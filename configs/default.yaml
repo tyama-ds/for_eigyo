@@ -1,0 +1,75 @@
+# 営業インテリジェンスツール デフォルト設定
+
+# データベース
+database:
+  path: ~/.for_eigyo/data.db
+
+# 検索設定
+search:
+  duckduckgo:
+    region: jp-jp
+    safesearch: moderate
+    default_max_results: 20
+  gbizinfo:
+    # APIトークンは環境変数 GBIZINFO_API_TOKEN で設定
+    timeout: 30
+
+# Web スクレイパー
+web:
+  timeout: 20
+  respect_robots: true
+  user_agent: "ForEigyoBot/0.1"
+
+# 分析設定
+analyzers:
+  keywords:
+    max_features: 1000
+    ngram_range: [1, 2]
+    top_n: 20
+  sentiment:
+    # カスタム極性辞書があれば指定
+    # positive_words_file: configs/positive_words.txt
+    # negative_words_file: configs/negative_words.txt
+  ner:
+    use_ginza: true  # GiNZA がインストールされていれば使用
+  cluster:
+    max_features: 500
+    default_n_clusters: 5
+
+# リードスコアリングルール
+scoring:
+  rules:
+    has_website:
+      weight: 0.10
+    has_email:
+      weight: 0.10
+    has_phone:
+      weight: 0.05
+    employee_range:
+      weight: 0.15
+    capital_range:
+      weight: 0.10
+    news_sentiment:
+      weight: 0.15
+    keyword_match:
+      weight: 0.20
+    recent_activity:
+      weight: 0.15
+
+# LLM 設定（APIキーは .env で管理）
+llm:
+  default_provider: openai
+  openai:
+    model: gpt-4o-mini
+    temperature: 0.3
+    max_tokens: 2000
+  anthropic:
+    model: claude-sonnet-4-20250514
+    temperature: 0.3
+    max_tokens: 2000
+    use_cache: true
+
+# Streamlit UI
+ui:
+  page_title: "営業インテリジェンス"
+  layout: wide
