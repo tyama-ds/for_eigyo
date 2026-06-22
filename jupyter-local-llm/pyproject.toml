@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llmlab"
+version = "0.1.0"
+description = "JupyterLab で OpenAI 互換エンドポイント（ローカルLLM）を使う AI コーディング支援ツールキット（チャット / 補完 / RAG）"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "for_eigyo" }]
+dependencies = [
+    "openai>=1.30",
+    "ipython>=8.0",
+    "ipywidgets>=8.0",
+    # Jupyter 本体（チャット & 補完）
+    "jupyterlab>=4.1",
+    "jupyter-ai>=2.20",
+    "langchain-openai>=0.1.8",
+    # RAG
+    "llama-index-core>=0.11",
+    "llama-index-llms-openai-like>=0.2",
+    "llama-index-embeddings-openai-like>=0.2",
+    "llama-index-readers-file>=0.2",
+]
+
+[project.optional-dependencies]
+dev = ["ruff>=0.5", "pytest>=8.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
