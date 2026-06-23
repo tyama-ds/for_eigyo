@@ -1,0 +1,15 @@
+# pip install -r requirements.txt でも導入可（pyproject の dependencies と同等）
+openai>=1.30
+ipython>=8.0
+ipywidgets>=8.0
+
+# JupyterLab 本体 + AI 拡張（① 補完 / ② チャット）
+jupyterlab>=4.1
+jupyter-ai>=2.20
+langchain-openai>=0.1.8
+
+# ③ RAG（LlamaIndex）
+llama-index-core>=0.11
+llama-index-llms-openai-like>=0.2
+llama-index-embeddings-openai-like>=0.2
+llama-index-readers-file>=0.2

@@ -1,0 +1,16 @@
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# jupyter
+.ipynb_checkpoints/
+
+# RAG の永続インデックスと取り込み文書
+storage/
+docs/*
+!docs/.gitkeep
