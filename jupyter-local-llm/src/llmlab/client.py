@@ -2,12 +2,27 @@
 
 from __future__ import annotations
 
+import httpx
 from openai import OpenAI
 
-from .config import get_settings
+from .config import Settings, get_settings
 
 # configure() で接続情報が変わるたびに作り直す（reset_client で破棄）。
 _client: OpenAI | None = None
+
+
+def build_http_client(s: Settings) -> httpx.Client:
+    """設定に応じた httpx クライアントを作る（プロキシ on/off を反映）。
+
+    - use_proxy=False: 環境変数のプロキシも無視して直結（trust_env=False）
+    - use_proxy=True かつ proxy_url 指定: その URL を使用
+    - use_proxy=True かつ proxy_url 空: 環境変数のプロキシ（HTTP(S)_PROXY）を使用
+    """
+    if not s.use_proxy:
+        return httpx.Client(trust_env=False)
+    if s.proxy_url:
+        return httpx.Client(proxy=s.proxy_url)
+    return httpx.Client(trust_env=True)
 
 
 def get_client() -> OpenAI:
@@ -15,7 +30,7 @@ def get_client() -> OpenAI:
     global _client
     if _client is None:
         s = get_settings()
-        _client = OpenAI(base_url=s.base_url, api_key=s.api_key)
+        _client = OpenAI(base_url=s.base_url, api_key=s.api_key, http_client=build_http_client(s))
     return _client
 
 

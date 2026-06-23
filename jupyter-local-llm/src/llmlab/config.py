@@ -8,6 +8,8 @@
         api_key="...",
         model="your-model-name",
         embed_model="your-embedding-model",   # 省略時は model を流用
+        use_proxy=True,                        # プロキシ経由にするか
+        proxy_url="http://proxy.example:8080", # 省略時は環境変数のプロキシを使用
     )
 
 または JupyterLab 上の入力フォームで設定する::
@@ -29,6 +31,8 @@ class Settings:
     model: str
     embed_model: str
     context_window: int = 8192
+    use_proxy: bool = False
+    proxy_url: str | None = None
 
 
 # セッション内で保持する現在の設定（プロセス内メモリのみ。永続化しない）。
@@ -42,8 +46,14 @@ def configure(
     *,
     embed_model: str | None = None,
     context_window: int = 8192,
+    use_proxy: bool = False,
+    proxy_url: str | None = None,
 ) -> Settings:
-    """接続情報を設定する。チャット / 補完 / RAG はこの値を共有する。"""
+    """接続情報を設定する。チャット / 補完 / RAG はこの値を共有する。
+
+    use_proxy=False のときは環境変数のプロキシも無視して直結する。
+    use_proxy=True で proxy_url 未指定なら、環境変数（HTTP(S)_PROXY）のプロキシを使う。
+    """
     global _current
 
     missing = [
@@ -60,6 +70,8 @@ def configure(
         model=model,
         embed_model=embed_model or model,
         context_window=context_window,
+        use_proxy=use_proxy,
+        proxy_url=(proxy_url or None) if use_proxy else None,
     )
 
     # 設定変更を依存モジュールに反映（生成済みクライアントを破棄）。
@@ -89,16 +101,30 @@ def settings_form():
     import ipywidgets as widgets
     from IPython.display import display
 
+    field_layout = widgets.Layout(width="480px")
+
     base_url = widgets.Text(
-        description="Base URL", placeholder="http://localhost:8000/v1",
-        layout=widgets.Layout(width="480px"),
+        description="Base URL", placeholder="http://localhost:8000/v1", layout=field_layout,
     )
-    api_key = widgets.Password(description="API Key", layout=widgets.Layout(width="480px"))
-    model = widgets.Text(description="Model", placeholder="your-model-name",
-                         layout=widgets.Layout(width="480px"))
-    embed_model = widgets.Text(description="Embed Model", placeholder="（省略可: Model を流用）",
-                               layout=widgets.Layout(width="480px"))
+    api_key = widgets.Password(description="API Key", layout=field_layout)
+    model = widgets.Text(description="Model", placeholder="your-model-name", layout=field_layout)
+    embed_model = widgets.Text(
+        description="Embed Model", placeholder="（省略可: Model を流用）", layout=field_layout,
+    )
     context_window = widgets.IntText(description="Ctx Window", value=8192)
+
+    # --- プロキシ設定（on/off + URL） ---
+    use_proxy = widgets.Checkbox(description="プロキシを使う", value=False, indent=False)
+    proxy_url = widgets.Text(
+        description="Proxy URL", placeholder="http://proxy:8080（空なら環境変数を使用）",
+        layout=field_layout, disabled=True,
+    )
+
+    def _toggle_proxy(change):
+        proxy_url.disabled = not change["new"]
+
+    use_proxy.observe(_toggle_proxy, names="value")
+
     button = widgets.Button(description="設定を適用", button_style="primary")
     status = widgets.Output()
 
@@ -108,6 +134,9 @@ def settings_form():
         model.value = _current.model
         embed_model.value = "" if _current.embed_model == _current.model else _current.embed_model
         context_window.value = _current.context_window
+        use_proxy.value = _current.use_proxy
+        proxy_url.value = _current.proxy_url or ""
+        proxy_url.disabled = not _current.use_proxy
 
     def _on_click(_):
         status.clear_output()
@@ -119,12 +148,29 @@ def settings_form():
                     model=model.value.strip(),
                     embed_model=embed_model.value.strip() or None,
                     context_window=context_window.value,
+                    use_proxy=use_proxy.value,
+                    proxy_url=proxy_url.value.strip() or None,
                 )
-                print(f"✅ 設定しました: {s.base_url}  model={s.model}  embed={s.embed_model}")
+                proxy = (s.proxy_url or "環境変数") if s.use_proxy else "なし（直結）"
+                print(f"✅ 設定しました: {s.base_url}  model={s.model}  proxy={proxy}")
             except Exception as e:  # noqa: BLE001
                 print(f"❌ {e}")
 
     button.on_click(_on_click)
     display(
-        widgets.VBox([base_url, api_key, model, embed_model, context_window, button, status])
+        widgets.VBox(
+            [
+                widgets.HTML("<b>ローカルLLM 接続設定</b>（OpenAI 互換エンドポイント）"),
+                base_url,
+                api_key,
+                model,
+                embed_model,
+                context_window,
+                widgets.HTML("<hr style='margin:6px 0'><b>プロキシ</b>"),
+                use_proxy,
+                proxy_url,
+                button,
+                status,
+            ]
+        )
     )

@@ -26,7 +26,10 @@ def _apply_settings():
     from llama_index.embeddings.openai_like import OpenAILikeEmbedding
     from llama_index.llms.openai_like import OpenAILike
 
+    from .client import build_http_client
+
     s = get_settings()
+    http_client = build_http_client(s)  # プロキシ on/off を反映
     LISettings.llm = OpenAILike(
         model=s.model,
         api_base=s.base_url,
@@ -34,11 +37,13 @@ def _apply_settings():
         context_window=s.context_window,
         is_chat_model=True,
         is_function_calling_model=False,
+        http_client=http_client,
     )
     LISettings.embed_model = OpenAILikeEmbedding(
         model_name=s.embed_model,
         api_base=s.base_url,
         api_key=s.api_key,
+        http_client=http_client,
     )
 
 
