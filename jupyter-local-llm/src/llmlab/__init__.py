@@ -11,14 +11,14 @@
 from __future__ import annotations
 
 from .bookrag import BookAnswer, BookRAG, Evidence
-from .chat import Chat
+from .chat import Chat, chat_panel
 from .client import complete, get_client
+from .complete import code_complete, completion_panel
 from .config import (
     Settings,
     configure,
     get_settings,
     is_configured,
-    jupyter_ai_hint,
     settings_form,
 )
 from .pagedrag import Answer, DocRAG, PagedRAG, Source
@@ -27,13 +27,17 @@ from .rag import build_rag
 __all__ = [
     "configure",
     "settings_form",
-    "jupyter_ai_hint",
     "get_settings",
     "is_configured",
     "Settings",
+    # チャット
     "Chat",
+    "chat_panel",
     "complete",
     "get_client",
+    # コード補完（自前実装・jupyter-ai 不要）
+    "code_complete",
+    "completion_panel",
     # 標準ベクトル RAG（ページ出典つき）
     "build_rag",
     "PagedRAG",

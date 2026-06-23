@@ -106,3 +106,54 @@ def load_ipython_extension(ipython) -> None:
             self._ensure_chat().ask(prompt, stream=True)
 
     ipython.register_magics(_LLMMagics)
+
+
+def chat_panel(system: str | None = DEFAULT_SYSTEM):
+    """ノートブック内のチャット UI（ipywidgets）を表示する（jupyter-ai 不要）。"""
+    import ipywidgets as widgets
+    from IPython.display import display
+
+    chat = Chat(system=system)
+    log = widgets.HTML(
+        value="", layout=widgets.Layout(width="100%", height="320px",
+                                         overflow_y="auto", border="1px solid #ddd", padding="8px")
+    )
+    box = widgets.Text(placeholder="メッセージを入力して Enter", layout=widgets.Layout(width="80%"))
+    send = widgets.Button(description="送信", button_style="primary")
+    clear = widgets.Button(description="クリア")
+    history_html: list[str] = []
+
+    def _render():
+        log.value = "".join(history_html)
+
+    def _escape(t: str) -> str:
+        return t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
+
+    def _submit(_=None):
+        text = box.value.strip()
+        if not text:
+            return
+        box.value = ""
+        history_html.append(f"<p><b>🧑 You:</b><br>{_escape(text)}</p>")
+        _render()
+        try:
+            answer = chat.ask(text)  # 非ストリームで取得して一括表示
+        except Exception as e:  # noqa: BLE001
+            answer = f"⚠️ エラー: {e}"
+        history_html.append(f"<p><b>🤖 LLM:</b><br>{_escape(answer)}</p><hr>")
+        _render()
+
+    def _clear(_):
+        chat.reset()
+        history_html.clear()
+        _render()
+
+    send.on_click(_submit)
+    clear.on_click(_clear)
+    # Enter キー送信。ipywidgets 8 では Text.on_submit が削除されたため安全にガードする
+    if hasattr(box, "on_submit"):
+        try:
+            box.on_submit(_submit)
+        except Exception:  # noqa: BLE001
+            pass
+    display(widgets.VBox([log, widgets.HBox([box, send, clear])]))
