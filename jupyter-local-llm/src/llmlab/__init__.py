@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-from .bookrag import Answer, BookRAG, Source
+from .bookrag import BookAnswer, BookRAG, Evidence
 from .chat import Chat
 from .client import complete, get_client
 from .config import (
@@ -21,6 +21,7 @@ from .config import (
     jupyter_ai_hint,
     settings_form,
 )
+from .pagedrag import Answer, DocRAG, PagedRAG, Source
 from .rag import build_rag
 
 __all__ = [
@@ -33,10 +34,16 @@ __all__ = [
     "Chat",
     "complete",
     "get_client",
+    # 標準ベクトル RAG（ページ出典つき）
     "build_rag",
-    "BookRAG",
+    "PagedRAG",
+    "DocRAG",
     "Answer",
     "Source",
+    # 論文忠実 BookRAG（BookIndex + エージェント検索）
+    "BookRAG",
+    "BookAnswer",
+    "Evidence",
 ]
 
 __version__ = "0.1.0"

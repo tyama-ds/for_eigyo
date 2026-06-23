@@ -8,8 +8,12 @@ jupyterlab>=4.1
 jupyter-ai>=2.20
 langchain-openai>=0.1.8
 
-# ③ RAG（LlamaIndex）
+# ③ RAG（PagedRAG/DocRAG: LlamaIndex）
 llama-index-core>=0.11
 llama-index-llms-openai-like>=0.2
 llama-index-embeddings-openai-like>=0.2
 llama-index-readers-file>=0.2
+
+# ④ BookRAG（論文忠実版: BookIndex = Tree + KG + GT-Link）
+numpy>=1.24
+pypdf>=4.0
