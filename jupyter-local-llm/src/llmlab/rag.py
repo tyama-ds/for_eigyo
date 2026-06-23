@@ -20,8 +20,8 @@ DEFAULT_DOCS = "./docs"
 DEFAULT_STORAGE = "./storage"
 
 
-def _apply_settings():
-    """LlamaIndex の Settings を現在の接続情報で構成する。"""
+def apply_llama_settings():
+    """LlamaIndex の Settings を現在の接続情報で構成する（bookrag からも共有）。"""
     from llama_index.core import Settings as LISettings
     from llama_index.embeddings.openai_like import OpenAILikeEmbedding
     from llama_index.llms.openai_like import OpenAILike
@@ -47,6 +47,10 @@ def _apply_settings():
     )
 
 
+# 後方互換のための別名。
+_apply_settings = apply_llama_settings
+
+
 def build_rag(
     docs_dir: str | Path = DEFAULT_DOCS,
     *,
@@ -64,7 +68,7 @@ def build_rag(
     )
     from llama_index.core import SimpleDirectoryReader
 
-    _apply_settings()
+    apply_llama_settings()
     storage_path = Path(storage_dir)
 
     if storage_path.exists() and not rebuild:

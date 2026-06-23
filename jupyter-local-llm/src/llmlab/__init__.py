@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+from .bookrag import Answer, BookRAG, Source
 from .chat import Chat
 from .client import complete, get_client
 from .config import (
@@ -33,6 +34,9 @@ __all__ = [
     "complete",
     "get_client",
     "build_rag",
+    "BookRAG",
+    "Answer",
+    "Source",
 ]
 
 __version__ = "0.1.0"
