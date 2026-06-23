@@ -96,6 +96,31 @@ def is_configured() -> bool:
     return _current is not None
 
 
+def jupyter_ai_hint() -> None:
+    """現在の接続設定を Jupyter AI 側へ転記するための案内を表示する。
+
+    インライン補完 / チャットパネル（Jupyter AI）は llmlab とは別に
+    AI 設定パネルへ接続情報を入力する必要がある。その入力値をここで確認できる。
+    """
+    s = get_settings()
+    masked = (s.api_key[:4] + "…") if len(s.api_key) > 4 else "…"
+    print(
+        "Jupyter AI（左パネルの ⚙ → AI Settings）に以下を入力してください。\n"
+        "  Provider           : OpenRouter :: *  （OpenAI 互換エンドポイント用）\n"
+        f"  API base URL       : {s.base_url}\n"
+        f"  API key            : {masked}（実値は settings_form と同じ）\n"
+        f"  Language model id  : {s.model}\n"
+        f"  Embedding model id : {s.embed_model}\n"
+        f"  Inline completions : {s.model}  （補完は FIM 対応モデルだと精度が高い）\n"
+    )
+    if s.use_proxy:
+        proxy = s.proxy_url or "環境変数(HTTP(S)_PROXY)"
+        print(
+            f"※ プロキシ={proxy} 経由の場合、Jupyter AI は内部で環境変数を見ます。\n"
+            "  jupyter lab 起動前に HTTPS_PROXY / HTTP_PROXY を設定してください。"
+        )
+
+
 def settings_form():
     """JupyterLab 上で接続情報を入力するフォーム（ipywidgets）を表示する。"""
     import ipywidgets as widgets

@@ -12,12 +12,20 @@ from __future__ import annotations
 
 from .chat import Chat
 from .client import complete, get_client
-from .config import Settings, configure, get_settings, is_configured, settings_form
+from .config import (
+    Settings,
+    configure,
+    get_settings,
+    is_configured,
+    jupyter_ai_hint,
+    settings_form,
+)
 from .rag import build_rag
 
 __all__ = [
     "configure",
     "settings_form",
+    "jupyter_ai_hint",
     "get_settings",
     "is_configured",
     "Settings",
