@@ -1,22 +1,47 @@
 # llmlab — JupyterLab × ローカルLLM コーディング支援
 
 OpenAI 互換エンドポイント（endpoint / api_key / model 名が分かっているローカルLLM）を
-**JupyterLab 上で** 使うためのツールキット。次の3用途をひとつのパッケージで賄う。
+**JupyterLab 上で** 使うためのツールキット。コード補完・チャット・各種 RAG を
+ひとつのパッケージで賄う。
 
-| 用途 | 仕組み |
-|------|--------|
-| ① コード補完 | `%%complete` / `completion_panel()`、入力中ゴースト補完は同梱の JupyterLab 拡張（`labextension/`）|
-| ② チャット | `%%llm` マジック / `chat_panel()`（**自前実装・jupyter-ai 不要**）|
-| ③ RAG（社内文書参照） | `build_rag`：LlamaIndex（生成・埋め込みとも同じエンドポイント）|
-| ④ PagedRAG / DocRAG | 標準ベクトル RAG。ページ出典つき・文書単位で問い合わせ |
-| ⑤ BookRAG（論文忠実版） | BookIndex（Tree+KG+GT-Link）+ エージェント検索（arXiv:2512.03413） |
-| ⑥ MultiPaperRAG（v2） | 複数論文の横断比較。PDF/Word/Excel、図理解(pics)、エンジン/探索の切替、to_df |
+| # | 機能 | 仕組み | サンプル |
+|---|------|--------|----------|
+| ① | コード補完 | `%%complete` / `completion_panel()` / 入力中ゴースト補完(同梱 JupyterLab 拡張 `labextension/`) | `01` |
+| ② | チャット | `%%llm` マジック / `chat_panel()`（**自前実装・jupyter-ai 不要**） | `01` |
+| ③ | RAG（汎用） | `build_rag`：LlamaIndex の素朴なベクトル検索 | `02` |
+| ④ | PagedRAG / DocRAG | 標準ベクトル RAG。ページ出典つき・文書単位で問い合わせ | `03` |
+| ⑤ | BookRAG（論文忠実版） | BookIndex（Tree+KG+GT-Link）+ エージェント検索（arXiv:2512.03413） | `04` |
+| ⑥ | MultiPaperRAG（v2） | 複数論文の横断比較。PDF/Word/Excel、図理解(pics)、エンジン/探索の切替、to_df | `05` |
 
 > **接続情報はファイルに保存しない。** すべて **セッション内で入力** する方式
 > （`llmlab.configure(...)` / `llmlab.settings_form()`）。
->
 > 補完・チャットは **OpenAI 互換 API だけで自前実装**しており、外部の AI 拡張
 > （jupyter-ai 等）には依存しない。
+
+## どれを使う？（早見表）
+
+| やりたいこと | 使うもの |
+|--------------|----------|
+| セルでコードを書く補助がほしい | ① コード補完 |
+| 質問・コード生成を対話で | ② チャット（`%%llm` / `chat_panel`） |
+| 文書をざっと検索したい | ③ `build_rag` |
+| 1〜数本の文書を**ページ出典つき**で引く | ④ `PagedRAG` |
+| 規程・ハンドブック・論文を**構造・用語の関係まで**踏まえて深掘り | ⑤ `BookRAG` |
+| **複数論文を横断**して比較・表の数値比較・図比較 | ⑥ `MultiPaperRAG` |
+
+> RAG（③④⑤⑥）は埋め込み API（`/v1/embeddings`）が要る。①②はチャット API だけで動く。
+> サーバに埋め込みが無い場合は `configure(embed_provider="local")` でローカル埋め込みも可。
+
+## ノートブック（動かして学ぶ）
+
+| ファイル | 内容 |
+|----------|------|
+| `notebooks/00_overview.ipynb` | **総合ガイド**（接続設定→各機能を一通り） |
+| `notebooks/01_quickstart_chat.ipynb` | 接続設定・コード補完・チャット |
+| `notebooks/02_rag.ipynb` | 汎用 RAG（`build_rag`） |
+| `notebooks/03_pagedrag.ipynb` | PagedRAG / DocRAG（ページ出典つき） |
+| `notebooks/04_bookrag.ipynb` | BookRAG（論文忠実版） |
+| `notebooks/05_multipaper.ipynb` | MultiPaperRAG（複数論文の横断比較） |
 
 ---
 
@@ -37,6 +62,24 @@ jupyter lab
 
 あとはノートブックで接続情報を入力し（下記）、`%%complete` / `completion_panel()` /
 `%%llm` / `chat_panel()` を使う。外部拡張のインストールや設定は不要。
+
+### 追加機能の任意依存（必要なときだけ）
+
+基本の `pip install -e .` で①〜⑤の中心機能は動く。次の機能は任意依存:
+
+```bash
+pip install -e ".[tables]"           # MultiPaperRAG の表抽出（PDF, pdfplumber）
+pip install -e ".[office]"           # Word(.docx)/Excel(.xlsx) の本文・表
+pip install -e ".[figures]"          # 図理解 pics=True（pymupdf）＋ 画像対応モデルが必要
+pip install -e ".[local-embeddings]" # サーバに /v1/embeddings が無い場合のローカル埋め込み
+pip install pandas                   # Comparison.to_df()
+# まとめて:
+pip install -e ".[tables,office,figures,local-embeddings]"
+```
+
+> **VLM を使わない場合**: `MultiPaperRAG(pics=False)`（既定）なら VLM も pymupdf も一切
+> 呼ばれず、埋め込みベースの検索だけで動く（＝v1 と同じ挙動）。図理解が要るときだけ
+> `pics=True` にする。
 
 ---
 
