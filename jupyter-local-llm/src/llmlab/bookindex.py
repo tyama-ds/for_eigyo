@@ -423,6 +423,20 @@ def build_graph(bi: BookIndex, node_ids: list[int], *, gradient_g: float = 0.6,
             if i % 20 == 0 or i == total:
                 print(f"[BookRAG] 抽出 {i}/{total} ノード")
 
+    # 空振り検知: 1件もエンティティが取れない場合は“読めていない”状態。
+    # 例外/タイムアウトは握り潰すため、ここで明示的に警告する。
+    found = sum(len(ents) for _, ents, _, _ in results)
+    print(f"[BookRAG] 抽出エンティティ合計: {found}")
+    if found == 0:
+        print(
+            "[BookRAG] 警告: エンティティが1件も抽出できませんでした。考えられる原因:\n"
+            "  - モデルが JSON 形式で返していない（指示無視）\n"
+            "  - 生成エンドポイントへのリクエストが失敗/タイムアウトしている\n"
+            "  - 文書テキストが空（スキャンPDF等でテキスト抽出できていない）\n"
+            "  確認: llmlab.complete('Return JSON: {\"ok\":true}') が JSON を返すか、"
+            "request_timeout を延ばす、PDF にテキスト層があるか。"
+        )
+
     # Gradient ER + グラフ構築は順序依存のため逐次（入力ノード順）。
     for nid, ents, rels, vecs in results:
         if not ents:

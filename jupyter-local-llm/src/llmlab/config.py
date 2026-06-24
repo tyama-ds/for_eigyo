@@ -31,6 +31,7 @@ class Settings:
     model: str
     embed_model: str
     context_window: int = 8192
+    request_timeout: float = 120.0  # 1リクエストの上限秒。遅い/固まるサーバ対策
     use_proxy: bool = False
     proxy_url: str | None = None
     # 埋め込み（RAG/BookRAG 用）。チャットと別エンドポイントの場合に指定する。
@@ -54,6 +55,7 @@ def configure(
     *,
     embed_model: str | None = None,
     context_window: int = 8192,
+    request_timeout: float = 120.0,
     use_proxy: bool = False,
     proxy_url: str | None = None,
     embed_base_url: str | None = None,
@@ -87,6 +89,7 @@ def configure(
         model=model,
         embed_model=embed_model or model,
         context_window=context_window,
+        request_timeout=request_timeout,
         use_proxy=use_proxy,
         proxy_url=(proxy_url or None) if use_proxy else None,
         embed_base_url=embed_base_url or None,
