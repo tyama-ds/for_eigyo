@@ -68,6 +68,22 @@ def code_complete(
     return strip_fences(resp.choices[0].message.content or "")
 
 
+def inline_complete(prefix: str, suffix: str = "", *, max_tokens: int = 128) -> str:
+    """JupyterLab のインライン補完拡張から呼ばれる入口。
+
+    どんな失敗でも例外を投げず空文字を返す（＝補完なし）。未設定時も空文字。
+    インライン用にトークン数を絞って応答を軽くする。
+    """
+    try:
+        from .config import is_configured
+
+        if not is_configured() or not prefix.strip():
+            return ""
+        return code_complete(prefix, suffix, max_tokens=max_tokens, temperature=0.1)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def load_ipython_extension(ipython) -> None:
     """``%load_ext llmlab.complete`` で %%complete マジックを登録する。"""
     from IPython.core.magic import Magics, line_cell_magic, magics_class

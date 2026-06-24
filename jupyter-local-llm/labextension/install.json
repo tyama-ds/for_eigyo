@@ -1,0 +1,5 @@
+{
+  "packageManager": "python",
+  "packageName": "jupyterlab_llmlab_completer",
+  "uninstallInstructions": "pip uninstall jupyterlab_llmlab_completer"
+}

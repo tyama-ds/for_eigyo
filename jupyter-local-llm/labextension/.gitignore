@@ -1,0 +1,16 @@
+# node / typescript build
+node_modules/
+lib/
+tsconfig.tsbuildinfo
+*.tsbuildinfo
+
+# jupyterlab build output (生成物。pip install -e . / jlpm build で再生成される)
+jupyterlab_llmlab_completer/labextension/
+jupyterlab_llmlab_completer/_version.py
+
+# python
+__pycache__/
+*.egg-info/
+dist/
+build/
+.yarn/

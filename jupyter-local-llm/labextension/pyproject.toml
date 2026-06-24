@@ -1,0 +1,48 @@
+[build-system]
+requires = ["hatchling>=1.5.0", "jupyterlab>=4.0.0,<5", "hatch-nodejs-version>=0.3.2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "jupyterlab_llmlab_completer"
+version = "0.1.0"
+description = "JupyterLab のインライン（ゴーストテキスト）補完を、ローカルの OpenAI 互換 LLM（カーネルの llmlab 設定を経由）で提供する拡張"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "for_eigyo" }]
+keywords = ["Jupyter", "JupyterLab", "JupyterLab4", "jupyterlab-extension"]
+classifiers = [
+    "Framework :: Jupyter",
+    "Framework :: Jupyter :: JupyterLab",
+    "Framework :: Jupyter :: JupyterLab :: 4",
+    "Framework :: Jupyter :: JupyterLab :: Extensions",
+    "Framework :: Jupyter :: JupyterLab :: Extensions :: Prebuilt",
+    "Programming Language :: Python :: 3",
+]
+dependencies = []
+
+[tool.hatch.build.targets.wheel.shared-data]
+"jupyterlab_llmlab_completer/labextension" = "share/jupyter/labextensions/jupyterlab-llmlab-completer"
+"install.json" = "share/jupyter/labextensions/jupyterlab-llmlab-completer/install.json"
+
+[tool.hatch.build.targets.wheel]
+packages = ["jupyterlab_llmlab_completer"]
+
+[tool.hatch.build.hooks.jupyter-builder]
+dependencies = ["hatch-jupyter-builder>=0.5"]
+build-function = "hatch_jupyter_builder.npm_builder"
+ensured-targets = [
+    "jupyterlab_llmlab_completer/labextension/static/style.js",
+    "jupyterlab_llmlab_completer/labextension/package.json",
+]
+skip-if-exists = ["jupyterlab_llmlab_completer/labextension/static/style.js"]
+
+[tool.hatch.build.hooks.jupyter-builder.build-kwargs]
+build_cmd = "build:prod"
+npm = ["jlpm"]
+
+[tool.hatch.build.hooks.jupyter-builder.editable-build-kwargs]
+build_cmd = "build"
+npm = ["jlpm"]
+source_dir = "src"
+build_dir = "jupyterlab_llmlab_completer/labextension"

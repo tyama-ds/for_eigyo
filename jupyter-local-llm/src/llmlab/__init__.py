@@ -13,7 +13,7 @@ from __future__ import annotations
 from .bookrag import BookAnswer, BookRAG, Evidence
 from .chat import Chat, chat_panel
 from .client import complete, get_client
-from .complete import code_complete, completion_panel
+from .complete import code_complete, completion_panel, inline_complete
 from .config import (
     Settings,
     configure,
@@ -42,6 +42,7 @@ __all__ = [
     # コード補完（自前実装・jupyter-ai 不要）
     "code_complete",
     "completion_panel",
+    "inline_complete",
     # 標準ベクトル RAG（ページ出典つき）
     "build_rag",
     "PagedRAG",
