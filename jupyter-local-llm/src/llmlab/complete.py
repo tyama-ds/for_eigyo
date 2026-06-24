@@ -103,6 +103,15 @@ def load_ipython_extension(ipython) -> None:
 
 def completion_panel(language: str = "python"):
     """入力欄＋「補完」ボタンのコード補完 UI（ipywidgets）を表示する。"""
+    from .config import widget_env
+
+    ok, reason = widget_env()
+    if not ok:
+        print(f"completion_panel はブラウザのノートブック上の ipywidgets が必要です（{reason}）。")
+        print("代わりに次を使ってください: %load_ext llmlab.complete → %%complete、"
+              "もしくは llmlab.code_complete('コード')。診断は llmlab.doctor()。")
+        return
+
     import ipywidgets as widgets
     from IPython.display import display
 

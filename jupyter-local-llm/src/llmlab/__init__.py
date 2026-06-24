@@ -17,7 +17,9 @@ from .complete import code_complete, completion_panel
 from .config import (
     Settings,
     configure,
+    doctor,
     get_settings,
+    in_notebook,
     is_configured,
     settings_form,
 )
@@ -27,6 +29,8 @@ from .rag import build_rag
 __all__ = [
     "configure",
     "settings_form",
+    "doctor",
+    "in_notebook",
     "get_settings",
     "is_configured",
     "Settings",

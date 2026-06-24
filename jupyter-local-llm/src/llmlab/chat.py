@@ -110,6 +110,15 @@ def load_ipython_extension(ipython) -> None:
 
 def chat_panel(system: str | None = DEFAULT_SYSTEM):
     """ノートブック内のチャット UI（ipywidgets）を表示する（jupyter-ai 不要）。"""
+    from .config import widget_env
+
+    ok, reason = widget_env()
+    if not ok:
+        print(f"chat_panel はブラウザのノートブック上の ipywidgets が必要です（{reason}）。")
+        print("代わりに次を使ってください: %load_ext llmlab.chat → %%llm、"
+              "もしくは llmlab.complete('質問')。診断は llmlab.doctor()。")
+        return
+
     import ipywidgets as widgets
     from IPython.display import display
 

@@ -96,8 +96,94 @@ def is_configured() -> bool:
     return _current is not None
 
 
-def settings_form():
-    """JupyterLab 上で接続情報を入力するフォーム（ipywidgets）を表示する。"""
+def in_notebook() -> bool:
+    """ブラウザのノートブック（ZMQ）カーネル上で動いているかを判定する。
+
+    ターミナル IPython / 素の python / nbconvert などでは ipywidgets は描画できない。
+    """
+    try:
+        from IPython import get_ipython
+
+        ip = get_ipython()
+        return ip is not None and ip.__class__.__name__ == "ZMQInteractiveShell"
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def widget_env() -> tuple[bool, str]:
+    """ipywidgets が描画できそうな環境かを (ok, 理由) で返す。"""
+    try:
+        import ipywidgets  # noqa: F401
+    except ImportError:
+        return False, "ipywidgets が未インストールです"
+    if not in_notebook():
+        return False, "ブラウザのノートブック（カーネル）上ではありません"
+    return True, ""
+
+
+def doctor() -> None:
+    """環境診断。ウィジェットが表示されない（VBox がテキスト表示される）原因を切り分ける。"""
+    import importlib
+    import sys
+
+    print("=== llmlab doctor ===")
+    print("Python           :", sys.version.split()[0])
+    print("In notebook kernel:", in_notebook())
+    print("接続設定済み      :", is_configured())
+    print("--- 依存パッケージ ---")
+    for pkg in ("ipywidgets", "jupyterlab", "openai", "numpy", "pypdf"):
+        try:
+            m = importlib.import_module(pkg)
+            print(f"  {pkg:12s}: {getattr(m, '__version__', '?')}")
+        except Exception:  # noqa: BLE001
+            print(f"  {pkg:12s}: ✗ 未インストール")
+    ok, reason = widget_env()
+    print("--- ウィジェット描画 ---")
+    if ok:
+        print("  描画できる見込み: OK")
+    else:
+        print(f"  描画できません: {reason}")
+        print("  対処:")
+        print("   - ブラウザで `jupyter lab` を起動し、そのノートブックのセルで実行する")
+        print("   - VBox がテキスト表示される場合、ipywidgets がカーネルと別環境の可能性。")
+        print("     `pip install -e .` した環境で jupyter lab を起動し、カーネルを再起動する")
+        print("   - フォーム無しで設定するなら: llmlab.settings_form(text=True) または")
+        print("     llmlab.configure(base_url=..., api_key=..., model=...)")
+
+
+def _settings_form_text() -> "Settings":
+    """ウィジェットが使えない環境向けのテキスト入力フォールバック。"""
+    import getpass
+
+    print("接続情報を入力してください（ウィジェット非対応環境のためテキスト入力）。")
+    base_url = input("Base URL (例 http://localhost:8000/v1): ").strip()
+    api_key = getpass.getpass("API Key: ")
+    model = input("Model: ").strip()
+    embed_model = input("Embed Model（空なら Model を流用）: ").strip() or None
+    use_proxy = input("プロキシを使う? [y/N]: ").strip().lower() == "y"
+    proxy_url = None
+    if use_proxy:
+        proxy_url = input("Proxy URL（空なら環境変数を使用）: ").strip() or None
+    s = configure(base_url=base_url, api_key=api_key, model=model,
+                  embed_model=embed_model, use_proxy=use_proxy, proxy_url=proxy_url)
+    proxy = (s.proxy_url or "環境変数") if s.use_proxy else "なし（直結）"
+    print(f"✅ 設定しました: {s.base_url}  model={s.model}  proxy={proxy}")
+    return s
+
+
+def settings_form(text: bool = False):
+    """JupyterLab 上で接続情報を入力するフォーム（ipywidgets）を表示する。
+
+    ウィジェットが描画できない環境（ターミナル/別環境の ipywidgets 等）では自動で
+    テキスト入力にフォールバックする。``text=True`` で明示的にテキスト入力にできる。
+    """
+    ok, reason = widget_env()
+    if text or not ok:
+        if not text:
+            print(f"[フォールバック] {reason}。テキスト入力に切り替えます。"
+                  "（フォームを使うには下の『対処』を参照: llmlab.doctor()）")
+        return _settings_form_text()
+
     import ipywidgets as widgets
     from IPython.display import display
 
@@ -174,3 +260,5 @@ def settings_form():
             ]
         )
     )
+    print("※ 上にフォームが表示されない（VBox(...) と出る）場合は llmlab.doctor() で診断、"
+          "または llmlab.settings_form(text=True) を使ってください。")
