@@ -24,6 +24,7 @@ from .config import (
     settings_form,
 )
 from .pagedrag import Answer, DocRAG, PagedRAG, Source
+from .multipaper import Comparison, MultiPaperRAG
 from .rag import build_rag
 
 __all__ = [
@@ -53,6 +54,9 @@ __all__ = [
     "BookRAG",
     "BookAnswer",
     "Evidence",
+    # 複数論文の横断比較（v1）
+    "MultiPaperRAG",
+    "Comparison",
 ]
 
 __version__ = "0.1.0"
