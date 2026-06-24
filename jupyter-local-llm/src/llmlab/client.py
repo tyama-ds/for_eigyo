@@ -9,6 +9,7 @@ from .config import Settings, get_settings
 
 # configure() で接続情報が変わるたびに作り直す（reset_client で破棄）。
 _client: OpenAI | None = None
+_embed_client: OpenAI | None = None
 
 
 def build_http_client(s: Settings) -> httpx.Client:
@@ -18,26 +19,47 @@ def build_http_client(s: Settings) -> httpx.Client:
     - use_proxy=True かつ proxy_url 指定: その URL を使用
     - use_proxy=True かつ proxy_url 空: 環境変数のプロキシ（HTTP(S)_PROXY）を使用
     """
+    # read/write は request_timeout、接続は短め。固まるサーバでの無限待ちを防ぐ。
+    timeout = httpx.Timeout(s.request_timeout, connect=min(10.0, s.request_timeout))
     if not s.use_proxy:
-        return httpx.Client(trust_env=False)
+        return httpx.Client(trust_env=False, timeout=timeout)
     if s.proxy_url:
-        return httpx.Client(proxy=s.proxy_url)
-    return httpx.Client(trust_env=True)
+        return httpx.Client(proxy=s.proxy_url, timeout=timeout)
+    return httpx.Client(trust_env=True, timeout=timeout)
 
 
 def get_client() -> OpenAI:
-    """設定済みの OpenAI 互換クライアントを返す。"""
+    """設定済みの OpenAI 互換クライアント（チャット/補完用）を返す。"""
     global _client
     if _client is None:
         s = get_settings()
-        _client = OpenAI(base_url=s.base_url, api_key=s.api_key, http_client=build_http_client(s))
+        # timeout/max_retries を明示（SDK 既定は 600s × リトライで“ハング”に見えるため）。
+        _client = OpenAI(
+            base_url=s.base_url, api_key=s.api_key, http_client=build_http_client(s),
+            timeout=s.request_timeout, max_retries=2,
+        )
     return _client
+
+
+def get_embed_client() -> OpenAI:
+    """埋め込み用クライアントを返す。embed_base_url 指定時はそちらへ向ける。"""
+    global _embed_client
+    if _embed_client is None:
+        s = get_settings()
+        base = s.embed_base_url or s.base_url
+        key = s.embed_api_key or s.api_key
+        _embed_client = OpenAI(
+            base_url=base, api_key=key, http_client=build_http_client(s),
+            timeout=s.request_timeout, max_retries=2,
+        )
+    return _embed_client
 
 
 def reset_client() -> None:
     """キャッシュ済みクライアントを破棄する（configure() から呼ばれる）。"""
-    global _client
+    global _client, _embed_client
     _client = None
+    _embed_client = None
 
 
 def complete(prompt: str, *, system: str | None = None, **kwargs) -> str:

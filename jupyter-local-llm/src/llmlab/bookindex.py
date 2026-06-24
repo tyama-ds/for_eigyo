@@ -62,14 +62,14 @@ def llm_json(prompt: str, *, system: str | None = None):
 
 
 def embed(texts: list[str]) -> np.ndarray:
-    """テキスト群を L2 正規化済みの埋め込み行列に変換する。"""
-    from .client import get_client
+    """テキスト群を L2 正規化済みの埋め込み行列に変換する（embed_base_url を尊重）。"""
+    from .client import get_embed_client
     from .config import get_settings
 
     if not texts:
         return np.zeros((0, 1), dtype=np.float32)
     s = get_settings()
-    resp = get_client().embeddings.create(model=s.embed_model, input=texts)
+    resp = get_embed_client().embeddings.create(model=s.embed_model, input=texts)
     vecs = np.array([d.embedding for d in resp.data], dtype=np.float32)
     norms = np.linalg.norm(vecs, axis=1, keepdims=True)
     norms[norms == 0] = 1.0
@@ -385,34 +385,74 @@ def build_tree(bi: BookIndex, blocks: list[dict], book: str) -> int:
 
 
 def build_graph(bi: BookIndex, node_ids: list[int], *, gradient_g: float = 0.6,
-                er_top_k: int = 10) -> None:
-    """各ノードからエンティティ/関係を抽出し、Gradient-based ER で KG を構築する。"""
-    for nid in node_ids:
-        node = bi.nodes[nid]
-        if node.type == "Section" or not node.content.strip():
-            continue
-        extracted = _extract_entities(node)
-        if not extracted:
-            continue
+                er_top_k: int = 10, max_workers: int = 8, min_chars: int = 40) -> None:
+    """各ノードからエンティティ/関係を抽出し、Gradient-based ER で KG を構築する。
 
-        # 抽出エンティティをまとめて埋め込み
-        names = [f"{e['name']} ({e.get('type','')}): {e.get('description','')}" for e in extracted]
-        vecs = embed(names)
+    速度のため、抽出（LLM 呼び出し + 埋め込み）はノード単位で **並列化** し、
+    Gradient ER とグラフ構築（順序依存・BookIndex を変更する）は **逐次** で行う。
+    短すぎるノード（min_chars 未満）は抽出をスキップして無駄な呼び出しを省く。
+    """
+    from concurrent.futures import ThreadPoolExecutor
 
+    targets = [
+        nid for nid in node_ids
+        if bi.nodes[nid].type != "Section"
+        and len(bi.nodes[nid].content.strip()) >= min_chars
+    ]
+    if not targets:
+        return
+
+    def _work(nid: int):
+        # 抽出フェーズは BookIndex を読むだけ（スレッド安全）。失敗しても全体を止めない。
+        try:
+            node = bi.nodes[nid]
+            data = _extract_graph(node)                       # entities + relations を1回で
+            ents = data["entities"]
+            if not ents:
+                return nid, [], [], None
+            names = [f"{e['name']} ({e.get('type','')}): {e.get('description','')}" for e in ents]
+            return nid, ents, data["relations"], embed(names)
+        except Exception:  # noqa: BLE001
+            return nid, [], [], None
+
+    results = []
+    total = len(targets)
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        for i, res in enumerate(ex.map(_work, targets), start=1):  # map は入力順を保持
+            results.append(res)
+            if i % 20 == 0 or i == total:
+                print(f"[BookRAG] 抽出 {i}/{total} ノード")
+
+    # 空振り検知: 1件もエンティティが取れない場合は“読めていない”状態。
+    # 例外/タイムアウトは握り潰すため、ここで明示的に警告する。
+    found = sum(len(ents) for _, ents, _, _ in results)
+    print(f"[BookRAG] 抽出エンティティ合計: {found}")
+    if found == 0:
+        print(
+            "[BookRAG] 警告: エンティティが1件も抽出できませんでした。考えられる原因:\n"
+            "  - モデルが JSON 形式で返していない（指示無視）\n"
+            "  - 生成エンドポイントへのリクエストが失敗/タイムアウトしている\n"
+            "  - 文書テキストが空（スキャンPDF等でテキスト抽出できていない）\n"
+            "  確認: llmlab.complete('Return JSON: {\"ok\":true}') が JSON を返すか、"
+            "request_timeout を延ばす、PDF にテキスト層があるか。"
+        )
+
+    # Gradient ER + グラフ構築は順序依存のため逐次（入力ノード順）。
+    for nid, ents, rels, vecs in results:
+        if not ents:
+            continue
         local_name_to_eid: dict[str, int] = {}
-        for e, vec in zip(extracted, vecs):
+        for e, vec in zip(ents, vecs):
             eid = gradient_entity_resolution(
                 bi, e["name"], e.get("type", ""), e.get("description", ""),
                 nid, vec, gradient_g=gradient_g, er_top_k=er_top_k,
             )
             local_name_to_eid[e["name"].strip().lower()] = eid
-
-        # 関係を KG に追加（同一ノード内で抽出された関係のみ）
-        for rel in _extract_relations(node, extracted):
-            s = local_name_to_eid.get(rel["source"].strip().lower())
-            t = local_name_to_eid.get(rel["target"].strip().lower())
+        for rel in rels:
+            s = local_name_to_eid.get(str(rel.get("source", "")).strip().lower())
+            t = local_name_to_eid.get(str(rel.get("target", "")).strip().lower())
             if s is not None and t is not None and s != t:
-                bi.relations.append((s, t, rel.get("relation", "related_to")))
+                bi.relations.append((s, t, str(rel.get("relation", "related_to"))))
 
 
 def gradient_entity_resolution(bi: BookIndex, name: str, etype: str, desc: str, origin: int,
@@ -451,32 +491,21 @@ def gradient_entity_resolution(bi: BookIndex, name: str, etype: str, desc: str, 
     return v_sel
 
 
-def _extract_entities(node: TreeNode) -> list[dict]:
+def _extract_graph(node: TreeNode) -> dict:
+    """1 回の LLM 呼び出しでノードからエンティティと関係をまとめて抽出する。"""
     result = llm_json(
-        _PROMPT_ENTITY_EXTRACT + f"\n\nNode type: {node.type}\nContent:\n{node.content[:2500]}"
+        _PROMPT_GRAPH_EXTRACT + f"\n\nNode type: {node.type}\nContent:\n{node.content[:2500]}"
     )
+    ents: list[dict] = []
+    rels: list[dict] = []
     if isinstance(result, dict):
-        result = result.get("entities", [])
-    out = []
-    if isinstance(result, list):
-        for e in result:
-            if isinstance(e, dict) and e.get("name"):
-                out.append(e)
-    return out
-
-
-def _extract_relations(node: TreeNode, entities: list[dict]) -> list[dict]:
-    if len(entities) < 2:
-        return []
-    names = [e["name"] for e in entities]
-    result = llm_json(
-        _PROMPT_RELATION_EXTRACT
-        + f"\n\nEntities: {json.dumps(names, ensure_ascii=False)}\nContent:\n{node.content[:2500]}"
-    )
-    if isinstance(result, dict):
-        result = result.get("relations", [])
-    return [r for r in result if isinstance(r, dict) and r.get("source") and r.get("target")] \
-        if isinstance(result, list) else []
+        raw_e = result.get("entities", [])
+        if isinstance(raw_e, list):
+            ents = [e for e in raw_e if isinstance(e, dict) and e.get("name")]
+        raw_r = result.get("relations", [])
+        if isinstance(raw_r, list):
+            rels = [r for r in raw_r if isinstance(r, dict) and r.get("source") and r.get("target")]
+    return {"entities": ents, "relations": rels}
 
 
 def _llm_select_entity(bi: BookIndex, name: str, etype: str, desc: str,
@@ -511,13 +540,13 @@ for each, its hierarchical level (1 = top-level section, 2, 3, ...) or null if i
 section heading (i.e., it is body text mistakenly detected as a title).
 Return ONLY a JSON array: [{"id": <int>, "level": <int or null>}, ...]."""
 
-_PROMPT_ENTITY_EXTRACT = """You are an information extraction engine. Extract the key entities from the
-given document node. For tables, also extract the table itself as one entity plus its row/column headers.
-Return ONLY JSON: {"entities":[{"name": str, "type": str, "description": str}, ...]}.
-Keep names canonical and concise. Output in the document's language."""
-
-_PROMPT_RELATION_EXTRACT = """Given the entities and the content, extract directed relations among the
-listed entities only. Return ONLY JSON: {"relations":[{"source": str, "target": str, "relation": str}, ...]}."""
+_PROMPT_GRAPH_EXTRACT = """You are an information extraction engine. From the given document node,
+extract (1) the key entities and (2) the directed relations among those entities (relations must only
+reference the extracted entities). For tables, also extract the table itself as one entity plus its
+row/column headers. Keep names canonical and concise, and output in the document's language.
+Return ONLY JSON:
+{"entities":[{"name": str, "type": str, "description": str}, ...],
+ "relations":[{"source": str, "target": str, "relation": str}, ...]}."""
 
 _PROMPT_ENTITY_RESOLUTION = """You are an Entity Resolution Adjudicator. Decide if the New Entity refers to
 the EXACT same real-world concept as one of the Candidate Entities. Be strict and conservative; when in
