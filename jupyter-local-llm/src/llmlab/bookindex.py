@@ -62,14 +62,14 @@ def llm_json(prompt: str, *, system: str | None = None):
 
 
 def embed(texts: list[str]) -> np.ndarray:
-    """テキスト群を L2 正規化済みの埋め込み行列に変換する。"""
-    from .client import get_client
+    """テキスト群を L2 正規化済みの埋め込み行列に変換する（embed_base_url を尊重）。"""
+    from .client import get_embed_client
     from .config import get_settings
 
     if not texts:
         return np.zeros((0, 1), dtype=np.float32)
     s = get_settings()
-    resp = get_client().embeddings.create(model=s.embed_model, input=texts)
+    resp = get_embed_client().embeddings.create(model=s.embed_model, input=texts)
     vecs = np.array([d.embedding for d in resp.data], dtype=np.float32)
     norms = np.linalg.norm(vecs, axis=1, keepdims=True)
     norms[norms == 0] = 1.0

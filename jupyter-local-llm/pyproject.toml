@@ -28,6 +28,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["ruff>=0.5", "pytest>=8.0"]
+# サーバに /v1/embeddings が無い場合のローカル埋め込み（configure(embed_provider="local")）
+local-embeddings = ["llama-index-embeddings-huggingface>=0.2"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

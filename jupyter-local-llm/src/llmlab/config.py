@@ -33,6 +33,14 @@ class Settings:
     context_window: int = 8192
     use_proxy: bool = False
     proxy_url: str | None = None
+    # 埋め込み（RAG/BookRAG 用）。チャットと別エンドポイントの場合に指定する。
+    # 省略時は base_url / api_key を流用。
+    embed_base_url: str | None = None
+    embed_api_key: str | None = None
+    # "openai": OpenAI 互換エンドポイントの /v1/embeddings を使う
+    # "local" : ローカルの HuggingFace 埋め込みを使う（サーバに embeddings API が無い時）
+    embed_provider: str = "openai"
+    embed_local_model: str = "intfloat/multilingual-e5-small"
 
 
 # セッション内で保持する現在の設定（プロセス内メモリのみ。永続化しない）。
@@ -48,11 +56,20 @@ def configure(
     context_window: int = 8192,
     use_proxy: bool = False,
     proxy_url: str | None = None,
+    embed_base_url: str | None = None,
+    embed_api_key: str | None = None,
+    embed_provider: str = "openai",
+    embed_local_model: str = "intfloat/multilingual-e5-small",
 ) -> Settings:
     """接続情報を設定する。チャット / 補完 / RAG はこの値を共有する。
 
     use_proxy=False のときは環境変数のプロキシも無視して直結する。
     use_proxy=True で proxy_url 未指定なら、環境変数（HTTP(S)_PROXY）のプロキシを使う。
+
+    埋め込み（RAG）について:
+    - サーバの埋め込みが別エンドポイントなら embed_base_url（必要なら embed_api_key）を指定。
+    - サーバに /v1/embeddings が無いなら embed_provider="local" でローカル埋め込みを使う
+      （`pip install llama-index-embeddings-huggingface` が必要）。
     """
     global _current
 
@@ -72,6 +89,10 @@ def configure(
         context_window=context_window,
         use_proxy=use_proxy,
         proxy_url=(proxy_url or None) if use_proxy else None,
+        embed_base_url=embed_base_url or None,
+        embed_api_key=embed_api_key or None,
+        embed_provider=embed_provider,
+        embed_local_model=embed_local_model,
     )
 
     # 設定変更を依存モジュールに反映（生成済みクライアントを破棄）。
@@ -211,6 +232,16 @@ def settings_form(text: bool = False):
 
     use_proxy.observe(_toggle_proxy, names="value")
 
+    # --- 埋め込み（RAG）設定 ---
+    embed_base_url = widgets.Text(
+        description="Embed URL", placeholder="空ならBase URLを流用。別エンドポイントなら指定",
+        layout=field_layout,
+    )
+    embed_local = widgets.Checkbox(
+        description="ローカル埋め込みを使う（サーバに /v1/embeddings が無い場合）",
+        value=False, indent=False,
+    )
+
     button = widgets.Button(description="設定を適用", button_style="primary")
     status = widgets.Output()
 
@@ -223,6 +254,8 @@ def settings_form(text: bool = False):
         use_proxy.value = _current.use_proxy
         proxy_url.value = _current.proxy_url or ""
         proxy_url.disabled = not _current.use_proxy
+        embed_base_url.value = _current.embed_base_url or ""
+        embed_local.value = _current.embed_provider == "local"
 
     def _on_click(_):
         status.clear_output()
@@ -236,9 +269,13 @@ def settings_form(text: bool = False):
                     context_window=context_window.value,
                     use_proxy=use_proxy.value,
                     proxy_url=proxy_url.value.strip() or None,
+                    embed_base_url=embed_base_url.value.strip() or None,
+                    embed_provider="local" if embed_local.value else "openai",
                 )
                 proxy = (s.proxy_url or "環境変数") if s.use_proxy else "なし（直結）"
-                print(f"✅ 設定しました: {s.base_url}  model={s.model}  proxy={proxy}")
+                embed = ("ローカル:" + s.embed_local_model) if s.embed_provider == "local" \
+                    else (s.embed_base_url or "Base URL 流用")
+                print(f"✅ 設定しました: {s.base_url}  model={s.model}  proxy={proxy}  embed={embed}")
             except Exception as e:  # noqa: BLE001
                 print(f"❌ {e}")
 
@@ -252,6 +289,9 @@ def settings_form(text: bool = False):
                 model,
                 embed_model,
                 context_window,
+                widgets.HTML("<hr style='margin:6px 0'><b>埋め込み（RAG）</b>"),
+                embed_base_url,
+                embed_local,
                 widgets.HTML("<hr style='margin:6px 0'><b>プロキシ</b>"),
                 use_proxy,
                 proxy_url,

@@ -58,13 +58,28 @@ def _make_llm(s, http_client):
 
 
 def _make_embed(s, http_client):
+    # サーバに /v1/embeddings が無い等の場合のローカル埋め込み
+    if getattr(s, "embed_provider", "openai") == "local":
+        try:
+            from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+        except ImportError as e:
+            raise ModuleNotFoundError(
+                "ローカル埋め込みには llama-index-embeddings-huggingface が必要です。\n"
+                "  pip install llama-index-embeddings-huggingface"
+            ) from e
+        return HuggingFaceEmbedding(model_name=s.embed_local_model)
+
+    # 埋め込み用の接続先（チャットと別エンドポイントなら embed_base_url を使う）
+    base = s.embed_base_url or s.base_url
+    key = s.embed_api_key or s.api_key
+
     # 推奨: OpenAILikeEmbedding（任意のモデル名 + カスタム api_base を許容）
     try:
         from llama_index.embeddings.openai_like import OpenAILikeEmbedding
 
         return _construct(
             OpenAILikeEmbedding,
-            dict(model_name=s.embed_model, api_base=s.base_url, api_key=s.api_key),
+            dict(model_name=s.embed_model, api_base=base, api_key=key),
             http_client,
         )
     except ImportError:
@@ -85,7 +100,7 @@ def _make_embed(s, http_client):
     )
     return _construct(
         OpenAIEmbedding,
-        dict(model=s.embed_model, api_base=s.base_url, api_key=s.api_key),
+        dict(model=s.embed_model, api_base=base, api_key=key),
         http_client,
     )
 
