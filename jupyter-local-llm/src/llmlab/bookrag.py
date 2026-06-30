@@ -89,30 +89,53 @@ class BookRAG:
         gradient_g: float = DEFAULT_GRADIENT_G,
         er_top_k: int = DEFAULT_ER_TOP_K,
         max_evidence: int = DEFAULT_MAX_EVIDENCE,
+        chunk_chars: int = 1500,    # 本文チャンクの目安サイズ（大きいほどノード=LLM呼出が減る）
+        max_nodes: int = 300,       # 取り込み対象ノードの上限（超過は打ち切り）
+        max_workers: int = 8,       # 抽出フェーズの並列数
+        er_use_llm: bool = False,   # 名寄せで LLM を使うか（既定 False=高速）
     ):
         self.storage_dir = Path(storage_dir)
         self.gradient_g = gradient_g
         self.er_top_k = er_top_k
         self.max_evidence = max_evidence
+        self.chunk_chars = chunk_chars
+        self.max_nodes = max_nodes
+        self.max_workers = max_workers
+        self.er_use_llm = er_use_llm
         self._bi: BookIndex | None = None
 
     # ===== Offline Indexing =====
 
-    def add_book(self, path: str | Path, *, title: str | None = None, use_llm_sections: bool = True) -> str:
-        """文書を取り込み、BookIndex（Tree + KG + GT-Link）へ統合する。"""
+    def add_book(self, path: str | Path, *, title: str | None = None,
+                 use_llm_sections: bool = False, max_nodes: int | None = None,
+                 chunk_chars: int | None = None) -> str:
+        """文書を取り込み、BookIndex（Tree + KG + GT-Link）へ統合する。
+
+        既定は速度重視（見出し判定は LLM 不使用、本文はチャンク化、ノード数に上限）。
+        精度を上げたいときは use_llm_sections=True / max_nodes を増やす / er_use_llm=True。
+        """
         path = Path(path)
         if not path.exists():
             raise FileNotFoundError(f"ファイルがありません: {path}")
         bi = self._index(create=True)
         book = title or path.stem
 
+        bx.log(f"[1/5] 解析（レイアウト）: {path.name}")
         blocks = bx.parse_blocks(path)                              # 4.2.1 Layout Parsing
+        bx.log(f"[2/5] 見出し判定{'（LLM）' if use_llm_sections else '（ヒューリスティック）'}"
+               f": ブロック {len(blocks)} 個")
         blocks = bx.section_filter(blocks, use_llm=use_llm_sections)  # 4.2.2 Section Filtering
-        root = bx.build_tree(bi, blocks, book)                     # 木 T を構築
+        bx.log("[3/5] 木（BookIndex Tree）を構築中…")
+        root = bx.build_tree(bi, blocks, book,                     # 木 T（本文はチャンク化）
+                             chunk_chars=chunk_chars or self.chunk_chars)
         new_nodes = bi.subtree(root)
+        bx.log(f"[4/5] 知識グラフ構築（抽出→名寄せ）: ノード {len(new_nodes)} 個")
         bx.build_graph(bi, new_nodes, gradient_g=self.gradient_g,  # 4.3 KG + Gradient ER
-                       er_top_k=self.er_top_k)
+                       er_top_k=self.er_top_k, max_workers=self.max_workers,
+                       max_nodes=max_nodes or self.max_nodes, er_use_llm=self.er_use_llm)
+        bx.log("[5/5] 保存中…")
         bi.persist(self.storage_dir)
+        bx.log(f"完了: {book}（エンティティ {len(bi.entities)} / 関係 {len(bi.relations)}）")
         return book
 
     def info(self) -> dict:

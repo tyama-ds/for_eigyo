@@ -83,6 +83,32 @@ def cosine(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b) / (na * nb))
 
 
+def progress(iterable, *, total: int | None = None, desc: str = ""):
+    """tqdm があればプログレスバー、無ければ定期 print で進捗を返すイテレータ。
+
+    JupyterLab では tqdm.auto がセル内にバーを描画する（現在のフェーズ=desc 付き）。
+    """
+    try:
+        from tqdm.auto import tqdm
+
+        return tqdm(iterable, total=total, desc=desc, leave=True)
+    except Exception:  # noqa: BLE001
+        def _gen():
+            n = 0
+            for x in iterable:
+                n += 1
+                if total and (n % 20 == 0 or n == total):
+                    print(f"[BookRAG] {desc} {n}/{total}")
+                elif not total and n % 20 == 0:
+                    print(f"[BookRAG] {desc} {n}")
+                yield x
+        return _gen()
+
+
+def log(msg: str) -> None:
+    print(f"[BookRAG] {msg}")
+
+
 # --------------------------------------------------------------------------
 # データ構造
 # --------------------------------------------------------------------------
@@ -126,8 +152,12 @@ class BookIndex:
         self.relations: list[tuple[int, int, str]] = []  # (src_eid, dst_eid, label)
         self._node_seq = 0
         self._ent_seq = 0
+        # エンティティ・ベクタDB（容量ダブリングの成長バッファ。append 償却 O(1)）
         self._entity_vecs: np.ndarray = np.zeros((0, 0), dtype=np.float32)
-        self._entity_ids: list[int] = []  # _entity_vecs の行に対応する entity id
+        self._entity_ids: list[int] = []  # 行 -> entity id
+        self._row_of: dict[int, int] = {}  # entity id -> 行
+        self._count = 0
+        self._dim: int | None = None
 
     # ---- ノード ----
     def add_node(self, **kwargs) -> TreeNode:
@@ -168,23 +198,28 @@ class BookIndex:
         ent = self.entities[target_eid]
         if origin not in ent.origin_nodes:
             ent.origin_nodes.append(origin)
-        # ベクトルは平均で更新（DB ←Update に相当）
-        row = self._entity_ids.index(target_eid)
+        row = self._row_of[target_eid]  # O(1)
         self._entity_vecs[row] = _normalize((self._entity_vecs[row] + vec) / 2.0)
 
     def _append_vec(self, eid: int, vec: np.ndarray) -> None:
-        vec = _normalize(vec).reshape(1, -1)
-        if self._entity_vecs.size == 0:
-            self._entity_vecs = vec
-        else:
-            self._entity_vecs = np.vstack([self._entity_vecs, vec])
+        vec = _normalize(vec).astype(np.float32)
+        if self._dim is None:
+            self._dim = int(vec.shape[0])
+            self._entity_vecs = np.zeros((64, self._dim), dtype=np.float32)
+        if self._count >= self._entity_vecs.shape[0]:  # 容量ダブリング
+            grown = np.zeros((self._entity_vecs.shape[0] * 2, self._dim), dtype=np.float32)
+            grown[: self._count] = self._entity_vecs[: self._count]
+            self._entity_vecs = grown
+        self._entity_vecs[self._count] = vec
+        self._row_of[eid] = self._count
         self._entity_ids.append(eid)
+        self._count += 1
 
     def search_entities(self, vec: np.ndarray, top_k: int) -> list[tuple[int, float]]:
         """エンティティ・ベクタDB に対する top_k 近傍検索（Algorithm 1 Line 1）。"""
-        if self._entity_vecs.size == 0:
+        if self._count == 0:
             return []
-        sims = self._entity_vecs @ _normalize(vec)
+        sims = self._entity_vecs[: self._count] @ _normalize(vec).astype(np.float32)
         order = np.argsort(-sims)[:top_k]
         return [(self._entity_ids[i], float(sims[i])) for i in order]
 
@@ -211,7 +246,7 @@ class BookIndex:
         (d / "bookindex.json").write_text(
             json.dumps(payload, ensure_ascii=False), encoding="utf-8"
         )
-        np.save(d / "entity_vecs.npy", self._entity_vecs)
+        np.save(d / "entity_vecs.npy", self._entity_vecs[: self._count])
 
     @classmethod
     def load(cls, storage_dir: str | Path) -> "BookIndex":
@@ -224,8 +259,12 @@ class BookIndex:
         bi.relations = [tuple(r) for r in payload["relations"]]
         bi._node_seq = payload["node_seq"]
         bi._ent_seq = payload["ent_seq"]
-        bi._entity_ids = payload["entity_ids"]
-        bi._entity_vecs = np.load(d / "entity_vecs.npy")
+        bi._entity_ids = list(payload["entity_ids"])
+        vecs = np.load(d / "entity_vecs.npy")
+        bi._entity_vecs = vecs.astype(np.float32)
+        bi._count = vecs.shape[0]
+        bi._dim = vecs.shape[1] if vecs.ndim == 2 and vecs.shape[0] else None
+        bi._row_of = {eid: i for i, eid in enumerate(bi._entity_ids)}
         return bi
 
 
@@ -354,15 +393,51 @@ def blocks_range(blocks):  # 小ヘルパ（id 範囲チェック）
     return range(len(blocks))
 
 
-def build_tree(bi: BookIndex, blocks: list[dict], book: str) -> int:
-    """フィルタ済みブロック列から木 T を組み立て、その書のルート node id を返す（4.2.2 末尾）。"""
+def _chunk_text(text: str, chunk_chars: int) -> list[str]:
+    """テキストを chunk_chars 程度の塊に分割（改行境界優先）。"""
+    text = text.strip()
+    if len(text) <= chunk_chars:
+        return [text] if text else []
+    chunks, buf, size = [], [], 0
+    for line in text.split("\n"):
+        if size + len(line) > chunk_chars and buf:
+            chunks.append("\n".join(buf).strip())
+            buf, size = [], 0
+        buf.append(line)
+        size += len(line) + 1
+    if buf:
+        chunks.append("\n".join(buf).strip())
+    return [c for c in chunks if c]
+
+
+def build_tree(bi: BookIndex, blocks: list[dict], book: str, *, chunk_chars: int = 1500) -> int:
+    """フィルタ済みブロック列から木 T を組み立て、その書のルート node id を返す（4.2.2 末尾）。
+
+    本文（Text）は段落ごとにノード化せず、**節の下でまとめて chunk_chars 程度のチャンク**に
+    する。これによりノード数（= 後段の LLM 抽出回数）を大幅に削減する。
+    Table / Image は構造を保つため単独ノードのまま。
+    """
     root = bi.add_node(type="Section", content=book, book=book, level=0, title=book)
     bi.roots.append(root.id)
-    # (level, node_id) のスタックで親子の入れ子を決める
     stack: list[tuple[int, int]] = [(0, root.id)]
 
+    buf: list[str] = []
+    buf_page = [None]  # チャンク先頭ページ
+
+    def _flush(parent: int) -> None:
+        if not buf:
+            return
+        for chunk in _chunk_text("\n".join(buf), chunk_chars):
+            node = bi.add_node(type="Text", content=chunk, book=book,
+                               page=buf_page[0], parent=parent)
+            bi.nodes[parent].children.append(node.id)
+        buf.clear()
+        buf_page[0] = None
+
     for b in blocks:
+        parent = stack[-1][1] if stack else root.id
         if b["type"] == "Title":
+            _flush(parent)
             level = b.get("level") or 1
             while stack and stack[-1][0] >= level:
                 stack.pop()
@@ -371,11 +446,17 @@ def build_tree(bi: BookIndex, blocks: list[dict], book: str) -> int:
                                level=level, title=b["content"], page=b.get("page"), parent=parent)
             bi.nodes[parent].children.append(node.id)
             stack.append((level, node.id))
-        else:
-            parent = stack[-1][1] if stack else root.id
+        elif b["type"] in ("Table", "Image"):
+            _flush(parent)
             node = bi.add_node(type=b["type"], content=b["content"], book=book,
                                page=b.get("page"), parent=parent)
             bi.nodes[parent].children.append(node.id)
+        else:  # Text: バッファに溜めてチャンク化
+            if buf_page[0] is None:
+                buf_page[0] = b.get("page")
+            buf.append(b["content"])
+
+    _flush(stack[-1][1] if stack else root.id)
     return root.id
 
 
@@ -385,12 +466,15 @@ def build_tree(bi: BookIndex, blocks: list[dict], book: str) -> int:
 
 
 def build_graph(bi: BookIndex, node_ids: list[int], *, gradient_g: float = 0.6,
-                er_top_k: int = 10, max_workers: int = 8, min_chars: int = 40) -> None:
+                er_top_k: int = 10, max_workers: int = 8, min_chars: int = 40,
+                max_nodes: int = 300, er_use_llm: bool = False) -> None:
     """各ノードからエンティティ/関係を抽出し、Gradient-based ER で KG を構築する。
 
     速度のため、抽出（LLM 呼び出し + 埋め込み）はノード単位で **並列化** し、
     Gradient ER とグラフ構築（順序依存・BookIndex を変更する）は **逐次** で行う。
-    短すぎるノード（min_chars 未満）は抽出をスキップして無駄な呼び出しを省く。
+    - 短すぎるノード（min_chars 未満）は抽出をスキップ。
+    - 対象ノードは max_nodes で上限（超過分は警告して打ち切り）。
+    - er_use_llm=False（既定）なら曖昧マージで LLM を呼ばず、最有力候補を採用（高速）。
     """
     from concurrent.futures import ThreadPoolExecutor
 
@@ -401,6 +485,10 @@ def build_graph(bi: BookIndex, node_ids: list[int], *, gradient_g: float = 0.6,
     ]
     if not targets:
         return
+    if len(targets) > max_nodes:
+        print(f"[BookRAG] 対象ノード {len(targets)} 件を max_nodes={max_nodes} 件に打ち切ります"
+              "（増やすには add_book(max_nodes=...)）")
+        targets = targets[:max_nodes]
 
     def _work(nid: int):
         # 抽出フェーズは BookIndex を読むだけ（スレッド安全）。失敗しても全体を止めない。
@@ -418,10 +506,9 @@ def build_graph(bi: BookIndex, node_ids: list[int], *, gradient_g: float = 0.6,
     results = []
     total = len(targets)
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        for i, res in enumerate(ex.map(_work, targets), start=1):  # map は入力順を保持
+        for res in progress(ex.map(_work, targets), total=total,
+                            desc=f"抽出: エンティティ/関係 ({max_workers}並列)"):
             results.append(res)
-            if i % 20 == 0 or i == total:
-                print(f"[BookRAG] 抽出 {i}/{total} ノード")
 
     # 空振り検知: 1件もエンティティが取れない場合は“読めていない”状態。
     # 例外/タイムアウトは握り潰すため、ここで明示的に警告する。
@@ -437,15 +524,16 @@ def build_graph(bi: BookIndex, node_ids: list[int], *, gradient_g: float = 0.6,
             "request_timeout を延ばす、PDF にテキスト層があるか。"
         )
 
-    # Gradient ER + グラフ構築は順序依存のため逐次（入力ノード順）。
-    for nid, ents, rels, vecs in results:
+    # Gradient ER + グラフ構築は順序依存のため逐次（入力ノード順）。進捗も表示。
+    for nid, ents, rels, vecs in progress(results, total=len(results),
+                                          desc="名寄せ/グラフ構築 (KG)"):
         if not ents:
             continue
         local_name_to_eid: dict[str, int] = {}
         for e, vec in zip(ents, vecs):
             eid = gradient_entity_resolution(
                 bi, e["name"], e.get("type", ""), e.get("description", ""),
-                nid, vec, gradient_g=gradient_g, er_top_k=er_top_k,
+                nid, vec, gradient_g=gradient_g, er_top_k=er_top_k, use_llm=er_use_llm,
             )
             local_name_to_eid[e["name"].strip().lower()] = eid
         for rel in rels:
@@ -456,11 +544,13 @@ def build_graph(bi: BookIndex, node_ids: list[int], *, gradient_g: float = 0.6,
 
 
 def gradient_entity_resolution(bi: BookIndex, name: str, etype: str, desc: str, origin: int,
-                               vec: np.ndarray, *, gradient_g: float, er_top_k: int) -> int:
+                               vec: np.ndarray, *, gradient_g: float, er_top_k: int,
+                               use_llm: bool = False) -> int:
     """Algorithm 1（Gradient-based entity resolution）。返り値は確定したエンティティ id。
 
     新規概念なら追加、既存の別名なら最も確からしい正準エンティティへマージする。
     reranker は持たないため、ベクトルDB のコサイン類似度を rerank スコア S とみなす。
+    use_llm=True のときだけ、複数の高関連候補がある場合に LLM で1つ選ぶ（遅い）。
     """
     candidates = bi.search_entities(vec, er_top_k)  # Line 1: Search
     if not candidates:
@@ -481,8 +571,8 @@ def gradient_entity_resolution(bi: BookIndex, name: str, etype: str, desc: str, 
         return bi.add_entity(name, etype, desc, origin, vec).id
 
     # Line 11-14: Case B → マージ
-    if len(sel) == 1:
-        v_sel = sel[0]
+    if len(sel) == 1 or not use_llm:
+        v_sel = sel[0]                # 既定: LLM を呼ばず最有力候補を採用（高速）
     else:
         v_sel = _llm_select_entity(bi, name, etype, desc, sel)
         if v_sel is None:

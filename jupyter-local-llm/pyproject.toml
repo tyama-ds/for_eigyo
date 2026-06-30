@@ -14,6 +14,7 @@ dependencies = [
     "openai>=1.30",
     "ipython>=8.0",
     "ipywidgets>=8.0",
+    "tqdm>=4.66",
     # Jupyter 本体（補完・チャットは自前実装。jupyter-ai は使わない）
     "jupyterlab>=4.1",
     # RAG（PagedRAG/DocRAG）
