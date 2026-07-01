@@ -77,6 +77,7 @@ class MultiPaperRAG:
         pics: bool = False,
         vlm_model: str | None = None,     # pics=True 時の画像対応モデル名（省略時は model）
         max_figure_pages: int = 20,
+        book_kwargs: dict | None = None,  # deep_engine="book" 時に per-paper BookRAG へ渡す設定
     ):
         if deep_engine not in ("paged", "book"):
             raise ValueError('deep_engine は "paged" か "book"')
@@ -89,6 +90,8 @@ class MultiPaperRAG:
         self.pics = pics
         self.vlm_model = vlm_model
         self.max_figure_pages = max_figure_pages
+        # per-paper BookRAG の調整ノブ（chunk_chars / max_nodes / er_use_llm / max_workers 等）
+        self.book_kwargs = book_kwargs or {}
         self._rag = PagedRAG(
             storage_dir=str(self.storage_dir / "vectors"),
             top_k=top_k, chunk_size=chunk_size, chunk_overlap=chunk_overlap,
@@ -111,6 +114,10 @@ class MultiPaperRAG:
             self._cache_tables(path, book_title)
         if self.pics and path.suffix.lower() == ".pdf":
             self._describe_figures(path, book_title)
+        # deep_engine="book" は取り込み時に BookIndex を構築（重い処理と進捗を add 時に出す。
+        # 遅延だと初回 compare() で突然重くなるため）。
+        if self.deep_engine == "book":
+            self._ensure_book(book_title)
         return book_title
 
     def add_papers(self, docs_dir: str | Path) -> list[str]:
@@ -228,7 +235,8 @@ class MultiPaperRAG:
             return self._book_cache[title]
         from .bookrag import BookRAG
 
-        book = BookRAG(storage_dir=str(self.storage_dir / "books" / self._safe(title)))
+        book = BookRAG(storage_dir=str(self.storage_dir / "books" / self._safe(title)),
+                       **self.book_kwargs)  # 高速化ノブ等を継承（chunk_chars/max_nodes/er_use_llm…）
         info = self._manifest().get(title, {})
         if info.get("path") and book.info().get("nodes", 0) == 0:
             book.add_book(info["path"], title=title)  # 初回のみ構築（重い）

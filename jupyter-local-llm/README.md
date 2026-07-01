@@ -266,6 +266,9 @@ print(mp.compare_figures("各論文のグラフの傾向を比較")) # pics=True
 
 **切替の要点**
 - `deep_engine`: 深掘りを ④PagedRAG（既定・速い）か ⑤BookRAG（構造・関係まで踏まえる・重い）で
+  - `deep_engine="book"` のとき、⑤の高速化（チャンク化・max_nodes・er_use_llm=False・進捗バー・
+    タイムアウト）を**そのまま継承**。取り込みは `add_paper` 時に構築（初回 compare で突然重くならない）。
+    調整は `MultiPaperRAG(deep_engine="book", book_kwargs={"chunk_chars":2000,"max_nodes":150})`
 - `locate_strategy`: 候補論文の選び方（横断検索／要約でLLM選別／全件）
 - `pics=True`: PDF を画像化して VLM が図を読む（`compare`/`compare_figures` で活用）
 
