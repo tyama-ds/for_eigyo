@@ -26,6 +26,7 @@ from .config import (
 from .pagedrag import Answer, DocRAG, PagedRAG, Source
 from .multipaper import Comparison, MultiPaperRAG
 from .tableqa import TableAnswer, TableQA
+from .docqa import DocQA, DocResult
 from .rag import build_rag
 
 __all__ = [
@@ -61,6 +62,9 @@ __all__ = [
     # 表データの text-to-pandas（集計・計算）
     "TableQA",
     "TableAnswer",
+    # 1文書を 散文=RAG / 表=TableQA に自動振り分け
+    "DocQA",
+    "DocResult",
 ]
 
 __version__ = "0.1.0"
