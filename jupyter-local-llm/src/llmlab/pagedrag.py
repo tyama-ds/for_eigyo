@@ -120,7 +120,8 @@ class PagedRAG:
         """フォルダ内の対応ファイルをまとめて取り込む。"""
         docs_dir = Path(docs_dir)
         added: list[str] = []
-        exts = {".pdf", ".txt", ".md", ".docx", ".pptx", ".csv", ".html"}
+        exts = {".pdf", ".txt", ".md", ".docx", ".doc", ".pptx",
+                ".csv", ".xlsx", ".xls", ".html", ".epub"}
         for f in sorted(docs_dir.iterdir()):
             if f.is_file() and f.suffix.lower() in exts:
                 added.append(self.add_book(f))
