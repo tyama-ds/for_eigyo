@@ -42,17 +42,48 @@ def safe_exec(code: str, namespace: dict, forbidden: tuple, *, result_var: str =
 
 
 def _run_restricted(code: str, namespace: dict, result_var: str):
+    import operator
+
     from RestrictedPython import compile_restricted
     from RestrictedPython.Guards import (
         guarded_iter_unpack_sequence,
+        guarded_unpack_sequence,
         safe_builtins,
         safer_getattr,
     )
+    from RestrictedPython.PrintCollector import PrintCollector
+
+    import warnings
 
     try:
-        byte_code = compile_restricted(code, filename="<tableqa>", mode="exec")
+        with warnings.catch_warnings():
+            # print() 使用時に出る「never reads 'printed'」は本実装では無害（即時出力する）
+            warnings.simplefilter("ignore", SyntaxWarning)
+            byte_code = compile_restricted(code, filename="<tableqa>", mode="exec")
     except SyntaxError as e:
         raise ValueError(f"サンドボックスがコードを拒否しました（制限構文）: {e}\nコード:\n{code}") from e
+
+    # RestrictedPython は `x += 1` / `a, b = ...` / `print(...)` を補助関数呼び出しに
+    # 変換するため、対応するガードを揃える（無いと正常コードが NameError で落ちる）。
+    _inplace_ops = {
+        "+=": operator.iadd, "-=": operator.isub, "*=": operator.imul,
+        "/=": operator.itruediv, "//=": operator.ifloordiv, "%=": operator.imod,
+        "**=": operator.ipow, "&=": operator.iand, "|=": operator.ior,
+        "^=": operator.ixor, ">>=": operator.irshift, "<<=": operator.ilshift,
+        "@=": operator.imatmul,
+    }
+
+    def _inplacevar(op, x, y):
+        try:
+            return _inplace_ops[op](x, y)
+        except KeyError:  # 未知の演算子は拒否
+            raise ValueError(f"サンドボックスが演算子 {op} を許可していません") from None
+
+    class _StdoutPrint(PrintCollector):
+        def write(self, text):  # print() の出力を握り潰さず即時表示する
+            import sys as _sys
+
+            _sys.stdout.write(text)
 
     # pandas の公開メソッド（アンダースコア始まりでない）だけ許可する getattr。
     # __class__ / __globals__ 等のエスケープ経路は safer_getattr が遮断する。
@@ -61,7 +92,7 @@ def _run_restricted(code: str, namespace: dict, result_var: str):
         "sum": sum, "min": min, "max": max, "sorted": sorted, "len": len,
         "range": range, "abs": abs, "round": round, "enumerate": enumerate,
         "zip": zip, "list": list, "dict": dict, "set": set, "tuple": tuple,
-        "float": float, "int": int, "str": str, "bool": bool, "print": print,
+        "float": float, "int": int, "str": str, "bool": bool,
     })
     glb = {
         "__builtins__": builtins,
@@ -69,6 +100,9 @@ def _run_restricted(code: str, namespace: dict, result_var: str):
         "_getitem_": lambda obj, key: obj[key],
         "_getiter_": iter,
         "_iter_unpack_sequence_": guarded_iter_unpack_sequence,
+        "_unpack_sequence_": guarded_unpack_sequence,
+        "_inplacevar_": _inplacevar,
+        "_print_": _StdoutPrint,
         "_write_": lambda obj: obj,  # 渡すのはコピーなので in-place 変更を許可
         **namespace,
     }

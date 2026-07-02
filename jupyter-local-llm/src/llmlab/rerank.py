@@ -35,27 +35,39 @@ class CosineReranker(Reranker):
 
 
 class EndpointReranker(Reranker):
-    """OpenAI 互換サーバの rerank API を叩く（Jina/Cohere 互換の想定）。"""
+    """OpenAI 互換サーバの rerank API を叩く（Jina/Cohere 互換の想定）。
 
-    def __init__(self, model: str, base_url: str, api_key: str, timeout: float = 120.0):
-        self.model, self.base_url, self.api_key, self.timeout = model, base_url, api_key, timeout
+    接続情報は rerank() 時に解決する（configure() 前に BookRAG を構築しても壊れない）。
+    """
+
+    def __init__(self, model: str = "rerank", base_url: str | None = None,
+                 api_key: str | None = None):
+        self.model, self._base_url, self._api_key = model, base_url, api_key
 
     def rerank(self, query: str, docs: list[str]) -> list[float]:
         if not docs:
             return []
-        import httpx
-
         s = _current_settings()
-        url = self.base_url.rstrip("/") + "/rerank"
+        base = self._base_url or s.embed_base_url or s.base_url
+        key = self._api_key or s.embed_api_key or s.api_key
+        url = base.rstrip("/") + "/rerank"
         payload = {"model": self.model, "query": query, "documents": docs}
         client = _http_client(s)
-        resp = client.post(url, headers={"Authorization": f"Bearer {self.api_key}"},
-                           json=payload, timeout=self.timeout)
-        resp.raise_for_status()
-        data = resp.json()
+        try:
+            resp = client.post(url, headers={"Authorization": f"Bearer {key}"},
+                               json=payload, timeout=s.request_timeout)
+            resp.raise_for_status()
+            data = resp.json()
+        finally:
+            try:
+                client.close()  # コネクション解放
+            except Exception:  # noqa: BLE001
+                pass
         # {"results":[{"index":i,"relevance_score":x}, ...]} 形式を想定
         scores = [0.0] * len(docs)
         for r in data.get("results", data.get("data", [])):
+            if not isinstance(r, dict):
+                continue
             idx = r.get("index")
             sc = r.get("relevance_score", r.get("score"))
             if isinstance(idx, int) and 0 <= idx < len(docs) and sc is not None:
@@ -95,12 +107,11 @@ def make_reranker(spec) -> Reranker:
             model = opts.get("model", "cross-encoder/ms-marco-MiniLM-L-6-v2")
             return LocalReranker(model)
         if kind == "endpoint":
-            s = _current_settings()
+            # 接続情報は rerank 時に解決（configure 前の構築でもフォールバックしない）
             return EndpointReranker(
                 model=opts.get("model", "rerank"),
-                base_url=opts.get("base_url") or s.embed_base_url or s.base_url,
-                api_key=opts.get("api_key") or s.embed_api_key or s.api_key,
-                timeout=getattr(s, "request_timeout", 120.0),
+                base_url=opts.get("base_url"),
+                api_key=opts.get("api_key"),
             )
     except Exception as e:  # noqa: BLE001
         print(f"[rerank] {kind} の初期化に失敗したため cosine にフォールバック: {e}")

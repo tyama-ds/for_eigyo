@@ -48,40 +48,48 @@ def parse_pdf(path: Path, *, ocr="auto", layout="auto") -> list[dict] | None:
     # 1) 各ページの行(テキスト+最大フォントサイズ)を集める
     page_lines: dict[int, list[tuple[str, float]]] = {}
     sizes: list[float] = []
-    for pno in range(len(doc)):
-        page = doc.load_page(pno)
-        lines: list[tuple[str, float]] = []
-        try:
-            data = page.get_text("dict")
-        except Exception:  # noqa: BLE001
-            data = {"blocks": []}
-        for block in data.get("blocks", []):
-            if block.get("type") != 0:  # 0=text
-                continue
-            for line in block.get("lines", []):
-                spans = line.get("spans", [])
-                txt = "".join(sp.get("text", "") for sp in spans).strip()
-                if not txt:
+    try:
+        for pno in range(len(doc)):
+            page = doc.load_page(pno)
+            lines: list[tuple[str, float]] = []
+            try:
+                data = page.get_text("dict")
+            except Exception:  # noqa: BLE001
+                data = {"blocks": []}
+            for block in data.get("blocks", []):
+                if block.get("type") != 0:  # 0=text
                     continue
-                size = max((sp.get("size", 0.0) for sp in spans), default=0.0)
-                lines.append((txt, size))
-                sizes.append(size)
-        # OCR 判定: テキストが薄いページ
-        need_ocr = ocr is True or (ocr == "auto" and _text_len(lines) < 40)
-        if need_ocr:
-            ocr_text = _ocr_page(page)
-            if ocr_text:
-                for ln in ocr_text.splitlines():
-                    ln = ln.strip()
-                    if ln:
-                        lines.append((ln, 0.0))  # OCR 行はサイズ不明→本文扱い
-        page_lines[pno + 1] = lines
+                for line in block.get("lines", []):
+                    spans = line.get("spans", [])
+                    txt = "".join(sp.get("text", "") for sp in spans).strip()
+                    if not txt:
+                        continue
+                    size = max((sp.get("size", 0.0) for sp in spans), default=0.0)
+                    lines.append((txt, size))
+                    sizes.append(size)
+            # OCR 判定: テキストが薄いページ
+            need_ocr = ocr is True or (ocr == "auto" and _text_len(lines) < 40)
+            if need_ocr:
+                ocr_text = _ocr_page(page)
+                if ocr_text:
+                    for ln in ocr_text.splitlines():
+                        ln = ln.strip()
+                        if ln:
+                            lines.append((ln, 0.0))  # OCR 行はサイズ不明→本文扱い
+            page_lines[pno + 1] = lines
+    finally:
+        try:
+            doc.close()  # fitz Document のリソース解放
+        except Exception:  # noqa: BLE001
+            pass
 
     if not sizes and not any(page_lines.values()):
         return []  # 完全に空（OCR も失敗）
 
-    # 2) 本文フォントサイズ（最頻値）を基準に見出し閾値を決める
-    body = _mode(sizes) if sizes else 0.0
+    # 2) 本文フォントサイズを基準に見出し閾値を決める。
+    #    行数の最頻値ではなく「文字数で重み付け」する: 本文は圧倒的に文字数が多いため、
+    #    見出しが多い/行数が拮抗する文書でも本文サイズを取り違えない。
+    body = _body_size(page_lines) if sizes else 0.0
     # サイズ→見出しレベルのマップ（本文より大きいサイズを大きい順に level 1,2,3...）
     big = sorted({round(s, 1) for s in sizes if s > body + 0.5}, reverse=True)
     size_to_level = {s: i + 1 for i, s in enumerate(big[:4])}
@@ -120,11 +128,16 @@ def _text_len(lines: list[tuple[str, float]]) -> int:
     return sum(len(t) for t, _ in lines)
 
 
-def _mode(values: list[float]) -> float:
+def _body_size(page_lines: dict[int, list[tuple[str, float]]]) -> float:
+    """本文フォントサイズ = 文字数が最も多いサイズ（OCR 行 size=0.0 は除外）。"""
     from collections import Counter
 
-    rounded = [round(v, 1) for v in values]
-    return Counter(rounded).most_common(1)[0][0]
+    weight: Counter = Counter()
+    for lines in page_lines.values():
+        for txt, size in lines:
+            if size > 0:
+                weight[round(size, 1)] += len(txt)
+    return weight.most_common(1)[0][0] if weight else 0.0
 
 
 def _ocr_page(page) -> str:

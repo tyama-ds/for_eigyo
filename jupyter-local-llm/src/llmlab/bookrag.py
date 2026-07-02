@@ -365,7 +365,10 @@ class BookRAG:
             print(f"[BookRAG] rerank に失敗したためコサインで代替: {e}")
             from .rerank import CosineReranker
             scores = CosineReranker().rerank(query, contents)
-        return {n: float(scores[i]) for i, n in enumerate(ns)}
+        # 0-1 に正規化して返す。CrossEncoder のロジット（±10 等）をそのまま使うと、
+        # Skyline 後の (S_G + S_T) ソートでグラフスコア（minmax 済み）との釣り合いが崩れる。
+        # 単調変換なので Pareto 支配関係（Skyline の中身）は変わらない。
+        return _minmax({n: float(scores[i]) for i, n in enumerate(ns)})
 
     def _op_skyline(self, ns: list[int], s_graph: dict, s_text: dict) -> list[int]:
         """Skyline_Ranker（式(14)）: (S_G, S_T) の Pareto 前線を残す（top-k 固定ではない）。"""
