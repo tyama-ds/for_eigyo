@@ -27,11 +27,14 @@ def available() -> bool:
         return False
 
 
-def parse_pdf(path: Path, *, ocr="auto", layout="auto") -> list[dict] | None:
+def parse_pdf(path: Path, *, ocr="auto", layout="auto", vlm=False,
+              vlm_model: str | None = None) -> list[dict] | None:
     """PDF を版面解析つきで解析。pymupdf が無ければ None（呼び出し側が pypdf へ）。
 
     ocr:    "auto"(テキストが薄いページのみOCR) / True(全ページOCR) / False(OCRしない)
     layout: "auto"(fitz のフォントサイズで見出し判定) / "mineru"(MinerU試行) / False(行=Text)
+    vlm:    True で図（画像ブロック）を VLM に渡して説明文を Image ノードとして取り込む
+            （画像対応モデルが必要。vlm_model 省略時は接続設定の model を使用）
     """
     if layout == "mineru":
         blocks = _try_mineru(path)
@@ -45,8 +48,9 @@ def parse_pdf(path: Path, *, ocr="auto", layout="auto") -> list[dict] | None:
         return None
 
     doc = fitz.open(str(path))
-    # 1) 各ページの行(テキスト+最大フォントサイズ)を集める
+    # 1) 各ページの行(テキスト+最大フォントサイズ)と、vlm=True なら図の説明を集める
     page_lines: dict[int, list[tuple[str, float]]] = {}
+    page_figs: dict[int, list[str]] = {}
     sizes: list[float] = []
     try:
         for pno in range(len(doc)):
@@ -58,6 +62,10 @@ def parse_pdf(path: Path, *, ocr="auto", layout="auto") -> list[dict] | None:
                 data = {"blocks": []}
             for block in data.get("blocks", []):
                 if block.get("type") != 0:  # 0=text
+                    if vlm and block.get("type") == 1:  # 1=image
+                        desc = _vlm_block(fitz, page, block, vlm_model)
+                        if desc:
+                            page_figs.setdefault(pno + 1, []).append(desc)
                     continue
                 for line in block.get("lines", []):
                     spans = line.get("spans", [])
@@ -83,7 +91,11 @@ def parse_pdf(path: Path, *, ocr="auto", layout="auto") -> list[dict] | None:
         except Exception:  # noqa: BLE001
             pass
 
-    if not sizes and not any(page_lines.values()):
+    n_figs = sum(len(v) for v in page_figs.values())
+    if n_figs:
+        print(f"[docparse] VLM が図 {n_figs} 個を読解しました")
+
+    if not sizes and not any(page_lines.values()) and not page_figs:
         return []  # 完全に空（OCR も失敗）
 
     # 2) 本文フォントサイズを基準に見出し閾値を決める。
@@ -99,6 +111,8 @@ def parse_pdf(path: Path, *, ocr="auto", layout="auto") -> list[dict] | None:
         for pno, lines in page_lines.items():
             for txt, _ in lines:
                 blocks.append(_blk(txt, "Text", pno))
+            for desc in page_figs.get(pno, []):
+                blocks.append(_blk(desc, "Image", pno))
         return blocks
 
     for pno, lines in page_lines.items():
@@ -114,6 +128,8 @@ def parse_pdf(path: Path, *, ocr="auto", layout="auto") -> list[dict] | None:
                 blocks.append(_blk(txt, "Title", pno, level=level))
             else:
                 blocks.append(_blk(txt, "Text", pno))
+        for desc in page_figs.get(pno, []):  # VLM が読解した図はページ末尾に Image ノード
+            blocks.append(_blk(desc, "Image", pno))
     return blocks
 
 
@@ -138,6 +154,22 @@ def _body_size(page_lines: dict[int, list[tuple[str, float]]]) -> float:
             if size > 0:
                 weight[round(size, 1)] += len(txt)
     return weight.most_common(1)[0][0] if weight else 0.0
+
+
+def _vlm_block(fitz_mod, page, block, vlm_model: str | None) -> str:
+    """画像ブロックの領域をレンダリングして VLM に説明させる。失敗は空文字。"""
+    try:
+        rect = fitz_mod.Rect(block["bbox"])
+        if rect.width < 40 or rect.height < 40:  # アイコン等の微小画像は無視
+            return ""
+        png = page.get_pixmap(clip=rect, dpi=150).tobytes("png")
+        from .bookindex import vlm_describe
+
+        desc = vlm_describe(png, model=vlm_model)
+        return f"[図] {desc}" if desc else ""
+    except Exception as e:  # noqa: BLE001
+        print(f"[docparse] VLM 図読解に失敗（スキップ）: {e}")
+        return ""
 
 
 def _ocr_page(page) -> str:

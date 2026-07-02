@@ -93,7 +93,9 @@ class BookRAG:
         max_nodes: int = 300,       # 取り込み対象ノードの上限（超過は打ち切り）
         max_workers: int = 8,       # 抽出フェーズの並列数
         er_use_llm: bool = False,   # 名寄せで LLM を使うか（既定 False=高速）
-        reranker=None,              # Text_Reasoning の再ランク: None/"cosine"/"local"/"endpoint"/dict
+        reranker=None,              # 再ランク: None/"cosine"/"local"/"endpoint"/dict（Text_Reasoning と ER の両方に使用）
+        vlm: bool = False,          # True で PDF の図を VLM が読解し Image ノード化（画像対応モデルが必要）
+        vlm_model: str | None = None,  # vlm=True 時の画像対応モデル名（省略時は接続設定の model）
     ):
         from .rerank import make_reranker
 
@@ -105,6 +107,8 @@ class BookRAG:
         self.max_nodes = max_nodes
         self.max_workers = max_workers
         self.er_use_llm = er_use_llm
+        self.vlm = vlm
+        self.vlm_model = vlm_model
         self._reranker = make_reranker(reranker)
         self._bi: BookIndex | None = None
 
@@ -112,7 +116,8 @@ class BookRAG:
 
     def add_book(self, path: str | Path, *, title: str | None = None,
                  use_llm_sections: bool = False, max_nodes: int | None = None,
-                 chunk_chars: int | None = None, ocr=False, layout=False) -> str:
+                 chunk_chars: int | None = None, ocr=False, layout=False,
+                 vlm: bool | None = None) -> str:
         """文書を取り込み、BookIndex（Tree + KG + GT-Link）へ統合する。
 
         既定は速度重視（見出し判定は LLM 不使用、本文はチャンク化、ノード数に上限）。
@@ -122,15 +127,22 @@ class BookRAG:
         - layout="auto": pymupdf のフォントサイズで見出し階層を判定（pypdf より高精度）
         - layout="mineru": MinerU(magic_pdf) 導入時はそれを使う
         - ocr="auto": テキストの薄いページのみ OCR / ocr=True: 全ページ OCR
+        - vlm=True: 図を VLM が読解して Image ノード化（画像対応モデルが必要。
+          省略時はコンストラクタの vlm 設定に従う。通常のローカルLLMのみなら False のまま）
         """
         path = Path(path)
         if not path.exists():
             raise FileNotFoundError(f"ファイルがありません: {path}")
+        use_vlm = self.vlm if vlm is None else vlm
+        if use_vlm:
+            bx.log("vlm=True: 図の読解には画像入力対応モデルが必要です"
+                   f"（使用モデル: {self.vlm_model or '接続設定の model'}）")
         bi = self._index(create=True)
         book = title or path.stem
 
-        bx.log(f"[1/5] 解析（レイアウト{'+OCR' if ocr else ''}）: {path.name}")
-        blocks = bx.parse_blocks(path, ocr=ocr, layout=layout)      # 4.2.1 Layout Parsing
+        bx.log(f"[1/5] 解析（レイアウト{'+OCR' if ocr else ''}{'+VLM' if use_vlm else ''}）: {path.name}")
+        blocks = bx.parse_blocks(path, ocr=ocr, layout=layout,      # 4.2.1 Layout Parsing
+                                 vlm=use_vlm, vlm_model=self.vlm_model)
         bx.log(f"[2/5] 見出し判定{'（LLM）' if use_llm_sections else '（ヒューリスティック）'}"
                f": ブロック {len(blocks)} 個")
         blocks = bx.section_filter(blocks, use_llm=use_llm_sections)  # 4.2.2 Section Filtering
@@ -141,7 +153,8 @@ class BookRAG:
         bx.log(f"[4/5] 知識グラフ構築（抽出→名寄せ）: ノード {len(new_nodes)} 個")
         bx.build_graph(bi, new_nodes, gradient_g=self.gradient_g,  # 4.3 KG + Gradient ER
                        er_top_k=self.er_top_k, max_workers=self.max_workers,
-                       max_nodes=max_nodes or self.max_nodes, er_use_llm=self.er_use_llm)
+                       max_nodes=max_nodes or self.max_nodes, er_use_llm=self.er_use_llm,
+                       reranker=self._reranker)  # Algorithm 1 の Rerank model R
         bx.log("[5/5] 保存中…")
         bi.persist(self.storage_dir)
         bx.log(f"完了: {book}（エンティティ {len(bi.entities)} / 関係 {len(bi.relations)}）")
@@ -248,10 +261,44 @@ class BookRAG:
         evidence = self._to_evidence(bi, ns, {}, {}, limit=min(total, 100))
         operation = str(spec.get("operation", "ANALYZE") or "ANALYZE")
         operation = f"{operation}（フィルタ後の該当ノード総数: {total} 件。件数を問われたらこの総数を使う）"
-        plan += ["Map", f"Reduce({operation})"]
-        text = self._op_reduce(question, evidence, operation=operation)
+
+        # 論文 5.3: Map が各ブロックを分析→Reduce が統合。件数が多いときはバッチ Map を
+        # 並列実行して部分所見を作り、Reduce に渡す（少数なら直接 Reduce で十分）。
+        partials = None
+        if len(evidence) > self.max_evidence:
+            plan.append(f"Map({len(evidence)}件をバッチ分析)")
+            partials = self._op_map_batches(question, evidence, operation)
+        plan += [f"Reduce({operation})"]
+        text = self._op_reduce(question, evidence[: self.max_evidence] if partials else evidence,
+                               operation=operation, partials=partials)
         return BookAnswer(text=text, category="global", plan=plan,
                           evidence=evidence[: self.max_evidence])
+
+    def _op_map_batches(self, question: str, evidence: list[Evidence],
+                        operation: str, *, batch_size: int = 10) -> list[str]:
+        """Synthesizer/Map: 根拠ブロックをバッチごとに分析し部分所見を生成（並列）。"""
+        from concurrent.futures import ThreadPoolExecutor
+
+        batches = [evidence[i:i + batch_size] for i in range(0, len(evidence), batch_size)]
+
+        def _map_one(pair):
+            bi_idx, batch = pair
+            ctx = "\n".join(
+                f"- ({e.title or ''} {'p.'+str(e.page) if e.page else ''}) {e.snippet}"
+                for e in batch
+            )
+            prompt = (
+                "以下は文書から取り出した断片の一部です。質問に関係する事実・数値・項目を"
+                "漏れなく抽出し、箇条書きで簡潔に列挙してください（このバッチ分のみ）。\n\n"
+                f"質問: {question}\n集計操作: {operation}\n\n断片（バッチ {bi_idx+1}/{len(batches)}）:\n{ctx}"
+            )
+            try:
+                return bx.llm_text(prompt).strip()
+            except Exception as e:  # noqa: BLE001
+                return f"(バッチ {bi_idx+1} の分析に失敗: {e})"
+
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            return list(ex.map(_map_one, enumerate(batches)))
 
     # ===== Operators =====
 

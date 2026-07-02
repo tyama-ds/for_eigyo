@@ -259,10 +259,23 @@ book = llmlab.BookRAG(chunk_chars=1500, max_nodes=300, max_workers=8, er_use_llm
   （要 `python-pptx` / `openpyxl`）
 - .txt 等 — 段落を本文として取り込み
 
-**論文との差分（環境前提による簡略化）**:
-- 版面解析に MinerU を使わず、上記の見出し/ヒューリスティック（+任意で LLM）で木を作る
-- Rerank モデルの代わりに埋め込みコサインを Gradient ER のスコアに使用（reranker 非依存）
-- 画像は VLM ではなくテキストとして扱う
+**論文との差分と“論文最接近”プリセット**:
+既定は速度優先の簡略構成（見出しヒューリスティック・コサインER・VLMなし）。
+オプションを全て有効にすると論文構成にほぼ一致する:
+
+```python
+book = llmlab.BookRAG(
+    er_use_llm=True,        # Algorithm 1 の LLM 名寄せ判定
+    reranker="endpoint",    # Rerank model R（ER と Text_Reasoning 両方に使用）
+    vlm=True,               # 図を VLM が読解して Image ノード化（画像対応モデルが必要）
+    # vlm_model="your-vision-model",   # 通常のローカルLLMのみなら vlm=False のまま
+)
+book.add_book("paper.pdf", use_llm_sections=True, layout="mineru", ocr="auto")
+```
+- 表は v_table エンティティ + ヘッダを ContainedIn で構造化（論文 4.3.1）
+- Section Filtering は確定済み上位節をバッチ間で持ち回り（論文 4.2.2）
+- global 集計は件数が多いとき Map（バッチ分析）→ Reduce（論文 5.3）
+- 残る差分: 版面解析の既定は MinerU でなく pymupdf（`layout="mineru"` で切替可）
 
 > **③/④ と ⑤ の使い分け**: 雑多な文書を手早く検索 → ③ `build_rag`。文書をページ出典つきで
 > 引く → ④ `PagedRAG`。**階層・表・横断参照が重要な複雑文書で精度を取りに行く** → ⑤ `BookRAG`。
