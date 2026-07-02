@@ -47,13 +47,16 @@ def parse_pdf(path: Path, *, ocr="auto", layout="auto", vlm=False,
     except Exception:  # noqa: BLE001
         return None
 
+    from .bookindex import progress  # 遅延 import（循環回避）
+
     doc = fitz.open(str(path))
     # 1) 各ページの行(テキスト+最大フォントサイズ)と、vlm=True なら図の説明を集める
     page_lines: dict[int, list[tuple[str, float]]] = {}
     page_figs: dict[int, list[str]] = {}
     sizes: list[float] = []
+    desc = "PDF解析" + ("+OCR" if ocr else "") + ("+VLM図" if vlm else "") + " (ページ)"
     try:
-        for pno in range(len(doc)):
+        for pno in progress(range(len(doc)), total=len(doc), desc=desc):
             page = doc.load_page(pno)
             lines: list[tuple[str, float]] = []
             try:

@@ -121,11 +121,15 @@ class MultiPaperRAG:
         return book_title
 
     def add_papers(self, docs_dir: str | Path) -> list[str]:
+        from .bookindex import progress
+
         docs_dir = Path(docs_dir)
+        files = [f for f in sorted(docs_dir.iterdir())
+                 if f.is_file() and f.suffix.lower() in PAPER_EXTS]
         added = []
-        for f in sorted(docs_dir.iterdir()):
-            if f.is_file() and f.suffix.lower() in PAPER_EXTS:
-                added.append(self.add_paper(f))
+        for f in progress(files, total=len(files), desc="論文取り込み"):
+            print(f"[MultiPaperRAG] 取り込み中: {f.name}")
+            added.append(self.add_paper(f))
         return added
 
     def papers(self) -> list[str]:

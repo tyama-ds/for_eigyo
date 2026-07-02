@@ -223,10 +223,10 @@ class BookRAG:
     def _run_complex(self, bi: BookIndex, question: str) -> BookAnswer:
         plan = ["Classify(multi-hop)", "Decompose"]
         subqs = self._op_decompose(question)                       # Formulator: Decompose
+        retrieval_qs = [sq for sq in subqs if sq.get("type") != "synthesis"]
         sub_answers, all_evidence = [], []
-        for sq in subqs:
-            if sq.get("type") == "synthesis":
-                continue
+        for sq in bx.progress(retrieval_qs, total=len(retrieval_qs),
+                              desc="multi-hop: サブ質問"):
             q = sq["question"]
             ids = self._op_extract(bi, q)
             ns = self._op_select_by_entity(bi, ids) if ids else self._op_select_by_section(bi, q)
@@ -298,7 +298,8 @@ class BookRAG:
                 return f"(バッチ {bi_idx+1} の分析に失敗: {e})"
 
         with ThreadPoolExecutor(max_workers=4) as ex:
-            return list(ex.map(_map_one, enumerate(batches)))
+            return list(bx.progress(ex.map(_map_one, enumerate(batches)),
+                                    total=len(batches), desc="global: Map バッチ分析 (4並列)"))
 
     # ===== Operators =====
 
