@@ -78,10 +78,23 @@ pip install -e ".[tables]"           # MultiPaperRAG の表抽出（PDF, pdfplum
 pip install -e ".[office]"           # Word(.docx)/Excel(.xlsx) の本文・表
 pip install -e ".[figures]"          # 図理解 pics=True（pymupdf）＋ 画像対応モデルが必要
 pip install -e ".[local-embeddings]" # サーバに /v1/embeddings が無い場合のローカル埋め込み
+pip install -e ".[sandbox]"          # TableQA の本格サンドボックス（RestrictedPython）
+pip install -e ".[ocr]"              # スキャンPDF の OCR / 版面解析（pymupdf + pytesseract）※要 Tesseract 本体
+pip install -e ".[rerank]"           # BookRAG のローカル rerank（CrossEncoder）
 pip install pandas                   # Comparison.to_df()
 # まとめて:
-pip install -e ".[tables,office,figures,local-embeddings]"
+pip install -e ".[tables,office,figures,local-embeddings,sandbox,ocr,rerank]"
 ```
+
+**高精度化オプション（任意）**
+- **スキャンPDF/版面解析**: `BookRAG().add_book("scan.pdf", ocr="auto", layout="auto")`
+  — pymupdf のフォントサイズで見出し階層を判定し、テキストの薄いページは OCR。
+  `layout="mineru"` で MinerU(magic_pdf) 導入時はそれを使用。OCR は Tesseract 本体
+  （日本語は `jpn` 言語データ）が別途必要。
+- **rerank**: `BookRAG(reranker="local")`（CrossEncoder）/ `reranker="endpoint"`（`/v1/rerank`）
+  / 既定 `"cosine"`（埋め込み）。検索（Text_Reasoning）の精度が上がる。
+- **TableQA サンドボックス**: RestrictedPython 導入時は AST レベルで import・dunder 属性・
+  危険構文をコンパイル段階で禁止（未導入時は builtins 最小化 + deny-list にフォールバック）。
 
 > **VLM を使わない場合**: `MultiPaperRAG(pics=False)`（既定）なら VLM も pymupdf も一切
 > 呼ばれず、埋め込みベースの検索だけで動く（＝v1 と同じ挙動）。図理解が要るときだけ

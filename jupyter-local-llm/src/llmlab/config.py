@@ -170,7 +170,8 @@ def doctor() -> None:
     print("--- 依存パッケージ ---")
     core = ("ipywidgets", "jupyterlab", "openai", "httpx", "numpy", "pypdf", "tqdm",
             "llama_index.core")
-    optional = ("pandas", "pdfplumber", "docx", "openpyxl", "pptx", "pymupdf")
+    optional = ("pandas", "pdfplumber", "docx", "openpyxl", "pptx",
+                "fitz", "pytesseract", "RestrictedPython", "sentence_transformers")
     for pkg in core:
         try:
             m = importlib.import_module(pkg)

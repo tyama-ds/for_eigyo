@@ -125,25 +125,17 @@ class TableQA:
         )
         return _strip_code(complete(prompt))
 
-    # ---- 実行 ----
+    # ---- 実行（サンドボックス経由） ----
     def _run(self, code: str):
-        low = code.lower()
-        bad = [tok for tok in _FORBIDDEN if tok in low]
-        if bad:
-            raise ValueError(f"安全のため実行を拒否しました（禁止トークン: {bad}）。コード:\n{code}")
         import pandas as pd
+
+        from .sandbox import safe_exec
 
         _, varmap = self._schema()
         # コピーを渡し、生成コードの in-place 変更が元データへ波及しないようにする
-        ns = {"pd": pd, "__builtins__": _SAFE_BUILTINS,
-              **{k: v.copy() for k, v in varmap.items()}}
-        try:
-            exec(code, ns)  # noqa: S102 制限名前空間で実行
-        except Exception as e:  # noqa: BLE001
-            raise RuntimeError(f"生成コードの実行に失敗しました: {e}\nコード:\n{code}") from e
-        if "result" not in ns:
-            raise RuntimeError(f"コードが `result` を定義しませんでした。コード:\n{code}")
-        return ns["result"]
+        namespace = {"pd": pd, **{k: v.copy() for k, v in varmap.items()}}
+        # RestrictedPython（AST制限）＋ deny-list（I/O名）の多重防御
+        return safe_exec(code, namespace, _FORBIDDEN, result_var="result")
 
     # ---- 質問 ----
     def ask(self, question: str, *, explain: bool = True) -> TableAnswer:

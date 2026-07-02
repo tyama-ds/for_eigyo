@@ -300,7 +300,7 @@ _MD_HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
 _NUM_HEADING = re.compile(r"^(\d+(\.\d+){0,3})\s+\S|^第[0-9一二三四五六七八九十百]+[章節編]")
 
 
-def parse_blocks(path: Path) -> list[dict]:
+def parse_blocks(path: Path, *, ocr=False, layout=False) -> list[dict]:
     """Layout Parsing（4.2.1）。文書を素朴なブロック列に分解する。
 
     各ブロック: {"content", "type"(Title/Text/Table/Image), "page", "font"}
@@ -319,6 +319,19 @@ def parse_blocks(path: Path) -> list[dict]:
             text = path.read_text(encoding="utf-8", errors="replace")
         return _parse_markdown(text)
     if suffix == ".pdf":
+        # 版面解析つきパース（pymupdf のフォントサイズ見出し + 任意 OCR）。
+        # pymupdf 未導入 or ocr/layout 無効なら pypdf のヒューリスティックへ。
+        if ocr or layout not in (None, False):
+            from . import docparse
+
+            blocks = docparse.parse_pdf(path, ocr=ocr, layout=(layout or "auto"))
+            if blocks is not None:
+                if not blocks:
+                    log("PDF からテキストを取得できませんでした（スキャンPDFなら ocr=True と "
+                        "Tesseract 導入が必要）。")
+                return blocks
+            log("pymupdf 未導入のため pypdf で解析します（OCR/版面解析は無効）。"
+                "  pip install -e \".[ocr]\"")
         return _parse_pdf(path)
     if suffix in (".docx", ".doc"):
         _warn_format(suffix)

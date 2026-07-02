@@ -93,7 +93,10 @@ class BookRAG:
         max_nodes: int = 300,       # 取り込み対象ノードの上限（超過は打ち切り）
         max_workers: int = 8,       # 抽出フェーズの並列数
         er_use_llm: bool = False,   # 名寄せで LLM を使うか（既定 False=高速）
+        reranker=None,              # Text_Reasoning の再ランク: None/"cosine"/"local"/"endpoint"/dict
     ):
+        from .rerank import make_reranker
+
         self.storage_dir = Path(storage_dir)
         self.gradient_g = gradient_g
         self.er_top_k = er_top_k
@@ -102,17 +105,23 @@ class BookRAG:
         self.max_nodes = max_nodes
         self.max_workers = max_workers
         self.er_use_llm = er_use_llm
+        self._reranker = make_reranker(reranker)
         self._bi: BookIndex | None = None
 
     # ===== Offline Indexing =====
 
     def add_book(self, path: str | Path, *, title: str | None = None,
                  use_llm_sections: bool = False, max_nodes: int | None = None,
-                 chunk_chars: int | None = None) -> str:
+                 chunk_chars: int | None = None, ocr=False, layout=False) -> str:
         """文書を取り込み、BookIndex（Tree + KG + GT-Link）へ統合する。
 
         既定は速度重視（見出し判定は LLM 不使用、本文はチャンク化、ノード数に上限）。
         精度を上げたいときは use_llm_sections=True / max_nodes を増やす / er_use_llm=True。
+
+        PDF の版面解析・OCR（要 `pip install -e ".[ocr]"` + Tesseract）:
+        - layout="auto": pymupdf のフォントサイズで見出し階層を判定（pypdf より高精度）
+        - layout="mineru": MinerU(magic_pdf) 導入時はそれを使う
+        - ocr="auto": テキストの薄いページのみ OCR / ocr=True: 全ページ OCR
         """
         path = Path(path)
         if not path.exists():
@@ -120,8 +129,8 @@ class BookRAG:
         bi = self._index(create=True)
         book = title or path.stem
 
-        bx.log(f"[1/5] 解析（レイアウト）: {path.name}")
-        blocks = bx.parse_blocks(path)                              # 4.2.1 Layout Parsing
+        bx.log(f"[1/5] 解析（レイアウト{'+OCR' if ocr else ''}）: {path.name}")
+        blocks = bx.parse_blocks(path, ocr=ocr, layout=layout)      # 4.2.1 Layout Parsing
         bx.log(f"[2/5] 見出し判定{'（LLM）' if use_llm_sections else '（ヒューリスティック）'}"
                f": ブロック {len(blocks)} 個")
         blocks = bx.section_filter(blocks, use_llm=use_llm_sections)  # 4.2.2 Section Filtering
@@ -343,14 +352,20 @@ class BookRAG:
         return _minmax(s_graph)
 
     def _op_text_reasoning(self, bi: BookIndex, ns: list[int], query: str) -> dict[int, float]:
-        """Reasoner/Text_Reasoning: ノード内容とクエリの意味的関連度 S_T。"""
+        """Reasoner/Text_Reasoning: ノード内容とクエリの意味的関連度 S_T。
+
+        reranker が設定されていればそれで再スコア（既定は埋め込みコサイン=従来挙動）。
+        """
         if not ns:
             return {}
-        qv = bx.embed([query])[0]
         contents = [bi.nodes[n].content[:500] or " " for n in ns]
-        cv = bx.embed(contents)
-        sims = cv @ qv
-        return {n: float(sims[i]) for i, n in enumerate(ns)}
+        try:
+            scores = self._reranker.rerank(query, contents)
+        except Exception as e:  # noqa: BLE001
+            print(f"[BookRAG] rerank に失敗したためコサインで代替: {e}")
+            from .rerank import CosineReranker
+            scores = CosineReranker().rerank(query, contents)
+        return {n: float(scores[i]) for i, n in enumerate(ns)}
 
     def _op_skyline(self, ns: list[int], s_graph: dict, s_text: dict) -> list[int]:
         """Skyline_Ranker（式(14)）: (S_G, S_T) の Pareto 前線を残す（top-k 固定ではない）。"""
