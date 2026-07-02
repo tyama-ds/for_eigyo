@@ -80,7 +80,14 @@ class DocQA:
                     raise RuntimeError("表も本文も利用できません。")
                 chosen = "rag"  # 表が無ければ RAG へフォールバック
             else:
-                return DocResult(route="table", result=self._tableqa.ask(question))
+                try:
+                    return DocResult(route="table", result=self._tableqa.ask(question))
+                except Exception as e:  # noqa: BLE001
+                    # 生成コードの拒否/実行失敗時、auto なら本文RAGで答えを試みる
+                    if route == "table" or self._rag is None:
+                        raise
+                    print(f"[DocQA] 表での回答に失敗したため本文RAGへフォールバック: {e}")
+                    chosen = "rag"
 
         if self._rag is None:
             if self._tableqa is not None:
@@ -153,10 +160,15 @@ def _rows_to_df(rows: list, name: str):
 def _dfs_from_excel(path: Path) -> dict:
     try:
         import pandas as pd
+
+        # read_excel は openpyxl を遅延 import するため、ここも try 内に置く
+        data = pd.read_excel(path, sheet_name=None)
     except ImportError:
-        print("[DocQA] Excel には pandas/openpyxl が必要: pip install openpyxl pandas")
+        print("[DocQA] Excel には pandas/openpyxl が必要: pip install openpyxl pandas（表なしで続行）")
         return {}
-    data = pd.read_excel(path, sheet_name=None)
+    except Exception as e:  # noqa: BLE001
+        print(f"[DocQA] Excel の読み込みに失敗（表なしで続行）: {e}")
+        return {}
     return {str(k): v for k, v in data.items()}
 
 
@@ -205,4 +217,8 @@ def _dfs_from_docx(path: Path) -> dict:
 
 
 def _safe(title: str) -> str:
-    return re.sub(r"[^\w\-.]+", "_", title)[:120] or "doc"
+    """正規化衝突（全角/半角括弧の差など）で別文書の storage を共有しないようハッシュを付与。"""
+    import hashlib
+
+    base = re.sub(r"[^\w\-.]+", "_", title)[:100] or "doc"
+    return f"{base}_{hashlib.md5(title.encode('utf-8')).hexdigest()[:8]}"

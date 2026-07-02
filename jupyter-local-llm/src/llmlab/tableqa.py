@@ -31,6 +31,12 @@ _FORBIDDEN = (
     "__", "import", "open(", "eval(", "exec(", "compile(", "os.", "sys.",
     "subprocess", "socket", "shutil", "pathlib", "globals(", "locals(",
     "getattr(", "setattr(", "delattr(", "input(", "exit(", "quit(",
+    # pandas の I/O 面（ファイル読み書き・SSRF・pickle 実行）を塞ぐ。
+    # データは名前空間の DataFrame として渡すため、生成コードに読込は不要。
+    "read_", "pd.io", "pickle", "urlopen", "storage_options",
+    "to_csv", "to_excel", "to_parquet", "to_json", "to_hdf", "to_sql",
+    "to_feather", "to_stata", "to_clipboard", "to_latex", "to_html",
+    "to_markdown", "buf=", "path_or_buf",
 )
 
 _SAFE_BUILTINS = {
@@ -92,6 +98,11 @@ class TableQA:
         single = len(self.tables) == 1
         for name, df in self.tables.items():
             var = "df" if single else "df_" + re.sub(r"[^\w]+", "_", str(name)).strip("_")
+            if var in varmap:  # サニタイズ後の名前衝突は連番で回避（表を落とさない）
+                i = 2
+                while f"{var}_{i}" in varmap:
+                    i += 1
+                var = f"{var}_{i}"
             varmap[var] = df
             cols = ", ".join(f"{c}({df[c].dtype})" for c in df.columns)
             try:
@@ -123,7 +134,9 @@ class TableQA:
         import pandas as pd
 
         _, varmap = self._schema()
-        ns = {"pd": pd, "__builtins__": _SAFE_BUILTINS, **varmap}
+        # コピーを渡し、生成コードの in-place 変更が元データへ波及しないようにする
+        ns = {"pd": pd, "__builtins__": _SAFE_BUILTINS,
+              **{k: v.copy() for k, v in varmap.items()}}
         try:
             exec(code, ns)  # noqa: S102 制限名前空間で実行
         except Exception as e:  # noqa: BLE001

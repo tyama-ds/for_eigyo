@@ -221,7 +221,12 @@ class BookRAG:
         plan = ["Classify(global)"]
         spec = self._op_make_filters(question)                     # Fig.12 のフィルタ生成
         ns = list(bi.nodes.keys())
-        for f in spec.get("filters", []):
+        filters = spec.get("filters", [])
+        if not isinstance(filters, list):  # LLM 応答の形状不正に耐える
+            filters = []
+        for f in filters:
+            if not isinstance(f, dict):
+                continue
             ftype = f.get("filter_type")
             if ftype in ("image", "table", "section"):
                 ns = self._op_filter_modal(bi, ns, ftype)          # Selector: Filter_Modal
@@ -229,8 +234,11 @@ class BookRAG:
             elif ftype == "page":
                 ns = self._op_filter_range(bi, ns, f.get("filter_value"))  # Selector: Filter_Range
                 plan.append(f"Filter_Range({f.get('filter_value')})")
-        evidence = self._to_evidence(bi, ns, {}, {})
-        operation = spec.get("operation", "ANALYZE")
+        # COUNT/LIST の集計を max_evidence で歪めないよう、全件数を明示しつつ広めに渡す
+        total = len(ns)
+        evidence = self._to_evidence(bi, ns, {}, {}, limit=min(total, 100))
+        operation = str(spec.get("operation", "ANALYZE") or "ANALYZE")
+        operation = f"{operation}（フィルタ後の該当ノード総数: {total} 件。件数を問われたらこの総数を使う）"
         plan += ["Map", f"Reduce({operation})"]
         text = self._op_reduce(question, evidence, operation=operation)
         return BookAnswer(text=text, category="global", plan=plan,
@@ -281,7 +289,10 @@ class BookRAG:
             _P_SELECT_SECTION + f"\n\nQuery: {query}\nSections: {json.dumps(listing, ensure_ascii=False)}"
         )
         chosen = result.get("section_ids", []) if isinstance(result, dict) else []
-        chosen = [c for c in chosen if c in bi.nodes]
+        if not isinstance(chosen, list):
+            chosen = []
+        section_ids = {nid for nid, _ in sections}  # Section ノードのみ受理（LLM の誤 id 対策）
+        chosen = [c for c in chosen if isinstance(c, int) and c in section_ids]
         if not chosen:  # フォールバック: タイトルのコサインで上位節
             qv = bx.embed([query])[0]
             tvs = bx.embed([t for _, t in sections])
@@ -307,7 +318,10 @@ class BookRAG:
                 lo = hi = int(value)
         except ValueError:
             return ns
-        return [n for n in ns if bi.nodes[n].page is not None and lo <= bi.nodes[n].page <= hi]
+        # page は PDF 由来なら int、Excel/PPTX 由来はシート名等の str のことがある。
+        # int のみ範囲比較の対象にする（str と int の比較は TypeError になるため）。
+        return [n for n in ns
+                if isinstance(bi.nodes[n].page, int) and lo <= bi.nodes[n].page <= hi]
 
     def _op_graph_reasoning(self, bi: BookIndex, ns: list[int], start_entities: list[int]) -> dict[int, float]:
         """Reasoner/Graph_Reasoning（式(6)(7)）: 部分グラフ上の PageRank を GT-Link でノードへ写像。"""
@@ -399,9 +413,10 @@ class BookRAG:
             cur = bi.nodes[cur].parent
         return cur
 
-    def _to_evidence(self, bi: BookIndex, ns: list[int], s_graph: dict, s_text: dict) -> list[Evidence]:
+    def _to_evidence(self, bi: BookIndex, ns: list[int], s_graph: dict, s_text: dict,
+                     *, limit: int | None = None) -> list[Evidence]:
         ev = []
-        for n in ns[: self.max_evidence]:
+        for n in ns[: (limit if limit is not None else self.max_evidence)]:
             node = bi.nodes[n]
             txt = node.content.strip().replace("\n", " ")
             ev.append(Evidence(

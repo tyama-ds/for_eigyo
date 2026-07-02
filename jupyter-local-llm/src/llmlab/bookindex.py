@@ -185,7 +185,16 @@ class BookIndex:
         return out
 
     # ---- エンティティ（KG） ----
+    def _validate_dim(self, vec: np.ndarray) -> None:
+        if self._dim is not None and vec.shape[0] != self._dim:
+            raise RuntimeError(
+                f"埋め込み次元が既存インデックス（{self._dim}）と一致しません（{vec.shape[0]}）。"
+                "埋め込みモデルを変更した場合は、storage を削除（reset()）して作り直してください。"
+            )
+
     def add_entity(self, name: str, etype: str, desc: str, origin: int, vec: np.ndarray) -> Entity:
+        vec = _normalize(vec).astype(np.float32)
+        self._validate_dim(vec)  # 変異前に検証（失敗時に entities とベクタが食い違わないように）
         eid = self._ent_seq
         self._ent_seq += 1
         ent = Entity(id=eid, name=name, type=etype, description=desc, origin_nodes=[origin])
@@ -195,6 +204,8 @@ class BookIndex:
 
     def merge_entity(self, target_eid: int, name: str, origin: int, vec: np.ndarray) -> None:
         """新エンティティを既存 target にマージし、GT-Link を集約（4.3.2 末尾）。"""
+        vec = _normalize(vec).astype(np.float32)
+        self._validate_dim(vec)  # 変異前に検証
         ent = self.entities[target_eid]
         if origin not in ent.origin_nodes:
             ent.origin_nodes.append(origin)
@@ -203,6 +214,7 @@ class BookIndex:
 
     def _append_vec(self, eid: int, vec: np.ndarray) -> None:
         vec = _normalize(vec).astype(np.float32)
+        self._validate_dim(vec)
         if self._dim is None:
             self._dim = int(vec.shape[0])
             self._entity_vecs = np.zeros((64, self._dim), dtype=np.float32)
@@ -243,10 +255,15 @@ class BookIndex:
             "ent_seq": self._ent_seq,
             "entity_ids": self._entity_ids,
         }
-        (d / "bookindex.json").write_text(
-            json.dumps(payload, ensure_ascii=False), encoding="utf-8"
-        )
-        np.save(d / "entity_vecs.npy", self._entity_vecs[: self._count])
+        # アトミック書き込み: 一時ファイルへ書いてから os.replace（中断時の索引破損防止）
+        import os
+
+        tmp_json = d / "bookindex.json.tmp"
+        tmp_json.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp_json, d / "bookindex.json")
+        tmp_npy = d / "entity_vecs.tmp.npy"
+        np.save(tmp_npy, self._entity_vecs[: self._count])
+        os.replace(tmp_npy, d / "entity_vecs.npy")
 
     @classmethod
     def load(cls, storage_dir: str | Path) -> "BookIndex":
@@ -295,7 +312,12 @@ def parse_blocks(path: Path) -> list[dict]:
     """
     suffix = path.suffix.lower()
     if suffix in (".md", ".markdown"):
-        return _parse_markdown(path.read_text(encoding="utf-8"))
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            log("UTF-8 で読めないため文字化けを置換して読み込みます（CP932 等は UTF-8 保存を推奨）")
+            text = path.read_text(encoding="utf-8", errors="replace")
+        return _parse_markdown(text)
     if suffix == ".pdf":
         return _parse_pdf(path)
     if suffix in (".docx", ".doc"):
@@ -480,6 +502,7 @@ def section_filter(blocks: list[dict], *, use_llm: bool = True) -> list[dict]:
     LLM でレベル判定・誤検出の Text 再分類を行う（use_llm=True）。
     """
     title_idx = [i for i, b in enumerate(blocks) if b["type"] == "Title" and b.get("level") is None]
+    candidate_set = set(title_idx)  # LLM が返す id は候補集合のみ受理（無関係ブロックの破壊防止）
     if title_idx and use_llm:
         candidates = [{"id": i, "text": blocks[i]["content"][:120]} for i in title_idx]
         # 長文書対策でバッチ分割
@@ -490,13 +513,19 @@ def section_filter(blocks: list[dict], *, use_llm: bool = True) -> list[dict]:
             )
             if isinstance(result, list):
                 for item in result:
+                    if not isinstance(item, dict):  # LLM 応答の形状不正はスキップ
+                        continue
                     i = item.get("id")
-                    if i in blocks_range(blocks):
-                        lvl = item.get("level")
-                        if lvl in (None, 0, "None", "none"):
-                            blocks[i]["type"] = "Text"  # 誤検出を Text に再分類
-                        else:
-                            blocks[i]["level"] = int(lvl)
+                    if not isinstance(i, int) or i not in candidate_set:
+                        continue
+                    lvl = item.get("level")
+                    if lvl in (None, 0, "None", "none"):
+                        blocks[i]["type"] = "Text"  # 誤検出を Text に再分類
+                    else:
+                        try:
+                            blocks[i]["level"] = max(1, int(lvl))
+                        except (TypeError, ValueError):
+                            pass  # フォールバック（下の番号推定）に任せる
     # LLM 未使用 or 失敗時のフォールバック: 番号の深さからレベル推定
     for i in title_idx:
         b = blocks[i]
@@ -601,6 +630,9 @@ def build_graph(bi: BookIndex, node_ids: list[int], *, gradient_g: float = 0.6,
         and len(bi.nodes[nid].content.strip()) >= min_chars
     ]
     if not targets:
+        # 空文書/スキャンPDF等。従来はここで黙って戻り「読めていない」ことに気づけなかった。
+        log("警告: 抽出対象の本文ノードが 0 件です。文書からテキストを取得できていない可能性が"
+            "あります（スキャンPDF・空文書・全ノードが min_chars 未満）。")
         return
     if len(targets) > max_nodes:
         print(f"[BookRAG] 対象ノード {len(targets)} 件を max_nodes={max_nodes} 件に打ち切ります"
@@ -672,6 +704,13 @@ def gradient_entity_resolution(bi: BookIndex, name: str, etype: str, desc: str, 
     candidates = bi.search_entities(vec, er_top_k)  # Line 1: Search
     if not candidates:
         return bi.add_entity(name, etype, desc, origin, vec).id
+
+    # ほぼ同一（コサイン>=0.95）は勾配判定を待たず即マージする。
+    # 候補が er_top_k 未満の小規模索引では「リストを使い切った」ことが Case A と
+    # 区別できず、完全一致でも重複追加されてしまうため（索引成長初期の名寄せ崩壊対策）。
+    if candidates[0][1] >= 0.95:
+        bi.merge_entity(candidates[0][0], name, origin, vec)
+        return candidates[0][0]
 
     # Line 2-3: rerank（=コサイン）して降順ソート済み
     scores = [s for _, s in candidates]

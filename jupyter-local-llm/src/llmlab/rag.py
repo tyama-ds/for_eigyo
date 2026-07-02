@@ -20,6 +20,11 @@ DEFAULT_DOCS = "./docs"
 DEFAULT_STORAGE = "./storage"
 
 
+# 設定(Settings は frozen dataclass=ハッシュ可能)ごとに llm/embed を再利用する。
+# 呼び出しのたびに httpx.Client を作り捨てるとコネクションが漏れるため。
+_models_cache: dict = {}
+
+
 def apply_llama_settings():
     """LlamaIndex の Settings を現在の接続情報で構成する（bookrag からも共有）。"""
     from llama_index.core import Settings as LISettings
@@ -27,17 +32,33 @@ def apply_llama_settings():
     from .client import build_http_client
 
     s = get_settings()
-    http_client = build_http_client(s)  # プロキシ on/off を反映
-    LISettings.llm = _make_llm(s, http_client)
-    LISettings.embed_model = _make_embed(s, http_client)
+    cached = _models_cache.get(s)
+    if cached is None:
+        http_client = build_http_client(s)  # プロキシ on/off を反映
+        cached = (_make_llm(s, http_client), _make_embed(s, http_client))
+        _models_cache.clear()  # 旧設定分は破棄
+        _models_cache[s] = cached
+    LISettings.llm, LISettings.embed_model = cached
 
 
 def _construct(cls, kwargs: dict, http_client):
-    """http_client 非対応の古い版でも動くよう、TypeError 時は外して再生成する。"""
-    try:
-        return cls(**kwargs, http_client=http_client)
-    except TypeError:
-        return cls(**kwargs)
+    """バージョン差異に耐えるコンストラクタ。
+
+    http_client → timeout/max_retries の順に、未対応の引数を落として再試行する
+    （古い llama-index では TypeError/ValidationError になるため）。
+    """
+    attempts = [
+        {**kwargs, "http_client": http_client},
+        kwargs,
+        {k: v for k, v in kwargs.items() if k not in ("timeout", "max_retries")},
+    ]
+    last = None
+    for kw in attempts:
+        try:
+            return cls(**kw)
+        except (TypeError, ValueError) as e:  # pydantic ValidationError は ValueError 派生
+            last = e
+    raise last
 
 
 def _make_llm(s, http_client):
@@ -52,7 +73,8 @@ def _make_llm(s, http_client):
         OpenAILike,
         dict(model=s.model, api_base=s.base_url, api_key=s.api_key,
              context_window=s.context_window, is_chat_model=True,
-             is_function_calling_model=False),
+             is_function_calling_model=False,
+             timeout=s.request_timeout, max_retries=2),  # RAG 経路にも timeout を効かせる
         http_client,
     )
 
@@ -79,7 +101,8 @@ def _make_embed(s, http_client):
 
         return _construct(
             OpenAILikeEmbedding,
-            dict(model_name=s.embed_model, api_base=base, api_key=key),
+            dict(model_name=s.embed_model, api_base=base, api_key=key,
+                 timeout=s.request_timeout, max_retries=2),
             http_client,
         )
     except ImportError:
@@ -100,7 +123,8 @@ def _make_embed(s, http_client):
     )
     return _construct(
         OpenAIEmbedding,
-        dict(model=s.embed_model, api_base=base, api_key=key),
+        dict(model=s.embed_model, api_base=base, api_key=key,
+             timeout=s.request_timeout, max_retries=2),
         http_client,
     )
 
@@ -129,7 +153,10 @@ def build_rag(
     apply_llama_settings()
     storage_path = Path(storage_dir)
 
-    if storage_path.exists() and not rebuild:
+    # ディレクトリ存在ではなく docstore.json の有無で「既存インデックス」を判定する。
+    # ./storage は PagedRAG/BookRAG 等の既定保存先の親でもあり、存在だけでは判定できない。
+    has_index = (storage_path / "docstore.json").exists()
+    if has_index and not rebuild:
         ctx = StorageContext.from_defaults(persist_dir=str(storage_path))
         index = load_index_from_storage(ctx)
     else:
