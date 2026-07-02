@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import threading
+
 import httpx
 from openai import OpenAI
 
 from .config import Settings, get_settings
 
 # configure() で接続情報が変わるたびに作り直す（reset_client で破棄）。
+# BookRAG の並列抽出などマルチスレッドから呼ばれるため、初期化はロックで保護する。
 _client: OpenAI | None = None
 _embed_client: OpenAI | None = None
+_lock = threading.Lock()
 
 
 def build_http_client(s: Settings) -> httpx.Client:
@@ -32,12 +36,14 @@ def get_client() -> OpenAI:
     """設定済みの OpenAI 互換クライアント（チャット/補完用）を返す。"""
     global _client
     if _client is None:
-        s = get_settings()
-        # timeout/max_retries を明示（SDK 既定は 600s × リトライで“ハング”に見えるため）。
-        _client = OpenAI(
-            base_url=s.base_url, api_key=s.api_key, http_client=build_http_client(s),
-            timeout=s.request_timeout, max_retries=2,
-        )
+        with _lock:
+            if _client is None:  # double-checked（並列 build_graph からの同時初期化対策）
+                s = get_settings()
+                # timeout/max_retries を明示（SDK 既定は 600s × リトライで“ハング”に見えるため）。
+                _client = OpenAI(
+                    base_url=s.base_url, api_key=s.api_key, http_client=build_http_client(s),
+                    timeout=s.request_timeout, max_retries=2,
+                )
     return _client
 
 
@@ -45,21 +51,24 @@ def get_embed_client() -> OpenAI:
     """埋め込み用クライアントを返す。embed_base_url 指定時はそちらへ向ける。"""
     global _embed_client
     if _embed_client is None:
-        s = get_settings()
-        base = s.embed_base_url or s.base_url
-        key = s.embed_api_key or s.api_key
-        _embed_client = OpenAI(
-            base_url=base, api_key=key, http_client=build_http_client(s),
-            timeout=s.request_timeout, max_retries=2,
-        )
+        with _lock:
+            if _embed_client is None:
+                s = get_settings()
+                base = s.embed_base_url or s.base_url
+                key = s.embed_api_key or s.api_key
+                _embed_client = OpenAI(
+                    base_url=base, api_key=key, http_client=build_http_client(s),
+                    timeout=s.request_timeout, max_retries=2,
+                )
     return _embed_client
 
 
 def reset_client() -> None:
     """キャッシュ済みクライアントを破棄する（configure() から呼ばれる）。"""
     global _client, _embed_client
-    _client = None
-    _embed_client = None
+    with _lock:
+        _client = None
+        _embed_client = None
 
 
 def complete(prompt: str, *, system: str | None = None, **kwargs) -> str:

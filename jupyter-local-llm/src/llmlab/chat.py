@@ -28,8 +28,7 @@ class Chat:
     """会話履歴を保持するチャットセッション。"""
 
     def __init__(self, system: str | None = DEFAULT_SYSTEM, **default_kwargs):
-        self._settings = get_settings()
-        self._client = get_client()
+        get_settings()  # 未設定なら早期に分かりやすいエラーを出す（接続情報は都度解決する）
         self._default_kwargs = default_kwargs
         self.history: list[dict[str, str]] = []
         if system:
@@ -37,31 +36,41 @@ class Chat:
 
     def ask(self, prompt: str, *, stream: bool = False, **kwargs) -> str:
         """プロンプトを送信し、応答を履歴に追加して返す。"""
+        # 設定・クライアントは毎回解決する。構築時に固定すると configure() し直しても
+        # 既存の Chat / %%llm が旧接続先を使い続けてしまうため。
+        settings = get_settings()
+        client = get_client()
         self.history.append({"role": "user", "content": prompt})
         call_kwargs = {**self._default_kwargs, **kwargs}
 
-        if stream:
-            chunks: list[str] = []
-            response = self._client.chat.completions.create(
-                model=self._settings.model,
-                messages=self.history,
-                stream=True,
-                **call_kwargs,
-            )
-            for event in response:
-                delta = event.choices[0].delta.content or ""
-                if delta:
-                    chunks.append(delta)
-                    print(delta, end="", flush=True)
-            print()
-            answer = "".join(chunks)
-        else:
-            resp = self._client.chat.completions.create(
-                model=self._settings.model,
-                messages=self.history,
-                **call_kwargs,
-            )
-            answer = resp.choices[0].message.content or ""
+        try:
+            if stream:
+                chunks: list[str] = []
+                response = client.chat.completions.create(
+                    model=settings.model,
+                    messages=self.history,
+                    stream=True,
+                    **call_kwargs,
+                )
+                for event in response:
+                    if not event.choices:  # 一部サーバは choices が空のチャンクを送る
+                        continue
+                    delta = event.choices[0].delta.content or ""
+                    if delta:
+                        chunks.append(delta)
+                        print(delta, end="", flush=True)
+                print()
+                answer = "".join(chunks)
+            else:
+                resp = client.chat.completions.create(
+                    model=settings.model,
+                    messages=self.history,
+                    **call_kwargs,
+                )
+                answer = (resp.choices[0].message.content or "") if resp.choices else ""
+        except Exception:
+            self.history.pop()  # 失敗した user メッセージを履歴に残さない（以後の会話の汚染防止）
+            raise
 
         self.history.append({"role": "assistant", "content": answer})
         return answer

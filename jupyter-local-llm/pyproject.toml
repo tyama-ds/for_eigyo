@@ -12,8 +12,10 @@ license = { text = "MIT" }
 authors = [{ name = "for_eigyo" }]
 dependencies = [
     "openai>=1.30",
+    "httpx>=0.27",
     "ipython>=8.0",
     "ipywidgets>=8.0",
+    "tqdm>=4.66",
     # Jupyter 本体（補完・チャットは自前実装。jupyter-ai は使わない）
     "jupyterlab>=4.1",
     # RAG（PagedRAG/DocRAG）
@@ -32,8 +34,14 @@ dev = ["ruff>=0.5", "pytest>=8.0"]
 local-embeddings = ["llama-index-embeddings-huggingface>=0.2"]
 # MultiPaperRAG の表抽出（compare_table, PDF）
 tables = ["pdfplumber>=0.11"]
+# TableQA の本格サンドボックス（AST レベル制限）
+sandbox = ["RestrictedPython>=7.0"]
+# スキャンPDF の OCR（要 Tesseract バイナリの別途インストール）
+ocr = ["pymupdf>=1.24", "pytesseract>=0.3.10", "Pillow>=10.0"]
+# BookRAG のローカル rerank（CrossEncoder）
+rerank = ["sentence-transformers>=2.2"]
 # Word/Excel の本文・表（add_paper で .docx/.xlsx を扱う）
-office = ["docx2txt>=0.8", "python-docx>=1.1", "openpyxl>=3.1", "pandas>=2.0"]
+office = ["docx2txt>=0.8", "python-docx>=1.1", "python-pptx>=0.6", "openpyxl>=3.1", "pandas>=2.0"]
 # 図/グラフ理解（MultiPaperRAG(pics=True)）。画像対応モデルも必要
 figures = ["pymupdf>=1.24"]
 

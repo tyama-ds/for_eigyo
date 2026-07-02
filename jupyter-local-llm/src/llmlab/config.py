@@ -19,7 +19,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -27,9 +27,9 @@ class Settings:
     """エンドポイント接続設定。"""
 
     base_url: str
-    api_key: str
-    model: str
-    embed_model: str
+    api_key: str = field(repr=False)  # repr 経由でノートブック出力(.ipynb)へ漏れないように
+    model: str = ""
+    embed_model: str = ""
     context_window: int = 8192
     request_timeout: float = 120.0  # 1リクエストの上限秒。遅い/固まるサーバ対策
     use_proxy: bool = False
@@ -37,7 +37,7 @@ class Settings:
     # 埋め込み（RAG/BookRAG 用）。チャットと別エンドポイントの場合に指定する。
     # 省略時は base_url / api_key を流用。
     embed_base_url: str | None = None
-    embed_api_key: str | None = None
+    embed_api_key: str | None = field(default=None, repr=False)
     # "openai": OpenAI 互換エンドポイントの /v1/embeddings を使う
     # "local" : ローカルの HuggingFace 埋め込みを使う（サーバに embeddings API が無い時）
     embed_provider: str = "openai"
@@ -82,6 +82,19 @@ def configure(
     ]
     if missing:
         raise ValueError("必須項目が未入力です: " + ", ".join(missing))
+
+    # 型・値の軽い検証（後段の分かりにくいエラーをここで止める）
+    try:
+        context_window = int(context_window)
+        request_timeout = float(request_timeout)
+    except (TypeError, ValueError) as e:
+        raise ValueError(
+            f"context_window / request_timeout は数値で指定してください: {e}"
+        ) from e
+    if context_window <= 0 or request_timeout <= 0:
+        raise ValueError("context_window / request_timeout は正の値で指定してください")
+    if embed_provider not in ("openai", "local"):
+        raise ValueError('embed_provider は "openai" か "local" を指定してください')
 
     _current = Settings(
         base_url=base_url,
@@ -155,12 +168,23 @@ def doctor() -> None:
     print("In notebook kernel:", in_notebook())
     print("接続設定済み      :", is_configured())
     print("--- 依存パッケージ ---")
-    for pkg in ("ipywidgets", "jupyterlab", "openai", "numpy", "pypdf"):
+    core = ("ipywidgets", "jupyterlab", "openai", "httpx", "numpy", "pypdf", "tqdm",
+            "llama_index.core")
+    optional = ("pandas", "pdfplumber", "docx", "openpyxl", "pptx",
+                "fitz", "pytesseract", "RestrictedPython", "sentence_transformers")
+    for pkg in core:
         try:
             m = importlib.import_module(pkg)
-            print(f"  {pkg:12s}: {getattr(m, '__version__', '?')}")
+            print(f"  {pkg:18s}: {getattr(m, '__version__', '?')}")
         except Exception:  # noqa: BLE001
-            print(f"  {pkg:12s}: ✗ 未インストール")
+            print(f"  {pkg:18s}: ✗ 未インストール")
+    print("--- 任意依存（該当機能を使う場合のみ必要） ---")
+    for pkg in optional:
+        try:
+            m = importlib.import_module(pkg)
+            print(f"  {pkg:18s}: {getattr(m, '__version__', 'OK')}")
+        except Exception:  # noqa: BLE001
+            print(f"  {pkg:18s}: -（未導入）")
     ok, reason = widget_env()
     print("--- ウィジェット描画 ---")
     if ok:

@@ -30,6 +30,10 @@ class LLMLabInlineProvider implements IInlineCompletionProvider {
   readonly identifier = 'llmlab-completer';
   readonly name = 'llmlab (local LLM)';
 
+  // 直近の実行 future。新しい補完要求が来たら前のものを破棄し、
+  // カーネルのキューに補完リクエストが滞留しないようにする。
+  private _pending: { dispose(): void; isDisposed: boolean } | null = null;
+
   async fetch(
     request: CompletionHandler.IRequest,
     context: IInlineCompletionContext
@@ -89,18 +93,30 @@ class LLMLabInlineProvider implements IInlineCompletionProvider {
         return finish('');
       }
 
+      // 前回の補完リクエストが残っていれば破棄（カーネルキューへの滞留・多重実行防止）
+      if (this._pending && !this._pending.isDisposed) {
+        try {
+          this._pending.dispose();
+        } catch {
+          /* noop */
+        }
+      }
+
       let future;
       try {
         future = kernel.requestExecute({
           code,
           silent: true,
-          stop_on_error: true,
+          // stop_on_error は false: 補完実行の失敗（llmlab 未 import 等）で
+          // ユーザーがキューに積んだセル実行を abort させない
+          stop_on_error: false,
           store_history: false,
           allow_stdin: false
         });
       } catch {
         return finish('');
       }
+      this._pending = future;
 
       future.onIOPub = (msg: KernelMessage.IIOPubMessage) => {
         if (msg.header.msg_type === 'stream') {
@@ -126,8 +142,17 @@ class LLMLabInlineProvider implements IInlineCompletionProvider {
         })
         .catch(() => finish(''));
 
-      // 遅いカーネルでも UI を固めないよう上限を設ける
-      setTimeout(() => finish(''), TIMEOUT_MS);
+      // 遅いカーネルでも UI を固めないよう上限を設け、future も破棄して滞留を防ぐ
+      setTimeout(() => {
+        if (!settled) {
+          try {
+            future.dispose();
+          } catch {
+            /* noop */
+          }
+        }
+        finish('');
+      }, TIMEOUT_MS);
     });
   }
 }

@@ -85,8 +85,14 @@ class PagedRAG:
 
     # ---- 取り込み ----------------------------------------------------------
 
-    def add_book(self, path: str | Path, *, title: str | None = None) -> str:
-        """1冊の本（PDF/txt/md/docx など）を取り込み、インデックスへ追加する。"""
+    def add_book(self, path: str | Path, *, title: str | None = None,
+                 force: bool = False) -> str:
+        """1冊の本（PDF/txt/md/docx など）を取り込み、インデックスへ追加する。
+
+        同じファイル名が取り込み済みの場合は重複追加を防ぐためスキップする
+        （ベクトル索引は追記型のため、再取り込みすると検索結果が重複する）。
+        取り込み直したいときは force=True か reset() を使う。
+        """
         from llama_index.core import SimpleDirectoryReader
         from llama_index.core.node_parser import SentenceSplitter
 
@@ -95,6 +101,12 @@ class PagedRAG:
         path = Path(path)
         if not path.exists():
             raise FileNotFoundError(f"ファイルがありません: {path}")
+
+        existing = next((b for b in self.books() if b["source"] == path.name), None)
+        if existing and not force:
+            print(f"[PagedRAG] {path.name} は取り込み済みのためスキップします"
+                  "（重複防止。再取り込みは force=True、全消去は reset()）")
+            return existing["title"]
 
         apply_llama_settings()
         book_title = title or path.stem
@@ -120,7 +132,8 @@ class PagedRAG:
         """フォルダ内の対応ファイルをまとめて取り込む。"""
         docs_dir = Path(docs_dir)
         added: list[str] = []
-        exts = {".pdf", ".txt", ".md", ".docx", ".pptx", ".csv", ".html"}
+        exts = {".pdf", ".txt", ".md", ".docx", ".doc", ".pptx",
+                ".csv", ".xlsx", ".xls", ".html", ".epub"}
         for f in sorted(docs_dir.iterdir()):
             if f.is_file() and f.suffix.lower() in exts:
                 added.append(self.add_book(f))

@@ -89,30 +89,62 @@ class BookRAG:
         gradient_g: float = DEFAULT_GRADIENT_G,
         er_top_k: int = DEFAULT_ER_TOP_K,
         max_evidence: int = DEFAULT_MAX_EVIDENCE,
+        chunk_chars: int = 1500,    # 本文チャンクの目安サイズ（大きいほどノード=LLM呼出が減る）
+        max_nodes: int = 300,       # 取り込み対象ノードの上限（超過は打ち切り）
+        max_workers: int = 8,       # 抽出フェーズの並列数
+        er_use_llm: bool = False,   # 名寄せで LLM を使うか（既定 False=高速）
+        reranker=None,              # Text_Reasoning の再ランク: None/"cosine"/"local"/"endpoint"/dict
     ):
+        from .rerank import make_reranker
+
         self.storage_dir = Path(storage_dir)
         self.gradient_g = gradient_g
         self.er_top_k = er_top_k
         self.max_evidence = max_evidence
+        self.chunk_chars = chunk_chars
+        self.max_nodes = max_nodes
+        self.max_workers = max_workers
+        self.er_use_llm = er_use_llm
+        self._reranker = make_reranker(reranker)
         self._bi: BookIndex | None = None
 
     # ===== Offline Indexing =====
 
-    def add_book(self, path: str | Path, *, title: str | None = None, use_llm_sections: bool = True) -> str:
-        """文書を取り込み、BookIndex（Tree + KG + GT-Link）へ統合する。"""
+    def add_book(self, path: str | Path, *, title: str | None = None,
+                 use_llm_sections: bool = False, max_nodes: int | None = None,
+                 chunk_chars: int | None = None, ocr=False, layout=False) -> str:
+        """文書を取り込み、BookIndex（Tree + KG + GT-Link）へ統合する。
+
+        既定は速度重視（見出し判定は LLM 不使用、本文はチャンク化、ノード数に上限）。
+        精度を上げたいときは use_llm_sections=True / max_nodes を増やす / er_use_llm=True。
+
+        PDF の版面解析・OCR（要 `pip install -e ".[ocr]"` + Tesseract）:
+        - layout="auto": pymupdf のフォントサイズで見出し階層を判定（pypdf より高精度）
+        - layout="mineru": MinerU(magic_pdf) 導入時はそれを使う
+        - ocr="auto": テキストの薄いページのみ OCR / ocr=True: 全ページ OCR
+        """
         path = Path(path)
         if not path.exists():
             raise FileNotFoundError(f"ファイルがありません: {path}")
         bi = self._index(create=True)
         book = title or path.stem
 
-        blocks = bx.parse_blocks(path)                              # 4.2.1 Layout Parsing
+        bx.log(f"[1/5] 解析（レイアウト{'+OCR' if ocr else ''}）: {path.name}")
+        blocks = bx.parse_blocks(path, ocr=ocr, layout=layout)      # 4.2.1 Layout Parsing
+        bx.log(f"[2/5] 見出し判定{'（LLM）' if use_llm_sections else '（ヒューリスティック）'}"
+               f": ブロック {len(blocks)} 個")
         blocks = bx.section_filter(blocks, use_llm=use_llm_sections)  # 4.2.2 Section Filtering
-        root = bx.build_tree(bi, blocks, book)                     # 木 T を構築
+        bx.log("[3/5] 木（BookIndex Tree）を構築中…")
+        root = bx.build_tree(bi, blocks, book,                     # 木 T（本文はチャンク化）
+                             chunk_chars=chunk_chars or self.chunk_chars)
         new_nodes = bi.subtree(root)
+        bx.log(f"[4/5] 知識グラフ構築（抽出→名寄せ）: ノード {len(new_nodes)} 個")
         bx.build_graph(bi, new_nodes, gradient_g=self.gradient_g,  # 4.3 KG + Gradient ER
-                       er_top_k=self.er_top_k)
+                       er_top_k=self.er_top_k, max_workers=self.max_workers,
+                       max_nodes=max_nodes or self.max_nodes, er_use_llm=self.er_use_llm)
+        bx.log("[5/5] 保存中…")
         bi.persist(self.storage_dir)
+        bx.log(f"完了: {book}（エンティティ {len(bi.entities)} / 関係 {len(bi.relations)}）")
         return book
 
     def info(self) -> dict:
@@ -198,7 +230,12 @@ class BookRAG:
         plan = ["Classify(global)"]
         spec = self._op_make_filters(question)                     # Fig.12 のフィルタ生成
         ns = list(bi.nodes.keys())
-        for f in spec.get("filters", []):
+        filters = spec.get("filters", [])
+        if not isinstance(filters, list):  # LLM 応答の形状不正に耐える
+            filters = []
+        for f in filters:
+            if not isinstance(f, dict):
+                continue
             ftype = f.get("filter_type")
             if ftype in ("image", "table", "section"):
                 ns = self._op_filter_modal(bi, ns, ftype)          # Selector: Filter_Modal
@@ -206,8 +243,11 @@ class BookRAG:
             elif ftype == "page":
                 ns = self._op_filter_range(bi, ns, f.get("filter_value"))  # Selector: Filter_Range
                 plan.append(f"Filter_Range({f.get('filter_value')})")
-        evidence = self._to_evidence(bi, ns, {}, {})
-        operation = spec.get("operation", "ANALYZE")
+        # COUNT/LIST の集計を max_evidence で歪めないよう、全件数を明示しつつ広めに渡す
+        total = len(ns)
+        evidence = self._to_evidence(bi, ns, {}, {}, limit=min(total, 100))
+        operation = str(spec.get("operation", "ANALYZE") or "ANALYZE")
+        operation = f"{operation}（フィルタ後の該当ノード総数: {total} 件。件数を問われたらこの総数を使う）"
         plan += ["Map", f"Reduce({operation})"]
         text = self._op_reduce(question, evidence, operation=operation)
         return BookAnswer(text=text, category="global", plan=plan,
@@ -258,7 +298,10 @@ class BookRAG:
             _P_SELECT_SECTION + f"\n\nQuery: {query}\nSections: {json.dumps(listing, ensure_ascii=False)}"
         )
         chosen = result.get("section_ids", []) if isinstance(result, dict) else []
-        chosen = [c for c in chosen if c in bi.nodes]
+        if not isinstance(chosen, list):
+            chosen = []
+        section_ids = {nid for nid, _ in sections}  # Section ノードのみ受理（LLM の誤 id 対策）
+        chosen = [c for c in chosen if isinstance(c, int) and c in section_ids]
         if not chosen:  # フォールバック: タイトルのコサインで上位節
             qv = bx.embed([query])[0]
             tvs = bx.embed([t for _, t in sections])
@@ -284,7 +327,10 @@ class BookRAG:
                 lo = hi = int(value)
         except ValueError:
             return ns
-        return [n for n in ns if bi.nodes[n].page is not None and lo <= bi.nodes[n].page <= hi]
+        # page は PDF 由来なら int、Excel/PPTX 由来はシート名等の str のことがある。
+        # int のみ範囲比較の対象にする（str と int の比較は TypeError になるため）。
+        return [n for n in ns
+                if isinstance(bi.nodes[n].page, int) and lo <= bi.nodes[n].page <= hi]
 
     def _op_graph_reasoning(self, bi: BookIndex, ns: list[int], start_entities: list[int]) -> dict[int, float]:
         """Reasoner/Graph_Reasoning（式(6)(7)）: 部分グラフ上の PageRank を GT-Link でノードへ写像。"""
@@ -306,14 +352,23 @@ class BookRAG:
         return _minmax(s_graph)
 
     def _op_text_reasoning(self, bi: BookIndex, ns: list[int], query: str) -> dict[int, float]:
-        """Reasoner/Text_Reasoning: ノード内容とクエリの意味的関連度 S_T。"""
+        """Reasoner/Text_Reasoning: ノード内容とクエリの意味的関連度 S_T。
+
+        reranker が設定されていればそれで再スコア（既定は埋め込みコサイン=従来挙動）。
+        """
         if not ns:
             return {}
-        qv = bx.embed([query])[0]
         contents = [bi.nodes[n].content[:500] or " " for n in ns]
-        cv = bx.embed(contents)
-        sims = cv @ qv
-        return {n: float(sims[i]) for i, n in enumerate(ns)}
+        try:
+            scores = self._reranker.rerank(query, contents)
+        except Exception as e:  # noqa: BLE001
+            print(f"[BookRAG] rerank に失敗したためコサインで代替: {e}")
+            from .rerank import CosineReranker
+            scores = CosineReranker().rerank(query, contents)
+        # 0-1 に正規化して返す。CrossEncoder のロジット（±10 等）をそのまま使うと、
+        # Skyline 後の (S_G + S_T) ソートでグラフスコア（minmax 済み）との釣り合いが崩れる。
+        # 単調変換なので Pareto 支配関係（Skyline の中身）は変わらない。
+        return _minmax({n: float(scores[i]) for i, n in enumerate(ns)})
 
     def _op_skyline(self, ns: list[int], s_graph: dict, s_text: dict) -> list[int]:
         """Skyline_Ranker（式(14)）: (S_G, S_T) の Pareto 前線を残す（top-k 固定ではない）。"""
@@ -376,9 +431,10 @@ class BookRAG:
             cur = bi.nodes[cur].parent
         return cur
 
-    def _to_evidence(self, bi: BookIndex, ns: list[int], s_graph: dict, s_text: dict) -> list[Evidence]:
+    def _to_evidence(self, bi: BookIndex, ns: list[int], s_graph: dict, s_text: dict,
+                     *, limit: int | None = None) -> list[Evidence]:
         ev = []
-        for n in ns[: self.max_evidence]:
+        for n in ns[: (limit if limit is not None else self.max_evidence)]:
             node = bi.nodes[n]
             txt = node.content.strip().replace("\n", " ")
             ev.append(Evidence(

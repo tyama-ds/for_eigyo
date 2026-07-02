@@ -77,6 +77,7 @@ class MultiPaperRAG:
         pics: bool = False,
         vlm_model: str | None = None,     # pics=True 時の画像対応モデル名（省略時は model）
         max_figure_pages: int = 20,
+        book_kwargs: dict | None = None,  # deep_engine="book" 時に per-paper BookRAG へ渡す設定
     ):
         if deep_engine not in ("paged", "book"):
             raise ValueError('deep_engine は "paged" か "book"')
@@ -89,6 +90,8 @@ class MultiPaperRAG:
         self.pics = pics
         self.vlm_model = vlm_model
         self.max_figure_pages = max_figure_pages
+        # per-paper BookRAG の調整ノブ（chunk_chars / max_nodes / er_use_llm / max_workers 等）
+        self.book_kwargs = book_kwargs or {}
         self._rag = PagedRAG(
             storage_dir=str(self.storage_dir / "vectors"),
             top_k=top_k, chunk_size=chunk_size, chunk_overlap=chunk_overlap,
@@ -111,6 +114,10 @@ class MultiPaperRAG:
             self._cache_tables(path, book_title)
         if self.pics and path.suffix.lower() == ".pdf":
             self._describe_figures(path, book_title)
+        # deep_engine="book" は取り込み時に BookIndex を構築（重い処理と進捗を add 時に出す。
+        # 遅延だと初回 compare() で突然重くなるため）。
+        if self.deep_engine == "book":
+            self._ensure_book(book_title)
         return book_title
 
     def add_papers(self, docs_dir: str | Path) -> list[str]:
@@ -159,7 +166,7 @@ class MultiPaperRAG:
         from .bookindex import llm_json
         res = llm_json(prompt)
         picked = res.get("papers", []) if isinstance(res, dict) else []
-        picked = [p for p in picked if p in summaries][:n]
+        picked = list(dict.fromkeys(p for p in picked if p in summaries))[:n]  # 重複排除
         return picked or self.papers()[:n]
 
     def _make_summary(self, title: str) -> str:
@@ -228,10 +235,17 @@ class MultiPaperRAG:
             return self._book_cache[title]
         from .bookrag import BookRAG
 
-        book = BookRAG(storage_dir=str(self.storage_dir / "books" / self._safe(title)))
+        book = BookRAG(storage_dir=str(self.storage_dir / "books" / self._safe(title)),
+                       **self.book_kwargs)  # 高速化ノブ等を継承（chunk_chars/max_nodes/er_use_llm…）
         info = self._manifest().get(title, {})
-        if info.get("path") and book.info().get("nodes", 0) == 0:
-            book.add_book(info["path"], title=title)  # 初回のみ構築（重い）
+        if book.info().get("nodes", 0) == 0:
+            src = info.get("path")
+            if not src or not Path(src).exists():
+                raise RuntimeError(
+                    f"論文「{title}」の元ファイルが見つかりません（manifest: {src!r}）。"
+                    "ファイルを移動した場合は add_paper で取り込み直してください。"
+                )
+            book.add_book(src, title=title)  # 初回のみ構築（重い）
         self._book_cache[title] = book
         return book
 
@@ -278,10 +292,15 @@ class MultiPaperRAG:
             return
         if tables is None:
             return
-        self.tables_dir.mkdir(parents=True, exist_ok=True)
-        (self.tables_dir / f"{self._safe(title)}.json").write_text(
-            json.dumps(tables, ensure_ascii=False), encoding="utf-8"
-        )
+        try:
+            self.tables_dir.mkdir(parents=True, exist_ok=True)
+            (self.tables_dir / f"{self._safe(title)}.json").write_text(
+                # default=str: 文字列化を逃れた非 JSON 型が残っても落とさない
+                json.dumps(tables, ensure_ascii=False, default=str), encoding="utf-8"
+            )
+        except Exception as e:  # noqa: BLE001
+            print(f"[MultiPaperRAG] 表キャッシュの保存に失敗（表比較なしで続行）: {e}")
+            return
         print(f"[MultiPaperRAG] {title}: 表 {len(tables)} 個を抽出")
 
     def _tables_from_pdf(self, path: Path):
@@ -330,7 +349,12 @@ class MultiPaperRAG:
         try:
             wb = load_workbook(str(path), read_only=True, data_only=True)
             for si, ws in enumerate(wb.worksheets, start=1):
-                rows = [[("" if c is None else c) for c in row] for row in ws.iter_rows(values_only=True)]
+                # datetime 等の非 JSON 型セルは文字列化する（json.dumps でのクラッシュ防止）
+                rows = [
+                    [("" if c is None else c if isinstance(c, (str, int, float, bool)) else str(c))
+                     for c in row]
+                    for row in ws.iter_rows(values_only=True)
+                ]
                 rows = [r for r in rows if any(str(c).strip() for c in r)]
                 if rows:
                     tables.append({"page": f"{ws.title}", "rows": rows})
@@ -419,4 +443,10 @@ class MultiPaperRAG:
 
     @staticmethod
     def _safe(title: str) -> str:
-        return re.sub(r"[^\w\-.]+", "_", title)[:120] or "untitled"
+        """タイトルをファイル名に正規化。衝突防止に元タイトルのハッシュを付与する
+        （「論文A(2024)」と「論文A（2024）」が同名化して上書きし合う事故を防ぐ）。"""
+        import hashlib
+
+        base = re.sub(r"[^\w\-.]+", "_", title)[:100] or "untitled"
+        digest = hashlib.md5(title.encode("utf-8")).hexdigest()[:8]
+        return f"{base}_{digest}"
