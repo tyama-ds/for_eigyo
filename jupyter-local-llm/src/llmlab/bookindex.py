@@ -287,8 +287,10 @@ def parse_blocks(path: Path) -> list[dict]:
     """Layout Parsing（4.2.1）。文書を素朴なブロック列に分解する。
 
     各ブロック: {"content", "type"(Title/Text/Table/Image), "page", "font"}
-    - .md/.markdown: 見出しレベルが明示的なので最も正確に木を作れる。
+    - .md/.markdown: 見出しレベルが明示的なので最も正確に木を作れる（推奨）。
     - .pdf: pypdf でページ毎テキストを取り、見出しらしさをヒューリスティック判定。
+    - .docx: 見出しスタイル(Heading n)から階層を復元（比較的良好）。
+    - .pptx / .xlsx: 一応読めるが BookRAG と相性が悪い（警告あり）。
     - .txt 等: 段落を Text ブロックに。
     """
     suffix = path.suffix.lower()
@@ -296,7 +298,122 @@ def parse_blocks(path: Path) -> list[dict]:
         return _parse_markdown(path.read_text(encoding="utf-8"))
     if suffix == ".pdf":
         return _parse_pdf(path)
+    if suffix in (".docx", ".doc"):
+        _warn_format(suffix)
+        return _parse_docx(path)
+    if suffix == ".pptx":
+        _warn_format(suffix)
+        return _parse_pptx(path)
+    if suffix in (".xlsx", ".xls"):
+        _warn_format(suffix)
+        return _parse_xlsx(path)
     return _parse_plain(path.read_text(encoding="utf-8", errors="ignore"))
+
+
+def _warn_format(suffix: str) -> None:
+    """BookRAG と相性が悪い形式の注意（デメリットと推奨方式）を表示する。"""
+    if suffix in (".docx", ".doc"):
+        log("⚠ Word を BookRAG で処理します。見出しスタイル(Heading n)から階層を作りますが、"
+            "スタイル未使用の文書は木が浅くなります。構造重視なら Markdown 化、"
+            "単純な検索用途なら PagedRAG も検討してください。")
+    elif suffix == ".pptx":
+        log("⚠ PowerPoint を BookRAG で処理します。スライドは階層的な散文ではないため"
+            "木/知識グラフの精度が落ちがちです。推奨: 検索は PagedRAG、要点抽出はチャット。")
+    elif suffix in (".xlsx", ".xls"):
+        log("⚠ Excel を BookRAG で処理します。表データは BookRAG の木/知識グラフと相性が悪く、"
+            "精度が低い可能性が高いです。推奨: 集計・計算は TableQA、検索は PagedRAG、"
+            "文章と表が混在するなら DocQA。")
+
+
+def _parse_docx(path: Path) -> list[dict]:
+    """Word。見出しスタイルを Title(level)、本文を Text、表を Table に。"""
+    try:
+        from docx import Document
+    except ImportError:
+        log(".docx には python-docx が必要です: pip install python-docx（スキップ）")
+        return []
+    blocks: list[dict] = []
+    try:
+        doc = Document(str(path))
+    except Exception as e:  # noqa: BLE001
+        log(f"Word の読み込みに失敗（スキップ）: {e}")
+        return []
+    for para in doc.paragraphs:
+        text = para.text.strip()
+        if not text:
+            continue
+        style = (para.style.name if para.style else "") or ""
+        if style.lower().startswith("heading"):
+            m = re.search(r"(\d+)", style)
+            level = int(m.group(1)) if m else 1
+            blocks.append({"content": text, "type": "Title", "page": None, "font": None, "level": level})
+        else:
+            blocks.append({"content": text, "type": "Text", "page": None, "font": None, "level": None})
+    for tb in doc.tables:
+        rows = [" | ".join(c.text for c in row.cells) for row in tb.rows]
+        rows = [r for r in rows if r.strip()]
+        if rows:
+            blocks.append({"content": "\n".join(rows), "type": "Table",
+                           "page": None, "font": None, "level": None})
+    return blocks
+
+
+def _parse_pptx(path: Path) -> list[dict]:
+    """PowerPoint。各スライドのタイトルを Title(level1)、本文を Text に。"""
+    try:
+        from pptx import Presentation
+    except ImportError:
+        log(".pptx には python-pptx が必要です: pip install python-pptx（スキップ）")
+        return []
+    blocks: list[dict] = []
+    try:
+        prs = Presentation(str(path))
+    except Exception as e:  # noqa: BLE001
+        log(f"PowerPoint の読み込みに失敗（スキップ）: {e}")
+        return []
+    for i, slide in enumerate(prs.slides, start=1):
+        title = None
+        try:
+            if slide.shapes.title and slide.shapes.title.text.strip():
+                title = slide.shapes.title.text.strip()
+        except Exception:  # noqa: BLE001
+            title = None
+        blocks.append({"content": title or f"Slide {i}", "type": "Title",
+                       "page": i, "font": None, "level": 1})
+        for shape in slide.shapes:
+            if not getattr(shape, "has_text_frame", False):
+                continue
+            txt = shape.text_frame.text.strip()
+            if txt and txt != title:
+                blocks.append({"content": txt, "type": "Text", "page": i, "font": None, "level": None})
+    return blocks
+
+
+def _parse_xlsx(path: Path) -> list[dict]:
+    """Excel。各シートを Title(level1)、行をまとめて Table に（相性は悪い）。"""
+    try:
+        from openpyxl import load_workbook
+    except ImportError:
+        log(".xlsx には openpyxl が必要です: pip install openpyxl（スキップ）")
+        return []
+    blocks: list[dict] = []
+    try:
+        wb = load_workbook(str(path), read_only=True, data_only=True)
+    except Exception as e:  # noqa: BLE001
+        log(f"Excel の読み込みに失敗（スキップ）: {e}")
+        return []
+    for ws in wb.worksheets:
+        blocks.append({"content": str(ws.title), "type": "Title",
+                       "page": str(ws.title), "font": None, "level": 1})
+        rows = []
+        for row in ws.iter_rows(values_only=True):
+            cells = ["" if c is None else str(c) for c in row]
+            if any(c.strip() for c in cells):
+                rows.append(" | ".join(cells))
+        if rows:
+            blocks.append({"content": "\n".join(rows), "type": "Table",
+                           "page": str(ws.title), "font": None, "level": None})
+    return blocks
 
 
 def _parse_markdown(text: str) -> list[dict]:

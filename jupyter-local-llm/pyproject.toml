@@ -34,7 +34,7 @@ local-embeddings = ["llama-index-embeddings-huggingface>=0.2"]
 # MultiPaperRAG の表抽出（compare_table, PDF）
 tables = ["pdfplumber>=0.11"]
 # Word/Excel の本文・表（add_paper で .docx/.xlsx を扱う）
-office = ["docx2txt>=0.8", "python-docx>=1.1", "openpyxl>=3.1", "pandas>=2.0"]
+office = ["docx2txt>=0.8", "python-docx>=1.1", "python-pptx>=0.6", "openpyxl>=3.1", "pandas>=2.0"]
 # 図/グラフ理解（MultiPaperRAG(pics=True)）。画像対応モデルも必要
 figures = ["pymupdf>=1.24"]
 
