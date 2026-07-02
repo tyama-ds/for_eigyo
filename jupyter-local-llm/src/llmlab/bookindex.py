@@ -61,6 +61,32 @@ def llm_json(prompt: str, *, system: str | None = None):
         return None
 
 
+def vlm_describe(png_bytes: bytes, *, model: str | None = None) -> str:
+    """画像を VLM（画像対応モデル）に渡して内容説明を得る。図が無ければ空文字。
+
+    model 省略時は接続設定の model を使う（画像対応モデルであることが前提）。
+    """
+    import base64
+
+    from .client import get_client
+    from .config import get_settings
+
+    s = get_settings()
+    b64 = base64.b64encode(png_bytes).decode("ascii")
+    resp = get_client().chat.completions.create(
+        model=model or s.model,
+        messages=[{"role": "user", "content": [
+            {"type": "text", "text":
+                "この画像の図・グラフ・表の内容と、読み取れる主要な数値・傾向を簡潔に"
+                "説明してください。意味のある図が無ければ「図なし」とだけ答えてください。"},
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+        ]}],
+        max_tokens=400,
+    )
+    out = (resp.choices[0].message.content or "") if resp.choices else ""
+    return "" if "図なし" in out else out.strip()
+
+
 def embed(texts: list[str]) -> np.ndarray:
     """テキスト群を L2 正規化済みの埋め込み行列に変換する（embed_base_url を尊重）。"""
     from .client import get_embed_client
@@ -300,7 +326,8 @@ _MD_HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
 _NUM_HEADING = re.compile(r"^(\d+(\.\d+){0,3})\s+\S|^第[0-9一二三四五六七八九十百]+[章節編]")
 
 
-def parse_blocks(path: Path, *, ocr=False, layout=False) -> list[dict]:
+def parse_blocks(path: Path, *, ocr=False, layout=False, vlm=False,
+                 vlm_model: str | None = None) -> list[dict]:
     """Layout Parsing（4.2.1）。文書を素朴なブロック列に分解する。
 
     各ブロック: {"content", "type"(Title/Text/Table/Image), "page", "font"}
@@ -319,18 +346,19 @@ def parse_blocks(path: Path, *, ocr=False, layout=False) -> list[dict]:
             text = path.read_text(encoding="utf-8", errors="replace")
         return _parse_markdown(text)
     if suffix == ".pdf":
-        # 版面解析つきパース（pymupdf のフォントサイズ見出し + 任意 OCR）。
-        # pymupdf 未導入 or ocr/layout 無効なら pypdf のヒューリスティックへ。
-        if ocr or layout not in (None, False):
+        # 版面解析つきパース（pymupdf のフォントサイズ見出し + 任意 OCR + 任意 VLM 図理解）。
+        # pymupdf 未導入 or 全オプション無効なら pypdf のヒューリスティックへ。
+        if ocr or vlm or layout not in (None, False):
             from . import docparse
 
-            blocks = docparse.parse_pdf(path, ocr=ocr, layout=(layout or "auto"))
+            blocks = docparse.parse_pdf(path, ocr=ocr, layout=(layout or "auto"),
+                                        vlm=vlm, vlm_model=vlm_model)
             if blocks is not None:
                 if not blocks:
                     log("PDF からテキストを取得できませんでした（スキャンPDFなら ocr=True と "
                         "Tesseract 導入が必要）。")
                 return blocks
-            log("pymupdf 未導入のため pypdf で解析します（OCR/版面解析は無効）。"
+            log("pymupdf 未導入のため pypdf で解析します（OCR/版面解析/図理解は無効）。"
                 "  pip install -e \".[ocr]\"")
         return _parse_pdf(path)
     if suffix in (".docx", ".doc"):
@@ -451,20 +479,31 @@ def _parse_xlsx(path: Path) -> list[dict]:
     return blocks
 
 
+_MD_TABLE_ROW = re.compile(r"^\s*\|.*\|\s*$")
+
+
 def _parse_markdown(text: str) -> list[dict]:
     blocks: list[dict] = []
     buf: list[str] = []
 
     def flush():
-        if buf:
-            content = "\n".join(buf).strip()
+        # 本文と表行を分離して emit する。節全体を1つの Table に併合しない
+        # （併合すると本文がラベル誤りになり、チャンク化も迂回される）。
+        if not buf:
+            return
+        runs: list[tuple[bool, list[str]]] = []  # (is_table, lines)
+        for line in buf:
+            is_tbl = bool(_MD_TABLE_ROW.match(line))
+            if runs and runs[-1][0] == is_tbl:
+                runs[-1][1].append(line)
+            else:
+                runs.append((is_tbl, [line]))
+        for is_tbl, lines in runs:
+            content = "\n".join(lines).strip()
             if content:
-                is_table = "|" in content and re.search(r"\|.*\|", content) is not None
-                blocks.append(
-                    {"content": content, "type": "Table" if is_table else "Text",
-                     "page": None, "font": None, "level": None}
-                )
-            buf.clear()
+                blocks.append({"content": content, "type": "Table" if is_tbl else "Text",
+                               "page": None, "font": None, "level": None})
+        buf.clear()
 
     for line in text.splitlines():
         m = _MD_HEADING.match(line)
@@ -518,11 +557,18 @@ def section_filter(blocks: list[dict], *, use_llm: bool = True) -> list[dict]:
     candidate_set = set(title_idx)  # LLM が返す id は候補集合のみ受理（無関係ブロックの破壊防止）
     if title_idx and use_llm:
         candidates = [{"id": i, "text": blocks[i]["content"][:120]} for i in title_idx]
-        # 長文書対策でバッチ分割
+        # 長文書対策でバッチ分割。論文 4.2.2 に従い、確定済みの上位レベル節を
+        # コンテキストとして次バッチへ持ち回る（バッチ間で階層判定の一貫性を保つ）。
+        outline: list[str] = []
         for start in range(0, len(candidates), 40):
             batch = candidates[start : start + 40]
+            ctx = ""
+            if outline:
+                ctx = ("\n\nDocument outline confirmed so far (higher-level sections, in order):\n"
+                       + "\n".join(outline[-12:]))
             result = llm_json(
-                _PROMPT_SECTION_FILTER + "\n\nCandidates JSON:\n" + json.dumps(batch, ensure_ascii=False)
+                _PROMPT_SECTION_FILTER + ctx
+                + "\n\nCandidates JSON:\n" + json.dumps(batch, ensure_ascii=False)
             )
             if isinstance(result, list):
                 for item in result:
@@ -536,7 +582,10 @@ def section_filter(blocks: list[dict], *, use_llm: bool = True) -> list[dict]:
                         blocks[i]["type"] = "Text"  # 誤検出を Text に再分類
                     else:
                         try:
-                            blocks[i]["level"] = max(1, int(lvl))
+                            level = max(1, int(lvl))
+                            blocks[i]["level"] = level
+                            if level <= 2:  # 上位レベル節をアウトラインへ
+                                outline.append(f"{'#' * level} {blocks[i]['content'][:60]}")
                         except (TypeError, ValueError):
                             pass  # フォールバック（下の番号推定）に任せる
     # LLM 未使用 or 失敗時のフォールバック: 番号の深さからレベル推定
@@ -626,7 +675,7 @@ def build_tree(bi: BookIndex, blocks: list[dict], book: str, *, chunk_chars: int
 
 def build_graph(bi: BookIndex, node_ids: list[int], *, gradient_g: float = 0.6,
                 er_top_k: int = 10, max_workers: int = 8, min_chars: int = 40,
-                max_nodes: int = 300, er_use_llm: bool = False) -> None:
+                max_nodes: int = 300, er_use_llm: bool = False, reranker=None) -> None:
     """各ノードからエンティティ/関係を抽出し、Gradient-based ER で KG を構築する。
 
     速度のため、抽出（LLM 呼び出し + 埋め込み）はノード単位で **並列化** し、
@@ -634,6 +683,8 @@ def build_graph(bi: BookIndex, node_ids: list[int], *, gradient_g: float = 0.6,
     - 短すぎるノード（min_chars 未満）は抽出をスキップ。
     - 対象ノードは max_nodes で上限（超過分は警告して打ち切り）。
     - er_use_llm=False（既定）なら曖昧マージで LLM を呼ばず、最有力候補を採用（高速）。
+    - reranker 指定時は Algorithm 1 の Rerank model R として名寄せ候補を再スコアする。
+    - Table ノードは論文 4.3.1 に従い v_table エンティティ + ヘッダを ContainedIn で構造化。
     """
     from concurrent.futures import ThreadPoolExecutor
 
@@ -689,29 +740,75 @@ def build_graph(bi: BookIndex, node_ids: list[int], *, gradient_g: float = 0.6,
     # Gradient ER + グラフ構築は順序依存のため逐次（入力ノード順）。進捗も表示。
     for nid, ents, rels, vecs in progress(results, total=len(results),
                                           desc="名寄せ/グラフ構築 (KG)"):
-        if not ents:
-            continue
+        node = bi.nodes[nid]
         local_name_to_eid: dict[str, int] = {}
-        for e, vec in zip(ents, vecs):
-            eid = gradient_entity_resolution(
-                bi, e["name"], e.get("type", ""), e.get("description", ""),
-                nid, vec, gradient_g=gradient_g, er_top_k=er_top_k, use_llm=er_use_llm,
-            )
-            local_name_to_eid[e["name"].strip().lower()] = eid
-        for rel in rels:
-            s = local_name_to_eid.get(str(rel.get("source", "")).strip().lower())
-            t = local_name_to_eid.get(str(rel.get("target", "")).strip().lower())
-            if s is not None and t is not None and s != t:
-                bi.relations.append((s, t, str(rel.get("relation", "related_to"))))
+        if ents:
+            for e, vec in zip(ents, vecs):
+                eid = gradient_entity_resolution(
+                    bi, e["name"], e.get("type", ""), e.get("description", ""),
+                    nid, vec, gradient_g=gradient_g, er_top_k=er_top_k, use_llm=er_use_llm,
+                    reranker=reranker,
+                )
+                local_name_to_eid[e["name"].strip().lower()] = eid
+            for rel in rels:
+                s = local_name_to_eid.get(str(rel.get("source", "")).strip().lower())
+                t = local_name_to_eid.get(str(rel.get("target", "")).strip().lower())
+                if s is not None and t is not None and s != t:
+                    bi.relations.append((s, t, str(rel.get("relation", "related_to"))))
+        # 論文 4.3.1: Table ノードは v_table エンティティ + ヘッダ(ContainedIn) を構造化。
+        # LLM 抽出が空でも実行する（プロンプト任せにせず構造として保証する）。
+        if node.type == "Table":
+            try:
+                _augment_table_entities(
+                    bi, node, local_name_to_eid,
+                    gradient_g=gradient_g, er_top_k=er_top_k,
+                    use_llm=er_use_llm, reranker=reranker,
+                )
+            except Exception as e:  # noqa: BLE001
+                log(f"表エンティティの構造化に失敗（スキップ）: {e}")
+
+
+def _augment_table_entities(bi: BookIndex, node: TreeNode, local_name_to_eid: dict,
+                            *, gradient_g: float, er_top_k: int, use_llm: bool,
+                            reranker=None) -> None:
+    """論文 4.3.1 の Table 処理: v_table を作り、行/列ヘッダと抽出エンティティを
+    ContainedIn で v_table に接続する。"""
+    rows = [r for r in node.content.split("\n") if r.strip()]
+    if not rows:
+        return
+    header_cells = [c.strip() for c in rows[0].split("|") if c.strip()][:10]
+    first_col = [r.split("|")[0].strip() for r in rows[1:16] if r.split("|")[0].strip()]
+    page = f" p.{node.page}" if node.page is not None else ""
+    table_name = f"表({node.book}{page}): " + (" / ".join(header_cells[:4]) or rows[0][:40])
+
+    headers = list(dict.fromkeys(header_cells + first_col))  # 重複排除・順序維持
+    names = [table_name] + headers
+    vecs = embed(names)
+    v_table = gradient_entity_resolution(
+        bi, table_name, "Table", node.content[:160], node.id, vecs[0],
+        gradient_g=gradient_g, er_top_k=er_top_k, use_llm=use_llm, reranker=reranker,
+    )
+    for nm, vec in zip(headers, vecs[1:]):
+        eid = gradient_entity_resolution(
+            bi, nm, "TableHeader", f"{table_name} のヘッダ", node.id, vec,
+            gradient_g=gradient_g, er_top_k=er_top_k, use_llm=use_llm, reranker=reranker,
+        )
+        if eid != v_table:
+            bi.relations.append((eid, v_table, "ContainedIn"))
+    # そのノードから LLM 抽出されたエンティティも v_table に接続（論文: primary vertex に link）
+    for eid in set(local_name_to_eid.values()):
+        if eid != v_table:
+            bi.relations.append((eid, v_table, "ContainedIn"))
 
 
 def gradient_entity_resolution(bi: BookIndex, name: str, etype: str, desc: str, origin: int,
                                vec: np.ndarray, *, gradient_g: float, er_top_k: int,
-                               use_llm: bool = False) -> int:
+                               use_llm: bool = False, reranker=None) -> int:
     """Algorithm 1（Gradient-based entity resolution）。返り値は確定したエンティティ id。
 
     新規概念なら追加、既存の別名なら最も確からしい正準エンティティへマージする。
-    reranker は持たないため、ベクトルDB のコサイン類似度を rerank スコア S とみなす。
+    reranker 指定時はそれを Rerank model R として候補を再スコア（論文どおり）。
+    未指定時はベクトルDB のコサイン類似度を rerank スコア S とみなす。
     use_llm=True のときだけ、複数の高関連候補がある場合に LLM で1つ選ぶ（遅い）。
     """
     candidates = bi.search_entities(vec, er_top_k)  # Line 1: Search
@@ -725,7 +822,8 @@ def gradient_entity_resolution(bi: BookIndex, name: str, etype: str, desc: str, 
         bi.merge_entity(candidates[0][0], name, origin, vec)
         return candidates[0][0]
 
-    # Line 2-3: rerank（=コサイン）して降順ソート済み
+    # Line 2-3: Rerank model R による再スコア（reranker 指定時）→ 降順ソート
+    candidates = _rerank_candidates(bi, name, etype, desc, candidates, reranker)
     scores = [s for _, s in candidates]
     sel = [candidates[0][0]]          # Line 4: Sel ← Ec[0]
     prev = scores[0]
@@ -748,6 +846,33 @@ def gradient_entity_resolution(bi: BookIndex, name: str, etype: str, desc: str, 
             return bi.add_entity(name, etype, desc, origin, vec).id
     bi.merge_entity(v_sel, name, origin, vec)
     return v_sel
+
+
+def _rerank_candidates(bi: BookIndex, name: str, etype: str, desc: str,
+                       candidates: list[tuple[int, float]], reranker):
+    """Algorithm 1 Line 2-3: Rerank model R で候補を再スコアし降順に返す。
+
+    reranker 未指定（または cosine）ならベクトル検索スコアのまま。CrossEncoder の
+    ロジット等 [0,1] 外のスコアは sigmoid で写像する（勾配判定は比率ベースのため
+    正の単調スコアを前提とする）。失敗時はコサインスコアで続行。
+    """
+    if reranker is None or type(reranker).__name__ == "CosineReranker":
+        return candidates
+    try:
+        query = f"{name} ({etype}): {desc[:160]}"
+        docs = [
+            f"{bi.entities[eid].name} ({bi.entities[eid].type}): {bi.entities[eid].description[:160]}"
+            for eid, _ in candidates
+        ]
+        scores = reranker.rerank(query, docs)
+        if any(s < 0.0 or s > 1.0 for s in scores):
+            import math
+
+            scores = [1.0 / (1.0 + math.exp(-s)) for s in scores]
+        return sorted(zip((eid for eid, _ in candidates), scores), key=lambda x: -x[1])
+    except Exception as e:  # noqa: BLE001
+        log(f"ER rerank に失敗（コサインで続行）: {e}")
+        return candidates
 
 
 def _extract_graph(node: TreeNode) -> dict:
