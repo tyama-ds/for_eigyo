@@ -479,20 +479,31 @@ def _parse_xlsx(path: Path) -> list[dict]:
     return blocks
 
 
+_MD_TABLE_ROW = re.compile(r"^\s*\|.*\|\s*$")
+
+
 def _parse_markdown(text: str) -> list[dict]:
     blocks: list[dict] = []
     buf: list[str] = []
 
     def flush():
-        if buf:
-            content = "\n".join(buf).strip()
+        # 本文と表行を分離して emit する。節全体を1つの Table に併合しない
+        # （併合すると本文がラベル誤りになり、チャンク化も迂回される）。
+        if not buf:
+            return
+        runs: list[tuple[bool, list[str]]] = []  # (is_table, lines)
+        for line in buf:
+            is_tbl = bool(_MD_TABLE_ROW.match(line))
+            if runs and runs[-1][0] == is_tbl:
+                runs[-1][1].append(line)
+            else:
+                runs.append((is_tbl, [line]))
+        for is_tbl, lines in runs:
+            content = "\n".join(lines).strip()
             if content:
-                is_table = "|" in content and re.search(r"\|.*\|", content) is not None
-                blocks.append(
-                    {"content": content, "type": "Table" if is_table else "Text",
-                     "page": None, "font": None, "level": None}
-                )
-            buf.clear()
+                blocks.append({"content": content, "type": "Table" if is_tbl else "Text",
+                               "page": None, "font": None, "level": None})
+        buf.clear()
 
     for line in text.splitlines():
         m = _MD_HEADING.match(line)
