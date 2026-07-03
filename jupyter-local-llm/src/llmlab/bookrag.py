@@ -155,6 +155,12 @@ class BookRAG:
         root = bx.build_tree(bi, blocks, book,                     # 木 T（本文はチャンク化）
                              chunk_chars=chunk_chars or self.chunk_chars)
         new_nodes = bi.subtree(root)
+        # 見出しが1つも検出できなかった場合はフラットな木になる（BookRAG の強みが出ない）
+        if path.suffix.lower() == ".pdf" and not layout and \
+                not any(bi.nodes[n].type == "Section" for n in new_nodes if n != root):
+            bx.log("見出しを検出できず木がフラットです。add_book(layout=\"auto\") で"
+                   "フォントサイズによる見出し判定を試せます（要 pip install -e \".[ocr]\"）。"
+                   "構造が薄い文書なら PagedRAG の方が適している場合もあります。")
         bx.log(f"[4/5] 知識グラフ構築（抽出→名寄せ）: ノード {len(new_nodes)} 個")
         bx.build_graph(bi, new_nodes, gradient_g=self.gradient_g,  # 4.3 KG + Gradient ER
                        er_top_k=self.er_top_k, max_workers=self.max_workers,
@@ -229,6 +235,10 @@ class BookRAG:
     def _p_std(self, bi, question, ns, entity_ids, plan):
         """P_std = (Graph ∥ Text) → Skyline → Reduce（式(10)）。"""
         plan += ["Graph_Reasoning∥Text_Reasoning", "Skyline_Ranker", "Reduce"]
+        # Section ノード（内容=見出し/書名）は根拠として無意味なので推論から除外する
+        body = [n for n in ns if bi.nodes[n].type != "Section"]
+        if body:
+            ns = body
         s_graph = self._op_graph_reasoning(bi, ns, entity_ids)     # Reasoner: Graph
         s_text = self._op_text_reasoning(bi, ns, question)         # Reasoner: Text
         retained = self._op_skyline(ns, s_graph, s_text)           # Skyline_Ranker（式(14)）
@@ -273,6 +283,18 @@ class BookRAG:
             elif ftype == "page":
                 ns = self._op_filter_range(bi, ns, f.get("filter_value"))  # Selector: Filter_Range
                 plan.append(f"Filter_Range({f.get('filter_value')})")
+        # 指定モーダル（table/image 等）のノードが索引に存在しない場合、「0件」と
+        # 答えて終わるのではなく本文検索にフォールバックする。pypdf 経路では表は
+        # Text として取り込まれるため、テキストからなら答えられることが多い。
+        if filters and not ns:
+            print("[BookRAG] 指定モーダルのノードが索引に無いため、本文検索で回答します"
+                  "（表を Table ノード化するには add_book(layout=\"auto\")、"
+                  "図は BookRAG(vlm=True) を検討）")
+            plan.append("Fallback(モーダル該当なし→本文検索)")
+            body = [n for n, node in bi.nodes.items() if node.type != "Section"]
+            text, evidence = self._p_std(bi, question, body, [], plan)
+            return BookAnswer(text=text, category="global", plan=plan, evidence=evidence)
+
         # COUNT/LIST の集計を max_evidence で歪めないよう、全件数を明示しつつ広めに渡す
         total = len(ns)
         evidence = self._to_evidence(bi, ns, {}, {}, limit=min(total, 100))
@@ -357,7 +379,11 @@ class BookRAG:
         sections = [(nid, n.title) for nid, n in bi.nodes.items()
                     if n.type == "Section" and n.level and n.level >= 1]
         if not sections:
-            return list(bi.nodes.keys())
+            # 見出しが無いフラットな文書。Section（ルート含む）を除いた本文ノードを返す。
+            # ルートの content は書名そのもので、根拠として選ばれると
+            # 「これは<書名>です」のような無内容な回答になるため必ず除外する。
+            body = [n for n, node in bi.nodes.items() if node.type != "Section"]
+            return body or list(bi.nodes.keys())
         listing = [{"id": nid, "title": t} for nid, t in sections][:200]
         result = bx.llm_json(
             _P_SELECT_SECTION + f"\n\nQuery: {query}\nSections: {json.dumps(listing, ensure_ascii=False)}"
