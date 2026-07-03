@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "llmlab"
-version = "0.1.0"
+version = "0.2.0"
 description = "JupyterLab で OpenAI 互換エンドポイント（ローカルLLM）を使う AI コーディング支援ツールキット（チャット / 補完 / RAG）"
 readme = "README.md"
 requires-python = ">=3.10"

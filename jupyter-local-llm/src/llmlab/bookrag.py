@@ -117,7 +117,7 @@ class BookRAG:
     def add_book(self, path: str | Path, *, title: str | None = None,
                  use_llm_sections: bool = False, max_nodes: int | None = None,
                  chunk_chars: int | None = None, ocr=False, layout=False,
-                 vlm: bool | None = None) -> str:
+                 vlm: bool | None = None, force: bool = False) -> str:
         """文書を取り込み、BookIndex（Tree + KG + GT-Link）へ統合する。
 
         既定は速度重視（見出し判定は LLM 不使用、本文はチャンク化、ノード数に上限）。
@@ -139,6 +139,11 @@ class BookRAG:
                    f"（使用モデル: {self.vlm_model or '接続設定の model'}）")
         bi = self._index(create=True)
         book = title or path.stem
+        # 同一タイトルの二重取り込みを防ぐ（木とKGが重複し検索結果も二重になるため）
+        if any(bi.nodes[r].title == book for r in bi.roots) and not force:
+            bx.log(f"「{book}」は取り込み済みのためスキップします"
+                   "（再取り込みは force=True、索引の作り直しは reset()）")
+            return book
 
         bx.log(f"[1/5] 解析（レイアウト{'+OCR' if ocr else ''}{'+VLM' if use_vlm else ''}）: {path.name}")
         blocks = bx.parse_blocks(path, ocr=ocr, layout=layout,      # 4.2.1 Layout Parsing
@@ -159,6 +164,18 @@ class BookRAG:
         bi.persist(self.storage_dir)
         bx.log(f"完了: {book}（エンティティ {len(bi.entities)} / 関係 {len(bi.relations)}）")
         return book
+
+    def tree(self, *, max_chars: int = 42, show_entities: bool = False,
+             do_print: bool = True) -> str:
+        """構築済みの木を ASCII アートで表示する（構造の確認・デバッグ用）。"""
+        bi = self._index(create=False)
+        if bi is None:
+            out = "(インデックスがありません。add_book を実行してください)"
+        else:
+            out = bx.render_tree(bi, max_chars=max_chars, show_entities=show_entities)
+        if do_print:
+            print(out)
+        return out
 
     def info(self) -> dict:
         bi = self._index(create=False)

@@ -168,9 +168,26 @@ class PagedRAG:
             similarity_top_k=top_k or self.top_k, filters=filters
         )
         response = engine.query(question)
+        source_nodes = list(getattr(response, "source_nodes", []) or [])
+
+        # title フィルタの効き目を検証する。ベクトルストアの実装/バージョンによっては
+        # フィルタが無視され「別文書の内容」で答えてしまうため、その場合は取得し直して
+        # クライアント側でフィルタし、回答も作り直す（MultiPaperRAG の比較が同一文書
+        # ばかりを見る症状の対策）。
+        if title:
+            got = {n.node.metadata.get("title") for n in source_nodes}
+            if got and title not in got:
+                print(f"[PagedRAG] 警告: title フィルタが効いていません"
+                      f"（要求: {title} / 取得: {got}）。手動フィルタで再試行します。")
+                response_text, source_nodes = self._manual_title_query(
+                    index, question, title, top_k or self.top_k)
+            else:
+                response_text = str(response).strip()
+        else:
+            response_text = str(response).strip()
 
         sources = []
-        for node in getattr(response, "source_nodes", []) or []:
+        for node in source_nodes:
             meta = node.node.metadata
             text = node.node.get_content().strip().replace("\n", " ")
             sources.append(
@@ -181,7 +198,27 @@ class PagedRAG:
                     snippet=(text[:120] + "…") if len(text) > 120 else text,
                 )
             )
-        return Answer(text=str(response).strip(), sources=sources)
+        return Answer(text=response_text, sources=sources)
+
+    def _manual_title_query(self, index, question: str, title: str, top_k: int):
+        """フィルタ非対応ストア向けフォールバック: 広めに取得→クライアント側で title 抽出→
+        その抜粋だけを文脈に LLM で回答を生成する。"""
+        from .client import complete
+
+        retriever = index.as_retriever(similarity_top_k=max(top_k * 10, 50))
+        nodes = [n for n in retriever.retrieve(question)
+                 if n.node.metadata.get("title") == title][:top_k]
+        if not nodes:
+            return f"（文書「{title}」から該当箇所を見つけられませんでした）", []
+        ctx = "\n\n".join(
+            f"[p.{n.node.metadata.get('page_label','?')}] {n.node.get_content()[:800]}"
+            for n in nodes
+        )
+        text = complete(
+            f"以下は文書「{title}」からの抜粋です。この抜粋のみに基づいて質問に答えてください。\n\n"
+            f"質問: {question}\n\n抜粋:\n{ctx}"
+        ).strip()
+        return text, nodes
 
     def ask(self, question: str, *, title: str | None = None, top_k: int | None = None) -> Answer:
         """query() のエイリアス（print() 前提の対話用）。"""

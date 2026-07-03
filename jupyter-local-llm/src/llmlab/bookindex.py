@@ -29,24 +29,35 @@ import numpy as np
 # --------------------------------------------------------------------------
 
 
-def llm_text(prompt: str, *, system: str | None = None, temperature: float = 0.0) -> str:
+def llm_text(prompt: str, *, system: str | None = None, temperature: float = 0.0,
+             max_retries: int | None = None, max_tokens: int | None = None) -> str:
+    """max_retries=0 で SDK リトライを無効化（fail-fast）。上位で独自に再試行する用途向け。
+    max_tokens で生成量を制限（遅いローカルLLMでの長時間生成→タイムアウトを防ぐ）。"""
     from .client import get_client
     from .config import get_settings
 
     s = get_settings()
+    client = get_client()
+    if max_retries is not None:
+        try:
+            client = client.with_options(max_retries=max_retries)
+        except Exception:  # noqa: BLE001  古いSDK/スタブは with_options 非対応でもよい
+            pass
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
-    resp = get_client().chat.completions.create(
-        model=s.model, messages=messages, temperature=temperature
-    )
-    return resp.choices[0].message.content or ""
+    kwargs = {"model": s.model, "messages": messages, "temperature": temperature}
+    if max_tokens is not None:
+        kwargs["max_tokens"] = max_tokens
+    resp = client.chat.completions.create(**kwargs)
+    return (resp.choices[0].message.content or "") if resp.choices else ""
 
 
-def llm_json(prompt: str, *, system: str | None = None):
+def llm_json(prompt: str, *, system: str | None = None, max_retries: int | None = None,
+             max_tokens: int | None = None):
     """LLM 応答を JSON として解釈する（```json フェンスや前後テキストを除去）。"""
-    raw = llm_text(prompt, system=system)
+    raw = llm_text(prompt, system=system, max_retries=max_retries, max_tokens=max_tokens)
     text = raw.strip()
     if text.startswith("```"):
         text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
@@ -315,6 +326,46 @@ def _normalize(v: np.ndarray) -> np.ndarray:
     v = np.asarray(v, dtype=np.float32)
     n = np.linalg.norm(v)
     return v / n if n else v
+
+
+def render_tree(bi: "BookIndex", *, max_chars: int = 42, show_entities: bool = False) -> str:
+    """BookIndex の木を ASCII アートで可視化する（構築結果の確認用）。
+
+    例::
+        Handbook
+        ├─ [S1] 第1章 概要 (p.1)
+        │   ├─ (Text#3 p.1, 812字) 本章では…
+        │   └─ (Tbl#4 p.2) モデル | 精度 | 速度
+        └─ [S1] 第2章 手順
+    """
+    rev = bi.node_to_entities() if show_entities else {}
+
+    def _label(n: TreeNode) -> str:
+        page = f" p.{n.page}" if n.page is not None else ""
+        ents = f" ◆{len(rev[n.id])}エンティティ" if show_entities and n.id in rev else ""
+        if n.type == "Section":
+            lvl = f"S{n.level}" if n.level else "S"
+            return f"[{lvl}] {n.title or n.content}{page}{ents}"
+        head = (n.content or "").replace("\n", " ")[:max_chars]
+        kind = {"Text": "Text", "Table": "Tbl", "Image": "Img"}.get(n.type, n.type)
+        size = f", {len(n.content)}字" if n.type == "Text" else ""
+        return f"({kind}#{n.id}{page}{size}) {head}"
+
+    lines: list[str] = []
+
+    def _walk(nid: int, prefix: str, is_last: bool, is_root: bool) -> None:
+        n = bi.nodes[nid]
+        if is_root:
+            lines.append(n.title or n.content)
+        else:
+            lines.append(prefix + ("└─ " if is_last else "├─ ") + _label(n))
+        child_prefix = "" if is_root else prefix + ("    " if is_last else "│   ")
+        for i, c in enumerate(n.children):
+            _walk(c, child_prefix, i == len(n.children) - 1, False)
+
+    for r in bi.roots:
+        _walk(r, "", True, True)
+    return "\n".join(lines) if lines else "(空のインデックスです。add_book を実行してください)"
 
 
 # --------------------------------------------------------------------------
@@ -703,18 +754,21 @@ def build_graph(bi: BookIndex, node_ids: list[int], *, gradient_g: float = 0.6,
               "（増やすには add_book(max_nodes=...)）")
         targets = targets[:max_nodes]
 
-    def _work(nid: int):
-        # 抽出フェーズは BookIndex を読むだけ（スレッド安全）。失敗しても全体を止めない。
+    def _work(nid: int, fail_fast: bool = True):
+        # 抽出フェーズは BookIndex を読むだけ（スレッド安全）。失敗しても全体を止めず、
+        # 状態（ok / empty / badjson / error:*）を返して後段で集計・再試行する。
         try:
             node = bi.nodes[nid]
-            data = _extract_graph(node)                       # entities + relations を1回で
+            data = _extract_graph(node, fail_fast=fail_fast)   # entities + relations を1回で
+            if data is None:
+                return nid, [], [], None, "badjson"            # モデルが JSON を返さない
             ents = data["entities"]
             if not ents:
-                return nid, [], [], None
+                return nid, [], [], None, "empty"
             names = [f"{e['name']} ({e.get('type','')}): {e.get('description','')}" for e in ents]
-            return nid, ents, data["relations"], embed(names)
-        except Exception:  # noqa: BLE001
-            return nid, [], [], None
+            return nid, ents, data["relations"], embed(names), "ok"
+        except Exception as e:  # noqa: BLE001
+            return nid, [], [], None, f"error:{type(e).__name__}"
 
     results = []
     total = len(targets)
@@ -723,23 +777,38 @@ def build_graph(bi: BookIndex, node_ids: list[int], *, gradient_g: float = 0.6,
                             desc=f"抽出: エンティティ/関係 ({max_workers}並列)"):
             results.append(res)
 
-    # 空振り検知: 1件もエンティティが取れない場合は“読めていない”状態。
-    # 例外/タイムアウトは握り潰すため、ここで明示的に警告する。
-    found = sum(len(ents) for _, ents, _, _ in results)
-    print(f"[BookRAG] 抽出エンティティ合計: {found}")
+    # 失敗ノード（通信エラー/JSON不正）を逐次(1並列)で1回だけ再試行する。
+    # ローカルLLMサーバが並列リクエストを捌けずタイムアウトする構成の救済。
+    retry_idx = [i for i, r in enumerate(results)
+                 if r[4].startswith("error") or r[4] == "badjson"]
+    if retry_idx:
+        log(f"{len(retry_idx)}/{len(results)} ノードの抽出が失敗。サーバ過負荷の可能性があるため"
+            "逐次(1並列)で再試行します…")
+        for i in progress(retry_idx, total=len(retry_idx), desc="失敗ノードの再試行 (1並列)"):
+            results[i] = _work(results[i][0], fail_fast=False)
+
+    # 状態を集計して報告（従来は失敗が黙殺され「エンティティ0」の原因が見えなかった）。
+    from collections import Counter
+
+    stat = Counter(("error" if r[4].startswith("error") else r[4]) for r in results)
+    errors = Counter(r[4].split(":", 1)[1] for r in results if r[4].startswith("error"))
+    found = sum(len(r[1]) for r in results)
+    log(f"抽出結果: 成功 {stat.get('ok', 0)} / エンティティ0 {stat.get('empty', 0)} / "
+        f"JSON不正 {stat.get('badjson', 0)} / 通信エラー {stat.get('error', 0)}"
+        f"（エンティティ合計 {found}）")
+    if stat.get("error"):
+        log(f"通信エラー内訳: {dict(errors)}。ローカルLLMサーバが並列を捌けない場合は "
+            "BookRAG(max_workers=1) を、1リクエストが遅い場合は "
+            "configure(request_timeout=300) を試してください。")
+    if stat.get("badjson"):
+        log("モデルが JSON 形式で応答していません。"
+            "llmlab.complete('Return JSON: {\"ok\":true}') で挙動を確認してください。")
     if found == 0:
-        print(
-            "[BookRAG] 警告: エンティティが1件も抽出できませんでした。考えられる原因:\n"
-            "  - モデルが JSON 形式で返していない（指示無視）\n"
-            "  - 生成エンドポイントへのリクエストが失敗/タイムアウトしている\n"
-            "  - 文書テキストが空（スキャンPDF等でテキスト抽出できていない）\n"
-            "  確認: llmlab.complete('Return JSON: {\"ok\":true}') が JSON を返すか、"
-            "request_timeout を延ばす、PDF にテキスト層があるか。"
-        )
+        log("警告: エンティティが1件も抽出できませんでした（上記の内訳を参照）。")
 
     # Gradient ER + グラフ構築は順序依存のため逐次（入力ノード順）。進捗も表示。
-    for nid, ents, rels, vecs in progress(results, total=len(results),
-                                          desc="名寄せ/グラフ構築 (KG)"):
+    for nid, ents, rels, vecs, _st in progress(results, total=len(results),
+                                               desc="名寄せ/グラフ構築 (KG)"):
         node = bi.nodes[nid]
         local_name_to_eid: dict[str, int] = {}
         if ents:
@@ -875,11 +944,19 @@ def _rerank_candidates(bi: BookIndex, name: str, etype: str, desc: str,
         return candidates
 
 
-def _extract_graph(node: TreeNode) -> dict:
-    """1 回の LLM 呼び出しでノードからエンティティと関係をまとめて抽出する。"""
+def _extract_graph(node: TreeNode, *, fail_fast: bool = False) -> dict | None:
+    """1 回の LLM 呼び出しでノードからエンティティと関係をまとめて抽出する。
+
+    fail_fast=True で SDK リトライ無効（並列パスで使用。失敗は上位の逐次再試行に回す）。
+    モデルが JSON を返さなかった場合は None（「エンティティ0」と区別するため）。
+    """
     result = llm_json(
-        _PROMPT_GRAPH_EXTRACT + f"\n\nNode type: {node.type}\nContent:\n{node.content[:2500]}"
+        _PROMPT_GRAPH_EXTRACT + f"\n\nNode type: {node.type}\nContent:\n{node.content[:2500]}",
+        max_retries=0 if fail_fast else None,
+        max_tokens=1200,  # 遅いローカルLLMで JSON 生成が長引きタイムアウトするのを防ぐ
     )
+    if result is None:
+        return None  # JSON 解釈不能（指示無視）
     ents: list[dict] = []
     rels: list[dict] = []
     if isinstance(result, dict):
@@ -925,10 +1002,10 @@ section heading (i.e., it is body text mistakenly detected as a title).
 Return ONLY a JSON array: [{"id": <int>, "level": <int or null>}, ...]."""
 
 _PROMPT_GRAPH_EXTRACT = """You are an information extraction engine. From the given document node,
-extract (1) the key entities and (2) the directed relations among those entities (relations must only
-reference the extracted entities). For tables, also extract the table itself as one entity plus its
-row/column headers. Keep names canonical and concise, and output in the document's language.
-Return ONLY JSON:
+extract (1) AT MOST 10 key entities and (2) the directed relations among those entities (relations
+must only reference the extracted entities). Keep names canonical, descriptions under 15 words each,
+and output in the document's language.
+Return ONLY JSON (no explanations, no markdown fences):
 {"entities":[{"name": str, "type": str, "description": str}, ...],
  "relations":[{"source": str, "target": str, "relation": str}, ...]}."""
 
