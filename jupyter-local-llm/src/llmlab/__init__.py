@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from .bookrag import BookAnswer, BookRAG, Evidence
 from .chat import Chat, chat_panel
-from .client import complete, get_client
+from .client import get_client
 from .complete import code_complete, completion_panel, inline_complete
 from .config import (
     Settings,
@@ -28,6 +28,11 @@ from .multipaper import Comparison, MultiPaperRAG
 from .tableqa import TableAnswer, TableQA
 from .docqa import DocQA, DocResult
 from .rag import build_rag
+
+# 重要: この import は complete.py（補完モジュール）の import より後に置くこと。
+# サブモジュール import はパッケージ属性 `complete` をモジュールで上書きするため、
+# 先に置くと llmlab.complete が関数ではなくモジュールになる（'module' is not callable）。
+from .client import complete  # noqa: E402
 
 __all__ = [
     "configure",
@@ -67,4 +72,4 @@ __all__ = [
     "DocResult",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"  # llmlab.__version__ で更新確認できる

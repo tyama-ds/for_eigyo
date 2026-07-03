@@ -165,6 +165,18 @@ class BookRAG:
         bx.log(f"完了: {book}（エンティティ {len(bi.entities)} / 関係 {len(bi.relations)}）")
         return book
 
+    def tree(self, *, max_chars: int = 42, show_entities: bool = False,
+             do_print: bool = True) -> str:
+        """構築済みの木を ASCII アートで表示する（構造の確認・デバッグ用）。"""
+        bi = self._index(create=False)
+        if bi is None:
+            out = "(インデックスがありません。add_book を実行してください)"
+        else:
+            out = bx.render_tree(bi, max_chars=max_chars, show_entities=show_entities)
+        if do_print:
+            print(out)
+        return out
+
     def info(self) -> dict:
         bi = self._index(create=False)
         if bi is None:

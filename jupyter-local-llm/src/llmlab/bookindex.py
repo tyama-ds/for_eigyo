@@ -30,8 +30,9 @@ import numpy as np
 
 
 def llm_text(prompt: str, *, system: str | None = None, temperature: float = 0.0,
-             max_retries: int | None = None) -> str:
-    """max_retries=0 で SDK リトライを無効化（fail-fast）。上位で独自に再試行する用途向け。"""
+             max_retries: int | None = None, max_tokens: int | None = None) -> str:
+    """max_retries=0 で SDK リトライを無効化（fail-fast）。上位で独自に再試行する用途向け。
+    max_tokens で生成量を制限（遅いローカルLLMでの長時間生成→タイムアウトを防ぐ）。"""
     from .client import get_client
     from .config import get_settings
 
@@ -46,15 +47,17 @@ def llm_text(prompt: str, *, system: str | None = None, temperature: float = 0.0
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
-    resp = client.chat.completions.create(
-        model=s.model, messages=messages, temperature=temperature
-    )
+    kwargs = {"model": s.model, "messages": messages, "temperature": temperature}
+    if max_tokens is not None:
+        kwargs["max_tokens"] = max_tokens
+    resp = client.chat.completions.create(**kwargs)
     return (resp.choices[0].message.content or "") if resp.choices else ""
 
 
-def llm_json(prompt: str, *, system: str | None = None, max_retries: int | None = None):
+def llm_json(prompt: str, *, system: str | None = None, max_retries: int | None = None,
+             max_tokens: int | None = None):
     """LLM 応答を JSON として解釈する（```json フェンスや前後テキストを除去）。"""
-    raw = llm_text(prompt, system=system, max_retries=max_retries)
+    raw = llm_text(prompt, system=system, max_retries=max_retries, max_tokens=max_tokens)
     text = raw.strip()
     if text.startswith("```"):
         text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
@@ -323,6 +326,46 @@ def _normalize(v: np.ndarray) -> np.ndarray:
     v = np.asarray(v, dtype=np.float32)
     n = np.linalg.norm(v)
     return v / n if n else v
+
+
+def render_tree(bi: "BookIndex", *, max_chars: int = 42, show_entities: bool = False) -> str:
+    """BookIndex の木を ASCII アートで可視化する（構築結果の確認用）。
+
+    例::
+        Handbook
+        ├─ [S1] 第1章 概要 (p.1)
+        │   ├─ (Text#3 p.1, 812字) 本章では…
+        │   └─ (Tbl#4 p.2) モデル | 精度 | 速度
+        └─ [S1] 第2章 手順
+    """
+    rev = bi.node_to_entities() if show_entities else {}
+
+    def _label(n: TreeNode) -> str:
+        page = f" p.{n.page}" if n.page is not None else ""
+        ents = f" ◆{len(rev[n.id])}エンティティ" if show_entities and n.id in rev else ""
+        if n.type == "Section":
+            lvl = f"S{n.level}" if n.level else "S"
+            return f"[{lvl}] {n.title or n.content}{page}{ents}"
+        head = (n.content or "").replace("\n", " ")[:max_chars]
+        kind = {"Text": "Text", "Table": "Tbl", "Image": "Img"}.get(n.type, n.type)
+        size = f", {len(n.content)}字" if n.type == "Text" else ""
+        return f"({kind}#{n.id}{page}{size}) {head}"
+
+    lines: list[str] = []
+
+    def _walk(nid: int, prefix: str, is_last: bool, is_root: bool) -> None:
+        n = bi.nodes[nid]
+        if is_root:
+            lines.append(n.title or n.content)
+        else:
+            lines.append(prefix + ("└─ " if is_last else "├─ ") + _label(n))
+        child_prefix = "" if is_root else prefix + ("    " if is_last else "│   ")
+        for i, c in enumerate(n.children):
+            _walk(c, child_prefix, i == len(n.children) - 1, False)
+
+    for r in bi.roots:
+        _walk(r, "", True, True)
+    return "\n".join(lines) if lines else "(空のインデックスです。add_book を実行してください)"
 
 
 # --------------------------------------------------------------------------
@@ -910,6 +953,7 @@ def _extract_graph(node: TreeNode, *, fail_fast: bool = False) -> dict | None:
     result = llm_json(
         _PROMPT_GRAPH_EXTRACT + f"\n\nNode type: {node.type}\nContent:\n{node.content[:2500]}",
         max_retries=0 if fail_fast else None,
+        max_tokens=1200,  # 遅いローカルLLMで JSON 生成が長引きタイムアウトするのを防ぐ
     )
     if result is None:
         return None  # JSON 解釈不能（指示無視）
@@ -958,10 +1002,10 @@ section heading (i.e., it is body text mistakenly detected as a title).
 Return ONLY a JSON array: [{"id": <int>, "level": <int or null>}, ...]."""
 
 _PROMPT_GRAPH_EXTRACT = """You are an information extraction engine. From the given document node,
-extract (1) the key entities and (2) the directed relations among those entities (relations must only
-reference the extracted entities). For tables, also extract the table itself as one entity plus its
-row/column headers. Keep names canonical and concise, and output in the document's language.
-Return ONLY JSON:
+extract (1) AT MOST 10 key entities and (2) the directed relations among those entities (relations
+must only reference the extracted entities). Keep names canonical, descriptions under 15 words each,
+and output in the document's language.
+Return ONLY JSON (no explanations, no markdown fences):
 {"entities":[{"name": str, "type": str, "description": str}, ...],
  "relations":[{"source": str, "target": str, "relation": str}, ...]}."""
 
