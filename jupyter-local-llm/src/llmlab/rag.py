@@ -176,4 +176,31 @@ def build_rag(
         index = VectorStoreIndex.from_documents(documents)
         index.storage_context.persist(persist_dir=str(storage_path))
 
-    return index.as_query_engine()
+    return _CleanQueryEngine(index.as_query_engine())
+
+
+class _CleanResponse:
+    """LlamaIndex の Response をラップし、思考過程を除去したテキストを返す。"""
+
+    def __init__(self, resp):
+        from .client import strip_think
+
+        self._resp = resp
+        self.source_nodes = getattr(resp, "source_nodes", [])
+        self.response = strip_think(str(resp))
+
+    def __str__(self) -> str:
+        return self.response
+
+
+class _CleanQueryEngine:
+    """query() の応答から思考過程（<think>…</think>）を除去する薄いラッパー。"""
+
+    def __init__(self, engine):
+        self._engine = engine
+
+    def query(self, question):
+        return _CleanResponse(self._engine.query(question))
+
+    def __getattr__(self, name):  # その他の属性は元エンジンへ委譲
+        return getattr(self._engine, name)

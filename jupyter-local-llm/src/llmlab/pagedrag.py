@@ -174,6 +174,8 @@ class PagedRAG:
         # フィルタが無視され「別文書の内容」で答えてしまうため、その場合は取得し直して
         # クライアント側でフィルタし、回答も作り直す（MultiPaperRAG の比較が同一文書
         # ばかりを見る症状の対策）。
+        from .client import strip_think  # LlamaIndex 経由の応答にも思考過程が混ざるため除去
+
         if title:
             got = {n.node.metadata.get("title") for n in source_nodes}
             if got and title not in got:
@@ -182,9 +184,9 @@ class PagedRAG:
                 response_text, source_nodes = self._manual_title_query(
                     index, question, title, top_k or self.top_k)
             else:
-                response_text = str(response).strip()
+                response_text = strip_think(str(response))
         else:
-            response_text = str(response).strip()
+            response_text = strip_think(str(response))
 
         sources = []
         for node in source_nodes:

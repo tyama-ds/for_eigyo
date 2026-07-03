@@ -679,12 +679,22 @@ def blocks_range(blocks):  # 小ヘルパ（id 範囲チェック）
 
 
 def _chunk_text(text: str, chunk_chars: int) -> list[str]:
-    """テキストを chunk_chars 程度の塊に分割（改行境界優先）。"""
+    """テキストを chunk_chars 程度の塊に分割（改行境界優先）。
+
+    PDF 抽出では段落全体が改行なしの1行になることがあるため、
+    1行が上限を超える場合は文字数で強制分割する（従来は無制限に膨らんでいた）。
+    """
     text = text.strip()
     if len(text) <= chunk_chars:
         return [text] if text else []
+    lines: list[str] = []
+    for raw in text.split("\n"):
+        while len(raw) > chunk_chars:
+            lines.append(raw[:chunk_chars])
+            raw = raw[chunk_chars:]
+        lines.append(raw)
     chunks, buf, size = [], [], 0
-    for line in text.split("\n"):
+    for line in lines:
         if size + len(line) > chunk_chars and buf:
             chunks.append("\n".join(buf).strip())
             buf, size = [], 0
@@ -738,6 +748,11 @@ def build_tree(bi: BookIndex, blocks: list[dict], book: str, *, chunk_chars: int
             bi.nodes[parent].children.append(node.id)
         else:  # Text: バッファに溜めてチャンク化
             if buf_page[0] is None:
+                buf_page[0] = b.get("page")
+            elif b.get("page") != buf_page[0]:
+                # ページが変わったら区切る。見出しの無い文書で全チャンクが
+                # 先頭ページ番号になる（ページ出典の喪失）のを防ぐ。
+                _flush(parent)
                 buf_page[0] = b.get("page")
             buf.append(b["content"])
 
@@ -832,6 +847,10 @@ def build_graph(bi: BookIndex, node_ids: list[int], *, gradient_g: float = 0.6,
             "思考過程を出力するモデル（Qwen3/R1系）の場合、思考が長すぎて JSON が"
             "途中で切れている可能性があります。サーバ側で思考の無効化"
             "（enable_thinking=false や /no_think）を推奨します（速度も改善）。")
+    if stat.get("empty", 0) >= max(1, len(results) // 2):
+        log("半数以上のノードで抽出結果が空でした。思考過程を出力するモデルは思考で"
+            "トークン上限に達し空の JSON を返しがちです。サーバ側で思考の無効化を"
+            "推奨します。改善しない場合は指示追従の強いモデルの利用を検討してください。")
     if found == 0:
         log("警告: エンティティが1件も抽出できませんでした（上記の内訳を参照）。")
 
@@ -983,8 +1002,8 @@ def _extract_graph(node: TreeNode, *, fail_fast: bool = False) -> dict | None:
         _PROMPT_GRAPH_EXTRACT + f"\n\nNode type: {node.type}\nContent:\n{node.content[:2500]}",
         max_retries=0 if fail_fast else None,
         # 長時間生成→タイムアウトを防ぐ上限。思考過程を出すモデルは思考にも消費するため
-        # 2000 に設定（思考をサーバ側で無効化するとさらに高速・確実になる）
-        max_tokens=2000,
+        # 並列パス2000 / 逐次レスキュー4000（思考でトークンを使い切り空 JSON になる対策）
+        max_tokens=2000 if fail_fast else 4000,
     )
     if result is None:
         return None  # JSON 解釈不能（指示無視）

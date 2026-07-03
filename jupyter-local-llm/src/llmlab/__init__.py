@@ -72,4 +72,4 @@ __all__ = [
     "DocResult",
 ]
 
-__version__ = "0.2.1"  # llmlab.__version__ で更新確認できる
+__version__ = "0.2.3"  # llmlab.__version__ で更新確認できる

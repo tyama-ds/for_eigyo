@@ -184,11 +184,24 @@ class MultiPaperRAG:
     # ---- compare ------------------------------------------------------------
 
     def compare(self, question: str, *, papers: list[str] | None = None) -> Comparison:
-        cands = papers or self.locate(question) or self.papers()[: self.max_papers]
+        cands = papers or self.locate(question)
+        # 比較は本質的に複数文書が対象。横断検索が1件以下しか特定できない場合
+        # （「それぞれの要点を…」のような汎用質問は検索で絞れない）は全論文に切り替える。
+        if not papers and len(cands) < 2:
+            all_papers = self.papers()
+            if len(all_papers) >= 2:
+                use = all_papers[: max(self.max_papers, 2)]
+                print(f"[MultiPaperRAG] 横断検索で特定できた論文が {len(cands)} 件のため、"
+                      f"全論文 {len(use)} 件を対象にします（明示指定は compare(..., papers=[...])）")
+                cands = use
+            elif not cands:
+                cands = all_papers
         if not cands:
             raise RuntimeError("論文が取り込まれていません。add_paper()/add_papers() を実行してください。")
+        from .bookindex import progress
+
         per_paper: dict[str, str] = {}
-        for t in cands:
+        for t in progress(cands, total=len(cands), desc="論文ごとに深掘り"):
             ans = self._deep_query(t, question)                # 深掘り（paged/book）
             if self.pics:
                 figs = self._load_figures(t)
