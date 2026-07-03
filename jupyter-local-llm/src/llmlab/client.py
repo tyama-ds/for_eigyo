@@ -2,12 +2,34 @@
 
 from __future__ import annotations
 
+import re
 import threading
 
 import httpx
 from openai import OpenAI
 
 from .config import Settings, get_settings
+
+_THINK_RE = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL | re.IGNORECASE)
+
+
+def strip_think(text: str) -> str:
+    """推論モデルの思考過程（<think>…</think>）を応答から除去する。
+
+    チャットテンプレートが開始タグを消費し **閉じタグ `</think>` だけが残る** モデル
+    （Qwen3/DeepSeek-R1 系で頻出）にも対応: 閉じタグが残っていれば、最後の閉じタグ
+    以降だけを答えとして扱う。
+    """
+    if not text:
+        return text
+    out = _THINK_RE.sub("", text)
+    low = out.lower()
+    for tag in ("</think>", "</thinking>"):
+        idx = low.rfind(tag)
+        if idx != -1:
+            out = out[idx + len(tag):]
+            break
+    return out.strip()
 
 # configure() で接続情報が変わるたびに作り直す（reset_client で破棄）。
 # BookRAG の並列抽出などマルチスレッドから呼ばれるため、初期化はロックで保護する。
@@ -72,11 +94,12 @@ def reset_client() -> None:
 
 
 def complete(prompt: str, *, system: str | None = None, **kwargs) -> str:
-    """単発のプロンプトに対する応答文字列を返す簡易ヘルパー。"""
+    """単発のプロンプトに対する応答文字列を返す簡易ヘルパー（思考過程は除去）。"""
     s = get_settings()
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
     resp = get_client().chat.completions.create(model=s.model, messages=messages, **kwargs)
-    return resp.choices[0].message.content or ""
+    raw = (resp.choices[0].message.content or "") if resp.choices else ""
+    return strip_think(raw)

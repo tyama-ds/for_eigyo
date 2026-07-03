@@ -65,7 +65,10 @@ def code_complete(
     if stop:
         kwargs["stop"] = stop
     resp = get_client().chat.completions.create(**kwargs)
-    return strip_fences(resp.choices[0].message.content or "")
+    from .client import strip_think
+
+    raw = (resp.choices[0].message.content or "") if resp.choices else ""
+    return strip_fences(strip_think(raw))  # 思考過程→フェンスの順に除去
 
 
 def inline_complete(prefix: str, suffix: str = "", *, max_tokens: int = 128) -> str:
