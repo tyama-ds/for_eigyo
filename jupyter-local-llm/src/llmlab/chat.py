@@ -43,6 +43,8 @@ class Chat:
         self.history.append({"role": "user", "content": prompt})
         call_kwargs = {**self._default_kwargs, **kwargs}
 
+        from .client import strip_think
+
         try:
             if stream:
                 chunks: list[str] = []
@@ -60,14 +62,17 @@ class Chat:
                         chunks.append(delta)
                         print(delta, end="", flush=True)
                 print()
-                answer = "".join(chunks)
+                # 表示は生のストリームだが、履歴と戻り値からは思考過程を除去する
+                answer = strip_think("".join(chunks))
             else:
                 resp = client.chat.completions.create(
                     model=settings.model,
                     messages=self.history,
                     **call_kwargs,
                 )
-                answer = (resp.choices[0].message.content or "") if resp.choices else ""
+                answer = strip_think(
+                    (resp.choices[0].message.content or "") if resp.choices else ""
+                )
         except Exception:
             self.history.pop()  # 失敗した user メッセージを履歴に残さない（以後の会話の汚染防止）
             raise

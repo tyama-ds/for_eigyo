@@ -157,7 +157,9 @@ class TableQA:
 
 
 def _strip_code(text: str) -> str:
-    t = text.strip()
+    from .client import strip_think
+
+    t = strip_think(text).strip()  # 思考過程つきモデルの前置きを除去
     if t.startswith("```"):
         t = re.sub(r"^```[a-zA-Z0-9_+-]*\n?", "", t)
         t = re.sub(r"\n?```\s*$", "", t)

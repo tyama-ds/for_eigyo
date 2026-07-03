@@ -51,25 +51,49 @@ def llm_text(prompt: str, *, system: str | None = None, temperature: float = 0.0
     if max_tokens is not None:
         kwargs["max_tokens"] = max_tokens
     resp = client.chat.completions.create(**kwargs)
-    return (resp.choices[0].message.content or "") if resp.choices else ""
+    raw = (resp.choices[0].message.content or "") if resp.choices else ""
+    from .client import strip_think
+
+    return strip_think(raw)  # 推論モデルの思考過程を除去
 
 
 def llm_json(prompt: str, *, system: str | None = None, max_retries: int | None = None,
              max_tokens: int | None = None):
-    """LLM 応答を JSON として解釈する（```json フェンスや前後テキストを除去）。"""
+    """LLM 応答を JSON として解釈する（思考過程・```フェンス・前後テキストに耐える）。"""
     raw = llm_text(prompt, system=system, max_retries=max_retries, max_tokens=max_tokens)
+    return parse_json_answer(raw)
+
+
+def parse_json_answer(raw: str):
+    """応答テキストから答えの JSON を取り出す。
+
+    - 思考過程（<think>…</think> / 閉じタグのみ残る型）は llm_text 側で除去済みだが、
+      タグ無しで思考を書き出すモデルにも耐えるよう、**最後に現れる完全なトップレベル
+      JSON** を採用する（思考中に JSON 断片を書き散らしても、最終回答が勝つ）。
+    - 旧実装の「最初の { から最後の } まで」の貪欲マッチは、思考混じりの応答で
+      必ず parse 失敗していた。
+    """
+    if not raw:
+        return None
     text = raw.strip()
     if text.startswith("```"):
         text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
         text = re.sub(r"\n?```$", "", text).strip()
-    # 最初の { … } もしくは [ … ] を抽出
-    m = re.search(r"(\{.*\}|\[.*\])", text, re.DOTALL)
-    if m:
-        text = m.group(1)
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        return None
+    dec = json.JSONDecoder()
+    last = None
+    pos = 0
+    while True:
+        m = re.search(r"[\{\[]", text[pos:])
+        if not m:
+            break
+        i = pos + m.start()
+        try:
+            obj, end = dec.raw_decode(text[i:])
+            last = obj                 # 直近のトップレベル JSON を記憶
+            pos = i + end              # その JSON の直後から続きを探す
+        except json.JSONDecodeError:
+            pos = i + 1
+    return last
 
 
 def vlm_describe(png_bytes: bytes, *, model: str | None = None) -> str:
@@ -94,7 +118,9 @@ def vlm_describe(png_bytes: bytes, *, model: str | None = None) -> str:
         ]}],
         max_tokens=400,
     )
-    out = (resp.choices[0].message.content or "") if resp.choices else ""
+    from .client import strip_think
+
+    out = strip_think((resp.choices[0].message.content or "") if resp.choices else "")
     return "" if "図なし" in out else out.strip()
 
 
@@ -802,7 +828,10 @@ def build_graph(bi: BookIndex, node_ids: list[int], *, gradient_g: float = 0.6,
             "configure(request_timeout=300) を試してください。")
     if stat.get("badjson"):
         log("モデルが JSON 形式で応答していません。"
-            "llmlab.complete('Return JSON: {\"ok\":true}') で挙動を確認してください。")
+            "llmlab.complete('Return JSON: {\"ok\":true}') で挙動を確認してください。"
+            "思考過程を出力するモデル（Qwen3/R1系）の場合、思考が長すぎて JSON が"
+            "途中で切れている可能性があります。サーバ側で思考の無効化"
+            "（enable_thinking=false や /no_think）を推奨します（速度も改善）。")
     if found == 0:
         log("警告: エンティティが1件も抽出できませんでした（上記の内訳を参照）。")
 
@@ -953,7 +982,9 @@ def _extract_graph(node: TreeNode, *, fail_fast: bool = False) -> dict | None:
     result = llm_json(
         _PROMPT_GRAPH_EXTRACT + f"\n\nNode type: {node.type}\nContent:\n{node.content[:2500]}",
         max_retries=0 if fail_fast else None,
-        max_tokens=1200,  # 遅いローカルLLMで JSON 生成が長引きタイムアウトするのを防ぐ
+        # 長時間生成→タイムアウトを防ぐ上限。思考過程を出すモデルは思考にも消費するため
+        # 2000 に設定（思考をサーバ側で無効化するとさらに高速・確実になる）
+        max_tokens=2000,
     )
     if result is None:
         return None  # JSON 解釈不能（指示無視）
