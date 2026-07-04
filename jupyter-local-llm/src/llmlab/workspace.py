@@ -36,6 +36,69 @@ DEFAULT_ROOT = "./storage"
 
 
 # --------------------------------------------------------------------------
+# ピン留め（よく使う索引フォルダの記憶）
+#
+# 接続情報（APIキー等）はセッション内のみだが、ピンは秘匿情報ではない
+# フォルダパスなので ~/.llmlab/pins.json に永続化する（再起動後も残る）。
+# --------------------------------------------------------------------------
+
+LLMLAB_DIR = Path.home() / ".llmlab"
+PINS_PATH = LLMLAB_DIR / "pins.json"
+
+
+def _read_json_file(path: Path, default):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return default
+
+
+def _write_json_file(path: Path, obj) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def pinned_paths() -> list[str]:
+    """ピン留め済みフォルダの絶対パス一覧。"""
+    raw = _read_json_file(PINS_PATH, [])
+    return [str(p) for p in raw if isinstance(p, str)] if isinstance(raw, list) else []
+
+
+def pin_index(path: str | Path) -> list[str]:
+    """索引フォルダをピン留めする（重複は無視）。ピン一覧を返す。"""
+    p = str(Path(path).resolve())
+    pins = pinned_paths()
+    if p not in pins:
+        pins.append(p)
+        _write_json_file(PINS_PATH, pins)
+    return pins
+
+
+def unpin_index(path: str | Path) -> list[str]:
+    """ピン留めを外す。ピン一覧を返す。"""
+    p = str(Path(path).resolve())
+    pins = [x for x in pinned_paths() if x != p]
+    _write_json_file(PINS_PATH, pins)
+    return pins
+
+
+def pinned_indexes() -> list[IndexInfo]:
+    """ピン留め済みの索引を IndexInfo で返す。
+
+    フォルダが消えている/索引でなくなっている場合は kind="missing" で返す
+    （一覧から気づいて外せるように、黙って消さない）。
+    """
+    out = []
+    for p in pinned_paths():
+        info = detect_index(p)
+        if info is None:
+            info = IndexInfo(path=p, name=Path(p).name, kind="missing")
+        info.pinned = True
+        out.append(info)
+    return out
+
+
+# --------------------------------------------------------------------------
 # 索引の検出
 # --------------------------------------------------------------------------
 
@@ -46,13 +109,14 @@ class IndexInfo:
 
     path: str
     name: str            # 表示名（フォルダ名。例: "2014"）
-    kind: str            # "paged" | "book"
+    kind: str            # "paged" | "book" | "missing"（ピン留め先が消えた場合）
     books: list[str] = field(default_factory=list)
     units: int = 0       # paged: チャンク数 / book: ノード数
+    pinned: bool = False  # ピン留め（~/.llmlab/pins.json に永続化）
 
     def to_dict(self) -> dict:
         return {"path": self.path, "name": self.name, "kind": self.kind,
-                "books": self.books, "units": self.units}
+                "books": self.books, "units": self.units, "pinned": self.pinned}
 
 
 def detect_index(path: str | Path) -> IndexInfo | None:
@@ -84,26 +148,42 @@ def detect_index(path: str | Path) -> IndexInfo | None:
     return None
 
 
-def discover(root: str | Path = DEFAULT_ROOT) -> list[IndexInfo]:
-    """root 直下（と root 自身）から索引フォルダを検出する。"""
+def discover(root: str | Path = DEFAULT_ROOT, *, include_pins: bool = True) -> list[IndexInfo]:
+    """root 直下（と root 自身）から索引フォルダを検出する。
+
+    include_pins=True（既定）なら、ピン留め済みの索引を root の内外を問わず
+    先頭に含める（root 内で見つかったものにはピン印を付ける）。
+    """
     root = Path(root)
     found: list[IndexInfo] = []
-    if not root.exists():
-        return found
-    info = detect_index(root)
-    if info:
-        found.append(info)
-    for d in sorted(p for p in root.iterdir() if p.is_dir()):
-        info = detect_index(d)
+    if root.exists():
+        info = detect_index(root)
         if info:
             found.append(info)
-        else:  # bookindex 既定の入れ子（storage/bookindex 等）も1段だけ見る
-            for dd in sorted(p for p in d.iterdir() if p.is_dir()):
-                sub = detect_index(dd)
-                if sub:
-                    sub.name = f"{d.name}/{dd.name}"
-                    found.append(sub)
-    return found
+        for d in sorted(p for p in root.iterdir() if p.is_dir()):
+            info = detect_index(d)
+            if info:
+                found.append(info)
+            else:  # bookindex 既定の入れ子（storage/bookindex 等）も1段だけ見る
+                for dd in sorted(p for p in d.iterdir() if p.is_dir()):
+                    sub = detect_index(dd)
+                    if sub:
+                        sub.name = f"{d.name}/{dd.name}"
+                        found.append(sub)
+    if not include_pins:
+        return found
+    # ピンを合流: root 内で検出済みのものは印だけ、root 外のピンは追加。ピンを先頭に
+    pins = pinned_indexes()
+    by_path = {str(Path(f.path).resolve()): f for f in found}
+    merged_pins = []
+    for pin in pins:
+        hit = by_path.pop(str(Path(pin.path).resolve()), None)
+        if hit is not None:
+            hit.pinned = True
+            merged_pins.append(hit)
+        else:
+            merged_pins.append(pin)  # root 外 or missing
+    return merged_pins + [f for f in found if not f.pinned]
 
 
 # --------------------------------------------------------------------------
@@ -231,9 +311,9 @@ class MultiRAG:
         self._infos: list[IndexInfo] = []
         for item in indexes:
             info = item if isinstance(item, IndexInfo) else detect_index(item)
-            if info is None:
+            if info is None or info.kind == "missing":
                 raise FileNotFoundError(
-                    f"索引が見つかりません: {item}\n"
+                    f"索引が見つかりません: {item if info is None else info.path}\n"
                     "（PagedRAG は docstore.json、BookRAG は bookindex.json を含む"
                     "フォルダを指定してください）"
                 )
@@ -260,6 +340,20 @@ class MultiRAG:
     @staticmethod
     def discover(root: str | Path = DEFAULT_ROOT) -> list[IndexInfo]:
         return discover(root)
+
+    @classmethod
+    def pinned(cls, **kwargs) -> "MultiRAG":
+        """ピン留め済みの索引だけで MultiRAG を作る（消えたピンはスキップして通知）。"""
+        infos = pinned_indexes()
+        missing = [i.path for i in infos if i.kind == "missing"]
+        for m in missing:
+            bx.log(f"ピン留め先が見つからないためスキップ: {m}"
+                   "（unpin_index() で外せます）")
+        valid = [i for i in infos if i.kind != "missing"]
+        if not valid:
+            raise RuntimeError("有効なピン留め索引がありません。"
+                               "llmlab.pin_index(パス) でピン留めしてください。")
+        return cls(valid, **kwargs)
 
     # ---- 横断アクション ------------------------------------------------------
 

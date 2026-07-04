@@ -28,7 +28,15 @@ from .multipaper import Comparison, MultiPaperRAG
 from .tableqa import TableAnswer, TableQA
 from .docqa import DocQA, DocResult
 from .rag import build_rag
-from .workspace import ExtractResult, IndexInfo, MultiAnswer, MultiRAG
+from .workspace import (
+    ExtractResult,
+    IndexInfo,
+    MultiAnswer,
+    MultiRAG,
+    pin_index,
+    pinned_indexes,
+    unpin_index,
+)
 from .app import launch_app
 
 # 重要: この import は complete.py（補完モジュール）の import より後に置くこと。
@@ -78,6 +86,10 @@ __all__ = [
     "ExtractResult",
     "IndexInfo",
     "launch_app",
+    # よく使う索引フォルダのピン留め（~/.llmlab/pins.json に永続化）
+    "pin_index",
+    "unpin_index",
+    "pinned_indexes",
 ]
 
-__version__ = "0.3.1"  # llmlab.__version__ で更新確認できる
+__version__ = "0.3.2"  # llmlab.__version__ で更新確認できる

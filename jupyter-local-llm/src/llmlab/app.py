@@ -37,6 +37,31 @@ _UI_PATH = Path(__file__).parent / "app_ui.html"
 _tasks: dict[str, Queue] = {}
 _tasks_lock = threading.Lock()
 
+# 質問履歴（~/.llmlab/history.json に永続化。回答は先頭のみ保存）
+_HISTORY_MAX = 50
+_history_lock = threading.Lock()
+
+
+def _history_path() -> Path:
+    from .workspace import LLMLAB_DIR
+
+    return LLMLAB_DIR / "history.json"
+
+
+def _history_read() -> list[dict]:
+    from .workspace import _read_json_file
+
+    raw = _read_json_file(_history_path(), [])
+    return raw if isinstance(raw, list) else []
+
+
+def _history_append(entry: dict) -> None:
+    from .workspace import _write_json_file
+
+    with _history_lock:
+        hist = [entry] + _history_read()
+        _write_json_file(_history_path(), hist[:_HISTORY_MAX])
+
 
 def _run_task(task_id: str, payload: dict) -> None:
     """バックグラウンドスレッドで MultiRAG のアクションを実行し、進捗を Queue へ流す。"""
@@ -59,8 +84,12 @@ def _run_task(task_id: str, payload: dict) -> None:
             return [{"index": p.index, "kind": p.kind, "text": p.text,
                      "sources": p.sources, "refs": p.refs} for p in r.partials]
 
+        import time
+
+        t0 = time.time()
         if action == "extract":
             r = ws.extract(question or "文書中の主要な数値")
+            preview = f"{len(r.rows)} 件の数値を抽出"
             q.put({"type": "result", "kind": "extract",
                    "rows": r.rows, "note": r.note, "partials": _partials(r)})
         else:
@@ -72,8 +101,18 @@ def _run_task(task_id: str, payload: dict) -> None:
                 if not question:
                     raise ValueError("質問を入力してください")
                 r = ws.ask(question)
+            preview = r.text.replace("\n", " ")[:200]
             q.put({"type": "result", "kind": "text", "text": r.text,
                    "partials": _partials(r)})
+        # 質問履歴に記録（同じ調査を後からワンクリックで再現できるように）
+        _history_append({
+            "ts": time.strftime("%Y-%m-%d %H:%M"),
+            "action": payload.get("ui_action") or payload.get("action", "ask"),
+            "question": question,
+            "indexes": indexes,
+            "elapsed_sec": round(time.time() - t0, 1),
+            "preview": preview,
+        })
     except Exception as e:  # noqa: BLE001  失敗は UI に表示する
         q.put({"type": "error", "message": f"{type(e).__name__}: {e}"})
     finally:
@@ -132,6 +171,10 @@ class _Handler(BaseHTTPRequestHandler):
         elif url.path == "/api/events":
             qs = parse_qs(url.query)
             self._api_events((qs.get("id") or [""])[0])
+        elif url.path == "/api/history":
+            self._json({"history": _history_read()})
+        elif url.path == "/api/test":
+            self._api_test()
         else:
             self._json({"error": "not found"}, 404)
 
@@ -141,6 +184,14 @@ class _Handler(BaseHTTPRequestHandler):
             self._api_configure()
         elif url.path == "/api/run":
             self._api_run()
+        elif url.path == "/api/pin":
+            self._api_pin()
+        elif url.path == "/api/history/clear":
+            from .workspace import _write_json_file
+
+            with _history_lock:
+                _write_json_file(_history_path(), [])
+            self._json({"ok": True})
         else:
             self._json({"error": "not found"}, 404)
 
@@ -191,6 +242,37 @@ class _Handler(BaseHTTPRequestHandler):
             _tasks[task_id] = Queue()
         threading.Thread(target=_run_task, args=(task_id, payload), daemon=True).start()
         self._json({"task_id": task_id})
+
+    def _api_pin(self) -> None:
+        """ピン留めの付け外し。"""
+        from .workspace import pin_index, unpin_index
+
+        p = self._read_json()
+        path = str(p.get("path", "")).strip()
+        if not path:
+            self._json({"ok": False, "error": "path がありません"}, 400)
+            return
+        try:
+            pins = pin_index(path) if p.get("pinned") else unpin_index(path)
+            self._json({"ok": True, "pins": pins})
+        except OSError as e:
+            self._json({"ok": False, "error": f"ピンの保存に失敗: {e}"}, 500)
+
+    def _api_test(self) -> None:
+        """接続テスト: /v1/models を短いタイムアウトで叩いて応答を確認する。"""
+        from .config import is_configured
+
+        if not is_configured():
+            self._json({"ok": False, "error": "接続設定が未入力です"})
+            return
+        try:
+            from .client import get_client
+
+            client = get_client().with_options(timeout=15)
+            models = [m.id for m in client.models.list().data][:8]
+            self._json({"ok": True, "models": models})
+        except Exception as e:  # noqa: BLE001
+            self._json({"ok": False, "error": f"{type(e).__name__}: {e}"})
 
     def _api_events(self, task_id: str) -> None:
         """SSE: タスクの進捗/結果を流す。done で切断。"""

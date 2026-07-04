@@ -97,6 +97,36 @@
   }
   .badge.book{color:#c4b5fd;border:1px solid rgba(144,133,233,.5)}
   .badge.paged{color:#7dd3fc;border:1px solid rgba(57,135,229,.5)}
+  .badge.miss{color:var(--err);border:1px solid rgba(230,103,103,.5)}
+  /* ピン留め */
+  .pinbtn{
+    cursor:pointer;border:none;background:transparent;font-size:1rem;line-height:1;
+    filter:grayscale(1) opacity(.4);transition:filter .15s, transform .1s;padding:2px;
+  }
+  .pinbtn:hover{filter:grayscale(.3) opacity(.9);transform:rotate(-14deg)}
+  .pinbtn.on{filter:none;opacity:1}
+  .idx.pinned{border-color:rgba(144,133,233,.55)}
+  .idx.pinned.sel{border-color:var(--accent-a)}
+  .idx.missing{opacity:.55;cursor:default}
+  /* プリセット質問チップ */
+  .chips{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 8px}
+  .chip{
+    cursor:pointer;font-size:.75rem;color:var(--ink-2);background:rgba(255,255,255,.03);
+    border:1px dashed var(--line-strong);border-radius:999px;padding:3px 12px;
+  }
+  .chip:hover{color:var(--accent-a);border-color:var(--accent-a)}
+  /* 履歴 */
+  details.hist{margin:10px 0 0}
+  details.hist summary{cursor:pointer;font-size:.8rem;color:var(--ink-2);user-select:none}
+  .hitem{
+    border:1px solid var(--line);border-radius:10px;padding:7px 10px;margin:6px 0;
+    cursor:pointer;font-size:.8rem;transition:border-color .15s;
+  }
+  .hitem:hover{border-color:var(--accent-a)}
+  .hitem .hq{color:var(--ink);font-weight:600}
+  .hitem .hm{color:var(--ink-mute);font-size:.72rem}
+  .hitem .hp{color:var(--ink-2);font-size:.75rem;margin-top:2px;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   /* ============ tabs ============ */
   .tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
   .tab{
@@ -232,11 +262,17 @@
       <button class="tab" data-a="extract">🔢 数値抽出</button>
       <button class="tab" data-a="chart">📊 グラフ作成</button>
     </div>
-    <textarea id="q" rows="3" placeholder="質問を入力（例: 2014年と2015年で売上高はどう変化した？）"></textarea>
+    <div class="chips" id="chips"></div>
+    <textarea id="q" rows="3" placeholder="質問を入力（例: 2014年と2015年で売上高はどう変化した？）　Ctrl+Enter で実行"></textarea>
     <div class="row" style="margin-top:10px">
       <button class="btn" id="btnRun">▶ 実行</button>
       <span style="font-size:.78rem;color:var(--ink-mute)" id="hint"></span>
     </div>
+    <details class="hist" id="histBox">
+      <summary>🕘 履歴（クリックで質問・索引の選択を復元）</summary>
+      <div id="histList" style="max-height:260px;overflow-y:auto"></div>
+      <button class="btn sm ghost" id="btnHistClear" style="margin-top:4px">履歴を消去</button>
+    </details>
 
     <div id="progWrap">
       <div class="bar"><i id="barFill"></i></div>
@@ -276,6 +312,7 @@
   <input type="number" id="c_timeout" value="120">
   <div class="row" style="margin-top:16px">
     <button class="btn" id="btnSave">接続する</button>
+    <button class="btn ghost" id="btnTest">接続テスト</button>
     <button class="btn ghost" id="btnClose">閉じる</button>
   </div>
   <div class="msg" id="cMsg"></div>
@@ -363,6 +400,15 @@ $("#btnSave").onclick = async ()=>{
     refreshStatus();
   }catch(e){ m.className="msg ng"; m.textContent="✗ "+e.message; }
 };
+$("#btnTest").onclick = async ()=>{
+  const m = $("#cMsg"); m.className="msg"; m.textContent="テスト中…（最大15秒）";
+  try{
+    const j = await api("/api/test");
+    if(j.ok){ m.className="msg ok";
+      m.textContent = "✓ 応答あり。利用可能モデル: " + (j.models.join(", ") || "（一覧なし）"); }
+    else{ m.className="msg ng"; m.textContent = "✗ " + j.error; }
+  }catch(e){ m.className="msg ng"; m.textContent="✗ "+e.message; }
+};
 
 /* ============================================================ 索引 */
 let INDEXES = [];
@@ -377,19 +423,41 @@ async function scan(){
         'PagedRAG / BookRAG で作成した storage フォルダのルートを指定してください。</div>';
       return;
     }
-    list.innerHTML = INDEXES.map((x,i)=>`
-      <label class="idx" data-i="${i}">
-        <input type="checkbox" data-i="${i}">
-        <div>
-          <div class="nm">${esc(x.name)}
-            <span class="badge ${x.kind}">${x.kind==="book"?"BOOK":"PAGED"}</span></div>
-          <div class="meta">${esc((x.books||[]).join("、")||"(文書名不明)")} ・ ${x.units} units</div>
+    list.innerHTML = INDEXES.map((x,i)=>{
+      const missing = x.kind === "missing";
+      const badge = missing
+        ? '<span class="badge miss">見つかりません</span>'
+        : `<span class="badge ${x.kind}">${x.kind==="book"?"BOOK":"PAGED"}</span>`;
+      const meta = missing
+        ? "（ピン留め先のフォルダが移動/削除されています）"
+        : `${esc((x.books||[]).join("、")||"(文書名不明)")} ・ ${x.units} units`;
+      return `
+      <label class="idx ${x.pinned?"pinned":""} ${missing?"missing":""}" data-i="${i}">
+        <input type="checkbox" data-i="${i}" ${missing?"disabled":""}>
+        <div style="flex:1">
+          <div class="nm">${x.pinned?"📌 ":""}${esc(x.name)} ${badge}</div>
+          <div class="meta">${meta}</div>
           <div class="meta">${esc(x.path)}</div>
         </div>
-      </label>`).join("");
+        <button class="pinbtn ${x.pinned?"on":""}" data-i="${i}"
+                title="${x.pinned?"ピンを外す":"よく使うフォルダとしてピン留め（次回起動時も先頭に表示）"}">📌</button>
+      </label>`;
+    }).join("");
     list.querySelectorAll("input").forEach(cb=>{
-      cb.onchange = ()=>{ cb.closest(".idx").classList.toggle("sel", cb.checked); updateWarn(); };
+      cb.onchange = ()=>{ cb.closest(".idx").classList.toggle("sel", cb.checked);
+                          updateWarn(); saveState(); };
     });
+    list.querySelectorAll(".pinbtn").forEach(pb=>{
+      pb.onclick = async e=>{
+        e.preventDefault(); e.stopPropagation();   // label のチェック切替を抑止
+        const x = INDEXES[+pb.dataset.i];
+        try{
+          await api("/api/pin", {path:x.path, pinned:!x.pinned});
+          await scan();                             // サーバの並び（ピン先頭）で再描画
+        }catch(err){ alert("ピンの保存に失敗: "+err.message); }
+      };
+    });
+    restoreSelection();
     updateWarn();
   }catch(e){
     list.innerHTML = `<div class="err">走査に失敗: ${esc(e.message)}</div>`;
@@ -412,6 +480,79 @@ function updateWarn(){
   w.textContent = msgs.join(" ");
 }
 
+/* ---- 前回の状態を復元（root・選択・アクション・質問。localStorage） ---- */
+const LS = "llmlabStudio";
+const loadState = () => { try{ return JSON.parse(localStorage.getItem(LS))||{}; }catch(e){ return {}; } };
+function saveState(){
+  const st = loadState();
+  st.root = $("#root").value; st.action = ACTION; st.q = $("#q").value;
+  st.selected = selectedPaths();
+  localStorage.setItem(LS, JSON.stringify(st));
+}
+function restoreSelection(){
+  const want = new Set(loadState().selected||[]);
+  document.querySelectorAll("#idxList input").forEach(cb=>{
+    const x = INDEXES[+cb.dataset.i];
+    if(want.has(x.path) && !cb.disabled){
+      cb.checked = true; cb.closest(".idx").classList.add("sel");
+    }
+  });
+}
+
+/* ---- プリセット質問（ワンクリックで定型の調査） ---- */
+const PRESETS = [
+  {label:"要点を3行で", a:"summarize", q:"要点を3行で"},
+  {label:"主要な数値を抽出", a:"extract", q:"文書中の主要な数値（売上・利益・件数など）"},
+  {label:"相違点を比較", a:"ask", q:"選択した各索引の内容で異なる点を、索引名を挙げて比較してください"},
+  {label:"リスク・注意点", a:"ask", q:"記載されているリスク・注意点・課題をすべて挙げてください"},
+  {label:"時系列の変化", a:"ask", q:"数値や方針が時系列でどう変化したかをまとめてください"},
+];
+$("#chips").innerHTML = PRESETS.map((p,i)=>
+  `<button class="chip" data-i="${i}">${esc(p.label)}</button>`).join("");
+$("#chips").onclick = e=>{
+  const c = e.target.closest(".chip"); if(!c) return;
+  const p = PRESETS[+c.dataset.i];
+  $("#q").value = p.q;
+  document.querySelector(`.tab[data-a="${p.a}"]`)?.click();
+  saveState();
+};
+
+/* ---- 質問履歴（サーバ側 ~/.llmlab/history.json） ---- */
+const ACTION_JA = {ask:"検索/QA", summarize:"要約", report:"レポート", extract:"数値抽出", chart:"グラフ"};
+async function loadHistory(){
+  const box = $("#histList");
+  try{
+    const j = await api("/api/history");
+    if(!j.history.length){ box.innerHTML =
+      '<div style="color:var(--ink-mute);font-size:.78rem;padding:6px 0">まだ履歴がありません</div>'; return; }
+    box.innerHTML = j.history.map((h,i)=>`
+      <div class="hitem" data-i="${i}">
+        <div class="hq">${esc(h.question||"（質問なし）")}</div>
+        <div class="hm">${esc(h.ts||"")} ・ ${esc(ACTION_JA[h.action]||h.action)} ・
+          索引${(h.indexes||[]).length}件 ・ ${h.elapsed_sec!=null?h.elapsed_sec+"s":""}</div>
+        <div class="hp">${esc(h.preview||"")}</div>
+      </div>`).join("");
+    box.querySelectorAll(".hitem").forEach(el=>{
+      el.onclick = ()=>{
+        const h = j.history[+el.dataset.i];
+        $("#q").value = h.question||"";
+        document.querySelector(`.tab[data-a="${h.action}"]`)?.click();
+        const want = new Set(h.indexes||[]);      // 索引の選択も復元
+        document.querySelectorAll("#idxList input").forEach(cb=>{
+          const x = INDEXES[+cb.dataset.i];
+          cb.checked = want.has(x.path) && !cb.disabled;
+          cb.closest(".idx").classList.toggle("sel", cb.checked);
+        });
+        updateWarn(); saveState();
+        $("#histBox").open = false;
+        window.scrollTo({top:0, behavior:"smooth"});
+      };
+    });
+  }catch(e){ box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+$("#histBox").addEventListener("toggle", ()=>{ if($("#histBox").open) loadHistory(); });
+$("#btnHistClear").onclick = async ()=>{ await api("/api/history/clear", {}); loadHistory(); };
+
 /* ============================================================ タブ */
 let ACTION = "ask";
 const HINTS = {
@@ -425,6 +566,7 @@ $("#tabs").onclick = e=>{
   const b = e.target.closest(".tab"); if(!b) return;
   document.querySelectorAll(".tab").forEach(t=>t.classList.remove("on"));
   b.classList.add("on"); ACTION = b.dataset.a; $("#hint").textContent = HINTS[ACTION];
+  if(typeof saveState === "function") saveState();
 };
 $("#hint").textContent = HINTS.ask;
 
@@ -437,9 +579,17 @@ $("#btnRun").onclick = async ()=>{
   $("#btnRun").disabled = true;
   $("#progWrap").style.display="block";
   $("#barFill").style.width="3%"; $("#stage").textContent="タスクを開始…"; $("#plog").innerHTML="";
+  saveState();
+  // 経過時間の表示（遅いローカルLLMで「動いているか」が分かるように）
+  const t0 = Date.now();
+  let lastStage = "タスクを開始…";
+  const tick = setInterval(()=>{
+    $("#stage").textContent = `${lastStage}　⏱ ${Math.round((Date.now()-t0)/1000)}s`;
+  }, 1000);
+  const finish = ()=>{ clearInterval(tick); $("#btnRun").disabled=false; };
   try{
     const {task_id} = await api("/api/run",
-      {action: ACTION==="chart" ? "extract" : ACTION,
+      {action: ACTION==="chart" ? "extract" : ACTION, ui_action: ACTION,
        question: $("#q").value, indexes: paths});
     const es = new EventSource("/api/events?id="+task_id);
     es.onmessage = ev=>{
@@ -447,28 +597,36 @@ $("#btnRun").onclick = async ()=>{
       if(e.type==="progress"){
         const pct = Math.max(3, Math.min(97, Math.round(100*(e.current)/(e.total||1))));
         $("#barFill").style.width = pct+"%";
-        $("#stage").textContent = `⟳ ${e.stage}${e.detail? " — "+e.detail : ""}`;
+        lastStage = `⟳ ${e.stage}${e.detail? " — "+e.detail : ""}`;
         $("#plog").innerHTML += `<div>• ${esc(e.stage)} ${esc(e.detail||"")}</div>`;
         $("#plog").scrollTop = $("#plog").scrollHeight;
       }else if(e.type==="result"){
-        $("#barFill").style.width="100%"; $("#stage").textContent="✓ 完了";
+        $("#barFill").style.width="100%";
+        lastStage = `✓ 完了（${Math.round((Date.now()-t0)/1000)}s）`;
+        $("#stage").textContent = lastStage;
         showResult(e);
       }else if(e.type==="error"){
-        $("#stage").textContent="✗ 失敗";
+        lastStage = "✗ 失敗";
+        $("#stage").textContent = lastStage;
         res.style.display="block";
         res.innerHTML = `<div class="err">${esc(e.message)}</div>`;
       }else if(e.type==="done"){
-        es.close(); $("#btnRun").disabled=false;
-        setTimeout(()=>{ $("#progWrap").style.display="none"; }, 1200);
+        es.close(); finish();
+        setTimeout(()=>{ $("#progWrap").style.display="none"; }, 1500);
       }
     };
-    es.onerror = ()=>{ es.close(); $("#btnRun").disabled=false;
+    es.onerror = ()=>{ es.close(); finish();
       $("#stage").textContent="✗ 接続が切れました"; };
   }catch(e){
-    $("#btnRun").disabled=false; $("#progWrap").style.display="none";
+    finish(); $("#progWrap").style.display="none";
     res.style.display="block"; res.innerHTML=`<div class="err">${esc(e.message)}</div>`;
   }
 };
+// Ctrl+Enter（Mac は Cmd+Enter）で実行
+$("#q").addEventListener("keydown", e=>{
+  if((e.ctrlKey||e.metaKey) && e.key==="Enter" && !$("#btnRun").disabled) $("#btnRun").click();
+});
+$("#q").addEventListener("change", saveState);
 
 /* ============================================================ 結果表示 */
 /* リファレンス: 各索引の該当箇所を 元ファイルの絶対パス への file:// リンクで表示。
@@ -674,6 +832,13 @@ function niceCeil(v){
 }
 
 /* ============================================================ init */
+(function(){
+  const st = loadState();                    // 前回の状態を復元
+  if(st.root) $("#root").value = st.root;
+  if(st.q) $("#q").value = st.q;
+  if(st.action) document.querySelector(`.tab[data-a="${st.action}"]`)?.click();
+})();
+$("#root").addEventListener("change", saveState);
 refreshStatus().then(scan);
 </script>
 </body>
