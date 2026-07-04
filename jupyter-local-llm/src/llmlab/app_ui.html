@@ -141,6 +141,20 @@
   details.part{border:1px solid var(--line);border-radius:10px;margin:8px 0;padding:8px 12px}
   details.part summary{cursor:pointer;color:var(--ink-2);font-weight:600;font-size:.88rem}
   details.part .src{font-size:.78rem;color:var(--ink-mute)}
+  .refs{border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin-top:14px;
+    background:rgba(34,211,238,.03)}
+  .refs h3{margin:0 0 8px;font-size:.8rem;letter-spacing:.15em;color:var(--accent-a)}
+  .ref{display:flex;gap:10px;align-items:baseline;padding:5px 0;
+    border-top:1px dashed var(--line);font-size:.82rem;flex-wrap:wrap}
+  .ref:first-of-type{border-top:none}
+  .ref .tag{color:var(--ink-2);font-weight:700;white-space:nowrap}
+  .ref a{color:var(--accent-a);text-decoration:none;word-break:break-all;
+    font-family:ui-monospace,Consolas,monospace;font-size:.78rem}
+  .ref a:hover{text-decoration:underline}
+  .ref .nolink{color:var(--ink-mute);font-size:.78rem}
+  .ref button{cursor:pointer;border:1px solid var(--line-strong);background:transparent;
+    color:var(--ink-2);border-radius:6px;font-size:.7rem;padding:1px 8px}
+  .ref button:hover{color:var(--ink);border-color:var(--accent-a)}
   .err{color:var(--err);border:1px solid rgba(230,103,103,.4);border-radius:10px;padding:10px 14px;
     background:rgba(230,103,103,.06)}
   /* ============ chart ============ */
@@ -457,6 +471,34 @@ $("#btnRun").onclick = async ()=>{
 };
 
 /* ============================================================ 結果表示 */
+/* リファレンス: 各索引の該当箇所を 元ファイルの絶対パス への file:// リンクで表示。
+   （ブラウザのセキュリティ設定で file:// クリックが遮断される場合に備え、
+     パスのコピー ボタンを常に併設） */
+const fileUrl = p => "file:///" + encodeURI(String(p).replace(/\\/g,"/").replace(/^\/+/,""));
+function refsHtml(partials){
+  const seen = new Set(), items = [];
+  for(const p of (partials||[])){
+    for(const r of (p.refs||[])){
+      const key = (r.path||"") + "|" + (r.page??"");
+      if(seen.has(key)) continue; seen.add(key);
+      items.push({...r, index:p.index});
+    }
+  }
+  if(!items.length) return "";
+  return `<div class="refs"><h3>📎 リファレンス（該当箇所）</h3>` + items.map(r=>{
+    const page = r.page ? ` p.${esc(String(r.page))}` : "";
+    const link = r.path
+      ? `<a href="${fileUrl(r.path)}" target="_blank" title="元ファイルを開く">${esc(r.path)}</a>
+         <button onclick="copyRef(this,'${esc(String(r.path)).replace(/'/g,"\\'")}')">パスをコピー</button>`
+      : `<span class="nolink">（パス情報なし: v0.3.0 以前に作成した索引。作り直すと表示されます）</span>`;
+    return `<div class="ref"><span class="tag">[${esc(r.index)}] ${esc(r.label||"?")}${page}</span>${link}</div>`;
+  }).join("") + `</div>`;
+}
+window.copyRef = (btn, path)=>{
+  navigator.clipboard.writeText(path);
+  const t = btn.textContent; btn.textContent="✓ コピー済";
+  setTimeout(()=>btn.textContent=t, 1400);
+};
 function partialsHtml(partials){
   return (partials||[]).map(p=>`
     <details class="part"><summary>索引「${esc(p.index)}」の調査結果（${p.kind}）</summary>
@@ -469,6 +511,7 @@ function showResult(e){
   const res = $("#result"); res.style.display="block";
   if(e.kind==="text"){
     res.innerHTML = `<div class="md">${md(e.text)}</div>
+      ${refsHtml(e.partials)}
       <div class="row" style="margin-top:10px">
         <button class="btn sm ghost" onclick="copyText(this)">📋 コピー</button>
         <button class="btn sm ghost" onclick="dlText()">⬇ Markdown 保存</button>
@@ -484,6 +527,7 @@ function showResult(e){
       <h3 style="color:var(--ink-2);font-size:.85rem;margin-top:14px">抽出データ（表ビュー）</h3>
       ${rowsTable(LAST_ROWS)}
       ${e.note?`<div style="font-size:.8rem;color:var(--ink-mute)">補足: ${esc(e.note)}</div>`:""}
+      ${refsHtml(e.partials)}
       <div class="row" style="margin-top:10px">
         <button class="btn sm ghost" onclick="dlCsv()">⬇ CSV 保存</button>
       </div>

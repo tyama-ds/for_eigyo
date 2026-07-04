@@ -44,11 +44,13 @@ class Source:
     page: str | None
     score: float | None
     snippet: str
+    path: str | None = None  # 元ファイルの絶対パス（出典リンク用）
 
     def __str__(self) -> str:
         page = f" p.{self.page}" if self.page else ""
         score = f" ({self.score:.2f})" if self.score is not None else ""
-        return f"- {self.title}{page}{score}: {self.snippet}"
+        ref = f"\n  ↳ {self.path}" if self.path else ""
+        return f"- {self.title}{page}{score}: {self.snippet}{ref}"
 
 
 @dataclass
@@ -116,6 +118,10 @@ class PagedRAG:
         for d in documents:
             d.metadata["title"] = book_title
             d.metadata["source"] = path.name
+            d.metadata["path"] = str(path.resolve())  # 出典リンク用の絶対パス
+            # 絶対パスを LLM のコンテキストに混ぜない（回答が汚れる/無駄に長くなる）
+            excluded = set(d.excluded_llm_metadata_keys or [])
+            d.excluded_llm_metadata_keys = list(excluded | {"path"})
 
         splitter = SentenceSplitter(
             chunk_size=self.chunk_size, chunk_overlap=self.chunk_overlap
@@ -198,6 +204,9 @@ class PagedRAG:
                     page=meta.get("page_label"),
                     score=getattr(node, "score", None),
                     snippet=(text[:120] + "…") if len(text) > 120 else text,
+                    # 旧索引には "path" が無い → SimpleDirectoryReader 由来の
+                    # file_path（取り込み時の指定パス）にフォールバック
+                    path=meta.get("path") or meta.get("file_path"),
                 )
             )
         return Answer(text=response_text, sources=sources)

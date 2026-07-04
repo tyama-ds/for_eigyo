@@ -55,12 +55,14 @@ def _run_task(task_id: str, payload: dict) -> None:
             raise ValueError("索引が選択されていません")
         ws = MultiRAG(indexes, top_k=int(payload.get("top_k", 5)), progress=emit)
 
+        def _partials(r):
+            return [{"index": p.index, "kind": p.kind, "text": p.text,
+                     "sources": p.sources, "refs": p.refs} for p in r.partials]
+
         if action == "extract":
             r = ws.extract(question or "文書中の主要な数値")
             q.put({"type": "result", "kind": "extract",
-                   "rows": r.rows, "note": r.note,
-                   "partials": [{"index": p.index, "kind": p.kind, "text": p.text,
-                                 "sources": p.sources} for p in r.partials]})
+                   "rows": r.rows, "note": r.note, "partials": _partials(r)})
         else:
             if action == "summarize":
                 r = ws.summarize(question or None)
@@ -71,8 +73,7 @@ def _run_task(task_id: str, payload: dict) -> None:
                     raise ValueError("質問を入力してください")
                 r = ws.ask(question)
             q.put({"type": "result", "kind": "text", "text": r.text,
-                   "partials": [{"index": p.index, "kind": p.kind, "text": p.text,
-                                 "sources": p.sources} for p in r.partials]})
+                   "partials": _partials(r)})
     except Exception as e:  # noqa: BLE001  失敗は UI に表示する
         q.put({"type": "error", "message": f"{type(e).__name__}: {e}"})
     finally:

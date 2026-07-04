@@ -119,6 +119,8 @@ class Partial:
     kind: str
     text: str
     sources: list[str] = field(default_factory=list)
+    # 出典リンク: {"label": 表示名, "path": 元ファイル絶対パス, "page": ページ}
+    refs: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -128,11 +130,29 @@ class MultiAnswer:
     text: str
     partials: list[Partial] = field(default_factory=list)
 
+    def refs(self) -> list[dict]:
+        """全索引の出典リンク（絶対パス）を重複除去して返す。"""
+        seen, out = set(), []
+        for p in self.partials:
+            for r in p.refs:
+                key = (r.get("path"), r.get("page"))
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append({**r, "index": p.index})
+        return out
+
     def __str__(self) -> str:
         out = [self.text]
-        srcs = [s for p in self.partials for s in p.sources]
-        if srcs:
-            out += ["", "── 出典 ──"] + srcs[:20]
+        refs = self.refs()
+        if refs:
+            out += ["", "── リファレンス（該当箇所） ──"]
+            for r in refs[:20]:
+                page = f" p.{r['page']}" if r.get("page") else ""
+                path = r.get("path") or "(パス不明: 旧バージョンで作成した索引)"
+                out.append(f"- [{r['index']}] {r.get('label', '?')}{page}\n    ↳ {path}")
+        elif any(p.sources for p in self.partials):
+            out += ["", "── 出典 ──"] + [s for p in self.partials for s in p.sources][:20]
         return "\n".join(out)
 
 
@@ -312,16 +332,21 @@ class MultiRAG:
                 engine = self._engine(info)
                 if info.kind == "book":
                     ans = engine.query(question)
-                    sources = [str(e) for e in getattr(ans, "evidence", [])]
-                    text = ans.text
+                    hits = getattr(ans, "evidence", [])
+                    path_attr = "source"  # Evidence.source = 元ファイル絶対パス
                 else:
                     ans = engine.query(question, top_k=self.top_k)
-                    sources = [str(s) for s in getattr(ans, "sources", [])]
-                    text = ans.text
+                    hits = getattr(ans, "sources", [])
+                    path_attr = "path"    # Source.path = 元ファイル絶対パス
+                refs = [{"label": getattr(h, "title", None) or "?",
+                         "page": getattr(h, "page", None),
+                         "path": getattr(h, path_attr, None)} for h in hits]
+                text, sources = ans.text, [str(s) for s in hits]
             except Exception as e:  # noqa: BLE001  1索引の失敗で全体を落とさない
-                text, sources = f"（この索引の調査に失敗: {e}）", []
-            partials.append(Partial(index=info.name, kind=info.kind,
-                                    text=text, sources=[f"[{info.name}] {s}" for s in sources]))
+                text, sources, refs = f"（この索引の調査に失敗: {e}）", [], []
+            partials.append(Partial(index=info.name, kind=info.kind, text=text,
+                                    sources=[f"[{info.name}] {s}" for s in sources],
+                                    refs=refs))
         return partials
 
     def _reduce(self, system: str, question: str, partials: list[Partial]) -> str:

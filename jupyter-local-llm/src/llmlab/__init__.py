@@ -80,4 +80,4 @@ __all__ = [
     "launch_app",
 ]
 
-__version__ = "0.3.0"  # llmlab.__version__ で更新確認できる
+__version__ = "0.3.1"  # llmlab.__version__ で更新確認できる
