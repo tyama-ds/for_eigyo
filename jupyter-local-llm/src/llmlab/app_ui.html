@@ -108,6 +108,15 @@
   .idx.pinned{border-color:rgba(144,133,233,.55)}
   .idx.pinned.sel{border-color:var(--accent-a)}
   .idx.missing{opacity:.55;cursor:default}
+  /* 索引の作成フォーム */
+  details.build{
+    border:1px dashed var(--line-strong);border-radius:12px;padding:8px 12px;margin-top:10px;
+  }
+  details.build summary{cursor:pointer;font-size:.85rem;color:var(--accent-a);font-weight:700;
+    user-select:none}
+  details.build .msg{font-size:.78rem}
+  #bProg{display:none;margin-top:10px}
+  #bstage{font-size:.76rem;color:var(--accent-a);margin-top:6px;word-break:break-all}
   /* プリセット質問チップ */
   .chips{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 8px}
   .chip{
@@ -245,6 +254,38 @@
       </div>
     </div>
     <div class="warnbox" id="idxWarn"></div>
+
+    <details class="build" id="buildBox">
+      <summary>＋ 索引を作成（フォルダ → 索引）</summary>
+      <label class="f">文書フォルダ or ファイルのパス</label>
+      <input type="text" id="b_docs" placeholder="./docs/2016 や C:\docs\2016">
+      <label class="f">索引名（root 直下に作られるフォルダ名）</label>
+      <input type="text" id="b_name" placeholder="2016">
+      <label class="f">方式</label>
+      <select id="b_kind">
+        <option value="paged">PAGED — フォルダ内をまとめて索引化（推奨・高速）</option>
+        <option value="book">BOOK — 1文書ずつ深掘り索引化（低速・数十分/文書）</option>
+      </select>
+      <div class="switch" style="margin:8px 0 2px">
+        <input type="checkbox" id="b_layout" checked style="accent-color:var(--accent-a)">
+        <label for="b_layout" style="font-size:.8rem">見出し判定を強化（BOOK 時のみ有効）</label>
+      </div>
+      <div class="switch" style="margin:2px 0 8px">
+        <input type="checkbox" id="b_pin" checked style="accent-color:var(--accent-a)">
+        <label for="b_pin" style="font-size:.8rem">作成後にピン留めする</label>
+      </div>
+      <button class="btn sm" id="btnBuild">⚒ 作成開始</button>
+      <div id="bProg">
+        <div class="bar"><i id="bbarFill"></i></div>
+        <div id="bstage"></div>
+      </div>
+      <div class="msg" id="bMsg"></div>
+      <div style="font-size:.72rem;color:var(--ink-mute);margin-top:6px">
+        既存の索引名を指定すると追記になります（同名ファイルはスキップ）。
+        取り込みには埋め込みAPIが必要です。
+      </div>
+    </details>
+
     <div style="font-size:.75rem;color:var(--ink-mute);margin-top:10px">
       ✓ を付けた索引が横断検索の対象になります。<br>
       索引は PagedRAG / BookRAG の storage フォルダをそのまま検出します
@@ -498,6 +539,56 @@ function restoreSelection(){
     }
   });
 }
+
+/* ---- 索引の作成（フォルダ → 索引。進捗は SSE） ---- */
+$("#btnBuild").onclick = async ()=>{
+  const m = $("#bMsg"); m.className="msg"; m.textContent="";
+  const kind = $("#b_kind").value;
+  $("#btnBuild").disabled = true;
+  $("#bProg").style.display="block";
+  $("#bbarFill").style.width="3%"; $("#bstage").textContent="開始しています…";
+  const t0 = Date.now();
+  const tick = setInterval(()=>{
+    const s = Math.round((Date.now()-t0)/1000);
+    $("#bstage").textContent = $("#bstage").dataset.msg
+      ? `${$("#bstage").dataset.msg}　⏱ ${s}s` : `処理中… ⏱ ${s}s`;
+  }, 1000);
+  const finish = ()=>{ clearInterval(tick); $("#btnBuild").disabled=false; };
+  try{
+    const {task_id} = await api("/api/build", {
+      docs_path: $("#b_docs").value, name: $("#b_name").value, kind,
+      layout: $("#b_layout").checked, pin: $("#b_pin").checked,
+      root: $("#root").value,
+    });
+    const es = new EventSource("/api/events?id="+task_id);
+    es.onmessage = ev=>{
+      const e = JSON.parse(ev.data);
+      if(e.type==="progress"){
+        const pct = Math.max(3, Math.min(97, Math.round(100*e.current/(e.total||1))));
+        $("#bbarFill").style.width = pct+"%";
+        $("#bstage").dataset.msg = `⟳ ${e.stage}${e.detail? " — "+e.detail : ""}`;
+      }else if(e.type==="result"){
+        $("#bbarFill").style.width="100%";
+        $("#bstage").dataset.msg = `✓ 完了（${Math.round((Date.now()-t0)/1000)}s）`;
+        m.className="msg ok";
+        m.textContent = `✓ 索引「${e.index.name}」を作成しました`
+          + `（文書 ${(e.index.books||[]).length} 冊 / ${e.index.units} units）`;
+        scan();                                    // 一覧に反映
+      }else if(e.type==="error"){
+        $("#bstage").dataset.msg = "✗ 失敗";
+        m.className="msg ng"; m.textContent = "✗ " + e.message;
+      }else if(e.type==="done"){
+        es.close(); finish();
+        setTimeout(()=>{ $("#bProg").style.display="none";
+                         delete $("#bstage").dataset.msg; }, 2000);
+      }
+    };
+    es.onerror = ()=>{ es.close(); finish(); $("#bstage").dataset.msg="✗ 接続が切れました"; };
+  }catch(e){
+    finish(); $("#bProg").style.display="none";
+    m.className="msg ng"; m.textContent="✗ "+e.message;
+  }
+};
 
 /* ---- プリセット質問（ワンクリックで定型の調査） ---- */
 const PRESETS = [

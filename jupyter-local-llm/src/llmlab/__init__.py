@@ -33,6 +33,7 @@ from .workspace import (
     IndexInfo,
     MultiAnswer,
     MultiRAG,
+    build_index,
     pin_index,
     pinned_indexes,
     unpin_index,
@@ -90,6 +91,8 @@ __all__ = [
     "pin_index",
     "unpin_index",
     "pinned_indexes",
+    # フォルダ → 索引 の作成（Studio の「索引を作成」と同じ処理）
+    "build_index",
 ]
 
-__version__ = "0.3.2"  # llmlab.__version__ で更新確認できる
+__version__ = "0.3.3"  # llmlab.__version__ で更新確認できる

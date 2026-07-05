@@ -119,6 +119,39 @@ def _run_task(task_id: str, payload: dict) -> None:
         q.put({"type": "done"})
 
 
+def _run_build(task_id: str, payload: dict, root: str) -> None:
+    """バックグラウンドで索引を作成し、進捗を Queue へ流す。"""
+    from .workspace import build_index
+
+    q = _tasks[task_id]
+
+    def emit(evt: dict) -> None:
+        q.put({"type": "progress", **evt})
+
+    try:
+        name = str(payload.get("name", "")).strip()
+        if not name or name in (".", "..") or any(c in name for c in "/\\"):
+            raise ValueError("索引名はフォルダ名として使える文字列にしてください"
+                             "（/ や \\ は不可）")
+        docs_path = str(payload.get("docs_path", "")).strip()
+        if not docs_path:
+            raise ValueError("文書フォルダ（またはファイル）のパスを入力してください")
+        storage = Path(payload.get("root") or root) / name
+        info = build_index(
+            docs_path, storage,
+            kind=str(payload.get("kind", "paged")),
+            layout=bool(payload.get("layout", False)),
+            max_workers=int(payload.get("max_workers", 1) or 1),
+            pin=bool(payload.get("pin", False)),
+            progress=emit,
+        )
+        q.put({"type": "result", "kind": "build", "index": info.to_dict()})
+    except Exception as e:  # noqa: BLE001
+        q.put({"type": "error", "message": f"{type(e).__name__}: {e}"})
+    finally:
+        q.put({"type": "done"})
+
+
 class _Handler(BaseHTTPRequestHandler):
     server_version = "llmlabStudio"
     root_dir = DEFAULT_ROOT  # serve() が差し替える
@@ -184,6 +217,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._api_configure()
         elif url.path == "/api/run":
             self._api_run()
+        elif url.path == "/api/build":
+            self._api_build()
         elif url.path == "/api/pin":
             self._api_pin()
         elif url.path == "/api/history/clear":
@@ -241,6 +276,21 @@ class _Handler(BaseHTTPRequestHandler):
         with _tasks_lock:
             _tasks[task_id] = Queue()
         threading.Thread(target=_run_task, args=(task_id, payload), daemon=True).start()
+        self._json({"task_id": task_id})
+
+    def _api_build(self) -> None:
+        """索引の作成（フォルダ→索引）。取り込みには埋め込みAPIが必要。"""
+        from .config import is_configured
+
+        if not is_configured():
+            self._json({"error": "接続設定が未入力です（索引の作成には埋め込みAPIが必要）"}, 400)
+            return
+        payload = self._read_json()
+        task_id = uuid.uuid4().hex[:12]
+        with _tasks_lock:
+            _tasks[task_id] = Queue()
+        threading.Thread(target=_run_build, args=(task_id, payload, self.root_dir),
+                         daemon=True).start()
         self._json({"task_id": task_id})
 
     def _api_pin(self) -> None:

@@ -187,6 +187,112 @@ def discover(root: str | Path = DEFAULT_ROOT, *, include_pins: bool = True) -> l
 
 
 # --------------------------------------------------------------------------
+# 索引の作成（Studio の「索引を作成」からも使う）
+# --------------------------------------------------------------------------
+
+# PagedRAG.add_books と同じ対応拡張子
+_BUILD_EXTS_PAGED = {".pdf", ".txt", ".md", ".docx", ".doc", ".pptx",
+                     ".csv", ".xlsx", ".xls", ".html", ".epub"}
+# BookRAG.add_book が受け付けるもの
+_BUILD_EXTS_BOOK = {".pdf", ".docx", ".md", ".txt", ".pptx", ".xlsx"}
+
+
+def _make_builder(kind: str, storage_dir: Path, *, max_workers: int = 1):
+    """kind に応じた取り込みエンジンを作る（テストで差し替えられるよう分離）。"""
+    if kind == "book":
+        from .bookrag import BookRAG
+
+        return BookRAG(storage_dir=storage_dir, max_workers=max_workers)
+    from .pagedrag import PagedRAG
+
+    return PagedRAG(storage_dir=storage_dir)
+
+
+def build_index(docs_path: str | Path, storage_dir: str | Path, *,
+                kind: str = "paged", layout: bool = False, ocr: bool = False,
+                max_workers: int = 1, pin: bool = False, progress=None) -> IndexInfo:
+    """フォルダ（またはファイル1つ）を取り込んで索引フォルダを作る。
+
+    - kind="paged": フォルダ内の文書をまとめてベクトル索引に（推奨・高速）
+    - kind="book" : 各文書を BookRAG（木+知識グラフ）で深掘り索引に（低速）
+    - 既存の同種索引フォルダを指定した場合は **追記**（同名ファイルはスキップ）
+    - progress: callable({"stage","current","total","detail"})。省略時は log 表示
+    - pin=True で作成後にピン留めする
+    """
+    if kind not in ("paged", "book"):
+        raise ValueError('kind は "paged" か "book" を指定してください')
+    docs = Path(docs_path)
+    if not docs.exists():
+        raise FileNotFoundError(f"文書のパスが見つかりません: {docs}")
+    exts = _BUILD_EXTS_BOOK if kind == "book" else _BUILD_EXTS_PAGED
+    if docs.is_file():
+        files = [docs]
+    else:
+        files = sorted(f for f in docs.iterdir()
+                       if f.is_file() and f.suffix.lower() in exts)
+    if not files:
+        raise FileNotFoundError(
+            f"{docs} に対応ファイルがありません（対応: {', '.join(sorted(exts))}）")
+
+    storage_dir = Path(storage_dir)
+    existing = detect_index(storage_dir)
+    if existing and existing.kind != kind:
+        raise ValueError(
+            f"{storage_dir} は既存の {existing.kind} 索引です。"
+            f"{kind} で作り直す場合は別の索引名にするか、フォルダを削除してください")
+
+    def emit(stage: str, current: int, total: int, detail: str = "") -> None:
+        if progress is not None:
+            try:
+                progress({"stage": stage, "current": current,
+                          "total": total, "detail": detail})
+            except Exception:  # noqa: BLE001
+                pass
+        else:
+            bx.log(f"({min(current + 1, total)}/{total}) {stage}"
+                   + (f" — {detail}" if detail else ""))
+
+    builder = _make_builder(kind, storage_dir, max_workers=max_workers)
+    total = len(files)
+    if existing:
+        emit("既存索引へ追記", 0, total, f"{existing.name}（同名ファイルはスキップ）")
+    if kind == "book" and total > 1:
+        emit("注意", 0, total,
+             "BOOK 方式は1文書ごとに知識グラフを構築するため時間がかかります")
+
+    # BookRAG の内部ログ（[1/5] 解析…等）も進捗として転送する
+    old_log = bx.log
+    state = {"i": 0, "file": ""}
+
+    def _forward_log(msg):
+        old_log(msg)
+        emit(f"取り込み: {state['file']}", state["i"], total, str(msg))
+
+    if progress is not None:
+        bx.log = _forward_log
+    try:
+        for i, f in enumerate(files):
+            state["i"], state["file"] = i, f.name
+            emit(f"取り込み: {f.name}", i, total, f"{i + 1}/{total} 件目（{kind}）")
+            if kind == "book":
+                builder.add_book(f, layout=("auto" if layout else False), ocr=ocr)
+            else:
+                builder.add_book(f)
+    finally:
+        bx.log = old_log
+
+    if pin:
+        pin_index(storage_dir)
+    info = detect_index(storage_dir)
+    if info is None:  # 全ファイルがスキップ等で索引が出来なかった場合
+        raise RuntimeError(f"索引を作成できませんでした: {storage_dir}")
+    info.pinned = str(storage_dir.resolve()) in pinned_paths()
+    emit("完了", total, total,
+         f"{info.name}: 文書 {len(info.books)} 冊 / {info.units} units")
+    return info
+
+
+# --------------------------------------------------------------------------
 # 結果の型
 # --------------------------------------------------------------------------
 
