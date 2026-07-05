@@ -192,6 +192,9 @@ class TreeNode:
     page: int | None = None
     parent: int | None = None
     children: list[int] = field(default_factory=list)
+    # 元ファイルの絶対パス（書のルートノードにのみ設定。出典リンク用）。
+    # 旧バージョンで保存した索引には無いため既定 None（load 互換）。
+    source: str | None = None
 
 
 @dataclass

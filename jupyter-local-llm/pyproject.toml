@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "llmlab"
-version = "0.2.3"
+version = "0.3.3"
 description = "JupyterLab で OpenAI 互換エンドポイント（ローカルLLM）を使う AI コーディング支援ツールキット（チャット / 補完 / RAG）"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -47,6 +47,10 @@ figures = ["pymupdf>=1.24"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+# llmlab Studio（python -m llmlab.app）の UI
+llmlab = ["*.html"]
 
 [tool.ruff]
 line-length = 100

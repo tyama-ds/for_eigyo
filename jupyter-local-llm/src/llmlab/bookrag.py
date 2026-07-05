@@ -52,6 +52,7 @@ class Evidence:
     s_graph: float
     s_text: float
     snippet: str
+    source: str | None = None  # 元ファイルの絶対パス（出典リンク用）
 
     def __str__(self) -> str:
         loc = []
@@ -60,7 +61,8 @@ class Evidence:
         if self.page:
             loc.append(f"p.{self.page}")
         head = " / ".join(loc) if loc else f"node#{self.node_id}"
-        return f"- [{head}] (G={self.s_graph:.2f}, T={self.s_text:.2f}) {self.snippet}"
+        ref = f"\n    ↳ {self.source}" if self.source else ""
+        return f"- [{head}] (G={self.s_graph:.2f}, T={self.s_text:.2f}) {self.snippet}{ref}"
 
 
 @dataclass
@@ -154,6 +156,7 @@ class BookRAG:
         bx.log("[3/5] 木（BookIndex Tree）を構築中…")
         root = bx.build_tree(bi, blocks, book,                     # 木 T（本文はチャンク化）
                              chunk_chars=chunk_chars or self.chunk_chars)
+        bi.nodes[root].source = str(path.resolve())  # 出典リンク用に元ファイルの絶対パスを記録
         new_nodes = bi.subtree(root)
         # 見出しが1つも検出できなかった場合はフラットな木になる（BookRAG の強みが出ない）
         if path.suffix.lower() == ".pdf" and not layout and \
@@ -524,6 +527,9 @@ class BookRAG:
 
     def _to_evidence(self, bi: BookIndex, ns: list[int], s_graph: dict, s_text: dict,
                      *, limit: int | None = None) -> list[Evidence]:
+        # 書名 → 元ファイル絶対パス（ルートノードに記録してある。旧索引は None）
+        src_by_book = {bi.nodes[r].book: getattr(bi.nodes[r], "source", None)
+                       for r in bi.roots}
         ev = []
         for n in ns[: (limit if limit is not None else self.max_evidence)]:
             node = bi.nodes[n]
@@ -532,6 +538,7 @@ class BookRAG:
                 node_id=n, title=node.title or node.book, page=node.page,
                 s_graph=s_graph.get(n, 0.0), s_text=s_text.get(n, 0.0),
                 snippet=(txt[:140] + "…") if len(txt) > 140 else txt,
+                source=src_by_book.get(node.book),
             ))
         return ev
 
