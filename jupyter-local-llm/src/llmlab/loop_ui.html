@@ -76,6 +76,23 @@
   .btn.sm{padding:6px 12px;font-size:.8rem}
   .row{display:flex;gap:8px;align-items:center}
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  /* ============ モード切替（セグメント） ============ */
+  .seg{display:flex;gap:6px}
+  .segbtn{flex:1;cursor:pointer;font:inherit;font-size:.76rem;font-weight:700;letter-spacing:.02em;
+    color:var(--ink-mute);border:1px solid var(--line-strong);border-radius:10px;padding:7px 6px;
+    background:transparent;transition:color .15s,border-color .15s,background .15s}
+  .segbtn.on{color:var(--accent-a);border-color:var(--accent-a);background:rgba(34,211,238,.07)}
+  /* ============ RAG インナーループ表示 ============ */
+  .rag-strip{display:none;margin-top:10px;border-top:1px dashed var(--line);padding-top:10px}
+  .rag-strip.show{display:block}
+  .rag-flow{display:flex;align-items:center;gap:7px;flex-wrap:wrap;font-size:.74rem}
+  .rnode{border:1px solid var(--line-strong);border-radius:999px;padding:3px 12px;color:var(--ink-2);
+    transition:border-color .2s,color .2s,box-shadow .2s;background:rgba(255,255,255,.02)}
+  .rnode.active{border-color:var(--accent-a);color:var(--accent-a);box-shadow:0 0 12px rgba(34,211,238,.25)}
+  .rnode.done{border-color:rgba(52,211,153,.55);color:var(--ok)}
+  .rarr{color:var(--ink-mute)}
+  .rback{color:var(--warn);font-weight:700;opacity:.4;transition:opacity .2s}
+  .rback.on{opacity:1;animation:blink 1s ease 3}
   .hint{font-size:.74rem;color:var(--ink-mute)}
   code.k{background:#0d1119;border:1px solid var(--line);border-radius:6px;padding:1px 6px;font-size:.78rem}
 
@@ -227,6 +244,14 @@
   <aside>
     <div class="panel">
       <h2>トリガー — 目標を投入</h2>
+      <label class="f">ループの種類</label>
+      <div class="seg">
+        <button class="segbtn on" id="modeAuto">汎用（プランナ自律）</button>
+        <button class="segbtn" id="modeRag">RAG特化（検索→生成）</button>
+      </div>
+      <div class="hint" id="modeHint" style="margin-top:4px">
+        プランナがツール（RAG検索・表計算・LLM・記憶）を自律的に選んで目標へ向かいます。
+      </div>
       <label class="f">目標（ゴール）</label>
       <textarea id="goal" placeholder="例: 2024年度の安全規程の変更点を3行で要約し、根拠のページを示す"></textarea>
 
@@ -296,6 +321,17 @@
             </marker>
           </defs>
         </svg>
+      </div>
+      <div class="rag-strip" id="ragStrip">
+        <div class="rag-flow">
+          <span class="hint" style="letter-spacing:.16em">RAG インナーループ</span>
+          <span class="rnode" id="rs_rewrite">① クエリ書き換え</span><span class="rarr">→</span>
+          <span class="rnode" id="rs_search">② 横断検索</span><span class="rarr">→</span>
+          <span class="rnode" id="rs_grade">③ 関連性グレード</span><span class="rarr">→</span>
+          <span class="rnode" id="rs_generate">④ 出典つき生成</span>
+          <span class="rback" id="rsBack">不足 ↩ ①へ戻る</span>
+          <span class="hint" id="rsRound"></span>
+        </div>
       </div>
       <div class="statusbar">
         <span class="st-badge idle" id="stBadge">IDLE</span>
@@ -507,8 +543,39 @@ function setStage(stage){
   curStage = id;
 }
 
+/* ================= モード切替 ================= */
+let loopMode = "auto";
+function setLoopMode(m){
+  loopMode = m;
+  $("modeAuto").classList.toggle("on", m === "auto");
+  $("modeRag").classList.toggle("on", m === "rag");
+  $("modeHint").textContent = m === "rag"
+    ? "固定フロー: クエリ書き換え→横断検索→関連性グレード→（不足なら書き換えへ）→出典つき生成。検証は 出典チェック + 忠実性判定。索引の選択が必要です（デモ実行は不要）。"
+    : "プランナがツール（RAG検索・表計算・LLM・記憶）を自律的に選んで目標へ向かいます。";
+  if (m === "rag" && +$("maxIters").value < 12) $("maxIters").value = 12;
+  if (m === "auto" && +$("maxIters").value === 12) $("maxIters").value = 5;
+}
+$("modeAuto").onclick = () => setLoopMode("auto");
+$("modeRag").onclick = () => setLoopMode("rag");
+
+/* ================= RAG インナーループ表示 ================= */
+const RS_MAP = {rag_rewrite: "rs_rewrite", rag_search: "rs_search",
+                rag_grade: "rs_grade", rag_generate: "rs_generate"};
+let rsCur = null;
+function rsReset(all){
+  for (const id of Object.values(RS_MAP)) $(id).className = "rnode";
+  $("rsBack").className = "rback"; rsCur = null;
+  if (all) $("rsRound").textContent = "";
+}
+function rsStage(tool, round){
+  const id = RS_MAP[tool]; if (!id) return;
+  if (rsCur && rsCur !== id) $(rsCur).className = "rnode done";
+  $(id).className = "rnode active"; rsCur = id;
+  if (round) $("rsRound").textContent = `検索ラウンド ${round}`;
+}
+
 /* ================= 実行制御 ================= */
-let currentRun = null, es = null, t0 = 0, timer = null, retries = 0;
+let currentRun = null, es = null, t0 = 0, timer = null, retries = 0, runMode = "auto";
 
 function setStatus(cls, text){
   const b = $("stBadge"); b.className = "st-badge " + cls; b.textContent = text;
@@ -529,6 +596,7 @@ function collectPayload(){
   const indexes = [...document.querySelectorAll("#idxList input:checked")].map(i => i.value);
   return {
     goal: $("goal").value.trim(),
+    mode: loopMode,
     indexes,
     table_path: $("tablePath").value.trim(),
     max_iters: +$("maxIters").value || 5,
@@ -541,20 +609,25 @@ async function runLoop(demo){
   const payload = collectPayload();
   if (!payload.goal){ $("goal").focus(); $("goal").style.borderColor = "var(--err)";
     setTimeout(()=> $("goal").style.borderColor = "", 1200); return; }
+  if (payload.mode === "rag" && !demo && !payload.indexes.length){
+    alert("RAGループには索引を1つ以上選択してください（索引なしで試すには「デモ実行」）"); return; }
   if (demo) payload.demo = true;
   $("btnRun").disabled = $("btnDemo").disabled = true;
   try {
     const r = await api("/api/loop/run", payload);
     if (r.error){ alert(r.error); return; }
-    attachRun(r.run_id, demo ? "デモ" : "ユーザー");
+    attachRun(r.run_id, demo ? "デモ" : "ユーザー", payload.mode);
   } finally {
     setTimeout(() => { $("btnRun").disabled = $("btnDemo").disabled = !!currentRun; }, 300);
   }
 }
 
-function attachRun(runId, triggerLabel){
+function attachRun(runId, triggerLabel, mode){
   if (es) es.close();
   currentRun = runId; retries = 0; curStage = null;
+  runMode = mode || "auto";
+  $("ragStrip").classList.toggle("show", runMode === "rag");
+  rsReset(true);
   resetPipe();
   $("timeline").innerHTML = ""; $("finalPanel").className = "panel"; hideHuman();
   $("stIter").textContent = "–"; $("stRetry").textContent = "0";
@@ -583,6 +656,7 @@ function handleEvent(e){
         const c = $("cnt_orchestrator"); c.textContent = e.iteration; c.className = "cnt show"; }
       break;
     case "plan":
+      if (runMode === "rag") rsStage(e.tool, e.round);
       tlAdd("plan", card(
         `第${e.iteration}反復 · 計画 <span class="chip tool">${esc(e.tool)}</span>`,
         `<div>${esc(e.thought || "")}</div>` +
@@ -592,6 +666,14 @@ function handleEvent(e){
       if (e.detail || e.stage) tlAdd("exec", `<div class="logline">⏳ ${esc(e.stage||"")} ${esc(e.detail||"")}</div>`);
       break;
     case "exec":
+      if (runMode === "rag" && e.tool === "rag_grade" && e.detail){
+        if (e.detail.sufficient === false){
+          $("rsBack").className = "rback on";           // 不足 → ①へ戻る を点灯
+          setTimeout(() => { rsReset(false); }, 1600);  // 次ラウンドに備えてノードを戻す
+        } else {
+          $("rs_grade").className = "rnode done"; rsCur = null;
+        }
+      }
       tlAdd("exec", card(`第${e.iteration}反復 · 実行結果 <span class="chip tool">${esc(e.tool)}</span>`,
         `<pre>${esc(e.summary)}</pre>` +
         (e.detail && e.detail.sources ? `<div class="hint">出典: ${esc(e.detail.sources.join(" / "))}</div>` : "") +
@@ -633,7 +715,8 @@ function handleEvent(e){
       break;
     case "status":
       setStatus(e.status, e.status.toUpperCase());
-      if (e.status === "succeeded"){ setStage("done"); nodeEl.done.classList.add("done"); }
+      if (e.status === "succeeded"){ setStage("done"); nodeEl.done.classList.add("done");
+        if (runMode === "rag") $("rs_generate").className = "rnode done"; }
       break;
     case "done":
       finishRun();
@@ -675,6 +758,7 @@ async function refreshStore(){
   runs.innerHTML = (r.runs || []).map(x =>
     `<div class="run-item" data-goal="${esc(x.goal)}">
       <div><span class="sdot ${esc(x.status)}"></span><span class="trg">${esc(x.trigger)}</span>
+        ${x.mode === "rag" ? '<span class="trg" style="color:#7dd3fc">RAG</span>' : ""}
         ${x.demo ? '<span class="trg">demo</span>' : ""}
         <span class="ts" style="float:right;font-size:.68rem;color:var(--ink-mute)">${esc(x.ts)}</span></div>
       <div class="g">${esc(x.goal)}</div>
@@ -718,7 +802,8 @@ setInterval(async () => {
   if (currentRun) return;
   try {
     const r = await api("/api/loop/active");
-    if (r.active && r.active.length) attachRun(r.active[0].run_id, r.active[0].trigger);
+    if (r.active && r.active.length)
+      attachRun(r.active[0].run_id, r.active[0].trigger, r.active[0].mode);
   } catch (e) {}
 }, 6000);
 
