@@ -349,7 +349,7 @@ def fetch_source(src: dict) -> tuple[str, list[dict], str | None]:
             "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.8",
             "Accept-Encoding": "gzip, identity",
         })
-        with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT) as r:
+        with _opener().open(req, timeout=FETCH_TIMEOUT) as r:   # proxy設定に従う
             raw = r.read(MAX_FEED_BYTES + 1)
             enc = (r.headers.get("Content-Encoding") or "").lower()
         if len(raw) > MAX_FEED_BYTES:
@@ -439,6 +439,34 @@ def save_settings(data: dict) -> None:
         os.replace(tmp, SETTINGS_FILE)
 
 
+def proxy_config() -> dict:
+    """情報取得・クラウドAI に使うプロキシ設定（llmlab と同じ流儀）。
+
+    - use_proxy=False           → 直結（環境変数のプロキシも無視）
+    - use_proxy=True + proxy_url → その URL を使用
+    - use_proxy=True + 空        → 環境変数 HTTP(S)_PROXY を使用（既定）
+    """
+    p = load_settings().get("proxy") or {}
+    return {"use_proxy": bool(p.get("use_proxy", True)),
+            "proxy_url": (p.get("proxy_url") or "").strip()}
+
+
+def _opener(force_direct: bool = False):
+    """proxy_config に従って urllib の opener を作る（llmlab の3モードに対応）。
+
+    force_direct=True でローカルLLM等は常に直結。他のアプリ（llmlab）と同様に、
+    設定で「使わない/環境変数/明示URL」を切り替えられる。
+    """
+    cfg = proxy_config()
+    if force_direct or not cfg["use_proxy"]:
+        return urllib.request.build_opener(urllib.request.ProxyHandler({}))   # 直結
+    if cfg["proxy_url"]:
+        p = cfg["proxy_url"]
+        return urllib.request.build_opener(
+            urllib.request.ProxyHandler({"http": p, "https": p}))            # 明示URL
+    return urllib.request.build_opener()                                      # 環境変数のプロキシ
+
+
 def ai_config() -> dict:
     ai = load_settings().get("ai") or {}
     provider = ai.get("provider") if ai.get("provider") in AI_PROVIDERS else "anthropic"
@@ -463,7 +491,7 @@ def ai_status() -> dict:
 
 
 def fetch_page_text(url: str) -> str:
-    """記事ページ本文をプレーンテキストで取得（失敗時は空文字）。proxy対応はurllib任せ。"""
+    """記事ページ本文をプレーンテキストで取得（失敗時は空文字）。proxy設定に従う。"""
     u = safe_url(url)
     if not u:
         return ""
@@ -472,7 +500,7 @@ def fetch_page_text(url: str) -> str:
             "User-Agent": USER_AGENT, "Accept": "text/html,*/*;q=0.8",
             "Accept-Encoding": "gzip, identity",
         })
-        with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT) as r:
+        with _opener().open(req, timeout=FETCH_TIMEOUT) as r:
             raw = r.read(MAX_FEED_BYTES + 1)
             enc = (r.headers.get("Content-Encoding") or "").lower()
         if len(raw) > MAX_FEED_BYTES:
@@ -493,13 +521,8 @@ def _http_json(url: str, body: dict, headers: dict, no_proxy: bool = False) -> d
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(url, data=data, method="POST",
                                  headers={**headers, "Content-Type": "application/json"})
-    if no_proxy:
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        open_fn = opener.open
-    else:
-        open_fn = urllib.request.urlopen
     try:
-        with open_fn(req, timeout=AI_TIMEOUT) as r:
+        with _opener(force_direct=no_proxy).open(req, timeout=AI_TIMEOUT) as r:
             resp = r.read(4 * 1024 * 1024)
         return json.loads(resp.decode("utf-8", "replace"))
     except urllib.error.HTTPError as e:
@@ -745,7 +768,7 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if u.path == "/api/settings":
-            self._json({"ai": ai_status()})
+            self._json({"ai": ai_status(), "proxy": proxy_config()})
             return
 
         self._json({"error": "not found"}, 404)
@@ -815,10 +838,16 @@ class Handler(BaseHTTPRequestHandler):
                 ai["api_key"] = ""
             else:
                 ai["api_key"] = ai_config()["api_key"]
+            # プロキシ設定（llmlab と同じ流儀: 使う/環境変数/明示URL）
+            purl = (body.get("proxy_url") or "").strip()
+            if purl and not safe_url(purl):
+                self._json({"ok": False, "error": "proxy_url は http/https の有効なURLにしてください"}, 400)
+                return
             settings = load_settings()
             settings["ai"] = ai
+            settings["proxy"] = {"use_proxy": bool(body.get("use_proxy", True)), "proxy_url": purl}
             save_settings(settings)
-            self._json({"ok": True, "ai": ai_status()})
+            self._json({"ok": True, "ai": ai_status(), "proxy": proxy_config()})
             return
 
         if u.path == "/api/ai/chat":  # 生成AIへの質問

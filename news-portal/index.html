@@ -582,7 +582,15 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
         <input id="aiKey" type="password" autocomplete="off" placeholder="保存済みのキーは表示されません">
         <span class="status" id="aiKeyStatus"></span>
       </div>
-      <div class="setnote">呼び出しはサーバー側で行われるため、他のアプリと同様に<b>プロキシ設定に自動対応</b>します（<code>HTTPS_PROXY</code> と CA を利用）。ローカルLLMへの接続は<b>プロキシを経由しません</b>。APIキーはこの端末の <code>settings.json</code> にのみ保存され、画面には再表示されません。</div>
+      <div class="setrow">
+        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:600">
+          <input type="checkbox" id="aiUseProxy" style="width:auto; accent-color:var(--accent)"> プロキシを使う（情報取得 & クラウドAI）
+        </label>
+        <input id="aiProxyUrl" type="text" autocomplete="off" spellcheck="false"
+               placeholder="http://proxy:8080（空なら環境変数 HTTP(S)_PROXY を使用）">
+        <span class="hint">オフ=直結（環境変数も無視）／オン+空=環境変数のプロキシ／オン+URL=そのプロキシ。RSS取得・クラウドAIに適用（ローカルLLMは常に直結）。</span>
+      </div>
+      <div class="setnote">AI 呼び出しと RSS 取得はいずれも<b>サーバー側の <code>urllib</code></b>で行われ、上のプロキシ設定に従います（他のアプリ／llmlab と同じ流儀。CA も利用）。APIキーはこの端末の <code>settings.json</code> にのみ保存され、画面には再表示されません。</div>
       <div class="mrow" style="display:flex; gap:9px; justify-content:flex-end">
         <button class="btn ghost" type="button" id="aiClearKey">キーを削除</button>
         <button class="btn" type="submit">保存</button>
@@ -1006,7 +1014,7 @@ $("#srcBtn").onclick=openSources;
 $("#helpBtn").onclick=openHelp;
 
 // ============================================================ AI アシスタント
-const AI = { config:null, ctx:{kind:"list"}, msgs:[], busy:false, fetchPage:true };
+const AI = { config:null, proxy:null, ctx:{kind:"list"}, msgs:[], busy:false, fetchPage:true };
 const PROVIDER_DEFAULTS = {
   anthropic:{ base:"https://api.anthropic.com", model:"claude-opus-4-8", keyOptional:false,
     baseHint:"空欄で既定 (https://api.anthropic.com)", modelHint:"例: claude-opus-4-8 / claude-sonnet-5 / claude-haiku-4-5" },
@@ -1017,7 +1025,7 @@ const PROVIDER_DEFAULTS = {
     modelHint:"ローカルにあるモデル名。例: llama3.1 / qwen2.5 / gpt-oss" },
 };
 
-async function loadAiSettings(){ try{ const d=await api("/api/settings"); AI.config=d.ai; }catch(e){ AI.config=null; } }
+async function loadAiSettings(){ try{ const d=await api("/api/settings"); AI.config=d.ai; AI.proxy=d.proxy; }catch(e){ AI.config=null; } }
 function aiReady(){ return !!(AI.config && (AI.config.has_key || AI.config.provider==="local")); }
 
 function setAiContext(a){
@@ -1124,22 +1132,28 @@ function applyProviderHints(){
   $("#aiKeyOpt").style.display = d.keyOptional ? "inline" : "none";
   $("#aiKey").placeholder = d.keyOptional ? "ローカルLLMでは空欄でも可" : "保存済みのキーは表示されません";
 }
+function toggleProxyUrl(){ $("#aiProxyUrl").disabled = !$("#aiUseProxy").checked; }
 function fillAiForm(){
   const c=AI.config||{provider:"anthropic",base_url:"",model:"",has_key:false};
   $("#aiProvider").value=c.provider||"anthropic";
   $("#aiBase").value=c.base_url||""; $("#aiModel").value=c.model||""; $("#aiKey").value="";
   $("#aiKeyStatus").textContent = c.has_key ? "✓ キー登録済み（変更する場合のみ入力）" : "";
-  applyProviderHints();
+  const p=AI.proxy||{use_proxy:true, proxy_url:""};
+  $("#aiUseProxy").checked = p.use_proxy!==false; $("#aiProxyUrl").value = p.proxy_url||"";
+  toggleProxyUrl(); applyProviderHints();
 }
+function proxyPayload(){ return { use_proxy:$("#aiUseProxy").checked, proxy_url:$("#aiProxyUrl").value.trim() }; }
 function openAiSettings(){ fillAiForm(); openOverlay($("#aiSettings")); }
 $("#aiProvider").addEventListener("change", applyProviderHints);
+$("#aiUseProxy").addEventListener("change", toggleProxyUrl);
 $("#aiForm").addEventListener("submit", async (e)=>{
   e.preventDefault();
-  const payload={ provider:$("#aiProvider").value, base_url:$("#aiBase").value.trim(), model:$("#aiModel").value.trim() };
+  const payload={ provider:$("#aiProvider").value, base_url:$("#aiBase").value.trim(),
+                  model:$("#aiModel").value.trim(), ...proxyPayload() };
   const key=$("#aiKey").value.trim(); if(key) payload.api_key=key;
   try{
     const d=await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
-    if(d.ok){ AI.config=d.ai; toast("AI設定を保存しました"); closeOverlays(); openAI(); }
+    if(d.ok){ AI.config=d.ai; AI.proxy=d.proxy; toast("AI・プロキシ設定を保存しました"); closeOverlays(); openAI(); }
     else toast(d.error||"保存に失敗しました","err");
   }catch(e){ toast("保存に失敗しました","err"); }
 });
@@ -1147,8 +1161,8 @@ $("#aiClearKey").onclick=async ()=>{
   try{
     const d=await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({ provider:$("#aiProvider").value, base_url:$("#aiBase").value.trim(),
-                            model:$("#aiModel").value.trim(), clear_key:true })});
-    if(d.ok){ AI.config=d.ai; $("#aiKey").value=""; $("#aiKeyStatus").textContent=""; toast("APIキーを削除しました"); }
+                            model:$("#aiModel").value.trim(), clear_key:true, ...proxyPayload() })});
+    if(d.ok){ AI.config=d.ai; AI.proxy=d.proxy; $("#aiKey").value=""; $("#aiKeyStatus").textContent=""; toast("APIキーを削除しました"); }
   }catch(e){ toast("削除に失敗しました","err"); }
 };
 $("#aiBtn").onclick=()=>{ setAiContext(null); openAI(); };
