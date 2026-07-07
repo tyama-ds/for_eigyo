@@ -94,6 +94,12 @@ DEFAULT_SOURCES = [
     ("MONOist（ものづくり）", "https://rss.itmedia.co.jp/rss/2.0/monoist.xml",              "専門"),
     ("EE Times Japan",       "https://rss.itmedia.co.jp/rss/2.0/eetimes.xml",              "専門"),
     ("arXiv cs.AI",          "https://rss.arxiv.org/rss/cs.AI",                            "専門"),
+    # 鉄鋼・素材（ご要望: 日刊工業新聞系 / ISIJ 鉄と鋼 / Science系 Materials）
+    ("Nature Materials",     "https://www.nature.com/nmat.rss",                            "専門"),
+    ("ScienceDaily 材料科学", "https://www.sciencedaily.com/rss/matter_energy/materials_science.xml", "専門"),
+    ("鉄と鋼（ISIJ・J-STAGE）", "https://api.jstage.jst.go.jp/searchapi/do?service=3&cdjournal=tetsutohagane&count=30", "専門"),
+    ("ISIJ International（J-STAGE）", "https://api.jstage.jst.go.jp/searchapi/do?service=3&cdjournal=isijinternational&count=30", "専門"),
+    ("ニュースイッチ（日刊工業新聞）", "https://newswitch.jp/rss",                          "専門"),
 ]
 
 _cache_lock = threading.Lock()      # _cache の読み書きを保護

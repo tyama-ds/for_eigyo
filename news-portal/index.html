@@ -335,6 +335,44 @@ main{max-width:1360px; margin:0 auto; padding:16px 22px 80px}
 kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2); border:1px solid var(--line-2);
   border-bottom-width:2px; border-radius:6px; padding:2px 8px; color:var(--text); min-width:22px; text-align:center}
 
+/* ============================================================ 横断検索 */
+.search-modal{width:min(860px,95vw); max-height:88vh}
+.search-modal .modal__head h2{flex:0 0 auto}
+.gsub{font-size:12px; color:var(--text-3)}
+.gsearch{position:relative; display:flex; align-items:center}
+.gsearch__icon{position:absolute; left:15px; width:19px;height:19px; color:var(--text-3); pointer-events:none}
+.gsearch input{width:100%; padding:14px 16px 14px 44px; border-radius:13px; background:var(--surface-2);
+  border:1px solid var(--line); color:var(--text); font-size:16px; outline:none; transition:.2s}
+.gsearch input:focus{border-color:color-mix(in srgb,var(--accent) 60%,transparent);
+  box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 12%,transparent)}
+.gsearch input::placeholder{color:var(--text-3)}
+.gscope{display:flex; flex-wrap:wrap; gap:7px; margin-top:13px}
+.gchip{display:inline-flex; align-items:center; gap:6px; padding:5px 11px; border-radius:99px; cursor:pointer;
+  font-size:12.5px; font-weight:700; border:1px solid var(--line-2); background:transparent; color:var(--text-3); transition:.18s}
+.gchip .dot{width:7px;height:7px;border-radius:99px; background:var(--c,var(--text-3))}
+.gchip:hover{color:var(--text-2); border-color:var(--text-3)}
+.gchip.on{color:var(--text); border-color:transparent; background:color-mix(in srgb,var(--c,var(--accent)) 16%,transparent)}
+.gchip.on .dot{box-shadow:0 0 0 3px color-mix(in srgb,var(--c,var(--accent)) 22%,transparent)}
+.gsum{margin:15px 2px 8px; font-size:12.5px; color:var(--text-2); display:flex; flex-wrap:wrap; gap:6px 12px; align-items:center}
+.gsum b{color:var(--accent); font-family:var(--font-serif)}
+.gsum .gseg{color:var(--text-3)}
+.gresults{display:flex; flex-direction:column; gap:2px}
+.gitem{display:grid; grid-template-columns:1fr auto; gap:3px 12px; padding:12px 12px; border-radius:12px;
+  border:1px solid transparent; cursor:pointer; transition:.15s; border-left:3px solid var(--c,var(--accent))}
+.gitem:hover{background:var(--surface-2); border-color:var(--line)}
+.gitem.read{opacity:.55}
+.gitem__meta{grid-column:1/-1; display:flex; align-items:center; gap:9px; font-size:11.5px; color:var(--text-3); flex-wrap:wrap}
+.gitem__cat{font-weight:700; color:var(--c); display:inline-flex; align-items:center; gap:5px}
+.gitem__cat .dot{width:7px;height:7px;border-radius:99px; background:var(--c)}
+.gitem__src{color:var(--text-2); font-weight:600}
+.gitem__title{grid-column:1; font-size:14.5px; font-weight:700; line-height:1.4; color:var(--text)}
+.gitem__sum{grid-column:1/-1; font-size:12.5px; color:var(--text-3); line-height:1.55; display:-webkit-box;
+  -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden}
+.gitem__acts{grid-row:2; grid-column:2; display:flex; gap:4px; align-self:start}
+.gresults mark{background:color-mix(in srgb,var(--accent) 34%,transparent); color:inherit; border-radius:3px; padding:0 1px}
+.gempty{text-align:center; color:var(--text-3); padding:38px 10px; font-size:13.5px}
+@media (max-width:560px){ .gsub{display:none} }
+
 /* ============================================================ AI パネル */
 .drawer.wide{width:min(480px,96vw)}
 .ai{display:flex; flex-direction:column; height:100%}
@@ -442,11 +480,14 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
 
     <div class="search">
       <svg class="search__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3" stroke-linecap="round"/></svg>
-      <input id="q" type="search" placeholder="記事・情報源を検索…" autocomplete="off" spellcheck="false" aria-label="検索">
+      <input id="q" type="search" placeholder="記事を検索（Enter・F で横断検索）…" autocomplete="off" spellcheck="false" aria-label="検索">
       <span class="search__key">/</span>
     </div>
 
     <div class="controls">
+      <button class="iconbtn" id="searchAllBtn" title="横断検索 (F)" aria-label="横断検索">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="10.5" cy="10.5" r="6"/><path d="M20 20l-4.4-4.4"/><path d="M7.5 10.5h6M10.5 7.5v6"/></svg>
+      </button>
       <button class="iconbtn pill" id="autoBtn" title="自動更新の間隔を切り替え">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2" stroke-linecap="round"/></svg>
         <span id="autoLbl">自動: オフ</span>
@@ -528,6 +569,7 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
   <div class="modal__body">
     <div class="kbd-list">
       <div class="kbd-row"><kbd>/</kbd> 検索にフォーカス</div>
+      <div class="kbd-row"><kbd>F</kbd> 横断検索（全カテゴリ）</div>
       <div class="kbd-row"><kbd>R</kbd> 記事を再取得</div>
       <div class="kbd-row"><kbd>T</kbd> ライト / ダーク切替</div>
       <div class="kbd-row"><kbd>L</kbd> グリッド / リスト切替</div>
@@ -537,6 +579,24 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
       <div class="kbd-row"><kbd>1</kbd>〜<kbd>9</kbd> カテゴリ切替</div>
       <div class="kbd-row"><kbd>Esc</kbd> 閉じる / 検索クリア</div>
     </div>
+  </div>
+</div>
+
+<!-- 横断検索 -->
+<div class="modal search-modal" id="searchModal" role="dialog" aria-modal="true" aria-label="横断検索" aria-hidden="true">
+  <div class="modal__head">
+    <h2>横断検索</h2>
+    <span class="gsub">全カテゴリ・全情報源をまたいで検索</span>
+    <button class="iconbtn" data-close aria-label="閉じる" style="margin-left:auto"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+  </div>
+  <div class="modal__body">
+    <div class="gsearch">
+      <svg class="gsearch__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3" stroke-linecap="round"/></svg>
+      <input id="gq" type="search" placeholder="キーワードを入力（タイトル・要約・情報源を横断）…" autocomplete="off" spellcheck="false" aria-label="横断検索キーワード">
+    </div>
+    <div class="gscope" id="gscope"></div>
+    <div class="gsum" id="gsum"></div>
+    <div class="gresults" id="gresults"></div>
   </div>
 </div>
 
@@ -988,6 +1048,79 @@ function closeOverlays(){ while(overlayStack.length) closeTop(); }
 function openBookmarks(){ renderBookmarks(); openOverlay($("#bmDrawer")); }
 function openSources(){ renderSources(); openOverlay($("#srcModal")); }
 function openHelp(){ openOverlay($("#helpModal")); }
+
+// ============================================================ 横断検索（全カテゴリ・全情報源）
+const GS = { q:"", scope:new Set(), gT:null };
+function gCats(){ return ALL_CATS.filter(c=>S.articles.some(a=>a.category===c)); }  // 実在するカテゴリのみ
+function renderScope(){
+  const box=$("#gscope"); box.innerHTML="";
+  const cats=gCats(); if(GS.scope.size===0) cats.forEach(c=>GS.scope.add(c));   // 既定は全ON
+  const mk=(label,active,on)=>{ const b=el("button",{class:"gchip"+(active?" on":"")}); b.append(el("span",{class:"dot"}),el("span",{text:label})); b.onclick=on; return b; };
+  const allOn=cats.every(c=>GS.scope.has(c));
+  const all=mk("すべて", allOn, ()=>{ if(allOn) return; cats.forEach(c=>GS.scope.add(c)); renderScope(); runGSearch(); });
+  all.style.setProperty("--c","var(--accent)"); box.append(all);
+  cats.forEach(c=>{ const on=GS.scope.has(c); const b=mk(c+"（"+S.articles.filter(a=>a.category===c).length+"）", on, ()=>{
+    if(on) GS.scope.delete(c); else GS.scope.add(c);
+    if(GS.scope.size===0) cats.forEach(x=>GS.scope.add(x));   // 空なら全ONへ戻す
+    renderScope(); runGSearch();
+  }); b.style.setProperty("--c",catColor(c)); box.append(b); });
+}
+function gItem(a){
+  const it=el("div",{class:"gitem"+(S.seen.has(a.id)?" read":"")});
+  it.style.setProperty("--c",catColor(a.category));
+  const meta=el("div",{class:"gitem__meta"});
+  const cat=el("span",{class:"gitem__cat"}); cat.append(el("span",{class:"dot"}),document.createTextNode(a.category));
+  meta.append(cat, el("span",{class:"gitem__src",text:a.source}));
+  if(timeMeta(a)) meta.append(el("span",{text:"·"}), el("span",{text:timeMeta(a)}));
+  const title=el("div",{class:"gitem__title"}); title.append(highlight(a.title, GS.q));
+  it.append(meta,title);
+  if(a.summary){ const sum=el("div",{class:"gitem__sum"}); sum.append(highlight(a.summary, GS.q)); it.append(sum); }
+  const acts=el("div",{class:"gitem__acts"});
+  const saved=S.bookmarks.has(a.id);
+  const bm=el("button",{class:"act"+(saved?" saved":""), title:saved?"保存を解除":"保存", "aria-label":"保存"});
+  bm.innerHTML=saved? '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z"/></svg>'
+                    : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z"/></svg>';
+  bm.onclick=(e)=>{ e.stopPropagation(); toggleBookmark(a, bm); };
+  acts.append(bm);
+  if(a.link){ const op=el("a",{class:"act open", href:a.link, target:"_blank", rel:"noopener noreferrer", title:"開く", "aria-label":"開く"});
+    op.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7M9 7h8v8"/></svg>';
+    op.onclick=(e)=>{ e.stopPropagation(); markSeen(a); it.classList.add("read"); }; acts.append(op);
+  }
+  it.append(acts);
+  if(a.link){ it.addEventListener("click",(e)=>{ if(e.target.closest(".gitem__acts"))return; openArticle(a); it.classList.add("read"); }); }
+  return it;
+}
+function runGSearch(){
+  const box=$("#gresults"), sum=$("#gsum");
+  const q=GS.q.trim(), lq=q.toLowerCase();
+  let list=S.articles.filter(a=>GS.scope.has(a.category));
+  if(lq) list=list.filter(a=>(a.title+" "+(a.summary||"")+" "+a.source).toLowerCase().includes(lq));
+  list=list.slice().sort((a,b)=>(b.published_ts||0)-(a.published_ts||0));
+  const cap=200, shown=list.slice(0,cap);
+  // 内訳（カテゴリ別件数）
+  const by={}; list.forEach(a=>{ by[a.category]=(by[a.category]||0)+1; });
+  sum.innerHTML="";
+  if(!q){ sum.append(el("span",{text:"キーワードを入力すると全"+list.length+"件から横断検索します"})); }
+  else{
+    sum.append(el("b",{text:String(list.length)}), document.createTextNode(" 件"));
+    const segs=gCats().filter(c=>by[c]).map(c=>c+" "+by[c]);
+    if(segs.length) sum.append(el("span",{class:"gseg",text:"— "+segs.join(" / ")}));
+    if(list.length>cap) sum.append(el("span",{class:"gseg",text:"（上位 "+cap+" 件を表示）"}));
+  }
+  box.innerHTML="";
+  if(q && !list.length){ box.append(el("div",{class:"gempty",text:"「"+q+"」に一致する記事はありません。スコープや語を変えてみてください。"})); return; }
+  shown.forEach(a=>box.append(gItem(a)));
+}
+function openSearchAll(initialQ){
+  GS.q = (initialQ!=null ? initialQ : (S.q||""));
+  renderScope();
+  openOverlay($("#searchModal"));
+  const inp=$("#gq"); inp.value=GS.q; runGSearch();
+  setTimeout(()=>{ try{ inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }catch(e){} }, 80);
+}
+$("#gq").addEventListener("input",(e)=>{ GS.q=e.target.value; clearTimeout(GS.gT); GS.gT=setTimeout(runGSearch,110); });
+$("#searchAllBtn").onclick=()=>openSearchAll();
+
 $("#scrim").onclick=closeTop;
 $$("[data-close]").forEach(b=>b.onclick=closeTop);
 $("#bmClear").onclick=()=>{ S.bookmarks.clear(); store.set("bm",[]); syncBmBadge(); renderCats(); renderBookmarks(); if(S.cat==="保存済み")renderGrid(); toast("保存済みをすべて削除しました"); };
@@ -1189,9 +1322,10 @@ $("#aiClearKey").onclick=async ()=>{
 $("#aiBtn").onclick=()=>{ setAiContext(null); openAI(); };
 $("#aiSettingsBtn").onclick=openAiSettings;
 
-// search (debounced)
+// search (debounced) — インライン絞り込み。Enter で横断検索へ展開
 let sT=null;
 $("#q").addEventListener("input",(e)=>{ clearTimeout(sT); sT=setTimeout(()=>{ S.q=e.target.value.trim(); renderGrid(); renderStatus(); renderTrend(); },120); });
+$("#q").addEventListener("keydown",(e)=>{ if(e.key==="Enter"){ e.preventDefault(); openSearchAll($("#q").value.trim()); } });
 
 // ============================================================ keyboard
 document.addEventListener("keydown",(e)=>{
@@ -1200,6 +1334,7 @@ document.addEventListener("keydown",(e)=>{
   if(typing) return;
   if(e.ctrlKey||e.metaKey||e.altKey) return;   // ブラウザのショートカット(Ctrl+T等)と衝突させない
   if(e.key==="/"){ e.preventDefault(); $("#q").focus(); }
+  else if(e.key==="f"||e.key==="F"){ e.preventDefault(); openSearchAll(); }
   else if(e.key==="r"||e.key==="R") doRefresh();
   else if(e.key==="t"||e.key==="T") $("#themeBtn").click();
   else if(e.key==="l"||e.key==="L") $("#layoutBtn").click();

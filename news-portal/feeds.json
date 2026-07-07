@@ -181,6 +181,41 @@
       "category": "専門",
       "enabled": true,
       "id": "arxiv-cs-ai"
+    },
+    {
+      "name": "Nature Materials",
+      "url": "https://www.nature.com/nmat.rss",
+      "category": "専門",
+      "enabled": true,
+      "id": "nature-materials"
+    },
+    {
+      "name": "ScienceDaily 材料科学",
+      "url": "https://www.sciencedaily.com/rss/matter_energy/materials_science.xml",
+      "category": "専門",
+      "enabled": true,
+      "id": "sciencedaily-材料科学"
+    },
+    {
+      "name": "鉄と鋼（ISIJ・J-STAGE）",
+      "url": "https://api.jstage.jst.go.jp/searchapi/do?service=3&cdjournal=tetsutohagane&count=30",
+      "category": "専門",
+      "enabled": true,
+      "id": "鉄と鋼-isij-j-stage"
+    },
+    {
+      "name": "ISIJ International（J-STAGE）",
+      "url": "https://api.jstage.jst.go.jp/searchapi/do?service=3&cdjournal=isijinternational&count=30",
+      "category": "専門",
+      "enabled": true,
+      "id": "isij-international-j-stage"
+    },
+    {
+      "name": "ニュースイッチ（日刊工業新聞）",
+      "url": "https://newswitch.jp/rss",
+      "category": "専門",
+      "enabled": true,
+      "id": "ニュースイッチ-日刊工業新聞"
     }
   ]
 }
