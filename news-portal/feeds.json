@@ -1,0 +1,354 @@
+{
+  "sources": [
+    {
+      "name": "NHK 主要ニュース",
+      "url": "https://www.nhk.or.jp/rss/news/cat0.xml",
+      "category": "総合",
+      "enabled": true,
+      "id": "nhk-主要ニュース"
+    },
+    {
+      "name": "NHK 経済",
+      "url": "https://www.nhk.or.jp/rss/news/cat5.xml",
+      "category": "ビジネス",
+      "enabled": true,
+      "id": "nhk-経済"
+    },
+    {
+      "name": "NHK 国際",
+      "url": "https://www.nhk.or.jp/rss/news/cat6.xml",
+      "category": "世界",
+      "enabled": true,
+      "id": "nhk-国際"
+    },
+    {
+      "name": "NHK 科学・文化",
+      "url": "https://www.nhk.or.jp/rss/news/cat3.xml",
+      "category": "科学",
+      "enabled": true,
+      "id": "nhk-科学-文化"
+    },
+    {
+      "name": "NHK スポーツ",
+      "url": "https://www.nhk.or.jp/rss/news/cat7.xml",
+      "category": "スポーツ",
+      "enabled": true,
+      "id": "nhk-スポーツ"
+    },
+    {
+      "name": "Yahoo!ニュース 主要",
+      "url": "https://news.yahoo.co.jp/rss/topics/top-picks.xml",
+      "category": "総合",
+      "enabled": true,
+      "id": "yahoo-ニュース-主要"
+    },
+    {
+      "name": "ITmedia NEWS",
+      "url": "https://rss.itmedia.co.jp/rss/2.0/news_bursts.xml",
+      "category": "テクノロジー",
+      "enabled": true,
+      "id": "itmedia-news"
+    },
+    {
+      "name": "GIGAZINE",
+      "url": "https://gigazine.net/news/rss_2.0/",
+      "category": "テクノロジー",
+      "enabled": true,
+      "id": "gigazine"
+    },
+    {
+      "name": "Publickey",
+      "url": "https://www.publickey1.jp/atom.xml",
+      "category": "テクノロジー",
+      "enabled": true,
+      "id": "publickey"
+    },
+    {
+      "name": "はてブ 人気エントリー",
+      "url": "https://b.hatena.ne.jp/hotentry.rss",
+      "category": "総合",
+      "enabled": true,
+      "id": "はてブ-人気エントリー"
+    },
+    {
+      "name": "TechCrunch",
+      "url": "https://techcrunch.com/feed/",
+      "category": "テクノロジー",
+      "enabled": true,
+      "id": "techcrunch"
+    },
+    {
+      "name": "The Verge",
+      "url": "https://www.theverge.com/rss/index.xml",
+      "category": "テクノロジー",
+      "enabled": true,
+      "id": "the-verge"
+    },
+    {
+      "name": "Hacker News",
+      "url": "https://hnrss.org/frontpage",
+      "category": "テクノロジー",
+      "enabled": true,
+      "id": "hacker-news"
+    },
+    {
+      "name": "BBC World",
+      "url": "https://feeds.bbci.co.uk/news/world/rss.xml",
+      "category": "世界",
+      "enabled": true,
+      "id": "bbc-world"
+    },
+    {
+      "name": "The Guardian World",
+      "url": "https://www.theguardian.com/world/rss",
+      "category": "世界",
+      "enabled": true,
+      "id": "the-guardian-world"
+    },
+    {
+      "name": "BBC Entertainment",
+      "url": "https://feeds.bbci.co.uk/news/entertainment_and_arts/rss.xml",
+      "category": "エンタメ",
+      "enabled": true,
+      "id": "bbc-entertainment"
+    },
+    {
+      "name": "Nature",
+      "url": "https://www.nature.com/nature.rss",
+      "category": "専門",
+      "enabled": true,
+      "id": "nature"
+    },
+    {
+      "name": "Science (AAAS)",
+      "url": "https://www.science.org/rss/news_current.xml",
+      "category": "専門",
+      "enabled": true,
+      "id": "science--aaas"
+    },
+    {
+      "name": "IEEE Spectrum",
+      "url": "https://spectrum.ieee.org/feeds/feed.rss",
+      "category": "専門",
+      "enabled": true,
+      "id": "ieee-spectrum"
+    },
+    {
+      "name": "MIT Technology Review",
+      "url": "https://www.technologyreview.com/feed/",
+      "category": "専門",
+      "enabled": true,
+      "id": "mit-technology-review"
+    },
+    {
+      "name": "ScienceDaily",
+      "url": "https://www.sciencedaily.com/rss/all.xml",
+      "category": "専門",
+      "enabled": true,
+      "id": "sciencedaily"
+    },
+    {
+      "name": "Ars Technica",
+      "url": "https://feeds.arstechnica.com/arstechnica/index",
+      "category": "専門",
+      "enabled": true,
+      "id": "ars-technica"
+    },
+    {
+      "name": "Harvard Business Review",
+      "url": "https://feeds.hbr.org/harvardbusiness",
+      "category": "専門",
+      "enabled": true,
+      "id": "harvard-business-review"
+    },
+    {
+      "name": "MONOist（ものづくり）",
+      "url": "https://rss.itmedia.co.jp/rss/2.0/monoist.xml",
+      "category": "専門",
+      "enabled": true,
+      "id": "monoist-ものづくり"
+    },
+    {
+      "name": "EE Times Japan",
+      "url": "https://rss.itmedia.co.jp/rss/2.0/eetimes.xml",
+      "category": "専門",
+      "enabled": true,
+      "id": "ee-times-japan"
+    },
+    {
+      "name": "arXiv cs.AI",
+      "url": "https://rss.arxiv.org/rss/cs.AI",
+      "category": "専門",
+      "enabled": true,
+      "id": "arxiv-cs-ai"
+    },
+    {
+      "name": "arXiv 材料科学 (cond-mat.mtrl-sci)",
+      "url": "https://rss.arxiv.org/rss/cond-mat.mtrl-sci",
+      "category": "専門",
+      "enabled": true,
+      "id": "arxiv-材料科学--cond-mat-mtrl-sci"
+    },
+    {
+      "name": "arXiv 応用物理 (physics.app-ph)",
+      "url": "https://rss.arxiv.org/rss/physics.app-ph",
+      "category": "専門",
+      "enabled": true,
+      "id": "arxiv-応用物理--physics-app-ph"
+    },
+    {
+      "name": "arXiv 機械学習 (cs.LG)",
+      "url": "https://rss.arxiv.org/rss/cs.LG",
+      "category": "専門",
+      "enabled": true,
+      "id": "arxiv-機械学習--cs-lg"
+    },
+    {
+      "name": "arXiv 制御・システム (eess.SY)",
+      "url": "https://rss.arxiv.org/rss/eess.SY",
+      "category": "専門",
+      "enabled": true,
+      "id": "arxiv-制御-システム--eess-sy"
+    },
+    {
+      "name": "Nature Materials",
+      "url": "https://www.nature.com/nmat.rss",
+      "category": "専門",
+      "enabled": true,
+      "id": "nature-materials"
+    },
+    {
+      "name": "ScienceDaily 材料科学",
+      "url": "https://www.sciencedaily.com/rss/matter_energy/materials_science.xml",
+      "category": "専門",
+      "enabled": true,
+      "id": "sciencedaily-材料科学"
+    },
+    {
+      "name": "鉄と鋼（ISIJ・J-STAGE）",
+      "url": "https://api.jstage.jst.go.jp/searchapi/do?service=3&cdjournal=tetsutohagane&count=30",
+      "category": "専門",
+      "enabled": true,
+      "id": "鉄と鋼-isij-j-stage"
+    },
+    {
+      "name": "ISIJ International（J-STAGE）",
+      "url": "https://api.jstage.jst.go.jp/searchapi/do?service=3&cdjournal=isijinternational&count=30",
+      "category": "専門",
+      "enabled": true,
+      "id": "isij-international-j-stage"
+    },
+    {
+      "name": "ニュースイッチ（日刊工業新聞）",
+      "url": "https://newswitch.jp/rss",
+      "category": "専門",
+      "enabled": true,
+      "id": "ニュースイッチ-日刊工業新聞"
+    },
+    {
+      "name": "電気新聞",
+      "url": "https://news.google.com/rss/search?q=site:denkishimbun.com&hl=ja&gl=JP&ceid=JP:ja",
+      "category": "専門",
+      "enabled": true,
+      "id": "電気新聞"
+    },
+    {
+      "name": "日刊鉄鋼新聞",
+      "url": "https://news.google.com/rss/search?q=site:japanmetaldaily.com&hl=ja&gl=JP&ceid=JP:ja",
+      "category": "専門",
+      "enabled": true,
+      "id": "日刊鉄鋼新聞"
+    },
+    {
+      "name": "日刊産業新聞（鉄鋼・非鉄）",
+      "url": "https://news.google.com/rss/search?q=site:japanmetal.com&hl=ja&gl=JP&ceid=JP:ja",
+      "category": "専門",
+      "enabled": true,
+      "id": "日刊産業新聞-鉄鋼-非鉄"
+    },
+    {
+      "name": "電波新聞（電波新聞デジタル）",
+      "url": "https://news.google.com/rss/search?q=site:dempa-digital.com&hl=ja&gl=JP&ceid=JP:ja",
+      "category": "専門",
+      "enabled": true,
+      "id": "電波新聞-電波新聞デジタル"
+    },
+    {
+      "name": "日刊工業新聞（本紙）",
+      "url": "https://news.google.com/rss/search?q=site:nikkan.co.jp&hl=ja&gl=JP&ceid=JP:ja",
+      "category": "専門",
+      "enabled": true,
+      "id": "日刊工業新聞-本紙"
+    },
+    {
+      "name": "化学工業日報",
+      "url": "https://news.google.com/rss/search?q=site:chemicaldaily.com&hl=ja&gl=JP&ceid=JP:ja",
+      "category": "専門",
+      "enabled": true,
+      "id": "化学工業日報"
+    },
+    {
+      "name": "環境新聞",
+      "url": "https://news.google.com/rss/search?q=site:kankyo-news.co.jp&hl=ja&gl=JP&ceid=JP:ja",
+      "category": "専門",
+      "enabled": true,
+      "id": "環境新聞"
+    },
+    {
+      "name": "日刊建設工業新聞",
+      "url": "https://news.google.com/rss/search?q=site:decn.co.jp&hl=ja&gl=JP&ceid=JP:ja",
+      "category": "専門",
+      "enabled": true,
+      "id": "日刊建設工業新聞"
+    },
+    {
+      "name": "日刊自動車新聞",
+      "url": "https://news.google.com/rss/search?q=site:netdenjd.com&hl=ja&gl=JP&ceid=JP:ja",
+      "category": "専門",
+      "enabled": true,
+      "id": "日刊自動車新聞"
+    },
+    {
+      "name": "日本海事新聞",
+      "url": "https://news.google.com/rss/search?q=site:jmd.co.jp&hl=ja&gl=JP&ceid=JP:ja",
+      "category": "専門",
+      "enabled": true,
+      "id": "日本海事新聞"
+    },
+    {
+      "name": "建設通信新聞",
+      "url": "https://news.google.com/rss/search?q=site:kensetsunews.com&hl=ja&gl=JP&ceid=JP:ja",
+      "category": "専門",
+      "enabled": true,
+      "id": "建設通信新聞"
+    },
+    {
+      "name": "日本物流新聞",
+      "url": "https://news.google.com/rss/search?q=site:nb-shinbun.co.jp&hl=ja&gl=JP&ceid=JP:ja",
+      "category": "専門",
+      "enabled": true,
+      "id": "日本物流新聞"
+    },
+    {
+      "name": "物流ニッポン",
+      "url": "https://news.google.com/rss/search?q=site:logistics.jp&hl=ja&gl=JP&ceid=JP:ja",
+      "category": "専門",
+      "enabled": true,
+      "id": "物流ニッポン"
+    },
+    {
+      "name": "繊研新聞",
+      "url": "https://news.google.com/rss/search?q=site:senken.co.jp&hl=ja&gl=JP&ceid=JP:ja",
+      "category": "専門",
+      "enabled": true,
+      "id": "繊研新聞"
+    },
+    {
+      "name": "日本経済新聞（日経系）",
+      "url": "https://news.google.com/rss/search?q=site:nikkei.com&hl=ja&gl=JP&ceid=JP:ja",
+      "category": "ビジネス",
+      "enabled": true,
+      "id": "日本経済新聞-日経系"
+    }
+  ]
+}
