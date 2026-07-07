@@ -272,6 +272,55 @@
       "category": "専門",
       "enabled": true,
       "id": "日刊建設工業新聞"
+    },
+    {
+      "name": "日刊自動車新聞",
+      "url": "https://news.google.com/rss/search?q=site:netdenjd.com&hl=ja&gl=JP&ceid=JP:ja",
+      "category": "専門",
+      "enabled": true,
+      "id": "日刊自動車新聞"
+    },
+    {
+      "name": "日本海事新聞",
+      "url": "https://news.google.com/rss/search?q=site:jmd.co.jp&hl=ja&gl=JP&ceid=JP:ja",
+      "category": "専門",
+      "enabled": true,
+      "id": "日本海事新聞"
+    },
+    {
+      "name": "建設通信新聞",
+      "url": "https://news.google.com/rss/search?q=site:kensetsunews.com&hl=ja&gl=JP&ceid=JP:ja",
+      "category": "専門",
+      "enabled": true,
+      "id": "建設通信新聞"
+    },
+    {
+      "name": "日本物流新聞",
+      "url": "https://news.google.com/rss/search?q=site:nb-shinbun.co.jp&hl=ja&gl=JP&ceid=JP:ja",
+      "category": "専門",
+      "enabled": true,
+      "id": "日本物流新聞"
+    },
+    {
+      "name": "物流ニッポン",
+      "url": "https://news.google.com/rss/search?q=site:logistics.jp&hl=ja&gl=JP&ceid=JP:ja",
+      "category": "専門",
+      "enabled": true,
+      "id": "物流ニッポン"
+    },
+    {
+      "name": "繊研新聞",
+      "url": "https://news.google.com/rss/search?q=site:senken.co.jp&hl=ja&gl=JP&ceid=JP:ja",
+      "category": "専門",
+      "enabled": true,
+      "id": "繊研新聞"
+    },
+    {
+      "name": "日本経済新聞（日経系）",
+      "url": "https://news.google.com/rss/search?q=site:nikkei.com&hl=ja&gl=JP&ceid=JP:ja",
+      "category": "ビジネス",
+      "enabled": true,
+      "id": "日本経済新聞-日経系"
     }
   ]
 }

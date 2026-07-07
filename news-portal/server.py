@@ -110,6 +110,15 @@ DEFAULT_SOURCES = [
     ("化学工業日報",         "https://news.google.com/rss/search?q=site:chemicaldaily.com&hl=ja&gl=JP&ceid=JP:ja",  "専門"),
     ("環境新聞",             "https://news.google.com/rss/search?q=site:kankyo-news.co.jp&hl=ja&gl=JP&ceid=JP:ja",  "専門"),
     ("日刊建設工業新聞",     "https://news.google.com/rss/search?q=site:decn.co.jp&hl=ja&gl=JP&ceid=JP:ja",         "専門"),
+    # 需要産業（自動車・造船海事・建設）と物流・繊維の専門紙
+    ("日刊自動車新聞",       "https://news.google.com/rss/search?q=site:netdenjd.com&hl=ja&gl=JP&ceid=JP:ja",       "専門"),
+    ("日本海事新聞",         "https://news.google.com/rss/search?q=site:jmd.co.jp&hl=ja&gl=JP&ceid=JP:ja",           "専門"),
+    ("建設通信新聞",         "https://news.google.com/rss/search?q=site:kensetsunews.com&hl=ja&gl=JP&ceid=JP:ja",   "専門"),
+    ("日本物流新聞",         "https://news.google.com/rss/search?q=site:nb-shinbun.co.jp&hl=ja&gl=JP&ceid=JP:ja",   "専門"),
+    ("物流ニッポン",         "https://news.google.com/rss/search?q=site:logistics.jp&hl=ja&gl=JP&ceid=JP:ja",       "専門"),
+    ("繊研新聞",             "https://news.google.com/rss/search?q=site:senken.co.jp&hl=ja&gl=JP&ceid=JP:ja",       "専門"),
+    # 経済一般（日経系・自前RSS非提供のため Google ニュース RSS）
+    ("日本経済新聞（日経系）", "https://news.google.com/rss/search?q=site:nikkei.com&hl=ja&gl=JP&ceid=JP:ja",         "ビジネス"),
 ]
 
 _cache_lock = threading.Lock()      # _cache の読み書きを保護
