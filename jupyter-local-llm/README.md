@@ -529,9 +529,15 @@ flowchart TD
 - **M365 Copilot コネクタ 4 種**（差し替え可能・`m365copilot.py`）:
   - `bridge`（**既定・確実**）: 各章のプロンプトを画面に出す → 人が M365 Copilot に貼り、
     回答を貼り戻す（自動化/APIが塞がれた社内環境でも動く）
-  - `selenium`: Chrome/Chromium を Selenium WebDriver で実駆動（初回 SSO ログイン・永続プロファイル）。
-    **chromedriver の場所は `driver_path` で明示指定可**（未指定なら Selenium Manager が自動解決。
-    環境変数 `CHROMEDRIVER_PATH` / `CHROME_BINARY` でも可）。`agent_selector` 指定で Researcher を自動選択
+  - `selenium`: **Edge（既定）/ Chrome** を Selenium WebDriver で実駆動（初回 SSO ログイン・永続
+    プロファイル）。M365 Copilot は Edge + 業務アカウントで使うことが多いため既定は Edge。
+    **WebDriver の場所は `driver_path` で明示指定可**（msedgedriver / chromedriver。未指定なら
+    Selenium Manager が自動解決。環境変数 `EDGEDRIVER_PATH` / `CHROMEDRIVER_PATH`、
+    `EDGE_BINARY` / `CHROME_BINARY` でも可）。`agent_selector` で Researcher を自動選択。
+    **待機（ウェイト）**: 入力欄の出現待ち（`ready_timeout_ms`）、送信後の初期待機（`initial_wait_ms`）、
+    ポーリング間隔（`poll_ms`）、**生成中インジケータが消えるまで待つ `busy_selector`**、
+    伸びが止まってからの静止確定 `settle_ms`、全体上限 `timeout_ms`（既定 5 分。Researcher は長い
+    ので必要に応じ増やす）。待機中は ~10 秒ごとに経過秒を UI へ配信
   - `graph`: 任意の HTTP エンドポイント（Microsoft Graph / 社内 Copilot プロキシ）へ Bearer POST。
     プロンプト/回答の JSON パスは設定可能
   - `demo`: モック（指示が濃いほど回答も濃くなり、擬似GEPA の改善が見える）

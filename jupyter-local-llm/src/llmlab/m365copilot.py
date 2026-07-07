@@ -185,15 +185,19 @@ class BridgeConnector(BaseConnector):
 # ---------------------------------------------------------------------------
 
 class SeleniumConnector(BaseConnector):
-    """Selenium（Chrome/Chromium WebDriver）で M365 Copilot の Web UI を駆動する。
+    """Selenium（Edge / Chrome WebDriver）で M365 Copilot の Web UI を駆動する。
 
-    初回は SSO ログインが必要。永続プロファイル（user_data_dir）にログイン状態を保存し、
-    2 回目以降は無人で回せる。UI のセレクタは頻繁に変わるため options で上書きできる。
+    既定は **Edge**（M365 Copilot は Edge + 業務アカウントの SSO で使うことが多いため）。
+    ``browser="chrome"`` で Chrome/Chromium にも切替可。初回は SSO ログインが必要で、永続
+    プロファイル（user_data_dir）にログイン状態を保存し 2 回目以降は無人で回せる。UI の
+    セレクタは頻繁に変わるため options で上書きできる。
 
     options:
+      browser         : "edge"（既定）/ "chrome"
       url             : Copilot のURL（既定 https://m365.cloud.microsoft/chat）
-      driver_path     : chromedriver の場所（**明示指定可**。空なら Selenium Manager が自動解決）
-      browser_binary  : Chrome/Chromium 実行ファイルの場所（空なら既定 / 環境変数を使用）
+      driver_path     : WebDriver の場所（msedgedriver / chromedriver。**明示指定可**。
+                        空なら Selenium Manager が自動解決）
+      browser_binary  : ブラウザ実行ファイルの場所（空なら既定 / 環境変数を使用）
       user_data_dir   : ログイン状態を保存するフォルダ（既定 ~/.llmlab/copilot/selenium-profile）
       profile_directory: プロファイル名（既定 "Default"）
       headless        : True で無人（初回ログインは False 推奨）
@@ -201,23 +205,30 @@ class SeleniumConnector(BaseConnector):
       send_selector   : 送信ボタンのCSSセレクタ（省略時は Enter 送信）
       answer_selector : 回答要素のCSSセレクタ（最後の要素を回答とみなす）
       agent_selector  : Researcher 等のエージェント選択チップのCSSセレクタ（指定時は入力前にクリック）
-      settle_ms       : 回答が伸びなくなったと判定するまでの静止時間（ms）
-      timeout_ms      : 1 章あたりの最大待ち時間（ms）
       agent_hint      : 使用するエージェント名（既定 "Researcher"。agent_selector 未指定時は通知のみ）
+      --- 待機（ウェイト）まわり -----------------------------------------------
+      ready_timeout_ms: 入力欄/エージェント選択が現れるまでの待ち上限（既定 30000）
+      initial_wait_ms : 送信直後に置く初期待機（既定 1500）
+      poll_ms         : 回答ポーリング間隔（既定 800）
+      busy_selector   : 「生成中」インジケータのCSS（例: 停止ボタン/スピナー）。**表示中は待機を続ける**
+                        ＝伸びが一瞬止まっても生成継続中なら誤って打ち切らない。Researcher 向けに有効
+      settle_ms       : 生成中でなく回答が伸びなくなってからの静止確定時間（既定 3000）
+      timeout_ms      : 1 章あたりの回答待ち上限（既定 300000＝5分。Researcher は長いので必要なら増やす）
 
-    driver_path / browser_binary は環境変数でも指定できる:
-      CHROMEDRIVER_PATH / CHROMEDRIVER  → driver_path
-      CHROME_BINARY / CHROME_BIN        → browser_binary
+    driver_path / browser_binary は環境変数でも指定できる（browser により参照名が変わる）:
+      edge  : EDGEDRIVER_PATH / MSEDGEDRIVER_PATH → driver_path、EDGE_BINARY / EDGE_BIN → browser_binary
+      chrome: CHROMEDRIVER_PATH / CHROMEDRIVER    → driver_path、CHROME_BINARY / CHROME_BIN → browser_binary
 
-    注意（並行実行）: Chrome は 1 つの user_data_dir を同時に開けない。selenium コネクタで
+    注意（並行実行）: ブラウザは 1 つの user_data_dir を同時に開けない。selenium コネクタで
     複数のリサーチを **同時に** 走らせる場合は、run ごとに別の user_data_dir を指定すること
     （同一プロファイルの同時起動は 2 本目が失敗する）。demo / bridge / graph は同時実行可。
     """
 
     kind = "selenium"
-    label = "Selenium（実ブラウザ）"
+    label = "Selenium（Edge/Chrome）"
 
     DEFAULTS = {
+        "browser": "edge",
         "url": "https://m365.cloud.microsoft/chat",
         "driver_path": "",
         "browser_binary": "",
@@ -227,32 +238,48 @@ class SeleniumConnector(BaseConnector):
         "send_selector": "",
         "answer_selector": "[data-content='ai-message'], .ai-message, [class*='botMessage']",
         "agent_selector": "",
-        "settle_ms": 2500,
-        "timeout_ms": 180000,
+        "busy_selector": "",
+        "ready_timeout_ms": 30000,
+        "initial_wait_ms": 1500,
+        "poll_ms": 800,
+        "settle_ms": 3000,
+        "timeout_ms": 300000,
         "agent_hint": "Researcher",
     }
 
     def _opt(self, key):
         return self.options.get(key, self.DEFAULTS.get(key))
 
+    def _browser(self) -> str:
+        return str(self._opt("browser") or "edge").lower()
+
     def _profile_dir(self) -> str:
         from .workspace import LLMLAB_DIR
 
         return self.options.get("user_data_dir") or str(LLMLAB_DIR / "copilot" / "selenium-profile")
 
-    def _driver_path(self) -> str:
+    def _env_first(self, names: tuple[str, ...]) -> str:
         import os
 
-        return str(self._opt("driver_path")
-                   or os.environ.get("CHROMEDRIVER_PATH")
-                   or os.environ.get("CHROMEDRIVER", "")).strip()
+        for n in names:
+            v = os.environ.get(n)
+            if v:
+                return v.strip()
+        return ""
+
+    def _driver_path(self) -> str:
+        v = self._opt("driver_path")
+        if v:
+            return str(v).strip()
+        return self._env_first(("EDGEDRIVER_PATH", "MSEDGEDRIVER_PATH") if self._browser() == "edge"
+                               else ("CHROMEDRIVER_PATH", "CHROMEDRIVER"))
 
     def _browser_binary(self) -> str:
-        import os
-
-        return str(self._opt("browser_binary")
-                   or os.environ.get("CHROME_BINARY")
-                   or os.environ.get("CHROME_BIN", "")).strip()
+        v = self._opt("browser_binary")
+        if v:
+            return str(v).strip()
+        return self._env_first(("EDGE_BINARY", "EDGE_BIN") if self._browser() == "edge"
+                               else ("CHROME_BINARY", "CHROME_BIN"))
 
     def test(self) -> tuple[bool, str]:
         try:
@@ -268,14 +295,21 @@ class SeleniumConnector(BaseConnector):
         if bb and not os.path.exists(bb):
             return False, f"browser_binary が見つかりません: {bb}"
         drv = dp or "Selenium Manager で自動解決"
-        return True, (f"selenium 利用可（driver: {drv}）。初回は headless=False で SSO ログイン。"
-                      f" profile: {self._profile_dir()}")
+        return True, (f"selenium 利用可（browser={self._browser()} / driver={drv}）。"
+                      f"初回は headless=False で SSO ログイン。profile: {self._profile_dir()}")
 
     def _make_driver(self):
-        """設定に応じた Chrome WebDriver を作る（driver_path / browser_binary を尊重）。"""
+        """設定に応じた Edge / Chrome WebDriver を作る（browser / driver_path / browser_binary を尊重）。"""
         from selenium import webdriver
-        from selenium.webdriver.chrome.options import Options
-        from selenium.webdriver.chrome.service import Service
+
+        if self._browser() == "chrome":
+            from selenium.webdriver.chrome.options import Options
+            from selenium.webdriver.chrome.service import Service
+            make = webdriver.Chrome
+        else:  # 既定: Edge
+            from selenium.webdriver.edge.options import Options
+            from selenium.webdriver.edge.service import Service
+            make = webdriver.Edge
 
         opts = Options()
         if bool(self._opt("headless")):
@@ -292,7 +326,7 @@ class SeleniumConnector(BaseConnector):
         dp = self._driver_path()
         # driver_path 明示時はそれを、未指定なら Selenium Manager（selenium 4.6+）に任せる
         service = Service(executable_path=dp) if dp else Service()
-        return webdriver.Chrome(options=opts, service=service)
+        return make(options=opts, service=service)
 
     @staticmethod
     def _type_prompt(driver, box, text: str) -> None:
@@ -320,16 +354,17 @@ class SeleniumConnector(BaseConnector):
 
         t0 = time.time()
         driver = None
-        timeout = int(self._opt("timeout_ms")) / 1000
+        ready = int(self._opt("ready_timeout_ms")) / 1000
         try:
-            self._emit(emit, type="progress", stage="se_launch", text="ブラウザ起動")
+            self._emit(emit, type="progress", stage="se_launch",
+                       text=f"{self._browser()} 起動")
             driver = self._make_driver()
             driver.get(self._opt("url"))
             # エージェント選択（Researcher 等）。セレクタ未指定なら通知のみ。
             agent_sel = self._opt("agent_selector")
             if agent_sel:
                 try:
-                    WebDriverWait(driver, 15).until(
+                    WebDriverWait(driver, ready).until(
                         EC.element_to_be_clickable((By.CSS_SELECTOR, agent_sel))).click()
                     self._emit(emit, type="progress", stage="se_agent",
                                text=f"エージェント選択: {self._opt('agent_hint')}")
@@ -339,7 +374,7 @@ class SeleniumConnector(BaseConnector):
             else:
                 self._emit(emit, type="progress", stage="se_page",
                            text=f"Copilot を開いた（エージェント {self._opt('agent_hint')} を選択してください）")
-            box = WebDriverWait(driver, timeout).until(
+            box = WebDriverWait(driver, ready).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, self._opt("input_selector"))))
             self._type_prompt(driver, box, prompt)
             send = self._opt("send_selector")
@@ -348,10 +383,10 @@ class SeleniumConnector(BaseConnector):
             else:
                 box.send_keys(Keys.ENTER)
             self._emit(emit, type="progress", stage="se_wait", text="回答生成を待機")
-            text = self._await_answer(driver)
+            text = self._await_answer(driver, emit)
             return ChapterResult(text=text, citations=extract_citations(text),
                                  connector=self.kind, latency_sec=time.time() - t0,
-                                 ok=bool(text), error="" if text else "回答が取得できませんでした")
+                                 ok=bool(text), error="" if text else "回答が取得できませんでした（timeout_ms を増やすか busy_selector を設定）")
         except Exception as e:  # noqa: BLE001  ブラウザ失敗はUIへ返す
             return ChapterResult(ok=False, connector=self.kind, latency_sec=time.time() - t0,
                                  error=f"{type(e).__name__}: {e}")
@@ -362,27 +397,53 @@ class SeleniumConnector(BaseConnector):
             except Exception:  # noqa: BLE001
                 pass
 
-    def _await_answer(self, driver) -> str:
-        """回答要素が伸びなくなる（settle）まで待ってテキストを返す。"""
+    def _await_answer(self, driver, emit: EmitFn | None = None) -> str:
+        """回答が「生成完了」するまで待ってテキストを返す。
+
+        - busy_selector が指定されていれば、その要素が **表示されている間は生成中とみなして待機**
+          （回答の伸びが一瞬止まっても打ち切らない）。Researcher のような長時間ジョブに有効。
+        - busy_selector が消え、かつ回答テキストが settle_ms の間伸びなければ確定。
+        - initial_wait_ms（送信直後の初期待機）と poll_ms（ポーリング間隔）で無駄な空読みを避ける。
+        - timeout_ms を上限に、~10 秒ごとに進捗（経過秒）を emit する。
+        """
         from selenium.webdriver.common.by import By
 
         sel = self._opt("answer_selector")
-        deadline = time.time() + int(self._opt("timeout_ms")) / 1000
+        busy_sel = self._opt("busy_selector")
+        start = time.time()
+        deadline = start + int(self._opt("timeout_ms")) / 1000
         settle = int(self._opt("settle_ms")) / 1000
-        last_text, stable_since = "", None
+        poll = max(0.1, int(self._opt("poll_ms")) / 1000)
+
+        time.sleep(int(self._opt("initial_wait_ms")) / 1000)  # 送信直後の初期待機
+        last_text, stable_since, last_beat = "", None, 0.0
         while time.time() < deadline:
+            busy = False
+            if busy_sel:
+                try:
+                    busy = any(e.is_displayed()
+                               for e in driver.find_elements(By.CSS_SELECTOR, busy_sel))
+                except Exception:  # noqa: BLE001
+                    busy = False
             try:
                 els = driver.find_elements(By.CSS_SELECTOR, sel)
                 cur = els[-1].text if els else ""
             except Exception:  # noqa: BLE001
                 cur = last_text
-            if cur and cur == last_text:
+            if not busy and cur and cur == last_text:
                 if stable_since and (time.time() - stable_since) >= settle:
                     return cur.strip()
                 stable_since = stable_since or time.time()
-            else:
-                last_text, stable_since = cur, None
-            time.sleep(0.6)
+            else:  # 生成中、または回答がまだ伸びている
+                last_text = cur or last_text
+                stable_since = None
+            now = time.time()
+            if emit and now - last_beat >= 10:
+                self._emit(emit, type="progress", stage="se_wait",
+                           text=f"回答生成待機中… {int(now - start)}s"
+                                + ("（生成中）" if busy else ""))
+                last_beat = now
+            time.sleep(poll)
         return last_text.strip()
 
 
