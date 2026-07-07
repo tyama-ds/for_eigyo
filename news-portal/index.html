@@ -384,6 +384,7 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
 .setrow input, .setrow select{padding:10px 12px; border-radius:10px; background:var(--surface-2);
   border:1px solid var(--line); color:var(--text); font-size:13.5px; outline:none}
 .setrow input:focus, .setrow select:focus{border-color:var(--accent)}
+.setrow input:disabled{opacity:.5; cursor:not-allowed; background:var(--surface)}
 .setrow .hint{font-size:11.5px; color:var(--text-3)}
 .setnote{font-size:12px; color:var(--text-3); background:var(--surface-2); border:1px solid var(--line);
   border-radius:10px; padding:11px 13px; line-height:1.65}
@@ -540,7 +541,7 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
 </div>
 
 <!-- AI アシスタント パネル -->
-<aside class="drawer wide" id="aiPanel" aria-hidden="true">
+<aside class="drawer wide" id="aiPanel" role="dialog" aria-modal="true" aria-label="AI アシスタント" aria-hidden="true">
   <div class="drawer__head">
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"><path d="M12 3l1.9 4.6L18.5 9l-4.6 1.9L12 15l-1.9-4.1L5.5 9l4.6-1.4z"/></svg>
     <h2>AI アシスタント</h2>
@@ -586,7 +587,7 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
         <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:600">
           <input type="checkbox" id="aiUseProxy" style="width:auto; accent-color:var(--accent)"> プロキシを使う（情報取得 & クラウドAI）
         </label>
-        <input id="aiProxyUrl" type="text" autocomplete="off" spellcheck="false"
+        <input id="aiProxyUrl" type="text" autocomplete="off" spellcheck="false" aria-label="Proxy URL"
                placeholder="http://proxy:8080（空なら環境変数 HTTP(S)_PROXY を使用）">
         <span class="hint">オフ=直結（環境変数も無視）／オン+空=環境変数のプロキシ／オン+URL=そのプロキシ。RSS取得・クラウドAIに適用（ローカルLLMは常に直結）。</span>
       </div>
@@ -685,8 +686,9 @@ applyTheme(store.get("theme", matchMedia("(prefers-color-scheme: light)").matche
 // ============================================================ API
 async function api(path, opts){
   const r = await fetch(path, opts);
-  if(!r.ok) throw new Error("HTTP "+r.status);
-  return r.json();
+  let data=null; try{ data=await r.json(); }catch(e){}
+  if(!r.ok){ const err=new Error((data&&data.error)||("HTTP "+r.status)); err.server=!!(data&&data.error); throw err; }
+  return data;
 }
 async function loadArticles(force){
   try{
@@ -945,7 +947,7 @@ function renderSources(){
     sw.onclick=async()=>{ sw.classList.toggle("on"); try{ const d=await api("/api/sources/toggle?id="+encodeURIComponent(s.id),{method:"POST"}); S.sources=d.sources; renderSources(); toast("情報源を更新しました。再取得します"); loadArticles(true);}catch(e){ sw.classList.toggle("on"); toast("更新に失敗","err"); } };
     const del=el("button",{class:"act", title:"削除", "aria-label":"削除"});
     del.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>';
-    del.onclick=async()=>{ try{ const d=await api("/api/sources?id="+encodeURIComponent(s.id),{method:"DELETE"}); S.sources=d.sources; renderSources(); renderCats(); toast("情報源を削除しました"); loadArticles(true);}catch(e){ toast("削除に失敗","err"); } };
+    del.onclick=async()=>{ try{ const d=await api("/api/sources?id="+encodeURIComponent(s.id),{method:"DELETE"}); S.sources=d.sources; renderSources(); renderCats(); toast("情報源を削除しました"); loadArticles(true);}catch(e){ toast(e.server ? e.message : "削除に失敗","err"); } };
     row.append(dot,c,sw,del); box.append(row);
   });
 }
@@ -957,28 +959,37 @@ $("#addForm").addEventListener("submit", async (e)=>{
     const d=await api("/api/sources",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name,url,category})});
     if(d.ok){ S.sources=d.sources; renderSources(); renderCats(); $("#addForm").reset(); toast("情報源を追加しました。再取得します"); loadArticles(true); }
     else toast(d.error||"追加に失敗","err");
-  }catch(e){ toast("追加に失敗","err"); }
+  }catch(e){ toast(e.server ? e.message : "追加に失敗","err"); }
 });
 
-// ============================================================ overlays
+// ============================================================ overlays（重ね対応）
 let lastTrigger=null;
+const overlayStack=[];
+function _bgInert(on){ $$(".topbar,.catbar,.subbar,main").forEach(n=>{ n.inert=on; }); }  // 背面をフォーカス不能に
+function _focusFirst(node,d){ const f=node.querySelector('input,select,textarea,button,[href]'); if(f) setTimeout(()=>{ try{ f.focus(); }catch(e){} }, d); }
 function openOverlay(node){
-  lastTrigger=document.activeElement;
+  const prev=overlayStack[overlayStack.length-1];
+  if(prev && prev!==node) prev.inert=true;          // 背面の overlay をタブ順/ATから外す
+  else if(!prev){ lastTrigger=document.activeElement; _bgInert(true); }
   $("#scrim").classList.add("show");
   node.classList.add("show"); node.setAttribute("aria-hidden","false"); node.inert=false;
-  const f=node.querySelector('input,select,textarea,button,[href]');
-  if(f) setTimeout(()=>{ try{ f.focus(); }catch(e){} }, 60);
+  if(!overlayStack.includes(node)) overlayStack.push(node);
+  _focusFirst(node,70);
 }
-function closeOverlays(){
-  $("#scrim").classList.remove("show");
-  $$(".modal,.drawer").forEach(n=>{ n.classList.remove("show"); n.setAttribute("aria-hidden","true"); n.inert=true; });
-  if(lastTrigger && lastTrigger.focus){ try{ lastTrigger.focus(); }catch(e){} lastTrigger=null; }
+function closeTop(){   // 一番上の overlay だけ閉じる
+  const node=overlayStack.pop();
+  if(node){ node.classList.remove("show"); node.setAttribute("aria-hidden","true"); node.inert=true; }
+  const below=overlayStack[overlayStack.length-1];
+  if(below){ below.inert=false; _focusFirst(below,50); }
+  else { $("#scrim").classList.remove("show"); _bgInert(false);
+         if(lastTrigger && lastTrigger.focus){ try{ lastTrigger.focus(); }catch(e){} lastTrigger=null; } }
 }
+function closeOverlays(){ while(overlayStack.length) closeTop(); }
 function openBookmarks(){ renderBookmarks(); openOverlay($("#bmDrawer")); }
 function openSources(){ renderSources(); openOverlay($("#srcModal")); }
 function openHelp(){ openOverlay($("#helpModal")); }
-$("#scrim").onclick=closeOverlays;
-$$("[data-close]").forEach(b=>b.onclick=closeOverlays);
+$("#scrim").onclick=closeTop;
+$$("[data-close]").forEach(b=>b.onclick=closeTop);
 $("#bmClear").onclick=()=>{ S.bookmarks.clear(); store.set("bm",[]); syncBmBadge(); renderCats(); renderBookmarks(); if(S.cat==="保存済み")renderGrid(); toast("保存済みをすべて削除しました"); };
 
 // ============================================================ toasts
@@ -1077,7 +1088,7 @@ function renderAiPanel(){
   }
 
   const inp=el("div",{class:"ai__input"});
-  const ta=el("textarea",{id:"aiInput", placeholder:"質問を入力…（Enterで送信 / Shift+Enterで改行）", rows:1});
+  const ta=el("textarea",{id:"aiInput", "aria-label":"AIへの質問", placeholder:"質問を入力…（Enterで送信 / Shift+Enterで改行）", rows:1});
   ta.addEventListener("input",()=>{ ta.style.height="auto"; ta.style.height=Math.min(ta.scrollHeight,120)+"px"; });
   ta.addEventListener("keydown",(e)=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); sendAi(ta.value); } });
   const send=el("button",{class:"ai__send", id:"aiSend", title:"送信","aria-label":"送信"});
@@ -1101,27 +1112,37 @@ function renderAiMessages(){
     log.append(el("div",{class:"bubble "+cls, text:m.text}));   // textContent（XSS安全）
   });
   if(AI.busy) log.append(el("div",{class:"bubble think", html:'<span class="dots"><span></span><span></span><span></span></span>'}));
+  const sb=$("#aiSend"); if(sb) sb.disabled=AI.busy;   // 送信中は無効化
   log.scrollTop=log.scrollHeight;
 }
 
 async function sendAi(text){
   text=(text||"").trim(); if(!text || AI.busy) return;
   const ta=$("#aiInput"); if(ta){ ta.value=""; ta.style.height="auto"; }
-  const history = AI.msgs.filter(m=>m.role==="user"||m.role==="assistant")
-                         .map(m=>({role:m.role, content:m.text}));
-  AI.msgs.push({role:"user", text}); AI.busy=true; renderAiMessages();
-  const ctxPayload = AI.ctx.kind==="article"
-    ? { kind:"article", title:AI.ctx.title, source:AI.ctx.source, category:AI.ctx.category,
-        published:AI.ctx.published, summary:AI.ctx.summary, link:AI.ctx.link }
+  // 完了した user/assistant ペアのみを履歴に。失敗で孤立した末尾の user は落とす
+  // （ロールが連続すると Anthropic が 400 → チャットが復旧不能になるのを防ぐ）
+  const ua = AI.msgs.filter(m=>m.role==="user"||m.role==="assistant");
+  let end=ua.length; while(end>0 && ua[end-1].role==="user") end--;
+  const history = ua.slice(0,end).map(m=>({role:m.role, content:m.text}));
+  const ctxAtSend = AI.ctx;
+  const ctxPayload = ctxAtSend.kind==="article"
+    ? { kind:"article", title:ctxAtSend.title, source:ctxAtSend.source, category:ctxAtSend.category,
+        published:ctxAtSend.published, summary:ctxAtSend.summary, link:ctxAtSend.link }
     : { kind:"list", items: filtered().slice(0,25).map(a=>({title:a.title, source:a.source, category:a.category, summary:a.summary})) };
+  AI.msgs.push({role:"user", text}); AI.busy=true; renderAiMessages();
+  let res;
   try{
     const d=await api("/api/ai/chat",{method:"POST", headers:{"Content-Type":"application/json"},
       body:JSON.stringify({ question:text, history, context:ctxPayload,
-                            fetch_page: AI.ctx.kind==="article" && AI.fetchPage })});
-    if(d.ok) AI.msgs.push({role:"assistant", text:d.answer});
-    else { AI.msgs.push({role:"error", text:"⚠ "+(d.error||"エラーが発生しました")}); if(d.need_setup) setTimeout(openAiSettings,500); }
-  }catch(e){ AI.msgs.push({role:"error", text:"⚠ 通信に失敗しました"}); }
-  AI.busy=false; renderAiMessages();
+                            fetch_page: ctxAtSend.kind==="article" && AI.fetchPage })});
+    res = d.ok ? {role:"assistant", text:d.answer}
+               : {role:"error", text:"⚠ "+(d.error||"エラーが発生しました"), need_setup:d.need_setup};
+  }catch(e){ res = {role:"error", text:"⚠ "+(e.server?e.message:"通信に失敗しました")}; }
+  AI.busy=false;
+  if(AI.ctx!==ctxAtSend){ return; }   // 送信中にコンテキストが変わったら結果は破棄（孤立バブル防止）
+  AI.msgs.push({role:res.role, text:res.text});
+  if(res.need_setup) setTimeout(openAiSettings,500);
+  renderAiMessages();
 }
 
 // ---- AI 設定 ----
@@ -1142,7 +1163,7 @@ function fillAiForm(){
   $("#aiUseProxy").checked = p.use_proxy!==false; $("#aiProxyUrl").value = p.proxy_url||"";
   toggleProxyUrl(); applyProviderHints();
 }
-function proxyPayload(){ return { use_proxy:$("#aiUseProxy").checked, proxy_url:$("#aiProxyUrl").value.trim() }; }
+function proxyPayload(){ const on=$("#aiUseProxy").checked; return { use_proxy:on, proxy_url: on ? $("#aiProxyUrl").value.trim() : "" }; }
 function openAiSettings(){ fillAiForm(); openOverlay($("#aiSettings")); }
 $("#aiProvider").addEventListener("change", applyProviderHints);
 $("#aiUseProxy").addEventListener("change", toggleProxyUrl);
@@ -1155,7 +1176,7 @@ $("#aiForm").addEventListener("submit", async (e)=>{
     const d=await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
     if(d.ok){ AI.config=d.ai; AI.proxy=d.proxy; toast("AI・プロキシ設定を保存しました"); closeOverlays(); openAI(); }
     else toast(d.error||"保存に失敗しました","err");
-  }catch(e){ toast("保存に失敗しました","err"); }
+  }catch(e){ toast(e.server ? e.message : "保存に失敗しました","err"); }
 });
 $("#aiClearKey").onclick=async ()=>{
   try{
@@ -1163,7 +1184,7 @@ $("#aiClearKey").onclick=async ()=>{
       body:JSON.stringify({ provider:$("#aiProvider").value, base_url:$("#aiBase").value.trim(),
                             model:$("#aiModel").value.trim(), clear_key:true, ...proxyPayload() })});
     if(d.ok){ AI.config=d.ai; AI.proxy=d.proxy; $("#aiKey").value=""; $("#aiKeyStatus").textContent=""; toast("APIキーを削除しました"); }
-  }catch(e){ toast("削除に失敗しました","err"); }
+  }catch(e){ toast(e.server ? e.message : "削除に失敗しました","err"); }
 };
 $("#aiBtn").onclick=()=>{ setAiContext(null); openAI(); };
 $("#aiSettingsBtn").onclick=openAiSettings;
@@ -1175,7 +1196,7 @@ $("#q").addEventListener("input",(e)=>{ clearTimeout(sT); sT=setTimeout(()=>{ S.
 // ============================================================ keyboard
 document.addEventListener("keydown",(e)=>{
   const ae=document.activeElement; const typing=!!ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName);
-  if(e.key==="Escape"){ if($(".modal.show,.drawer.show")) closeOverlays(); else if($("#q").value){ $("#q").value=""; S.q=""; renderGrid(); renderStatus(); renderTrend(); } $("#q").blur(); return; }
+  if(e.key==="Escape"){ if(overlayStack.length) closeTop(); else if($("#q").value){ $("#q").value=""; S.q=""; renderGrid(); renderStatus(); renderTrend(); } $("#q").blur(); return; }
   if(typing) return;
   if(e.ctrlKey||e.metaKey||e.altKey) return;   // ブラウザのショートカット(Ctrl+T等)と衝突させない
   if(e.key==="/"){ e.preventDefault(); $("#q").focus(); }

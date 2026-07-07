@@ -19,6 +19,7 @@ import argparse
 import gzip
 import hashlib
 import html
+import ipaddress
 import json
 import os
 import re
@@ -27,6 +28,7 @@ import sys
 import threading
 import time
 import webbrowser
+import zlib
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -349,15 +351,13 @@ def fetch_source(src: dict) -> tuple[str, list[dict], str | None]:
             "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.8",
             "Accept-Encoding": "gzip, identity",
         })
-        with _opener().open(req, timeout=FETCH_TIMEOUT) as r:   # proxy設定に従う
+        with _opener(block_internal=True).open(req, timeout=FETCH_TIMEOUT) as r:  # proxy設定に従う
             raw = r.read(MAX_FEED_BYTES + 1)
             enc = (r.headers.get("Content-Encoding") or "").lower()
         if len(raw) > MAX_FEED_BYTES:
             return src.get("id", ""), [], "feed too large"
         if enc == "gzip" or raw[:2] == b"\x1f\x8b":
-            raw = gzip.decompress(raw)
-            if len(raw) > MAX_FEED_BYTES:
-                return src.get("id", ""), [], "feed too large (decompressed)"
+            raw = _gunzip_capped(raw, MAX_FEED_BYTES)   # gzip爆弾を上限付き展開で防ぐ
         arts = parse_feed(raw, src)
         return src.get("id", ""), arts[:MAX_PER_SOURCE], None
     except Exception as e:  # 1フィードの失敗を全体へ波及させない（種類を問わず握る）
@@ -436,6 +436,10 @@ def save_settings(data: dict) -> None:
         tmp = SETTINGS_FILE.parent / (SETTINGS_FILE.name + ".tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n",
                        encoding="utf-8")
+        try:
+            os.chmod(tmp, 0o600)   # APIキーを含むため所有者のみ読み書き可に
+        except OSError:
+            pass
         os.replace(tmp, SETTINGS_FILE)
 
 
@@ -446,29 +450,64 @@ def proxy_config() -> dict:
     - use_proxy=True + proxy_url → その URL を使用
     - use_proxy=True + 空        → 環境変数 HTTP(S)_PROXY を使用（既定）
     """
-    p = load_settings().get("proxy") or {}
+    x = load_settings().get("proxy")
+    p = x if isinstance(x, dict) else {}   # 壊れた settings.json でも崩れない
     return {"use_proxy": bool(p.get("use_proxy", True)),
             "proxy_url": (p.get("proxy_url") or "").strip()}
 
 
-def _opener(force_direct: bool = False):
+def _host_is_internal(url: str) -> bool:
+    """URL のホストがループバック/リンクローカル/プライベート等に解決されるか（SSRF対策）。"""
+    try:
+        host = urlparse(url).hostname
+        if not host:
+            return False
+        for info in socket.getaddrinfo(host, None):
+            ip = ipaddress.ip_address(info[4][0])
+            if (ip.is_loopback or ip.is_link_local or ip.is_private
+                    or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+                return True
+        return False
+    except (socket.gaierror, ValueError, OSError, UnicodeError):
+        return False
+
+
+class _NoInternalRedirect(urllib.request.HTTPRedirectHandler):
+    """内部アドレスや http/https 以外へのリダイレクトを追わない（SSRF対策）。"""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if urlparse(newurl).scheme not in ("http", "https") or _host_is_internal(newurl):
+            return None
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _gunzip_capped(raw: bytes, cap: int) -> bytes:
+    """gzip/zlib を上限付きで展開する（出力を cap+1 までしか確保しない = gzip爆弾対策）。"""
+    out = zlib.decompressobj(47).decompress(raw, cap + 1)   # 47: gzip/zlib 自動判定
+    if len(out) > cap:
+        raise ValueError("decompressed data exceeds cap")
+    return out
+
+
+def _opener(force_direct: bool = False, block_internal: bool = False):
     """proxy_config に従って urllib の opener を作る（llmlab の3モードに対応）。
 
-    force_direct=True でローカルLLM等は常に直結。他のアプリ（llmlab）と同様に、
-    設定で「使わない/環境変数/明示URL」を切り替えられる。
+    force_direct=True でローカルLLM等は常に直結。block_internal=True で
+    内部アドレスへのリダイレクトを遮断する（情報取得の SSRF 対策）。
     """
     cfg = proxy_config()
+    extra = [_NoInternalRedirect()] if block_internal else []
     if force_direct or not cfg["use_proxy"]:
-        return urllib.request.build_opener(urllib.request.ProxyHandler({}))   # 直結
-    if cfg["proxy_url"]:
+        extra.append(urllib.request.ProxyHandler({}))                         # 直結
+    elif cfg["proxy_url"]:
         p = cfg["proxy_url"]
-        return urllib.request.build_opener(
-            urllib.request.ProxyHandler({"http": p, "https": p}))            # 明示URL
-    return urllib.request.build_opener()                                      # 環境変数のプロキシ
+        extra.append(urllib.request.ProxyHandler({"http": p, "https": p}))    # 明示URL
+    # それ以外は環境変数のプロキシ（build_opener が既定の ProxyHandler を付与）
+    return urllib.request.build_opener(*extra)
 
 
 def ai_config() -> dict:
-    ai = load_settings().get("ai") or {}
+    x = load_settings().get("ai")
+    ai = x if isinstance(x, dict) else {}   # 壊れた settings.json でも崩れない
     provider = ai.get("provider") if ai.get("provider") in AI_PROVIDERS else "anthropic"
     return {
         "provider": provider,
@@ -491,22 +530,26 @@ def ai_status() -> dict:
 
 
 def fetch_page_text(url: str) -> str:
-    """記事ページ本文をプレーンテキストで取得（失敗時は空文字）。proxy設定に従う。"""
+    """記事ページ本文をプレーンテキストで取得（失敗時は空文字）。proxy設定に従う。
+
+    記事リンクはフィード提供者（=第三者）由来のため、内部アドレスへの取得は
+    SSRF 対策として拒否し、リダイレクトも内部アドレスを追わない。
+    """
     u = safe_url(url)
-    if not u:
+    if not u or _host_is_internal(u):
         return ""
     try:
         req = urllib.request.Request(u, headers={
             "User-Agent": USER_AGENT, "Accept": "text/html,*/*;q=0.8",
             "Accept-Encoding": "gzip, identity",
         })
-        with _opener().open(req, timeout=FETCH_TIMEOUT) as r:
+        with _opener(block_internal=True).open(req, timeout=FETCH_TIMEOUT) as r:
             raw = r.read(MAX_FEED_BYTES + 1)
             enc = (r.headers.get("Content-Encoding") or "").lower()
         if len(raw) > MAX_FEED_BYTES:
             return ""
         if enc == "gzip" or raw[:2] == b"\x1f\x8b":
-            raw = gzip.decompress(raw)
+            raw = _gunzip_capped(raw, MAX_FEED_BYTES)
         text = strip_html(raw.decode("utf-8", "replace"))
         return text[:MAX_PAGE_TEXT]
     except Exception:
@@ -557,7 +600,8 @@ def call_ai(cfg: dict, system: str, user_content: str, history: list[dict]) -> s
     # OpenAI互換（Chat Completions）— openai / local 共通
     if provider == "local":
         url = (base or LOCAL_DEFAULT_BASE) + "/chat/completions"
-        default_model, no_proxy = "llama3.1", True   # localhost はプロキシ非経由
+        # ローカル(=内部アドレス)のみプロキシ非経由。外部URLならプロキシ設定に従う
+        default_model, no_proxy = "llama3.1", _host_is_internal(base or LOCAL_DEFAULT_BASE)
     else:
         url = (base or "https://api.openai.com/v1") + "/chat/completions"
         default_model, no_proxy = "gpt-4o-mini", False
@@ -709,9 +753,13 @@ class Handler(BaseHTTPRequestHandler):
     def _same_origin(self) -> bool:
         """ブラウザからのクロスサイト書き込み(CSRF)を弾く。
 
-        Origin / Referer が付いていて自ホストと異なれば False。
+        Origin / Referer が付いていて自ホストと異なれば False。Host も
+        ループバックに固定し DNS リバインディングを防ぐ。
         ヘッダの無い非ブラウザ(curl 等)は許可する。"""
         host = self.headers.get("Host", "")
+        hostname = host.rsplit(":", 1)[0].strip("[]").lower()
+        if hostname not in ("127.0.0.1", "localhost", "::1"):
+            return False   # 127.0.0.1 以外の Host はブラウザ経由の DNS リバインディング等
         for h in (self.headers.get("Origin"), self.headers.get("Referer")):
             if h and urlparse(h).netloc != host:
                 return False
@@ -725,9 +773,10 @@ class Handler(BaseHTTPRequestHandler):
         if n <= 0 or n > MAX_BODY:
             return {}
         try:
-            return json.loads(self.rfile.read(n).decode("utf-8"))
+            obj = json.loads(self.rfile.read(n).decode("utf-8"))
         except (ValueError, UnicodeDecodeError):
             return {}
+        return obj if isinstance(obj, dict) else {}   # 非オブジェクトJSONで落ちない
 
     # ------------------------------------------------------------------ GET
     def do_GET(self):
@@ -762,8 +811,9 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if u.path == "/api/sources":
-            data = _cache if _cache["ts"] else {"errors": {}}
-            self._json({"sources": source_status(load_sources(), data.get("errors", {})),
+            with _cache_lock:
+                errors = dict(_cache["errors"]) if _cache["ts"] else {}
+            self._json({"sources": source_status(load_sources(), errors),
                         "categories": CATEGORIES})
             return
 
@@ -839,13 +889,16 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 ai["api_key"] = ai_config()["api_key"]
             # プロキシ設定（llmlab と同じ流儀: 使う/環境変数/明示URL）
+            use_proxy = bool(body.get("use_proxy", True))
             purl = (body.get("proxy_url") or "").strip()
-            if purl and not safe_url(purl):
+            if not use_proxy:
+                purl = ""   # 無効時は URL を保持・検証しない
+            elif purl and not safe_url(purl):
                 self._json({"ok": False, "error": "proxy_url は http/https の有効なURLにしてください"}, 400)
                 return
             settings = load_settings()
             settings["ai"] = ai
-            settings["proxy"] = {"use_proxy": bool(body.get("use_proxy", True)), "proxy_url": purl}
+            settings["proxy"] = {"use_proxy": use_proxy, "proxy_url": purl}
             save_settings(settings)
             self._json({"ok": True, "ai": ai_status(), "proxy": proxy_config()})
             return
