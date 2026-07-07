@@ -100,6 +100,13 @@ DEFAULT_SOURCES = [
     ("鉄と鋼（ISIJ・J-STAGE）", "https://api.jstage.jst.go.jp/searchapi/do?service=3&cdjournal=tetsutohagane&count=30", "専門"),
     ("ISIJ International（J-STAGE）", "https://api.jstage.jst.go.jp/searchapi/do?service=3&cdjournal=isijinternational&count=30", "専門"),
     ("ニュースイッチ（日刊工業新聞）", "https://newswitch.jp/rss",                          "専門"),
+    # 産業・専門紙（「新聞」系メディア）。多くは自前RSS非提供のため Google ニュースRSSで
+    # 各紙ドメインに絞って取得する（有効なRSSを返し、当該紙の記事に限定される）。
+    ("電気新聞",             "https://news.google.com/rss/search?q=site:denkishimbun.com&hl=ja&gl=JP&ceid=JP:ja",   "専門"),
+    ("日刊鉄鋼新聞",         "https://news.google.com/rss/search?q=site:japanmetaldaily.com&hl=ja&gl=JP&ceid=JP:ja", "専門"),
+    ("日刊産業新聞（鉄鋼・非鉄）", "https://news.google.com/rss/search?q=site:japanmetal.com&hl=ja&gl=JP&ceid=JP:ja",     "専門"),
+    ("電波新聞（電波新聞デジタル）", "https://news.google.com/rss/search?q=site:dempa-digital.com&hl=ja&gl=JP&ceid=JP:ja", "専門"),
+    ("日刊工業新聞（本紙）", "https://news.google.com/rss/search?q=site:nikkan.co.jp&hl=ja&gl=JP&ceid=JP:ja",       "専門"),
 ]
 
 _cache_lock = threading.Lock()      # _cache の読み書きを保護

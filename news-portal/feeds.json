@@ -216,6 +216,41 @@
       "category": "専門",
       "enabled": true,
       "id": "ニュースイッチ-日刊工業新聞"
+    },
+    {
+      "name": "電気新聞",
+      "url": "https://news.google.com/rss/search?q=site:denkishimbun.com&hl=ja&gl=JP&ceid=JP:ja",
+      "category": "専門",
+      "enabled": true,
+      "id": "電気新聞"
+    },
+    {
+      "name": "日刊鉄鋼新聞",
+      "url": "https://news.google.com/rss/search?q=site:japanmetaldaily.com&hl=ja&gl=JP&ceid=JP:ja",
+      "category": "専門",
+      "enabled": true,
+      "id": "日刊鉄鋼新聞"
+    },
+    {
+      "name": "日刊産業新聞（鉄鋼・非鉄）",
+      "url": "https://news.google.com/rss/search?q=site:japanmetal.com&hl=ja&gl=JP&ceid=JP:ja",
+      "category": "専門",
+      "enabled": true,
+      "id": "日刊産業新聞-鉄鋼-非鉄"
+    },
+    {
+      "name": "電波新聞（電波新聞デジタル）",
+      "url": "https://news.google.com/rss/search?q=site:dempa-digital.com&hl=ja&gl=JP&ceid=JP:ja",
+      "category": "専門",
+      "enabled": true,
+      "id": "電波新聞-電波新聞デジタル"
+    },
+    {
+      "name": "日刊工業新聞（本紙）",
+      "url": "https://news.google.com/rss/search?q=site:nikkan.co.jp&hl=ja&gl=JP&ceid=JP:ja",
+      "category": "専門",
+      "enabled": true,
+      "id": "日刊工業新聞-本紙"
     }
   ]
 }
