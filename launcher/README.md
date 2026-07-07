@@ -19,7 +19,12 @@ python launcher/launcher.py --port 9200 --open
   起動中のアプリは ■ ボタンで停止できる（このポータルから起動したもののみ）。
 - **入り口イメージ**: 各アプリのカードにはアプリの性格に合わせた
   生成アートワーク（SVG・アニメーション付き）を表示。
-  `studio / loop / jupyter / terminal / chat / docs` の6種から選べる。
+  `studio / loop / jupyter / agents / research / terminal / chat / docs` の8種から選べる。
+- **ホバーで画面プレビュー**: カードにマウスを乗せると、実際のアプリ画面の
+  スクリーンショットが GIF 風のスライドショー（3コマ ≒ 5秒ループ、コマ送り
+  ドット付き）でフェード再生される。プリセット5アプリは撮影済みの実画面を同梱。
+  自作アプリに付けるには `previews/<アプリid>-1.jpg`, `<アプリid>-2.jpg`, … を
+  置くだけ（自動検出）。`apps.json` の `"previews": ["/previews/..jpg"]` でも指定可。
 - **アプリの追加**: UI の「＋ アプリを追加」から。`launcher/apps.json` の直接編集でも可。
 
 ## 最初から登録されているアプリ
