@@ -39,6 +39,7 @@ from .workspace import (
     unpin_index,
 )
 from .app import launch_app
+from .loopsys import launch_loop
 
 # 重要: この import は complete.py（補完モジュール）の import より後に置くこと。
 # サブモジュール import はパッケージ属性 `complete` をモジュールで上書きするため、
@@ -87,6 +88,8 @@ __all__ = [
     "ExtractResult",
     "IndexInfo",
     "launch_app",
+    # 自律ループシステム（トリガー→計画→実行→検証→再試行/停止/人間へ）
+    "launch_loop",
     # よく使う索引フォルダのピン留め（~/.llmlab/pins.json に永続化）
     "pin_index",
     "unpin_index",
@@ -95,4 +98,4 @@ __all__ = [
     "build_index",
 ]
 
-__version__ = "0.3.3"  # llmlab.__version__ で更新確認できる
+__version__ = "0.4.0"  # llmlab.__version__ で更新確認できる
