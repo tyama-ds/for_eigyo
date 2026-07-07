@@ -618,6 +618,62 @@ const ART = {
       <circle cx="304" cy="70" r="2"><animate attributeName="opacity" values=".3;1;.3" dur="3.4s" repeatCount="indefinite"/></circle>
     </g>
   </svg>`,
+
+  /* Prism ニュースポータル — 白色光を分光して記事の帯にするプリズム */
+  news: (u) => `
+  <svg viewBox="0 0 400 240" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="nb${u}" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#0b1030"/><stop offset=".55" stop-color="#0e1b3f"/><stop offset="1" stop-color="#081f33"/>
+      </linearGradient>
+      <linearGradient id="np${u}" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#7c9cff"/><stop offset="1" stop-color="#57e3c9"/>
+      </linearGradient>
+      <radialGradient id="ng${u}" cx=".4" cy=".5" r=".55">
+        <stop offset="0" stop-color="#7c9cff" stop-opacity=".33"/><stop offset="1" stop-color="#7c9cff" stop-opacity="0"/>
+      </radialGradient>
+    </defs>
+    <rect width="400" height="240" fill="url(#nb${u})"/>
+    <ellipse cx="150" cy="120" rx="150" ry="95" fill="url(#ng${u})"/>
+    <!-- 入射する白色光 -->
+    <line x1="8" y1="120" x2="150" y2="120" stroke="#eaf0ff" stroke-width="3" stroke-linecap="round" opacity=".85">
+      <animate attributeName="opacity" values=".5;.95;.5" dur="3s" repeatCount="indefinite"/>
+    </line>
+    <!-- プリズム -->
+    <g>
+      <animateTransform attributeName="transform" type="translate" values="0 0;0 -5;0 0" dur="6s" repeatCount="indefinite"/>
+      <path d="M150 66 L196 156 L104 156 Z" fill="rgba(124,156,255,.10)" stroke="url(#np${u})" stroke-width="3" stroke-linejoin="round"/>
+      <path d="M150 66 L196 156" stroke="#bfe9ff" stroke-opacity=".5" stroke-width="1"/>
+    </g>
+    <!-- 分光した光線 → ニュースの帯 -->
+    <g stroke-width="3.5" stroke-linecap="round" fill="none">
+      <path d="M172 112 L360 70"  stroke="#ff8f5e"><animate attributeName="opacity" values=".55;1;.55" dur="3.4s" repeatCount="indefinite"/></path>
+      <path d="M176 122 L360 104" stroke="#f5b83b"><animate attributeName="opacity" values="1;.55;1" dur="3.8s" repeatCount="indefinite"/></path>
+      <path d="M178 132 L360 138" stroke="#46d17f"><animate attributeName="opacity" values=".6;1;.6" dur="3.1s" repeatCount="indefinite"/></path>
+      <path d="M176 142 L360 172" stroke="#3fd8c3"><animate attributeName="opacity" values="1;.6;1" dur="3.6s" repeatCount="indefinite"/></path>
+      <path d="M172 150 L360 204" stroke="#b48bff"><animate attributeName="opacity" values=".55;1;.55" dur="4s" repeatCount="indefinite"/></path>
+    </g>
+    <!-- 浮遊するニュースカード -->
+    <g opacity=".95">
+      <animateTransform attributeName="transform" type="translate" values="0 0;0 6;0 0" dur="7s" repeatCount="indefinite"/>
+      <rect x="286" y="52" width="86" height="40" rx="7" fill="#101c38" stroke="#33518f" stroke-width="1.3"/>
+      <rect x="296" y="62" width="24" height="20" rx="3" fill="#ff8f5e" opacity=".9"/>
+      <rect x="326" y="63" width="38" height="5" rx="2.5" fill="#8fb2ff"/>
+      <rect x="326" y="73" width="30" height="4" rx="2" fill="#33518f"/>
+      <rect x="326" y="81" width="34" height="4" rx="2" fill="#33518f"/>
+    </g>
+    <g opacity=".9">
+      <animateTransform attributeName="transform" type="translate" values="0 0;0 -5;0 0" dur="5.4s" repeatCount="indefinite"/>
+      <rect x="286" y="150" width="86" height="40" rx="7" fill="#0c1730" stroke="#2c3f6e" stroke-width="1.3"/>
+      <rect x="296" y="160" width="24" height="20" rx="3" fill="#3fd8c3" opacity=".9"/>
+      <rect x="326" y="161" width="38" height="5" rx="2.5" fill="#8fb2ff"/>
+      <rect x="326" y="171" width="30" height="4" rx="2" fill="#2c3f6e"/>
+      <rect x="326" y="179" width="34" height="4" rx="2" fill="#2c3f6e"/>
+    </g>
+    <circle cx="60" cy="70" r="2.2" fill="#8fb2ff"><animate attributeName="cy" values="70;62;70" dur="4.6s" repeatCount="indefinite"/></circle>
+    <circle cx="44" cy="176" r="2" fill="#57e3c9"><animate attributeName="cy" values="176;168;176" dur="5.2s" repeatCount="indefinite"/></circle>
+    <circle cx="210" cy="196" r="2.4" fill="#b48bff"><animate attributeName="opacity" values=".3;1;.3" dur="3.3s" repeatCount="indefinite"/></circle>
+  </svg>`,
 };
 const ICON_KEYS = Object.keys(ART);
 let artSeq = 0;

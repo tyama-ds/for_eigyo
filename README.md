@@ -17,4 +17,5 @@ llmlab Studio / llmlab Loop / JupyterLab を最初から登録済み。
 | フォルダ | 内容 |
 |----------|------|
 | [jupyter-local-llm/](jupyter-local-llm/) | llmlab — JupyterLab × ローカルLLM（補完・チャット・各種RAG・Studio・Loop） |
+| [news-portal/](news-portal/) | Prism ニュースポータル — 多数のRSS/Atomを1画面に束ねて分光するニュース収集ポータル（標準ライブラリのみ） |
 | [launcher/](launcher/) | App Portal — 上記アプリ群を呼び出す窓口 |

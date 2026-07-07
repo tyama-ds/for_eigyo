@@ -1,0 +1,123 @@
+{
+  "sources": [
+    {
+      "name": "NHK 主要ニュース",
+      "url": "https://www.nhk.or.jp/rss/news/cat0.xml",
+      "category": "総合",
+      "enabled": true,
+      "id": "nhk-主要ニュース"
+    },
+    {
+      "name": "NHK 経済",
+      "url": "https://www.nhk.or.jp/rss/news/cat5.xml",
+      "category": "ビジネス",
+      "enabled": true,
+      "id": "nhk-経済"
+    },
+    {
+      "name": "NHK 国際",
+      "url": "https://www.nhk.or.jp/rss/news/cat6.xml",
+      "category": "世界",
+      "enabled": true,
+      "id": "nhk-国際"
+    },
+    {
+      "name": "NHK 科学・文化",
+      "url": "https://www.nhk.or.jp/rss/news/cat3.xml",
+      "category": "科学",
+      "enabled": true,
+      "id": "nhk-科学-文化"
+    },
+    {
+      "name": "NHK スポーツ",
+      "url": "https://www.nhk.or.jp/rss/news/cat7.xml",
+      "category": "スポーツ",
+      "enabled": true,
+      "id": "nhk-スポーツ"
+    },
+    {
+      "name": "Yahoo!ニュース 主要",
+      "url": "https://news.yahoo.co.jp/rss/topics/top-picks.xml",
+      "category": "総合",
+      "enabled": true,
+      "id": "yahoo-ニュース-主要"
+    },
+    {
+      "name": "ITmedia NEWS",
+      "url": "https://rss.itmedia.co.jp/rss/2.0/news_bursts.xml",
+      "category": "テクノロジー",
+      "enabled": true,
+      "id": "itmedia-news"
+    },
+    {
+      "name": "GIGAZINE",
+      "url": "https://gigazine.net/news/rss_2.0/",
+      "category": "テクノロジー",
+      "enabled": true,
+      "id": "gigazine"
+    },
+    {
+      "name": "Publickey",
+      "url": "https://www.publickey1.jp/atom.xml",
+      "category": "テクノロジー",
+      "enabled": true,
+      "id": "publickey"
+    },
+    {
+      "name": "はてブ 人気エントリー",
+      "url": "https://b.hatena.ne.jp/hotentry.rss",
+      "category": "総合",
+      "enabled": true,
+      "id": "はてブ-人気エントリー"
+    },
+    {
+      "name": "TechCrunch",
+      "url": "https://techcrunch.com/feed/",
+      "category": "テクノロジー",
+      "enabled": true,
+      "id": "techcrunch"
+    },
+    {
+      "name": "The Verge",
+      "url": "https://www.theverge.com/rss/index.xml",
+      "category": "テクノロジー",
+      "enabled": true,
+      "id": "the-verge"
+    },
+    {
+      "name": "Hacker News",
+      "url": "https://hnrss.org/frontpage",
+      "category": "テクノロジー",
+      "enabled": true,
+      "id": "hacker-news"
+    },
+    {
+      "name": "BBC World",
+      "url": "https://feeds.bbci.co.uk/news/world/rss.xml",
+      "category": "世界",
+      "enabled": true,
+      "id": "bbc-world"
+    },
+    {
+      "name": "The Guardian World",
+      "url": "https://www.theguardian.com/world/rss",
+      "category": "世界",
+      "enabled": true,
+      "id": "the-guardian-world"
+    },
+    {
+      "name": "BBC Entertainment",
+      "url": "https://feeds.bbci.co.uk/news/entertainment_and_arts/rss.xml",
+      "category": "エンタメ",
+      "enabled": true,
+      "id": "bbc-entertainment"
+    },
+    {
+      "name": "Nature",
+      "url": "https://www.nature.com/nature.rss",
+      "category": "科学",
+      "enabled": true,
+      "id": "nature"
+    }
+  ]
+}
