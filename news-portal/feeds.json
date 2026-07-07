@@ -183,6 +183,34 @@
       "id": "arxiv-cs-ai"
     },
     {
+      "name": "arXiv 材料科学 (cond-mat.mtrl-sci)",
+      "url": "https://rss.arxiv.org/rss/cond-mat.mtrl-sci",
+      "category": "専門",
+      "enabled": true,
+      "id": "arxiv-材料科学--cond-mat-mtrl-sci"
+    },
+    {
+      "name": "arXiv 応用物理 (physics.app-ph)",
+      "url": "https://rss.arxiv.org/rss/physics.app-ph",
+      "category": "専門",
+      "enabled": true,
+      "id": "arxiv-応用物理--physics-app-ph"
+    },
+    {
+      "name": "arXiv 機械学習 (cs.LG)",
+      "url": "https://rss.arxiv.org/rss/cs.LG",
+      "category": "専門",
+      "enabled": true,
+      "id": "arxiv-機械学習--cs-lg"
+    },
+    {
+      "name": "arXiv 制御・システム (eess.SY)",
+      "url": "https://rss.arxiv.org/rss/eess.SY",
+      "category": "専門",
+      "enabled": true,
+      "id": "arxiv-制御-システム--eess-sy"
+    },
+    {
       "name": "Nature Materials",
       "url": "https://www.nature.com/nmat.rss",
       "category": "専門",

@@ -94,6 +94,10 @@ DEFAULT_SOURCES = [
     ("MONOist（ものづくり）", "https://rss.itmedia.co.jp/rss/2.0/monoist.xml",              "専門"),
     ("EE Times Japan",       "https://rss.itmedia.co.jp/rss/2.0/eetimes.xml",              "専門"),
     ("arXiv cs.AI",          "https://rss.arxiv.org/rss/cs.AI",                            "専門"),
+    ("arXiv 材料科学 (cond-mat.mtrl-sci)", "https://rss.arxiv.org/rss/cond-mat.mtrl-sci",      "専門"),
+    ("arXiv 応用物理 (physics.app-ph)",    "https://rss.arxiv.org/rss/physics.app-ph",         "専門"),
+    ("arXiv 機械学習 (cs.LG)",             "https://rss.arxiv.org/rss/cs.LG",                  "専門"),
+    ("arXiv 制御・システム (eess.SY)",     "https://rss.arxiv.org/rss/eess.SY",                "専門"),
     # 鉄鋼・素材（ご要望: 日刊工業新聞系 / ISIJ 鉄と鋼 / Science系 Materials）
     ("Nature Materials",     "https://www.nature.com/nmat.rss",                            "専門"),
     ("ScienceDaily 材料科学", "https://www.sciencedaily.com/rss/matter_energy/materials_science.xml", "専門"),
