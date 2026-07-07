@@ -33,6 +33,7 @@ python launcher/launcher.py --port 9200 --open
 |--------|------|------|--------|
 | llmlab Studio | for_eigyo | 検索/要約/レポート/数値抽出/グラフのワンストップUI | 8765 |
 | llmlab Loop | for_eigyo | 自律ループ（計画→実行→検証→再試行） | 8766 |
+| Copilot Research | for_eigyo | M365 Copilot × 擬似GEPA（目次→章別リサーチ→統合レポート） | 8767 |
 | JupyterLab | for_eigyo | llmlab のノートブック環境（要 `pip install jupyterlab`） | 8888 |
 | Agent Orchestrator | claudecode | Codex × Claude Code × ローカルLLM の協調（7戦略） | 8801 |
 | Deep Research Tool | claudecode | Web検索→検証→レポート生成のディープリサーチ | 8802 |
