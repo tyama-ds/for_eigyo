@@ -301,6 +301,19 @@ main{max-width:1360px; margin:0 auto; padding:16px 22px 80px}
 .modal__head h2{font-size:19px; margin:0; font-family:var(--font-serif); font-weight:700; flex:1}
 .modal__body{overflow:auto; padding:18px 22px}
 
+.srctools{display:flex; flex-direction:column; gap:9px; margin-bottom:14px; padding-bottom:14px; border-bottom:1px dashed var(--line-2)}
+.srctools__row{display:flex; align-items:center; gap:9px}
+.srcsearch{position:relative; flex:1; display:flex; align-items:center}
+.srcsearch svg{position:absolute; left:11px; width:16px;height:16px; color:var(--text-3); pointer-events:none}
+.srcsearch input{width:100%; padding:9px 12px 9px 34px; border-radius:10px; background:var(--surface-2);
+  border:1px solid var(--line); color:var(--text); font-size:13px; outline:none}
+.srcsearch input:focus{border-color:var(--accent)}
+.srctools select{padding:9px 12px; border-radius:10px; background:var(--surface-2); border:1px solid var(--line);
+  color:var(--text); font-size:13px; outline:none}
+.srctools select:focus{border-color:var(--accent)}
+.srccount{font-size:12.5px; color:var(--text-2)}
+.srccount b{color:var(--accent); font-family:var(--font-serif)}
+.btn.sm{padding:6px 12px; font-size:12px}
 .src{display:flex; align-items:center; gap:12px; padding:11px 12px; border-radius:12px;
   border:1px solid var(--line); margin-bottom:8px; transition:.2s}
 .src:hover{border-color:var(--line-2)}
@@ -552,6 +565,21 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
     <button class="iconbtn" data-close aria-label="閉じる"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
   </div>
   <div class="modal__body">
+    <div class="srctools">
+      <div class="srctools__row">
+        <div class="srcsearch">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3" stroke-linecap="round"/></svg>
+          <input id="srcQ" type="search" placeholder="情報源を絞り込み（名前・URL・カテゴリ）" autocomplete="off" spellcheck="false" aria-label="情報源を絞り込み">
+        </div>
+        <select id="srcCat" aria-label="カテゴリで絞り込み"></select>
+      </div>
+      <div class="srctools__row">
+        <span class="srccount" id="srcCount"></span>
+        <span style="flex:1"></span>
+        <button class="btn ghost sm" type="button" id="srcAllOn" title="表示中の情報源をすべて有効化">表示中を ON</button>
+        <button class="btn ghost sm" type="button" id="srcAllOff" title="表示中の情報源をすべて無効化">表示中を OFF</button>
+      </div>
+    </div>
     <div id="srcList"></div>
     <form class="addform" id="addForm">
       <input class="full" id="addUrl" type="url" placeholder="フィードURL (https://…/rss.xml)" required>
@@ -992,10 +1020,26 @@ function renderBookmarks(){
 }
 
 // ============================================================ sources
+function filteredSources(){
+  const q=($("#srcQ").value||"").trim().toLowerCase();
+  const cat=$("#srcCat").value||"すべて";
+  return S.sources.filter(s=>{
+    if(cat!=="すべて" && s.category!==cat) return false;
+    if(q && !((s.name+" "+s.url+" "+s.category).toLowerCase().includes(q))) return false;
+    return true;
+  });
+}
 function renderSources(){
+  const sel=$("#srcCat");
+  if(sel && !sel.dataset.filled){ sel.dataset.filled="1"; ["すべて",...ALL_CATS].forEach(c=>sel.append(el("option",{value:c,text:c}))); }
   const box=$("#srcList"); box.innerHTML="";
-  if(!S.sources.length){ box.append(el("div",{class:"empty",style:"padding:30px",html:'<h3>情報源がありません</h3>'})); }
-  S.sources.forEach(s=>{
+  const total=S.sources.length, on=S.sources.filter(s=>s.enabled).length;
+  const list=filteredSources();
+  const cnt=$("#srcCount");
+  if(cnt){ cnt.innerHTML=""; cnt.append(document.createTextNode("有効 "), el("b",{text:String(on)}), document.createTextNode(" / 全 "+total+(list.length!==total?"（表示 "+list.length+"）":""))); }
+  if(!S.sources.length){ box.append(el("div",{class:"empty",style:"padding:30px",html:'<h3>情報源がありません</h3>'})); return; }
+  if(!list.length){ box.append(el("div",{class:"empty",style:"padding:26px",html:'<h3>該当する情報源がありません</h3>'})); return; }
+  list.forEach(s=>{
     const row=el("div",{class:"src"});
     const dot=el("span",{class:"src__dot "+(!s.enabled?"off":(s.error?"err":"ok"))});
     dot.title=s.error?("エラー: "+s.error):(s.enabled?"正常":"無効");
@@ -1021,6 +1065,21 @@ $("#addForm").addEventListener("submit", async (e)=>{
     else toast(d.error||"追加に失敗","err");
   }catch(e){ toast(e.server ? e.message : "追加に失敗","err"); }
 });
+// 情報源の絞り込み・一括 ON/OFF
+$("#srcQ").addEventListener("input", renderSources);
+$("#srcCat").addEventListener("change", renderSources);
+async function bulkEnableSources(enabled){
+  const ids=filteredSources().map(s=>s.id);
+  if(!ids.length){ toast("対象の情報源がありません","err"); return; }
+  try{
+    const d=await api("/api/sources/enable",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ids, enabled})});
+    S.sources=d.sources; renderSources(); renderCats();
+    if(d.changed){ toast("表示中の"+d.changed+"件を"+(enabled?"有効化":"無効化")+"しました。再取得します"); loadArticles(true); }
+    else toast("変更はありませんでした");
+  }catch(e){ toast(e.server ? e.message : "更新に失敗","err"); }
+}
+$("#srcAllOn").onclick=()=>bulkEnableSources(true);
+$("#srcAllOff").onclick=()=>bulkEnableSources(false);
 
 // ============================================================ overlays（重ね対応）
 let lastTrigger=null;

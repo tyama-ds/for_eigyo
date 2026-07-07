@@ -209,6 +209,21 @@ def toggle_source(sid: str) -> tuple[list[dict], bool]:
         return sources, hit
 
 
+def set_enabled(ids: list[str], enabled: bool) -> tuple[list[dict], int]:
+    """指定 id 群の enabled を一括で設定（トグルではなく指定値）。変更件数を返す。"""
+    want = set(ids)
+    with _sources_lock:
+        sources = _load_locked()
+        n = 0
+        for s in sources:
+            if s.get("id") in want and bool(s.get("enabled", True)) != enabled:
+                s["enabled"] = enabled
+                n += 1
+        if n:
+            _save_locked(sources)
+        return sources, n
+
+
 def delete_source(sid: str) -> tuple[list[dict], bool]:
     with _sources_lock:
         sources = _load_locked()
@@ -892,6 +907,17 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._invalidate()
             self._json({"ok": True, "sources": source_status(sources, {})})
+            return
+
+        if u.path == "/api/sources/enable":  # 一括で有効/無効を設定
+            body = self._read_body()
+            ids = body.get("ids")
+            ids = [str(i) for i in ids] if isinstance(ids, list) else []
+            enabled = bool(body.get("enabled"))
+            sources, n = set_enabled(ids, enabled)
+            if n:
+                self._invalidate()
+            self._json({"ok": True, "changed": n, "sources": source_status(sources, {})})
             return
 
         if u.path == "/api/settings":  # AI API 設定の保存
