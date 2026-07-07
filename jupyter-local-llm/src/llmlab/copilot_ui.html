@@ -340,8 +340,11 @@ $("segMode").addEventListener("click",e=>{
 /* ================= コネクタ ================= */
 const CONN_OPTS={
   demo:[], bridge:[],
-  playwright:[
+  selenium:[
     {k:"url",label:"Copilot URL",ph:"https://m365.cloud.microsoft/chat"},
+    {k:"driver_path",label:"chromedriver の場所（空なら自動解決 / 環境変数 CHROMEDRIVER_PATH）",ph:"/usr/local/bin/chromedriver"},
+    {k:"browser_binary",label:"Chrome/Chromium 実行ファイル（空なら既定）",ph:"/usr/bin/google-chrome"},
+    {k:"agent_selector",label:"エージェント選択チップのCSS（Researcher自動選択・任意）",ph:"button[aria-label*='Researcher']"},
     {k:"headless",label:"headless（無人・初回はOFF推奨）",type:"check"},
   ],
   graph:[

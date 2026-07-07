@@ -10,8 +10,9 @@ Microsoft 365 Copilot の「Researcher（リサーチ）」エージェントに
                「比較」「最新」等を含むほど濃い回答を返すので、擬似GEPAの改善曲線を体験できる。
 - ``bridge`` : 人手ブリッジ。各章の完成プロンプトを UI に表示 → 人が M365 Copilot に貼り付け、
                返ってきた回答を貼り戻す。自動化/API が塞がれた社内環境でも確実に動く既定手段。
-- ``playwright`` : Chromium を Playwright で駆動し、M365 Copilot の Web UI（Researcher）へ
-               実際にプロンプトを投入して回答を読む。初回に SSO ログインが要る（永続プロファイル）。
+- ``selenium`` : Chrome/Chromium を Selenium WebDriver で駆動し、M365 Copilot の Web UI
+               （Researcher）へ実際にプロンプトを投入して回答を読む。初回に SSO ログインが要る
+               （永続プロファイル）。chromedriver の場所は ``driver_path`` で明示指定できる。
 - ``graph``  : 任意の HTTP エンドポイント（Microsoft Graph / 社内 Copilot プロキシ等）へ
                Bearer トークンで POST する汎用コネクタ。要求/応答の JSON パスは設定可能。
 
@@ -180,36 +181,48 @@ class BridgeConnector(BaseConnector):
 
 
 # ---------------------------------------------------------------------------
-# playwright — M365 Copilot Web UI を実ブラウザで駆動
+# selenium — M365 Copilot Web UI を実ブラウザで駆動
 # ---------------------------------------------------------------------------
 
-class PlaywrightConnector(BaseConnector):
-    """Chromium（Playwright）で M365 Copilot の Web UI を駆動する。
+class SeleniumConnector(BaseConnector):
+    """Selenium（Chrome/Chromium WebDriver）で M365 Copilot の Web UI を駆動する。
 
     初回は SSO ログインが必要。永続プロファイル（user_data_dir）にログイン状態を保存し、
     2 回目以降は無人で回せる。UI のセレクタは頻繁に変わるため options で上書きできる。
 
     options:
-      url            : Copilot のURL（既定 https://m365.cloud.microsoft/chat）
-      user_data_dir  : ログイン状態を保存するフォルダ（既定 ~/.llmlab/copilot/pw-profile）
-      headless       : True で無人（初回ログインは False 推奨）
-      input_selector : プロンプト入力欄のセレクタ
-      send_selector  : 送信ボタンのセレクタ（省略時は Enter 送信）
-      answer_selector: 回答要素のセレクタ（最後の要素を回答とみなす）
-      settle_ms      : 回答が伸びなくなったと判定するまでの静止時間（ms）
-      timeout_ms     : 1 章あたりの最大待ち時間（ms）
-      agent_hint     : 使用するエージェント名（既定 "Researcher"）。UI 選択は環境依存のため通知のみ。
+      url             : Copilot のURL（既定 https://m365.cloud.microsoft/chat）
+      driver_path     : chromedriver の場所（**明示指定可**。空なら Selenium Manager が自動解決）
+      browser_binary  : Chrome/Chromium 実行ファイルの場所（空なら既定 / 環境変数を使用）
+      user_data_dir   : ログイン状態を保存するフォルダ（既定 ~/.llmlab/copilot/selenium-profile）
+      profile_directory: プロファイル名（既定 "Default"）
+      headless        : True で無人（初回ログインは False 推奨）
+      input_selector  : プロンプト入力欄のCSSセレクタ
+      send_selector   : 送信ボタンのCSSセレクタ（省略時は Enter 送信）
+      answer_selector : 回答要素のCSSセレクタ（最後の要素を回答とみなす）
+      agent_selector  : Researcher 等のエージェント選択チップのCSSセレクタ（指定時は入力前にクリック）
+      settle_ms       : 回答が伸びなくなったと判定するまでの静止時間（ms）
+      timeout_ms      : 1 章あたりの最大待ち時間（ms）
+      agent_hint      : 使用するエージェント名（既定 "Researcher"。agent_selector 未指定時は通知のみ）
+
+    driver_path / browser_binary は環境変数でも指定できる:
+      CHROMEDRIVER_PATH / CHROMEDRIVER  → driver_path
+      CHROME_BINARY / CHROME_BIN        → browser_binary
     """
 
-    kind = "playwright"
-    label = "Playwright（実ブラウザ）"
+    kind = "selenium"
+    label = "Selenium（実ブラウザ）"
 
     DEFAULTS = {
         "url": "https://m365.cloud.microsoft/chat",
+        "driver_path": "",
+        "browser_binary": "",
+        "profile_directory": "Default",
         "headless": False,
         "input_selector": "div[contenteditable='true'], textarea",
         "send_selector": "",
         "answer_selector": "[data-content='ai-message'], .ai-message, [class*='botMessage']",
+        "agent_selector": "",
         "settle_ms": 2500,
         "timeout_ms": 180000,
         "agent_hint": "Researcher",
@@ -221,59 +234,117 @@ class PlaywrightConnector(BaseConnector):
     def _profile_dir(self) -> str:
         from .workspace import LLMLAB_DIR
 
-        d = self.options.get("user_data_dir") or str(LLMLAB_DIR / "copilot" / "pw-profile")
-        return d
+        return self.options.get("user_data_dir") or str(LLMLAB_DIR / "copilot" / "selenium-profile")
+
+    def _driver_path(self) -> str:
+        import os
+
+        return str(self._opt("driver_path")
+                   or os.environ.get("CHROMEDRIVER_PATH")
+                   or os.environ.get("CHROMEDRIVER", "")).strip()
+
+    def _browser_binary(self) -> str:
+        import os
+
+        return str(self._opt("browser_binary")
+                   or os.environ.get("CHROME_BINARY")
+                   or os.environ.get("CHROME_BIN", "")).strip()
 
     def test(self) -> tuple[bool, str]:
         try:
-            import playwright  # noqa: F401
+            import selenium  # noqa: F401
         except ImportError:
-            return False, ("playwright が未インストールです。`pip install playwright` の後 "
-                           "`playwright install chromium`（本環境では既定ブラウザを自動使用）")
-        return True, ("playwright 利用可。初回は headless=False でログインしてください "
-                      f"(profile: {self._profile_dir()})")
-
-    def _launch(self):
-        """永続プロファイルで Chromium を起動。環境の既定ブラウザがあれば流用。"""
+            return False, "selenium が未インストールです（`pip install selenium`）"
         import os
 
-        from playwright.sync_api import sync_playwright
+        dp = self._driver_path()
+        if dp and not os.path.exists(dp):
+            return False, f"driver_path が見つかりません: {dp}"
+        bb = self._browser_binary()
+        if bb and not os.path.exists(bb):
+            return False, f"browser_binary が見つかりません: {bb}"
+        drv = dp or "Selenium Manager で自動解決"
+        return True, (f"selenium 利用可（driver: {drv}）。初回は headless=False で SSO ログイン。"
+                      f" profile: {self._profile_dir()}")
 
-        pw = sync_playwright().start()
-        launch_kwargs = {"user_data_dir": self._profile_dir(),
-                         "headless": bool(self._opt("headless"))}
-        # 本実行環境は PLAYWRIGHT_BROWSERS_PATH に Chromium が同梱されている場合がある
-        exe = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE") or self.options.get("executable_path")
-        if exe:
-            launch_kwargs["executable_path"] = exe
-        ctx = pw.chromium.launch_persistent_context(**launch_kwargs)
-        return pw, ctx
+    def _make_driver(self):
+        """設定に応じた Chrome WebDriver を作る（driver_path / browser_binary を尊重）。"""
+        from selenium import webdriver
+        from selenium.webdriver.chrome.options import Options
+        from selenium.webdriver.chrome.service import Service
+
+        opts = Options()
+        if bool(self._opt("headless")):
+            opts.add_argument("--headless=new")
+        opts.add_argument(f"--user-data-dir={self._profile_dir()}")
+        if self._opt("profile_directory"):
+            opts.add_argument(f"--profile-directory={self._opt('profile_directory')}")
+        opts.add_argument("--no-first-run")
+        opts.add_argument("--no-default-browser-check")
+        opts.add_argument("--disable-blink-features=AutomationControlled")
+        bb = self._browser_binary()
+        if bb:
+            opts.binary_location = bb
+        dp = self._driver_path()
+        # driver_path 明示時はそれを、未指定なら Selenium Manager（selenium 4.6+）に任せる
+        service = Service(executable_path=dp) if dp else Service()
+        return webdriver.Chrome(options=opts, service=service)
+
+    @staticmethod
+    def _type_prompt(driver, box, text: str) -> None:
+        """複数行プロンプトを、途中の改行で送信されないように入力する（改行は Shift+Enter）。"""
+        from selenium.webdriver.common.action_chains import ActionChains
+        from selenium.webdriver.common.keys import Keys
+
+        box.click()
+        lines = text.split("\n")
+        for i, line in enumerate(lines):
+            if i:
+                ActionChains(driver).key_down(Keys.SHIFT).send_keys(Keys.ENTER)\
+                    .key_up(Keys.SHIFT).perform()
+            if line:
+                box.send_keys(line)
 
     def research(self, prompt, *, meta=None, emit=None, ask_bridge=None) -> ChapterResult:
         ok, msg = self.test()
         if not ok:
             return ChapterResult(ok=False, connector=self.kind, error=msg)
+        from selenium.webdriver.common.by import By
+        from selenium.webdriver.common.keys import Keys
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.webdriver.support.ui import WebDriverWait
+
         t0 = time.time()
-        pw = ctx = None
+        driver = None
+        timeout = int(self._opt("timeout_ms")) / 1000
         try:
-            self._emit(emit, type="progress", stage="pw_launch", text="ブラウザ起動")
-            pw, ctx = self._launch()
-            page = ctx.pages[0] if ctx.pages else ctx.new_page()
-            page.goto(self._opt("url"), wait_until="domcontentloaded",
-                      timeout=int(self._opt("timeout_ms")))
-            self._emit(emit, type="progress", stage="pw_page",
-                       text=f"Copilot を開いた（エージェント: {self._opt('agent_hint')} を選択してください）")
-            box = page.locator(self._opt("input_selector")).last
-            box.wait_for(timeout=int(self._opt("timeout_ms")))
-            box.click()
-            box.fill(prompt) if page.locator("textarea").count() else box.type(prompt, delay=2)
+            self._emit(emit, type="progress", stage="se_launch", text="ブラウザ起動")
+            driver = self._make_driver()
+            driver.get(self._opt("url"))
+            # エージェント選択（Researcher 等）。セレクタ未指定なら通知のみ。
+            agent_sel = self._opt("agent_selector")
+            if agent_sel:
+                try:
+                    WebDriverWait(driver, 15).until(
+                        EC.element_to_be_clickable((By.CSS_SELECTOR, agent_sel))).click()
+                    self._emit(emit, type="progress", stage="se_agent",
+                               text=f"エージェント選択: {self._opt('agent_hint')}")
+                except Exception:  # noqa: BLE001  選択に失敗しても続行
+                    self._emit(emit, type="progress", stage="se_agent",
+                               text=f"エージェント選択に失敗（{self._opt('agent_hint')} を手動選択してください）")
+            else:
+                self._emit(emit, type="progress", stage="se_page",
+                           text=f"Copilot を開いた（エージェント {self._opt('agent_hint')} を選択してください）")
+            box = WebDriverWait(driver, timeout).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, self._opt("input_selector"))))
+            self._type_prompt(driver, box, prompt)
             send = self._opt("send_selector")
             if send:
-                page.locator(send).last.click()
+                driver.find_element(By.CSS_SELECTOR, send).click()
             else:
-                page.keyboard.press("Enter")
-            self._emit(emit, type="progress", stage="pw_wait", text="回答生成を待機")
-            text = self._await_answer(page)
+                box.send_keys(Keys.ENTER)
+            self._emit(emit, type="progress", stage="se_wait", text="回答生成を待機")
+            text = self._await_answer(driver)
             return ChapterResult(text=text, citations=extract_citations(text),
                                  connector=self.kind, latency_sec=time.time() - t0,
                                  ok=bool(text), error="" if text else "回答が取得できませんでした")
@@ -282,23 +353,23 @@ class PlaywrightConnector(BaseConnector):
                                  error=f"{type(e).__name__}: {e}")
         finally:
             try:
-                if ctx:
-                    ctx.close()
-                if pw:
-                    pw.stop()
+                if driver:
+                    driver.quit()
             except Exception:  # noqa: BLE001
                 pass
 
-    def _await_answer(self, page) -> str:
+    def _await_answer(self, driver) -> str:
         """回答要素が伸びなくなる（settle）まで待ってテキストを返す。"""
+        from selenium.webdriver.common.by import By
+
         sel = self._opt("answer_selector")
         deadline = time.time() + int(self._opt("timeout_ms")) / 1000
         settle = int(self._opt("settle_ms")) / 1000
         last_text, stable_since = "", None
         while time.time() < deadline:
             try:
-                loc = page.locator(sel).last
-                cur = loc.inner_text(timeout=2000) if loc.count() else ""
+                els = driver.find_elements(By.CSS_SELECTOR, sel)
+                cur = els[-1].text if els else ""
             except Exception:  # noqa: BLE001
                 cur = last_text
             if cur and cur == last_text:
@@ -307,7 +378,7 @@ class PlaywrightConnector(BaseConnector):
                 stable_since = stable_since or time.time()
             else:
                 last_text, stable_since = cur, None
-            page.wait_for_timeout(600)
+            time.sleep(0.6)
         return last_text.strip()
 
 
@@ -400,7 +471,7 @@ class GraphConnector(BaseConnector):
 _CONNECTORS = {
     "demo": DemoConnector,
     "bridge": BridgeConnector,
-    "playwright": PlaywrightConnector,
+    "selenium": SeleniumConnector,
     "graph": GraphConnector,
 }
 

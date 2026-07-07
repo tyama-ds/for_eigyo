@@ -529,7 +529,9 @@ flowchart TD
 - **M365 Copilot コネクタ 4 種**（差し替え可能・`m365copilot.py`）:
   - `bridge`（**既定・確実**）: 各章のプロンプトを画面に出す → 人が M365 Copilot に貼り、
     回答を貼り戻す（自動化/APIが塞がれた社内環境でも動く）
-  - `playwright`: Chromium で Copilot Web UI を実駆動（初回 SSO ログイン、永続プロファイル）
+  - `selenium`: Chrome/Chromium を Selenium WebDriver で実駆動（初回 SSO ログイン・永続プロファイル）。
+    **chromedriver の場所は `driver_path` で明示指定可**（未指定なら Selenium Manager が自動解決。
+    環境変数 `CHROMEDRIVER_PATH` / `CHROME_BINARY` でも可）。`agent_selector` 指定で Researcher を自動選択
   - `graph`: 任意の HTTP エンドポイント（Microsoft Graph / 社内 Copilot プロキシ）へ Bearer POST。
     プロンプト/回答の JSON パスは設定可能
   - `demo`: モック（指示が濃いほど回答も濃くなり、擬似GEPA の改善が見える）
