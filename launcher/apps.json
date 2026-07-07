@@ -39,6 +39,25 @@
       "wait_port": 8766
     },
     {
+      "id": "copilot-research",
+      "name": "Copilot Research",
+      "description": "M365 Copilot（Researcher）を擬似GEPAで駆動。依頼→LocalLLMで目次→章ごとにCopilotリサーチ→統合レポート",
+      "icon": "research",
+      "cwd": "../jupyter-local-llm",
+      "command": [
+        "{python}",
+        "-m",
+        "llmlab.copilotresearch",
+        "--port",
+        "8767"
+      ],
+      "env": {
+        "PYTHONPATH": "src"
+      },
+      "url": "http://127.0.0.1:8767",
+      "wait_port": 8767
+    },
+    {
       "id": "jupyterlab",
       "name": "JupyterLab",
       "description": "コード補完・チャット・各種RAGのノートブック（llmlab）を動かす JupyterLab",

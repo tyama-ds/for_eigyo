@@ -1,0 +1,668 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Copilot Research</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔬</text></svg>">
+<style>
+  /* ============ tokens（llmlab Studio / Loop と共通の意匠） ============ */
+  :root{
+    --page:#0a0d13; --panel:rgba(18,22,31,.82); --panel-solid:#12161f;
+    --line:rgba(255,255,255,.08); --line-strong:rgba(255,255,255,.16);
+    --ink:#f2f5fa; --ink-2:#aab3c5; --ink-mute:#78829a;
+    --warn:#fab219;
+    --accent-a:#22d3ee; --accent-b:#8b5cf6;
+    --grad:linear-gradient(92deg,#22d3ee,#8b5cf6);
+    --ok:#34d399; --err:#e66767;
+    --radius:14px; font-size:15px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    background:
+      radial-gradient(900px 480px at 85% -10%, rgba(139,92,246,.16), transparent 60%),
+      radial-gradient(760px 420px at -10% 20%, rgba(34,211,238,.10), transparent 60%),
+      var(--page);
+    color:var(--ink);
+    font-family:system-ui,-apple-system,"Segoe UI","Hiragino Sans","Noto Sans JP",sans-serif;
+    line-height:1.6;
+  }
+  header{
+    display:flex;align-items:center;gap:14px;padding:14px 22px;border-bottom:1px solid var(--line);
+    backdrop-filter:blur(8px);position:sticky;top:0;z-index:20;background:rgba(10,13,19,.75);
+  }
+  .logo{font-weight:800;font-size:1.15rem;letter-spacing:.12em}
+  .logo b{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .logo small{color:var(--ink-mute);letter-spacing:.28em;font-weight:600;margin-left:8px}
+  .spacer{flex:1}
+  .pill{display:inline-flex;align-items:center;gap:8px;font-size:.8rem;color:var(--ink-2);
+    border:1px solid var(--line);border-radius:999px;padding:4px 12px}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--err);box-shadow:0 0 8px var(--err)}
+  .dot.on{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+  main{display:grid;grid-template-columns:372px 1fr;gap:18px;padding:18px 22px;max-width:1620px;margin:0 auto}
+  @media (max-width:1080px){main{grid-template-columns:1fr}}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+    backdrop-filter:blur(10px);padding:16px;margin-bottom:16px}
+  .panel h2{margin:0 0 12px;font-size:.78rem;letter-spacing:.2em;color:var(--ink-2);
+    text-transform:uppercase;display:flex;align-items:center;gap:8px}
+  .panel h2::before{content:"";width:14px;height:2px;background:var(--grad);border-radius:2px}
+  input[type=text],input[type=password],input[type=number],textarea,select{
+    width:100%;background:#0d1119;border:1px solid var(--line-strong);color:var(--ink);
+    border-radius:10px;padding:9px 12px;font:inherit;outline:none}
+  input:focus,textarea:focus,select:focus{border-color:var(--accent-a);box-shadow:0 0 0 2px rgba(34,211,238,.15)}
+  textarea{resize:vertical;min-height:86px}
+  label.f{display:block;font-size:.78rem;color:var(--ink-2);margin:10px 0 4px}
+  .btn{cursor:pointer;border:none;border-radius:10px;padding:10px 18px;font:inherit;font-weight:700;
+    color:#06090f;background:var(--grad);letter-spacing:.04em;transition:filter .15s, transform .05s}
+  .btn:hover{filter:brightness(1.12)} .btn:active{transform:translateY(1px)}
+  .btn[disabled]{filter:grayscale(.8) brightness(.6);cursor:not-allowed}
+  .btn.ghost{background:transparent;color:var(--ink-2);border:1px solid var(--line-strong)}
+  .btn.ghost:hover{color:var(--ink);border-color:var(--accent-a)}
+  .btn.warn{background:linear-gradient(92deg,#fab219,#e66767)}
+  .btn.sm{padding:6px 12px;font-size:.8rem}
+  .row{display:flex;gap:8px;align-items:center}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .hint{font-size:.74rem;color:var(--ink-mute)}
+  code.k{background:#0d1119;border:1px solid var(--line);border-radius:6px;padding:1px 6px;font-size:.78rem}
+  /* segment */
+  .seg{display:flex;gap:6px}
+  .segbtn{flex:1;cursor:pointer;font:inherit;font-size:.76rem;font-weight:700;color:var(--ink-mute);
+    border:1px solid var(--line-strong);border-radius:10px;padding:7px 6px;background:transparent;
+    transition:color .15s,border-color .15s,background .15s}
+  .segbtn.on{color:var(--accent-a);border-color:var(--accent-a);background:rgba(34,211,238,.07)}
+  /* pipeline strip */
+  .flow{display:flex;align-items:stretch;gap:6px;flex-wrap:wrap}
+  .fnode{flex:1;min-width:96px;border:1px solid var(--line-strong);border-radius:12px;padding:9px 8px;
+    text-align:center;background:var(--panel-solid);transition:border-color .2s,box-shadow .2s,background .2s}
+  .fnode .t{font-weight:700;font-size:.82rem} .fnode .s{font-size:.62rem;color:var(--ink-mute);margin-top:2px}
+  .fnode.active{border-color:var(--accent-a);box-shadow:0 0 0 1px rgba(34,211,238,.5),0 0 20px rgba(34,211,238,.22);background:#101b22}
+  .fnode.active .t{color:var(--accent-a)}
+  .fnode.done{border-color:rgba(52,211,153,.55)} .fnode.done .t{color:var(--ok)}
+  .fnode.err{border-color:var(--err)} .fnode.err .t{color:var(--err)}
+  .farr{align-self:center;color:var(--ink-mute)}
+  /* status bar */
+  .statusbar{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-top:12px;
+    border-top:1px dashed var(--line);padding-top:10px;font-size:.82rem;color:var(--ink-2)}
+  .st-badge{font-weight:800;letter-spacing:.08em;font-size:.7rem;border-radius:8px;padding:2px 10px}
+  .st-badge.idle{border:1px solid var(--line-strong);color:var(--ink-mute)}
+  .st-badge.running{border:1px solid var(--accent-a);color:var(--accent-a);animation:blink 1.4s ease infinite}
+  .st-badge.waiting{border:1px solid var(--warn);color:var(--warn);animation:blink 1.4s ease infinite}
+  .st-badge.succeeded{border:1px solid var(--ok);color:var(--ok)}
+  .st-badge.failed,.st-badge.cancelled{border:1px solid var(--err);color:var(--err)}
+  @keyframes blink{50%{opacity:.45}}
+  /* cards */
+  .card{border:1px solid var(--line);border-radius:12px;background:rgba(255,255,255,.02);padding:10px 12px;margin:8px 0}
+  .card .hd{display:flex;gap:8px;align-items:center;font-size:.74rem;color:var(--ink-mute);letter-spacing:.05em;margin-bottom:4px;flex-wrap:wrap}
+  .chip{font-size:.66rem;font-weight:800;border-radius:6px;padding:1px 7px;letter-spacing:.05em}
+  .chip.tool{color:#7dd3fc;border:1px solid rgba(57,135,229,.5)}
+  .chip.ok{color:var(--ok);border:1px solid rgba(52,211,153,.5)}
+  .chip.bad{color:var(--warn);border:1px solid rgba(250,178,25,.5)}
+  .chip.pareto{color:#c4b5fd;border:1px solid rgba(144,133,233,.6)}
+  .chip.best{color:#06090f;background:var(--grad)}
+  .card pre{margin:4px 0 0;white-space:pre-wrap;word-break:break-word;font-family:inherit;font-size:.85rem;color:var(--ink);max-height:200px;overflow-y:auto}
+  /* score bar */
+  .bar{height:7px;border-radius:5px;background:rgba(255,255,255,.08);overflow:hidden;margin-top:5px}
+  .bar>i{display:block;height:100%;background:var(--grad);border-radius:5px;transition:width .4s}
+  .mono{font-variant-numeric:tabular-nums;font-weight:800}
+  /* outline editor */
+  .ch{display:grid;grid-template-columns:1fr 1fr auto;gap:6px;margin:6px 0;align-items:center}
+  .ch input{font-size:.85rem;padding:7px 9px}
+  .xbtn{cursor:pointer;border:1px solid var(--line-strong);background:transparent;color:var(--ink-mute);
+    border-radius:8px;padding:6px 10px;font:inherit}
+  .xbtn:hover{color:var(--err);border-color:var(--err)}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media (max-width:1320px){.cols{grid-template-columns:1fr}}
+  .scroll{max-height:560px;overflow-y:auto;padding-right:4px}
+  /* report markdown */
+  .md{background:rgba(255,255,255,.02);border:1px solid var(--line);border-radius:12px;padding:16px 18px;max-height:640px;overflow:auto}
+  .md h1{font-size:1.3rem;margin:.2em 0 .5em} .md h2{font-size:1.05rem;margin:1em 0 .4em;color:var(--accent-a)}
+  .md h3{font-size:.95rem;margin:.8em 0 .3em} .md ul{margin:.3em 0 .6em;padding-left:1.3em}
+  .md li{margin:.15em 0} .md p{margin:.4em 0} .md code{background:#0d1119;border:1px solid var(--line);border-radius:5px;padding:1px 5px;font-size:.85em}
+  .md a{color:var(--accent-a);word-break:break-all}
+  /* bridge */
+  .bridge{display:none;border:1px solid var(--warn);border-radius:12px;background:rgba(250,178,25,.06);padding:14px;margin-bottom:16px}
+  .bridge.show{display:block;animation:pop .25s ease}
+  @keyframes pop{from{transform:scale(.98);opacity:.4}}
+  .promptbox{background:#0d1119;border:1px solid var(--line);border-radius:10px;padding:10px 12px;white-space:pre-wrap;
+    font-size:.82rem;max-height:180px;overflow:auto;margin:8px 0}
+  /* modal */
+  .modal{position:fixed;inset:0;background:rgba(4,6,10,.66);backdrop-filter:blur(3px);display:none;
+    align-items:center;justify-content:center;z-index:50}
+  .modal.show{display:flex}
+  .modal .box{background:var(--panel-solid);border:1px solid var(--line-strong);border-radius:16px;padding:22px;width:520px;max-width:94vw}
+  .runrow{display:flex;gap:8px;align-items:center;justify-content:space-between;border:1px solid var(--line);
+    border-radius:10px;padding:8px 10px;margin:6px 0;cursor:pointer;transition:border-color .15s,background .15s}
+  .runrow:hover{border-color:var(--accent-a);background:rgba(34,211,238,.05)}
+  .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--panel-solid);
+    border:1px solid var(--accent-a);border-radius:10px;padding:10px 18px;font-size:.85rem;opacity:0;
+    transition:opacity .2s;z-index:60;pointer-events:none}
+  .toast.show{opacity:1}
+  svg.curve{width:100%;height:64px;display:block}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo"><b>COPILOT</b> RESEARCH<small>M365 × 擬似GEPA</small></div>
+  <div class="spacer"></div>
+  <span class="pill"><span class="dot" id="connDot"></span><span id="connText">未接続</span></span>
+  <button class="btn ghost sm" id="btnConnect">CONNECT</button>
+</header>
+
+<main>
+  <!-- ============ 左: コントロール ============ -->
+  <section>
+    <div class="panel">
+      <h2>調査依頼</h2>
+      <textarea id="request" placeholder="例: 社内文書検索に RAG を導入すべきか。費用対効果・リスク・他社事例を含めて調査したい。"></textarea>
+      <label class="f">実行モード</label>
+      <div class="seg" id="segMode">
+        <button class="segbtn on" data-mode="demo">デモ（接続不要）</button>
+        <button class="segbtn" data-mode="live">本番（LocalLLM＋Copilot）</button>
+      </div>
+      <div class="hint" id="modeHint" style="margin-top:6px">デモ: LLM も M365 も使わず、目次→擬似GEPA→統合を体験できます。</div>
+    </div>
+
+    <div class="panel">
+      <h2>M365 Copilot コネクタ</h2>
+      <select id="connector"></select>
+      <div id="connOpts"></div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn ghost sm" id="btnTest">接続テスト</button>
+        <span class="hint" id="testMsg"></span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>擬似GEPA 設定</h2>
+      <div class="grid2">
+        <div><label class="f">進化予算（反復）</label><input type="number" id="budget" value="3" min="0" max="8"></div>
+        <div><label class="f">minibatch（章数）</label><input type="number" id="minibatch" value="2" min="1" max="6"></div>
+      </div>
+      <div class="hint" style="margin-top:6px">予算 0 = 進化なし（シード指示で調査）。minibatch = 探索中に評価する代表章の数。</div>
+    </div>
+
+    <div class="panel">
+      <h2>実行</h2>
+      <div class="row" style="flex-wrap:wrap;gap:8px">
+        <button class="btn ghost" id="btnOutline">① 目次を作成</button>
+        <button class="btn" id="btnRun">② リサーチ実行</button>
+        <button class="btn warn sm" id="btnCancel" style="display:none">中止</button>
+      </div>
+      <div class="hint" style="margin-top:8px">「目次を作成」で章立てを確認・編集してから実行できます（そのまま実行も可）。</div>
+    </div>
+
+    <div class="panel">
+      <h2>実行履歴</h2>
+      <div id="runs" class="scroll" style="max-height:260px"><div class="hint">まだありません</div></div>
+    </div>
+  </section>
+
+  <!-- ============ 右: ワークスペース ============ -->
+  <section>
+    <div class="panel">
+      <h2>パイプライン</h2>
+      <div class="flow" id="flow"></div>
+      <div class="statusbar">
+        <span class="st-badge idle" id="stBadge">IDLE</span>
+        <span id="stText">依頼を入力して実行してください</span>
+        <span class="spacer" style="flex:1"></span>
+        <span id="stMeta" class="hint"></span>
+      </div>
+    </div>
+
+    <!-- 人手ブリッジ -->
+    <div class="bridge" id="bridge">
+      <div style="font-weight:800;color:var(--warn)">✋ 人手ブリッジ — 下のプロンプトを M365 Copilot（Researcher）に貼り、回答を貼り戻してください</div>
+      <div class="hint" id="bridgeMeta"></div>
+      <div class="promptbox" id="bridgePrompt"></div>
+      <button class="btn ghost sm" id="btnCopyPrompt">プロンプトをコピー</button>
+      <label class="f">Copilot の回答を貼り付け</label>
+      <textarea id="bridgeAns" placeholder="ここに Copilot の回答を貼り付けて「送信」"></textarea>
+      <div class="row" style="margin-top:8px">
+        <button class="btn" id="btnBridgeSend">送信</button>
+        <button class="btn ghost sm" id="btnBridgeSkip">この章をスキップ</button>
+      </div>
+    </div>
+
+    <!-- 目次エディタ -->
+    <div class="panel" id="outlinePanel" style="display:none">
+      <h2>目次（章立て）— 編集できます</h2>
+      <input type="text" id="outlineTitle" placeholder="レポート題目" style="margin-bottom:8px">
+      <div id="chapters"></div>
+      <button class="xbtn" id="btnAddCh" style="margin-top:6px">＋ 章を追加</button>
+    </div>
+
+    <div class="cols">
+      <!-- GEPA -->
+      <div class="panel">
+        <h2>擬似GEPA — 指示の進化</h2>
+        <svg class="curve" id="curve" viewBox="0 0 300 64" preserveAspectRatio="none"></svg>
+        <div class="hint" id="gepaMeta">候補と Pareto フロンティア、スコア推移がここに出ます。</div>
+        <div id="lineage" class="scroll" style="max-height:420px"></div>
+      </div>
+      <!-- 章別リサーチ -->
+      <div class="panel">
+        <h2>章別リサーチ（確定）</h2>
+        <div id="finalChapters" class="scroll" style="max-height:504px"><div class="hint">実行するとここに章ごとの結果が出ます。</div></div>
+      </div>
+    </div>
+
+    <!-- レポート -->
+    <div class="panel" id="reportPanel" style="display:none">
+      <h2>統合レポート</h2>
+      <div class="row" style="margin-bottom:10px">
+        <button class="btn ghost sm" id="btnCopyReport">コピー</button>
+        <button class="btn ghost sm" id="btnDownload">.md ダウンロード</button>
+        <span class="hint" id="bestInfo"></span>
+      </div>
+      <div class="md" id="report"></div>
+    </div>
+  </section>
+</main>
+
+<!-- CONNECT モーダル -->
+<div class="modal" id="connModal">
+  <div class="box">
+    <h2 style="margin-top:0">LocalLLM 接続（OpenAI 互換）</h2>
+    <label class="f">Base URL</label><input type="text" id="cBase" placeholder="http://localhost:8000/v1">
+    <label class="f">API Key</label><input type="password" id="cKey" placeholder="sk-...">
+    <label class="f">Model</label><input type="text" id="cModel" placeholder="your-model-name">
+    <label class="f"><input type="checkbox" id="cProxy" style="width:auto;margin-right:6px">プロキシを使用（環境変数 HTTP(S)_PROXY）</label>
+    <div class="row" style="margin-top:14px">
+      <button class="btn" id="btnConnSave">保存して接続</button>
+      <button class="btn ghost" id="btnConnClose">閉じる</button>
+    </div>
+    <div class="hint" style="color:var(--err);margin-top:6px" id="connErr"></div>
+    <div class="hint" style="margin-top:8px">デモ実行なら接続は不要です。本番（目次生成・採点・内省・統合）に LocalLLM を使います。</div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const api = async (path, body) => {
+  const r = await fetch(path, body === undefined ? {} : {
+    method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+  return r.json();
+};
+const esc = (t) => String(t ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+let currentRun=null, es=null, mode="demo", t0=0, timer=null, lastReport="", lastTitle="";
+
+/* ================= パイプライン ================= */
+const NODES=[
+  {id:"trigger",   t:"依頼",       s:"調査依頼"},
+  {id:"outline",   t:"目次",       s:"LocalLLM 章立て"},
+  {id:"gepa",      t:"擬似GEPA",   s:"調査→採点→内省→進化"},
+  {id:"finalize",  t:"確定リサーチ",s:"勝ち指示で全章"},
+  {id:"integrate", t:"統合",       s:"LocalLLM レポート"},
+  {id:"done",      t:"完了",       s:"成果物"},
+];
+// 実 stage → 表示ノード
+const STAGE_MAP={trigger:"trigger",outline:"outline",gepa:"gepa",research:"gepa",judge:"gepa",
+  reflect:"gepa",finalize:"finalize",integrate:"integrate",done:"done"};
+function buildFlow(){
+  const f=$("flow"); f.innerHTML="";
+  NODES.forEach((n,i)=>{
+    const d=document.createElement("div"); d.className="fnode"; d.id="fn_"+n.id;
+    d.innerHTML=`<div class="t">${n.t}</div><div class="s">${n.s}</div>`; f.appendChild(d);
+    if(i<NODES.length-1){const a=document.createElement("div");a.className="farr";a.textContent="→";f.appendChild(a);}
+  });
+}
+function resetFlow(){ NODES.forEach(n=>$("fn_"+n.id).className="fnode"); }
+let flowSeen=[];
+function setStage(stage,extra){
+  const node=STAGE_MAP[stage]; if(!node) return;
+  const idx=NODES.findIndex(n=>n.id===node);
+  // finalize の research は確定ノード側
+  const target=(stage==="research"&&extra&&extra.final)?"finalize":node;
+  NODES.forEach((n,i)=>{
+    const el=$("fn_"+n.id);
+    if(n.id===target){el.classList.add("active");el.classList.remove("done");}
+    else if(i<NODES.findIndex(x=>x.id===target)){el.classList.add("done");el.classList.remove("active");}
+    else {el.classList.remove("active");}
+  });
+}
+
+/* ================= モード ================= */
+$("segMode").addEventListener("click",e=>{
+  const b=e.target.closest(".segbtn"); if(!b) return;
+  mode=b.dataset.mode;
+  [...$("segMode").children].forEach(x=>x.classList.toggle("on",x===b));
+  $("modeHint").textContent = mode==="demo"
+    ? "デモ: LLM も M365 も使わず、目次→擬似GEPA→統合を体験できます。"
+    : "本番: 目次生成・採点・内省・統合は LocalLLM、章調査は下のコネクタで M365 Copilot を使います。";
+  $("connector").disabled = (mode==="demo");
+});
+
+/* ================= コネクタ ================= */
+const CONN_OPTS={
+  demo:[], bridge:[],
+  selenium:[
+    {k:"browser",label:"ブラウザ",type:"select",choices:["edge","chrome"]},
+    {k:"url",label:"Copilot URL",ph:"https://m365.cloud.microsoft/chat"},
+    {k:"driver_path",label:"WebDriverの場所（msedgedriver/chromedriver。空なら自動解決）",ph:"/usr/local/bin/msedgedriver"},
+    {k:"browser_binary",label:"ブラウザ実行ファイル（空なら既定）",ph:"/usr/bin/microsoft-edge"},
+    {k:"agent_selector",label:"エージェント選択チップのCSS（Researcher自動選択・任意）",ph:"button[aria-label*='Researcher']"},
+    {k:"busy_selector",label:"生成中インジケータのCSS（消えるまで待機・任意）",ph:"button[aria-label*='停止'], [class*='typing']"},
+    {k:"timeout_ms",label:"回答待ち上限ミリ秒（Researcherは長め・既定300000）",type:"number",ph:"300000"},
+    {k:"headless",label:"headless（無人・初回はOFF推奨）",type:"check"},
+  ],
+  graph:[
+    {k:"endpoint",label:"POST エンドポイント",ph:"https://graph.microsoft.com/beta/..."},
+    {k:"token",label:"Bearer トークン（空なら環境変数 M365_COPILOT_TOKEN）",type:"password"},
+    {k:"prompt_field",label:"プロンプトのキー",ph:"message"},
+    {k:"answer_path",label:"回答の JSON パス",ph:"choices.0.message.content"},
+  ],
+};
+function renderConnOpts(){
+  const kind=$("connector").value, opts=CONN_OPTS[kind]||[], box=$("connOpts"); box.innerHTML="";
+  if(kind==="bridge"){ box.innerHTML=`<div class="hint" style="margin-top:8px">各章のプロンプトを画面に表示 → 人が M365 Copilot に貼り、回答を貼り戻す方式。自動化不可の環境でも確実。</div>`; return; }
+  if(kind==="demo"){ box.innerHTML=`<div class="hint" style="margin-top:8px">モック。指示が濃くなるほど回答も濃くなり、擬似GEPA の改善が見えます。</div>`; return; }
+  opts.forEach(o=>{
+    const id="opt_"+o.k;
+    if(o.type==="check"){
+      box.insertAdjacentHTML("beforeend",`<label class="f"><input type="checkbox" id="${id}" style="width:auto;margin-right:6px">${o.label}</label>`);
+    }else if(o.type==="select"){
+      box.insertAdjacentHTML("beforeend",`<label class="f">${o.label}</label><select id="${id}">${(o.choices||[]).map(c=>`<option value="${c}">${c}</option>`).join("")}</select>`);
+    }else{
+      box.insertAdjacentHTML("beforeend",`<label class="f">${o.label}</label><input type="${o.type||"text"}" id="${id}" placeholder="${o.ph||""}">`);
+    }
+  });
+}
+function collectConnOpts(){
+  const kind=$("connector").value, out={};
+  (CONN_OPTS[kind]||[]).forEach(o=>{
+    const el=$("opt_"+o.k); if(!el) return;
+    if(o.type==="check") out[o.k]=el.checked;
+    else if(o.type==="select") out[o.k]=el.value;
+    else if(String(el.value).trim()) out[o.k]=String(el.value).trim();
+  });
+  return out;
+}
+$("btnTest").onclick=async()=>{
+  $("testMsg").textContent="テスト中…";
+  const r=await api("/api/connector/test",{kind:$("connector").value,options:collectConnOpts()});
+  $("testMsg").innerHTML=`<span style="color:${r.ok?'var(--ok)':'var(--err)'}">${r.ok?'✅':'❌'} ${esc(r.message||'')}</span>`;
+};
+
+/* ================= 目次 ================= */
+function renderOutline(o){
+  $("outlinePanel").style.display="block";
+  $("outlineTitle").value=o.title||"";
+  $("chapters").innerHTML="";
+  (o.chapters||[]).forEach(addChapterRow);
+}
+function addChapterRow(c){
+  c=c||{title:"",goal:""};
+  const div=document.createElement("div"); div.className="ch";
+  div.innerHTML=`<input type="text" placeholder="章タイトル" value="${esc(c.title)}">
+    <input type="text" placeholder="この章で明らかにすること" value="${esc(c.goal)}">
+    <button class="xbtn">✕</button>`;
+  div.querySelector(".xbtn").onclick=()=>div.remove();
+  $("chapters").appendChild(div);
+}
+$("btnAddCh").onclick=()=>addChapterRow();
+function collectOutline(){
+  if($("outlinePanel").style.display==="none") return null;
+  const rows=[...$("chapters").querySelectorAll(".ch")].map(r=>{
+    const [a,b]=r.querySelectorAll("input"); return {title:a.value.trim(),goal:b.value.trim()};
+  }).filter(c=>c.title);
+  if(!rows.length) return null;
+  return {title:$("outlineTitle").value.trim(),chapters:rows};
+}
+$("btnOutline").onclick=async()=>{
+  const request=$("request").value.trim();
+  if(!request){toast("調査依頼を入力してください");return;}
+  $("btnOutline").disabled=true; $("btnOutline").textContent="生成中…";
+  const r=await api("/api/outline",{request,demo:mode==="demo"});
+  $("btnOutline").disabled=false; $("btnOutline").textContent="① 目次を作成";
+  if(!r.ok){toast("目次生成エラー: "+(r.error||""));return;}
+  renderOutline(r);
+};
+
+/* ================= 実行 ================= */
+function collectPayload(){
+  return {
+    request:$("request").value.trim(),
+    demo: mode==="demo",
+    connector: $("connector").value,
+    connector_options: collectConnOpts(),
+    gepa_budget: +$("budget").value||0,
+    minibatch: +$("minibatch").value||2,
+    outline: collectOutline(),
+  };
+}
+$("btnRun").onclick=async()=>{
+  const p=collectPayload();
+  if(!p.request){toast("調査依頼を入力してください");return;}
+  // reset UI
+  $("lineage").innerHTML=""; $("finalChapters").innerHTML=""; $("reportPanel").style.display="none";
+  $("gepaMeta").textContent="実行中…"; curveReset(); resetFlow(); hideBridge();
+  setStatus("running","実行中"); startTimer();
+  $("btnRun").disabled=true; $("btnOutline").disabled=true; $("btnCancel").style.display="inline-block";
+  const r=await api("/api/run",p);
+  if(r.error){setStatus("failed",r.error);finishRun();return;}
+  currentRun=r.run_id; attachRun(r.run_id);
+};
+$("btnCancel").onclick=async()=>{ if(currentRun) await api("/api/cancel",{run_id:currentRun}); };
+
+function attachRun(id){
+  if(es) es.close();
+  es=new EventSource("/api/events?id="+id);
+  es.onmessage=(m)=>handleEvent(JSON.parse(m.data));
+  es.onerror=()=>{ /* 完了時に done で閉じる */ };
+}
+function finishRun(){
+  if(es){es.close();es=null;} currentRun=null; stopTimer();
+  $("btnRun").disabled=false; $("btnOutline").disabled=false; $("btnCancel").style.display="none";
+}
+
+/* ================= イベント処理 ================= */
+const cand={}; // id -> element
+let curvePts=[];
+function handleEvent(e){
+  switch(e.type){
+    case "stage": setStage(e.stage,e); break;
+    case "outline": renderOutline({title:e.title,chapters:e.chapters}); break;
+    case "log": $("stMeta").textContent=e.text; break;
+    case "gepa_candidate": upsertCand(e); break;
+    case "gepa_select": markSelect(e); break;
+    case "gepa_pareto": markPareto(e); break;
+    case "gepa_best": markBest(e); break;
+    case "chapter": onChapter(e); break;
+    case "bridge": showBridge(e); break;
+    case "final": onFinal(e); break;
+    case "status": setStatus(e.status, statusText(e.status), e); break;
+    case "error": setStatus("failed", e.message); toast("エラー: "+e.message); break;
+    case "done": finishRun(); break;
+  }
+}
+function statusText(s){return {succeeded:"完了",failed:"失敗",cancelled:"中止"}[s]||s;}
+
+function upsertCand(e){
+  hideBridge();
+  let el=cand[e.id];
+  const scores=Object.entries(e.scores||{}).map(([k,v])=>`${esc(k)}: <span class="mono">${v.toFixed(2)}</span>`).join(" ／ ");
+  const inner=`
+    <div class="hd">
+      <span class="chip tool">${e.id}</span>
+      ${e.parent?`<span class="hint">← ${esc(e.parent)}</span>`:`<span class="hint">シード</span>`}
+      <span class="hint">反復 ${e.iter}</span>
+      <span class="pchip"></span>
+      <span class="spacer" style="flex:1"></span>
+      <span class="mono" style="color:var(--accent-a)">agg ${e.agg.toFixed(3)}</span>
+    </div>
+    <div class="bar"><i style="width:${Math.round(e.agg*100)}%"></i></div>
+    <div class="hint" style="margin-top:4px">${esc(e.rationale||"")}</div>
+    <div class="hint" style="margin-top:2px">${scores}</div>
+    <details style="margin-top:4px"><summary class="hint" style="cursor:pointer">指示文を見る</summary><pre>${esc(e.instruction)}</pre></details>`;
+  if(!el){ el=document.createElement("div"); el.className="card"; cand[e.id]=el; $("lineage").appendChild(el); }
+  el.innerHTML=inner;
+  if(e.pareto) el.querySelector(".pchip").outerHTML=`<span class="chip pareto pchip">Pareto</span>`;
+  // curve
+  curvePts.push(e.agg); drawCurve();
+  $("gepaMeta").textContent=`候補 ${Object.keys(cand).length} 件 / 最新 agg ${e.agg.toFixed(3)}`;
+}
+function markSelect(e){ Object.values(cand).forEach(el=>el.style.outline=""); if(cand[e.id]) cand[e.id].style.outline="1px solid var(--warn)"; }
+function markPareto(e){
+  Object.entries(cand).forEach(([id,el])=>{
+    const chip=el.querySelector(".pchip");
+    const on=e.ids.includes(id);
+    if(chip) chip.outerHTML = on?`<span class="chip pareto pchip">Pareto</span>`:`<span class="pchip"></span>`;
+  });
+}
+function markBest(e){
+  Object.values(cand).forEach(el=>el.querySelectorAll(".chip.best").forEach(x=>x.remove()));
+  if(cand[e.id]){ cand[e.id].querySelector(".hd").insertAdjacentHTML("beforeend",`<span class="chip best">BEST</span>`); }
+}
+
+function onChapter(e){
+  if(e.phase==="gepa") return; // 探索中の章はGEPAカードに集約済み
+  const sc=(typeof e.score==="number")?`<span class="chip ${e.score>=0.6?'ok':'bad'}">score ${e.score.toFixed(2)}</span>`:"";
+  const cites=(e.citations&&e.citations.length)?`<div class="hint" style="margin-top:4px">出典: ${e.citations.map(c=>c.startsWith("http")?`<a href="${esc(c)}" target="_blank">${esc(c)}</a>`:esc(c)).join(" / ")}</div>`:"";
+  const html=`<div class="card">
+    <div class="hd"><span class="chip tool">第${e.idx+1}章</span><b>${esc(e.title)}</b>
+      ${sc}<span class="hint">${esc(e.connector)}</span>${e.ok?"":'<span class="chip bad">失敗</span>'}</div>
+    <pre>${esc(e.preview||"")}</pre>${cites}</div>`;
+  if($("finalChapters").querySelector(".hint")) $("finalChapters").innerHTML="";
+  $("finalChapters").insertAdjacentHTML("beforeend",html);
+}
+
+function onFinal(e){
+  lastReport=e.report; lastTitle=e.title||"report";
+  $("reportPanel").style.display="block";
+  $("report").innerHTML=mdToHtml(e.report);
+  $("bestInfo").innerHTML=`勝ち指示 agg <span class="mono">${(e.best_agg||0).toFixed(3)}</span> ／ 候補 ${e.candidates} 件`;
+  refreshRuns();
+}
+
+/* ================= ブリッジ ================= */
+function showBridge(e){
+  setStatus("waiting","貼り付け待ち");
+  $("bridge").classList.add("show");
+  $("bridgeMeta").textContent=`章: ${e.meta&&e.meta.chapter?e.meta.chapter:""}`;
+  $("bridgePrompt").textContent=e.prompt;
+  $("bridgeAns").value=""; $("bridgeAns").focus();
+}
+function hideBridge(){ $("bridge").classList.remove("show"); }
+$("btnCopyPrompt").onclick=()=>{ navigator.clipboard.writeText($("bridgePrompt").textContent); toast("プロンプトをコピーしました"); };
+$("btnBridgeSend").onclick=async()=>{
+  const text=$("bridgeAns").value.trim();
+  if(!text){toast("回答を貼り付けてください");return;}
+  hideBridge(); setStatus("running","実行中");
+  await api("/api/bridge/respond",{run_id:currentRun,decision:"submit",text});
+};
+$("btnBridgeSkip").onclick=async()=>{ hideBridge(); setStatus("running","実行中");
+  await api("/api/bridge/respond",{run_id:currentRun,decision:"skip",text:""}); };
+
+/* ================= スコア曲線 ================= */
+function curveReset(){ curvePts=[]; $("curve").innerHTML=""; }
+function drawCurve(){
+  const W=300,H=64,pad=6, n=curvePts.length; if(!n) return;
+  const xs=(i)=> n===1?W/2 : pad + i*(W-2*pad)/(n-1);
+  const ys=(v)=> H-pad - v*(H-2*pad);
+  const pts=curvePts.map((v,i)=>`${xs(i).toFixed(1)},${ys(v).toFixed(1)}`).join(" ");
+  const dots=curvePts.map((v,i)=>`<circle cx="${xs(i).toFixed(1)}" cy="${ys(v).toFixed(1)}" r="2.6" fill="#22d3ee"/>`).join("");
+  $("curve").innerHTML=`<polyline points="${pts}" fill="none" stroke="url(#g)" stroke-width="2"/>
+    <defs><linearGradient id="g" x1="0" x2="1"><stop offset="0" stop-color="#22d3ee"/><stop offset="1" stop-color="#8b5cf6"/></linearGradient></defs>${dots}`;
+}
+
+/* ================= レポート md ================= */
+function mdToHtml(md){
+  const lines=String(md).split("\n"); let html="",inList=false,inCode=false;
+  const inl=(t)=>esc(t).replace(/`([^`]+)`/g,"<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g,"<b>$1</b>")
+    .replace(/\[(\d+)\]/g,'<sup>[$1]</sup>')
+    .replace(/(https?:\/\/[^\s)]+)/g,'<a href="$1" target="_blank">$1</a>');
+  const closeList=()=>{ if(inList){html+="</ul>";inList=false;} };
+  for(let l of lines){
+    if(l.trim().startsWith("```")){ if(inCode){html+="</pre>";inCode=false;}else{closeList();html+="<pre>";inCode=true;} continue; }
+    if(inCode){ html+=esc(l)+"\n"; continue; }
+    const h=l.match(/^(#{1,3})\s+(.*)/);
+    if(h){ closeList(); html+=`<h${h[1].length}>${inl(h[2])}</h${h[1].length}>`; continue; }
+    if(/^\s*[-*]\s+/.test(l)){ if(!inList){html+="<ul>";inList=true;} html+=`<li>${inl(l.replace(/^\s*[-*]\s+/,""))}</li>`; continue; }
+    if(l.trim()===""){ closeList(); continue; }
+    closeList(); html+=`<p>${inl(l)}</p>`;
+  }
+  if(inList)html+="</ul>"; if(inCode)html+="</pre>"; return html;
+}
+$("btnCopyReport").onclick=()=>{ navigator.clipboard.writeText(lastReport); toast("レポートをコピーしました"); };
+$("btnDownload").onclick=()=>{
+  const blob=new Blob([lastReport],{type:"text/markdown"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
+  a.download=(lastTitle||"report").replace(/[\\/:*?"<>|]/g,"_").slice(0,60)+".md"; a.click();
+};
+
+/* ================= ステータス ================= */
+function setStatus(cls,text,extra){
+  $("stBadge").className="st-badge "+cls; $("stBadge").textContent=(cls||"idle").toUpperCase();
+  if(text) $("stText").textContent=text;
+  if(extra&&extra.elapsed_sec!=null) $("stMeta").textContent=`${extra.elapsed_sec}s`;
+}
+function startTimer(){ t0=Date.now(); timer=setInterval(()=>{ $("stMeta").textContent=((Date.now()-t0)/1000).toFixed(1)+"s"; },200); }
+function stopTimer(){ if(timer){clearInterval(timer);timer=null;} }
+
+/* ================= 履歴 ================= */
+async function refreshRuns(){
+  const r=await api("/api/runs");
+  const box=$("runs");
+  if(!r.runs||!r.runs.length){box.innerHTML='<div class="hint">まだありません</div>';return;}
+  box.innerHTML="";
+  r.runs.forEach(run=>{
+    const div=document.createElement("div"); div.className="runrow";
+    const bad=(run.status!=="succeeded");
+    div.innerHTML=`<div style="min-width:0">
+        <div style="font-size:.85rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(run.title||run.request||"")}</div>
+        <div class="hint">${esc(run.ts)} · ${esc(run.connector)}${run.demo?"(demo)":""} · ${run.chapters}章 · agg ${(run.gepa&&run.gepa.best_agg||0).toFixed(2)}</div>
+      </div>
+      <span class="chip ${bad?'bad':'ok'}">${esc(statusText(run.status))}</span>`;
+    div.onclick=()=>openRun(run.id);
+    box.appendChild(div);
+  });
+}
+async function openRun(id){
+  const r=await api("/api/run?id="+encodeURIComponent(id));
+  if(r.error){toast("読み込めません");return;}
+  lastReport=r.report||""; lastTitle=r.title||"report";
+  $("reportPanel").style.display="block"; $("report").innerHTML=mdToHtml(r.report||"（レポートなし）");
+  $("bestInfo").innerHTML=`履歴 ${esc(r.ts)} ／ agg <span class="mono">${(r.gepa&&r.gepa.best_agg||0).toFixed(3)}</span>`;
+  $("reportPanel").scrollIntoView({behavior:"smooth"});
+}
+
+/* ================= CONNECT ================= */
+$("btnConnect").onclick=()=>{ $("connModal").classList.add("show"); };
+$("btnConnClose").onclick=()=>{ $("connModal").classList.remove("show"); };
+$("btnConnSave").onclick=async()=>{
+  $("connErr").textContent="";
+  const r=await api("/api/configure",{base_url:$("cBase").value,api_key:$("cKey").value,
+    model:$("cModel").value,use_proxy:$("cProxy").checked});
+  if(r.ok){ $("connModal").classList.remove("show"); refreshStatus(); toast("接続しました"); }
+  else $("connErr").textContent=r.error||"失敗";
+};
+async function refreshStatus(){
+  const s=await api("/api/status");
+  $("connDot").className="dot"+(s.configured?" on":"");
+  $("connText").textContent=s.configured?`${s.model||"接続済み"}`:"未接続";
+  if(s.configured&&s.base_url){ $("cBase").value=s.base_url; $("cModel").value=s.model||""; }
+}
+
+/* ================= toast ================= */
+let toastT=null;
+function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show");
+  clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove("show"),2200); }
+
+/* ================= init ================= */
+(async function init(){
+  buildFlow();
+  const c=await api("/api/connectors");
+  $("connector").innerHTML=(c.connectors||[]).map(x=>`<option value="${x.kind}">${esc(x.label)}</option>`).join("");
+  $("connector").value="bridge"; $("connector").disabled=(mode==="demo");
+  $("connector").onchange=renderConnOpts; renderConnOpts();
+  await refreshStatus(); await refreshRuns();
+})();
+</script>
+</body>
+</html>
