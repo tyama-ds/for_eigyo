@@ -208,6 +208,10 @@ class SeleniumConnector(BaseConnector):
     driver_path / browser_binary は環境変数でも指定できる:
       CHROMEDRIVER_PATH / CHROMEDRIVER  → driver_path
       CHROME_BINARY / CHROME_BIN        → browser_binary
+
+    注意（並行実行）: Chrome は 1 つの user_data_dir を同時に開けない。selenium コネクタで
+    複数のリサーチを **同時に** 走らせる場合は、run ごとに別の user_data_dir を指定すること
+    （同一プロファイルの同時起動は 2 本目が失敗する）。demo / bridge / graph は同時実行可。
     """
 
     kind = "selenium"
