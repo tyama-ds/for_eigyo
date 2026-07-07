@@ -76,7 +76,7 @@
     {
       "id": "news-portal",
       "name": "Prism ニュースポータル",
-      "description": "多数のRSS/Atomフィードを1画面に束ねて分光するニュース収集ポータル。カテゴリ・検索・トレンド・保存・自動更新・ダーク/ライト対応",
+      "description": "多数のRSS/Atomフィード（専門誌・学術含む）を1画面に束ねて分光するニュース収集ポータル。検索・トレンド・保存・自動更新・生成AI要約（Claude/OpenAI互換/ローカルLLM対応）・ダーク/ライト",
       "icon": "news",
       "cwd": "../news-portal",
       "command": [

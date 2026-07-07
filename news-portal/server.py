@@ -52,8 +52,16 @@ MAX_BODY = 256 * 1024    # POST ボディの上限（バイト）
 MAX_FEED_BYTES = 6 * 1024 * 1024  # 1フィードの取得上限（バイト）
 USER_AGENT = "Mozilla/5.0 (compatible; PrismNewsPortal/1.0; +local)"
 
-# カテゴリの正準リスト（UI の色・並びと対応）
-CATEGORIES = ["総合", "テクノロジー", "ビジネス", "科学", "世界", "スポーツ", "エンタメ"]
+AI_TIMEOUT = 60           # 生成AI呼び出しのタイムアウト（秒）
+AI_MAX_TOKENS = 1500      # AI応答の最大トークン
+MAX_PAGE_TEXT = 6000      # 記事ページを本文コンテキストに含める最大文字数
+AI_PROVIDERS = ("anthropic", "openai", "local")  # openai/local = OpenAI互換（base_url指定）
+# local = ローカルLLM（Ollama / LM Studio / llama.cpp 等）。APIキー任意・プロキシ非経由
+LOCAL_DEFAULT_BASE = "http://localhost:11434/v1"  # Ollama 既定
+SETTINGS_FILE = BASE / "settings.json"  # AI API設定（APIキー等・.gitignore対象）
+
+# カテゴリの正準リスト（UI の色・並びと対応）。「専門」は専門誌・学術系。
+CATEGORIES = ["総合", "テクノロジー", "ビジネス", "科学", "専門", "世界", "スポーツ", "エンタメ"]
 
 # 初期フィード（feeds.json が無いとき書き出される）
 DEFAULT_SOURCES = [
@@ -73,12 +81,23 @@ DEFAULT_SOURCES = [
     ("BBC World",            "https://feeds.bbci.co.uk/news/world/rss.xml",                "世界"),
     ("The Guardian World",   "https://www.theguardian.com/world/rss",                      "世界"),
     ("BBC Entertainment",    "https://feeds.bbci.co.uk/news/entertainment_and_arts/rss.xml", "エンタメ"),
-    ("Nature",               "https://www.nature.com/nature.rss",                          "科学"),
+    # 専門誌・学術系
+    ("Nature",               "https://www.nature.com/nature.rss",                          "専門"),
+    ("Science (AAAS)",       "https://www.science.org/rss/news_current.xml",               "専門"),
+    ("IEEE Spectrum",        "https://spectrum.ieee.org/feeds/feed.rss",                   "専門"),
+    ("MIT Technology Review","https://www.technologyreview.com/feed/",                      "専門"),
+    ("ScienceDaily",         "https://www.sciencedaily.com/rss/all.xml",                   "専門"),
+    ("Ars Technica",         "https://feeds.arstechnica.com/arstechnica/index",            "専門"),
+    ("Harvard Business Review", "https://feeds.hbr.org/harvardbusiness",                   "専門"),
+    ("MONOist（ものづくり）", "https://rss.itmedia.co.jp/rss/2.0/monoist.xml",              "専門"),
+    ("EE Times Japan",       "https://rss.itmedia.co.jp/rss/2.0/eetimes.xml",              "専門"),
+    ("arXiv cs.AI",          "https://rss.arxiv.org/rss/cs.AI",                            "専門"),
 ]
 
 _cache_lock = threading.Lock()      # _cache の読み書きを保護
 _refresh_lock = threading.Lock()    # 取得(refresh)を直列化しスタンピードを防ぐ
 _sources_lock = threading.Lock()    # feeds.json の read-modify-write を保護
+_settings_lock = threading.Lock()   # settings.json の read-modify-write を保護
 _cache: dict = {"articles": [], "errors": {}, "offline": None, "updated": None, "ts": 0.0}
 DEMO = False                        # --demo 起動時 True（常にデモ記事を返す）
 
@@ -399,6 +418,180 @@ def get_feed(force: bool = False) -> dict:
             return dict(_cache)
 
 
+# ------------------------------------------------------------------ 設定 / 生成AI
+
+def load_settings() -> dict:
+    with _settings_lock:
+        if not SETTINGS_FILE.exists():
+            return {}
+        try:
+            data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+
+def save_settings(data: dict) -> None:
+    with _settings_lock:
+        tmp = SETTINGS_FILE.parent / (SETTINGS_FILE.name + ".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+                       encoding="utf-8")
+        os.replace(tmp, SETTINGS_FILE)
+
+
+def ai_config() -> dict:
+    ai = load_settings().get("ai") or {}
+    provider = ai.get("provider") if ai.get("provider") in AI_PROVIDERS else "anthropic"
+    return {
+        "provider": provider,
+        "base_url": (ai.get("base_url") or "").strip(),
+        "model": (ai.get("model") or "").strip(),
+        "api_key": ai.get("api_key") or "",
+    }
+
+
+def ai_status() -> dict:
+    """APIキーを含めない安全な設定ビュー。"""
+    cfg = ai_config()
+    return {
+        "provider": cfg["provider"],
+        "base_url": cfg["base_url"],
+        "model": cfg["model"],
+        "has_key": bool(cfg["api_key"]),
+        "providers": list(AI_PROVIDERS),
+    }
+
+
+def fetch_page_text(url: str) -> str:
+    """記事ページ本文をプレーンテキストで取得（失敗時は空文字）。proxy対応はurllib任せ。"""
+    u = safe_url(url)
+    if not u:
+        return ""
+    try:
+        req = urllib.request.Request(u, headers={
+            "User-Agent": USER_AGENT, "Accept": "text/html,*/*;q=0.8",
+            "Accept-Encoding": "gzip, identity",
+        })
+        with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT) as r:
+            raw = r.read(MAX_FEED_BYTES + 1)
+            enc = (r.headers.get("Content-Encoding") or "").lower()
+        if len(raw) > MAX_FEED_BYTES:
+            return ""
+        if enc == "gzip" or raw[:2] == b"\x1f\x8b":
+            raw = gzip.decompress(raw)
+        text = strip_html(raw.decode("utf-8", "replace"))
+        return text[:MAX_PAGE_TEXT]
+    except Exception:
+        return ""
+
+
+def _http_json(url: str, body: dict, headers: dict, no_proxy: bool = False) -> dict:
+    """JSON を POST して JSON を返す（proxy・CA は urllib が処理）。
+
+    no_proxy=True のときはプロキシを経由しない（ローカルLLM向け）。
+    """
+    data = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(url, data=data, method="POST",
+                                 headers={**headers, "Content-Type": "application/json"})
+    if no_proxy:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        open_fn = opener.open
+    else:
+        open_fn = urllib.request.urlopen
+    try:
+        with open_fn(req, timeout=AI_TIMEOUT) as r:
+            resp = r.read(4 * 1024 * 1024)
+        return json.loads(resp.decode("utf-8", "replace"))
+    except urllib.error.HTTPError as e:
+        detail = e.read(1500).decode("utf-8", "replace")
+        raise RuntimeError(f"HTTP {e.code}: {detail[:500]}")
+    except (urllib.error.URLError, socket.timeout, TimeoutError, ValueError, OSError) as e:
+        raise RuntimeError(f"接続エラー: {e}")
+
+
+def call_ai(cfg: dict, system: str, user_content: str, history: list[dict]) -> str:
+    """provider に応じて生成AIを呼び出し、本文テキストを返す。"""
+    provider, key, model = cfg["provider"], cfg["api_key"], cfg["model"]
+    base = cfg["base_url"].rstrip("/")
+    # history は [{role, content(str)}]（user/assistant のみ想定）
+    msgs = [{"role": m.get("role", "user"), "content": str(m.get("content", ""))}
+            for m in history if m.get("role") in ("user", "assistant")]
+    msgs.append({"role": "user", "content": user_content})
+
+    if provider == "anthropic":
+        url = (base or "https://api.anthropic.com") + "/v1/messages"
+        body = {"model": model or "claude-opus-4-8",
+                "max_tokens": AI_MAX_TOKENS, "messages": msgs}
+        if system:
+            body["system"] = system
+        data = _http_json(url, body, {
+            "x-api-key": key, "anthropic-version": "2023-06-01",
+        })
+        parts = [b.get("text", "") for b in data.get("content", [])
+                 if isinstance(b, dict) and b.get("type") == "text"]
+        return "".join(parts).strip() or "（空の応答が返りました）"
+
+    # OpenAI互換（Chat Completions）— openai / local 共通
+    if provider == "local":
+        url = (base or LOCAL_DEFAULT_BASE) + "/chat/completions"
+        default_model, no_proxy = "llama3.1", True   # localhost はプロキシ非経由
+    else:
+        url = (base or "https://api.openai.com/v1") + "/chat/completions"
+        default_model, no_proxy = "gpt-4o-mini", False
+    full = ([{"role": "system", "content": system}] if system else []) + msgs
+    body = {"model": model or default_model, "messages": full, "max_tokens": AI_MAX_TOKENS}
+    headers = {"Authorization": "Bearer " + key} if key else {}   # ローカルはキー任意
+    data = _http_json(url, body, headers, no_proxy=no_proxy)
+    choices = data.get("choices") or [{}]
+    return ((choices[0].get("message") or {}).get("content") or "").strip() or "（空の応答が返りました）"
+
+
+def ai_chat(payload: dict) -> dict:
+    """UI からの1問に答える。記事/一覧のコンテキストを組み立ててAIへ。"""
+    cfg = ai_config()
+    # ローカルLLM はAPIキー不要。クラウドはキー必須。
+    if cfg["provider"] != "local" and not cfg["api_key"]:
+        return {"ok": False, "need_setup": True,
+                "error": "生成AI APIが未設定です。設定からAPIキーを登録してください。"}
+    question = (payload.get("question") or "").strip()
+    if not question:
+        return {"ok": False, "error": "質問が空です。"}
+    history = payload.get("history") if isinstance(payload.get("history"), list) else []
+    history = history[-8:]  # 直近のみ
+    ctx = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+
+    system = ("あなたはニュース閲覧を助けるアシスタントです。以下に与えられた記事情報や"
+              "本文に基づいて、日本語で簡潔かつ正確に答えてください。推測が必要な場合は"
+              "その旨を明示し、与えられた情報に無い事実を断定しないでください。")
+
+    parts = []
+    if ctx.get("kind") == "list":
+        parts.append("【現在表示中の記事一覧】")
+        for i, a in enumerate((ctx.get("items") or [])[:25], 1):
+            parts.append(f"{i}. [{a.get('category','')}] {a.get('title','')}（{a.get('source','')}）"
+                         + (f" — {a.get('summary','')}" if a.get("summary") else ""))
+    else:
+        parts.append("【対象の記事】")
+        for f in ("title", "source", "category", "published", "summary", "link"):
+            if ctx.get(f):
+                parts.append(f"{f}: {ctx.get(f)}")
+        # 本文取得（記事の実URLがあり、要求されていれば）
+        if payload.get("fetch_page") and safe_url(ctx.get("link")):
+            page = fetch_page_text(ctx.get("link"))
+            if page:
+                parts.append("\n【記事ページ本文（抜粋）】\n" + page)
+    context_block = "\n".join(str(p) for p in parts if p)
+    user_content = (context_block + "\n\n" if context_block else "") + "質問: " + question
+
+    try:
+        answer = call_ai(cfg, system, user_content, history)
+        return {"ok": True, "answer": answer}
+    except RuntimeError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:   # 想定外も UI に見せる
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
 # ------------------------------------------------------------------ デモ記事（オフライン時）
 
 # (age_min, category, source, title, summary)
@@ -411,6 +604,10 @@ _DEMO = [
      "調査会社の集計によると、今年の世界の半導体製造装置への投資額は前年比で大幅に増加した。データセンター向けの先端プロセスが投資を押し上げている。"),
     (35, "科学", "Prism Science", "深宇宙望遠鏡が最遠方の銀河候補を捉える",
      "観測チームは、初期宇宙に存在したとみられる銀河の光を検出したと発表した。分光観測による距離の確定が今後の焦点となる。"),
+    (40, "専門", "Prism Journal", "新規高強度鋼板の疲労特性、専門誌が査読論文を掲載",
+     "自動車・建材向けの新しい高張力鋼について、繰り返し荷重下での亀裂進展を評価した研究が学術誌に掲載された。組織制御による長寿命化の指針が示されている。"),
+    (58, "専門", "Prism Journal", "産業用ロボットの力制御に関する国際会議、査読採択率を公表",
+     "今年の会議では触覚フィードバックと学習制御を組み合わせた研究が目立ち、製造現場での実装事例の報告が増えたと専門誌がまとめた。"),
     (42, "スポーツ", "Prism Sports", "国内リーグ、若手主体のチームが首位に浮上",
      "終盤の連勝で勝ち点を伸ばし、リーグ戦の首位に立った。監督は「守備の集中力が結果につながった」と語った。"),
     (51, "エンタメ", "Prism Ent", "話題の長編アニメ映画、公開2週で興行収入の節目を突破",
@@ -547,6 +744,10 @@ class Handler(BaseHTTPRequestHandler):
                         "categories": CATEGORIES})
             return
 
+        if u.path == "/api/settings":
+            self._json({"ai": ai_status()})
+            return
+
         self._json({"error": "not found"}, 404)
 
     # ------------------------------------------------------------------ POST
@@ -593,6 +794,35 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._invalidate()
             self._json({"ok": True, "sources": source_status(sources, {})})
+            return
+
+        if u.path == "/api/settings":  # AI API 設定の保存
+            body = self._read_body()
+            provider = body.get("provider")
+            if provider not in AI_PROVIDERS:
+                provider = "anthropic"
+            base_url = (body.get("base_url") or "").strip()
+            if base_url and not safe_url(base_url):
+                self._json({"ok": False, "error": "base_url は http/https の有効なURLにしてください"}, 400)
+                return
+            ai = {"provider": provider, "base_url": base_url,
+                  "model": (body.get("model") or "").strip()}
+            # api_key: 未指定/空なら既存を保持（画面には返さないため）
+            new_key = body.get("api_key")
+            if new_key:
+                ai["api_key"] = str(new_key)
+            elif body.get("clear_key"):
+                ai["api_key"] = ""
+            else:
+                ai["api_key"] = ai_config()["api_key"]
+            settings = load_settings()
+            settings["ai"] = ai
+            save_settings(settings)
+            self._json({"ok": True, "ai": ai_status()})
+            return
+
+        if u.path == "/api/ai/chat":  # 生成AIへの質問
+            self._json(ai_chat(self._read_body()))
             return
 
         self._json({"error": "not found"}, 404)

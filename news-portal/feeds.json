@@ -115,9 +115,72 @@
     {
       "name": "Nature",
       "url": "https://www.nature.com/nature.rss",
-      "category": "科学",
+      "category": "専門",
       "enabled": true,
       "id": "nature"
+    },
+    {
+      "name": "Science (AAAS)",
+      "url": "https://www.science.org/rss/news_current.xml",
+      "category": "専門",
+      "enabled": true,
+      "id": "science--aaas"
+    },
+    {
+      "name": "IEEE Spectrum",
+      "url": "https://spectrum.ieee.org/feeds/feed.rss",
+      "category": "専門",
+      "enabled": true,
+      "id": "ieee-spectrum"
+    },
+    {
+      "name": "MIT Technology Review",
+      "url": "https://www.technologyreview.com/feed/",
+      "category": "専門",
+      "enabled": true,
+      "id": "mit-technology-review"
+    },
+    {
+      "name": "ScienceDaily",
+      "url": "https://www.sciencedaily.com/rss/all.xml",
+      "category": "専門",
+      "enabled": true,
+      "id": "sciencedaily"
+    },
+    {
+      "name": "Ars Technica",
+      "url": "https://feeds.arstechnica.com/arstechnica/index",
+      "category": "専門",
+      "enabled": true,
+      "id": "ars-technica"
+    },
+    {
+      "name": "Harvard Business Review",
+      "url": "https://feeds.hbr.org/harvardbusiness",
+      "category": "専門",
+      "enabled": true,
+      "id": "harvard-business-review"
+    },
+    {
+      "name": "MONOist（ものづくり）",
+      "url": "https://rss.itmedia.co.jp/rss/2.0/monoist.xml",
+      "category": "専門",
+      "enabled": true,
+      "id": "monoist-ものづくり"
+    },
+    {
+      "name": "EE Times Japan",
+      "url": "https://rss.itmedia.co.jp/rss/2.0/eetimes.xml",
+      "category": "専門",
+      "enabled": true,
+      "id": "ee-times-japan"
+    },
+    {
+      "name": "arXiv cs.AI",
+      "url": "https://rss.arxiv.org/rss/cs.AI",
+      "category": "専門",
+      "enabled": true,
+      "id": "arxiv-cs-ai"
     }
   ]
 }
