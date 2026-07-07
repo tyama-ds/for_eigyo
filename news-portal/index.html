@@ -229,6 +229,19 @@ main{max-width:1360px; margin:0 auto; padding:16px 22px 80px}
   font-weight:700; font-size:13px; color:#fff; letter-spacing:.01em; text-shadow:0 1px 8px rgba(0,0,0,.55);
   display:-webkit-box; -webkit-line-clamp:1; -webkit-box-orient:vertical; overflow:hidden}
 .card:hover .ph__svg{transform:scale(1.05); transition:transform .55s var(--ease)}
+/* インタラクティブ挙動 */
+.ph__glyph{transform:translate(var(--gx,0px),var(--gy,0px)); transition:transform .18s ease}
+.ph__sheen{opacity:0}
+@media (prefers-reduced-motion: no-preference){
+  .ph__spark{stroke-dasharray:660; stroke-dashoffset:660; animation:phdraw 1.2s .06s cubic-bezier(.4,0,.2,1) both}
+  .ph__dot{opacity:0; animation:phdot .45s both}
+  .card:hover .ph__sheen, .hero:hover .ph__sheen{animation:phsheen .85s ease}
+  .card:hover .ph__glyph{filter:drop-shadow(0 2px 8px rgba(0,0,0,.25))}
+}
+@keyframes phdraw{to{stroke-dashoffset:0}}
+@keyframes phdot{to{opacity:.9}}
+@keyframes phsheen{0%{opacity:0; transform:translateX(-190px) skewX(-16deg)}
+  22%{opacity:.9} 100%{opacity:0; transform:translateX(410px) skewX(-16deg)}}
 
 .card__body{padding:15px 16px 6px; display:flex; flex-direction:column; gap:8px; flex:1}
 .card__top{display:flex; align-items:center; gap:9px; font-size:11.5px; color:var(--text-3)}
@@ -965,19 +978,23 @@ function coverSVG(t, seed, uid){
   const xy=P.map((p,i)=>[Math.round(x0+i*step), Math.round(baseY - p/9*band)]);
   const line=xy.map((q,i)=>(i?"L":"M")+q[0]+" "+q[1]).join(" ");
   const area="M"+x0+" 168 "+xy.map(q=>"L"+q[0]+" "+q[1]).join(" ")+" L"+x1+" 168 Z";
-  const dots=xy.map(q=>'<circle cx="'+q[0]+'" cy="'+q[1]+'" r="2.3" fill="#fff" fill-opacity=".9"/>').join("");
+  const dots=xy.map((q,i)=>'<circle class="ph__dot" cx="'+q[0]+'" cy="'+q[1]+'" r="2.3" fill="#fff" style="animation-delay:'+(300+i*55)+'ms"/>').join("");
   return '<svg class="ph__svg" viewBox="0 0 320 180" preserveAspectRatio="xMidYMid slice" aria-hidden="true">'
     +'<defs><linearGradient id="'+uid+'g" gradientTransform="rotate('+ang+' .5 .5)">'
     +'<stop offset="0" stop-color="'+t.c[0]+'"/><stop offset="1" stop-color="'+t.c[1]+'"/></linearGradient>'
     +'<radialGradient id="'+uid+'h" cx="26%" cy="16%" r="85%"><stop offset="0" stop-color="#fff" stop-opacity=".3"/>'
-    +'<stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient></defs>'
+    +'<stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>'
+    +'<linearGradient id="'+uid+'s"><stop offset="0" stop-color="#fff" stop-opacity="0"/>'
+    +'<stop offset=".5" stop-color="#fff" stop-opacity=".55"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient></defs>'
     +'<rect width="320" height="180" fill="url(#'+uid+'g)"/><rect width="320" height="180" fill="url(#'+uid+'h)"/>'
     +'<g stroke="#fff" stroke-opacity=".10"><path d="M0 45H320 M0 90H320 M0 135H320 M64 0V180 M128 0V180 M192 0V180 M256 0V180"/></g>'
-    +'<g transform="translate(196,42) scale(0.92)" fill="none" stroke="#fff" stroke-opacity=".9" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">'+t.g+'</g>'
+    +'<g transform="translate(196,42) scale(0.92)"><g class="ph__glyph" fill="none" stroke="#fff" stroke-opacity=".9" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">'+t.g+'</g></g>'
     +'<path d="'+area+'" fill="#fff" fill-opacity=".12"/>'
-    +'<path d="'+line+'" fill="none" stroke="#fff" stroke-opacity=".85" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>'
-    +dots+'</svg>';
+    +'<path class="ph__spark" d="'+line+'" fill="none" stroke="#fff" stroke-opacity=".85" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>'
+    +dots
+    +'<rect class="ph__sheen" x="0" y="0" width="120" height="180" fill="url(#'+uid+'s)"/></svg>';
 }
+const _phReduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
 function placeholder(a){
   const t=COVER[themeFor(a)] || COVER.news;
   const seed=Math.abs((a.id||a.source||"x").split("").reduce((s,ch)=>((s*31+ch.charCodeAt(0))|0),7));
@@ -985,6 +1002,14 @@ function placeholder(a){
   ph.innerHTML=coverSVG(t, seed, "ph"+(++_phUID));   // 定数+数値のみ（XSS安全）
   ph.append(el("span",{class:"ph__field", text:t.label}));
   ph.append(el("span",{class:"ph__src", text:a.source||""}));
+  if(!_phReduce){   // カーソル追従の視差（グリフが少し動く）
+    ph.addEventListener("pointermove",(e)=>{
+      const r=ph.getBoundingClientRect(); if(!r.width) return;
+      ph.style.setProperty("--gx",(((e.clientX-r.left)/r.width-0.5)*11).toFixed(1)+"px");
+      ph.style.setProperty("--gy",(((e.clientY-r.top)/r.height-0.5)*8).toFixed(1)+"px");
+    });
+    ph.addEventListener("pointerleave",()=>{ ph.style.setProperty("--gx","0px"); ph.style.setProperty("--gy","0px"); });
+  }
   return ph;
 }
 function timeMeta(a){ return relTime(a.published_ts); }
