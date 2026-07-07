@@ -217,6 +217,18 @@ main{max-width:1360px; margin:0 auto; padding:16px 22px 80px}
   letter-spacing:.04em; text-shadow:0 2px 12px rgba(0,0,0,.4)}
 .ph::after{content:""; position:absolute; inset:0; mix-blend-mode:overlay;
   background:radial-gradient(120px 80px at 30% 20%, rgba(255,255,255,.35), transparent 70%)}
+/* 生成カバーアート（分野別・インフォグラフィック調） */
+.ph--art{display:block; font-size:0}
+.ph--art::after{display:none}
+.ph__svg{position:absolute; inset:0; width:100%; height:100%; display:block}
+.ph__field{position:absolute; left:11px; top:11px; z-index:2; font-family:var(--font-sans);
+  font-size:10px; font-weight:700; letter-spacing:.05em; color:#fff; background:rgba(0,0,0,.26);
+  padding:3px 9px; border-radius:99px; white-space:nowrap; max-width:calc(100% - 22px);
+  overflow:hidden; text-overflow:ellipsis}
+.ph__src{position:absolute; left:13px; right:13px; bottom:11px; z-index:2; font-family:var(--font-sans);
+  font-weight:700; font-size:13px; color:#fff; letter-spacing:.01em; text-shadow:0 1px 8px rgba(0,0,0,.55);
+  display:-webkit-box; -webkit-line-clamp:1; -webkit-box-orient:vertical; overflow:hidden}
+.card:hover .ph__svg{transform:scale(1.05); transition:transform .55s var(--ease)}
 
 .card__body{padding:15px 16px 6px; display:flex; flex-direction:column; gap:8px; flex:1}
 .card__top{display:flex; align-items:center; gap:9px; font-size:11.5px; color:var(--text-3)}
@@ -900,11 +912,79 @@ function mediaEl(a){
   }else wrap.append(placeholder(a));
   return wrap;
 }
+// ---- 分野別カバーアート（サムネイル無し記事の生成パネル） ----
+// 各テーマは配色 + 分野ラベル + 線画グリフ(0..100座標)。SVGは定数+数値のみで
+// 組み立て、情報源名は textContent で重ねる（XSS安全）。
+const COVER = {
+  steel:{c:["#586576","#93a3b6"],label:"鉄鋼 · STEEL",g:'<path d="M20 30h30 M20 70h30 M35 30v40"/><circle cx="68" cy="50" r="14"/><circle cx="68" cy="50" r="8"/><circle cx="68" cy="50" r="3"/>'},
+  materials:{c:["#1596ad","#4dd0e1"],label:"材料 · MATERIALS",g:'<g transform="translate(50,40)"><path d="M14 0 7 12.1 -7 12.1 -14 0 -7 -12.1 7 -12.1Z"/></g><g transform="translate(36,63)"><path d="M14 0 7 12.1 -7 12.1 -14 0 -7 -12.1 7 -12.1Z"/></g><g transform="translate(64,63)"><path d="M14 0 7 12.1 -7 12.1 -14 0 -7 -12.1 7 -12.1Z"/></g>'},
+  chemistry:{c:["#8b7ff0","#6f9bff"],label:"化学 · CHEMISTRY",g:'<g transform="translate(50,50)"><path d="M18 0 9 15.6 -9 15.6 -18 0 -9 -15.6 9 -15.6Z"/><circle r="9"/></g><circle cx="68" cy="50" r="3.5"/><circle cx="41" cy="34" r="3.5"/><circle cx="41" cy="66" r="3.5"/>'},
+  electronics:{c:["#22b3a6","#22b8cf"],label:"電子 · ELECTRONICS",g:'<rect x="36" y="36" width="28" height="28" rx="3"/><rect x="44" y="44" width="12" height="12" rx="1"/><path d="M42 36v-8 M50 36v-8 M58 36v-8 M42 64v8 M50 64v8 M58 64v8 M36 42h-8 M36 50h-8 M36 58h-8 M64 42h8 M64 50h8 M64 58h8"/>'},
+  automotive:{c:["#e0982f","#f5b83b"],label:"自動車 · AUTOMOTIVE",g:'<circle cx="50" cy="50" r="18" stroke-dasharray="3 6"/><circle cx="50" cy="50" r="13"/><circle cx="50" cy="50" r="5"/>'},
+  maritime:{c:["#2f9fe0","#6f9bff"],label:"海事 · MARITIME",g:'<path d="M28 58h44l-6 13H34z"/><path d="M50 58V34"/><path d="M50 36l15 15H50z"/><path d="M22 78q6-6 12 0 6 6 12 0 6-6 12 0 6 6 12 0"/>'},
+  construction:{c:["#d98a2b","#f5b83b"],label:"建設 · CONSTRUCTION",g:'<path d="M40 28v52 M32 80h16 M30 32h44 M66 32v10"/><path d="M61 42h10v7H61z"/><path d="M30 32l10-4h34"/>'},
+  environment:{c:["#2fa85f","#46d17f"],label:"環境 · ENVIRONMENT",g:'<path d="M50 26C31 40 31 66 50 80 69 66 69 40 50 26Z"/><path d="M50 32v44 M50 48l-12 6 M50 56l12-6"/>'},
+  logistics:{c:["#5a83f0","#60a5fa"],label:"物流 · LOGISTICS",g:'<path d="M22 44h30v22H22z"/><path d="M52 52h10l8 8v6H52z"/><circle cx="33" cy="70" r="5"/><circle cx="62" cy="70" r="5"/>'},
+  energy:{c:["#e0a72f","#fcd34d"],label:"電力 · ENERGY",g:'<path d="M54 26 40 54h12l-6 24 22-32H55z"/><path d="M20 40h12 M20 52h9 M76 40h-6 M76 52h-9"/>'},
+  science:{c:["#9b7ff0","#8b5cf6"],label:"学術 · SCIENCE",g:'<circle cx="50" cy="50" r="5"/><ellipse cx="50" cy="50" rx="26" ry="10"/><ellipse cx="50" cy="50" rx="26" ry="10" transform="rotate(60 50 50)"/><ellipse cx="50" cy="50" rx="26" ry="10" transform="rotate(120 50 50)"/>'},
+  business:{c:["#d99a2b","#46d17f"],label:"経済 · BUSINESS",g:'<path d="M26 76V28 M26 76h50"/><path d="M34 66v-14 M46 66v-24 M58 66v-10 M70 66v-30"/><path d="M32 60l14-10 12 4 16-18"/><path d="M64 22h10v10"/>'},
+  textile:{c:["#e86fa4","#f472b6"],label:"繊維 · TEXTILE",g:'<path d="M38 30h24 M38 70h24 M43 30v40 M57 30v40"/><path d="M43 40q7 6 14 0 M43 50q7 6 14 0 M43 60q7 6 14 0"/>'},
+  tech:{c:["#2fb7a6","#3fd8c3"],label:"工業 · TECH",g:'<rect x="26" y="32" width="48" height="32" rx="3"/><path d="M46 64v8 M40 76h20"/><path d="M32 42h10 M32 48h18 M32 54h14"/><path d="M60 42l6 6-6 6"/>'},
+  world:{c:["#e0793f","#ff8f5e"],label:"世界 · WORLD",g:'<circle cx="50" cy="50" r="22"/><ellipse cx="50" cy="50" rx="10" ry="22"/><path d="M28 50h44 M32 39h36 M32 61h36"/>'},
+  sports:{c:["#2fa85f","#46d17f"],label:"スポーツ · SPORTS",g:'<path d="M40 30h20v9a10 10 0 0 1-20 0z"/><path d="M40 33a7 7 0 0 0-8 7 M60 33a7 7 0 0 1 8 7"/><path d="M50 49v9 M42 62h16"/>'},
+  media:{c:["#e06f9f","#ff7bb0"],label:"エンタメ · MEDIA",g:'<circle cx="50" cy="50" r="20"/><path d="M45 40l16 10-16 10z"/>'},
+  news:{c:["#5a76e0","#7c9cff"],label:"ニュース · NEWS",g:'<rect x="28" y="30" width="44" height="40" rx="2"/><path d="M34 38h18 M34 46h32 M34 52h32 M34 58h20"/><path d="M56 38h10v8H56z"/>'}
+};
+function themeFor(a){
+  const s=((a.source||"")+" "+(a.id||"")).toLowerCase();
+  const has=(...ks)=>ks.some(k=>s.includes(k.toLowerCase()));
+  if(has("鉄と鋼","鉄鋼","isij","japanmetal","日刊産業新聞","金属")) return "steel";
+  if(has("materials","材料")) return "materials";
+  if(has("化学","chemical")) return "chemistry";
+  if(has("電波","ee times","半導体","電子")) return "electronics";
+  if(has("自動車","automotive","netdenjd")) return "automotive";
+  if(has("海事","海運","造船","maritime","jmd")) return "maritime";
+  if(has("建設","kensetsu","decn")) return "construction";
+  if(has("環境","kankyo")) return "environment";
+  if(has("物流","logistics","nb-shinbun","ニッポン")) return "logistics";
+  if(has("電気新聞","電力","denkishimbun")) return "energy";
+  if(has("繊研","繊維","senken")) return "textile";
+  if(has("ieee","spectrum")) return "electronics";
+  if(has("日刊工業","ニュースイッチ","monoist","ものづくり","工業新聞")) return "tech";
+  if(has("nature","science","arxiv","sciencedaily","journal","学術")) return "science";
+  if(has("harvard","hbr","日経","nikkei","経済")) return "business";
+  if(has("mit tech","ars technica","techcrunch","verge","gigazine","publickey","hacker","itmedia")) return "tech";
+  return ({"科学":"science","ビジネス":"business","テクノロジー":"tech","世界":"world","スポーツ":"sports","エンタメ":"media","専門":"science"}[a.category]) || "news";
+}
+let _phUID=0;
+function coverSVG(t, seed, uid){
+  const ang=seed%140+20;
+  let v=seed%6+2; const P=[];
+  for(let i=0;i<9;i++){ v=(v*5+seed+i*7)%10; P.push(v); }
+  const x0=8, x1=312, band=26, baseY=150, step=(x1-x0)/8;
+  const xy=P.map((p,i)=>[Math.round(x0+i*step), Math.round(baseY - p/9*band)]);
+  const line=xy.map((q,i)=>(i?"L":"M")+q[0]+" "+q[1]).join(" ");
+  const area="M"+x0+" 168 "+xy.map(q=>"L"+q[0]+" "+q[1]).join(" ")+" L"+x1+" 168 Z";
+  const dots=xy.map(q=>'<circle cx="'+q[0]+'" cy="'+q[1]+'" r="2.3" fill="#fff" fill-opacity=".9"/>').join("");
+  return '<svg class="ph__svg" viewBox="0 0 320 180" preserveAspectRatio="xMidYMid slice" aria-hidden="true">'
+    +'<defs><linearGradient id="'+uid+'g" gradientTransform="rotate('+ang+' .5 .5)">'
+    +'<stop offset="0" stop-color="'+t.c[0]+'"/><stop offset="1" stop-color="'+t.c[1]+'"/></linearGradient>'
+    +'<radialGradient id="'+uid+'h" cx="26%" cy="16%" r="85%"><stop offset="0" stop-color="#fff" stop-opacity=".3"/>'
+    +'<stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient></defs>'
+    +'<rect width="320" height="180" fill="url(#'+uid+'g)"/><rect width="320" height="180" fill="url(#'+uid+'h)"/>'
+    +'<g stroke="#fff" stroke-opacity=".10"><path d="M0 45H320 M0 90H320 M0 135H320 M64 0V180 M128 0V180 M192 0V180 M256 0V180"/></g>'
+    +'<g transform="translate(196,42) scale(0.92)" fill="none" stroke="#fff" stroke-opacity=".9" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">'+t.g+'</g>'
+    +'<path d="'+area+'" fill="#fff" fill-opacity=".12"/>'
+    +'<path d="'+line+'" fill="none" stroke="#fff" stroke-opacity=".85" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>'
+    +dots+'</svg>';
+}
 function placeholder(a){
-  const c=catColor(a.category), c2=catColor(S.categories[(S.categories.indexOf(a.category)+2)%S.categories.length]||a.category);
-  const ang=(a.id||"x").split("").reduce((s,ch)=>s+ch.charCodeAt(0),0)%360;
-  const ph=el("div",{class:"ph",text:initials(a.source)});
-  ph.style.background=`linear-gradient(${ang}deg, ${c}, ${c2})`;
+  const t=COVER[themeFor(a)] || COVER.news;
+  const seed=Math.abs((a.id||a.source||"x").split("").reduce((s,ch)=>((s*31+ch.charCodeAt(0))|0),7));
+  const ph=el("div",{class:"ph ph--art"});
+  ph.innerHTML=coverSVG(t, seed, "ph"+(++_phUID));   // 定数+数値のみ（XSS安全）
+  ph.append(el("span",{class:"ph__field", text:t.label}));
+  ph.append(el("span",{class:"ph__src", text:a.source||""}));
   return ph;
 }
 function timeMeta(a){ return relTime(a.published_ts); }
