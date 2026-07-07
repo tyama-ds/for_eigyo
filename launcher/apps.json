@@ -42,7 +42,7 @@
       "id": "copilot-research",
       "name": "Copilot Research",
       "description": "M365 Copilot（Researcher）を擬似GEPAで駆動。依頼→LocalLLMで目次→章ごとにCopilotリサーチ→統合レポート",
-      "icon": "research",
+      "icon": "copilot",
       "cwd": "../jupyter-local-llm",
       "command": [
         "{python}",
