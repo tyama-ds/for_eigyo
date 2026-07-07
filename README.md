@@ -18,5 +18,5 @@ llmlab Studio / llmlab Loop / Copilot Research / JupyterLab / Prism ニュース
 | フォルダ | 内容 |
 |----------|------|
 | [jupyter-local-llm/](jupyter-local-llm/) | llmlab — JupyterLab × ローカルLLM（補完・チャット・各種RAG・Studio・Loop・Copilot Research） |
-| [news-portal/](news-portal/) | Prism ニュースポータル — RSS/Atom を束ねるニュース収集（検索・トレンド・AI要約） |
+| [news-portal/](news-portal/) | Prism ニュースポータル — 多数のRSS/Atomを1画面に束ねて分光するニュース収集ポータル（標準ライブラリのみ） |
 | [launcher/](launcher/) | App Portal — 上記アプリ群を呼び出す窓口 |
