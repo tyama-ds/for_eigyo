@@ -251,6 +251,27 @@
       "category": "専門",
       "enabled": true,
       "id": "日刊工業新聞-本紙"
+    },
+    {
+      "name": "化学工業日報",
+      "url": "https://news.google.com/rss/search?q=site:chemicaldaily.com&hl=ja&gl=JP&ceid=JP:ja",
+      "category": "専門",
+      "enabled": true,
+      "id": "化学工業日報"
+    },
+    {
+      "name": "環境新聞",
+      "url": "https://news.google.com/rss/search?q=site:kankyo-news.co.jp&hl=ja&gl=JP&ceid=JP:ja",
+      "category": "専門",
+      "enabled": true,
+      "id": "環境新聞"
+    },
+    {
+      "name": "日刊建設工業新聞",
+      "url": "https://news.google.com/rss/search?q=site:decn.co.jp&hl=ja&gl=JP&ceid=JP:ja",
+      "category": "専門",
+      "enabled": true,
+      "id": "日刊建設工業新聞"
     }
   ]
 }

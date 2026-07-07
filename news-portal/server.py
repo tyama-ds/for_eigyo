@@ -107,6 +107,9 @@ DEFAULT_SOURCES = [
     ("日刊産業新聞（鉄鋼・非鉄）", "https://news.google.com/rss/search?q=site:japanmetal.com&hl=ja&gl=JP&ceid=JP:ja",     "専門"),
     ("電波新聞（電波新聞デジタル）", "https://news.google.com/rss/search?q=site:dempa-digital.com&hl=ja&gl=JP&ceid=JP:ja", "専門"),
     ("日刊工業新聞（本紙）", "https://news.google.com/rss/search?q=site:nikkan.co.jp&hl=ja&gl=JP&ceid=JP:ja",       "専門"),
+    ("化学工業日報",         "https://news.google.com/rss/search?q=site:chemicaldaily.com&hl=ja&gl=JP&ceid=JP:ja",  "専門"),
+    ("環境新聞",             "https://news.google.com/rss/search?q=site:kankyo-news.co.jp&hl=ja&gl=JP&ceid=JP:ja",  "専門"),
+    ("日刊建設工業新聞",     "https://news.google.com/rss/search?q=site:decn.co.jp&hl=ja&gl=JP&ceid=JP:ja",         "専門"),
 ]
 
 _cache_lock = threading.Lock()      # _cache の読み書きを保護
