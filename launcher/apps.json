@@ -55,6 +55,37 @@
       ],
       "url": "http://127.0.0.1:8888/lab",
       "wait_port": 8888
+    },
+    {
+      "id": "agent-orchestrator",
+      "name": "Agent Orchestrator",
+      "description": "Codex × Claude Code × ローカルLLM のエージェント同士を協調させる（実装+レビュー / 討論 / 審判 など7戦略）",
+      "icon": "agents",
+      "cwd": "../../claudecode",
+      "command": [
+        "{python}",
+        "-m",
+        "agent_orchestrator",
+        "serve",
+        "--port",
+        "8801"
+      ],
+      "url": "http://127.0.0.1:8801",
+      "wait_port": 8801
+    },
+    {
+      "id": "deep-research",
+      "name": "Deep Research Tool",
+      "description": "Web検索→調査ループ→根拠管理→ハルシネーション検証→レポート生成 まで自動で行うディープリサーチ",
+      "icon": "research",
+      "cwd": "../../claudecode",
+      "command": [
+        "{python}",
+        "-c",
+        "from deep_research_tool.webui.server import run_server; run_server(port=8802)"
+      ],
+      "url": "http://127.0.0.1:8802",
+      "wait_port": 8802
     }
   ]
 }

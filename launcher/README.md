@@ -24,14 +24,26 @@ python launcher/launcher.py --port 9200 --open
 
 ## 最初から登録されているアプリ
 
-| アプリ | 説明 | ポート |
-|--------|------|--------|
-| llmlab Studio | 検索/要約/レポート/数値抽出/グラフのワンストップUI | 8765 |
-| llmlab Loop | 自律ループ（計画→実行→検証→再試行） | 8766 |
-| JupyterLab | llmlab のノートブック環境（要 `pip install jupyterlab`） | 8888 |
+| アプリ | 場所 | 説明 | ポート |
+|--------|------|------|--------|
+| llmlab Studio | for_eigyo | 検索/要約/レポート/数値抽出/グラフのワンストップUI | 8765 |
+| llmlab Loop | for_eigyo | 自律ループ（計画→実行→検証→再試行） | 8766 |
+| JupyterLab | for_eigyo | llmlab のノートブック環境（要 `pip install jupyterlab`） | 8888 |
+| Agent Orchestrator | claudecode | Codex × Claude Code × ローカルLLM の協調（7戦略） | 8801 |
+| Deep Research Tool | claudecode | Web検索→検証→レポート生成のディープリサーチ | 8802 |
 
 Studio / Loop は標準ライブラリのみで動くため、`PYTHONPATH=src` を通して
 リポジトリのソースから直接起動する（venv や pip install -e は不要）。
+
+claudecode の2つは、`for_eigyo` と `claudecode` が**同じ親フォルダに並んでいる**
+前提で `cwd: ../../claudecode` としてある。配置が違う場合は `apps.json` の
+`cwd` を実際のパス（絶対パスも可）に直すだけでよい。
+
+- Agent Orchestrator は標準ライブラリのみで起動できる。既定ポート(8765)が
+  llmlab Studio と重なるため `--port 8801` で起動している
+- Deep Research Tool の Web UI はポート固定(8765)のため、`run_server(port=8802)` を
+  `-c` 経由で呼んで重複を回避している。起動には同ツールの依存
+  （`claudecode/deep_research_tool/requirements.txt`）が入った Python が必要
 
 ## claudecode ディレクトリのアプリを登録する
 
