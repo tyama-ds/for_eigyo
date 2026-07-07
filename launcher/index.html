@@ -1,0 +1,834 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>App Portal — for_eigyo / claudecode</title>
+<style>
+  :root{
+    --bg:#0b0f1a; --bg2:#0e1524; --card:#121a2c; --card2:#16203a;
+    --line:rgba(148,163,255,.14); --text:#e6ecff; --dim:#8b96b8;
+    --acc:#6d8dff; --acc2:#38d3ff; --ok:#34d399; --warn:#fbbf24; --err:#fb7185;
+    --r:18px;
+  }
+  *{box-sizing:border-box; margin:0; padding:0}
+  html,body{height:100%}
+  body{
+    font-family:"Hiragino Sans","Yu Gothic UI","Noto Sans JP",system-ui,sans-serif;
+    background:
+      radial-gradient(1200px 600px at 15% -10%, rgba(109,141,255,.14), transparent 60%),
+      radial-gradient(900px 500px at 90% 0%, rgba(56,211,255,.10), transparent 55%),
+      var(--bg);
+    color:var(--text); min-height:100%; overflow-x:hidden;
+  }
+  #bg{position:fixed; inset:0; z-index:0; pointer-events:none}
+  .wrap{position:relative; z-index:1; max-width:1120px; margin:0 auto; padding:40px 24px 80px}
+
+  /* ---------- header ---------- */
+  header{display:flex; align-items:flex-end; justify-content:space-between; gap:16px; margin-bottom:34px; flex-wrap:wrap}
+  .brand h1{
+    font-size:30px; letter-spacing:.02em; font-weight:800;
+    background:linear-gradient(92deg,#dbe4ff 10%, #8fb2ff 45%, #55e0ff 90%);
+    -webkit-background-clip:text; background-clip:text; color:transparent;
+  }
+  .brand p{color:var(--dim); margin-top:7px; font-size:13.5px}
+  .btn{
+    border:1px solid var(--line); background:linear-gradient(180deg,var(--card2),var(--card));
+    color:var(--text); border-radius:12px; padding:10px 16px; font-size:14px; cursor:pointer;
+    transition:.18s; display:inline-flex; align-items:center; gap:8px;
+  }
+  .btn:hover{border-color:rgba(148,163,255,.45); transform:translateY(-1px); box-shadow:0 8px 24px rgba(80,110,255,.18)}
+  .btn.primary{background:linear-gradient(92deg,#4f6df5,#37b6f0); border-color:transparent; font-weight:700}
+  .btn.ghost{background:transparent}
+  .btn.danger{border-color:rgba(251,113,133,.35); color:#ffb3c0}
+  .btn:disabled{opacity:.5; cursor:default; transform:none; box-shadow:none}
+
+  /* ---------- cards ---------- */
+  .grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:22px}
+  .card{
+    position:relative; border-radius:var(--r); background:linear-gradient(180deg,var(--card2),var(--card));
+    border:1px solid var(--line); overflow:hidden; cursor:pointer;
+    transition:transform .25s cubic-bezier(.2,.8,.3,1), box-shadow .25s, border-color .25s;
+    transform-style:preserve-3d; will-change:transform; animation:cardIn .5s cubic-bezier(.2,.8,.3,1) both;
+  }
+  @keyframes cardIn{from{opacity:0; transform:translateY(16px) scale(.98)} to{opacity:1}}
+  .card:hover{border-color:rgba(148,163,255,.5); box-shadow:0 18px 48px rgba(30,50,140,.35)}
+  .card .shine{position:absolute; inset:0; pointer-events:none; opacity:0; transition:opacity .25s;
+    background:radial-gradient(420px 240px at var(--mx,50%) var(--my,0%), rgba(160,190,255,.14), transparent 60%)}
+  .card:hover .shine{opacity:1}
+  .art{height:186px; position:relative; overflow:hidden; border-bottom:1px solid var(--line)}
+  .art svg{width:100%; height:100%; display:block}
+  .badge{
+    position:absolute; top:12px; right:12px; z-index:2;
+    font-size:11.5px; padding:4px 11px 4px 8px; border-radius:999px; backdrop-filter:blur(6px);
+    display:flex; align-items:center; gap:6px; border:1px solid rgba(255,255,255,.12);
+    background:rgba(10,14,26,.55); color:var(--dim);
+  }
+  .badge .dot{width:8px; height:8px; border-radius:50%; background:#5b6684}
+  .badge.running{color:#b7f5d8}
+  .badge.running .dot{background:var(--ok); box-shadow:0 0 10px var(--ok); animation:pulse 1.8s infinite}
+  .badge.starting{color:#ffe9b3}
+  .badge.starting .dot{background:var(--warn); animation:pulse .9s infinite}
+  .badge.link .dot{background:var(--acc2)}
+  @keyframes pulse{0%,100%{transform:scale(1); opacity:1}50%{transform:scale(1.45); opacity:.55}}
+  .body{padding:18px 20px 16px}
+  .body h3{font-size:17.5px; font-weight:750; letter-spacing:.01em}
+  .body p{color:var(--dim); font-size:13px; line-height:1.75; margin-top:7px; min-height:44px}
+  .foot{display:flex; align-items:center; justify-content:space-between; margin-top:12px}
+  .go{font-size:13px; font-weight:700; color:#9fb8ff; display:flex; align-items:center; gap:6px}
+  .go .arrow{transition:transform .2s}
+  .card:hover .go .arrow{transform:translateX(4px)}
+  .mini{display:flex; gap:6px}
+  .icon-btn{
+    width:32px; height:32px; border-radius:9px; border:1px solid var(--line); background:transparent;
+    color:var(--dim); cursor:pointer; font-size:14px; display:grid; place-items:center; transition:.15s;
+    opacity:0;
+  }
+  .card:hover .icon-btn{opacity:1}
+  .icon-btn:hover{color:#fff; border-color:rgba(148,163,255,.5)}
+  .icon-btn.stop:hover{color:#ffb3c0; border-color:rgba(251,113,133,.5)}
+  .empty{grid-column:1/-1; text-align:center; color:var(--dim); padding:60px 0; font-size:14px}
+
+  /* ---------- launch overlay ---------- */
+  #overlay{
+    position:fixed; inset:0; z-index:50; display:none; align-items:center; justify-content:center;
+    background:rgba(6,9,18,.78); backdrop-filter:blur(14px);
+  }
+  #overlay.show{display:flex; animation:fadeIn .25s both}
+  @keyframes fadeIn{from{opacity:0}to{opacity:1}}
+  .panel{
+    width:min(560px, 92vw); border-radius:24px; padding:38px 38px 30px; text-align:center;
+    background:linear-gradient(180deg,#141d33,#0e1424); border:1px solid rgba(148,163,255,.22);
+    box-shadow:0 30px 90px rgba(0,0,0,.55); animation:panelIn .35s cubic-bezier(.2,.9,.3,1.2) both;
+  }
+  @keyframes panelIn{from{opacity:0; transform:scale(.92) translateY(14px)} to{opacity:1}}
+  .orbit-box{position:relative; width:190px; height:190px; margin:0 auto 6px}
+  .orbit-box .thumb{
+    position:absolute; inset:37px; border-radius:50%; overflow:hidden;
+    border:1px solid rgba(148,163,255,.3); box-shadow:inset 0 0 30px rgba(0,0,0,.4);
+  }
+  .orbit-box .thumb svg{width:100%; height:100%; object-fit:cover; transform:scale(1.9)}
+  .ring{position:absolute; inset:0; border-radius:50%; border:2px solid transparent}
+  .ring.r1{border-top-color:var(--acc); border-right-color:rgba(109,141,255,.25); animation:spin 1.3s linear infinite}
+  .ring.r2{inset:12px; border-bottom-color:var(--acc2); border-left-color:rgba(56,211,255,.2); animation:spin 2.1s linear infinite reverse}
+  .ring.r3{inset:24px; border-top-color:rgba(190,160,255,.8); animation:spin 3.4s linear infinite}
+  #overlay.done .ring{animation-play-state:paused; border-color:rgba(52,211,153,.65)}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .sat{position:absolute; inset:0; animation:spin 2.6s linear infinite}
+  .sat::after{content:""; position:absolute; top:-4px; left:calc(50% - 4px); width:9px; height:9px;
+    border-radius:50%; background:var(--acc2); box-shadow:0 0 12px var(--acc2)}
+  #ov-title{font-size:19px; font-weight:800; margin-top:14px}
+  #ov-msg{color:var(--dim); font-size:13.5px; margin-top:9px; min-height:20px; transition:opacity .3s}
+  #ov-msg.swap{opacity:0}
+  .bar{height:7px; border-radius:99px; background:rgba(148,163,255,.12); margin:22px 8px 8px; overflow:hidden; position:relative}
+  .bar i{
+    display:block; height:100%; width:0%; border-radius:99px; transition:width .45s cubic-bezier(.3,.8,.4,1);
+    background:linear-gradient(90deg,#4f6df5,#37b6f0,#4f6df5); background-size:200% 100%;
+    animation:shimmer 1.6s linear infinite;
+  }
+  @keyframes shimmer{to{background-position:-200% 0}}
+  #overlay.done .bar i{background:linear-gradient(90deg,#10b981,#34d399); animation:none}
+  #ov-elapsed{font-size:11.5px; color:#5f6a8c; letter-spacing:.06em}
+  .ov-actions{display:flex; gap:10px; justify-content:center; margin-top:20px; flex-wrap:wrap}
+  #ov-log{
+    display:none; text-align:left; margin-top:16px; max-height:180px; overflow:auto; border-radius:12px;
+    background:#0a0e1a; border:1px solid var(--line); padding:12px 14px;
+    font:11.5px/1.7 ui-monospace,Consolas,monospace; color:#9fb0d8; white-space:pre-wrap;
+  }
+  #confetti{position:fixed; inset:0; z-index:60; pointer-events:none}
+
+  /* ---------- add modal ---------- */
+  #modal{position:fixed; inset:0; z-index:55; display:none; align-items:center; justify-content:center;
+    background:rgba(6,9,18,.7); backdrop-filter:blur(10px)}
+  #modal.show{display:flex; animation:fadeIn .2s both}
+  .mpanel{width:min(600px,94vw); max-height:90vh; overflow:auto; border-radius:22px; padding:30px 32px;
+    background:linear-gradient(180deg,#141d33,#0e1424); border:1px solid rgba(148,163,255,.22)}
+  .mpanel h2{font-size:19px; margin-bottom:4px}
+  .mpanel .hint{color:var(--dim); font-size:12.5px; line-height:1.7; margin-bottom:18px}
+  .field{margin-bottom:14px; text-align:left}
+  .field label{display:block; font-size:12.5px; color:#aab6da; margin-bottom:6px; font-weight:600}
+  .field input{
+    width:100%; background:#0a0e1a; border:1px solid var(--line); color:var(--text);
+    border-radius:10px; padding:10px 13px; font-size:13.5px; outline:none; transition:border-color .15s;
+  }
+  .field input:focus{border-color:rgba(109,141,255,.6)}
+  .field .sub{font-size:11.5px; color:#5f6a8c; margin-top:5px}
+  .icons{display:grid; grid-template-columns:repeat(3,1fr); gap:10px}
+  .icons .opt{border:2px solid var(--line); border-radius:12px; overflow:hidden; cursor:pointer; transition:.15s; position:relative}
+  .icons .opt svg{width:100%; height:74px; display:block}
+  .icons .opt.sel{border-color:var(--acc); box-shadow:0 0 0 3px rgba(109,141,255,.2)}
+  .mrow{display:flex; justify-content:flex-end; gap:10px; margin-top:22px}
+  #madd-err{color:var(--err); font-size:12.5px; margin-top:10px; display:none}
+  footer{margin-top:44px; color:#525d7d; font-size:12px; text-align:center; line-height:1.9}
+  footer code{background:rgba(148,163,255,.1); padding:2px 7px; border-radius:6px}
+</style>
+</head>
+<body>
+<canvas id="bg"></canvas>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <h1>App Portal</h1>
+      <p>for_eigyo / claudecode で作ったアプリを、ここからワンクリックで起動する窓口</p>
+    </div>
+    <button class="btn" id="btn-add">＋ アプリを追加</button>
+  </header>
+
+  <div class="grid" id="grid"></div>
+
+  <footer>
+    アプリの登録は上の「＋ アプリを追加」か、<code>launcher/apps.json</code> を直接編集。<br>
+    起動プロセスはこのポータル終了（Ctrl+C）時にまとめて停止されます。
+  </footer>
+</div>
+
+<!-- 起動オーバーレイ -->
+<div id="overlay">
+  <div class="panel">
+    <div class="orbit-box">
+      <div class="ring r1"></div><div class="ring r2"></div><div class="ring r3"></div>
+      <div class="sat"></div>
+      <div class="thumb" id="ov-art"></div>
+    </div>
+    <div id="ov-title">起動しています</div>
+    <div id="ov-msg">プロセスを準備しています…</div>
+    <div class="bar"><i id="ov-bar"></i></div>
+    <div id="ov-elapsed"></div>
+    <div class="ov-actions">
+      <button class="btn primary" id="ov-open" style="display:none">アプリを開く ↗</button>
+      <button class="btn ghost" id="ov-logbtn" style="display:none">ログを表示</button>
+      <button class="btn ghost" id="ov-close">閉じる</button>
+    </div>
+    <div id="ov-log"></div>
+  </div>
+</div>
+<canvas id="confetti"></canvas>
+
+<!-- アプリ追加モーダル -->
+<div id="modal">
+  <div class="mpanel">
+    <h2>アプリを追加</h2>
+    <p class="hint">
+      claudecode ディレクトリなど、別フォルダのアプリも登録できます。<br>
+      「URLだけ」ならリンクカードに、「起動コマンド」も入れると起動＆待機してから開きます。
+    </p>
+    <div class="field"><label>名前 *</label><input id="f-name" placeholder="例: 売上ダッシュボード"></div>
+    <div class="field"><label>説明</label><input id="f-desc" placeholder="ひとことで何をするアプリか"></div>
+    <div class="field"><label>URL</label><input id="f-url" placeholder="http://127.0.0.1:8501">
+      <div class="sub">起動後に開くアドレス（コマンド無しならリンクとして開くだけ）</div></div>
+    <div class="field"><label>起動コマンド</label><input id="f-cmd" placeholder="{python} app.py --port 8501">
+      <div class="sub">{python} はポータルと同じ Python に置き換わる。スペース区切り</div></div>
+    <div class="field"><label>作業フォルダ</label><input id="f-cwd" placeholder="../../claudecode/myapp">
+      <div class="sub">launcher/ フォルダ起点の相対パス、または絶対パス</div></div>
+    <div class="field"><label>待機ポート</label><input id="f-port" placeholder="8501">
+      <div class="sub">このポートが応答したら「起動完了」と判定する</div></div>
+    <div class="field"><label>入り口イメージ</label><div class="icons" id="f-icons"></div></div>
+    <div id="madd-err"></div>
+    <div class="mrow">
+      <button class="btn ghost" id="m-cancel">キャンセル</button>
+      <button class="btn primary" id="m-save">追加する</button>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* ================================================================
+   入り口イメージ（生成アートワーク / SVG）
+   ================================================================ */
+const ART = {
+  /* llmlab Studio — 文書とレンズと集計の観測所 */
+  studio: (u) => `
+  <svg viewBox="0 0 400 240" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="sb${u}" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#141b3f"/><stop offset=".55" stop-color="#0e2647"/><stop offset="1" stop-color="#083344"/>
+      </linearGradient>
+      <linearGradient id="sl${u}" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stop-color="#6d8dff"/><stop offset="1" stop-color="#38d3ff"/>
+      </linearGradient>
+      <radialGradient id="sg${u}" cx=".5" cy=".45" r=".6">
+        <stop offset="0" stop-color="#38d3ff" stop-opacity=".35"/><stop offset="1" stop-color="#38d3ff" stop-opacity="0"/>
+      </radialGradient>
+    </defs>
+    <rect width="400" height="240" fill="url(#sb${u})"/>
+    <ellipse cx="205" cy="115" rx="150" ry="95" fill="url(#sg${u})"/>
+    <g stroke="#38d3ff" stroke-opacity=".18"><path d="M0 200 Q200 150 400 195" fill="none"/><path d="M0 215 Q200 175 400 212" fill="none"/></g>
+    <!-- 浮遊する文書 -->
+    <g>
+      <animateTransform attributeName="transform" type="translate" values="0 0;0 -5;0 0" dur="5s" repeatCount="indefinite"/>
+      <rect x="86" y="52" width="86" height="112" rx="9" fill="#101c38" stroke="#3d548f" stroke-width="1.5"/>
+      <rect x="98" y="68" width="52" height="6" rx="3" fill="#5f7ddd"/>
+      <rect x="98" y="83" width="62" height="4" rx="2" fill="#33518f"/>
+      <rect x="98" y="94" width="58" height="4" rx="2" fill="#33518f"/>
+      <rect x="98" y="105" width="42" height="4" rx="2" fill="#33518f"/>
+      <rect x="98" y="122" width="10" height="26" rx="2" fill="#2e7fd0"/>
+      <rect x="112" y="114" width="10" height="34" rx="2" fill="#38d3ff"/>
+      <rect x="126" y="128" width="10" height="20" rx="2" fill="#6d8dff"/>
+    </g>
+    <g opacity=".8">
+      <animateTransform attributeName="transform" type="translate" values="0 0;0 6;0 0" dur="6.5s" repeatCount="indefinite"/>
+      <rect x="66" y="76" width="64" height="86" rx="8" fill="#0c1730" stroke="#2c3f6e" stroke-width="1.4" transform="rotate(-8 98 119)"/>
+    </g>
+    <!-- レンズ -->
+    <g>
+      <animateTransform attributeName="transform" type="translate" values="0 0;0 -7;0 0" dur="4.2s" repeatCount="indefinite"/>
+      <circle cx="242" cy="104" r="46" fill="rgba(56,211,255,.08)" stroke="url(#sl${u})" stroke-width="5"/>
+      <circle cx="242" cy="104" r="46" fill="none" stroke="#fff" stroke-opacity=".25" stroke-width="1"/>
+      <line x1="277" y1="139" x2="312" y2="174" stroke="url(#sl${u})" stroke-width="10" stroke-linecap="round"/>
+      <path d="M222 92 q10 -14 26 -10" stroke="#bfefff" stroke-width="4" stroke-linecap="round" fill="none" opacity=".7"/>
+    </g>
+    <!-- 抽出された数値の粒 -->
+    <g fill="#7ee7ff" font-family="monospace" font-size="11" opacity=".85">
+      <text x="300" y="66">128.4<animate attributeName="opacity" values=".2;1;.2" dur="3s" repeatCount="indefinite"/></text>
+      <text x="322" y="98">+12%<animate attributeName="opacity" values="1;.2;1" dur="3.6s" repeatCount="indefinite"/></text>
+      <text x="298" y="128">p.42<animate attributeName="opacity" values=".4;1;.4" dur="2.7s" repeatCount="indefinite"/></text>
+    </g>
+    <circle cx="52" cy="42" r="2.4" fill="#8fb2ff"><animate attributeName="cy" values="42;36;42" dur="4s" repeatCount="indefinite"/></circle>
+    <circle cx="356" cy="180" r="2" fill="#38d3ff"><animate attributeName="cy" values="180;174;180" dur="5s" repeatCount="indefinite"/></circle>
+  </svg>`,
+
+  /* llmlab Loop — 自律ループの軌道 */
+  loop: (u) => `
+  <svg viewBox="0 0 400 240" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="lb${u}" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#1c1240"/><stop offset=".6" stop-color="#2a1148"/><stop offset="1" stop-color="#3b0f3f"/>
+      </linearGradient>
+      <linearGradient id="ll${u}" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stop-color="#a78bfa"/><stop offset="1" stop-color="#f472b6"/>
+      </linearGradient>
+      <radialGradient id="lg${u}" cx=".5" cy=".5" r=".55">
+        <stop offset="0" stop-color="#c084fc" stop-opacity=".4"/><stop offset="1" stop-color="#c084fc" stop-opacity="0"/>
+      </radialGradient>
+    </defs>
+    <rect width="400" height="240" fill="url(#lb${u})"/>
+    <ellipse cx="200" cy="120" rx="130" ry="90" fill="url(#lg${u})"/>
+    <!-- 軌道 -->
+    <ellipse cx="200" cy="120" rx="128" ry="66" fill="none" stroke="#a78bfa" stroke-opacity=".35" stroke-width="1.6"/>
+    <ellipse cx="200" cy="120" rx="92" ry="46" fill="none" stroke="#f472b6" stroke-opacity=".3" stroke-width="1.4"/>
+    <ellipse cx="200" cy="120" rx="55" ry="27" fill="none" stroke="#e9d5ff" stroke-opacity=".25" stroke-width="1.2"/>
+    <!-- 中心コア -->
+    <circle cx="200" cy="120" r="17" fill="url(#ll${u})">
+      <animate attributeName="r" values="17;19;17" dur="2.4s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="200" cy="120" r="26" fill="none" stroke="#f0abfc" stroke-opacity=".5" stroke-width="1.5">
+      <animate attributeName="r" values="24;32;24" dur="2.4s" repeatCount="indefinite"/>
+      <animate attributeName="stroke-opacity" values=".5;0;.5" dur="2.4s" repeatCount="indefinite"/>
+    </circle>
+    <!-- 周回ノード（計画→実行→検証→再試行） -->
+    <g><animateTransform attributeName="transform" type="rotate" from="0 200 120" to="360 200 120" dur="9s" repeatCount="indefinite"/>
+      <circle cx="328" cy="120" r="9" fill="#a78bfa"/><circle cx="328" cy="120" r="14" fill="none" stroke="#a78bfa" stroke-opacity=".4"/>
+    </g>
+    <g><animateTransform attributeName="transform" type="rotate" from="120 200 120" to="480 200 120" dur="9s" repeatCount="indefinite"/>
+      <circle cx="328" cy="120" r="7" fill="#f472b6"/>
+    </g>
+    <g><animateTransform attributeName="transform" type="rotate" from="240 200 120" to="600 200 120" dur="9s" repeatCount="indefinite"/>
+      <circle cx="328" cy="120" r="6" fill="#fbbf24"/>
+    </g>
+    <g><animateTransform attributeName="transform" type="rotate" from="0 200 120" to="-360 200 120" dur="6s" repeatCount="indefinite"/>
+      <circle cx="292" cy="120" r="5" fill="#67e8f9"/>
+    </g>
+    <!-- 巡回する彗星の弧 -->
+    <path d="M 96 158 A 128 66 0 0 1 92 96" fill="none" stroke="url(#ll${u})" stroke-width="3.5" stroke-linecap="round" opacity=".9">
+      <animate attributeName="opacity" values=".9;.3;.9" dur="3s" repeatCount="indefinite"/>
+    </path>
+    <g fill="#e9d5ff" opacity=".7" font-family="monospace" font-size="10">
+      <text x="30" y="36">plan → act</text><text x="300" y="216">verify ↺</text>
+    </g>
+    <circle cx="60" cy="196" r="2" fill="#f0abfc"><animate attributeName="cy" values="196;190;196" dur="4.4s" repeatCount="indefinite"/></circle>
+    <circle cx="352" cy="52" r="2.4" fill="#c4b5fd"><animate attributeName="cy" values="52;46;52" dur="3.6s" repeatCount="indefinite"/></circle>
+  </svg>`,
+
+  /* JupyterLab — ノートブックの惑星 */
+  jupyter: (u) => `
+  <svg viewBox="0 0 400 240" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="jb${u}" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#2a1608"/><stop offset=".55" stop-color="#3a1d0a"/><stop offset="1" stop-color="#1f1206"/>
+      </linearGradient>
+      <linearGradient id="jp${u}" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#fdba74"/><stop offset="1" stop-color="#ea580c"/>
+      </linearGradient>
+      <radialGradient id="jg${u}" cx=".5" cy=".5" r=".55">
+        <stop offset="0" stop-color="#fb923c" stop-opacity=".35"/><stop offset="1" stop-color="#fb923c" stop-opacity="0"/>
+      </radialGradient>
+    </defs>
+    <rect width="400" height="240" fill="url(#jb${u})"/>
+    <ellipse cx="200" cy="118" rx="150" ry="95" fill="url(#jg${u})"/>
+    <!-- 惑星と環 -->
+    <g>
+      <animateTransform attributeName="transform" type="translate" values="0 0;0 -6;0 0" dur="6s" repeatCount="indefinite"/>
+      <ellipse cx="200" cy="118" rx="108" ry="30" fill="none" stroke="#fdba74" stroke-opacity=".5" stroke-width="3" transform="rotate(-14 200 118)"/>
+      <circle cx="200" cy="114" r="52" fill="url(#jp${u})"/>
+      <path d="M158 100 q42 -26 84 0" stroke="#fff7ed" stroke-opacity=".5" stroke-width="4" fill="none" stroke-linecap="round"/>
+      <path d="M156 126 q44 18 88 0" stroke="#7c2d12" stroke-opacity=".55" stroke-width="6" fill="none" stroke-linecap="round"/>
+      <ellipse cx="200" cy="118" rx="108" ry="30" fill="none" stroke="#fed7aa" stroke-opacity=".85" stroke-width="3"
+               transform="rotate(-14 200 118)" stroke-dasharray="270 400" stroke-dashoffset="-180"/>
+    </g>
+    <!-- 三つの月（Jupyter） -->
+    <g><animateTransform attributeName="transform" type="rotate" from="0 200 118" to="360 200 118" dur="14s" repeatCount="indefinite"/>
+      <circle cx="322" cy="118" r="7" fill="#fdba74"/></g>
+    <g><animateTransform attributeName="transform" type="rotate" from="130 200 118" to="490 200 118" dur="14s" repeatCount="indefinite"/>
+      <circle cx="322" cy="118" r="5.4" fill="#fb923c"/></g>
+    <g><animateTransform attributeName="transform" type="rotate" from="245 200 118" to="605 200 118" dur="14s" repeatCount="indefinite"/>
+      <circle cx="322" cy="118" r="4.4" fill="#ffedd5"/></g>
+    <!-- ノートブックセル -->
+    <g font-family="monospace" font-size="10.5">
+      <g><animateTransform attributeName="transform" type="translate" values="0 0;0 5;0 0" dur="5s" repeatCount="indefinite"/>
+        <rect x="34" y="42" width="102" height="26" rx="6" fill="#12100c" stroke="#92400e" stroke-width="1.2" opacity=".95"/>
+        <text x="43" y="59" fill="#fdba74">In [1]: fit()</text></g>
+      <g><animateTransform attributeName="transform" type="translate" values="0 0;0 -5;0 0" dur="5.8s" repeatCount="indefinite"/>
+        <rect x="286" y="168" width="86" height="26" rx="6" fill="#12100c" stroke="#92400e" stroke-width="1.2" opacity=".95"/>
+        <text x="295" y="185" fill="#fde68a">Out: 0.98</text></g>
+    </g>
+    <circle cx="70" cy="180" r="2.2" fill="#fdba74"><animate attributeName="opacity" values=".3;1;.3" dur="3.4s" repeatCount="indefinite"/></circle>
+    <circle cx="340" cy="46" r="2" fill="#fed7aa"><animate attributeName="opacity" values="1;.3;1" dur="4.1s" repeatCount="indefinite"/></circle>
+  </svg>`,
+
+  /* terminal — claudecode 系のアプリ向け */
+  terminal: (u) => `
+  <svg viewBox="0 0 400 240" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="tb${u}" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#04211c"/><stop offset=".6" stop-color="#052e29"/><stop offset="1" stop-color="#03201f"/>
+      </linearGradient>
+      <linearGradient id="tl${u}" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stop-color="#34d399"/><stop offset="1" stop-color="#2dd4bf"/>
+      </linearGradient>
+      <radialGradient id="tg${u}" cx=".5" cy=".4" r=".6">
+        <stop offset="0" stop-color="#34d399" stop-opacity=".28"/><stop offset="1" stop-color="#34d399" stop-opacity="0"/>
+      </radialGradient>
+    </defs>
+    <rect width="400" height="240" fill="url(#tb${u})"/>
+    <ellipse cx="200" cy="110" rx="160" ry="100" fill="url(#tg${u})"/>
+    <!-- ターミナルウィンドウ -->
+    <g>
+      <animateTransform attributeName="transform" type="translate" values="0 0;0 -5;0 0" dur="5.5s" repeatCount="indefinite"/>
+      <rect x="92" y="52" width="216" height="136" rx="13" fill="#04120f" stroke="#0f766e" stroke-width="1.6"/>
+      <rect x="92" y="52" width="216" height="30" rx="13" fill="#062a24"/>
+      <rect x="92" y="70" width="216" height="12" fill="#062a24"/>
+      <circle cx="112" cy="67" r="4.6" fill="#fb7185"/><circle cx="128" cy="67" r="4.6" fill="#fbbf24"/><circle cx="144" cy="67" r="4.6" fill="#34d399"/>
+      <g font-family="monospace" font-size="12.5">
+        <text x="108" y="107" fill="#5eead4">$ claude code</text>
+        <text x="108" y="128" fill="#a7f3d0" opacity=".9">✔ building app…</text>
+        <text x="108" y="149" fill="#6ee7b7" opacity=".75">✔ ready on :3000</text>
+        <text x="108" y="170" fill="#34d399">$ <tspan fill="#d1fae5">▌<animate attributeName="opacity" values="1;0;1" dur="1s" repeatCount="indefinite"/></tspan></text>
+      </g>
+    </g>
+    <!-- 立ちのぼるスパーク -->
+    <g fill="#6ee7b7">
+      <circle cx="70" cy="170" r="2.4"><animate attributeName="cy" values="180;120" dur="4s" repeatCount="indefinite"/><animate attributeName="opacity" values="0;.9;0" dur="4s" repeatCount="indefinite"/></circle>
+      <circle cx="330" cy="150" r="2"><animate attributeName="cy" values="170;100" dur="5s" repeatCount="indefinite"/><animate attributeName="opacity" values="0;.8;0" dur="5s" repeatCount="indefinite"/></circle>
+      <circle cx="352" cy="190" r="2.6"><animate attributeName="cy" values="200;140" dur="4.6s" repeatCount="indefinite"/><animate attributeName="opacity" values="0;.7;0" dur="4.6s" repeatCount="indefinite"/></circle>
+      <circle cx="52" cy="110" r="1.8"><animate attributeName="cy" values="130;70" dur="5.4s" repeatCount="indefinite"/><animate attributeName="opacity" values="0;.8;0" dur="5.4s" repeatCount="indefinite"/></circle>
+    </g>
+    <path d="M60 216 Q200 196 340 216" stroke="url(#tl${u})" stroke-width="2" fill="none" opacity=".35"/>
+  </svg>`,
+
+  /* chat — 対話・アシスタント系 */
+  chat: (u) => `
+  <svg viewBox="0 0 400 240" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="cb${u}" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#0c1f3f"/><stop offset=".6" stop-color="#0a2a55"/><stop offset="1" stop-color="#061a38"/>
+      </linearGradient>
+      <linearGradient id="cl${u}" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stop-color="#60a5fa"/><stop offset="1" stop-color="#22d3ee"/>
+      </linearGradient>
+      <radialGradient id="cg${u}" cx=".5" cy=".45" r=".6">
+        <stop offset="0" stop-color="#60a5fa" stop-opacity=".3"/><stop offset="1" stop-color="#60a5fa" stop-opacity="0"/>
+      </radialGradient>
+    </defs>
+    <rect width="400" height="240" fill="url(#cb${u})"/>
+    <ellipse cx="200" cy="115" rx="150" ry="95" fill="url(#cg${u})"/>
+    <g stroke="#60a5fa" stroke-opacity=".25">
+      <line x1="70" y1="60" x2="130" y2="92"/><line x1="330" y1="70" x2="272" y2="98"/><line x1="86" y1="196" x2="140" y2="164"/>
+    </g>
+    <circle cx="70" cy="60" r="3" fill="#93c5fd"/><circle cx="330" cy="70" r="3.4" fill="#67e8f9"/><circle cx="86" cy="196" r="2.6" fill="#93c5fd"/>
+    <!-- 吹き出し（相手） -->
+    <g>
+      <animateTransform attributeName="transform" type="translate" values="0 0;0 -6;0 0" dur="5s" repeatCount="indefinite"/>
+      <rect x="108" y="66" width="150" height="58" rx="18" fill="#0e2b57" stroke="#3b82f6" stroke-width="1.6"/>
+      <path d="M132 122 l-10 18 24 -13z" fill="#0e2b57" stroke="#3b82f6" stroke-width="1.6"/>
+      <rect x="126" y="84" width="96" height="6" rx="3" fill="#60a5fa"/>
+      <rect x="126" y="99" width="72" height="6" rx="3" fill="#2f5aa8"/>
+    </g>
+    <!-- 吹き出し（返信・タイピング中） -->
+    <g>
+      <animateTransform attributeName="transform" type="translate" values="0 0;0 6;0 0" dur="5.8s" repeatCount="indefinite"/>
+      <rect x="196" y="132" width="120" height="50" rx="17" fill="url(#cl${u})"/>
+      <path d="M292 180 l12 16 -26 -8z" fill="#22d3ee"/>
+      <circle cx="232" cy="157" r="5" fill="#062a55"><animate attributeName="cy" values="157;151;157" dur="1.2s" repeatCount="indefinite"/></circle>
+      <circle cx="254" cy="157" r="5" fill="#062a55"><animate attributeName="cy" values="157;151;157" dur="1.2s" begin=".2s" repeatCount="indefinite"/></circle>
+      <circle cx="276" cy="157" r="5" fill="#062a55"><animate attributeName="cy" values="157;151;157" dur="1.2s" begin=".4s" repeatCount="indefinite"/></circle>
+    </g>
+    <circle cx="348" cy="182" r="2.2" fill="#67e8f9"><animate attributeName="opacity" values=".3;1;.3" dur="3.2s" repeatCount="indefinite"/></circle>
+    <circle cx="56" cy="132" r="2" fill="#93c5fd"><animate attributeName="opacity" values="1;.3;1" dur="4s" repeatCount="indefinite"/></circle>
+  </svg>`,
+
+  /* docs — 文書・レポート系 */
+  docs: (u) => `
+  <svg viewBox="0 0 400 240" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="db${u}" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#2d0e34"/><stop offset=".6" stop-color="#3c1245"/><stop offset="1" stop-color="#250a3a"/>
+      </linearGradient>
+      <linearGradient id="dl${u}" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stop-color="#f472b6"/><stop offset="1" stop-color="#c084fc"/>
+      </linearGradient>
+      <radialGradient id="dg${u}" cx=".5" cy=".45" r=".6">
+        <stop offset="0" stop-color="#f472b6" stop-opacity=".28"/><stop offset="1" stop-color="#f472b6" stop-opacity="0"/>
+      </radialGradient>
+    </defs>
+    <rect width="400" height="240" fill="url(#db${u})"/>
+    <ellipse cx="200" cy="115" rx="150" ry="95" fill="url(#dg${u})"/>
+    <!-- 重なるページ -->
+    <g opacity=".7"><animateTransform attributeName="transform" type="translate" values="0 0;0 5;0 0" dur="6.4s" repeatCount="indefinite"/>
+      <rect x="128" y="66" width="118" height="128" rx="10" fill="#1d0b2e" stroke="#7e22ce" stroke-width="1.3" transform="rotate(-9 187 130)"/>
+    </g>
+    <g opacity=".85"><animateTransform attributeName="transform" type="translate" values="0 0;0 -4;0 0" dur="5.6s" repeatCount="indefinite"/>
+      <rect x="142" y="58" width="118" height="128" rx="10" fill="#230d38" stroke="#a855f7" stroke-width="1.4" transform="rotate(5 201 122)"/>
+    </g>
+    <g>
+      <animateTransform attributeName="transform" type="translate" values="0 0;0 -7;0 0" dur="4.8s" repeatCount="indefinite"/>
+      <rect x="152" y="52" width="120" height="132" rx="10" fill="#2a1043" stroke="url(#dl${u})" stroke-width="2"/>
+      <path d="M236 52 v30 l10 -9 10 9 v-30 z" fill="url(#dl${u})"/>
+      <rect x="167" y="72" width="66" height="8" rx="4" fill="#f0abfc"/>
+      <rect x="167" y="92" width="88" height="5" rx="2.5" fill="#6b2a8f"/>
+      <rect x="167" y="104" width="82" height="5" rx="2.5" fill="#6b2a8f"/>
+      <rect x="167" y="116" width="88" height="5" rx="2.5" fill="#6b2a8f"/>
+      <rect x="167" y="128" width="58" height="5" rx="2.5" fill="#6b2a8f"/>
+      <path d="M167 158 l14 -12 12 8 16 -16 14 10 16 -14" stroke="#f472b6" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+    <g fill="#f0abfc">
+      <circle cx="92" cy="88" r="2.4"><animate attributeName="cy" values="88;80;88" dur="4.4s" repeatCount="indefinite"/></circle>
+      <circle cx="318" cy="150" r="2.8"><animate attributeName="cy" values="150;142;150" dur="5.2s" repeatCount="indefinite"/></circle>
+      <circle cx="304" cy="70" r="2"><animate attributeName="opacity" values=".3;1;.3" dur="3.4s" repeatCount="indefinite"/></circle>
+    </g>
+  </svg>`,
+};
+const ICON_KEYS = Object.keys(ART);
+let artSeq = 0;
+const artOf = (icon) => (ART[icon] || ART.terminal)(++artSeq);
+
+/* ================================================================
+   背景パーティクル
+   ================================================================ */
+(() => {
+  const cv = document.getElementById("bg"), cx = cv.getContext("2d");
+  let W, H, pts = [];
+  const resize = () => {
+    W = cv.width = innerWidth; H = cv.height = innerHeight;
+    const n = Math.min(70, Math.floor(W * H / 26000));
+    pts = Array.from({length: n}, () => ({
+      x: Math.random()*W, y: Math.random()*H,
+      vx: (Math.random()-.5)*.25, vy: (Math.random()-.5)*.25,
+      r: Math.random()*1.6+.6,
+    }));
+  };
+  addEventListener("resize", resize); resize();
+  (function tick(){
+    cx.clearRect(0,0,W,H);
+    for (const p of pts) {
+      p.x += p.vx; p.y += p.vy;
+      if (p.x<0||p.x>W) p.vx*=-1;
+      if (p.y<0||p.y>H) p.vy*=-1;
+      cx.beginPath(); cx.arc(p.x,p.y,p.r,0,7);
+      cx.fillStyle = "rgba(140,165,255,.35)"; cx.fill();
+    }
+    for (let i=0;i<pts.length;i++) for (let j=i+1;j<pts.length;j++){
+      const a=pts[i],b=pts[j],dx=a.x-b.x,dy=a.y-b.y,d=dx*dx+dy*dy;
+      if (d<13000){
+        cx.beginPath(); cx.moveTo(a.x,a.y); cx.lineTo(b.x,b.y);
+        cx.strokeStyle=`rgba(120,150,255,${.10*(1-d/13000)})`; cx.stroke();
+      }
+    }
+    requestAnimationFrame(tick);
+  })();
+})();
+
+/* ================================================================
+   カード描画
+   ================================================================ */
+const grid = document.getElementById("grid");
+let apps = [];
+
+const STATE_LABEL = { running:"起動中", starting:"準備中", stopped:"停止中", link:"リンク" };
+
+function render() {
+  grid.innerHTML = "";
+  if (!apps.length) {
+    grid.innerHTML = '<div class="empty">アプリが未登録です。「＋ アプリを追加」から登録してください。</div>';
+    return;
+  }
+  apps.forEach((app, i) => {
+    const card = document.createElement("div");
+    card.className = "card";
+    card.style.animationDelay = (i * 70) + "ms";
+    card.innerHTML = `
+      <div class="shine"></div>
+      <div class="art">${artOf(app.icon)}
+        <div class="badge ${app.state}"><span class="dot"></span>${STATE_LABEL[app.state] || app.state}</div>
+      </div>
+      <div class="body">
+        <h3>${esc(app.name)}</h3>
+        <p>${esc(app.description || "")}</p>
+        <div class="foot">
+          <span class="go">${app.state === "running" || app.state === "link" ? "開く" : "起動して開く"} <span class="arrow">→</span></span>
+          <span class="mini">
+            ${app.command && app.state === "running" ? '<button class="icon-btn stop" title="停止" data-act="stop">■</button>' : ""}
+            <button class="icon-btn" title="登録を削除" data-act="del">✕</button>
+          </span>
+        </div>
+      </div>`;
+    card.addEventListener("click", (e) => {
+      const act = e.target.closest("[data-act]")?.dataset.act;
+      if (act === "stop") { e.stopPropagation(); stopApp(app); return; }
+      if (act === "del")  { e.stopPropagation(); delApp(app); return; }
+      openApp(app);
+    });
+    // ホバーチルト
+    card.addEventListener("mousemove", (e) => {
+      const r = card.getBoundingClientRect();
+      const px = (e.clientX - r.left) / r.width, py = (e.clientY - r.top) / r.height;
+      card.style.transform = `perspective(900px) rotateY(${(px-.5)*5}deg) rotateX(${(.5-py)*4}deg) translateY(-3px)`;
+      card.style.setProperty("--mx", px*100+"%"); card.style.setProperty("--my", py*100+"%");
+    });
+    card.addEventListener("mouseleave", () => card.style.transform = "");
+    grid.appendChild(card);
+  });
+}
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c =>
+  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+async function refresh(rerender = true) {
+  try {
+    const r = await fetch("/api/apps");
+    const data = await r.json();
+    const prev = JSON.stringify(apps);
+    apps = data.apps || [];
+    if (rerender && JSON.stringify(apps) !== prev) render();
+  } catch {}
+}
+setInterval(() => { if (!ovShown) refresh(); }, 4000);
+refresh();
+
+/* ================================================================
+   起動フロー（オーバーレイ）
+   ================================================================ */
+const ov = document.getElementById("overlay");
+const ovArt = document.getElementById("ov-art");
+const ovTitle = document.getElementById("ov-title");
+const ovMsg = document.getElementById("ov-msg");
+const ovBar = document.getElementById("ov-bar");
+const ovElapsed = document.getElementById("ov-elapsed");
+const ovOpen = document.getElementById("ov-open");
+const ovLogBtn = document.getElementById("ov-logbtn");
+const ovLog = document.getElementById("ov-log");
+let ovShown = false, ovTimer = null, msgTimer = null;
+
+const MESSAGES = [
+  "プロセスを起動しています…",
+  "モジュールを読み込んでいます…",
+  "ポートの応答を待っています…",
+  "画面を準備しています…",
+  "もう少しで完了します…",
+];
+
+function showOverlay(app) {
+  ovShown = true;
+  ov.classList.remove("done");
+  ovArt.innerHTML = artOf(app.icon);
+  ovTitle.textContent = `${app.name} を起動しています`;
+  ovMsg.textContent = MESSAGES[0];
+  ovBar.style.width = "3%";
+  ovElapsed.textContent = "";
+  ovOpen.style.display = "none";
+  ovLogBtn.style.display = "none";
+  ovLog.style.display = "none"; ovLog.textContent = "";
+  ov.classList.add("show");
+}
+function hideOverlay() {
+  ovShown = false;
+  ov.classList.remove("show");
+  clearInterval(ovTimer); clearInterval(msgTimer);
+  refresh();
+}
+document.getElementById("ov-close").addEventListener("click", hideOverlay);
+ovLogBtn.addEventListener("click", () => {
+  ovLog.style.display = ovLog.style.display === "block" ? "none" : "block";
+});
+
+async function openApp(app) {
+  if (app.state === "link" || app.state === "running") {
+    if (app.url) window.open(app.url, "_blank");
+    return;
+  }
+  if (!app.command) { alert("URL も起動コマンドも未設定です"); return; }
+
+  showOverlay(app);
+  let res;
+  try {
+    res = await (await fetch(`/api/launch?id=${encodeURIComponent(app.id)}`, {method:"POST"})).json();
+  } catch (e) { res = {ok:false, error:String(e)}; }
+  if (!res.ok) { failOverlay(app, res.error || "起動に失敗しました"); return; }
+  if (res.state === "running") { successOverlay(app); return; }
+
+  const t0 = Date.now();
+  let mi = 0;
+  msgTimer = setInterval(() => {
+    mi = (mi + 1) % MESSAGES.length;
+    ovMsg.classList.add("swap");
+    setTimeout(() => { ovMsg.textContent = MESSAGES[mi]; ovMsg.classList.remove("swap"); }, 280);
+  }, 2600);
+
+  ovTimer = setInterval(async () => {
+    const sec = (Date.now() - t0) / 1000;
+    ovElapsed.textContent = sec.toFixed(1) + " 秒経過";
+    // 漸近的に 92% まで進む
+    ovBar.style.width = (92 * (1 - Math.exp(-sec / 7)) + 3).toFixed(1) + "%";
+    let st;
+    try {
+      st = await (await fetch(`/api/status?id=${encodeURIComponent(app.id)}`)).json();
+    } catch { return; }
+    if (st.log && st.log.length) {
+      ovLogBtn.style.display = "inline-flex";
+      ovLog.textContent = st.log.join("\n");
+      if (ovLog.style.display === "block") ovLog.scrollTop = ovLog.scrollHeight;
+    }
+    if (st.state === "running") { successOverlay(app); return; }
+    if (st.state === "stopped") {
+      failOverlay(app, "プロセスが終了しました。ログを確認してください。"); return;
+    }
+    if (sec > 120) { failOverlay(app, "タイムアウトしました（120秒）。ログを確認してください。"); }
+  }, 600);
+}
+
+function successOverlay(app) {
+  clearInterval(ovTimer); clearInterval(msgTimer);
+  ov.classList.add("done");
+  ovBar.style.width = "100%";
+  ovTitle.textContent = `${app.name} が起動しました 🎉`;
+  ovMsg.textContent = "新しいタブで開きます";
+  burst();
+  if (app.url) {
+    ovOpen.style.display = "inline-flex";
+    ovOpen.onclick = () => { window.open(app.url, "_blank"); hideOverlay(); };
+    setTimeout(() => {
+      const w = window.open(app.url, "_blank");
+      if (w) hideOverlay();
+      else ovMsg.textContent = "ポップアップがブロックされました。下のボタンから開いてください。";
+    }, 700);
+  } else {
+    setTimeout(hideOverlay, 1200);
+  }
+}
+
+function failOverlay(app, message) {
+  clearInterval(ovTimer); clearInterval(msgTimer);
+  ovTitle.textContent = `${app.name} を起動できませんでした`;
+  ovMsg.textContent = message;
+  ovMsg.style.color = "var(--err)";
+  setTimeout(() => ovMsg.style.color = "", 6000);
+  ovBar.style.width = "0%";
+}
+
+async function stopApp(app) {
+  if (!confirm(`${app.name} を停止しますか？`)) return;
+  const res = await (await fetch(`/api/stop?id=${encodeURIComponent(app.id)}`, {method:"POST"})).json();
+  if (!res.ok) alert(res.error || "停止できませんでした");
+  refresh();
+}
+
+async function delApp(app) {
+  if (!confirm(`「${app.name}」の登録をポータルから削除しますか？\n（アプリ本体は削除されません）`)) return;
+  await fetch(`/api/apps?id=${encodeURIComponent(app.id)}`, {method:"DELETE"});
+  refresh();
+}
+
+/* 成功時の紙吹雪 */
+function burst() {
+  const cv = document.getElementById("confetti"), cx = cv.getContext("2d");
+  cv.width = innerWidth; cv.height = innerHeight;
+  const colors = ["#6d8dff","#38d3ff","#34d399","#fbbf24","#f472b6","#c084fc"];
+  const ps = Array.from({length: 90}, () => ({
+    x: innerWidth/2, y: innerHeight/2 - 40,
+    vx: (Math.random()-.5)*14, vy: (Math.random()-.9)*13,
+    r: Math.random()*4+2, c: colors[Math.random()*colors.length|0],
+    a: 1, rot: Math.random()*7, vr: (Math.random()-.5)*.3,
+  }));
+  let frame = 0;
+  (function tick(){
+    cx.clearRect(0,0,cv.width,cv.height);
+    let alive = false;
+    for (const p of ps) {
+      p.x += p.vx; p.y += p.vy; p.vy += .28; p.a -= .012; p.rot += p.vr;
+      if (p.a <= 0) continue;
+      alive = true;
+      cx.save(); cx.translate(p.x,p.y); cx.rotate(p.rot); cx.globalAlpha = p.a;
+      cx.fillStyle = p.c; cx.fillRect(-p.r,-p.r/2,p.r*2,p.r);
+      cx.restore();
+    }
+    if (alive && frame++ < 220) requestAnimationFrame(tick);
+    else cx.clearRect(0,0,cv.width,cv.height);
+  })();
+}
+
+/* ================================================================
+   アプリ追加モーダル
+   ================================================================ */
+const modal = document.getElementById("modal");
+const fIcons = document.getElementById("f-icons");
+let selIcon = "terminal";
+
+function buildIconPicker() {
+  fIcons.innerHTML = "";
+  ICON_KEYS.forEach((key) => {
+    const d = document.createElement("div");
+    d.className = "opt" + (key === selIcon ? " sel" : "");
+    d.innerHTML = artOf(key);
+    d.title = key;
+    d.addEventListener("click", () => {
+      selIcon = key;
+      fIcons.querySelectorAll(".opt").forEach(o => o.classList.remove("sel"));
+      d.classList.add("sel");
+    });
+    fIcons.appendChild(d);
+  });
+}
+document.getElementById("btn-add").addEventListener("click", () => {
+  selIcon = "terminal"; buildIconPicker();
+  ["f-name","f-desc","f-url","f-cmd","f-cwd","f-port"].forEach(id => document.getElementById(id).value = "");
+  document.getElementById("madd-err").style.display = "none";
+  modal.classList.add("show");
+});
+document.getElementById("m-cancel").addEventListener("click", () => modal.classList.remove("show"));
+modal.addEventListener("click", (e) => { if (e.target === modal) modal.classList.remove("show"); });
+
+document.getElementById("m-save").addEventListener("click", async () => {
+  const body = {
+    name: document.getElementById("f-name").value,
+    description: document.getElementById("f-desc").value,
+    url: document.getElementById("f-url").value,
+    command: document.getElementById("f-cmd").value,
+    cwd: document.getElementById("f-cwd").value,
+    port: document.getElementById("f-port").value,
+    icon: selIcon,
+  };
+  const res = await (await fetch("/api/apps", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body),
+  })).json();
+  if (!res.ok) {
+    const err = document.getElementById("madd-err");
+    err.textContent = res.error || "追加できませんでした";
+    err.style.display = "block";
+    return;
+  }
+  modal.classList.remove("show");
+  refresh();
+});
+</script>
+</body>
+</html>

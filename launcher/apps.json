@@ -1,0 +1,60 @@
+{
+  "apps": [
+    {
+      "id": "studio",
+      "name": "llmlab Studio",
+      "description": "検索・要約・レポート・数値抽出・グラフをブラウザ1画面で行うワンストップUI",
+      "icon": "studio",
+      "cwd": "../jupyter-local-llm",
+      "command": [
+        "{python}",
+        "-m",
+        "llmlab.app",
+        "--port",
+        "8765"
+      ],
+      "env": {
+        "PYTHONPATH": "src"
+      },
+      "url": "http://127.0.0.1:8765",
+      "wait_port": 8765
+    },
+    {
+      "id": "loop",
+      "name": "llmlab Loop",
+      "description": "目標を投げると 計画→実行→検証→再試行 を自動で回す自律ループ。定期実行・Webhook・人間承認",
+      "icon": "loop",
+      "cwd": "../jupyter-local-llm",
+      "command": [
+        "{python}",
+        "-m",
+        "llmlab.loopsys",
+        "--port",
+        "8766"
+      ],
+      "env": {
+        "PYTHONPATH": "src"
+      },
+      "url": "http://127.0.0.1:8766",
+      "wait_port": 8766
+    },
+    {
+      "id": "jupyterlab",
+      "name": "JupyterLab",
+      "description": "コード補完・チャット・各種RAGのノートブック（llmlab）を動かす JupyterLab",
+      "icon": "jupyter",
+      "cwd": "../jupyter-local-llm",
+      "command": [
+        "{python}",
+        "-m",
+        "jupyterlab",
+        "--no-browser",
+        "--port",
+        "8888",
+        "--ServerApp.token="
+      ],
+      "url": "http://127.0.0.1:8888/lab",
+      "wait_port": 8888
+    }
+  ]
+}
