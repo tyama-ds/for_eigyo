@@ -78,6 +78,14 @@ def extract_citations(text: str) -> list[str]:
     return found[:20]
 
 
+def _has_pyperclip() -> bool:
+    try:
+        import pyperclip  # noqa: F401
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 # ---------------------------------------------------------------------------
 # コネクタ基底
 # ---------------------------------------------------------------------------
@@ -96,6 +104,9 @@ class BaseConnector:
     def test(self) -> tuple[bool, str]:
         """接続確認。(ok, メッセージ) を返す。"""
         return True, f"{self.label}: 準備OK"
+
+    def close(self) -> None:
+        """セッションの後始末（ブラウザ終了など）。既定は何もしない。run 終了時に呼ばれる。"""
 
     @staticmethod
     def _emit(emit: EmitFn | None, **evt) -> None:
@@ -185,67 +196,100 @@ class BridgeConnector(BaseConnector):
 # ---------------------------------------------------------------------------
 
 class SeleniumConnector(BaseConnector):
-    """Selenium（Edge / Chrome WebDriver）で M365 Copilot の Web UI を駆動する。
+    """Selenium（Edge 既定 / Chrome）で M365 Copilot の **Researcher（リサーチ）** を実駆動する。
 
-    既定は **Edge**（M365 Copilot は Edge + 業務アカウントの SSO で使うことが多いため）。
-    ``browser="chrome"`` で Chrome/Chromium にも切替可。初回は SSO ログインが必要で、永続
-    プロファイル（user_data_dir）にログイン状態を保存し 2 回目以降は無人で回せる。UI の
-    セレクタは頻繁に変わるため options で上書きできる。
+    実運用で動作実績のあるフローをそのまま実装している:
 
-    options:
-      browser         : "edge"（既定）/ "chrome"
-      url             : Copilot のURL（既定 https://m365.cloud.microsoft/chat）
-      driver_path     : WebDriver の場所（msedgedriver / chromedriver。**明示指定可**。
-                        空なら Selenium Manager が自動解決）
-      browser_binary  : ブラウザ実行ファイルの場所（空なら既定 / 環境変数を使用）
-      user_data_dir   : ログイン状態を保存するフォルダ（既定 ~/.llmlab/copilot/selenium-profile）
-      profile_directory: プロファイル名（既定 "Default"）
-      headless        : True で無人（初回ログインは False 推奨）
-      input_selector  : プロンプト入力欄のCSSセレクタ
-      send_selector   : 送信ボタンのCSSセレクタ（省略時は Enter 送信）
-      answer_selector : 回答要素のCSSセレクタ（最後の要素を回答とみなす）
-      agent_selector  : Researcher 等のエージェント選択チップのCSSセレクタ（指定時は入力前にクリック）
-      agent_hint      : 使用するエージェント名（既定 "Researcher"。agent_selector 未指定時は通知のみ）
-      --- 待機（ウェイト）まわり -----------------------------------------------
-      ready_timeout_ms: 入力欄/エージェント選択が現れるまでの待ち上限（既定 30000）
-      initial_wait_ms : 送信直後に置く初期待機（既定 1500）
-      poll_ms         : 回答ポーリング間隔（既定 800）
-      busy_selector   : 「生成中」インジケータのCSS（例: 停止ボタン/スピナー）。**表示中は待機を続ける**
-                        ＝伸びが一瞬止まっても生成継続中なら誤って打ち切らない。Researcher 向けに有効
-      settle_ms       : 生成中でなく回答が伸びなくなってからの静止確定時間（既定 3000）
-      timeout_ms      : 1 章あたりの回答待ち上限（既定 300000＝5分。Researcher は長いので必要なら増やす）
+      1. office.com を開く（``login_url``）。必要なら SSO を **ブラウザで完了**（``login_timeout_ms`` 待つ）
+      2. ヘッダのメニュー（``menu_button_xpath``）→ エージェント入口（``agent_entrance_xpath``）をクリックして
+         Researcher へ移動。案内タブ（``close_tab_selector``）を閉じる
+      3. 入力欄（``editor_id`` = 既定 ``m365-chat-editor-target-element``）にプロンプトを入れて送信
+      4. レポートの長さ（``length_selector`` = 既定「長い, 5 ページ以上」）が出れば選択
+      5. 続行の合図（``proceed_text`` = 既定 "go ahead" ＝おまかせ）を送る
+      6. **生成停止ボタン（``stop_selector`` = 「生成を停止する」）が出現→消滅** したら生成完了とみなす
+         （出ない/止まらないときは ``refresh_every_ms`` ごとにリロード、``timeout_ms`` で打ち切り）
+      7. 「応答のコピー」（``copy_selector``）を押し、**クリップボードから本文を取得**（``pyperclip`` 推奨）
 
-    driver_path / browser_binary は環境変数でも指定できる（browser により参照名が変わる）:
+    セレクタは tenant / 言語 / UI 改定で変わるため **すべて options で上書き可能**。既定値は日本語UI向け。
+    ドライバ（session）は run 内で **使い回す**（章ごとにログインし直さない）。2 章目以降は新規リサーチ
+    （``new_chat_selector`` があればクリック、無ければ入口から開き直し）。run 終了時に ``close()`` される。
+
+    主な options:
+      browser          : "edge"（既定）/ "chrome"
+      driver_path      : msedgedriver / chromedriver の場所（**明示指定可**。空なら自動解決 / 環境変数）
+      browser_binary   : ブラウザ実行ファイルの場所（空なら既定 / 環境変数）
+      user_data_dir    : プロファイル（空＝ブラウザ既定プロファイル＝業務SSOを流用。同時実行時のみ別途指定）
+      profile_directory: プロファイル名（空なら付与しない）
+      headless         : True で無人（初回 SSO は False 必須）
+      login_url        : 既定 https://www.office.com/?auth=2
+      login_timeout_ms : サインイン完了（メニュー出現）待ち上限（既定 300000＝5分）
+      menu_button_xpath / agent_entrance_xpath / close_tab_selector : Researcher へ入る導線
+      editor_id        : 入力欄の id（既定 m365-chat-editor-target-element）
+      length_selector  : レポート長さの選択ボタン（既定「長い, 5 ページ以上」。空で無効）
+      proceed_text     : 続行の合図（既定 "go ahead"）。send_proceed=False で無効
+      stop_selector    : 生成中を示す停止ボタン（既定「生成を停止する」）
+      copy_selector    : 応答コピーのボタン（既定「応答のコピー」）
+      answer_selector  : クリップボードが取れない時の DOM フォールバック（任意）
+      new_chat_selector: 2 章目以降の新規リサーチ開始ボタン（任意）
+      ready_timeout_ms / poll_ms / refresh_every_ms / timeout_ms : 待機（ウェイト）調整
+                         （timeout_ms 既定 1800000＝30分。Researcher は長い）
+
+    driver_path / browser_binary は環境変数でも指定できる（browser で参照名が変わる）:
       edge  : EDGEDRIVER_PATH / MSEDGEDRIVER_PATH → driver_path、EDGE_BINARY / EDGE_BIN → browser_binary
       chrome: CHROMEDRIVER_PATH / CHROMEDRIVER    → driver_path、CHROME_BINARY / CHROME_BIN → browser_binary
 
-    注意（並行実行）: ブラウザは 1 つの user_data_dir を同時に開けない。selenium コネクタで
-    複数のリサーチを **同時に** 走らせる場合は、run ごとに別の user_data_dir を指定すること
-    （同一プロファイルの同時起動は 2 本目が失敗する）。demo / bridge / graph は同時実行可。
+    注意:
+    - 応答本文の取得は「応答のコピー」→クリップボードが最も確実。``pip install pyperclip`` 推奨
+      （無ければ JS/tkinter で読み、それも不可なら answer_selector の DOM 抽出を試みる）。
+    - Researcher は 1 章あたり数分〜十数分かかる。擬似GEPA の予算/minibatch は小さめ推奨
+      （budget 0〜1）。
+    - 並行実行時のみ run ごとに別 user_data_dir を指定（同一プロファイルの同時起動は失敗する）。
     """
 
     kind = "selenium"
-    label = "Selenium（Edge/Chrome）"
+    label = "Selenium（Edge/Chrome・Researcher）"
 
     DEFAULTS = {
         "browser": "edge",
-        "url": "https://m365.cloud.microsoft/chat",
         "driver_path": "",
         "browser_binary": "",
-        "profile_directory": "Default",
+        "user_data_dir": "",          # 空 = ブラウザ既定プロファイル（業務SSOを流用）
+        "profile_directory": "",
         "headless": False,
-        "input_selector": "div[contenteditable='true'], textarea",
-        "send_selector": "",
-        "answer_selector": "[data-content='ai-message'], .ai-message, [class*='botMessage']",
-        "agent_selector": "",
-        "busy_selector": "",
-        "ready_timeout_ms": 30000,
-        "initial_wait_ms": 1500,
-        "poll_ms": 800,
-        "settle_ms": 3000,
-        "timeout_ms": 300000,
+        "login_url": "https://www.office.com/?auth=2",
+        "login_timeout_ms": 300000,
+        # Researcher への導線（動作実績のある既定。tenant/言語で変わるため上書き可）
+        "menu_button_xpath":
+            "/html/body/div[1]/div/div/main/div[1]/div/header/div/div[1]/button",
+        "agent_entrance_xpath":
+            "/html/body/div[1]/div/div/main/div[1]/div/div/div[2]/div/div[1]/div[2]"
+            "/div[1]/div/button[1]/span[2]",
+        "close_tab_selector": "button[data-testid='header-branding-container']",
+        "post_open_wait_ms": 10000,
+        # 入力・レポート長さ・続行
+        "editor_id": "m365-chat-editor-target-element",
+        "length_selector": "button[aria-label='長い, 5 ページ以上']",
+        "length_timeout_ms": 50000,
+        "send_proceed": True,
+        "proceed_text": "go ahead",
+        # 生成待ち（停止ボタンの出現→消滅で完了）
+        "stop_selector": "button[aria-label='生成を停止する']",
+        "poll_ms": 1000,
+        "refresh_every_ms": 600000,
+        "timeout_ms": 1800000,        # 30 分
+        # 応答取得
+        "copy_selector": "button[aria-label='応答のコピー']",
+        "answer_selector": "",        # DOM フォールバック（任意）
+        # 2 章目以降の新規リサーチ
+        "new_chat_selector": "",
+        "ready_timeout_ms": 60000,
         "agent_hint": "Researcher",
     }
+
+    def __init__(self, options: dict | None = None):
+        super().__init__(options)
+        self._driver = None
+        self._research_count = 0
 
     def _opt(self, key):
         return self.options.get(key, self.DEFAULTS.get(key))
@@ -254,9 +298,8 @@ class SeleniumConnector(BaseConnector):
         return str(self._opt("browser") or "edge").lower()
 
     def _profile_dir(self) -> str:
-        from .workspace import LLMLAB_DIR
-
-        return self.options.get("user_data_dir") or str(LLMLAB_DIR / "copilot" / "selenium-profile")
+        # 空なら --user-data-dir を付けず、ブラウザ既定プロファイル（業務SSO）を使う
+        return str(self._opt("user_data_dir") or "").strip()
 
     def _env_first(self, names: tuple[str, ...]) -> str:
         import os
@@ -295,8 +338,10 @@ class SeleniumConnector(BaseConnector):
         if bb and not os.path.exists(bb):
             return False, f"browser_binary が見つかりません: {bb}"
         drv = dp or "Selenium Manager で自動解決"
-        return True, (f"selenium 利用可（browser={self._browser()} / driver={drv}）。"
-                      f"初回は headless=False で SSO ログイン。profile: {self._profile_dir()}")
+        prof = self._profile_dir() or "ブラウザ既定（業務SSOを流用）"
+        clip = "pyperclip 検出" if _has_pyperclip() else "pyperclip 無し（JS/tkinter/DOM で代替）"
+        return True, (f"selenium 利用可（browser={self._browser()} / driver={drv} / profile={prof} / "
+                      f"{clip}）。初回は headless=False で office.com にサインインしてください。")
 
     def _make_driver(self):
         """設定に応じた Edge / Chrome WebDriver を作る（browser / driver_path / browser_binary を尊重）。"""
@@ -314,9 +359,11 @@ class SeleniumConnector(BaseConnector):
         opts = Options()
         if bool(self._opt("headless")):
             opts.add_argument("--headless=new")
-        opts.add_argument(f"--user-data-dir={self._profile_dir()}")
-        if self._opt("profile_directory"):
-            opts.add_argument(f"--profile-directory={self._opt('profile_directory')}")
+        profile = self._profile_dir()
+        if profile:  # 空なら付けない＝ブラウザ既定プロファイル（業務SSO）を使う
+            opts.add_argument(f"--user-data-dir={profile}")
+            if self._opt("profile_directory"):
+                opts.add_argument(f"--profile-directory={self._opt('profile_directory')}")
         opts.add_argument("--no-first-run")
         opts.add_argument("--no-default-browser-check")
         opts.add_argument("--disable-blink-features=AutomationControlled")
@@ -328,123 +375,281 @@ class SeleniumConnector(BaseConnector):
         service = Service(executable_path=dp) if dp else Service()
         return make(options=opts, service=service)
 
-    @staticmethod
-    def _type_prompt(driver, box, text: str) -> None:
-        """複数行プロンプトを、途中の改行で送信されないように入力する（改行は Shift+Enter）。"""
+    # ---- セッション（ログイン→Researcher を開く。run 内で使い回す） -----------
+
+    def _open_researcher(self, driver, emit=None) -> None:
+        """office.com を開き、メニュー→エージェント入口 で Researcher に入る。案内タブを閉じる。"""
+        from selenium.webdriver.common.by import By
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.webdriver.support.ui import WebDriverWait
+
+        ready = int(self._opt("ready_timeout_ms")) / 1000
+        login = int(self._opt("login_timeout_ms")) / 1000
+        driver.get(self._opt("login_url"))
+        self._emit(emit, type="progress", stage="se_login",
+                   text="サインイン待ち（必要ならブラウザで完了してください）")
+        # メニューボタンが押せるようになる＝サインイン済み。SSO/MFA を待てるよう長め。
+        WebDriverWait(driver, login).until(
+            EC.element_to_be_clickable((By.XPATH, self._opt("menu_button_xpath")))).click()
+        self._emit(emit, type="progress", stage="se_agent",
+                   text=f"{self._opt('agent_hint')} を開く")
+        WebDriverWait(driver, ready).until(
+            EC.element_to_be_clickable((By.XPATH, self._opt("agent_entrance_xpath")))).click()
+        # 案内タブ/ブランディングを閉じる（環境により無いことも）
+        close_sel = self._opt("close_tab_selector")
+        if close_sel:
+            try:
+                WebDriverWait(driver, 60).until(
+                    EC.element_to_be_clickable((By.CSS_SELECTOR, close_sel))).click()
+            except Exception:  # noqa: BLE001
+                pass
+        time.sleep(int(self._opt("post_open_wait_ms")) / 1000)
+
+    def _ensure_session(self, emit=None):
+        """ドライバを（初回のみ）起動し、Researcher を開いて返す。以降は使い回す。"""
+        if self._driver is not None:
+            return self._driver
+        self._emit(emit, type="progress", stage="se_launch", text=f"{self._browser()} 起動")
+        driver = self._make_driver()
+        try:
+            self._open_researcher(driver, emit)
+        except Exception:
+            try:
+                driver.quit()
+            except Exception:  # noqa: BLE001
+                pass
+            raise
+        self._driver = driver
+        return driver
+
+    def _start_new_research(self, driver, emit=None) -> None:
+        """2 章目以降: 新規リサーチを開始する（ボタンがあれば押す。無ければ入口から開き直す）。"""
+        from selenium.webdriver.common.by import By
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.webdriver.support.ui import WebDriverWait
+
+        sel = self._opt("new_chat_selector")
+        if sel:
+            try:
+                WebDriverWait(driver, int(self._opt("ready_timeout_ms")) / 1000).until(
+                    EC.element_to_be_clickable((By.CSS_SELECTOR, sel))).click()
+                time.sleep(2)
+                return
+            except Exception:  # noqa: BLE001  フォールバックへ
+                pass
+        self._open_researcher(driver, emit)
+
+    # ---- 入力・レポート長さ・続行 ------------------------------------------
+
+    def _editor(self, driver):
+        from selenium.webdriver.common.by import By
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.webdriver.support.ui import WebDriverWait
+
+        return WebDriverWait(driver, int(self._opt("ready_timeout_ms")) / 1000).until(
+            EC.presence_of_element_located((By.ID, self._opt("editor_id"))))
+
+    def _type_and_submit(self, driver, editor, text: str) -> None:
+        """複数行を途中送信せず入力（改行は Shift+Enter）→ 最後に Enter で送信。"""
         from selenium.webdriver.common.action_chains import ActionChains
         from selenium.webdriver.common.keys import Keys
 
-        box.click()
-        lines = text.split("\n")
-        for i, line in enumerate(lines):
+        editor.click()
+        for i, line in enumerate(text.split("\n")):
             if i:
                 ActionChains(driver).key_down(Keys.SHIFT).send_keys(Keys.ENTER)\
                     .key_up(Keys.SHIFT).perform()
             if line:
-                box.send_keys(line)
+                editor.send_keys(line)
+        editor.send_keys(Keys.ENTER)
+
+    def _pick_length(self, driver, emit=None) -> None:
+        """レポートの長さボタン（例「長い, 5 ページ以上」）が出れば選択（出なければスキップ）。"""
+        sel = self._opt("length_selector")
+        if not sel:
+            return
+        from selenium.webdriver.common.by import By
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.webdriver.support.ui import WebDriverWait
+
+        to = int(self._opt("length_timeout_ms")) / 1000
+        try:
+            WebDriverWait(driver, to).until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, sel)))
+            driver.execute_script(
+                "arguments[0].scrollIntoView();", driver.find_element(By.CSS_SELECTOR, sel))
+            time.sleep(3)
+            # スクロール後に要素が差し替わることがあるので取り直してからクリック
+            WebDriverWait(driver, to).until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, sel))).click()
+            self._emit(emit, type="progress", stage="se_length", text="レポート長さを選択")
+        except Exception:  # noqa: BLE001  出ない構成もある
+            self._emit(emit, type="progress", stage="se_length",
+                       text="レポート長さの選択は表示されず（スキップ）")
+
+    def _send_proceed(self, driver) -> None:
+        """入力欄を全消去して続行の合図（既定 "go ahead"）を送る。"""
+        from selenium.webdriver.common.by import By
+        from selenium.webdriver.common.keys import Keys
+
+        editor = driver.find_element(By.ID, self._opt("editor_id"))
+        editor.click()
+        editor.send_keys(Keys.CONTROL, "a")
+        editor.send_keys(Keys.BACKSPACE)
+        editor.send_keys(str(self._opt("proceed_text")), Keys.ENTER)
+
+    # ---- 生成待ち（停止ボタンの出現→消滅で完了） ---------------------------
+
+    def _wait_generation_done(self, driver, emit=None) -> None:
+        """生成中(■=停止ボタン) → 完了(■が消える) を待つ。長時間ジョブ向けに堅牢化。"""
+        from selenium.common.exceptions import StaleElementReferenceException
+        from selenium.webdriver.common.by import By
+        from selenium.webdriver.support.ui import WebDriverWait
+
+        stop_sel = self._opt("stop_selector")
+        poll = max(0.2, int(self._opt("poll_ms")) / 1000)
+        refresh_every = int(self._opt("refresh_every_ms")) / 1000
+        total = int(self._opt("timeout_ms")) / 1000
+
+        start = time.monotonic()
+        last_refresh = start
+        last_beat = 0.0
+        saw_stop = False
+        while True:
+            now = time.monotonic()
+            if (now - start) > total:
+                raise TimeoutError("生成完了を検出できませんでした（timeout_ms 超過）")
+            try:
+                stops = driver.find_elements(By.CSS_SELECTOR, stop_sel)
+                visible = any(e.is_displayed() for e in stops)
+                if visible:
+                    saw_stop = True          # まだ生成中
+                elif saw_stop:
+                    return                    # ■→消失 ＝ 生成完了
+            except StaleElementReferenceException:
+                pass                          # DOM 差し替え中。次ループへ
+            if (now - last_refresh) >= refresh_every:  # 動きが無ければリロード
+                try:
+                    driver.refresh()
+                    WebDriverWait(driver, 30).until(
+                        lambda d: d.execute_script("return document.readyState") == "complete")
+                except Exception:  # noqa: BLE001
+                    pass
+                last_refresh = time.monotonic()
+                saw_stop = False
+            if emit and (now - last_beat) >= 15:
+                self._emit(emit, type="progress", stage="se_wait",
+                           text=f"リサーチ実行中… {int(now - start)}s"
+                                + ("（生成中）" if saw_stop else "（開始待ち）"))
+                last_beat = now
+            time.sleep(poll)
+
+    # ---- 応答取得（コピー→クリップボード。無ければ DOM） ------------------
+
+    def _capture_answer(self, driver, emit=None) -> str:
+        from selenium.webdriver.common.by import By
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.webdriver.support.ui import WebDriverWait
+
+        text = ""
+        copy_sel = self._opt("copy_selector")
+        if copy_sel:
+            try:
+                WebDriverWait(driver, 60).until(
+                    EC.element_to_be_clickable((By.CSS_SELECTOR, copy_sel))).click()
+                time.sleep(1)
+                text = self._read_clipboard(driver)
+            except Exception:  # noqa: BLE001
+                text = ""
+        if not text and self._opt("answer_selector"):  # DOM フォールバック
+            try:
+                els = driver.find_elements(By.CSS_SELECTOR, self._opt("answer_selector"))
+                text = els[-1].text if els else ""
+            except Exception:  # noqa: BLE001
+                text = ""
+        return (text or "").strip()
+
+    @staticmethod
+    def _read_clipboard(driver) -> str:
+        """クリップボード本文を取得（pyperclip → JS → tkinter の順に試す）。"""
+        # 1) pyperclip（Windows で最も確実）
+        try:
+            import pyperclip
+            v = pyperclip.paste()
+            if v:
+                return v
+        except Exception:  # noqa: BLE001
+            pass
+        # 2) ブラウザの Clipboard API（許可・フォーカスが要る。取れれば確実に「今コピーした値」）
+        try:
+            v = driver.execute_async_script(
+                "var cb=arguments[arguments.length-1];"
+                "navigator.clipboard.readText().then(function(t){cb(t);})"
+                ".catch(function(){cb('');});")
+            if v:
+                return v
+        except Exception:  # noqa: BLE001
+            pass
+        # 3) tkinter（GUI 環境）
+        try:
+            import tkinter
+            r = tkinter.Tk()
+            r.withdraw()
+            v = r.clipboard_get()
+            r.destroy()
+            if v:
+                return v
+        except Exception:  # noqa: BLE001
+            pass
+        return ""
+
+    # ---- 1 章分のリサーチ ---------------------------------------------------
 
     def research(self, prompt, *, meta=None, emit=None, ask_bridge=None) -> ChapterResult:
         ok, msg = self.test()
         if not ok:
             return ChapterResult(ok=False, connector=self.kind, error=msg)
-        from selenium.webdriver.common.by import By
-        from selenium.webdriver.common.keys import Keys
-        from selenium.webdriver.support import expected_conditions as EC
-        from selenium.webdriver.support.ui import WebDriverWait
-
         t0 = time.time()
-        driver = None
-        ready = int(self._opt("ready_timeout_ms")) / 1000
         try:
-            self._emit(emit, type="progress", stage="se_launch",
-                       text=f"{self._browser()} 起動")
-            driver = self._make_driver()
-            driver.get(self._opt("url"))
-            # エージェント選択（Researcher 等）。セレクタ未指定なら通知のみ。
-            agent_sel = self._opt("agent_selector")
-            if agent_sel:
+            driver = self._ensure_session(emit)
+        except Exception as e:  # noqa: BLE001  セッション初期化失敗（次章のため破棄）
+            self.close()
+            return ChapterResult(ok=False, connector=self.kind, latency_sec=time.time() - t0,
+                                 error=f"セッション初期化に失敗: {type(e).__name__}: {e}")
+        try:
+            if self._research_count > 0:              # 2 章目以降は新規リサーチ
+                self._start_new_research(driver, emit)
+            self._emit(emit, type="progress", stage="se_prompt", text="プロンプトを送信")
+            editor = self._editor(driver)
+            self._type_and_submit(driver, editor, prompt)
+            self._pick_length(driver, emit)           # 長さ選択（あれば）
+            if bool(self._opt("send_proceed")):       # 続行の合図（おまかせ）
                 try:
-                    WebDriverWait(driver, ready).until(
-                        EC.element_to_be_clickable((By.CSS_SELECTOR, agent_sel))).click()
-                    self._emit(emit, type="progress", stage="se_agent",
-                               text=f"エージェント選択: {self._opt('agent_hint')}")
-                except Exception:  # noqa: BLE001  選択に失敗しても続行
-                    self._emit(emit, type="progress", stage="se_agent",
-                               text=f"エージェント選択に失敗（{self._opt('agent_hint')} を手動選択してください）")
-            else:
-                self._emit(emit, type="progress", stage="se_page",
-                           text=f"Copilot を開いた（エージェント {self._opt('agent_hint')} を選択してください）")
-            box = WebDriverWait(driver, ready).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, self._opt("input_selector"))))
-            self._type_prompt(driver, box, prompt)
-            send = self._opt("send_selector")
-            if send:
-                driver.find_element(By.CSS_SELECTOR, send).click()
-            else:
-                box.send_keys(Keys.ENTER)
-            self._emit(emit, type="progress", stage="se_wait", text="回答生成を待機")
-            text = self._await_answer(driver, emit)
-            return ChapterResult(text=text, citations=extract_citations(text),
-                                 connector=self.kind, latency_sec=time.time() - t0,
-                                 ok=bool(text), error="" if text else "回答が取得できませんでした（timeout_ms を増やすか busy_selector を設定）")
-        except Exception as e:  # noqa: BLE001  ブラウザ失敗はUIへ返す
+                    self._send_proceed(driver)
+                except Exception:  # noqa: BLE001  続行入力が不要な構成もある
+                    pass
+            self._emit(emit, type="progress", stage="se_wait", text="リサーチ生成を待機")
+            self._wait_generation_done(driver, emit)
+            self._emit(emit, type="progress", stage="se_copy", text="応答をコピー")
+            text = self._capture_answer(driver, emit)
+            self._research_count += 1
+            return ChapterResult(
+                text=text, citations=extract_citations(text), connector=self.kind,
+                latency_sec=time.time() - t0, ok=bool(text),
+                error="" if text else "応答本文を取得できませんでした"
+                      "（copy_selector/クリップボード権限、または answer_selector を確認）")
+        except Exception as e:  # noqa: BLE001  章単位の失敗（セッションは維持して次章へ）
+            self._research_count += 1
             return ChapterResult(ok=False, connector=self.kind, latency_sec=time.time() - t0,
                                  error=f"{type(e).__name__}: {e}")
-        finally:
+
+    def close(self) -> None:
+        if self._driver is not None:
             try:
-                if driver:
-                    driver.quit()
+                self._driver.quit()
             except Exception:  # noqa: BLE001
                 pass
-
-    def _await_answer(self, driver, emit: EmitFn | None = None) -> str:
-        """回答が「生成完了」するまで待ってテキストを返す。
-
-        - busy_selector が指定されていれば、その要素が **表示されている間は生成中とみなして待機**
-          （回答の伸びが一瞬止まっても打ち切らない）。Researcher のような長時間ジョブに有効。
-        - busy_selector が消え、かつ回答テキストが settle_ms の間伸びなければ確定。
-        - initial_wait_ms（送信直後の初期待機）と poll_ms（ポーリング間隔）で無駄な空読みを避ける。
-        - timeout_ms を上限に、~10 秒ごとに進捗（経過秒）を emit する。
-        """
-        from selenium.webdriver.common.by import By
-
-        sel = self._opt("answer_selector")
-        busy_sel = self._opt("busy_selector")
-        start = time.time()
-        deadline = start + int(self._opt("timeout_ms")) / 1000
-        settle = int(self._opt("settle_ms")) / 1000
-        poll = max(0.1, int(self._opt("poll_ms")) / 1000)
-
-        time.sleep(int(self._opt("initial_wait_ms")) / 1000)  # 送信直後の初期待機
-        last_text, stable_since, last_beat = "", None, 0.0
-        while time.time() < deadline:
-            busy = False
-            if busy_sel:
-                try:
-                    busy = any(e.is_displayed()
-                               for e in driver.find_elements(By.CSS_SELECTOR, busy_sel))
-                except Exception:  # noqa: BLE001
-                    busy = False
-            try:
-                els = driver.find_elements(By.CSS_SELECTOR, sel)
-                cur = els[-1].text if els else ""
-            except Exception:  # noqa: BLE001
-                cur = last_text
-            if not busy and cur and cur == last_text:
-                if stable_since and (time.time() - stable_since) >= settle:
-                    return cur.strip()
-                stable_since = stable_since or time.time()
-            else:  # 生成中、または回答がまだ伸びている
-                last_text = cur or last_text
-                stable_since = None
-            now = time.time()
-            if emit and now - last_beat >= 10:
-                self._emit(emit, type="progress", stage="se_wait",
-                           text=f"回答生成待機中… {int(now - start)}s"
-                                + ("（生成中）" if busy else ""))
-                last_beat = now
-            time.sleep(poll)
-        return last_text.strip()
+            self._driver = None
 
 
 # ---------------------------------------------------------------------------

@@ -530,15 +530,20 @@ flowchart TD
 - **M365 Copilot コネクタ 4 種**（差し替え可能・`m365copilot.py`）:
   - `bridge`（**既定・確実**）: 各章のプロンプトを画面に出す → 人が M365 Copilot に貼り、
     回答を貼り戻す（自動化/APIが塞がれた社内環境でも動く）
-  - `selenium`: **Edge（既定）/ Chrome** を Selenium WebDriver で実駆動（初回 SSO ログイン・永続
-    プロファイル）。M365 Copilot は Edge + 業務アカウントで使うことが多いため既定は Edge。
-    **WebDriver の場所は `driver_path` で明示指定可**（msedgedriver / chromedriver。未指定なら
-    Selenium Manager が自動解決。環境変数 `EDGEDRIVER_PATH` / `CHROMEDRIVER_PATH`、
-    `EDGE_BINARY` / `CHROME_BINARY` でも可）。`agent_selector` で Researcher を自動選択。
-    **待機（ウェイト）**: 入力欄の出現待ち（`ready_timeout_ms`）、送信後の初期待機（`initial_wait_ms`）、
-    ポーリング間隔（`poll_ms`）、**生成中インジケータが消えるまで待つ `busy_selector`**、
-    伸びが止まってからの静止確定 `settle_ms`、全体上限 `timeout_ms`（既定 5 分。Researcher は長い
-    ので必要に応じ増やす）。待機中は ~10 秒ごとに経過秒を UI へ配信
+  - `selenium`: **Edge（既定）/ Chrome** を Selenium WebDriver で実駆動し、**M365 Copilot の
+    Researcher（リサーチ）を実際に操作**する（動作実績のあるフローを実装）:
+    office.com を開く → 必要なら**ブラウザで SSO 完了**（`login_timeout_ms` 待つ）→ メニュー→
+    エージェント入口で Researcher を開く → 入力欄（`editor_id`=`m365-chat-editor-target-element`）へ
+    プロンプト送信 → レポート長さ（`length_selector`=「長い, 5 ページ以上」）を選択 → 続行の合図
+    （`proceed_text`=`go ahead`）→ **停止ボタン（`stop_selector`=「生成を停止する」）の出現→消滅で
+    生成完了を検知**（`refresh_every_ms` ごとにリロード、`timeout_ms` 既定 **30 分**）→
+    「応答のコピー」（`copy_selector`）→ **クリップボードから本文取得**（`pip install pyperclip` 推奨）。
+    **`driver_path` で msedgedriver / chromedriver の場所を明示指定可**（空なら Selenium Manager 自動解決。
+    環境変数 `EDGEDRIVER_PATH` / `CHROMEDRIVER_PATH`、`EDGE_BINARY` / `CHROME_BINARY` でも可）。
+    `user_data_dir` 空なら**ブラウザ既定プロファイル（業務 SSO を流用）**。セレクタ類は tenant/言語で
+    変わるため **すべて options で上書き可**（UI の「詳細設定JSON」から `menu_button_xpath` 等も指定可能）。
+    セッションは run 内で使い回し、run 終了時にブラウザを閉じる。**Researcher は 1 章数分〜十数分**
+    かかるので擬似GEPA の予算は小さめ（0〜1）推奨
   - `graph`: 任意の HTTP エンドポイント（Microsoft Graph / 社内 Copilot プロキシ）へ Bearer POST。
     プロンプト/回答の JSON パスは設定可能
   - `demo`: モック（指示が濃いほど回答も濃くなり、擬似GEPA の改善が見える）
