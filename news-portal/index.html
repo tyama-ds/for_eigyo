@@ -136,6 +136,8 @@ button{font-family:inherit; cursor:pointer}
 .chip.active .cnt{color:color-mix(in srgb,#05101d 55%,transparent)}
 :root[data-theme="light"] .chip.active .cnt{color:rgba(255,255,255,.8)}
 .chip.active .dot{background:currentColor; box-shadow:none}
+.chip.srcchip .x{margin-left:2px; font-size:15px; line-height:1; opacity:.85}
+.chip.srcchip:hover .x{opacity:1}
 
 /* ============================================================ trending + status */
 .subbar{max-width:1360px; margin:0 auto; padding:4px 22px 0;
@@ -249,6 +251,22 @@ main{max-width:1360px; margin:0 auto; padding:16px 22px 80px}
 .card__cat .dot{width:7px;height:7px;border-radius:99px;background:var(--c,var(--accent))}
 .card__src{color:var(--text-2); font-weight:600}
 .card__time{margin-left:auto; white-space:nowrap}
+/* クリックで情報源フィルタできる情報源名 */
+.srclink{cursor:pointer; border-radius:5px; transition:.15s}
+.srclink:hover{color:var(--accent); text-decoration:underline; text-underline-offset:2px}
+.hero__src.srclink:hover{color:#fff; text-decoration:underline}
+.srclink:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+/* ソース別ピッカー */
+.srcpick__meta{font-size:12px; color:var(--text-3); margin-bottom:9px}
+.srcpick{display:flex; align-items:center; gap:11px; width:100%; text-align:left; padding:10px 12px;
+  border-radius:11px; border:1px solid transparent; background:transparent; color:var(--text);
+  cursor:pointer; transition:.15s; margin-bottom:3px}
+.srcpick:hover{background:var(--surface-2); border-color:var(--line)}
+.srcpick.on{background:color-mix(in srgb,var(--accent) 14%,transparent); border-color:transparent}
+.srcpick__dot{width:9px;height:9px;border-radius:99px;flex:0 0 auto}
+.srcpick__n{flex:1; min-width:0; font-weight:600; font-size:13.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.srcpick__cat{font-size:11px; color:var(--text-3); flex:0 0 auto}
+.srcpick__n2{font-size:12px; font-weight:700; color:var(--accent); min-width:26px; text-align:right; flex:0 0 auto}
 .card__title{font-family:var(--font-serif); font-size:17px; font-weight:700; line-height:1.35;
   color:var(--text); margin:0; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden}
 .card__title mark, .card__sum mark, .row mark{background:color-mix(in srgb,var(--accent) 40%,transparent);
@@ -540,6 +558,9 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
       <button class="iconbtn" id="searchAllBtn" title="横断検索 (F)" aria-label="横断検索">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="10.5" cy="10.5" r="6"/><path d="M20 20l-4.4-4.4"/><path d="M7.5 10.5h6M10.5 7.5v6"/></svg>
       </button>
+      <button class="iconbtn" id="srcViewBtn" title="ソース別に表示 (V)" aria-label="ソース別">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="4" rx="1"/><rect x="3" y="11" width="18" height="4" rx="1"/><rect x="3" y="18" width="12" height="3" rx="1"/></svg>
+      </button>
       <button class="iconbtn pill" id="autoBtn" title="自動更新の間隔を切り替え">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2" stroke-linecap="round"/></svg>
         <span id="autoLbl">自動: オフ</span>
@@ -598,6 +619,23 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
   <div class="drawer__body" id="bmBody"></div>
 </aside>
 
+<!-- ソース別に表示（情報源を選んで絞り込む） -->
+<aside class="drawer" id="srcPickDrawer" role="dialog" aria-modal="true" aria-label="ソース別に表示" aria-hidden="true">
+  <div class="drawer__head">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="4" rx="1"/><rect x="3" y="11" width="18" height="4" rx="1"/><rect x="3" y="18" width="12" height="3" rx="1"/></svg>
+    <h2>ソース別に表示</h2>
+    <button class="iconbtn" data-close aria-label="閉じる" style="margin-left:auto"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+  </div>
+  <div class="drawer__body">
+    <div class="srcsearch" style="margin-bottom:10px">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3" stroke-linecap="round"/></svg>
+      <input id="srcPickQ" type="search" placeholder="情報源を検索…" autocomplete="off" spellcheck="false" aria-label="情報源を検索">
+    </div>
+    <div class="srcpick__meta" id="srcPickCount"></div>
+    <div id="srcPickBody"></div>
+  </div>
+</aside>
+
 <div class="modal" id="srcModal" role="dialog" aria-modal="true" aria-hidden="true">
   <div class="modal__head">
     <h2>情報源</h2>
@@ -651,6 +689,7 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
       <div class="kbd-row"><kbd>L</kbd> グリッド / リスト切替</div>
       <div class="kbd-row"><kbd>B</kbd> 保存済みを開く</div>
       <div class="kbd-row"><kbd>S</kbd> 情報源を開く</div>
+      <div class="kbd-row"><kbd>V</kbd> ソース別に表示</div>
       <div class="kbd-row"><kbd>A</kbd> AIアシスタント</div>
       <div class="kbd-row"><kbd>1</kbd>〜<kbd>9</kbd> カテゴリ切替</div>
       <div class="kbd-row"><kbd>Esc</kbd> 閉じる / 検索クリア</div>
@@ -806,6 +845,7 @@ function copyText(t){
 const S = {
   articles:[], sources:[], categories:[], offline:false, updated:null, errors:{},
   cat: store.get("cat","すべて"), q:"",
+  source:null, sourceName:"",        // 情報源フィルタ（ソース別表示）
   layout: store.get("layout","grid"),
   bookmarks: new Map((store.get("bm",[])||[]).map(a=>[a.id,a])),
   seen: new Set(store.get("seen",[])||[]),
@@ -843,13 +883,15 @@ async function loadArticles(force){
 }
 
 // ============================================================ derived
+function matchSource(a){ return a.source_id===S.source || a.source===S.sourceName; }
 function filtered(){
   let list = S.articles;
-  if(S.cat==="保存済み") list=[...S.bookmarks.values()].sort((a,b)=>(b.published_ts||0)-(a.published_ts||0));
+  if(S.source) list=list.filter(matchSource);   // 情報源フィルタはカテゴリより優先
+  else if(S.cat==="保存済み") list=[...S.bookmarks.values()].sort((a,b)=>(b.published_ts||0)-(a.published_ts||0));
   else if(S.cat!=="すべて") list=list.filter(a=>a.category===S.cat);
   if(S.q){
     const q=S.q.toLowerCase();
-    list=list.filter(a=>(a.title+" "+a.summary+" "+a.source).toLowerCase().includes(q));
+    list=list.filter(a=>(a.title+" "+(a.summary||"")+" "+a.source).toLowerCase().includes(q));
   }
   return list;
 }
@@ -860,7 +902,7 @@ function catCount(c){
 }
 const STOP=new Set(["について","という","との","この","その","します","された","する","した","こと","ため","へ","の","を","に","は","が","で","と","も","や","から","まで","the","and","for","with","that","this","from","を発表","になる","される"]);
 function trending(){
-  const src = S.cat==="保存済み"?[...S.bookmarks.values()]:(S.cat==="すべて"?S.articles:S.articles.filter(a=>a.category===S.cat));
+  const src = S.source?S.articles.filter(matchSource):(S.cat==="保存済み"?[...S.bookmarks.values()]:(S.cat==="すべて"?S.articles:S.articles.filter(a=>a.category===S.cat)));
   const freq=new Map();
   const re=/[A-Za-z0-9]{3,}|[ァ-ヶー]{2,}|[一-龠々]{2,}/g;
   for(const a of src.slice(0,120)){
@@ -878,9 +920,18 @@ function renderAll(){ renderCats(); renderTrend(); renderStatus(); renderGrid();
 
 function renderCats(){
   const box=$("#cats"); box.innerHTML="";
+  if(S.source){   // 情報源フィルタ中：解除できるアクティブなソースチップを先頭に表示
+    const sc=el("button",{class:"chip active srcchip", title:"情報源フィルタを解除"});
+    sc.style.setProperty("--c", catColor((S.articles.find(matchSource)||{}).category||"総合"));
+    sc.append(el("span",{class:"dot"}), el("span",{text:"情報源: "+(S.sourceName||S.source)}),
+              el("span",{class:"cnt",text:String(S.articles.filter(matchSource).length)}),
+              el("span",{class:"x",html:'&times;'}));
+    sc.onclick=clearSourceFilter;
+    box.append(sc);
+  }
   const cats=["すべて",...S.categories,"保存済み"];
   cats.forEach((c,i)=>{
-    const active=c===S.cat, isSpecial=c==="すべて"||c==="保存済み";
+    const active=!S.source && c===S.cat, isSpecial=c==="すべて"||c==="保存済み";
     const chip=el("button",{class:"chip"+(active?" active":""), title:c+" ("+catCount(c)+")"});
     chip.style.setProperty("--c", isSpecial? "var(--accent)":catColor(c));
     if(c==="保存済み"){
@@ -888,7 +939,7 @@ function renderCats(){
     }else{
       chip.append(el("span",{class:"dot"}), el("span",{text:c}), el("span",{class:"cnt",text:String(catCount(c))}));
     }
-    chip.onclick=()=>{ S.cat=c; store.set("cat",c); renderAll(); };
+    chip.onclick=()=>{ S.source=null; S.sourceName=""; S.cat=c; store.set("cat",c); renderAll(); };
     box.append(chip);
   });
 }
@@ -916,6 +967,38 @@ function renderStatus(){
   if(errN){ box.append(el("span",{class:"sep"})); const e=el("span",{class:"badge-err",text:"⚠ "+errN+"件の取得エラー"}); e.onclick=openSources; box.append(e); }
   if(S.offline){ const o=el("span",{class:"badge-offline",text:"オフラインデモ"}); o.title="情報源に接続できないため、サンプル記事を表示しています。クリックで情報源を確認"; o.onclick=openSources; box.append(o); }
 }
+
+// ============================================================ ソース別表示
+function setSourceFilter(name){
+  if(!name) return;
+  S.source=name; S.sourceName=name; S.cat="すべて"; S.q=""; if($("#q")) $("#q").value="";
+  closeOverlays(); renderAll();
+  try{ window.scrollTo({top:0, behavior:"smooth"}); }catch(e){}
+}
+function clearSourceFilter(){ S.source=null; S.sourceName=""; renderAll(); }
+function sourceCounts(){   // 読み込み済み記事をソース名で集計（件数降順）
+  const m=new Map();
+  for(const a of S.articles){ const k=a.source||"?";
+    const e=m.get(k)||{name:k, category:a.category, n:0}; e.n++; m.set(k,e); }
+  return [...m.values()].sort((x,y)=>y.n-x.n || x.name.localeCompare(y.name,"ja"));
+}
+function renderSourcePicker(){
+  const box=$("#srcPickBody"); box.innerHTML="";
+  const q=($("#srcPickQ").value||"").trim().toLowerCase();
+  const list=sourceCounts().filter(s=>!q || s.name.toLowerCase().includes(q));
+  $("#srcPickCount").textContent=list.length+" 情報源 / "+S.articles.length+" 件";
+  if(!list.length){ box.append(el("div",{class:"empty",style:"padding:26px",html:'<h3>該当する情報源がありません</h3>'})); return; }
+  list.forEach(s=>{
+    const row=el("button",{class:"srcpick"+(S.sourceName===s.name?" on":"")});
+    const dot=el("span",{class:"srcpick__dot"}); dot.style.background=catColor(s.category);
+    row.append(dot, el("span",{class:"srcpick__n",text:s.name}),
+               el("span",{class:"srcpick__cat",text:s.category}),
+               el("span",{class:"srcpick__n2",text:String(s.n)}));
+    row.onclick=()=>setSourceFilter(s.name);
+    box.append(row);
+  });
+}
+function openSourcePicker(){ renderSourcePicker(); openOverlay($("#srcPickDrawer")); }
 
 let io=null;
 function renderGrid(){
@@ -1043,6 +1126,14 @@ function placeholder(a){
 }
 function timeMeta(a){ return relTime(a.published_ts); }
 
+// クリックでその情報源だけ表示する情報源名（ソース別表示）
+function srcSpan(name, cls){
+  const s=el("span",{class:(cls||"card__src")+" srclink", role:"button", tabindex:"0", title:"この情報源だけ表示", text:name||""});
+  s.onclick=(e)=>{ e.stopPropagation(); setSourceFilter(name); };
+  s.onkeydown=(e)=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); e.stopPropagation(); setSourceFilter(name); } };
+  return s;
+}
+
 function card(a){
   const c=el("article",{class:"card"+(S.seen.has(a.id)?" read":"")});
   c.style.setProperty("--c", catColor(a.category));
@@ -1050,7 +1141,7 @@ function card(a){
   const body=el("div",{class:"card__body"});
   const top=el("div",{class:"card__top"});
   const cat=el("span",{class:"card__cat"}); cat.append(el("span",{class:"dot"}), document.createTextNode(a.category));
-  top.append(cat, el("span",{class:"card__src",text:a.source}), el("span",{class:"card__time",text:timeMeta(a)}));
+  top.append(cat, srcSpan(a.source,"card__src"), el("span",{class:"card__time",text:timeMeta(a)}));
   const title=el("h3",{class:"card__title"}); title.append(highlight(a.title, S.q));
   const sum=el("p",{class:"card__sum"}); sum.append(highlight(a.summary||"", S.q));
   body.append(top,title); if(a.summary) body.append(sum);
@@ -1091,7 +1182,7 @@ function heroCard(a, mini){
   const body=el("div",{class:"hero__body"});
   body.append(el("span",{class:"hero__cat",text:a.category}));
   const t=el("h2",{class:"hero__title"}); t.append(document.createTextNode(a.title)); body.append(t);
-  const meta=el("div",{class:"hero__meta"}); meta.append(el("span",{text:a.source}), el("span",{text:"·"}), el("span",{text:timeMeta(a)})); body.append(meta);
+  const meta=el("div",{class:"hero__meta"}); meta.append(srcSpan(a.source,"hero__src"), el("span",{text:"·"}), el("span",{text:timeMeta(a)})); body.append(meta);
   h.append(media,body);
   if(a.link){
     h.tabIndex=0; h.setAttribute("role","link"); h.setAttribute("aria-label",a.title);
@@ -1112,7 +1203,8 @@ function skeleton(){
 }
 function emptyState(){
   const wrap=el("div",{class:"empty",style:"grid-column:1/-1"});
-  const msg = S.cat==="保存済み" ? ["保存済みの記事はありません","記事カードの ⚑ から保存できます"]
+  const msg = S.source ? ["「"+S.sourceName+"」の記事はありません","この情報源が無効か、まだ取得できていない可能性があります（情報源の診断も可能）"]
+            : S.cat==="保存済み" ? ["保存済みの記事はありません","記事カードの ⚑ から保存できます"]
             : S.q ? ["「"+S.q+"」に一致する記事はありません","検索語を変えるか、カテゴリを切り替えてください"]
             : ["記事がありません","「再取得」を押すか、情報源を確認してください"];
   wrap.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3" stroke-linecap="round"/></svg>';
@@ -1316,7 +1408,7 @@ function gItem(a){
   it.style.setProperty("--c",catColor(a.category));
   const meta=el("div",{class:"gitem__meta"});
   const cat=el("span",{class:"gitem__cat"}); cat.append(el("span",{class:"dot"}),document.createTextNode(a.category));
-  meta.append(cat, el("span",{class:"gitem__src",text:a.source}));
+  meta.append(cat, srcSpan(a.source,"gitem__src"));
   if(timeMeta(a)) meta.append(el("span",{text:"·"}), el("span",{text:timeMeta(a)}));
   const title=el("div",{class:"gitem__title"}); title.append(highlight(a.title, GS.q));
   it.append(meta,title);
@@ -1401,6 +1493,8 @@ $("#themeBtn").onclick=()=>applyTheme(document.documentElement.getAttribute("dat
 $("#layoutBtn").onclick=()=>{ S.layout=S.layout==="grid"?"list":"grid"; store.set("layout",S.layout); renderGrid(); };
 $("#bmBtn").onclick=openBookmarks;
 $("#srcBtn").onclick=openSources;
+$("#srcViewBtn").onclick=openSourcePicker;
+$("#srcPickQ").addEventListener("input", renderSourcePicker);
 $("#helpBtn").onclick=openHelp;
 
 // ============================================================ AI アシスタント
@@ -1587,9 +1681,10 @@ document.addEventListener("keydown",(e)=>{
   else if(e.key==="l"||e.key==="L") $("#layoutBtn").click();
   else if(e.key==="b"||e.key==="B") openBookmarks();
   else if(e.key==="s"||e.key==="S") openSources();
+  else if(e.key==="v"||e.key==="V") openSourcePicker();
   else if(e.key==="a"||e.key==="A"){ setAiContext(null); openAI(); }
   else if(e.key==="?") openHelp();
-  else if(/^[1-9]$/.test(e.key)){ const cats=["すべて",...S.categories,"保存済み"]; const c=cats[parseInt(e.key)-1]; if(c){ S.cat=c; store.set("cat",c); renderAll(); } }
+  else if(/^[1-9]$/.test(e.key)){ S.source=null; S.sourceName=""; const cats=["すべて",...S.categories,"保存済み"]; const c=cats[parseInt(e.key)-1]; if(c){ S.cat=c; store.set("cat",c); renderAll(); } }
 });
 
 // ============================================================ boot
