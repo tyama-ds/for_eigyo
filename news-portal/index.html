@@ -339,6 +339,20 @@ main{max-width:1360px; margin:0 auto; padding:16px 22px 80px}
 .srccount{font-size:12.5px; color:var(--text-2)}
 .srccount b{color:var(--accent); font-family:var(--font-serif)}
 .btn.sm{padding:6px 12px; font-size:12px}
+/* 情報源 診断 */
+.diag-load{padding:26px 4px; color:var(--text-2); font-size:13.5px}
+.diag-head{font-size:12.5px; color:var(--text-2); margin-bottom:11px; line-height:1.7}
+.diag-head b{color:var(--text); font-size:14px}
+.diag-verdict{padding:11px 13px; border-radius:11px; font-size:13.5px; font-weight:600; margin:4px 0 15px; line-height:1.65; color:var(--text)}
+.diag-verdict.ok{background:color-mix(in srgb,var(--cat-スポーツ) 16%,transparent)}
+.diag-verdict.warn{background:color-mix(in srgb,var(--cat-世界) 18%,transparent)}
+.diag-verdict.info{background:color-mix(in srgb,var(--accent) 14%,transparent)}
+.diag-probe{border:1px solid var(--line); border-radius:12px; padding:12px 14px; margin-bottom:12px}
+.diag-probe h4{margin:0 0 9px; font-size:12px; color:var(--text-2); font-weight:700; letter-spacing:.02em}
+.diag-kv{display:grid; grid-template-columns:132px 1fr; gap:5px 12px; font-size:12.5px; margin:0}
+.diag-kv dt{color:var(--text-3)}
+.diag-kv dd{margin:0; color:var(--text); word-break:break-all}
+.diag-kv dd.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; color:var(--text-2)}
 .src{display:flex; align-items:center; gap:12px; padding:11px 12px; border-radius:12px;
   border:1px solid var(--line); margin-bottom:8px; transition:.2s}
 .src:hover{border-color:var(--line-2)}
@@ -615,6 +629,15 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
   </div>
 </div>
 
+<!-- 情報源の診断（取得できない原因の切り分け） -->
+<div class="modal" id="diagModal" role="dialog" aria-modal="true" aria-label="情報源の診断" aria-hidden="true">
+  <div class="modal__head">
+    <h2>情報源の診断</h2>
+    <button class="iconbtn" data-close aria-label="閉じる" style="margin-left:auto"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+  </div>
+  <div class="modal__body"><div id="diagBody"></div></div>
+</div>
+
 <div class="modal" id="helpModal" role="dialog" aria-modal="true" aria-hidden="true">
   <div class="modal__head"><h2>キーボードショートカット</h2>
     <button class="iconbtn" data-close aria-label="閉じる"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
@@ -704,7 +727,13 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
                placeholder="http://proxy:8080（空なら環境変数 HTTP(S)_PROXY を使用）">
         <span class="hint">オフ=直結（環境変数も無視）／オン+空=環境変数のプロキシ／オン+URL=そのプロキシ。RSS取得・クラウドAIに適用（ローカルLLMは常に直結）。</span>
       </div>
-      <div class="setnote">AI 呼び出しと RSS 取得はいずれも<b>サーバー側の <code>urllib</code></b>で行われ、上のプロキシ設定に従います（他のアプリ／llmlab と同じ流儀。CA も利用）。APIキーはこの端末の <code>settings.json</code> にのみ保存され、画面には再表示されません。</div>
+      <div class="setrow">
+        <label for="aiCaBundle">CA証明書（任意）</label>
+        <input id="aiCaBundle" type="text" autocomplete="off" spellcheck="false" aria-label="CA bundle path"
+               placeholder="社内プロキシのCA .pem の絶対パス（TLS傍受環境のみ）">
+        <span class="hint">社内プロキシがHTTPSを傍受(MITM)し証明書エラーになる場合のみ指定。空なら環境変数 <code>SSL_CERT_FILE</code> ／システム既定を使用（検証は常に有効）。</span>
+      </div>
+      <div class="setnote">AI 呼び出しと RSS 取得はいずれも<b>サーバー側の <code>urllib</code></b>で行われ、上のプロキシ設定に従います（他のアプリ／llmlab と同じ流儀）。取得できない情報源は「情報源」画面の各行の<b>診断ボタン</b>（脈波アイコン）で原因を切り分けられます。APIキーはこの端末の <code>settings.json</code> にのみ保存され、画面には再表示されません。</div>
       <div class="mrow" style="display:flex; gap:9px; justify-content:flex-end">
         <button class="btn ghost" type="button" id="aiClearKey">キーを削除</button>
         <button class="btn" type="submit">保存</button>
@@ -1154,10 +1183,13 @@ function renderSources(){
     c.append(n, el("div",{class:"src__u",text:s.url}));
     const sw=el("button",{class:"switch"+(s.enabled?" on":""), title:s.enabled?"無効にする":"有効にする", "aria-label":"有効切替"});
     sw.onclick=async()=>{ sw.classList.toggle("on"); try{ const d=await api("/api/sources/toggle?id="+encodeURIComponent(s.id),{method:"POST"}); S.sources=d.sources; renderSources(); toast("情報源を更新しました。再取得します"); loadArticles(true);}catch(e){ sw.classList.toggle("on"); toast("更新に失敗","err"); } };
+    const diag=el("button",{class:"act", title:"診断（取得できるか確認）", "aria-label":"診断"});
+    diag.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2 5 4-12 2 7h6"/></svg>';
+    diag.onclick=(e)=>{ e.stopPropagation(); diagnoseSource(s); };
     const del=el("button",{class:"act", title:"削除", "aria-label":"削除"});
     del.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>';
     del.onclick=async()=>{ try{ const d=await api("/api/sources?id="+encodeURIComponent(s.id),{method:"DELETE"}); S.sources=d.sources; renderSources(); renderCats(); toast("情報源を削除しました"); loadArticles(true);}catch(e){ toast(e.server ? e.message : "削除に失敗","err"); } };
-    row.append(dot,c,sw,del); box.append(row);
+    row.append(dot,c,sw,diag,del); box.append(row);
   });
 }
 $("#addForm").addEventListener("submit", async (e)=>{
@@ -1185,6 +1217,56 @@ async function bulkEnableSources(enabled){
 }
 $("#srcAllOn").onclick=()=>bulkEnableSources(true);
 $("#srcAllOff").onclick=()=>bulkEnableSources(false);
+
+// 情報源の診断（取得できない原因を切り分け：プロキシ / 同意ページ / 403 / TLS / 解析）
+async function diagnoseSource(s){
+  openOverlay($("#diagModal"));
+  const box=$("#diagBody"); box.innerHTML="";
+  box.append(el("div",{class:"diag-load",text:"診断中… "+(s.name||s.id)+"（実際に取得を試みます）"}));
+  try{
+    const d=await api("/api/sources/diagnose?id="+encodeURIComponent(s.id));
+    renderDiag(d.diag);
+  }catch(e){
+    box.innerHTML=""; box.append(el("div",{class:"diag-verdict warn",text:"診断に失敗しました: "+(e&&e.message||e)}));
+  }
+}
+function diagVerdict(diag){
+  const p=diag.primary||{}, a=diag.alternative, errl=(p.error||"").toLowerCase();
+  if(p.items>0) return ["ok","✓ 正常に取得できています（"+p.items+"件）。"];
+  if(a && a.items>0) return ["info","このURLでは取得できませんが、代替（Bing⇄Google）では "+a.items+" 件取得できます。実際の表示ではこの代替へ自動フォールバックします。"];
+  if(errl.includes("ssl")||errl.includes("certificate")||errl.includes("cert_")) return ["warn","TLS証明書エラー。社内プロキシがHTTPSを傍受している可能性 →「AI・プロキシ設定」でCA証明書（ca_bundle）を指定してください。"];
+  if(p.status===403||p.status===407||errl.includes("forbidden")||errl.includes("proxy authentication")) return ["warn","アクセス拒否（HTTP "+(p.status||"?")+"）。社内プロキシのカテゴリ制限／認証の可能性が高いです。管理者に news.google.com / bing.com の許可を依頼するか、代替を利用してください。"];
+  if(errl.includes("urlerror")||errl.includes("timed out")||errl.includes("timeout")||errl.includes("refused")||errl.includes("name or service")||errl.includes("getaddrinfo")) return ["warn","接続できません（"+(p.error||"")+"）。プロキシ未経由／ブロック／DNS の可能性。プロキシ設定を確認してください。"];
+  if(p.ok && !p.looks_like_feed) return ["warn","フィードではない応答（同意ページ／ブロックページの可能性。HTTP "+(p.status||"?")+", "+(p.content_type||"?")+"）。"];
+  return ["warn", p.error ? ("取得エラー: "+p.error) : "記事0件（フィードが空、または内容が想定と異なります）。"];
+}
+function probeCard(title, pr){
+  const w=el("div",{class:"diag-probe"}); w.append(el("h4",{text:title}));
+  const dl=el("dl",{class:"diag-kv"});
+  const add=(k,v,mono)=>{ dl.append(el("dt",{text:k})); dl.append(el("dd",{class:mono?"mono":"",text:(v===null||v===undefined||v==="")?"—":String(v)})); };
+  add("URL", pr.url, true);
+  add("結果", pr.ok?"接続OK":"接続失敗");
+  add("HTTPステータス", pr.status);
+  if(pr.final_url && pr.final_url!==pr.url) add("最終URL", pr.final_url, true);
+  add("Content-Type", pr.content_type);
+  add("サイズ", pr.bytes!=null?(pr.bytes+" bytes"):null);
+  add("フィード形式", pr.looks_like_feed?"はい":"いいえ");
+  add("記事数", pr.items);
+  if(pr.error) add("エラー", pr.error);
+  if(pr.snippet) add("先頭抜粋", pr.snippet, true);
+  w.append(dl); return w;
+}
+function renderDiag(diag){
+  const box=$("#diagBody"); box.innerHTML="";
+  const head=el("div",{class:"diag-head"});
+  head.append(el("b",{text:diag.name||diag.id}));
+  head.append(el("div",{text:"プロキシ: "+diag.proxy_mode+" ／ CA証明書: "+diag.ca_bundle}));
+  box.append(head);
+  const v=diagVerdict(diag);
+  box.append(el("div",{class:"diag-verdict "+v[0], text:v[1]}));
+  box.append(probeCard("このURL", diag.primary||{}));
+  if(diag.alternative) box.append(probeCard("代替アグリゲータ（Bing⇄Google）", diag.alternative));
+}
 
 // ============================================================ overlays（重ね対応）
 let lastTrigger=null;
@@ -1456,11 +1538,12 @@ function fillAiForm(){
   $("#aiProvider").value=c.provider||"anthropic";
   $("#aiBase").value=c.base_url||""; $("#aiModel").value=c.model||""; $("#aiKey").value="";
   $("#aiKeyStatus").textContent = c.has_key ? "✓ キー登録済み（変更する場合のみ入力）" : "";
-  const p=AI.proxy||{use_proxy:true, proxy_url:""};
+  const p=AI.proxy||{use_proxy:true, proxy_url:"", ca_bundle:""};
   $("#aiUseProxy").checked = p.use_proxy!==false; $("#aiProxyUrl").value = p.proxy_url||"";
+  $("#aiCaBundle").value = p.ca_bundle||"";
   toggleProxyUrl(); applyProviderHints();
 }
-function proxyPayload(){ const on=$("#aiUseProxy").checked; return { use_proxy:on, proxy_url: on ? $("#aiProxyUrl").value.trim() : "" }; }
+function proxyPayload(){ const on=$("#aiUseProxy").checked; return { use_proxy:on, proxy_url: on ? $("#aiProxyUrl").value.trim() : "", ca_bundle: $("#aiCaBundle").value.trim() }; }
 function openAiSettings(){ fillAiForm(); openOverlay($("#aiSettings")); }
 $("#aiProvider").addEventListener("change", applyProviderHints);
 $("#aiUseProxy").addEventListener("change", toggleProxyUrl);
