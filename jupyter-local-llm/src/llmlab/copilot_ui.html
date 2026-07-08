@@ -376,23 +376,35 @@ function renderConnOpts(){
     }
   });
 }
+// 不正な入力があれば null を返す（呼び出し側は実行を中止する）
 function collectConnOpts(){
   const kind=$("connector").value, out={};
+  let bad=false;
   (CONN_OPTS[kind]||[]).forEach(o=>{
     const el=$("opt_"+o.k); if(!el) return;
     if(o.type==="check"){ out[o.k]=el.checked; }
     else if(o.type==="select"){ out[o.k]=el.value; }
+    else if(o.type==="number"){
+      const v=String(el.value).trim();
+      if(v){ const n=parseInt(v,10); if(Number.isFinite(n)) out[o.k]=n; else { toast(`${o.k} は整数で入力してください`); bad=true; } }
+    }
     else if(o.type==="json"){
       const v=String(el.value).trim();
-      if(v){ try{ Object.assign(out, JSON.parse(v)); }catch(e){ toast("詳細設定JSONが不正です"); } }
+      if(v){
+        let parsed;
+        try{ parsed=JSON.parse(v); }catch(e){ toast("詳細設定JSONが不正です: "+e.message); bad=true; return; }
+        if(!parsed || typeof parsed!=="object" || Array.isArray(parsed)){ toast("詳細設定JSONはオブジェクト {..} にしてください"); bad=true; return; }
+        Object.assign(out, parsed);
+      }
     }
     else if(String(el.value).trim()){ out[o.k]=String(el.value).trim(); }
   });
-  return out;
+  return bad ? null : out;
 }
 $("btnTest").onclick=async()=>{
+  const opts=collectConnOpts(); if(opts===null) return;
   $("testMsg").textContent="テスト中…";
-  const r=await api("/api/connector/test",{kind:$("connector").value,options:collectConnOpts()});
+  const r=await api("/api/connector/test",{kind:$("connector").value,options:opts});
   $("testMsg").innerHTML=`<span style="color:${r.ok?'var(--ok)':'var(--err)'}">${r.ok?'✅':'❌'} ${esc(r.message||'')}</span>`;
 };
 
@@ -433,11 +445,12 @@ $("btnOutline").onclick=async()=>{
 
 /* ================= 実行 ================= */
 function collectPayload(){
+  const co=collectConnOpts(); if(co===null) return null;  // 不正なコネクタ設定
   return {
     request:$("request").value.trim(),
     demo: mode==="demo",
     connector: $("connector").value,
-    connector_options: collectConnOpts(),
+    connector_options: co,
     gepa_budget: +$("budget").value||0,
     minibatch: +$("minibatch").value||2,
     outline: collectOutline(),
@@ -445,6 +458,7 @@ function collectPayload(){
 }
 $("btnRun").onclick=async()=>{
   const p=collectPayload();
+  if(!p) return;                                    // コネクタ設定が不正
   if(!p.request){toast("調査依頼を入力してください");return;}
   // reset UI
   $("lineage").innerHTML=""; $("finalChapters").innerHTML=""; $("reportPanel").style.display="none";

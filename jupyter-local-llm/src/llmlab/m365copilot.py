@@ -98,7 +98,8 @@ class BaseConnector:
         self.options = options or {}
 
     def research(self, prompt: str, *, meta: dict | None = None,
-                 emit: EmitFn | None = None, ask_bridge: AskBridgeFn | None = None) -> ChapterResult:
+                 emit: EmitFn | None = None, ask_bridge: AskBridgeFn | None = None,
+                 should_cancel=None) -> ChapterResult:
         raise NotImplementedError
 
     def test(self) -> tuple[bool, str]:
@@ -128,7 +129,8 @@ class DemoConnector(BaseConnector):
     kind = "demo"
     label = "デモ（モック）"
 
-    def research(self, prompt, *, meta=None, emit=None, ask_bridge=None) -> ChapterResult:
+    def research(self, prompt, *, meta=None, emit=None, ask_bridge=None,
+                 should_cancel=None) -> ChapterResult:
         meta = meta or {}
         time.sleep(float(self.options.get("delay", 0.35)))
         chapter = str(meta.get("chapter", "この章"))
@@ -174,7 +176,8 @@ class BridgeConnector(BaseConnector):
     kind = "bridge"
     label = "人手ブリッジ（貼り付け）"
 
-    def research(self, prompt, *, meta=None, emit=None, ask_bridge=None) -> ChapterResult:
+    def research(self, prompt, *, meta=None, emit=None, ask_bridge=None,
+                 should_cancel=None) -> ChapterResult:
         if ask_bridge is None:
             return ChapterResult(ok=False, connector=self.kind,
                                  error="bridge コネクタは対話サーバ経由でのみ利用できます")
@@ -405,10 +408,26 @@ class SeleniumConnector(BaseConnector):
                 pass
         time.sleep(int(self._opt("post_open_wait_ms")) / 1000)
 
+    @staticmethod
+    def _is_alive(driver) -> bool:
+        """ドライバ（ブラウザ）がまだ生きているかを軽く確認する。"""
+        if driver is None:
+            return False
+        try:
+            _ = driver.current_url
+            return True
+        except Exception:  # noqa: BLE001  セッション失効/ウィンドウ消失など
+            return False
+
     def _ensure_session(self, emit=None):
-        """ドライバを（初回のみ）起動し、Researcher を開いて返す。以降は使い回す。"""
+        """ドライバを（初回のみ）起動し、Researcher を開いて返す。以降は使い回す。
+
+        既存セッションが死んでいたら作り直す（章の途中でブラウザが落ちても後続章が巻き添えに
+        ならないようにする）。"""
         if self._driver is not None:
-            return self._driver
+            if self._is_alive(self._driver):
+                return self._driver
+            self.close()  # 死んでいる → 破棄して作り直す
         self._emit(emit, type="progress", stage="se_launch", text=f"{self._browser()} 起動")
         driver = self._make_driver()
         try:
@@ -500,8 +519,10 @@ class SeleniumConnector(BaseConnector):
 
     # ---- 生成待ち（停止ボタンの出現→消滅で完了） ---------------------------
 
-    def _wait_generation_done(self, driver, emit=None) -> None:
-        """生成中(■=停止ボタン) → 完了(■が消える) を待つ。長時間ジョブ向けに堅牢化。"""
+    def _wait_generation_done(self, driver, emit=None, should_cancel=None) -> None:
+        """生成中(■=停止ボタン) → 完了(■が消える) を待つ。長時間ジョブ向けに堅牢化。
+
+        should_cancel() が True を返したら即座に中断（キャンセルを長時間待たせない）。"""
         from selenium.common.exceptions import StaleElementReferenceException
         from selenium.webdriver.common.by import By
         from selenium.webdriver.support.ui import WebDriverWait
@@ -516,6 +537,8 @@ class SeleniumConnector(BaseConnector):
         last_beat = 0.0
         saw_stop = False
         while True:
+            if should_cancel and should_cancel():
+                raise RuntimeError("キャンセルされました")
             now = time.monotonic()
             if (now - start) > total:
                 raise TimeoutError("生成完了を検出できませんでした（timeout_ms 超過）")
@@ -547,6 +570,7 @@ class SeleniumConnector(BaseConnector):
     # ---- 応答取得（コピー→クリップボード。無ければ DOM） ------------------
 
     def _capture_answer(self, driver, emit=None) -> str:
+        """「応答のコピー」→ クリップボード。前章の値を誤取得しないよう直前に目印を書いて確認する。"""
         from selenium.webdriver.common.by import By
         from selenium.webdriver.support import expected_conditions as EC
         from selenium.webdriver.support.ui import WebDriverWait
@@ -554,11 +578,16 @@ class SeleniumConnector(BaseConnector):
         text = ""
         copy_sel = self._opt("copy_selector")
         if copy_sel:
+            # コピー前にユニークな目印をクリップボードへ。コピー後も目印のままなら
+            # 「実際にはコピーされていない（前章の値のまま）」と判断して失敗扱いにする。
+            sentinel = f"__llmlab_copy_{int(time.time() * 1000)}__"
+            self._set_clipboard(driver, sentinel)
             try:
                 WebDriverWait(driver, 60).until(
                     EC.element_to_be_clickable((By.CSS_SELECTOR, copy_sel))).click()
                 time.sleep(1)
-                text = self._read_clipboard(driver)
+                got = self._read_clipboard(driver)
+                text = "" if got == sentinel else got
             except Exception:  # noqa: BLE001
                 text = ""
         if not text and self._opt("answer_selector"):  # DOM フォールバック
@@ -568,6 +597,23 @@ class SeleniumConnector(BaseConnector):
             except Exception:  # noqa: BLE001
                 text = ""
         return (text or "").strip()
+
+    @staticmethod
+    def _set_clipboard(driver, value: str) -> None:
+        """クリップボードに目印を書く（pyperclip → JS の順。ベストエフォート）。"""
+        try:
+            import pyperclip
+            pyperclip.copy(value)
+            return
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            driver.execute_async_script(
+                "var cb=arguments[arguments.length-1];"
+                "navigator.clipboard.writeText(arguments[0]).then(function(){cb(1);})"
+                ".catch(function(){cb(0);});", value)
+        except Exception:  # noqa: BLE001
+            pass
 
     @staticmethod
     def _read_clipboard(driver) -> str:
@@ -590,13 +636,15 @@ class SeleniumConnector(BaseConnector):
                 return v
         except Exception:  # noqa: BLE001
             pass
-        # 3) tkinter（GUI 環境）
+        # 3) tkinter（GUI 環境）。root は必ず destroy する（TclError でも漏らさない）
         try:
             import tkinter
             r = tkinter.Tk()
             r.withdraw()
-            v = r.clipboard_get()
-            r.destroy()
+            try:
+                v = r.clipboard_get()
+            finally:
+                r.destroy()
             if v:
                 return v
         except Exception:  # noqa: BLE001
@@ -605,7 +653,8 @@ class SeleniumConnector(BaseConnector):
 
     # ---- 1 章分のリサーチ ---------------------------------------------------
 
-    def research(self, prompt, *, meta=None, emit=None, ask_bridge=None) -> ChapterResult:
+    def research(self, prompt, *, meta=None, emit=None, ask_bridge=None,
+                 should_cancel=None) -> ChapterResult:
         ok, msg = self.test()
         if not ok:
             return ChapterResult(ok=False, connector=self.kind, error=msg)
@@ -629,7 +678,7 @@ class SeleniumConnector(BaseConnector):
                 except Exception:  # noqa: BLE001  続行入力が不要な構成もある
                     pass
             self._emit(emit, type="progress", stage="se_wait", text="リサーチ生成を待機")
-            self._wait_generation_done(driver, emit)
+            self._wait_generation_done(driver, emit, should_cancel)
             self._emit(emit, type="progress", stage="se_copy", text="応答をコピー")
             text = self._capture_answer(driver, emit)
             self._research_count += 1
@@ -638,8 +687,11 @@ class SeleniumConnector(BaseConnector):
                 latency_sec=time.time() - t0, ok=bool(text),
                 error="" if text else "応答本文を取得できませんでした"
                       "（copy_selector/クリップボード権限、または answer_selector を確認）")
-        except Exception as e:  # noqa: BLE001  章単位の失敗（セッションは維持して次章へ）
+        except Exception as e:  # noqa: BLE001  章単位の失敗
             self._research_count += 1
+            # ブラウザが死んでいたら破棄して次章で作り直す（1章の失敗で全滅させない）
+            if not self._is_alive(self._driver):
+                self.close()
             return ChapterResult(ok=False, connector=self.kind, latency_sec=time.time() - t0,
                                  error=f"{type(e).__name__}: {e}")
 
@@ -706,7 +758,8 @@ class GraphConnector(BaseConnector):
                 return None
         return obj
 
-    def research(self, prompt, *, meta=None, emit=None, ask_bridge=None) -> ChapterResult:
+    def research(self, prompt, *, meta=None, emit=None, ask_bridge=None,
+                 should_cancel=None) -> ChapterResult:
         ok, msg = self.test()
         if not ok:
             return ChapterResult(ok=False, connector=self.kind, error=msg)
