@@ -327,6 +327,15 @@ print(mp.compare_figures("各論文のグラフの傾向を比較")) # pics=True
 - `locate_strategy`: 候補論文の選び方（横断検索／要約でLLM選別／全件）
 - `pics=True`: PDF を画像化して VLM が図を読む（`compare`/`compare_figures` で活用）
 
+**文書間検索の多様化（v0.5.1〜）**: `locate_strategy="search"` は「全チャンクから top-k を
+取る」方式だと1文書のチャンクが上位を独占して候補が偏っていた。現在は **doc_id 単位で候補を
+集約**する（広めに `candidate_chunk_k` チャンクを取得 → 文書ごとに group by → 文書スコア=最大
+または上位平均 → 上位 N 文書）。`chunks_per_doc`（文書ごとに使うチャンク数）で調整できる。
+各文書には安定な `doc_id`（絶対パス由来。同名ファイルでも衝突せず、title に関係なく再取り込みは
+冪等）が付き、`storage/multipaper/documents/{doc_id}.json` に中身（チャンク）が保存され個別確認
+できる。低レベルAPI: `PagedRAG.rank_documents(q, candidate_chunk_k=, top_n=, chunks_per_doc=)` /
+`PagedRAG.query(q, doc_id=...)` / `PagedRAG.document(doc_id)`。
+
 **必要な任意依存（未導入なら該当機能のみスキップ＋案内）**
 - 表抽出: `pip install pdfplumber`（PDF）、`python-docx`（Word）、`openpyxl`（Excel）
 - Word/Excel 本文: `pip install "llama-index-readers-file" docx2txt openpyxl pandas`

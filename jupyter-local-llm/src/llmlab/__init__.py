@@ -23,7 +23,7 @@ from .config import (
     is_configured,
     settings_form,
 )
-from .pagedrag import Answer, DocRAG, PagedRAG, Source
+from .pagedrag import Answer, DocRank, DocRAG, PagedRAG, Source, make_doc_id
 from .multipaper import Comparison, MultiPaperRAG
 from .tableqa import TableAnswer, TableQA
 from .docqa import DocQA, DocResult
@@ -70,6 +70,8 @@ __all__ = [
     "DocRAG",
     "Answer",
     "Source",
+    "DocRank",
+    "make_doc_id",
     # 論文忠実 BookRAG（BookIndex + エージェント検索）
     "BookRAG",
     "BookAnswer",
@@ -101,4 +103,4 @@ __all__ = [
     "build_index",
 ]
 
-__version__ = "0.5.0"  # llmlab.__version__ で更新確認できる
+__version__ = "0.5.1"  # llmlab.__version__ で更新確認できる
