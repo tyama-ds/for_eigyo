@@ -2,7 +2,7 @@
 
 LlamaIndex の素直なベクトル検索に、書名・ページ番号の出典付与と本単位フィルタを
 足した実装。**論文 BookRAG（階層ツリー＋KG＋エージェント検索）とは別物**で、
-「複数文書をまとめてページ出典つきで引きたい」軽量用途向け。論文忠実版は
+「複数文書をまとめてページ出典つきで引きたい」軽量用途向け。BookRAG-inspired 版は
 `llmlab.BookRAG`（bookrag.py）を参照。
 
 使い方::
@@ -43,17 +43,28 @@ DEFAULT_TOP_K = 5
 _DOC_ID_KEY = "llmlab_doc_id"
 
 
-def make_doc_id(path: str | Path, title: str | None = None) -> str:
-    """文書の一意な ID を作る（物理ファイルの**絶対パス**から決定的に導出）。
+def content_hash(path: str | Path, *, chunk: int = 1 << 20) -> str:
+    """ファイル内容の SHA-256（先頭16桁）。同一内容→同一、版違い→別。"""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(chunk), b""):
+            h.update(block)
+    return h.hexdigest()[:16]
 
-    - `path.name` **だけ** には依存しない（同名ファイルでも別フォルダなら別 ID）。
-    - 逆に同じファイルは **title に関係なく** 常に同じ ID になる（再取り込みの冪等性）。
-      title を混ぜると `add_book(p, title="A")` と `add_book(p)` が別 ID になり、
-      同一ファイルが二重登録される（= 文書多様化が壊れる）ため、混ぜない。
+
+def make_doc_id(path: str | Path, title: str | None = None) -> str:
+    """文書の一意な ID を作る（既定は **内容ハッシュ** ベース）。
+
+    - `title` / `path.name` には依存しない。同名文書・版違い・別ファイルを正しく区別
+      できる（内容が同じなら別パスでも同一 ID = 冪等な再取り込み）。
+    - 読み取れない場合のみ絶対パスのハッシュにフォールバックする。
     - title 引数は呼び出し側の互換のため残すが、ID には影響しない。
     """
-    resolved = str(Path(path).resolve())
-    return "d" + hashlib.md5(resolved.encode("utf-8")).hexdigest()[:12]
+    try:
+        return "d" + content_hash(path)
+    except OSError:
+        resolved = str(Path(path).resolve())
+        return "d" + hashlib.md5(resolved.encode("utf-8")).hexdigest()[:12]
 
 
 @dataclass
@@ -123,12 +134,15 @@ class PagedRAG:
     # ---- 取り込み ----------------------------------------------------------
 
     def add_book(self, path: str | Path, *, title: str | None = None,
-                 force: bool = False) -> str:
+                 force: bool = False, doc_id: str | None = None) -> str:
         """1冊の本（PDF/txt/md/docx など）を取り込み、インデックスへ追加する。
 
-        同じ文書（= 同じ絶対パス）が取り込み済みの場合は重複追加を防ぐためスキップする
-        （ベクトル索引は追記型のため、再取り込みすると検索結果が重複する）。
+        同じ文書（= 同じ内容ハッシュの doc_id）が取り込み済みの場合は重複追加を防ぐため
+        スキップする（ベクトル索引は追記型のため、再取り込みすると検索結果が重複する）。
         取り込み直したいときは force=True か reset() を使う。
+
+        doc_id を明示指定すると、その ID で登録する（IndexManager が内容ハッシュ ID を
+        共有するため）。省略時は make_doc_id(path) で内容ハッシュから導出する。
         """
         from llama_index.core import SimpleDirectoryReader
         from llama_index.core.node_parser import SentenceSplitter
@@ -139,19 +153,28 @@ class PagedRAG:
         if not path.exists():
             raise FileNotFoundError(f"ファイルがありません: {path}")
 
-        doc_id = make_doc_id(path, title)
-        # doc_id で重複判定（同名ファイルが別フォルダにある場合でも衝突しない）。
-        # 旧カタログ（doc_id 無し）は source 名で後方互換的に判定する。
-        existing = next(
-            (b for b in self.books()
-             if (b.get("doc_id") == doc_id) or
-                (b.get("doc_id") is None and b.get("source") == path.name)),
+        doc_id = doc_id or make_doc_id(path, title)
+        resolved = str(path.resolve())
+        # 重複判定は2段:
+        #  1) 同じ doc_id（=同じ内容）→ 取り込み済みなのでスキップ（force で置換）
+        #  2) 同じファイル（catalog の path 一致 / 旧々形式は source 名）だが別 doc_id
+        #     → 旧形式ID（〜v0.5.1 のパスハッシュ）か、内容が変わった版違い。
+        #       どちらも旧チャンクを削除してから新IDで取り込み直す（置き換え）。
+        #       これを怠ると追記型ストアに新旧が併存し検索が二重になる。
+        books = self.books()
+        by_id = next((b for b in books if b.get("doc_id") == doc_id), None)
+        by_path = next(
+            (b for b in books
+             if b is not by_id and (
+                 (b.get("path") and b.get("path") == resolved) or
+                 (b.get("doc_id") is None and b.get("source") == path.name))),
             None,
         )
-        if existing and not force:
+        if by_id and not force:
             print(f"[PagedRAG] {path.name} は取り込み済みのためスキップします"
                   "（重複防止。再取り込みは force=True、全消去は reset()）")
-            return existing["title"]
+            return by_id["title"]
+        existing = by_id or by_path
 
         apply_llama_settings()
         book_title = title or path.stem
@@ -175,10 +198,20 @@ class PagedRAG:
             n.metadata.setdefault(_DOC_ID_KEY, doc_id)
 
         index = self._get_or_create_index()
-        if existing and force:
+        if existing:
             # 追記型ストアなので、削除せず insert すると同じチャンクが二重に入り、
             # その文書が top-k を独占して多様化が壊れる。再取り込み前に旧チャンクを消す。
-            self._delete_doc_nodes(index, doc_id)
+            # 旧形式ID/版違い（by_path）の場合は **旧IDの** チャンクを消す。
+            old_id = existing.get("doc_id") or doc_id
+            if by_path is existing:
+                print(f"[PagedRAG] {path.name}: 既存の登録（doc_id={old_id}）を"
+                      "新しい内容で置き換えます")
+            self._delete_doc_nodes(index, old_id)
+            if old_id != doc_id:  # 旧IDのカタログ/チャンクJSONを掃除して新IDへ移行
+                jp = self.documents_dir / f"{old_id}.json"
+                if jp.exists():
+                    jp.unlink()
+                self._drop_catalog_entry(old_id)
         index.insert_nodes(nodes)
         index.storage_context.persist(persist_dir=str(self.storage_dir))
         self._register_book(book_title, path.name, len(nodes), doc_id,
@@ -432,6 +465,37 @@ class PagedRAG:
         doc["summary"] = summary
         (self.documents_dir / f"{doc_id}.json").write_text(
             json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _drop_catalog_entry(self, doc_id: str) -> bool:
+        """カタログから doc_id のエントリを外す。外したら True。"""
+        catalog = self.books()
+        kept = [b for b in catalog if b.get("doc_id") != doc_id]
+        if len(kept) != len(catalog):
+            self.storage_dir.mkdir(parents=True, exist_ok=True)
+            self._catalog_path.write_text(
+                json.dumps(kept, ensure_ascii=False, indent=2), encoding="utf-8")
+            return True
+        return False
+
+    def delete_document(self, doc_id: str) -> bool:
+        """1文書分のチャンクを索引・カタログ・文書JSONから削除する。
+
+        返り値は「実際に何かを削除できたか」。チャンクIDの記録（文書JSON）が無い
+        旧索引ではベクトル側を特定できないため、その場合カタログ/JSONのみ削除し、
+        何も見つからなければ False を返す（UI が成功と誤認しないように）。
+        """
+        doc = self.document(doc_id)
+        had_chunks = bool((doc or {}).get("chunks"))
+        index = self._get_or_create_index(create_if_missing=False)
+        if index is not None and had_chunks:
+            self._delete_doc_nodes(index, doc_id)
+            index.storage_context.persist(persist_dir=str(self.storage_dir))
+        dropped = self._drop_catalog_entry(doc_id)
+        jp = self.documents_dir / f"{doc_id}.json"
+        if jp.exists():
+            jp.unlink()
+            dropped = True
+        return had_chunks or dropped
 
     def reset(self) -> None:
         """インデックスとカタログ・文書JSONを削除する（全消去）。"""

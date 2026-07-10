@@ -148,11 +148,21 @@ def detect_index(path: str | Path) -> IndexInfo | None:
     return None
 
 
+def _is_manager_root(p: Path) -> bool:
+    """IndexManager（doc_id 中心レジストリ）の保存ルートか。
+
+    内部の vectors/ を通常の paged 索引として索引横断ビューに露出させると、
+    そこへ旧経路で追記されてレジストリの整合（docs/ メタ）が壊れるため除外する。
+    """
+    return (p / "docs").is_dir() and (p / "status").is_dir() and (p / "vectors").is_dir()
+
+
 def discover(root: str | Path = DEFAULT_ROOT, *, include_pins: bool = True) -> list[IndexInfo]:
     """root 直下（と root 自身）から索引フォルダを検出する。
 
     include_pins=True（既定）なら、ピン留め済みの索引を root の内外を問わず
     先頭に含める（root 内で見つかったものにはピン印を付ける）。
+    IndexManager の内部ストア（index/vectors 等）は対象外（文書管理ビューで扱う）。
     """
     root = Path(root)
     found: list[IndexInfo] = []
@@ -161,11 +171,16 @@ def discover(root: str | Path = DEFAULT_ROOT, *, include_pins: bool = True) -> l
         if info:
             found.append(info)
         for d in sorted(p for p in root.iterdir() if p.is_dir()):
+            if _is_manager_root(d) or (_is_manager_root(root)
+                                       and d.name in ("vectors", "bookindex")):
+                continue  # IndexManager 領域は露出しない
             info = detect_index(d)
             if info:
                 found.append(info)
             else:  # bookindex 既定の入れ子（storage/bookindex 等）も1段だけ見る
                 for dd in sorted(p for p in d.iterdir() if p.is_dir()):
+                    if _is_manager_root(dd):
+                        continue
                     sub = detect_index(dd)
                     if sub:
                         sub.name = f"{d.name}/{dd.name}"
@@ -260,17 +275,17 @@ def build_index(docs_path: str | Path, storage_dir: str | Path, *,
         emit("注意", 0, total,
              "BOOK 方式は1文書ごとに知識グラフを構築するため時間がかかります")
 
-    # BookRAG の内部ログ（[1/5] 解析…等）も進捗として転送する
-    old_log = bx.log
+    # BookRAG の内部ログ（[1/5] 解析…等）も進捗として転送する。
+    # bx.log_to はスレッドローカルのため、Studio で他タスクと並行しても混線しない
+    # （旧実装の bx.log グローバル差し替えは並行実行で競合していた）。
+    from contextlib import nullcontext
+
     state = {"i": 0, "file": ""}
 
     def _forward_log(msg):
-        old_log(msg)
         emit(f"取り込み: {state['file']}", state["i"], total, str(msg))
 
-    if progress is not None:
-        bx.log = _forward_log
-    try:
+    with (bx.log_to(_forward_log) if progress is not None else nullcontext()):
         for i, f in enumerate(files):
             state["i"], state["file"] = i, f.name
             emit(f"取り込み: {f.name}", i, total, f"{i + 1}/{total} 件目（{kind}）")
@@ -278,8 +293,6 @@ def build_index(docs_path: str | Path, storage_dir: str | Path, *,
                 builder.add_book(f, layout=("auto" if layout else False), ocr=ocr)
             else:
                 builder.add_book(f)
-    finally:
-        bx.log = old_log
 
     if pin:
         pin_index(storage_dir)

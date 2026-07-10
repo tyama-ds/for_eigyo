@@ -168,7 +168,44 @@ def progress(iterable, *, total: int | None = None, desc: str = ""):
         return _gen()
 
 
+# ログ転送はスレッドローカル。以前は呼び出し側が bx.log をグローバルに差し替えて
+# いたが、Studio はタスクごとに別スレッドで動くため、並行実行で転送先が混線し
+# 復元順によっては死んだタスクの Queue を永久に指す事故が起きる。log_to() を使う。
+_log_local = __import__("threading").local()
+
+
+def log_to(callback):
+    """このスレッドの log() 出力を callback にも転送するコンテキストマネージャ。
+
+    使い方::
+        with bx.log_to(lambda msg: progress_queue.put(msg)):
+            book.add_book(...)
+
+    ネスト可（内側が優先、抜けると外側に戻る）。他スレッドには影響しない。
+    注意: ThreadPoolExecutor 内の子スレッドからの log() には転送されない
+    （現状 log() を呼ぶのはタスクの主スレッドのみ）。
+    """
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _cm():
+        prev = getattr(_log_local, "cb", None)
+        _log_local.cb = callback
+        try:
+            yield
+        finally:
+            _log_local.cb = prev
+
+    return _cm()
+
+
 def log(msg: str) -> None:
+    cb = getattr(_log_local, "cb", None)
+    if cb is not None:
+        try:
+            cb(msg)
+        except Exception:  # noqa: BLE001  転送失敗で本処理は止めない
+            pass
     print(f"[BookRAG] {msg}")
 
 
@@ -195,6 +232,9 @@ class TreeNode:
     # 元ファイルの絶対パス（書のルートノードにのみ設定。出典リンク用）。
     # 旧バージョンで保存した索引には無いため既定 None（load 互換）。
     source: str | None = None
+    # 文書ID（内容ハッシュ）。title/book 名ではなくこれで文書を識別する。
+    # 旧バージョンで保存した索引には無いため既定 None（load 互換）。
+    doc_id: str | None = None
 
 
 @dataclass
@@ -768,15 +808,53 @@ def build_tree(bi: BookIndex, blocks: list[dict], book: str, *, chunk_chars: int
 # --------------------------------------------------------------------------
 
 
+def _section_ancestor_id(bi: "BookIndex", nid: int) -> int:
+    """ノードが属する最も近い Section 祖先（無ければ自分）の id。"""
+    cur = nid
+    seen = 0
+    while bi.nodes[cur].type != "Section" and bi.nodes[cur].parent is not None and seen < 10000:
+        cur = bi.nodes[cur].parent
+        seen += 1
+    return cur
+
+
+def _even_sample(bi: "BookIndex", targets: list[int], budget: int) -> list[int]:
+    """max_nodes を超える場合、セクションごとに均等（round-robin）にサンプリングする。
+
+    従来は先頭から budget 件だけ採用していたため、後半セクションが丸ごと無視され
+    「前半しか見ない」偏りが出ていた。文書全体を薄く広くカバーするよう変更。
+    後段の Gradient ER は順序依存のため、**返り値は文書順（targets の元の並び）**を保つ。
+    """
+    from collections import OrderedDict
+    from itertools import zip_longest
+
+    if budget >= len(targets):
+        return list(targets)
+    buckets: "OrderedDict[int, list[int]]" = OrderedDict()
+    for nid in targets:  # 入力順（=文書順）を保ったままセクション別に束ねる
+        buckets.setdefault(_section_ancestor_id(bi, nid), []).append(nid)
+    # ラウンドロビンで各セクションから均等に採用（O(total)）
+    picked: set[int] = set()
+    for row in zip_longest(*buckets.values()):
+        for nid in row:
+            if nid is not None and len(picked) < budget:
+                picked.add(nid)
+        if len(picked) >= budget:
+            break
+    return [nid for nid in targets if nid in picked]  # 文書順を復元
+
+
 def build_graph(bi: BookIndex, node_ids: list[int], *, gradient_g: float = 0.6,
                 er_top_k: int = 10, max_workers: int = 8, min_chars: int = 40,
-                max_nodes: int = 300, er_use_llm: bool = False, reranker=None) -> None:
+                max_nodes: int = 300, er_use_llm: bool = False, reranker=None,
+                all_nodes: bool = False) -> None:
     """各ノードからエンティティ/関係を抽出し、Gradient-based ER で KG を構築する。
 
     速度のため、抽出（LLM 呼び出し + 埋め込み）はノード単位で **並列化** し、
     Gradient ER とグラフ構築（順序依存・BookIndex を変更する）は **逐次** で行う。
     - 短すぎるノード（min_chars 未満）は抽出をスキップ。
-    - 対象ノードは max_nodes で上限（超過分は警告して打ち切り）。
+    - all_nodes=True なら全ノードを処理。False（既定）で max_nodes を超える場合は
+      **セクションごとに均等サンプリング**（先頭打ち切りにせず文書全体をカバー）。
     - er_use_llm=False（既定）なら曖昧マージで LLM を呼ばず、最有力候補を採用（高速）。
     - reranker 指定時は Algorithm 1 の Rerank model R として名寄せ候補を再スコアする。
     - Table ノードは論文 4.3.1 に従い v_table エンティティ + ヘッダを ContainedIn で構造化。
@@ -793,10 +871,10 @@ def build_graph(bi: BookIndex, node_ids: list[int], *, gradient_g: float = 0.6,
         log("警告: 抽出対象の本文ノードが 0 件です。文書からテキストを取得できていない可能性が"
             "あります（スキャンPDF・空文書・全ノードが min_chars 未満）。")
         return
-    if len(targets) > max_nodes:
-        print(f"[BookRAG] 対象ノード {len(targets)} 件を max_nodes={max_nodes} 件に打ち切ります"
-              "（増やすには add_book(max_nodes=...)）")
-        targets = targets[:max_nodes]
+    if not all_nodes and len(targets) > max_nodes:
+        print(f"[BookRAG] 対象ノード {len(targets)} 件を max_nodes={max_nodes} 件へ"
+              "**セクション均等サンプリング**で圧縮します（全件は all_nodes=True）")
+        targets = _even_sample(bi, targets, max_nodes)
 
     def _work(nid: int, fail_fast: bool = True):
         # 抽出フェーズは BookIndex を読むだけ（スレッド安全）。失敗しても全体を止めず、

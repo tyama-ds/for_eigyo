@@ -36,29 +36,45 @@ def _chunk(doc_id: str, title: str, score: float, text: str = "x") -> NodeWithSc
 # 1. doc_id が同名ファイル/同名タイトルでも衝突しない
 # --------------------------------------------------------------------------
 
+def _tmp_doc(name: str, text: str):
+    import tempfile
+
+    d = Path(tempfile.mkdtemp(prefix="llmlab_docid_"))
+    p = d / name
+    p.write_text(text, encoding="utf-8")
+    return p
+
+
 def test_doc_id_no_collision_same_name():
-    a = make_doc_id("/data/2014/report.pdf", "決算報告")
-    b = make_doc_id("/data/2015/report.pdf", "決算報告")   # 同名ファイル・同名タイトル
-    assert a != b, "別フォルダの同名ファイルは別 doc_id になるべき"
+    # v0.6.0〜: doc_id は内容ハッシュ。同名ファイルでも内容が違えば別 ID。
+    a = make_doc_id(_tmp_doc("report.txt", "2014年の内容"), "決算報告")
+    b = make_doc_id(_tmp_doc("report.txt", "2015年の内容"), "決算報告")
+    assert a != b, "同名ファイルでも内容が違えば別 doc_id になるべき"
+
+
+def test_doc_id_same_content_same_id():
+    # 内容が同じなら別フォルダ・別パスでも同じ ID（冪等な再取り込み）。
+    a = make_doc_id(_tmp_doc("a.txt", "同一内容"))
+    b = make_doc_id(_tmp_doc("b.txt", "同一内容"))
+    assert a == b, "同一内容は場所やファイル名に関係なく同じ doc_id"
 
 
 def test_doc_id_stable():
-    a1 = make_doc_id("/data/2014/report.pdf", "決算報告")
-    a2 = make_doc_id("/data/2014/report.pdf", "決算報告")
-    assert a1 == a2, "同じパス・同じタイトルなら安定した doc_id"
-    assert a1.startswith("d") and len(a1) == 13
+    p = _tmp_doc("report.txt", "本文")
+    a1, a2 = make_doc_id(p, "決算報告"), make_doc_id(p, "決算報告")
+    assert a1 == a2, "同じファイルなら安定した doc_id"
+    assert a1.startswith("d") and len(a1) == 17  # "d" + sha256 先頭16桁
 
 
-def test_doc_id_relative_and_absolute_same():
-    import os
-
-    here = os.getcwd()
-    assert make_doc_id("report.pdf") == make_doc_id(os.path.join(here, "report.pdf"))
+def test_doc_id_fallback_when_unreadable():
+    # 読めないパスは絶対パスハッシュへフォールバック（旧形式・13桁）
+    a = make_doc_id("/no/such/dir/report.pdf")
+    assert a.startswith("d") and len(a) == 13
 
 
 def test_doc_id_ignores_title():
     # 同じファイルは title に関係なく同じ doc_id（再取り込みの冪等性）。
-    p = "/data/2014/report.pdf"
+    p = _tmp_doc("report.txt", "本文")
     assert make_doc_id(p) == make_doc_id(p, "A") == make_doc_id(p, "別タイトル")
 
 
