@@ -358,6 +358,84 @@ def test_search_scoped_by_doc_ids():
 
 
 # --------------------------------------------------------------------------
+# 4.6 フォルダ一括取り込み（v0.6.3: 1ファイル=1文書、失敗続行、fast自動降格）
+# --------------------------------------------------------------------------
+
+def test_add_folder_one_doc_per_file():
+    _inject_mock_settings()
+    from llmlab.indexmanager import IndexManager
+
+    work = Path(tempfile.mkdtemp(prefix="llmlab_folder_"))
+    src = work / "docs"
+    for i in range(3):
+        _write(src, f"doc{i}.txt", f"文書{i}の本文。" * 30)
+    _write(src, "ignore.bin", "x")           # 非対応拡張子は対象外
+    im = IndexManager(storage_dir=str(work / "index"))
+
+    events = []
+    r = im.add_folder(src, progress=events.append)
+    check("folder: 3件追加", r["added"] == 3 and r["failed"] == 0, f"{r}")
+    docs = im.documents()
+    check("folder: 1ファイル=1文書（doc_id 個別）",
+          len(docs) == 3 and len({d['doc_id'] for d in docs}) == 3)
+    check("folder: 進捗にファイル位置", any("[2/3]" in e["stage"] for e in events))
+    # 再実行は全件 skipped（キャッシュ）
+    r2 = im.add_folder(src)
+    check("folder: 再実行は変更なし", r2["skipped"] == 3 and r2["added"] == 0, f"{r2}")
+    # 検索は従来どおり文書単位で多様化（構造維持の確認）
+    hits = im.search("本文", document_top_n=3, chunk_top_k_per_doc=2)
+    check("folder: 検索は文書ごとに集約", len({h.doc_id for h in hits}) == len(hits) >= 2)
+
+
+def test_add_folder_continues_on_failure_and_downgrades():
+    _inject_mock_settings()
+    from llmlab.indexmanager import IndexManager
+
+    work = Path(tempfile.mkdtemp(prefix="llmlab_folderfail_"))
+    src = work / "docs"
+    _write(src, "ok.txt", "正常な文書。" * 30)
+    _write(src, "data.csv", "a,b\n1,2\n")     # BOOK 非対応 → graph 指定でも fast 降格
+    bad = _write(src, "broken.txt", "壊れる文書。" * 30)
+    im = IndexManager(storage_dir=str(work / "index"))
+
+    orig = im.add_document
+    def flaky(path, **kw):
+        if Path(path).name == "broken.txt":
+            raise RuntimeError("解析失敗")
+        return orig(path, **kw)
+    im.add_document = flaky
+    r = im.add_folder(src, index_mode="graph")
+    im.add_document = orig
+    check("folder: 失敗しても続行", r["added"] == 2 and r["failed"] == 1, f"{r}")
+    check("folder: 失敗ファイルを記録",
+          r["errors"] and r["errors"][0]["file"] == "broken.txt")
+    modes = {m["title"]: m["index_mode"] for m in r["results"]}
+    check("folder: 非対応形式は fast へ自動降格", modes.get("data") == "fast", f"{modes}")
+    check("folder: 対応形式は指定モード", modes.get("ok") == "graph", f"{modes}")
+
+
+def test_add_folder_rejects_non_dir_and_empty():
+    _inject_mock_settings()
+    from llmlab.indexmanager import IndexManager
+
+    work = Path(tempfile.mkdtemp(prefix="llmlab_folderng_"))
+    im = IndexManager(storage_dir=str(work / "index"))
+    f = _write(work, "a.txt", "x")
+    try:
+        im.add_folder(f)
+        check("folder: ファイル指定はエラー", False)
+    except NotADirectoryError:
+        check("folder: ファイル指定はエラー", True)
+    empty = work / "empty"
+    empty.mkdir()
+    try:
+        im.add_folder(empty)
+        check("folder: 空フォルダはエラー", False)
+    except FileNotFoundError:
+        check("folder: 空フォルダはエラー", True)
+
+
+# --------------------------------------------------------------------------
 # 5. 監査修正の回帰テスト（v0.6.1）
 # --------------------------------------------------------------------------
 
