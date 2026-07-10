@@ -446,7 +446,14 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
 @media (max-width:560px){ .gsub{display:none} }
 
 /* ============================================================ AI パネル */
-.drawer.wide{width:min(480px,96vw)}
+.drawer.wide{width:min(600px,96vw)}
+/* 推論系LLMの<think>過程は折りたたみで格納（既定は閉＝最終解答だけ見える） */
+.think-box{margin:0 0 8px; font-size:12px; color:var(--text-3)}
+.think-box summary{cursor:pointer; user-select:none; font-weight:600; padding:3px 0; list-style-position:inside}
+.think-box summary:hover{color:var(--text-2)}
+.think-box .think-body{margin-top:6px; padding:9px 11px; border-left:3px solid var(--line-2);
+  background:color-mix(in srgb,var(--surface-2) 60%,transparent); border-radius:0 9px 9px 0;
+  max-height:260px; overflow:auto; white-space:pre-wrap; word-break:break-word; line-height:1.6}
 .ai{display:flex; flex-direction:column; height:100%}
 .ai__ctx{display:flex; align-items:center; gap:8px; padding:10px 16px; border-bottom:1px solid var(--line);
   font-size:12.5px; color:var(--text-2); background:var(--surface-2)}
@@ -1608,7 +1615,15 @@ function renderAiMessages(){
   }
   AI.msgs.forEach(m=>{
     const cls = m.role==="user" ? "me" : m.role==="error" ? "err" : "ai";
-    log.append(el("div",{class:"bubble "+cls, text:m.text}));   // textContent（XSS安全）
+    const b=el("div",{class:"bubble "+cls});
+    if(m.reasoning){   // 推論系LLMの思考過程は折りたたみ（既定は閉）で本文の上に
+      const det=el("details",{class:"think-box"});
+      det.append(el("summary",{text:"推論過程を表示"}),
+                 el("div",{class:"think-body", text:m.reasoning}));   // textContent（XSS安全）
+      b.append(det);
+    }
+    b.append(document.createTextNode(m.text));   // textContent（XSS安全）
+    log.append(b);
   });
   if(AI.busy) log.append(el("div",{class:"bubble think", html:'<span class="dots"><span></span><span></span><span></span></span>'}));
   const sb=$("#aiSend"); if(sb) sb.disabled=AI.busy;   // 送信中は無効化
@@ -1634,12 +1649,12 @@ async function sendAi(text){
     const d=await api("/api/ai/chat",{method:"POST", headers:{"Content-Type":"application/json"},
       body:JSON.stringify({ question:text, history, context:ctxPayload,
                             fetch_page: ctxAtSend.kind==="article" && AI.fetchPage })});
-    res = d.ok ? {role:"assistant", text:d.answer}
+    res = d.ok ? {role:"assistant", text:d.answer, reasoning:(d.reasoning||"")}
                : {role:"error", text:"⚠ "+(d.error||"エラーが発生しました"), need_setup:d.need_setup};
   }catch(e){ res = {role:"error", text:"⚠ "+(e.server?e.message:"通信に失敗しました")}; }
   AI.busy=false;
   if(AI.ctx!==ctxAtSend){ return; }   // 送信中にコンテキストが変わったら結果は破棄（孤立バブル防止）
-  AI.msgs.push({role:res.role, text:res.text});
+  AI.msgs.push({role:res.role, text:res.text, reasoning:res.reasoning||""});
   if(res.need_setup) setTimeout(openAiSettings,500);
   renderAiMessages();
 }

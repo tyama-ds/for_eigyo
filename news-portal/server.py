@@ -847,6 +847,34 @@ def _http_json(url: str, body: dict, headers: dict, no_proxy: bool = False) -> d
         raise RuntimeError(f"接続エラー: {e}")
 
 
+_THINK_PAIR_RE = re.compile(r"<think(?:ing)?>(.*?)</think(?:ing)?>\s*",
+                            re.DOTALL | re.IGNORECASE)
+_THINK_CLOSE_RE = re.compile(r"</think(?:ing)?>\s*", re.IGNORECASE)
+
+
+def _split_reasoning(text: str) -> tuple[str, str]:
+    """推論系ローカルLLM（DeepSeek-R1 / QwQ 等）が本文に混ぜて出力する
+    <think>…</think> の推論過程を分離する。開きタグ無しで </think> だけ来る
+    ケース（テンプレート側で <think> が消される LM Studio 等）にも対応。
+    戻り値は (最終解答, 推論過程)。全部が推論だった場合は推論を解答として返す。"""
+    if not text or "</think" not in text.lower():
+        return text, ""
+    chunks: list[str] = []
+    def _grab(m):
+        chunks.append(m.group(1).strip())
+        return ""
+    stripped = _THINK_PAIR_RE.sub(_grab, text)
+    if "</think" in stripped.lower():   # 開きタグの無い残骸: 先頭〜</think> が推論
+        parts = _THINK_CLOSE_RE.split(stripped, maxsplit=1)
+        chunks.insert(0, parts[0].strip())
+        stripped = parts[1] if len(parts) > 1 else ""
+    answer = stripped.strip()
+    reasoning = "\n\n".join(c for c in chunks if c)
+    if not answer:
+        return (reasoning or text.strip()), ""
+    return answer, reasoning
+
+
 def call_ai(cfg: dict, system: str, user_content: str, history: list[dict]) -> str:
     """provider に応じて生成AIを呼び出し、本文テキストを返す。"""
     provider, key, model = cfg["provider"], cfg["api_key"], cfg["model"]
@@ -882,7 +910,14 @@ def call_ai(cfg: dict, system: str, user_content: str, history: list[dict]) -> s
     headers = {"Authorization": "Bearer " + key} if key else {}   # ローカルはキー任意
     data = _http_json(url, body, headers, no_proxy=no_proxy)
     choices = data.get("choices") or [{}]
-    return ((choices[0].get("message") or {}).get("content") or "").strip() or "（空の応答が返りました）"
+    msg = choices[0].get("message") or {}
+    content = (msg.get("content") or "").strip()
+    # 推論を別フィールドで返す実装（DeepSeek API / Ollama 等）は <think> 形式に
+    # 畳んでおき、呼び出し側の _split_reasoning で本文と一元的に分離する
+    rc = (msg.get("reasoning_content") or msg.get("reasoning") or "").strip()
+    if rc:
+        content = f"<think>{rc}</think>\n{content}"
+    return content or "（空の応答が返りました）"
 
 
 def ai_chat(payload: dict) -> dict:
@@ -923,8 +958,8 @@ def ai_chat(payload: dict) -> dict:
     user_content = (context_block + "\n\n" if context_block else "") + "質問: " + question
 
     try:
-        answer = call_ai(cfg, system, user_content, history)
-        return {"ok": True, "answer": answer}
+        answer, reasoning = _split_reasoning(call_ai(cfg, system, user_content, history))
+        return {"ok": True, "answer": answer, "reasoning": reasoning}
     except RuntimeError as e:
         return {"ok": False, "error": str(e)}
     except Exception as e:   # 想定外も UI に見せる
