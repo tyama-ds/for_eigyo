@@ -421,9 +421,11 @@ def _alt_aggregator(url: str) -> str:
     return ""
 
 
-def _http_get(url: str, accept: str = FEED_ACCEPT, block_internal: bool = True) -> dict:
+def _http_get(url: str, accept: str = FEED_ACCEPT, block_internal: bool = True,
+              cfg: dict | None = None) -> dict:
     """1回のHTTP GET。ブラウザ相当のヘッダを送り、Google系には同意回避Cookieを付ける。
-    例外は握って構造化した結果を返す（診断・フォールバックで使う）。"""
+    例外は握って構造化した結果を返す（診断・フォールバックで使う）。
+    cfg を渡すと保存済み設定の代わりにそのプロキシ設定で取得（接続テスト用）。"""
     headers = {
         "User-Agent": USER_AGENT,
         "Accept": accept,
@@ -435,7 +437,7 @@ def _http_get(url: str, accept: str = FEED_ACCEPT, block_internal: bool = True) 
         headers["Cookie"] = "CONSENT=YES+cb; SOCS=CAISHAgBEhJnd3NfMjAyMw"   # EU同意ページ回避
     req = urllib.request.Request(url, headers=headers)
     try:
-        with _opener(block_internal=block_internal).open(req, timeout=FETCH_TIMEOUT) as r:
+        with _opener(block_internal=block_internal, cfg=cfg).open(req, timeout=FETCH_TIMEOUT) as r:
             raw = r.read(MAX_FEED_BYTES + 1)
             return {"ok": True, "status": getattr(r, "status", 200) or 200,
                     "final_url": r.geturl(), "ctype": (r.headers.get("Content-Type") or ""),
@@ -534,6 +536,43 @@ def diagnose_source(src: dict) -> dict:
     alt = _alt_aggregator(url)
     out["alternative"] = probe(alt) if alt else None
     return out
+
+
+PROXY_TEST_URL = "https://rss.arxiv.org/rss/cs.AI"   # 接続テストの既定ターゲット
+
+
+def proxy_test(body: dict) -> dict:
+    """設定画面の「接続テスト」。フォームの値（保存前）でプロキシ経由の取得を試す。
+    設定ファイルには一切書き込まない。"""
+    use_proxy = bool(body.get("use_proxy", True))
+    purl = (body.get("proxy_url") or "").strip()
+    if not use_proxy:
+        purl = ""
+    elif purl and not safe_url(purl):
+        return {"ok": False, "error": "proxy_url は http/https の有効なURLにしてください",
+                "status": None, "items": 0, "looks_like_feed": False,
+                "elapsed_ms": 0, "url": "", "proxy_mode": ""}
+    cfg = {"use_proxy": use_proxy, "proxy_url": purl,
+           "ca_bundle": (body.get("ca_bundle") or "").strip()}
+    url = safe_url(body.get("url")) or PROXY_TEST_URL
+    mode = ("直結(proxyオフ)" if not use_proxy
+            else (f"明示proxy: {purl}" if purl else "環境変数のproxy"))
+    t0 = time.time()
+    res = _http_get(url, cfg=cfg)
+    elapsed = int((time.time() - t0) * 1000)
+    looks, items = False, 0
+    if res["ok"]:
+        try:
+            raw = _decode_feed_bytes(res)
+            looks = _looks_like_feed(raw)
+            if looks:
+                items = len(parse_feed(raw, {"id": "test", "name": "test", "category": "総合"}))
+        except Exception:
+            pass
+    return {"ok": bool(res["ok"] and looks), "http_ok": res["ok"], "status": res["status"],
+            "error": res["error"], "looks_like_feed": looks, "items": items,
+            "elapsed_ms": elapsed, "url": url, "proxy_mode": mode,
+            "content_type": (res["ctype"].split(";")[0] if res.get("ctype") else "")}
 
 
 def refresh(sources: list[dict]) -> dict:
@@ -661,11 +700,11 @@ def _gunzip_capped(raw: bytes, cap: int) -> bytes:
     return out
 
 
-def _ssl_context():
+def _ssl_context(cfg: dict | None = None):
     """HTTPS 検証用の SSL コンテキスト。社内プロキシがTLSを傍受(MITM)する環境では
     その CA を settings の ca_bundle か環境変数 SSL_CERT_FILE で指定できる。
     検証は常に有効（無効化はしない）。指定が無ければ既定(システムCA/環境変数)を使う。"""
-    ca = proxy_config().get("ca_bundle") or os.environ.get("SSL_CERT_FILE") or ""
+    ca = (cfg or proxy_config()).get("ca_bundle") or os.environ.get("SSL_CERT_FILE") or ""
     try:
         if ca and os.path.exists(ca):
             return ssl.create_default_context(cafile=ca)
@@ -674,15 +713,17 @@ def _ssl_context():
     return None   # None → urllib 既定（システムCA、環境変数も反映）
 
 
-def _opener(force_direct: bool = False, block_internal: bool = False):
+def _opener(force_direct: bool = False, block_internal: bool = False,
+            cfg: dict | None = None):
     """proxy_config に従って urllib の opener を作る（llmlab の3モードに対応）。
 
     force_direct=True でローカルLLM等は常に直結。block_internal=True で
     内部アドレスへのリダイレクトを遮断する（情報取得の SSRF 対策）。
+    cfg を渡すと保存済み設定の代わりにその値を使う（接続テスト用・保存しない）。
     """
-    cfg = proxy_config()
+    cfg = cfg or proxy_config()
     extra = [_NoInternalRedirect()] if block_internal else []
-    ctx = _ssl_context()
+    ctx = _ssl_context(cfg)
     if ctx is not None:
         extra.append(urllib.request.HTTPSHandler(context=ctx))   # 社内CAを信頼
     if force_direct or not cfg["use_proxy"]:
@@ -1111,6 +1152,10 @@ class Handler(BaseHTTPRequestHandler):
             settings["proxy"] = {"use_proxy": use_proxy, "proxy_url": purl, "ca_bundle": ca_bundle}
             save_settings(settings)
             self._json({"ok": True, "ai": ai_status(), "proxy": proxy_config()})
+            return
+
+        if u.path == "/api/proxy/test":  # 接続テスト（フォーム値で試すだけ・保存しない）
+            self._json(proxy_test(self._read_body()))
             return
 
         if u.path == "/api/ai/chat":  # 生成AIへの質問

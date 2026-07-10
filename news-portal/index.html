@@ -497,6 +497,10 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
 .setnote{font-size:12px; color:var(--text-3); background:var(--surface-2); border:1px solid var(--line);
   border-radius:10px; padding:11px 13px; line-height:1.65}
 .setrow.key .status{font-size:11.5px; color:var(--cat-スポーツ)}
+.sethead{font-size:11.5px; font-weight:700; letter-spacing:.06em; color:var(--text-3);
+  text-transform:uppercase; border-bottom:1px solid var(--line); padding-bottom:6px; margin-top:4px}
+#proxyTestOut.ok{color:var(--cat-スポーツ); font-weight:600}
+#proxyTestOut.err{color:var(--cat-世界); font-weight:600}
 
 /* toast */
 .toasts{position:fixed; left:50%; bottom:26px; transform:translateX(-50%); z-index:90;
@@ -581,6 +585,9 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
       <button class="iconbtn" id="aiBtn" title="AIに聞く (A)" aria-label="AIアシスタント">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"><path d="M12 3l1.9 4.6L18.5 9l-4.6 1.9L12 15l-1.9-4.1L5.5 9l4.6-1.4z"/><path d="M18.5 14.5l.9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9z"/></svg>
       </button>
+      <button class="iconbtn" id="settingsBtn" title="設定（AI・プロキシ）" aria-label="設定">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 8h10M18 8h2M4 16h2M10 16h10"/><circle cx="16" cy="8" r="2.5"/><circle cx="8" cy="16" r="2.5"/></svg>
+      </button>
       <button class="iconbtn" id="themeBtn" title="テーマ (T)" aria-label="テーマ切替">
         <svg id="themeIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"></svg>
       </button>
@@ -655,6 +662,7 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
         <span style="flex:1"></span>
         <button class="btn ghost sm" type="button" id="srcAllOn" title="表示中の情報源をすべて有効化">表示中を ON</button>
         <button class="btn ghost sm" type="button" id="srcAllOff" title="表示中の情報源をすべて無効化">表示中を OFF</button>
+        <button class="btn ghost sm" type="button" id="srcProxyBtn" title="プロキシ・CA証明書の設定と接続テスト">プロキシ設定</button>
       </div>
     </div>
     <div id="srcList"></div>
@@ -730,11 +738,12 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
 
 <!-- AI 設定モーダル -->
 <div class="modal" id="aiSettings" role="dialog" aria-modal="true" aria-hidden="true">
-  <div class="modal__head"><h2>AI API 設定</h2>
+  <div class="modal__head"><h2>設定 — 生成AI / プロキシ</h2>
     <button class="iconbtn" data-close aria-label="閉じる"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
   </div>
   <div class="modal__body">
     <form class="setform" id="aiForm">
+      <div class="sethead">生成AI</div>
       <div class="setrow">
         <label for="aiProvider">プロバイダ</label>
         <select id="aiProvider">
@@ -758,19 +767,27 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
         <input id="aiKey" type="password" autocomplete="off" placeholder="保存済みのキーは表示されません">
         <span class="status" id="aiKeyStatus"></span>
       </div>
+      <div class="sethead">プロキシ / ネットワーク（RSS取得・クラウドAI共通）</div>
       <div class="setrow">
         <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:600">
           <input type="checkbox" id="aiUseProxy" style="width:auto; accent-color:var(--accent)"> プロキシを使う（情報取得 & クラウドAI）
         </label>
         <input id="aiProxyUrl" type="text" autocomplete="off" spellcheck="false" aria-label="Proxy URL"
-               placeholder="http://proxy:8080（空なら環境変数 HTTP(S)_PROXY を使用）">
-        <span class="hint">オフ=直結（環境変数も無視）／オン+空=環境変数のプロキシ／オン+URL=そのプロキシ。RSS取得・クラウドAIに適用（ローカルLLMは常に直結）。</span>
+               placeholder="http://proxy.example.co.jp:8080（空なら環境変数 HTTP(S)_PROXY を使用）">
+        <span class="hint">オフ=直結（環境変数も無視）／オン+空=環境変数のプロキシ／オン+URL=そのプロキシ。認証付きは <code>http://ユーザー名:パスワード@proxy:8080</code> 形式（Basic）。ブラウザは繋がるのにアプリが失敗する場合、PAC/自動構成のプロキシをここに明示入力してください（ローカルLLMは常に直結）。</span>
       </div>
       <div class="setrow">
         <label for="aiCaBundle">CA証明書（任意）</label>
         <input id="aiCaBundle" type="text" autocomplete="off" spellcheck="false" aria-label="CA bundle path"
                placeholder="社内プロキシのCA .pem の絶対パス（TLS傍受環境のみ）">
         <span class="hint">社内プロキシがHTTPSを傍受(MITM)し証明書エラーになる場合のみ指定。空なら環境変数 <code>SSL_CERT_FILE</code> ／システム既定を使用（検証は常に有効）。</span>
+      </div>
+      <div class="setrow">
+        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap">
+          <button class="btn ghost sm" type="button" id="proxyTestBtn">接続テスト</button>
+          <span class="hint" id="proxyTestOut" style="flex:1; min-width:200px" aria-live="polite"></span>
+        </div>
+        <span class="hint">上のフォームの値（保存前でも可）で arXiv への取得を試し、失敗理由（407認証/403遮断/TLS/未到達）を判定します。</span>
       </div>
       <div class="setnote">AI 呼び出しと RSS 取得はいずれも<b>サーバー側の <code>urllib</code></b>で行われ、上のプロキシ設定に従います（他のアプリ／llmlab と同じ流儀）。取得できない情報源は「情報源」画面の各行の<b>診断ボタン</b>（脈波アイコン）で原因を切り分けられます。APIキーはこの端末の <code>settings.json</code> にのみ保存され、画面には再表示されません。</div>
       <div class="mrow" style="display:flex; gap:9px; justify-content:flex-end">
@@ -1309,6 +1326,7 @@ async function bulkEnableSources(enabled){
 }
 $("#srcAllOn").onclick=()=>bulkEnableSources(true);
 $("#srcAllOff").onclick=()=>bulkEnableSources(false);
+$("#srcProxyBtn").onclick=()=>{ closeOverlays(); openAiSettings(); };
 
 // 情報源の診断（取得できない原因を切り分け：プロキシ / 同意ページ / 403 / TLS / 解析）
 async function diagnoseSource(s){
@@ -1662,6 +1680,31 @@ $("#aiClearKey").onclick=async ()=>{
 };
 $("#aiBtn").onclick=()=>{ setAiContext(null); openAI(); };
 $("#aiSettingsBtn").onclick=openAiSettings;
+$("#settingsBtn").onclick=openAiSettings;
+
+// プロキシ接続テスト — フォームの値（保存前）でサーバー側から実取得を試す
+$("#proxyTestBtn").onclick=async()=>{
+  const out=$("#proxyTestOut"), btn=$("#proxyTestBtn");
+  out.className="hint"; out.textContent="テスト中…（arXiv へ接続しています）"; btn.disabled=true;
+  try{
+    const d=await api("/api/proxy/test",{method:"POST",headers:{"Content-Type":"application/json"},
+                                          body:JSON.stringify(proxyPayload())});
+    if(d.ok){
+      out.className="hint ok";
+      out.textContent="✓ 接続OK — "+d.proxy_mode+" で "+d.items+"件取得（"+d.elapsed_ms+"ms）。保存して再取得してください。";
+    }else{
+      const e=(d.error||"").toLowerCase(); let hint="";
+      if(d.status===407||e.includes("407")) hint="プロキシ認証(407)。URLを http://ユーザー名:パスワード@proxy:8080 形式にするか、px/cntlm の利用をご検討ください。";
+      else if(e.includes("ssl")||e.includes("cert")) hint="TLS証明書エラー。社内プロキシがHTTPSを傍受している可能性 → CA証明書欄に社内CAのパスを指定してください。";
+      else if(d.status===403||e.includes("403")) hint="アクセス拒否(403)。プロキシのカテゴリ遮断の可能性。ALLOWLIST.md のホスト許可を管理者に依頼してください。";
+      else if(d.http_ok&&!d.looks_like_feed) hint="応答はありますがフィードではありません（ブロック/同意ページの可能性）。";
+      else hint="到達できません。プロキシURLの指定（ブラウザのPAC/自動構成の実体）をご確認ください。";
+      out.className="hint err";
+      out.textContent="✗ 失敗 — "+(d.error||("HTTP "+(d.status||"?")))+"。"+hint;
+    }
+  }catch(err){ out.className="hint err"; out.textContent="✗ テスト実行に失敗: "+(err.server?err.message:"通信エラー"); }
+  finally{ btn.disabled=false; }
+};
 
 // search (debounced) — インライン絞り込み。Enter で横断検索へ展開
 let sT=null;
