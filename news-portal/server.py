@@ -24,6 +24,7 @@ import json
 import os
 import re
 import socket
+import ssl
 import sys
 import threading
 import time
@@ -34,7 +35,7 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -52,7 +53,10 @@ MAX_TOTAL = 600          # 全体の上限
 MAX_SUMMARY = 320        # 要約の最大文字数
 MAX_BODY = 256 * 1024    # POST ボディの上限（バイト）
 MAX_FEED_BYTES = 6 * 1024 * 1024  # 1フィードの取得上限（バイト）
-USER_AGENT = "Mozilla/5.0 (compatible; PrismNewsPortal/1.0; +local)"
+# 一部サイト（特に Google/Bing ニュース）はボット風UAに同意ページ/403を返すため、
+# 一般的なブラウザ相当のUAを使う。
+USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
 
 AI_TIMEOUT = 60           # 生成AI呼び出しのタイムアウト（秒）
 AI_MAX_TOKENS = 1500      # AI応答の最大トークン
@@ -387,25 +391,188 @@ def parse_feed(raw: bytes, src: dict) -> list[dict]:
 
 # ------------------------------------------------------------------ 取得
 
-def fetch_source(src: dict) -> tuple[str, list[dict], str | None]:
-    url = src.get("url", "")
+FEED_ACCEPT = "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.8"
+
+
+def _looks_like_feed(raw: bytes) -> bool:
+    """本文が RSS/Atom/RDF フィードらしいか（同意ページ・ブロックページのHTMLを弾く）。"""
+    head = raw[:2048].lstrip().lower()
+    if head.startswith(b"<!doctype html") or head.startswith(b"<html"):
+        return False
+    return (b"<rss" in head or b"<feed" in head or b"<rdf" in head
+            or b"<channel" in head or b"rss version" in head)
+
+
+def _alt_aggregator(url: str) -> str:
+    """Google ニュース RSS ⇄ Bing ニュース RSS の相互フォールバックURLを返す（無ければ空）。
+    社内プロキシが一方のドメインをブロックしていても、もう一方で取得を試みる。"""
     try:
-        req = urllib.request.Request(url, headers={
-            "User-Agent": USER_AGENT,
-            "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.8",
-            "Accept-Encoding": "gzip, identity",
-        })
-        with _opener(block_internal=True).open(req, timeout=FETCH_TIMEOUT) as r:  # proxy設定に従う
+        p = urlparse(url)
+        host, path = (p.hostname or "").lower(), p.path
+        q = (parse_qs(p.query).get("q") or [""])[0]
+        if not q:
+            return ""
+        if "news.google.com" in host and "/rss/search" in path:
+            return "https://www.bing.com/news/search?q=" + quote(q) + "&format=RSS&setlang=ja"
+        if "bing.com" in host and "/news/search" in path:
+            return "https://news.google.com/rss/search?q=" + quote(q) + "&hl=ja&gl=JP&ceid=JP:ja"
+    except (ValueError, UnicodeError):
+        pass
+    return ""
+
+
+def _http_get(url: str, accept: str = FEED_ACCEPT, block_internal: bool = True,
+              cfg: dict | None = None) -> dict:
+    """1回のHTTP GET。ブラウザ相当のヘッダを送り、Google系には同意回避Cookieを付ける。
+    例外は握って構造化した結果を返す（診断・フォールバックで使う）。
+    cfg を渡すと保存済み設定の代わりにそのプロキシ設定で取得（接続テスト用）。"""
+    headers = {
+        "User-Agent": USER_AGENT,
+        "Accept": accept,
+        "Accept-Encoding": "gzip, identity",
+        "Accept-Language": "ja,en;q=0.8",
+    }
+    host = (urlparse(url).hostname or "").lower()
+    if host.endswith("google.com"):
+        headers["Cookie"] = "CONSENT=YES+cb; SOCS=CAISHAgBEhJnd3NfMjAyMw"   # EU同意ページ回避
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with _opener(block_internal=block_internal, cfg=cfg).open(req, timeout=FETCH_TIMEOUT) as r:
             raw = r.read(MAX_FEED_BYTES + 1)
-            enc = (r.headers.get("Content-Encoding") or "").lower()
-        if len(raw) > MAX_FEED_BYTES:
-            return src.get("id", ""), [], "feed too large"
-        if enc == "gzip" or raw[:2] == b"\x1f\x8b":
-            raw = _gunzip_capped(raw, MAX_FEED_BYTES)   # gzip爆弾を上限付き展開で防ぐ
-        arts = parse_feed(raw, src)
-        return src.get("id", ""), arts[:MAX_PER_SOURCE], None
-    except Exception as e:  # 1フィードの失敗を全体へ波及させない（種類を問わず握る）
-        return src.get("id", ""), [], f"{type(e).__name__}: {e}"
+            return {"ok": True, "status": getattr(r, "status", 200) or 200,
+                    "final_url": r.geturl(), "ctype": (r.headers.get("Content-Type") or ""),
+                    "enc": (r.headers.get("Content-Encoding") or "").lower(),
+                    "raw": raw, "error": None}
+    except urllib.error.HTTPError as e:
+        body = b""
+        try:
+            body = e.read(2048)
+        except Exception:
+            pass
+        ctype = (e.headers.get("Content-Type") if e.headers else "") or ""
+        return {"ok": False, "status": e.code, "final_url": url, "ctype": ctype,
+                "enc": "", "raw": body, "error": f"HTTP {e.code} {e.reason}"}
+    except Exception as e:   # URLError(接続不可/プロキシ/DNS)・SSLエラー・タイムアウト等
+        return {"ok": False, "status": None, "final_url": url, "ctype": "",
+                "enc": "", "raw": b"", "error": f"{type(e).__name__}: {e}"}
+
+
+def _decode_feed_bytes(res: dict) -> bytes:
+    raw = res["raw"]
+    if res.get("enc") == "gzip" or raw[:2] == b"\x1f\x8b":
+        raw = _gunzip_capped(raw, MAX_FEED_BYTES)
+    return raw
+
+
+def _fetch_and_parse(url: str, src: dict):
+    """1URLを取得→解析。戻り値 (articles, error)。非フィード応答は明確なエラーにする。"""
+    res = _http_get(url)
+    if not res["ok"]:
+        return [], res["error"]
+    if len(res["raw"]) > MAX_FEED_BYTES:
+        return [], "feed too large"
+    try:
+        raw = _decode_feed_bytes(res)
+    except Exception as e:
+        return [], f"decompress error: {type(e).__name__}"
+    if not _looks_like_feed(raw):
+        ct = (res["ctype"].split(";")[0] or "?").strip()
+        return [], f"非フィード応答 (HTTP {res['status']}, {ct}) — 同意/ブロックページの可能性"
+    arts = parse_feed(raw, src)
+    return arts[:MAX_PER_SOURCE], None
+
+
+def fetch_source(src: dict) -> tuple[str, list[dict], str | None]:
+    sid, url = src.get("id", ""), src.get("url", "")
+    arts, err = _fetch_and_parse(url, src)
+    if arts:
+        return sid, arts, None
+    # 取得失敗/非フィード/0件 → 代替アグリゲータ(Google⇄Bing)があれば試す
+    alt = _alt_aggregator(url)
+    if alt and err is not None:   # err=None は「正常なフィードだが0件」なので代替不要
+        alt_arts, alt_err = _fetch_and_parse(alt, src)
+        if alt_arts:
+            return sid, alt_arts, None
+        if alt_err:
+            err = f"{err} / 代替も失敗: {alt_err}"
+    return sid, [], err
+
+
+def diagnose_source(src: dict) -> dict:
+    """情報源1件を実際に取得し、失敗理由を切り分けるための詳細を返す
+    （プロキシ/同意ページ/403/TLS/解析 の判別に使う）。"""
+    cfg = proxy_config()
+    mode = ("直結(proxyオフ)" if not cfg["use_proxy"]
+            else (f"明示proxy: {cfg['proxy_url']}" if cfg["proxy_url"] else "環境変数のproxy"))
+    ca = cfg.get("ca_bundle") or os.environ.get("SSL_CERT_FILE") or ""
+
+    def probe(u: str) -> dict:
+        res = _http_get(u)
+        raw = res["raw"]
+        looks = False
+        items = 0
+        try:
+            if res["ok"]:
+                dec = _decode_feed_bytes(res)
+                looks = _looks_like_feed(dec)
+                if looks:
+                    items = len(parse_feed(dec, src))
+        except Exception:
+            pass
+        snippet = ""
+        try:
+            snippet = raw[:160].decode("utf-8", "replace").replace("\n", " ").strip()
+        except Exception:
+            pass
+        return {"url": u, "ok": res["ok"], "status": res["status"],
+                "final_url": res["final_url"], "content_type": res["ctype"].split(";")[0],
+                "bytes": len(raw), "looks_like_feed": looks, "items": items,
+                "error": res["error"], "snippet": snippet}
+
+    url = src.get("url", "")
+    out = {"id": src.get("id", ""), "name": src.get("name", ""), "url": url,
+           "proxy_mode": mode, "ca_bundle": ca or "(未設定/システム既定)",
+           "primary": probe(url)}
+    alt = _alt_aggregator(url)
+    out["alternative"] = probe(alt) if alt else None
+    return out
+
+
+PROXY_TEST_URL = "https://rss.arxiv.org/rss/cs.AI"   # 接続テストの既定ターゲット
+
+
+def proxy_test(body: dict) -> dict:
+    """設定画面の「接続テスト」。フォームの値（保存前）でプロキシ経由の取得を試す。
+    設定ファイルには一切書き込まない。"""
+    use_proxy = bool(body.get("use_proxy", True))
+    purl = (body.get("proxy_url") or "").strip()
+    if not use_proxy:
+        purl = ""
+    elif purl and not safe_url(purl):
+        return {"ok": False, "error": "proxy_url は http/https の有効なURLにしてください",
+                "status": None, "items": 0, "looks_like_feed": False,
+                "elapsed_ms": 0, "url": "", "proxy_mode": ""}
+    cfg = {"use_proxy": use_proxy, "proxy_url": purl,
+           "ca_bundle": (body.get("ca_bundle") or "").strip()}
+    url = safe_url(body.get("url")) or PROXY_TEST_URL
+    mode = ("直結(proxyオフ)" if not use_proxy
+            else (f"明示proxy: {purl}" if purl else "環境変数のproxy"))
+    t0 = time.time()
+    res = _http_get(url, cfg=cfg)
+    elapsed = int((time.time() - t0) * 1000)
+    looks, items = False, 0
+    if res["ok"]:
+        try:
+            raw = _decode_feed_bytes(res)
+            looks = _looks_like_feed(raw)
+            if looks:
+                items = len(parse_feed(raw, {"id": "test", "name": "test", "category": "総合"}))
+        except Exception:
+            pass
+    return {"ok": bool(res["ok"] and looks), "http_ok": res["ok"], "status": res["status"],
+            "error": res["error"], "looks_like_feed": looks, "items": items,
+            "elapsed_ms": elapsed, "url": url, "proxy_mode": mode,
+            "content_type": (res["ctype"].split(";")[0] if res.get("ctype") else "")}
 
 
 def refresh(sources: list[dict]) -> dict:
@@ -497,7 +664,8 @@ def proxy_config() -> dict:
     x = load_settings().get("proxy")
     p = x if isinstance(x, dict) else {}   # 壊れた settings.json でも崩れない
     return {"use_proxy": bool(p.get("use_proxy", True)),
-            "proxy_url": (p.get("proxy_url") or "").strip()}
+            "proxy_url": (p.get("proxy_url") or "").strip(),
+            "ca_bundle": (p.get("ca_bundle") or "").strip()}   # 社内プロキシのCA証明書(任意)
 
 
 def _host_is_internal(url: str) -> bool:
@@ -532,14 +700,32 @@ def _gunzip_capped(raw: bytes, cap: int) -> bytes:
     return out
 
 
-def _opener(force_direct: bool = False, block_internal: bool = False):
+def _ssl_context(cfg: dict | None = None):
+    """HTTPS 検証用の SSL コンテキスト。社内プロキシがTLSを傍受(MITM)する環境では
+    その CA を settings の ca_bundle か環境変数 SSL_CERT_FILE で指定できる。
+    検証は常に有効（無効化はしない）。指定が無ければ既定(システムCA/環境変数)を使う。"""
+    ca = (cfg or proxy_config()).get("ca_bundle") or os.environ.get("SSL_CERT_FILE") or ""
+    try:
+        if ca and os.path.exists(ca):
+            return ssl.create_default_context(cafile=ca)
+    except (ssl.SSLError, OSError):
+        pass
+    return None   # None → urllib 既定（システムCA、環境変数も反映）
+
+
+def _opener(force_direct: bool = False, block_internal: bool = False,
+            cfg: dict | None = None):
     """proxy_config に従って urllib の opener を作る（llmlab の3モードに対応）。
 
     force_direct=True でローカルLLM等は常に直結。block_internal=True で
     内部アドレスへのリダイレクトを遮断する（情報取得の SSRF 対策）。
+    cfg を渡すと保存済み設定の代わりにその値を使う（接続テスト用・保存しない）。
     """
-    cfg = proxy_config()
+    cfg = cfg or proxy_config()
     extra = [_NoInternalRedirect()] if block_internal else []
+    ctx = _ssl_context(cfg)
+    if ctx is not None:
+        extra.append(urllib.request.HTTPSHandler(context=ctx))   # 社内CAを信頼
     if force_direct or not cfg["use_proxy"]:
         extra.append(urllib.request.ProxyHandler({}))                         # 直結
     elif cfg["proxy_url"]:
@@ -861,6 +1047,15 @@ class Handler(BaseHTTPRequestHandler):
                         "categories": CATEGORIES})
             return
 
+        if u.path == "/api/sources/diagnose":   # 1件を実取得して失敗理由を切り分ける
+            sid = (parse_qs(u.query).get("id") or [""])[0]
+            src = next((s for s in load_sources() if s.get("id") == sid), None)
+            if not src:
+                self._json({"ok": False, "error": "unknown source"}, 404)
+                return
+            self._json({"ok": True, "diag": diagnose_source(src)})
+            return
+
         if u.path == "/api/settings":
             self._json({"ai": ai_status(), "proxy": proxy_config()})
             return
@@ -951,11 +1146,16 @@ class Handler(BaseHTTPRequestHandler):
             elif purl and not safe_url(purl):
                 self._json({"ok": False, "error": "proxy_url は http/https の有効なURLにしてください"}, 400)
                 return
+            ca_bundle = (body.get("ca_bundle") or "").strip()   # 社内プロキシCA(任意・絶対パス)
             settings = load_settings()
             settings["ai"] = ai
-            settings["proxy"] = {"use_proxy": use_proxy, "proxy_url": purl}
+            settings["proxy"] = {"use_proxy": use_proxy, "proxy_url": purl, "ca_bundle": ca_bundle}
             save_settings(settings)
             self._json({"ok": True, "ai": ai_status(), "proxy": proxy_config()})
+            return
+
+        if u.path == "/api/proxy/test":  # 接続テスト（フォーム値で試すだけ・保存しない）
+            self._json(proxy_test(self._read_body()))
             return
 
         if u.path == "/api/ai/chat":  # 生成AIへの質問
