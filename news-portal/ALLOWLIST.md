@@ -30,11 +30,10 @@
 | `www.technologyreview.com` | MIT Technology Review |
 | `www.sciencedaily.com` | ScienceDaily / 材料科学 |
 | `feeds.arstechnica.com` | Ars Technica |
-| `feeds.hbr.org` | Harvard Business Review |
 | `rss.arxiv.org` | arXiv（cs.AI / 材料科学 / 応用物理 / 機械学習 / 制御） |
 | `api.jstage.jst.go.jp` | 鉄と鋼・ISIJ International（J-STAGE WebAPI） |
 | `newswitch.jp` | ニュースイッチ（日刊工業新聞） |
-| `news.google.com` | 電気新聞・日刊鉄鋼新聞・日刊産業新聞・電波新聞・日刊工業新聞・化学工業日報・環境新聞・日刊建設工業新聞・日刊自動車新聞・日本海事新聞・建設通信新聞・日本物流新聞・物流ニッポン・繊研新聞（各紙を Google ニュース RSS で取得） |
+| `news.google.com` | 電気新聞・日刊鉄鋼新聞・日刊産業新聞・電波新聞・日刊工業新聞・化学工業日報・環境新聞・日刊建設工業新聞・Harvard Business Review・日刊自動車新聞・日本海事新聞・建設通信新聞・日本物流新聞・物流ニッポン・繊研新聞（各紙を Google ニュース RSS で取得） |
 | `www.bing.com` | 上記 Google ニュース系の**自動フォールバック**先（Bing ニュース RSS） |
 
 ## 2. 生成AI アシスタント（使う場合のみ）
@@ -59,7 +58,7 @@ AIパネルで記事コンテキストに本文を含める設定にすると、
 ## コピー用（カンマ区切り・必須＋フォールバック）
 
 ```
-www.nhk.or.jp,news.yahoo.co.jp,rss.itmedia.co.jp,gigazine.net,www.publickey1.jp,b.hatena.ne.jp,techcrunch.com,www.theverge.com,hnrss.org,feeds.bbci.co.uk,www.theguardian.com,www.nature.com,www.science.org,spectrum.ieee.org,www.technologyreview.com,www.sciencedaily.com,feeds.arstechnica.com,feeds.hbr.org,rss.arxiv.org,api.jstage.jst.go.jp,newswitch.jp,news.google.com,www.bing.com
+www.nhk.or.jp,news.yahoo.co.jp,rss.itmedia.co.jp,gigazine.net,www.publickey1.jp,b.hatena.ne.jp,techcrunch.com,www.theverge.com,hnrss.org,feeds.bbci.co.uk,www.theguardian.com,www.nature.com,www.science.org,spectrum.ieee.org,www.technologyreview.com,www.sciencedaily.com,feeds.arstechnica.com,rss.arxiv.org,api.jstage.jst.go.jp,newswitch.jp,news.google.com,www.bing.com
 ```
 
 ## コピー用（＋生成AI）
@@ -74,7 +73,7 @@ api.anthropic.com,api.openai.com
 *.nhk.or.jp, *.yahoo.co.jp, *.itmedia.co.jp, gigazine.net, *.publickey1.jp, *.hatena.ne.jp,
 techcrunch.com, *.theverge.com, hnrss.org, *.bbci.co.uk, *.theguardian.com, *.nature.com,
 *.science.org, *.ieee.org, *.technologyreview.com, *.sciencedaily.com, *.arstechnica.com,
-*.hbr.org, *.arxiv.org, *.jst.go.jp, newswitch.jp, *.google.com, *.bing.com,
+*.arxiv.org, *.jst.go.jp, newswitch.jp, *.google.com, *.bing.com,
 api.anthropic.com, api.openai.com
 ```
 
