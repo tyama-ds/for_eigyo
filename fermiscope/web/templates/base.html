@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ app_name }}{% endblock %}</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+</head>
+<body>
+  <header class="app-header">
+    <a href="/" class="app-logo">🔭 {{ app_name }}</a>
+    <span class="app-sub">証拠に基づくフェルミ推定 <small>v{{ version }}</small></span>
+  </header>
+  <main id="main">
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="app-footer">
+    <p>{{ app_name }} — 推定はすべて出典・仮定つきで表示されます。数値計算はローカルのPythonで実行されます。</p>
+  </footer>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

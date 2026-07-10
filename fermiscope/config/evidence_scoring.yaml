@@ -1,0 +1,37 @@
+# 証拠採点の重み設定
+# 各サブスコアは 0〜100。総合点 = Σ(weight × subscore) − Σ(penalty)、0〜100にクリップ。
+weights:
+  source_authority: 0.18
+  primaryness: 0.14
+  parameter_directness: 0.18
+  methodology_transparency: 0.12
+  geography_fit: 0.08
+  population_fit: 0.07
+  time_fit: 0.08
+  recency: 0.05
+  independence: 0.05
+  reproducibility: 0.05
+
+# ペナルティ(0〜100の減点。該当時に適用)
+penalties:
+  conflict_of_interest_penalty: 15.0    # 利益相反(自社に有利な主張を市場全体へ適用等)
+  unclear_definition_penalty: 10.0      # 対象定義が不明瞭
+  secondary_citation_penalty: 12.0      # 一次資料の転載・孫引き
+  stale_data_penalty: 10.0              # 基準時点から大きく乖離した古いデータ
+  sample_bias_penalty: 10.0             # 標本偏りの疑い
+  unverifiable_claim_penalty: 15.0      # 方法非公開等で検証不能な主張
+
+# recency / time_fit の減衰(年)
+time:
+  recency_half_life_years: 5.0     # この年数で recency が半減
+  stale_threshold_years: 8.0       # これを超えると stale_data_penalty 適用
+  time_fit_tolerance_years: 2.0    # 基準時点との許容乖離(これ以内は満点)
+
+# 転載クラスタリング
+clustering:
+  title_similarity_threshold: 0.75   # タイトル類似度(0〜1)がこれ以上なら転載候補
+  # クラスタの重みはクラスタ内最大スコアを採用(証拠の水増しを防止)
+
+# 矛盾検出
+contradiction:
+  ratio_threshold: 2.0   # 互換な証拠同士でも中心値の比がこれを超えたら矛盾として表示

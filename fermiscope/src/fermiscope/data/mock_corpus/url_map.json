@@ -1,0 +1,54 @@
+{
+  "https://stats.example-gov.jp/kokusei/tokyo-households-2020.html": {
+    "file": "estat_households.html",
+    "content_type": "text/html; charset=utf-8"
+  },
+  "https://tokyo.example-gov.jp/toukei/setai-2025.html": {
+    "file": "tokyo_households_2025.html",
+    "content_type": "text/html; charset=utf-8"
+  },
+  "https://esri.example-gov.jp/shouhi/piano-ownership.csv": {
+    "file": "cao_piano_ownership.csv",
+    "content_type": "text/csv; charset=utf-8"
+  },
+  "https://esri.example-gov.jp/shouhi/correction-2024.html": {
+    "file": "cao_correction_notice.html",
+    "content_type": "text/html; charset=utf-8"
+  },
+  "https://news.example-media.jp/articles/piano-ownership.html": {
+    "file": "reprint_news_ownership.html",
+    "content_type": "text/html; charset=utf-8"
+  },
+  "https://kurashi.example-blog.jp/piano-donokurai.html": {
+    "file": "reprint_blog_ownership.html",
+    "content_type": "text/html; charset=utf-8"
+  },
+  "https://archive.example-media.jp/1996/piano-survey.html": {
+    "file": "old_ownership_1996.html",
+    "content_type": "text/html; charset=utf-8"
+  },
+  "https://tokushu.example-site.jp/piano-hoyuritsu-uragawa.html": {
+    "file": "injection_page.html",
+    "content_type": "text/html; charset=utf-8"
+  },
+  "https://gakki-union.example-org.jp/report/tuning-frequency-2023.html": {
+    "file": "piano_assoc_tunings.html",
+    "content_type": "text/html; charset=utf-8"
+  },
+  "https://pianolife-media.example.jp/tuner-jobs.html": {
+    "file": "tuner_capacity_blog.html",
+    "content_type": "text/html; charset=utf-8"
+  },
+  "https://jpta.example.or.jp/about/members.html": {
+    "file": "jpta_members.html",
+    "content_type": "text/html; charset=utf-8"
+  },
+  "https://forum.example-bbs.jp/threads/piano-tuner-union.html": {
+    "file": "membership_forum.html",
+    "content_type": "text/html; charset=utf-8"
+  },
+  "https://survey.example.or.jp/workload2024.pdf": {
+    "file": "tuner_workload.pdf",
+    "content_type": "application/pdf"
+  }
+}

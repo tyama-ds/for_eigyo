@@ -1,0 +1,60 @@
+# 推定エンジン・分解・検索の上限設定
+app:
+  # アプリ表示名(GUI/レポートに反映)。環境変数 FERMISCOPE_APP_NAME でも上書き可。
+  name: "FermiScope"
+  language: "ja"
+
+decomposition:
+  initial_max_leaves: 10        # 初期の末端パラメータ数上限
+  max_leaves_after_expansion: 15  # 自動再分解後の最大末端数
+  max_depth: 3                  # 最大分解深度
+  max_revisits_per_parameter: 2 # 同一パラメータの再検討回数
+  # 再分解条件
+  critique_severity_threshold: 0.60
+  importance_threshold: 0.40
+
+simulation:
+  iterations: 20000             # モンテカルロ反復回数(10,000〜30,000推奨)
+  default_seed: 20260710        # 乱数シード(監査ログに保存され再現可能)
+  scenario_quantiles:           # 弱気/基準/強気に対応する出力分位点
+    bear: 0.10
+    base: 0.50
+    bull: 0.90
+  extra_quantiles: [0.05, 0.25, 0.75, 0.95]
+  histogram_bins: 40
+
+validation:
+  central_ratio_warning: 3.0    # 主モデル/検算モデルの中心値比がこれを超えたら警告
+  interval_overlap_warning: 0.10  # P10-P90区間の重なり率がこれ未満なら警告
+
+search:
+  max_searches_per_project: 80  # 1プロジェクトあたり検索回数上限(再分解ラウンドを含む)
+  max_cost_per_project_usd: 1.0 # コスト上限(実プロバイダの概算単価で計算)
+  cost_per_search_usd: 0.005    # 1検索あたり概算コスト(プロバイダごとに上書き可)
+  rate_limit_per_second: 1.0    # 秒間リクエスト上限
+  timeout_seconds: 15
+  max_retries: 2
+  retry_backoff_seconds: 2.0
+  cache_ttl_hours: 168          # 検索キャッシュTTL(7日)
+  max_results_per_query: 6
+
+fetch:
+  timeout_seconds: 20
+  max_response_bytes: 5242880   # 5 MiB 応答サイズ上限
+  max_redirects: 5
+  cache_ttl_hours: 720          # 文書キャッシュTTL(30日)
+  user_agent: "FermiScopeBot/0.1 (+local research tool; respects robots.txt)"
+  allowed_content_types:
+    - text/html
+    - application/xhtml+xml
+    - text/plain
+    - text/csv
+    - application/json
+    - application/pdf
+
+fusion:
+  low_quantile: 0.10
+  high_quantile: 0.90
+  outlier_iqr_multiplier: 3.0   # 対数空間IQRのこの倍数を超える値を外れ値として除外(表示は残す)
+  min_evidence_score: 20        # これ未満の証拠は統合から除外(表示は残す)
+  log_space_for_positive: true  # 正の乗法的パラメータは対数空間で補間

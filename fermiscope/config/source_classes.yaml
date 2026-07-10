@@ -1,0 +1,53 @@
+# 情報源クラスの初期基準値(source_authority の基礎点 0〜100)
+# クラスはドメインだけで決めず、文書メタデータ(発行主体・方法記載)から判定する。
+# ここの値は「初期値」であり、方法透明性・直接性等の他軸と合成される。
+classes:
+  S:
+    base_authority: 95
+    label: 公的一次統計
+    description: 政府統計・国勢調査・公的レジストリ・法令・官報・公式基準データ
+  A:
+    base_authority: 85
+    label: 国際機関・査読レビュー・監査済み資料
+    description: 国際機関統計、システマティックレビュー/メタ分析、監査済み財務資料、方法明示の業界団体統計、標準化団体資料、公的研究機関の一次研究
+  B:
+    base_authority: 70
+    label: 査読研究・方法明示の民間統計
+    description: 査読済み個別研究、方法・標本数・期間明示の民間統計、大学報告書、企業の一次資料、公式特許情報
+  C:
+    base_authority: 55
+    label: 出典明示の報道・専門分析
+    description: 出典を明示した信頼性の高い報道、方法の一部が確認できる商用DB、専門家の二次分析
+  D:
+    base_authority: 35
+    label: 一般記事・企業ブログ
+    description: 一般記事、出典の弱い企業ブログ、マーケティング資料、方法不明の集計
+  E:
+    base_authority: 15
+    label: 匿名・SNS・出典不明
+    description: 匿名投稿、SNS、掲示板、出典不明の数値、噂
+
+# ドメイン接尾辞からのクラス推定ヒント(確定ではなくヒント。文書メタデータが優先)
+domain_hints:
+  - suffixes: [".go.jp", ".gov", ".gc.ca", ".gov.uk", ".europa.eu"]
+    hint_class: S
+  - suffixes: [".ac.jp", ".edu", ".or.jp"]
+    hint_class: B
+  - suffixes: [".co.jp", ".com", ".jp", ".net"]
+    hint_class: D
+
+# 特許情報の用途依存評価
+patent_rules:
+  # 発明の記載・出願日・優先日・請求項・法的状態 → 高い直接性を認める
+  legal_facts_directness: 90
+  # 市場普及率・販売量・実運用性能・社会的需要 → 特許を理由に高評価しない
+  market_claims_directness: 25
+  # 明細書中の効果の主張は実証値と区別(unverifiable扱い)
+  effect_claims_unverifiable: true
+
+# 利益相反ルール: 企業の公式資料
+conflict_of_interest:
+  # 自社の販売数・自社データには直接性を認める
+  own_data_directness: 85
+  # 市場全体の評価に使う場合はペナルティ
+  market_wide_penalty_applies: true

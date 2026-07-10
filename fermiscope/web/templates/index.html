@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}{{ app_name }} — 新規推定{% endblock %}
+{% block content %}
+<section class="panel">
+  <h1>新しい推定をはじめる</h1>
+  <p class="hint">
+    知りたい数量を日本語で入力してください。例:「東京都内にはピアノ調律師が何人いるか」
+    「日本で1日に廃棄される傘は何本か」
+  </p>
+  <form id="new-project-form" class="new-form">
+    <div class="field">
+      <label for="question">問い(必須)</label>
+      <textarea id="question" name="question" rows="3" required
+        placeholder="例: 東京都内にはピアノ調律師が何人いるか"></textarea>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label for="geography">地域(任意)</label>
+        <input id="geography" name="geography" type="text" placeholder="例: 東京都">
+      </div>
+      <div class="field">
+        <label for="reference_date">基準時点(任意)</label>
+        <input id="reference_date" name="reference_date" type="text" placeholder="例: 2026">
+      </div>
+      <div class="field">
+        <label for="target_unit">求める単位(任意)</label>
+        <input id="target_unit" name="target_unit" type="text" placeholder="例: 人">
+      </div>
+    </div>
+    <div class="field">
+      <label for="known_facts">既知の情報(任意・1行1件)</label>
+      <textarea id="known_facts" name="known_facts" rows="2"
+        placeholder="例: 都内の世帯数は約740万世帯"></textarea>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label for="research_mode">調査モード</label>
+        <select id="research_mode" name="research_mode">
+          <option value="fast">高速(検索少なめ)</option>
+          <option value="standard" selected>標準</option>
+          <option value="careful">慎重(検索・検証を最大化)</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="max_searches">検索回数上限(任意)</label>
+        <input id="max_searches" name="max_searches" type="number" min="1" max="500"
+          placeholder="既定値を使用">
+      </div>
+      <div class="field">
+        <label for="max_cost_usd">コスト上限 USD(任意)</label>
+        <input id="max_cost_usd" name="max_cost_usd" type="number" min="0" max="100" step="0.01"
+          placeholder="既定値を使用">
+      </div>
+    </div>
+    <div class="actions">
+      <button type="submit" class="btn primary" id="start-btn">推定をはじめる</button>
+      <span id="form-status" role="status" aria-live="polite"></span>
+    </div>
+  </form>
+  <p class="hint">
+    検索プロバイダ: <strong>{{ search_provider }}</strong> /
+    生成AI: <strong>{{ llm_provider }}</strong>
+    {% if search_provider == "mock" %}
+    <br>いまはモック検索モードです。同梱のサンプル資料で動作します
+    (実検索は環境変数 <code>SEARCH_PROVIDER=brave</code> と <code>BRAVE_API_KEY</code> で有効化)。
+    {% endif %}
+  </p>
+</section>
+
+<section class="panel">
+  <h2>これまでの推定</h2>
+  <ul id="project-list" class="project-list">
+    <li class="hint">読み込み中…</li>
+  </ul>
+</section>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/index.js"></script>
+{% endblock %}
