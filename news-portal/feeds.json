@@ -156,7 +156,7 @@
     },
     {
       "name": "Harvard Business Review",
-      "url": "https://feeds.hbr.org/harvardbusiness",
+      "url": "https://news.google.com/rss/search?q=site:hbr.org&hl=ja&gl=JP&ceid=JP:ja",
       "category": "専門",
       "enabled": true,
       "id": "harvard-business-review"

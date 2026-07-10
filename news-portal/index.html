@@ -382,6 +382,8 @@ main{max-width:1360px; margin:0 auto; padding:16px 22px 80px}
 .src__u{font-size:11.5px; color:var(--text-3); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
 .src__cat{font-size:11px; font-weight:700; padding:2px 8px; border-radius:99px;
   color:var(--c); background:color-mix(in srgb,var(--c) 15%,transparent)}
+.src__num{font-size:11px; font-weight:700; color:var(--text-3); flex:0 0 auto}
+.src__num.zero{color:var(--cat-世界)}   /* 取得は成功しているのに表示0件（要注意） */
 .switch{width:40px;height:23px; border-radius:99px; background:var(--surface-2); border:1px solid var(--line-2);
   position:relative; transition:.25s; flex:0 0 auto}
 .switch::after{content:""; position:absolute; top:2px; left:2px; width:17px;height:17px; border-radius:99px;
@@ -1282,6 +1284,8 @@ function renderSources(){
   if(cnt){ cnt.innerHTML=""; cnt.append(document.createTextNode("有効 "), el("b",{text:String(on)}), document.createTextNode(" / 全 "+total+(list.length!==total?"（表示 "+list.length+"）":""))); }
   if(!S.sources.length){ box.append(el("div",{class:"empty",style:"padding:30px",html:'<h3>情報源がありません</h3>'})); return; }
   if(!list.length){ box.append(el("div",{class:"empty",style:"padding:26px",html:'<h3>該当する情報源がありません</h3>'})); return; }
+  const artCnt=new Map();   // 表示中（パネルに載っている）記事数を情報源ごとに集計
+  for(const a of S.articles) artCnt.set(a.source_id,(artCnt.get(a.source_id)||0)+1);
   list.forEach(s=>{
     const row=el("div",{class:"src"});
     const dot=el("span",{class:"src__dot "+(!s.enabled?"off":(s.error?"err":"ok"))});
@@ -1289,6 +1293,10 @@ function renderSources(){
     const c=el("div",{class:"src__c"});
     const n=el("div",{class:"src__n"}); n.append(document.createTextNode(s.name));
     const catpill=el("span",{class:"src__cat",text:s.category}); catpill.style.setProperty("--c",catColor(s.category)); n.append(catpill);
+    const nn=artCnt.get(s.id)||0;
+    const cntpill=el("span",{class:"src__num"+(s.enabled&&!s.error&&!nn&&!S.offline?" zero":""), text:nn+"件",
+                             title:"ニュースパネルに表示中の記事数"});
+    n.append(cntpill);
     c.append(n, el("div",{class:"src__u",text:s.url}));
     const sw=el("button",{class:"switch"+(s.enabled?" on":""), title:s.enabled?"無効にする":"有効にする", "aria-label":"有効切替"});
     sw.onclick=async()=>{ sw.classList.toggle("on"); try{ const d=await api("/api/sources/toggle?id="+encodeURIComponent(s.id),{method:"POST"}); S.sources=d.sources; renderSources(); toast("情報源を更新しました。再取得します"); loadArticles(true);}catch(e){ sw.classList.toggle("on"); toast("更新に失敗","err"); } };
