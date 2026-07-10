@@ -24,12 +24,26 @@ def test_lognormal_ppf_matches_p10_p90():
     assert float(ppf(np.array([0.9]))[0]) == pytest.approx(20.0, rel=0.05)
 
 
-def test_loguniform_bounds():
-    param = p("x", None, 1.0, 1000.0, DistributionKind.LOGUNIFORM)
+def test_loguniform_interprets_low_high_as_p10_p90():
+    # 全分布で意味論を統一: low/high は P10/P90(hard bound ではない)
+    param = p("x", None, 100.0, 10000.0, DistributionKind.LOGUNIFORM)
     ppf = build_ppf(param)
-    samples = ppf(np.linspace(0.001, 0.999, 100))
-    assert samples.min() >= 1.0 and samples.max() <= 1000.0
-    assert float(ppf(np.array([0.5]))[0]) == pytest.approx(np.sqrt(1000), rel=0.05)
+    u = np.random.default_rng(0).random(200000)
+    s = ppf(u)
+    assert np.percentile(s, 10) == pytest.approx(100.0, rel=0.03)
+    assert np.percentile(s, 90) == pytest.approx(10000.0, rel=0.03)
+    assert float(ppf(np.array([0.5]))[0]) == pytest.approx(1000.0, rel=0.03)  # 幾何中点
+    # 端点は入力の外側へ外挿される(裾を切り落とさない)
+    assert s.min() < 100.0 and s.max() > 10000.0
+
+
+def test_uniform_interprets_low_high_as_p10_p90():
+    param = p("x", None, 100.0, 900.0, DistributionKind.UNIFORM)
+    ppf = build_ppf(param)
+    u = np.random.default_rng(1).random(200000)
+    s = ppf(u)
+    assert np.percentile(s, 10) == pytest.approx(100.0, rel=0.03)
+    assert np.percentile(s, 90) == pytest.approx(900.0, rel=0.03)
 
 
 def test_fixed_distribution():

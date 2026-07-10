@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import ipaddress
 import re
 import time
 import urllib.robotparser
@@ -24,7 +25,13 @@ import httpx
 from fermiscope.config import Settings
 from fermiscope.domain.enums import DocumentType
 from fermiscope.security.sanitizer import strip_html_to_text
-from fermiscope.security.url_guard import Resolver, UrlGuardError, validate_url
+from fermiscope.security.url_guard import (
+    Resolver,
+    UrlGuardError,
+    default_resolver,
+    validate_ip,
+    validate_url,
+)
 
 
 class FetchError(RuntimeError):
@@ -123,6 +130,47 @@ class DocumentFetcher:
     async def close(self) -> None:
         await self._client.aclose()
 
+    def _pin_connection(self, url: str) -> tuple[str, str | None, str | None]:
+        """ホスト名を1回だけ解決して検証済みIPへ接続を固定する(DNSリバインディング対策)。
+
+        検証時と接続時でDNSが差し替わる TOCTOU を防ぐため、解決したIPで接続URLを
+        書き換え、Host ヘッダと TLS SNI は元のホスト名に保つ。
+
+        Returns:
+            (接続URL, Hostヘッダ, SNIホスト名)。書き換え不要なら (url, None, None)。
+        """
+        # モック(オフライン)モードでは書き換えない — フィクスチャは元URLで配信される
+        if self._skip_dns:
+            return url, None, None
+        parsed = urlparse(url)
+        host = parsed.hostname or ""
+        # 既にIPリテラル(validate_url で検証済み)ならそのまま
+        try:
+            ipaddress.ip_address(host.strip("[]"))
+            return url, None, None
+        except ValueError:
+            pass
+        ips = (self._resolver or default_resolver)(host)
+        if not ips:
+            raise UrlGuardError(f"ホスト名を解決できません: {host}")
+        for ip in ips:
+            validate_ip(ip)  # 全解決IPを検査
+        pinned = ips[0]
+        ip_host = f"[{pinned}]" if ":" in pinned else pinned
+        port = f":{parsed.port}" if parsed.port else ""
+        connect_url = parsed._replace(netloc=f"{ip_host}{port}").geturl()
+        return connect_url, parsed.netloc, host
+
+    async def _pinned_send(self, url: str, *, stream: bool) -> httpx.Response:
+        """検証済みIPへ固定して送信する。"""
+        connect_url, host_header, sni = self._pin_connection(url)
+        request = self._client.build_request("GET", connect_url)
+        if host_header:
+            request.headers["Host"] = host_header
+        if sni:
+            request.extensions["sni_hostname"] = sni  # TLS証明書は元ホスト名で検証
+        return await self._client.send(request, stream=stream)
+
     async def _robots_allows(self, url: str) -> bool:
         if not self._respect_robots:
             return True
@@ -131,13 +179,14 @@ class DocumentFetcher:
         if base not in self._robots_cache:
             rp = urllib.robotparser.RobotFileParser()
             try:
-                resp = await self._client.get(base + "/robots.txt")
+                resp = await self._pinned_send(base + "/robots.txt", stream=False)
                 if resp.status_code == 200:
                     rp.parse(resp.text.splitlines())
                     self._robots_cache[base] = rp
                 else:
                     self._robots_cache[base] = None  # robotsなし → 許可
-            except httpx.HTTPError:
+            except (httpx.HTTPError, UrlGuardError):
+                # robots取得先が解決不能/プライベートIPでも許可扱い(本体fetchで再検査される)
                 self._robots_cache[base] = None
         rp2 = self._robots_cache[base]
         if rp2 is None:
@@ -145,12 +194,17 @@ class DocumentFetcher:
         return rp2.can_fetch(self.settings.fetch.user_agent, url)
 
     async def _get_limited(self, url: str) -> httpx.Response:
-        """サイズ上限つきGET。超過時は打ち切って FetchError。"""
+        """サイズ上限つきGET。超過時は打ち切って FetchError。接続は検証済みIPへ固定。"""
         max_bytes = self.settings.fetch.max_response_bytes
-        async with self._client.stream("GET", url) as resp:
+        resp = await self._pinned_send(url, stream=True)
+        try:
             declared = resp.headers.get("content-length")
-            if declared and int(declared) > max_bytes:
-                raise FetchError(f"応答サイズが上限({max_bytes}バイト)を超えています")
+            if declared:
+                try:
+                    if int(declared) > max_bytes:
+                        raise FetchError(f"応答サイズが上限({max_bytes}バイト)を超えています")
+                except ValueError:
+                    pass  # 不正な Content-Length はヘッダ値を無視しストリームで実測検査する
             chunks: list[bytes] = []
             total = 0
             async for chunk in resp.aiter_bytes():
@@ -158,8 +212,11 @@ class DocumentFetcher:
                 if total > max_bytes:
                     raise FetchError(f"応答サイズが上限({max_bytes}バイト)を超えました")
                 chunks.append(chunk)
-            resp._content = b"".join(chunks)  # noqa: SLF001
-            return resp
+            content = b"".join(chunks)
+        finally:
+            await resp.aclose()
+        resp._content = content  # noqa: SLF001
+        return resp
 
     async def fetch(self, url: str) -> FetchedDocument:
         """URLを安全に取得し、パース済み文書を返す。"""

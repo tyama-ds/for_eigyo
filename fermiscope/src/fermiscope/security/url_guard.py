@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 import socket
 from collections.abc import Callable
 from urllib.parse import urlparse
@@ -97,6 +98,13 @@ def validate_url(
     if is_ip_literal:
         validate_ip(bare_host)
         return url
+
+    # 数値のみ/16進/8進ドット表記の「IPリテラルもどき」を拒否する。
+    # ipaddress.ip_address は "2130706433" や "0x7f000001"、"0177.0.0.1"、"127.1" を
+    # IPとして解釈しないが、OS の getaddrinfo はこれらを 127.0.0.1 等へ解決し得る。
+    # skip_dns=True(オフライン検査)でも確実にブロックするための保険。
+    if re.fullmatch(r"0x[0-9a-fA-F]+|[0-9]+|[0-9]+(\.[0-9]+){1,3}", bare_host):
+        raise UrlGuardError(f"数値形式のホストは許可しません: {host}")
 
     if not skip_dns:
         ips = (resolver or default_resolver)(host_lower)

@@ -202,7 +202,7 @@ class EvidenceItem(BaseModel):
     """1件の証拠。必ず原典URL・取得日・根拠箇所を持つ。"""
 
     id: str = Field(default_factory=lambda: new_id("ev"))
-    url: str
+    url: str = Field(min_length=1)  # 出典なしの証拠は作らない(絶対条件2・4)
     canonical_url: str = ""
     title: str = ""
     publisher: str = ""

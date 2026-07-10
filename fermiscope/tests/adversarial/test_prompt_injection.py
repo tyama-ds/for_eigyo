@@ -72,16 +72,43 @@ async def test_script_content_not_in_extracted_text(injected_project, settings, 
     assert "169.254.169.254" not in doc.text
 
 
-async def test_api_keys_not_in_report_or_audit(injected_project, monkeypatch):
-    """レポート・監査ログのどこにもAPIキー・環境変数が漏れない。"""
-    project, _ = injected_project
-    from fermiscope.reporting.builder import build_report
+async def test_api_keys_not_in_report_or_audit(settings, mock_search, mock_fetcher, caplog):
+    """実際にAPIキーを持つLLMプロバイダで調査を実行しても、レポート・監査ログ・
+    アプリログのどこにもキーが漏れないことを検証する(自明成立でない実効テスト)。"""
+    import logging
 
-    fake_secret = "sk-super-secret-key-abcdef"
-    monkeypatch.setenv("LLM_API_KEY", fake_secret)
-    monkeypatch.setenv("BRAVE_API_KEY", fake_secret)
+    import httpx
+    from tests.conftest import build_piano_project
+
+    from fermiscope.llm.openai_compat import OpenAICompatProvider
+    from fermiscope.reporting.builder import build_report
+    from fermiscope.reporting.export import export_json
+    from fermiscope.research.orchestrator import ResearchOrchestrator
+    from fermiscope.research.search.service import SearchService
+
+    fake_secret = "sk-super-secret-key-abcdef123456"
+    # 毎回エラーを返すLLM(キーはヘッダに載るが、失敗経路でも漏れないことを見る)
+    llm = OpenAICompatProvider(
+        api_base="https://llm.example.com/v1",
+        api_key=fake_secret,
+        model="test-model",
+        transport=httpx.MockTransport(lambda r: httpx.Response(500)),
+    )
+    project = await build_piano_project(settings, llm)
+    service = SearchService(mock_search, settings)
+    orch = ResearchOrchestrator(settings, service, mock_fetcher, llm)
+    with caplog.at_level(logging.DEBUG):
+        await orch.run_research(project)
+    await llm.close()
+
     dump = json.dumps(build_report(project), ensure_ascii=False, default=str)
     assert fake_secret not in dump
+    assert fake_secret not in export_json(project)
+    assert fake_secret not in caplog.text
+    # 監査イベントのメッセージ・データにも漏れない
+    for ev in project.audit_events:
+        assert fake_secret not in ev.message
+        assert fake_secret not in json.dumps(ev.data, ensure_ascii=False, default=str)
 
 
 async def test_injection_text_preserved_as_data_with_low_score(injected_project):

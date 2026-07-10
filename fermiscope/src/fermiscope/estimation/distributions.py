@@ -68,12 +68,16 @@ def build_ppf(param: ParameterEstimate) -> Callable[[np.ndarray], np.ndarray]:
         return lambda u: np.exp(mu + sigma * stats.norm.ppf(u))
 
     if kind == DistributionKind.UNIFORM:
-        return lambda u: lo + (hi - lo) * np.asarray(u, dtype=float)
+        # low/high は P10/P90 と解釈する(全分布で意味論を統一)。
+        # 一様分布で P10=a+0.1(b-a), P90=a+0.9(b-a) より端点 a,b を外挿する。
+        a, b = _uniform_bounds_from_p10_p90(lo, hi)
+        return lambda u: a + (b - a) * np.asarray(u, dtype=float)
 
     if kind == DistributionKind.LOGUNIFORM:
         _require(lo > 0 and hi > 0, f"{param.id}: loguniform には正の low/high が必要です")
-        ln_lo, ln_hi = np.log(lo), np.log(hi)
-        return lambda u: np.exp(ln_lo + (ln_hi - ln_lo) * np.asarray(u, dtype=float))
+        # 対数空間で low/high を P10/P90 として端点へ外挿する。
+        ln_a, ln_b = _uniform_bounds_from_p10_p90(np.log(lo), np.log(hi))
+        return lambda u: np.exp(ln_a + (ln_b - ln_a) * np.asarray(u, dtype=float))
 
     if kind == DistributionKind.EMPIRICAL:
         # distribution_parameters の分位点(例 p10, p25, p50, p75, p90)を
@@ -89,6 +93,20 @@ def build_ppf(param: ParameterEstimate) -> Callable[[np.ndarray], np.ndarray]:
         return lambda u: np.interp(np.asarray(u, dtype=float), qs, vs)
 
     raise DistributionError(f"{param.id}: 未対応の分布 {kind}")
+
+
+def _uniform_bounds_from_p10_p90(p10: float, p90: float) -> tuple[float, float]:
+    """P10/P90 から一様分布の端点 (a, b) を求める。
+
+    P10 = a + 0.1(b-a), P90 = a + 0.9(b-a) を解くと b-a = (p90-p10)/0.8。
+    """
+    if p90 <= p10:
+        eps = abs(p10) * 1e-9 + 1e-12
+        return p10 - eps, p90 + eps
+    span = (p90 - p10) / 0.8
+    a = p10 - 0.1 * span
+    b = p90 + 0.1 * span
+    return a, b
 
 
 def _triangular_bounds_from_p10_p90(p10: float, mode: float, p90: float) -> tuple[float, float]:

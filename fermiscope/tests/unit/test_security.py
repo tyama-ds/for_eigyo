@@ -26,6 +26,11 @@ from fermiscope.security.url_guard import UrlGuardError, validate_ip, validate_u
         "http://metadata.google.internal/computeMetadata/v1/",
         "http://user:pass@example.com/",
         "",
+        # 数値/16進/8進表記の localhost 迂回(skip_dns時も拒否)
+        "http://2130706433/",
+        "http://0x7f000001/",
+        "http://0177.0.0.1/",
+        "http://127.1/",
     ],
 )
 def test_dangerous_urls_rejected(url):

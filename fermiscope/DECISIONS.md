@@ -116,6 +116,50 @@
   補正前後の値・式を `ParameterEstimate.adjustments` に記録する。
 - 理由: 要件§7「無言で時点補正を行わない」。
 
+## D-016: 独立監査(2エージェント)の指摘と対応
+
+実装後、実装とは別コンテキストの検証エージェント2体(要件・数理担当/
+セキュリティ・テスト担当)に監査させ、指摘をコードで再現・確認してから修正した。
+
+### 数理MAJOR: 全分布で low/high を P10/P90 として統一(修正済み)
+- 問題: uniform/loguniform が low/high を分布の 0%/100% 端点(hard bound)として
+  扱っていた。fusion は high/low>10 のとき loguniform を自動選択するため、
+  最も不確実なパラメータで裾20%が切り落とされ、報告レンジが過小(過信方向)になった。
+- 対応: `distributions.py` に `_uniform_bounds_from_p10_p90` を追加し、
+  uniform/loguniform も lognormal と同様に low/high を P10/P90 とみなして
+  端点へ外挿するように統一。テスト `test_*_interprets_low_high_as_p10_p90` を追加。
+
+### セキュリティMAJOR: DNSリバインディング/TOCTOU 対策(修正済み)
+- 問題: `validate_url` がホスト名を解決・検証しても、接続時に httpx が
+  独立して再解決するため、検査と接続の間にDNSを差し替えられると
+  プライベート/メタデータIPへ接続され得た。
+- 対応: `DocumentFetcher._pin_connection` で接続直前に1回解決し、全解決IPを
+  検証したうえで**接続URLを検証済みIPリテラルへ書き換え**、Hostヘッダと
+  TLS SNI を元ホスト名に保つ(`_pinned_send`)。これで「接続するIP」と
+  「検証したIP」が原子的に一致し、httpx による再解決が起きない。robots取得も
+  同経路でピン留め。オフライン(モック)モードでは書き換えない。
+  実際のTOCTOUを再現するテスト `test_dns_rebinding_flip_to_private_blocked` と
+  `test_connection_pinned_to_validated_ip` を追加。
+
+### MINOR(修正済み)
+- 数値/16進/8進表記のIP迂回(`http://2130706433/` 等)を url_guard で拒否。
+- 式パーサに演算子数上限(200)と RecursionError 捕捉、べき指数上限(|指数|<=8)を追加。
+- 不正・負の Content-Length を無視しストリーム実測でサイズ上限を担保。
+- `EvidenceItem.url` に min_length=1 制約(出典なし証拠を型で禁止)。
+- APIキー漏洩テストを、実際にキーを持つLLMで調査実行しレポート/監査/ログに
+  出ないことを検証する形へ強化。
+
+### 設計上の制約として受容(未修正・注記のみ)
+- lognormal は central を中央値(μ=ln central)に使うため、central が
+  幾何平均(low·high)から外れる非対称ケースでは実現P10/P90が入力low/highと
+  厳密には一致しない。2パラメータ分布に3点を厳密に載せられない本質的制約で、
+  fusion の central は重み付き中央値(≒対数中央値)のため実害は小さい。
+- JA単位マップは 台/本/個 を同一 `item` 次元へ集約する。式の単位検査は
+  パラメータ宣言単位(piano/vehicle 等の別次元)を使うため健全で、証拠単位
+  ブリッジ(normalize.py)でのみ影響し、そこでは仮定を注記付きで変換する。
+- 極端シナリオ・弾力性は中心点でのOAT(局所)ベースのため、加減算を含む
+  非単調式では近似。フェルミ推定の乗除モデルでは無害。
+
 ## D-015: E2EブラウザテストはオプションのPlaywright、UIテストの主経路はTestClient
 
 - 決定: UI/APIテストは FastAPI TestClient(ネットワーク不要・常時実行)。
