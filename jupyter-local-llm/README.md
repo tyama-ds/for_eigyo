@@ -453,9 +453,11 @@ python -m llmlab.app --port 9000 --root ./storage
   127.0.0.1 のみに bind し外部公開しない
 - **文書管理ビュー（ヘッダの「文書管理」）**: ⑬ IndexManager を GUI から操作する。
   文書追加（index_mode 選択）・文書一覧（doc_id/モード/状態/chunks/graph）・詳細（JSON/
-  チャンク/セクション）・再構築・削除・検索（`対象文書数`/`文書内チャンク`/`最大チャンク`/
-  `BookRAG(graph)を使う`）を行える。graph 未作成の文書に BookRAG 検索を要求しても落とさず
-  通常RAGにフォールバックし、その旨を各文書に表示する。
+  チャンク/セクション）・再構築・削除に加え、**回答生成 / 要約 / チャンク検索** の
+  3アクション（`対象文書数`/`文書内チャンク`/`最大チャンク`/`BookRAG(graph)を使う`）。
+  「要約してください」のような依頼文にも応え、一覧の ✓ で対象文書を絞れる。
+  graph 未作成の文書に BookRAG 検索を要求しても落とさず通常RAGにフォールバックし、
+  その旨を各文書に表示する。
 
 ### ⑬ IndexManager — index_mode で速度と精度を選ぶ文書間RAG（ローカルLLM実用重視）
 
@@ -477,6 +479,9 @@ im.documents()                                    # doc_id 単位の一覧（tit
 im.document(doc_id)                               # メタ + status + チャンク + 木の要約
 res = im.search("退職金は？", document_top_n=4, chunk_top_k_per_doc=4, use_graph=False)
 for h in res: print(h.title, h.doc_id, h.score, len(h.chunks))
+print(im.ask("退職金の計算方法は？"))              # 回答を生成（要約・比較などの依頼文もOK）
+print(im.summarize())                              # 文書ごとに要約 → 統合要約
+print(im.summarize("リスク面を中心に", doc_ids=[doc_id]))  # 観点・対象文書の指定
 im.rebuild(doc_id, index_mode="hierarchy")        # 作り直し（force 相当）
 im.delete(doc_id)
 ```

@@ -279,6 +279,85 @@ def test_existing_apis_intact():
 
 
 # --------------------------------------------------------------------------
+# 4.5 回答生成・要約（v0.6.2: ask / summarize / doc_ids 絞り込み）
+# --------------------------------------------------------------------------
+
+def test_ask_answers_with_doc_grounding():
+    """ask(): 検索した根拠を文脈に LLM で回答し、根拠(hits)を返す。"""
+    _inject_mock_settings()
+    import llmlab.bookindex as bx
+    from llmlab.indexmanager import IndexManager
+
+    work = Path(tempfile.mkdtemp(prefix="llmlab_ask_"))
+    im = IndexManager(storage_dir=str(work / "index"))
+    for i in range(3):
+        f = _write(work / "s", f"doc{i}.txt", f"文書{i}の本文。退職金の規定あり。" * 30)
+        im.add_document(f, title=f"文書{i}")
+
+    prompts = []
+    old = bx.llm_text
+    bx.llm_text = lambda p, **k: (prompts.append((p, k)), "回答: 規定は文書0にあります")[-1]
+    try:
+        events = []
+        ans = im.ask("退職金は？", document_top_n=2, progress=events.append)
+    finally:
+        bx.llm_text = old
+    check("ask: 回答テキスト", "回答:" in ans.text)
+    check("ask: 根拠 hits が文書単位", ans.hits and
+          len({h.doc_id for h in ans.hits}) == len(ans.hits))
+    check("ask: 抜粋がプロンプトに入る", "文書「" in prompts[0][0])
+    check("ask: 文書名明示を指示", "文書名" in prompts[0][1].get("system", ""))
+    check("ask: 進捗イベント", any("回答" in e["stage"] for e in events))
+    d = ans.to_dict()
+    check("ask: to_dict", set(d) == {"text", "hits", "per_doc"})
+
+
+def test_summarize_maps_each_doc_then_reduces():
+    """summarize(): 文書ごとに部分要約 → 統合。doc_ids で対象を絞れる。"""
+    _inject_mock_settings()
+    import llmlab.bookindex as bx
+    from llmlab.indexmanager import IndexManager
+
+    work = Path(tempfile.mkdtemp(prefix="llmlab_summ_"))
+    im = IndexManager(storage_dir=str(work / "index"))
+    ids = []
+    for i in range(3):
+        f = _write(work / "s", f"doc{i}.txt", f"文書{i}の内容。" * 30)
+        ids.append(im.add_document(f, title=f"文書{i}")["doc_id"])
+
+    calls = []
+    old = bx.llm_text
+    bx.llm_text = lambda p, **k: (calls.append(p), f"要約{len(calls)}")[-1]
+    try:
+        ans = im.summarize()                       # 全文書
+        ans2 = im.summarize("リスク面", doc_ids=ids[:1])   # 1文書に絞る + 観点
+    finally:
+        bx.llm_text = old
+    check("summarize: 全文書の部分要約", len(ans.per_doc) == 3,
+          f"{[p['title'] for p in ans.per_doc]}")
+    check("summarize: 統合要約あり", bool(ans.text))
+    check("summarize: 文書ごと+統合のLLM回数", len(calls) >= 3 + 1)
+    check("summarize: doc_ids 絞り込み", len(ans2.per_doc) == 1)
+    check("summarize: 1文書なら統合を省略", ans2.text == ans2.per_doc[0]["text"])
+    check("summarize: 観点がプロンプトへ", any("リスク面" in c for c in calls))
+
+
+def test_search_scoped_by_doc_ids():
+    _inject_mock_settings()
+    from llmlab.indexmanager import IndexManager
+
+    work = Path(tempfile.mkdtemp(prefix="llmlab_scope_"))
+    im = IndexManager(storage_dir=str(work / "index"))
+    ids = []
+    for i in range(3):
+        f = _write(work / "s", f"doc{i}.txt", f"文書{i}の内容。" * 30)
+        ids.append(im.add_document(f, title=f"文書{i}")["doc_id"])
+    res = im.search("内容", doc_ids=ids[:2], document_top_n=4)
+    got = {h.doc_id for h in res}
+    check("search: doc_ids で対象を制限", got <= set(ids[:2]) and got, f"{got}")
+
+
+# --------------------------------------------------------------------------
 # 5. 監査修正の回帰テスト（v0.6.1）
 # --------------------------------------------------------------------------
 
