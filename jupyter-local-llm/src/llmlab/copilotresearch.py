@@ -47,6 +47,9 @@ from urllib.parse import parse_qs, urlparse
 
 from . import m365copilot
 
+APP_NAME = "Copilot Research"
+APP_VERSION = "0.6.0"  # llmlab.__version__ と合わせて更新する。/api/status と GUI ヘッダに表示される
+
 DEFAULT_PORT = 8767
 _UI_PATH = Path(__file__).parent / "copilot_ui.html"
 
@@ -600,7 +603,7 @@ def _start_run(payload: dict) -> str:
 # ---------------------------------------------------------------------------
 
 class _Handler(BaseHTTPRequestHandler):
-    server_version = "llmlabCopilotResearch"
+    server_version = f"llmlabCopilotResearch/{APP_VERSION}"
 
     def _json(self, obj, status: int = 200) -> None:
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
@@ -674,7 +677,7 @@ class _Handler(BaseHTTPRequestHandler):
     def _api_status(self) -> None:
         from .config import is_configured
 
-        info = {"configured": is_configured()}
+        info = {"configured": is_configured(), "app": APP_NAME, "version": APP_VERSION}
         if is_configured():
             from .config import get_settings
 
@@ -799,7 +802,7 @@ def serve(port: int = DEFAULT_PORT, *, open_browser: bool = False):
     """Copilot Research サーバを起動する（ブロッキング）。Ctrl+C で終了。"""
     httpd = ThreadingHTTPServer(("127.0.0.1", port), _Handler)
     url = f"http://127.0.0.1:{port}"
-    print(f"Copilot Research: {url}  （Ctrl+C で終了）")
+    print(f"{APP_NAME} v{APP_VERSION}: {url}  （Ctrl+C で終了）")
     if open_browser:
         import webbrowser
 
@@ -817,7 +820,7 @@ def launch_copilot_research(port: int = DEFAULT_PORT) -> str:
     httpd = ThreadingHTTPServer(("127.0.0.1", port), _Handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{port}"
-    print(f"Copilot Research を起動しました: {url}\n"
+    print(f"{APP_NAME} v{APP_VERSION} を起動しました: {url}\n"
           "（LocalLLM は右上 CONNECT から。M365 Copilot はコネクタ選択。"
           "未接続でも『デモ実行』で 目次→擬似GEPA→統合 を体験できます）")
     return url

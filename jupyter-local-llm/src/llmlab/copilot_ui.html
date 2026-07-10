@@ -35,6 +35,9 @@
   .logo{font-weight:800;font-size:1.15rem;letter-spacing:.12em}
   .logo b{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
   .logo small{color:var(--ink-mute);letter-spacing:.28em;font-weight:600;margin-left:8px}
+  .logo .ver{font-size:.66rem;font-weight:700;letter-spacing:.05em;color:var(--ink-mute);
+    border:1px solid var(--line-strong);border-radius:999px;padding:1px 8px;margin-left:10px;
+    vertical-align:2px}
   .spacer{flex:1}
   .pill{display:inline-flex;align-items:center;gap:8px;font-size:.8rem;color:var(--ink-2);
     border:1px solid var(--line);border-radius:999px;padding:4px 12px}
@@ -143,7 +146,7 @@
 </head>
 <body>
 <header>
-  <div class="logo"><b>COPILOT</b> RESEARCH<small>M365 × 擬似GEPA</small></div>
+  <div class="logo"><b>COPILOT</b> RESEARCH<small>M365 × 擬似GEPA</small><span class="ver" id="appVer" title="アプリのバージョン"></span></div>
   <div class="spacer"></div>
   <span class="pill"><span class="dot" id="connDot"></span><span id="connText">未接続</span></span>
   <button class="btn ghost sm" id="btnConnect">CONNECT</button>
@@ -666,6 +669,8 @@ $("btnConnSave").onclick=async()=>{
 };
 async function refreshStatus(){
   const s=await api("/api/status");
+  $("appVer").textContent=s.version?("v"+s.version):"";
+  document.title=`Copilot Research${s.version?" v"+s.version:""}`;
   $("connDot").className="dot"+(s.configured?" on":"");
   $("connText").textContent=s.configured?`${s.model||"接続済み"}`:"未接続";
   if(s.configured&&s.base_url){ $("cBase").value=s.base_url; $("cModel").value=s.model||""; }

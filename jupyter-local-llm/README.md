@@ -619,3 +619,16 @@ jupyter-local-llm/
 ├── labextension/      # 入力中ゴースト補完の JupyterLab 拡張（要ビルド）
 └── docs/              # RAG に取り込む文書を置く（中身は git 管理外）
 ```
+
+---
+
+## 更新履歴（バージョン）
+
+現在のバージョンはコードでは `llmlab.__version__`、Copilot Research では GUI ヘッダの
+バッジ / `GET /api/status` の `version` / 起動時のコンソール表示で確認できる。
+
+| バージョン | 内容 |
+|-----------|------|
+| **0.6.0** | Copilot Research の selenium コネクタを **参照スクリプト完全準拠**に再実装（Edge 素起動・find_element 直呼び・send_keys 一発送信・停止ボタンの出現→消滅で完了検知・応答コピー→クリップボード取得）。多エージェント監査で確認された 11 件を修正（セッション死亡復帰・失敗を再試行・キャンセル即応・章の一意ID化 など）。GUI にバージョン表示を追加 |
+| 0.5.0 | ⑫ Copilot Research 追加 — M365 Copilot（Researcher）×擬似GEPA で 目次→章別リサーチ→統合。コネクタ4種（demo/bridge/selenium/graph）・使い方ノート `08` |
+| 0.4.0 | ⑪ llmlab Loop 追加 — 自律ループ（計画→実行→検証→再試行/人間承認）・RAGモード・定期実行/Webhook |
