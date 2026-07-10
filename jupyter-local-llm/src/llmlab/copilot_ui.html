@@ -344,10 +344,8 @@ $("segMode").addEventListener("click",e=>{
 const CONN_OPTS={
   demo:[], bridge:[],
   selenium:[
-    {k:"session_mode",label:"セッション（same_chat=同一チャットで継続・文脈維持 / per_chapter=章ごとに開き直し）",type:"select",choices:["same_chat","per_chapter"]},
-    {k:"driver_path",label:"msedgedriver の場所（実証スクリプトと同じ既定値）",ph:"C:\\Driver\\edgedriver_win32\\msedgedriver.exe"},
+    {k:"driver_path",label:"msedgedriver の場所（スクリプトと同じ既定値）",ph:"C:\\Driver\\edgedriver_win32\\msedgedriver.exe"},
     {k:"total_timeout_sec",label:"生成待ち上限秒（空=無制限・スクリプト準拠）",type:"number",ph:"3600"},
-    {k:"__advanced__",label:"詳細設定JSON（menu_button_xpath / length_selector 等を上書き・任意）",type:"json",ph:'{"editor_id":"m365-chat-editor-target-element"}'},
   ],
   graph:[
     {k:"endpoint",label:"POST エンドポイント",ph:"https://graph.microsoft.com/beta/..."},
@@ -360,7 +358,7 @@ function renderConnOpts(){
   const kind=$("connector").value, opts=CONN_OPTS[kind]||[], box=$("connOpts"); box.innerHTML="";
   if(kind==="bridge"){ box.innerHTML=`<div class="hint" style="margin-top:8px">各章のプロンプトを画面に表示 → 人が M365 Copilot に貼り、回答を貼り戻す方式。自動化不可の環境でも確実。</div>`; return; }
   if(kind==="demo"){ box.innerHTML=`<div class="hint" style="margin-top:8px">モック。指示が濃くなるほど回答も濃くなり、擬似GEPA の改善が見えます。</div>`; return; }
-  if(kind==="selenium"){ box.insertAdjacentHTML("beforeend",`<div class="hint" style="margin-top:8px">実証済みスクリプトの移植（Edge）。same_chat（既定）は最初にログイン・Researcher を開いた後、<b>同一チャットで章を続けて質問</b>します（文脈維持・高速）。擬似GEPA予算は 0〜1 推奨。per_chapter はスクリプト原文どおり章ごとに開き直します。</div>`); }
+  if(kind==="selenium"){ box.insertAdjacentHTML("beforeend",`<div class="hint" style="margin-top:8px"><b>ユーザースクリプト原文</b>（src/llmlab/m365_user_script.py）を章ごとに実行します（Edge）。セレクタ/XPathを変えたい時はそのファイルを直接編集。<b>失敗時はブラウザを開いたまま</b>にするので、どの画面で止まったか確認できます。擬似GEPA予算は 0〜1 推奨。</div>`); }
   opts.forEach(o=>{
     const id="opt_"+o.k, ph=esc(o.ph||"");
     if(o.type==="check"){

@@ -10,10 +10,10 @@ Microsoft 365 Copilot の「Researcher（リサーチ）」エージェントに
                「比較」「最新」等を含むほど濃い回答を返すので、擬似GEPAの改善曲線を体験できる。
 - ``bridge`` : 人手ブリッジ。各章の完成プロンプトを UI に表示 → 人が M365 Copilot に貼り付け、
                返ってきた回答を貼り戻す。自動化/API が塞がれた社内環境でも確実に動く既定手段。
-- ``selenium`` : **ユーザー実証済みスクリプトの忠実移植**。Edge を Selenium で駆動し、
-               office.com → Researcher → プロンプト送信 → 「長い」選択 → go ahead →
-               停止ボタンの出現→消滅で完了検知 → 応答コピー、を章ごとに 1 回転する。
-               msedgedriver の場所は ``driver_path`` で指定（既定はスクリプトのパス）。
+- ``selenium`` : **ユーザースクリプト原文の実行**。同梱の ``m365_user_script.py``
+               （実運用で動作確認済みのスクリプトそのもの）を章ごとに 1 回呼ぶだけ。
+               セレクタ変更はそのファイルを直接編集。設定は ``driver_path`` と
+               ``total_timeout_sec`` のみ。失敗時はブラウザを開いたままにする（目視確認用）。
 - ``graph``  : 任意の HTTP エンドポイント（Microsoft Graph / 社内 Copilot プロキシ等）へ
                Bearer トークンで POST する汎用コネクタ。要求/応答の JSON パスは設定可能。
 
@@ -196,84 +196,37 @@ class BridgeConnector(BaseConnector):
 
 
 # ---------------------------------------------------------------------------
-# selenium — ユーザー実証済みスクリプトの忠実移植（Edge で M365 Copilot Researcher を駆動）
+# selenium — ユーザースクリプト原文（m365_user_script.py）をそのまま実行
 # ---------------------------------------------------------------------------
 
 class SeleniumConnector(BaseConnector):
-    r"""実運用で動作確認済みのスクラッチスクリプトを **そのまま移植** したコネクタ。
+    r"""ユーザー実証済みスクリプトを **原文のまま** 実行するコネクタ（薄いラッパー）。
 
-    1 回のリサーチはスクリプト原文の手順:
+    Selenium 操作は同梱の ``m365_user_script.py`` に原文どおり収めてあり、本クラスは
+    それを章ごとに 1 回呼ぶだけ（ログイン→Researcher→送信→「長い」→go ahead→
+    完了待ち→コピー→quit）。**セレクタや XPath を変えたいときは m365_user_script.py を
+    直接編集**する（それがスクリプト原文そのもの）。
 
-      _login()（Edge 起動 → office.com → sleep(1)）
-      → メニュー click → リサーチツール入口 click → タブを閉じる（WebDriverWait 60）
-      → sleep(10) → 入力欄へ send_keys(プロンプト, ENTER)
-      → 「長い, 5 ページ以上」を scrollIntoView → sleep(5) → 再定義 → click
-      → 入力欄 全選択 → 削除 → "go ahead" + ENTER（おまかせ）
-      → wait_until_generation_done（停止ボタン■の出現→消滅。1秒ポーリング・10分毎 refresh）
-      → 「応答のコピー」click → クリップボードから本文取得
-
-    章のまたぎ方（``session_mode``）:
-
-    - ``same_chat``（既定）: **同一チャットでリサーチを繰り返す**。2 章目以降はログイン・
-      画面遷移を省略して同じ入力欄へ続きのプロンプトを送る（Researcher が前章の文脈を
-      引き継ぐ）。同一チャットでは「応答のコピー」が応答の数だけ並ぶため、**送信前の
-      ボタン数を数えて増えた最後の 1 個**を押す。「長い」の質問が出た時だけ go ahead を送る。
-      ブラウザは run 終了時（close()）に閉じる。※擬似GEPAで同じ章を聞き直すと文脈が
-      混ざるので、予算 0〜1 推奨。
-    - ``per_chapter``: スクリプト原文どおり、章ごとにブラウザを起動し直す使い切り。
-
-    移植にあたっての追加は: クリップボード読み取り / 例外の ChapterResult 化 /
-    プロンプト改行の 1 行化 / 上記 same_chat の継続処理、のみ。
-
-    options（既定はスクリプトの値そのまま。tenant/言語が違う時だけ上書き）:
-      session_mode      : "same_chat"（既定・同一チャット継続）/ "per_chapter"（原文どおり使い切り）
+    options:
       driver_path       : msedgedriver の場所（既定 C:\Driver\edgedriver_win32\msedgedriver.exe。
                           環境変数 EDGEDRIVER_PATH / MSEDGEDRIVER_PATH でも指定可）
-      login_url         : https://www.office.com/?auth=2
-      menu_button_xpath / agent_entrance_xpath / close_tab_selector : Researcher への導線
-      editor_id         : m365-chat-editor-target-element
-      length_selector   : button[aria-label='長い, 5 ページ以上']（空で選択をスキップ）
-      length_timeout_sec: 「長い」の出現待ち秒（スクリプト既定 50。同一チャットの 2 章目以降で
-                          質問が出ないテナントでは短くすると速い）
-      proceed_text      : "go ahead"（「長い」を選んだ時だけ送る）
-      stop_selector     : button[aria-label='生成を停止する']
-      copy_selector     : button[aria-label='応答のコピー']
-      poll_sec / refresh_every_sec / total_timeout_sec : 生成待ち（スクリプト既定 1 / 600 / None=無制限）
+      total_timeout_sec : 生成待ちの上限秒（既定 None=無制限・スクリプト準拠）
+
+    失敗した章のブラウザは **開いたまま** にする（スクリプトと同じ挙動。どの画面で
+    止まったか目視で確認できる）。不要になったら手で閉じる。
+    アプリ側の追加はプロンプト改行の 1 行化と、エラーを結果として返すことのみ。
     """
 
     kind = "selenium"
-    label = "Selenium（実証スクリプト移植・Edge）"
+    label = "Selenium（ユーザースクリプト実行・Edge）"
 
     DEFAULTS = {
-        "session_mode": "same_chat",
         "driver_path": r"C:\Driver\edgedriver_win32\msedgedriver.exe",
-        "login_url": "https://www.office.com/?auth=2",
-        "menu_button_xpath":
-            "/html/body/div[1]/div/div/main/div[1]/div/header/div/div[1]/button",
-        "agent_entrance_xpath":
-            "/html/body/div[1]/div/div/main/div[1]/div/div/div[2]/div/div[1]/div[2]"
-            "/div[1]/div/button[1]/span[2]",
-        "close_tab_selector": "button[data-testid='header-branding-container']",
-        "editor_id": "m365-chat-editor-target-element",
-        "length_selector": "button[aria-label='長い, 5 ページ以上']",
-        "length_timeout_sec": 50,
-        "proceed_text": "go ahead",
-        "stop_selector": "button[aria-label='生成を停止する']",
-        "copy_selector": "button[aria-label='応答のコピー']",
-        "poll_sec": 1,
-        "refresh_every_sec": 600,
         "total_timeout_sec": None,
     }
 
-    def __init__(self, options: dict | None = None):
-        super().__init__(options)
-        self._driver = None  # same_chat モードで run 内に使い回すセッション
-
     def _opt(self, key):
         return self.options.get(key, self.DEFAULTS.get(key))
-
-    def _mode(self) -> str:
-        return str(self._opt("session_mode") or "same_chat").lower()
 
     def _driver_path(self) -> str:
         import os
@@ -296,242 +249,48 @@ class SeleniumConnector(BaseConnector):
             return False, f"driver_path が見つかりません: {dp}"
         clip = "pyperclip 検出" if _has_pyperclip() else \
             "pyperclip 無し（`pip install pyperclip` 推奨）"
-        return True, f"selenium 利用可（Edge / driver={dp} / {clip}）"
-
-    # ---- 以下、スクリプト原文の移植（ロジック・待ち時間は原文どおり） ----------
-
-    def _login(self):
-        """M365へログイン（原文 _login の移植）。"""
-        from selenium import webdriver
-        from selenium.webdriver.edge.service import Service
-
-        login_url = self._opt("login_url")
-        driver = webdriver.Edge(service=Service(self._driver_path()))
-        driver.get(login_url)
-        # 3秒待機
-        time.sleep(1)
-        return driver
-
-    def _wait_until_generation_done(self, driver, should_cancel=None):
-        """生成中(■)→ 完了(⇒)に戻るまで待つ（原文 wait_until_generation_done の移植）。
-
-        1秒おきに確認。10分見つからない/止まらないなら refresh。
-        Returns: True（完了を検知）
-        """
-        from selenium.common.exceptions import StaleElementReferenceException
-        from selenium.webdriver.common.by import By
-        from selenium.webdriver.support.ui import WebDriverWait
-
-        stop_button = (By.CSS_SELECTOR, self._opt("stop_selector"))
-        poll_sec = float(self._opt("poll_sec") or 1)
-        refresh_every_sec = float(self._opt("refresh_every_sec") or 600)
-        raw = self._opt("total_timeout_sec")
-        total_timeout_sec = float(raw) if raw not in (None, "", 0, "0") else None
-
-        start = time.monotonic()
-        last_refresh = start
-        saw_stop = False  # 一度でも■を見たか
-
-        while True:
-            now = time.monotonic()
-
-            if total_timeout_sec is not None and (now - start) > total_timeout_sec:
-                raise TimeoutError("生成完了を検出できませんでした。")
-            if should_cancel and should_cancel():  # 移植追加: アプリのキャンセルに応答
-                raise RuntimeError("キャンセルされました")
-
-            try:
-                stops = driver.find_elements(*stop_button)
-                visible = [e for e in stops if e.is_displayed()]
-
-                if visible:
-                    # ■が表示中＝まだ生成中
-                    saw_stop = True
-                else:
-                    # ■が消えた
-                    if saw_stop:
-                        # 「■→消失」を検知 ＝ 生成完了
-                        return True
-                    # まだ■を一度も見てない＝送信直後でDOM未反映の可能性
-                    # → そのまま待機継続
-
-            except StaleElementReferenceException:
-                # DOM差し替え中。次ループへ
-                pass
-
-            # 一定時間動きなしなら refresh
-            if (now - last_refresh) >= refresh_every_sec:
-                driver.refresh()
-                WebDriverWait(driver, 30).until(
-                    lambda d: d.execute_script("return document.readyState") == "complete"
-                )
-                last_refresh = time.monotonic()
-                saw_stop = False  # リフレッシュ後はリセット
-
-            time.sleep(poll_sec)
+        return True, (f"selenium 利用可（Edge / driver={dp} / {clip}）。"
+                      "操作はユーザースクリプト原文（m365_user_script.py）を実行します。")
 
     def research(self, prompt, *, meta=None, emit=None, ask_bridge=None,
                  should_cancel=None) -> ChapterResult:
         ok, msg = self.test()
         if not ok:
             return ChapterResult(ok=False, connector=self.kind, error=msg)
-        from selenium.webdriver.common.by import By
-        from selenium.webdriver.common.keys import Keys
-        from selenium.webdriver.support import expected_conditions as EC
-        from selenium.webdriver.support.ui import WebDriverWait
 
-        # 入力欄では Enter=送信のため、章プロンプトは 1 行へ潰して送る（移植上の必要調整）
+        from . import m365_user_script
+
+        # 入力欄では Enter=送信のため、章プロンプトは 1 行へ潰して送る（アプリ側の必要調整）
         research_prompt = " ".join(s.strip() for s in str(prompt).splitlines() if s.strip())
-        same_chat = self._mode() == "same_chat"
-        copy_sel = self._opt("copy_selector")
-        t0 = time.time()
-        driver = None
+        raw = self._opt("total_timeout_sec")
         try:
-            # --- セッション: same_chat は 2 章目以降を同じチャットで続ける ---------
-            if same_chat and self._driver is not None:
-                driver = self._driver
-                try:
-                    _ = driver.current_url  # 生存確認（閉じられていたら作り直す）
-                    self._emit(emit, type="progress", stage="se_agent",
-                               text="同一チャットで続きのリサーチ")
-                except Exception:  # noqa: BLE001
-                    self.close()
-                    driver = None
-            if driver is None:
-                # ログインして
-                self._emit(emit, type="progress", stage="se_login", text="Edge 起動 → office.com")
-                driver = self._login()
-                driver.find_element(By.XPATH, self._opt("menu_button_xpath")).click()
-                _agent_entrance = driver.find_element(By.XPATH, self._opt("agent_entrance_xpath"))
+            total = float(raw) if raw not in (None, "", 0, "0") else None
+        except (TypeError, ValueError):
+            total = None
 
-                # リサーチツールをクリックして移動。
-                _agent_entrance.click()
-                self._emit(emit, type="progress", stage="se_agent", text="リサーチツールへ移動")
-
-                btn = WebDriverWait(driver, 60).until(EC.element_to_be_clickable(
-                    (By.CSS_SELECTOR, self._opt("close_tab_selector"))))  # タブを閉じる
-                btn.click()
-
-                time.sleep(10)
-                if same_chat:
-                    self._driver = driver
-
-            # 同一チャットでは「応答のコピー」が応答の数だけ並ぶ。
-            # 送信前の個数を控え、増えた最後の 1 個（＝今回の応答）を押す。
-            n_copy_before = len(driver.find_elements(By.CSS_SELECTOR, copy_sel))
-
-            self._emit(emit, type="progress", stage="se_prompt", text="プロンプトを送信")
-            driver.find_element(By.ID, self._opt("editor_id")).send_keys(
-                research_prompt, Keys.ENTER)
-
-            # レポートの長い方を選ぶ。下へ移動してクリック。
-            # （同一チャットの 2 章目以降では質問が出ないことがある → 出た時だけ）
-            length_sel = self._opt("length_selector")
-            length_to = float(self._opt("length_timeout_sec") or 50)
-            clicked_length = False
-            if length_sel:
-                try:
-                    elem = WebDriverWait(driver, length_to).until(
-                        EC.element_to_be_clickable((By.CSS_SELECTOR, length_sel)))
-                    driver.execute_script("arguments[0].scrollIntoView();", elem)
-                    time.sleep(5)
-                    elem = WebDriverWait(driver, length_to).until(
-                        EC.element_to_be_clickable((By.CSS_SELECTOR, length_sel)))
-                    # よくわからないけど、ここで再定義必要みたい。
-                    elem.click()
-                    clicked_length = True
-                except Exception:  # noqa: BLE001  質問が出ない場合はそのまま生成が走る
-                    self._emit(emit, type="progress", stage="se_length",
-                               text="長さの質問は表示されず（そのまま生成待ちへ）")
-
-            if clicked_length:  # 「長い」を選んだ時だけ続行の合図を送る
-                elem = driver.find_element(By.ID, self._opt("editor_id"))
-                elem.click()
-
-                # 全選択 → 削除
-                elem.send_keys(Keys.CONTROL, "a")
-                elem.send_keys(Keys.BACKSPACE)
-
-                elem.send_keys(str(self._opt("proceed_text")), Keys.ENTER)  # これだとおまかせ
-
-            # 生成完了まで待つ
-            self._emit(emit, type="progress", stage="se_wait",
-                       text="生成完了を待機（■の出現→消滅を1秒ポーリング）")
-            self._wait_until_generation_done(driver, should_cancel)
-            self._emit(emit, type="progress", stage="se_copy", text="✅ 生成完了！ → 応答のコピー")
-
-            # ① 今回の応答のコピーが増えるまで待つ ② 最後の 1 個をクリック
-            WebDriverWait(driver, 60).until(
-                lambda d: len(d.find_elements(By.CSS_SELECTOR, copy_sel)) > n_copy_before)
-            btns = [e for e in driver.find_elements(By.CSS_SELECTOR, copy_sel)
-                    if e.is_displayed()] or driver.find_elements(By.CSS_SELECTOR, copy_sel)
-            btns[-1].click()
-            time.sleep(1)
-            text = (self._read_clipboard(driver) or "").strip()  # 移植追加: 本文の取得
-
+        t0 = time.time()
+        try:
+            self._emit(emit, type="progress", stage="se_run",
+                       text="ユーザースクリプトを実行（Edge起動→Researcher→送信→完了待ち→コピー）")
+            text = (m365_user_script.run_research(
+                research_prompt, driver_path=self._driver_path(),
+                total_timeout_sec=total) or "").strip()
             return ChapterResult(
                 text=text, citations=extract_citations(text), connector=self.kind,
                 latency_sec=time.time() - t0, ok=bool(text),
                 error="" if text else
                 "クリップボードから本文を取得できませんでした（`pip install pyperclip` を確認）")
         except Exception as e:  # noqa: BLE001  失敗は UI に返す（アプリは落とさない）
-            if same_chat:  # 失敗した章のセッションは破棄 → 次章は新しいチャットでやり直す
-                self.close()
-                driver = None
-            return ChapterResult(ok=False, connector=self.kind, latency_sec=time.time() - t0,
-                                 error=f"{type(e).__name__}: {e}")
-        finally:
-            if not same_chat:  # per_chapter はスクリプト原文どおり使い切り
-                try:
-                    if driver:
-                        driver.quit()
-                except Exception:  # noqa: BLE001
-                    pass
+            import traceback
 
-    def close(self) -> None:
-        """same_chat モードのセッションを閉じる（run 終了時にオーケストレータから呼ばれる）。"""
-        if self._driver is not None:
-            try:
-                self._driver.quit()
-            except Exception:  # noqa: BLE001
-                pass
-            self._driver = None
-
-    @staticmethod
-    def _read_clipboard(driver) -> str:
-        """クリップボード本文を取得（pyperclip → JS → tkinter の順に試す）。"""
-        # 1) pyperclip（Windows で最も確実）
-        try:
-            import pyperclip
-            v = pyperclip.paste()
-            if v:
-                return v
-        except Exception:  # noqa: BLE001
-            pass
-        # 2) ブラウザの Clipboard API（許可・フォーカスが要る）
-        try:
-            v = driver.execute_async_script(
-                "var cb=arguments[arguments.length-1];"
-                "navigator.clipboard.readText().then(function(t){cb(t);})"
-                ".catch(function(){cb('');});")
-            if v:
-                return v
-        except Exception:  # noqa: BLE001
-            pass
-        # 3) tkinter（GUI 環境）。root は必ず destroy する
-        try:
-            import tkinter
-            r = tkinter.Tk()
-            r.withdraw()
-            try:
-                v = r.clipboard_get()
-            finally:
-                r.destroy()
-            if v:
-                return v
-        except Exception:  # noqa: BLE001
-            pass
-        return ""
+            # スクリプト内のどの行で失敗したかを添える（ブラウザは開いたまま＝目視確認可）
+            loc = next((ln.strip() for ln in reversed(traceback.format_exc().splitlines())
+                        if "m365_user_script" in ln), "")
+            where = f"／失敗箇所: {loc}" if loc else ""
+            return ChapterResult(
+                ok=False, connector=self.kind, latency_sec=time.time() - t0,
+                error=f"{type(e).__name__}: {e}{where}"
+                      "（ブラウザは開いたままです。画面でどこまで進んだか確認できます）")
 
 
 # ---------------------------------------------------------------------------

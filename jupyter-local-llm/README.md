@@ -580,21 +580,14 @@ flowchart TD
 - **M365 Copilot コネクタ 4 種**（差し替え可能・`m365copilot.py`）:
   - `bridge`（**既定・確実**）: 各章のプロンプトを画面に出す → 人が M365 Copilot に貼り、
     回答を貼り戻す（自動化/APIが塞がれた社内環境でも動く）
-  - `selenium`: **実運用で動作確認済みのスクラッチスクリプトをそのまま移植**（Edge）。
-    1 章 = スクリプト 1 回分: `webdriver.Edge(service=Service(driver_path))` で起動 →
-    office.com → メニュー → リサーチツール入口 → タブを閉じる → `sleep(10)` →
-    入力欄（`m365-chat-editor-target-element`）へ送信 → 「長い, 5 ページ以上」を選択 →
-    入力欄を全消去して `go ahead` → **停止ボタン「生成を停止する」の出現→消滅で生成完了を
-    検知**（1 秒ポーリング・10 分ごとに refresh・上限は既定なし=スクリプト準拠）→
-    「応答のコピー」→ **クリップボードから本文取得**（`pip install pyperclip` 推奨）。
-    **章のまたぎ方は 2 モード**: `same_chat`（既定）は最初の 1 回だけログイン・Researcher を開き、
-    **同一チャットで章を続けて質問**する（前章の文脈を引き継ぐ・高速。「応答のコピー」は増えた
-    最後の 1 個を押す／「長い」の質問が出た時だけ go ahead。擬似GEPA予算 0〜1 推奨）。
-    `per_chapter` はスクリプト原文どおり章ごとにブラウザを開き直す。移植上の追加は
-    「クリップボード読み取り・エラーの結果化・改行の 1 行化・same_chat の継続処理」のみ。`driver_path` 既定はスクリプトと同じ
-    `C:\Driver\edgedriver_win32\msedgedriver.exe`（UI から変更可）。セレクタ/XPath は
-    UI の「詳細設定JSON」で上書き可。**Researcher は 1 章数分〜十数分**かかるので
-    擬似GEPA の予算は小さめ（0〜1）推奨
+  - `selenium`: **ユーザー実証済みスクリプトの原文をそのまま実行**（Edge）。Selenium 操作は
+    同梱の `src/llmlab/m365_user_script.py` に原文どおり収めてあり、アプリは章ごとにそれを
+    1 回呼ぶだけ（ログイン→Researcher→送信→「長い, 5 ページ以上」→go ahead→停止ボタンの
+    出現→消滅で完了検知→応答コピー→quit）。**セレクタ/XPath を変えたいときはこのファイルを
+    直接編集**。アプリ側の設定は `driver_path`（既定 `C:\Driver\edgedriver_win32\msedgedriver.exe`）
+    と `total_timeout_sec`（既定なし=無制限）のみ。**失敗時はブラウザを開いたまま**にする
+    （どの画面で止まったか目視確認できる）。応答はクリップボード経由（`pip install pyperclip`
+    推奨）。**Researcher は 1 章数分〜十数分**かかるので擬似GEPA の予算は 0〜1 推奨
   - `graph`: 任意の HTTP エンドポイント（Microsoft Graph / 社内 Copilot プロキシ）へ Bearer POST。
     プロンプト/回答の JSON パスは設定可能
   - `demo`: モック（指示が濃いほど回答も濃くなり、擬似GEPA の改善が見える）
@@ -680,7 +673,8 @@ jupyter-local-llm/
 
 | バージョン | 内容 |
 |-----------|------|
-| **0.7.2** | selenium に `session_mode` を追加 — **same_chat（既定）: 同一チャットで章を継続**（文脈維持・ログインは初回のみ・増えた最後のコピーを押す・「長い」が出た時だけ go ahead）/ per_chapter: 原文どおり使い切り |
+| **0.7.3** | selenium を**ユーザースクリプト原文の直接実行**方式へ（`m365_user_script.py` を同梱。セレクタ変更はファイル直編集・失敗時はブラウザを開いたままにして目視デバッグ可能・same_chat モードは撤去） |
+| 0.7.2 | selenium に `session_mode` を追加 — **same_chat（既定）: 同一チャットで章を継続**（文脈維持・ログインは初回のみ・増えた最後のコピーを押す・「長い」が出た時だけ go ahead）/ per_chapter: 原文どおり使い切り |
 | 0.7.1 | selenium コネクタを**ユーザー実証済みスクリプトの忠実移植**へ全面差し替え（Edge 固定・章ごとにブラウザ使い切り・セッション管理/独自待機ロジックを全廃。追加はクリップボード読取・エラー結果化・改行1行化のみ） |
 | 0.7.0 | Copilot Research の selenium コネクタを **参照スクリプト完全準拠**に再実装（Edge 素起動・find_element 直呼び・send_keys 一発送信・停止ボタンの出現→消滅で完了検知・応答コピー→クリップボード取得）。多エージェント監査で確認された 11 件を修正（セッション死亡復帰・失敗を再試行・キャンセル即応・章の一意ID化 など）。GUI にバージョン表示を追加 |
 | 0.6.1 | RAG 監査で確定した 10 指摘の修正（XSS/移行dedup/モード降格/logレース ほか） |
