@@ -19,7 +19,12 @@ python launcher/launcher.py --port 9200 --open
   起動中のアプリは ■ ボタンで停止できる（このポータルから起動したもののみ）。
 - **入り口イメージ**: 各アプリのカードにはアプリの性格に合わせた
   生成アートワーク（SVG・アニメーション付き）を表示。
-  `studio / loop / jupyter / terminal / chat / docs` の6種から選べる。
+  `studio / loop / jupyter / agents / research / copilot / news / terminal / chat / docs` の10種から選べる。
+- **ホバーで画面プレビュー**: カードにマウスを乗せると、実際のアプリ画面の
+  スクリーンショットが GIF 風のスライドショー（3コマ ≒ 5秒ループ、コマ送り
+  ドット付き）でフェード再生される。プリセット5アプリは撮影済みの実画面を同梱。
+  自作アプリに付けるには `previews/<アプリid>-1.jpg`, `<アプリid>-2.jpg`, … を
+  置くだけ（自動検出）。`apps.json` の `"previews": ["/previews/..jpg"]` でも指定可。
 - **アプリの追加**: UI の「＋ アプリを追加」から。`launcher/apps.json` の直接編集でも可。
 
 ## 最初から登録されているアプリ
@@ -30,6 +35,7 @@ python launcher/launcher.py --port 9200 --open
 | llmlab Loop | for_eigyo | 自律ループ（計画→実行→検証→再試行） | 8766 |
 | Copilot Research | for_eigyo | M365 Copilot × 擬似GEPA（目次→章別リサーチ→統合レポート） | 8767 |
 | JupyterLab | for_eigyo | llmlab のノートブック環境（要 `pip install jupyterlab`） | 8888 |
+| Prism ニュースポータル | for_eigyo | RSS/Atom を束ねるニュース収集（検索・トレンド・AI要約） | 8780 |
 | Agent Orchestrator | claudecode | Codex × Claude Code × ローカルLLM の協調（7戦略） | 8801 |
 | Deep Research Tool | claudecode | Web検索→検証→レポート生成のディープリサーチ | 8802 |
 

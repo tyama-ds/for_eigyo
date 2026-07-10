@@ -42,7 +42,7 @@
       "id": "copilot-research",
       "name": "Copilot Research",
       "description": "M365 Copilot（Researcher）を擬似GEPAで駆動。依頼→LocalLLMで目次→章ごとにCopilotリサーチ→統合レポート",
-      "icon": "research",
+      "icon": "copilot",
       "cwd": "../jupyter-local-llm",
       "command": [
         "{python}",
@@ -91,6 +91,21 @@
       ],
       "url": "http://127.0.0.1:8801",
       "wait_port": 8801
+    },
+    {
+      "id": "news-portal",
+      "name": "Prism ニュースポータル",
+      "description": "多数のRSS/Atomフィード（専門誌・学術含む）を1画面に束ねて分光するニュース収集ポータル。検索・トレンド・保存・自動更新・生成AI要約（Claude/OpenAI互換/ローカルLLM対応）・ダーク/ライト",
+      "icon": "news",
+      "cwd": "../news-portal",
+      "command": [
+        "{python}",
+        "server.py",
+        "--port",
+        "8780"
+      ],
+      "url": "http://127.0.0.1:8780",
+      "wait_port": 8780
     },
     {
       "id": "deep-research",

@@ -72,6 +72,8 @@ class MultiPaperRAG:
         max_papers: int = 4,
         chunk_size: int = 1024,
         chunk_overlap: int = 128,
+        chunks_per_doc: int = 4,          # 文書ごとに使うチャンク数（locate 集約・深掘り）
+        max_chunks_per_doc: int | None = None,  # 深掘りで1文書から使う上限（既定=chunks_per_doc）
         deep_engine: str = "paged",       # "paged" | "book"
         locate_strategy: str = "search",  # "search" | "summary" | "all"
         pics: bool = False,
@@ -85,6 +87,8 @@ class MultiPaperRAG:
             raise ValueError('locate_strategy は "search" / "summary" / "all"')
         self.storage_dir = Path(storage_dir)
         self.max_papers = max_papers
+        self.chunks_per_doc = chunks_per_doc
+        self.max_chunks_per_doc = max_chunks_per_doc or chunks_per_doc
         self.deep_engine = deep_engine
         self.locate_strategy = locate_strategy
         self.pics = pics
@@ -95,6 +99,7 @@ class MultiPaperRAG:
         self._rag = PagedRAG(
             storage_dir=str(self.storage_dir / "vectors"),
             top_k=top_k, chunk_size=chunk_size, chunk_overlap=chunk_overlap,
+            documents_dir=str(self.storage_dir / "documents"),  # 文書ごとJSONの保存先
         )
         self.tables_dir = self.storage_dir / "tables"
         self.figures_dir = self.storage_dir / "figures"
@@ -146,11 +151,21 @@ class MultiPaperRAG:
         return self._locate_by_search(question, n)
 
     def _locate_by_search(self, question: str, n: int) -> list[str]:
-        ans = self._rag.query(question)
+        """文書単位のスコア集約で候補を選ぶ（global chunk top-k 偏り対策）。
+
+        従来は query() の source_nodes（全チャンク top-k）から title を拾うだけで、
+        1文書のチャンクが上位を独占すると1件しか特定できなかった。ここでは広めに
+        チャンクを取得し、doc_id 単位で group by して上位 N **文書** を返す。
+        """
+        candidate_chunk_k = max(n * self.chunks_per_doc * 5, 50)
+        ranked = self._rag.rank_documents(
+            question, candidate_chunk_k=candidate_chunk_k,
+            top_n=n, chunks_per_doc=self.chunks_per_doc,
+        )
         order: list[str] = []
-        for s in ans.sources:
-            if s.title and s.title not in order:
-                order.append(s.title)
+        for r in ranked:  # 表示は title。同名 doc が複数あっても順序を保って dedupe
+            if r.title and r.title not in order:
+                order.append(r.title)
         return order[:n]
 
     def _locate_by_summary(self, question: str, n: int) -> list[str]:
@@ -179,7 +194,17 @@ class MultiPaperRAG:
         except Exception:  # noqa: BLE001
             summ = ""
         self._manifest_set(title, {"summary": summ})
+        did = self._doc_id_for(title)  # 文書ごと JSON にも要約を反映
+        if did:
+            self._rag.set_summary(did, summ)
         return summ
+
+    def _doc_id_for(self, title: str) -> str | None:
+        """title から doc_id を引く（カタログ経由）。"""
+        for b in self._rag.books():
+            if b.get("title") == title:
+                return b.get("doc_id")
+        return None
 
     # ---- compare ------------------------------------------------------------
 
@@ -245,7 +270,10 @@ class MultiPaperRAG:
         if self.deep_engine == "book":
             book = self._ensure_book(title)
             return book.ask(question).text
-        return self._rag.query(question, title=title).text
+        # paged: 候補文書「内」だけで chunk top-k（max_chunks_per_doc）を使って深掘り。
+        # 1文書に絞った回答なので、全チャンク横断で他文書に流れる心配がない。
+        return self._rag.query(question, title=title,
+                               top_k=self.max_chunks_per_doc).text
 
     def _ensure_book(self, title: str):
         if title in self._book_cache:

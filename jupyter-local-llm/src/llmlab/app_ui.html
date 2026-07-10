@@ -223,6 +223,40 @@
   .switch{display:flex;align-items:center;gap:10px;margin:12px 0}
   .msg{font-size:.82rem;margin-top:10px;min-height:1.2em}
   .msg.ok{color:var(--ok)} .msg.ng{color:var(--err)}
+  /* ビュー切替タブ（索引横断 / 文書管理） */
+  .viewtabs{display:flex;gap:4px;margin-left:20px}
+  .vtab{cursor:pointer;border:1px solid var(--line-strong);background:transparent;
+    color:var(--ink-2);border-radius:999px;padding:5px 16px;font:inherit;font-size:.82rem;font-weight:700}
+  .vtab.on{color:#06090f;background:var(--grad);border-color:transparent}
+  #docsView{display:none;padding:18px 22px;max-width:1480px;margin:0 auto}
+  #docsView.on{display:block}
+  /* 文書テーブル */
+  .doctbl{width:100%;border-collapse:collapse;font-size:.82rem;margin-top:8px}
+  .doctbl th,.doctbl td{border-bottom:1px solid var(--line);padding:7px 8px;text-align:left;
+    vertical-align:top}
+  .doctbl th{color:var(--ink-2);font-size:.74rem;letter-spacing:.06em;font-weight:700}
+  .doctbl td.mono{font-family:ui-monospace,Consolas,monospace;font-size:.75rem;color:var(--ink-mute)}
+  .doctbl tr:hover td{background:rgba(255,255,255,.02)}
+  .st{font-size:.7rem;font-weight:800;border-radius:6px;padding:1px 8px;white-space:nowrap}
+  .st.ready{color:#0ca30c;border:1px solid rgba(12,163,12,.5)}
+  .st.running{color:#22d3ee;border:1px solid rgba(34,211,238,.5)}
+  .st.failed{color:var(--err);border:1px solid rgba(230,103,103,.5)}
+  .st.skipped,.st.pending{color:var(--ink-mute);border:1px solid var(--line-strong)}
+  .modechip{font-size:.68rem;font-weight:800;border-radius:6px;padding:1px 7px}
+  .modechip.fast{color:#7dd3fc;border:1px solid rgba(57,135,229,.5)}
+  .modechip.hierarchy{color:#5eead4;border:1px solid rgba(25,158,112,.5)}
+  .modechip.graph{color:#c4b5fd;border:1px solid rgba(144,133,233,.5)}
+  .docgrp{border:1px solid var(--line);border-radius:12px;margin:10px 0;padding:10px 14px;
+    background:rgba(255,255,255,.02)}
+  .docgrp h4{margin:0 0 6px;font-size:.92rem;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .docgrp .did{font-family:ui-monospace,Consolas,monospace;font-size:.72rem;color:var(--ink-mute)}
+  .docgrp .ck{border-top:1px dashed var(--line);padding:6px 0;font-size:.82rem}
+  .docgrp .ck .sc{color:var(--accent-a);font-variant-numeric:tabular-nums;font-size:.72rem}
+  .fbnote{color:var(--warn);font-size:.75rem}
+  pre.json{background:#0d1119;border:1px solid var(--line);border-radius:10px;padding:12px;
+    overflow:auto;max-height:340px;font-size:.74rem;font-family:ui-monospace,Consolas,monospace}
+  .warnrow{font-size:.78rem;color:var(--warn);margin-top:6px;min-height:1em}
+  #docDetail{display:none;margin-top:14px}
   .warnbox{
     display:none;font-size:.8rem;color:var(--warn);margin-top:8px;
     border:1px solid rgba(250,178,25,.35);background:rgba(250,178,25,.07);
@@ -234,13 +268,17 @@
 <body>
 
 <header>
-  <div class="logo"><b>llmlab</b> STUDIO <small>CROSS-INDEX RAG</small></div>
+  <div class="logo"><b>llmlab</b> STUDIO</div>
+  <div class="viewtabs">
+    <button class="vtab on" data-v="cross">索引横断</button>
+    <button class="vtab" data-v="docs">文書管理</button>
+  </div>
   <div class="spacer"></div>
   <span class="pill"><span class="dot" id="connDot"></span><span id="connTxt">未接続</span></span>
   <button class="btn sm ghost" id="btnDrawer">⚙ CONNECT</button>
 </header>
 
-<main>
+<main id="crossMain">
   <!-- ============ 左: 索引セレクタ ============ -->
   <section class="panel">
     <h2>Indexes — 検索対象の索引</h2>
@@ -324,6 +362,81 @@
     <div id="result"></div>
   </section>
 </main>
+
+<!-- ============ 文書管理ビュー（doc_id 中心・index_mode） ============ -->
+<div id="docsView">
+  <div style="display:grid;grid-template-columns:360px 1fr;gap:18px">
+    <!-- 左: 文書を追加 -->
+    <section class="panel">
+      <h2>文書を追加</h2>
+      <label class="f">文書ファイルのパス</label>
+      <input type="text" id="d_path" placeholder="./docs/2024規程.pdf">
+      <label class="f">表示名（任意・省略時はファイル名）</label>
+      <input type="text" id="d_title" placeholder="2024年度 就業規程">
+      <label class="f">処理モード</label>
+      <select id="d_mode">
+        <option value="fast">高速（通常RAG・推奨） — チャンク＋埋め込みのみ</option>
+        <option value="hierarchy">構造化 — 見出し/セクション階層まで作成</option>
+        <option value="graph">高精度だが低速 — Entity/Relation 抽出（BookRAG Full）</option>
+      </select>
+      <div class="warnrow" id="d_modewarn"></div>
+      <div class="switch" style="margin:8px 0 2px">
+        <input type="checkbox" id="d_layout" style="accent-color:var(--accent-a)">
+        <label for="d_layout" style="font-size:.8rem">見出し判定を強化（PDFの構造化に。要 pip install -e ".[ocr]"）</label>
+      </div>
+      <div class="switch" style="margin:2px 0 2px">
+        <input type="checkbox" id="d_force" style="accent-color:var(--accent-a)">
+        <label for="d_force" style="font-size:.8rem">再構築する（force・同一内容でも作り直す）</label>
+      </div>
+      <button class="btn sm" id="btnDocAdd" style="margin-top:6px">＋ 追加 / インデックス作成</button>
+      <div id="dProg" style="display:none;margin-top:10px">
+        <div class="bar"><i id="dbar"></i></div>
+        <div id="dstage" style="font-size:.76rem;color:var(--accent-a);margin-top:6px;word-break:break-all"></div>
+      </div>
+      <div class="msg" id="dMsg"></div>
+      <div style="font-size:.72rem;color:var(--ink-mute);margin-top:8px">
+        文書は内容ハッシュの doc_id で識別します（同名・版違いも区別）。
+        「高精度だが低速」は明示的に選んだときだけ Entity/Relation 抽出を実行します。
+      </div>
+    </section>
+
+    <!-- 右: 文書一覧 + 検索 -->
+    <section class="panel">
+      <h2>文書一覧
+        <button class="btn sm ghost" id="btnDocScan" style="margin-left:auto">再読込</button>
+      </h2>
+      <div style="overflow-x:auto">
+        <table class="doctbl"><thead><tr>
+          <th>表示名</th><th>doc_id</th><th>ファイル</th><th>モード</th><th>状態</th>
+          <th>chunks</th><th>graph</th><th>更新</th><th></th>
+        </tr></thead><tbody id="docRows"></tbody></table>
+      </div>
+
+      <h2 style="margin-top:18px">検索（文書単位で多様化）</h2>
+      <textarea id="s_q" rows="2" placeholder="質問（例: 退職金の計算方法は？）"></textarea>
+      <div class="row" style="margin-top:8px;flex-wrap:wrap;gap:10px">
+        <label style="font-size:.75rem;color:var(--ink-2)">対象文書数
+          <input type="number" id="s_topn" value="4" style="width:64px"></label>
+        <label style="font-size:.75rem;color:var(--ink-2)">文書内チャンク
+          <input type="number" id="s_k" value="4" style="width:64px"></label>
+        <label style="font-size:.75rem;color:var(--ink-2)">最大チャンク/文書
+          <input type="number" id="s_max" value="4" style="width:64px"></label>
+        <label style="font-size:.75rem;color:var(--ink-2);display:flex;align-items:center;gap:6px">
+          <input type="checkbox" id="s_graph" style="accent-color:var(--accent-a)">BookRAG(graph)を使う</label>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button class="btn" id="btnDocSearch">🔍 検索</button>
+        <span style="font-size:.76rem;color:var(--ink-mute)">結果は文書ごとにまとめて表示します</span>
+      </div>
+      <div id="sProg" style="display:none;margin-top:10px">
+        <div class="bar"><i id="sbar"></i></div>
+        <div id="sstage" style="font-size:.76rem;color:var(--accent-a);margin-top:6px"></div>
+      </div>
+      <div id="docSearchRes" style="margin-top:12px"></div>
+      <div id="docDetail"></div>
+    </section>
+  </div>
+</div>
 
 <!-- ============ 接続設定ドロワー ============ -->
 <div id="scrim"></div>
@@ -920,6 +1033,193 @@ function niceCeil(v){
   const p = Math.pow(10, Math.floor(Math.log10(Math.abs(v)||1)));
   for(const m of [1,2,2.5,5,10]) if(v<=m*p) return m*p;
   return 10*p;
+}
+
+/* ============================================================ 文書管理ビュー */
+document.querySelector(".viewtabs").onclick = e=>{
+  const b = e.target.closest(".vtab"); if(!b) return;
+  document.querySelectorAll(".vtab").forEach(t=>t.classList.remove("on"));
+  b.classList.add("on");
+  const docs = b.dataset.v === "docs";
+  $("#crossMain").style.display = docs ? "none" : "";
+  $("#docsView").classList.toggle("on", docs);
+  if(docs) docsScan();
+};
+
+const D_MODEWARN = {
+  fast: "",
+  hierarchy: "見出し/セクション構造を作ります（Entity/Relation 抽出はしません）。",
+  graph: "⚠ Entity/Relation 抽出を行うため時間がかかります（ローカルLLMでは数十分/文書のことも）。明示選択時のみ実行されます。",
+};
+$("#d_mode").onchange = ()=>{ $("#d_modewarn").textContent = D_MODEWARN[$("#d_mode").value] || ""; };
+
+const ST_JA = {ready:"準備OK", running:"処理中", failed:"失敗", skipped:"変更なし",
+               pending:"待機", unknown:"不明"};
+let DOCS = [];   // 直近の文書一覧（ボタンは data-i でここを参照。文字列をJSに埋め込まない）
+async function docsScan(){
+  const tb = $("#docRows");
+  tb.innerHTML = '<tr><td colspan="9" style="color:var(--ink-mute)">読込中…</td></tr>';
+  try{
+    const j = await api("/api/docs?root="+encodeURIComponent($("#root").value));
+    DOCS = j.documents;
+    if(!DOCS.length){
+      tb.innerHTML = '<tr><td colspan="9" style="color:var(--ink-mute)">文書がありません。左の「文書を追加」から登録してください。</td></tr>';
+      return;
+    }
+    tb.innerHTML = DOCS.map((m,i)=>{
+      const st = m.status||"unknown";
+      const err = m.error ? ` title="${esc(m.error)}"` : "";
+      return `<tr>
+        <td>${esc(m.title||"")}</td>
+        <td class="mono">${esc(m.doc_id||"")}</td>
+        <td class="mono">${esc((m.source_path||"").split(/[\\/]/).pop())}</td>
+        <td><span class="modechip ${esc(m.index_mode)}">${esc(m.index_mode||"")}</span></td>
+        <td><span class="st ${st}"${err}>${ST_JA[st]||st}</span></td>
+        <td>${m.chunk_count||0}</td>
+        <td>${m.graph_index?"✓":"—"}</td>
+        <td class="mono">${esc((m.updated_at||"").replace("T"," "))}</td>
+        <td>
+          <button class="btn sm ghost" data-act="detail" data-i="${i}">詳細</button>
+          <button class="btn sm ghost" data-act="rebuild" data-i="${i}">再構築</button>
+          <button class="btn sm ghost" data-act="delete" data-i="${i}">削除</button>
+        </td></tr>`;
+    }).join("");
+  }catch(e){ tb.innerHTML = `<tr><td colspan="9" class="err">${esc(e.message)}</td></tr>`; }
+}
+$("#btnDocScan").onclick = docsScan;
+// ボタンはイベント委譲で処理する。title 等のユーザー文字列を inline onclick に
+// 埋め込むと、引用符を含む題名で JS が壊れる/任意コードが動く（XSS）ため。
+$("#docRows").addEventListener("click", e=>{
+  const b = e.target.closest("button[data-act]");
+  if(!b) return;
+  const m = DOCS[+b.dataset.i];
+  if(!m) return;
+  if(b.dataset.act === "detail") docsDetail(m);
+  else if(b.dataset.act === "rebuild") docsRebuild(m);
+  else if(b.dataset.act === "delete") docsDelete(m);
+});
+
+/* SSE 実行の共通ヘルパ（進捗バー + 完了/エラー） */
+function runTask(url, body, {bar, stage, prog, onResult, onDone}){
+  prog.style.display = "block";
+  bar.style.width = "3%";
+  stage.dataset.msg = "開始…"; stage.textContent = "開始…";
+  const t0 = Date.now();
+  // 進捗イベントが来ない処理（検索など）でも経過秒が動き続けるよう、
+  // 表示はタイマー側で組み立てる（「開始…」のまま固まって見えるのを防ぐ）
+  const tick = setInterval(()=>{
+    stage.textContent = `${stage.dataset.msg}  ⏱${Math.round((Date.now()-t0)/1000)}s`;
+  }, 1000);
+  const stop = ()=> clearInterval(tick);
+  api(url, body).then(({task_id})=>{
+    const es = new EventSource("/api/events?id="+task_id);
+    es.onmessage = ev=>{
+      const e = JSON.parse(ev.data);
+      if(e.type==="progress"){
+        bar.style.width = Math.max(3,Math.min(97,Math.round(100*e.current/(e.total||1))))+"%";
+        stage.dataset.msg = `⟳ ${e.stage||""} ${e.detail||""}`;
+        stage.textContent = `${stage.dataset.msg}  ⏱${Math.round((Date.now()-t0)/1000)}s`;
+      }else if(e.type==="result"){ bar.style.width="100%"; stop();
+        stage.textContent=`✓ 完了（${Math.round((Date.now()-t0)/1000)}s）`; onResult&&onResult(e); }
+      else if(e.type==="error"){ stop(); stage.textContent="✗ 失敗"; onResult&&onResult(e); }
+      else if(e.type==="done"){ es.close(); stop();
+        setTimeout(()=>{ prog.style.display="none"; }, 1200); onDone&&onDone(); }
+    };
+    es.onerror = ()=>{ es.close(); stop(); stage.textContent="✗ 接続断"; };
+  }).catch(e=>{ stop(); prog.style.display="none";
+    stage.textContent = "✗ "+e.message; });
+}
+
+$("#btnDocAdd").onclick = ()=>{
+  const m = $("#dMsg"); m.className="msg"; m.textContent="";
+  runTask("/api/docs/add", {
+    path:$("#d_path").value, title:$("#d_title").value, index_mode:$("#d_mode").value,
+    force:$("#d_force").checked, layout:$("#d_layout").checked, root:$("#root").value,
+  }, {bar:$("#dbar"), stage:$("#dstage"), prog:$("#dProg"),
+    onResult:e=>{ if(e.type==="error"){ m.className="msg ng"; m.textContent="✗ "+e.message; }
+      else { m.className="msg ok";
+        m.textContent = `✓ ${e.meta.title}（${e.meta.index_mode} / ${e.meta.status} / chunks ${e.meta.chunk_count}）`; } },
+    onDone:docsScan});
+};
+window.docsRebuild = m=>{
+  // 既定値は現在のモード（"fast" 固定にすると graph 文書が黙って降格してしまう）
+  const cur = m.index_mode || "fast";
+  let mode = prompt(
+    `「${m.title}」を再構築します。モードを入力（fast / hierarchy / graph）\n` +
+    `※ graph は Entity/Relation 抽出のため低速です`, cur);
+  if(mode === null) return;                       // キャンセル
+  mode = mode.trim().toLowerCase() || cur;
+  if(!["fast","hierarchy","graph"].includes(mode)){
+    alert(`モードは fast / hierarchy / graph のいずれかです（入力: ${mode}）`);
+    return;
+  }
+  const msg = $("#dMsg"); msg.className="msg"; msg.textContent=`再構築中…（${mode}）`;
+  runTask("/api/docs/rebuild", {doc_id:m.doc_id, index_mode:mode, root:$("#root").value},
+    {bar:$("#dbar"), stage:$("#dstage"), prog:$("#dProg"),
+     onResult:e=>{ if(e.type==="error"){ msg.className="msg ng"; msg.textContent="✗ "+e.message; }
+       else { msg.className="msg ok";
+         msg.textContent=`✓ 再構築完了: ${e.meta.title}（${e.meta.index_mode}）`; } },
+     onDone:docsScan});
+};
+window.docsDelete = async m=>{
+  if(!confirm(`文書「${m.title}」(${m.doc_id}) を削除しますか？`)) return;
+  try{ await api("/api/docs/delete", {doc_id:m.doc_id, root:$("#root").value}); docsScan(); }
+  catch(e){ alert("削除に失敗: "+e.message); }
+};
+window.docsDetail = async m=>{
+  const did = m.doc_id;
+  const box = $("#docDetail"); box.style.display="block";
+  box.innerHTML = '<div style="color:var(--ink-mute)">読込中…</div>';
+  window.scrollTo({top:document.body.scrollHeight, behavior:"smooth"});
+  try{
+    const d = await api("/api/docs/detail?root="+encodeURIComponent($("#root").value)+"&doc_id="+encodeURIComponent(did));
+    const bi = d.bookindex;
+    const secList = bi && bi.sections && bi.sections.length
+      ? `<div style="font-size:.78rem;margin:6px 0">セクション（${bi.section_count}）: ${bi.sections.slice(0,30).map(esc).join(" / ")}</div>` : "";
+    box.innerHTML = `
+      <h2>文書詳細 — ${esc(d.meta.title)} <span class="did" style="color:var(--ink-mute);font-size:.72rem">${esc(did)}</span></h2>
+      <div style="font-size:.8rem;color:var(--ink-2)">
+        モード: <b>${esc(d.meta.index_mode)}</b> / 状態: <b>${esc(d.meta.status)}</b>
+        / chunks: ${d.meta.chunk_count} / graph索引: ${d.meta.graph_index?"あり":"なし"}
+        ${d.meta.error?`<div class="err" style="margin-top:6px">${esc(d.meta.error)}</div>`:""}
+      </div>
+      ${bi?`<div style="font-size:.8rem;margin-top:8px">BookRAG索引: ノード ${bi.node_count} / セクション ${bi.section_count} / エンティティ ${bi.entity_count} / 関係 ${bi.relation_count}</div>${secList}`
+          :`<div style="font-size:.78rem;color:var(--ink-mute);margin-top:8px">BookRAG索引なし（fast モード。構造/グラフが必要なら hierarchy/graph で再構築）</div>`}
+      <h3 style="margin-top:12px;font-size:.85rem;color:var(--ink-2)">docs/${esc(did)}.json</h3>
+      <pre class="json">${esc(JSON.stringify(d.meta,null,2))}</pre>
+      <h3 style="font-size:.85rem;color:var(--ink-2)">チャンク一覧（${d.chunks.length}）</h3>
+      <pre class="json">${esc(d.chunks.slice(0,50).map(c=>`[${c.chunk_id}] p.${c.page||"?"} ${(c.text||"").slice(0,160)}`).join("\n\n"))}</pre>
+      <button class="btn sm ghost" onclick="$('#docDetail').style.display='none'">閉じる</button>`;
+  }catch(e){ box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+};
+
+$("#btnDocSearch").onclick = ()=>{
+  const res = $("#docSearchRes"); res.innerHTML="";
+  runTask("/api/docs/search", {
+    question:$("#s_q").value, document_top_n:$("#s_topn").value,
+    chunk_top_k_per_doc:$("#s_k").value, max_chunks_per_doc:$("#s_max").value,
+    use_graph:$("#s_graph").checked, root:$("#root").value,
+  }, {bar:$("#sbar"), stage:$("#sstage"), prog:$("#sProg"),
+    onResult:e=>{
+      if(e.type==="error"){ res.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
+      renderDocSearch(e.hits, res);
+    }});
+};
+function renderDocSearch(hits, box){
+  if(!hits || !hits.length){ box.innerHTML = '<div class="err">該当する文書がありませんでした</div>'; return; }
+  box.innerHTML = `<div style="font-size:.78rem;color:var(--ink-mute);margin-bottom:6px">
+    ${hits.length} 文書に多様化（1文書に偏らない）</div>` + hits.map(h=>{
+    const gtag = h.used_graph ? '<span class="modechip graph">BookRAG</span>' : '<span class="modechip fast">通常RAG</span>';
+    const fb = h.fallback_reason ? `<div class="fbnote">⚠ ${esc(h.fallback_reason)}</div>` : "";
+    const chunks = (h.chunks||[]).map(c=>`
+      <div class="ck"><span class="sc">score ${c.score}${c.page?` ・ p.${esc(String(c.page))}`:""}</span><br>
+        ${esc((c.text||"").slice(0,400))}
+        ${c.source?`<div class="did">↳ ${esc(c.source)}</div>`:""}</div>`).join("");
+    return `<div class="docgrp">
+      <h4>${gtag} ${esc(h.title)} <span class="sc" style="color:var(--accent-a)">score ${h.score}</span>
+        <span class="did">${esc(h.doc_id)}</span></h4>
+      ${fb}${chunks || '<div class="ck" style="color:var(--ink-mute)">チャンクなし</div>'}</div>`;
+  }).join("");
 }
 
 /* ============================================================ init */

@@ -28,6 +28,7 @@ from urllib.parse import parse_qs, urlparse
 BASE = Path(__file__).resolve().parent
 APPS_FILE = BASE / "apps.json"
 UI_FILE = BASE / "index.html"
+PREVIEW_DIR = BASE / "previews"
 DEFAULT_PORT = 8770
 HOST = "127.0.0.1"
 LOG_LINES = 200
@@ -189,8 +190,23 @@ def app_payload(app: dict) -> dict:
         "url": app.get("url"),
         "cwd": app.get("cwd"),
         "command": app.get("command"),
+        "previews": app_previews(app),
         "state": app_state(app),
     }
+
+
+def app_previews(app: dict) -> list[str]:
+    """apps.json の previews 指定、なければ previews/<id>-*.jpg|png を自動検出。"""
+    if app.get("previews"):
+        return list(app["previews"])
+    found = []
+    if PREVIEW_DIR.is_dir():
+        for f in sorted(PREVIEW_DIR.iterdir()):
+            if f.suffix.lower() in (".jpg", ".jpeg", ".png", ".gif", ".webp") and (
+                f.stem == app["id"] or f.stem.startswith(app["id"] + "-")
+            ):
+                found.append(f"/previews/{f.name}")
+    return found
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -226,6 +242,24 @@ class Handler(BaseHTTPRequestHandler):
             return
         if u.path == "/api/apps":
             self._json({"apps": [app_payload(a) for a in load_apps()]})
+            return
+        if u.path.startswith("/previews/"):
+            name = Path(u.path).name  # パス区切りを落として previews/ 直下に限定
+            f = PREVIEW_DIR / name
+            if not f.is_file():
+                self._json({"error": "not found"}, 404)
+                return
+            ctype = {
+                ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+                ".gif": "image/gif", ".webp": "image/webp",
+            }.get(f.suffix.lower(), "application/octet-stream")
+            body = f.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "max-age=60")
+            self.end_headers()
+            self.wfile.write(body)
             return
         if u.path == "/api/status":
             app_id = (parse_qs(u.query).get("id") or [""])[0]
