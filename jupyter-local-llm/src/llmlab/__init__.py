@@ -109,4 +109,4 @@ __all__ = [
     "build_index",
 ]
 
-__version__ = "0.6.2"  # llmlab.__version__ で更新確認できる
+__version__ = "0.6.3"  # llmlab.__version__ で更新確認できる

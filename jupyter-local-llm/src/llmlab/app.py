@@ -191,7 +191,17 @@ def _run_docs_task(task_id: str, payload: dict, root: str) -> None:
             else:
                 path = str(payload.get("path", "")).strip()
                 if not path:
-                    raise ValueError("文書ファイルのパスを入力してください")
+                    raise ValueError("文書ファイル（またはフォルダ）のパスを入力してください")
+                if Path(path).is_dir():
+                    # フォルダ一括: 1ファイル=1文書として順に処理（失敗は続行して集計）
+                    batch = im.add_folder(
+                        path, index_mode=str(payload.get("index_mode", "fast")),
+                        force=bool(payload.get("force", False)),
+                        layout=bool(payload.get("layout", False)),
+                        ocr=payload.get("ocr", False), progress=emit)
+                    q.put({"type": "result", "kind": "docbatch", **batch,
+                           "results": [m for m in batch["results"]]})
+                    return
                 meta = im.add_document(
                     path, title=(payload.get("title") or None),
                     index_mode=str(payload.get("index_mode", "fast")),

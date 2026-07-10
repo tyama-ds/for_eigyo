@@ -369,9 +369,9 @@
     <!-- 左: 文書を追加 -->
     <section class="panel">
       <h2>文書を追加</h2>
-      <label class="f">文書ファイルのパス</label>
-      <input type="text" id="d_path" placeholder="./docs/2024規程.pdf">
-      <label class="f">表示名（任意・省略時はファイル名）</label>
+      <label class="f">文書ファイル or フォルダのパス</label>
+      <input type="text" id="d_path" placeholder="./docs/2024規程.pdf ／ ./docs/2024（フォルダで一括）">
+      <label class="f">表示名（任意・単一ファイル時のみ。フォルダは各ファイル名を使用）</label>
       <input type="text" id="d_title" placeholder="2024年度 就業規程">
       <label class="f">処理モード</label>
       <select id="d_mode">
@@ -1150,7 +1150,13 @@ $("#btnDocAdd").onclick = ()=>{
     force:$("#d_force").checked, layout:$("#d_layout").checked, root:$("#root").value,
   }, {bar:$("#dbar"), stage:$("#dstage"), prog:$("#dProg"),
     onResult:e=>{ if(e.type==="error"){ m.className="msg ng"; m.textContent="✗ "+e.message; }
-      else { m.className="msg ok";
+      else if(e.kind === "docbatch"){   // フォルダ一括の集計
+        m.className = e.failed ? "msg ng" : "msg ok";
+        m.textContent = `${e.failed ? "⚠" : "✓"} フォルダ取り込み完了: `
+          + `追加 ${e.added} / 変更なし ${e.skipped} / 失敗 ${e.failed}`
+          + (e.errors && e.errors.length
+             ? ` — 例: ${e.errors[0].file}: ${e.errors[0].error}` : "");
+      } else { m.className="msg ok";
         m.textContent = `✓ ${e.meta.title}（${e.meta.index_mode} / ${e.meta.status} / chunks ${e.meta.chunk_count}）`; } },
     onDone:docsScan});
 };

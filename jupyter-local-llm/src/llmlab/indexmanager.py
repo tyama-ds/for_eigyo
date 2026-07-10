@@ -46,6 +46,12 @@ INDEX_MODES = ("fast", "hierarchy", "graph")
 STATUSES = ("pending", "running", "ready", "failed", "skipped")
 DEFAULT_STORAGE = "./storage/index"
 
+# フォルダ一括取り込みの対応拡張子（fast はベクトル索引に入る全形式）
+FOLDER_EXTS = {".pdf", ".txt", ".md", ".docx", ".doc", ".pptx",
+               ".csv", ".xlsx", ".xls", ".html", ".epub"}
+# hierarchy/graph（BookRAG の木/KG）を作れる形式。それ以外は fast に自動降格
+BOOK_EXTS = {".pdf", ".docx", ".md", ".txt", ".pptx", ".xlsx"}
+
 
 def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
@@ -211,6 +217,68 @@ class IndexManager:
             self._write(self.docs_dir, doc_id, meta)
             self._set_status(doc_id, "failed", index_mode, error=meta["error"])
             raise
+
+    def add_folder(self, docs_dir: str | Path, *, index_mode: str = "fast",
+                   force: bool = False, layout=False, ocr=False,
+                   progress=None) -> dict:
+        """フォルダ内の対応文書を **1ファイル=1文書** として順に取り込む。
+
+        - 各ファイルは個別の doc_id を持つ独立文書になる（検索は従来どおり
+          文書ごとに chunk top-k を取り doc_id 単位で集約・多様化する）。
+        - hierarchy/graph 指定時、木/KG を作れない形式（csv/html 等）は
+          そのファイルだけ fast に自動降格して取り込む（スキップしない）。
+        - 1ファイルの失敗で全体を止めない（status=failed に記録して続行）。
+        - 返り値: {"results": [meta...], "added", "skipped", "failed", "errors"}
+        """
+        docs_dir = Path(docs_dir)
+        if not docs_dir.is_dir():
+            raise NotADirectoryError(f"フォルダではありません: {docs_dir}")
+        files = sorted(f for f in docs_dir.iterdir()
+                       if f.is_file() and f.suffix.lower() in FOLDER_EXTS)
+        if not files:
+            raise FileNotFoundError(
+                f"{docs_dir} に対応文書がありません"
+                f"（対応: {', '.join(sorted(FOLDER_EXTS))}）")
+
+        def emit(stage, cur, detail=""):
+            if progress:
+                try:
+                    progress({"stage": stage, "current": cur, "total": len(files),
+                              "detail": detail})
+                except Exception:  # noqa: BLE001
+                    pass
+
+        results, errors = [], []
+        added = skipped = failed = 0
+        for i, f in enumerate(files):
+            eff_mode = index_mode
+            if index_mode != "fast" and f.suffix.lower() not in BOOK_EXTS:
+                eff_mode = "fast"
+                emit(f"[{i + 1}/{len(files)}] {f.name}", i,
+                     f"{f.suffix} は木/KG 非対応のため fast で取り込み")
+
+            # ファイル内の進捗（チャンク化・抽出フェーズ等）は detail に流し、
+            # バーはフォルダ全体（i/total）で進める
+            def _inner(evt, _i=i, _name=f.name):
+                emit(f"[{_i + 1}/{len(files)}] {_name}", _i, str(evt.get("stage", "")))
+
+            emit(f"[{i + 1}/{len(files)}] {f.name}", i, f"取り込み中（{eff_mode}）")
+            try:
+                meta = self.add_document(f, index_mode=eff_mode, force=force,
+                                         layout=layout, ocr=ocr, progress=_inner)
+                results.append(meta)
+                if meta.get("status") == "skipped":
+                    skipped += 1
+                else:
+                    added += 1
+            except Exception as e:  # noqa: BLE001  1件の失敗で全体を止めない
+                failed += 1
+                errors.append({"file": f.name, "error": f"{type(e).__name__}: {e}"})
+                print(f"[IndexManager] {f.name} の取り込みに失敗（続行）: {e}")
+        emit("完了", len(files),
+             f"追加 {added} / 変更なし {skipped} / 失敗 {failed}")
+        return {"results": results, "added": added, "skipped": skipped,
+                "failed": failed, "errors": errors}
 
     def rebuild(self, doc_id: str, *, index_mode: str | None = None,
                 progress=None) -> dict:
