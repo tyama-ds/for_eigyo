@@ -1,0 +1,18 @@
+services:
+  fermiscope:
+    build: .
+    ports:
+      - "8720:8720"
+    environment:
+      SEARCH_PROVIDER: ${SEARCH_PROVIDER:-mock}
+      BRAVE_API_KEY: ${BRAVE_API_KEY:-}
+      LLM_PROVIDER: ${LLM_PROVIDER:-noop}
+      LLM_API_BASE: ${LLM_API_BASE:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      FERMISCOPE_APP_NAME: ${FERMISCOPE_APP_NAME:-FermiScope}
+    volumes:
+      - fermiscope-data:/data
+
+volumes:
+  fermiscope-data:

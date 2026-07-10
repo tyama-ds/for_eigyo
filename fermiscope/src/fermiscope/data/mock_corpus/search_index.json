@@ -1,0 +1,136 @@
+[
+  {
+    "keywords": ["世帯数"],
+    "hits": [
+      {
+        "url": "https://stats.example-gov.jp/kokusei/tokyo-households-2020.html",
+        "title": "令和2年国勢調査 東京都の世帯数",
+        "snippet": "東京都の一般世帯数は7,227,180世帯(2020年10月1日現在)。",
+        "published_hint": "2021-11-30"
+      },
+      {
+        "url": "https://tokyo.example-gov.jp/toukei/setai-2025.html",
+        "title": "住民基本台帳による東京都の世帯数(2025年1月)",
+        "snippet": "東京都の世帯数は7,410,000世帯(2025年1月1日現在)。",
+        "published_hint": "2025-02-10"
+      }
+    ]
+  },
+  {
+    "keywords": ["保有率", "普及率"],
+    "hits": [
+      {
+        "url": "https://esri.example-gov.jp/shouhi/piano-ownership.csv",
+        "title": "消費動向調査 主要耐久消費財の普及率(2024年3月)",
+        "snippet": "ピアノの普及率は10.4%(二人以上の世帯、2024年3月)。",
+        "published_hint": "2024-04-15"
+      },
+      {
+        "url": "https://archive.example-media.jp/1996/piano-survey.html",
+        "title": "主要耐久消費財の普及率(1996年3月)",
+        "snippet": "1996年3月末時点のピアノの普及率は22.0%。",
+        "published_hint": "1996-05-10"
+      },
+      {
+        "url": "https://news.example-media.jp/articles/piano-ownership.html",
+        "title": "ピアノのある家庭は1割 内閣府調査",
+        "snippet": "内閣府の消費動向調査によると、ピアノの普及率は10.4%。",
+        "published_hint": "2024-04-20"
+      },
+      {
+        "url": "https://kurashi.example-blog.jp/piano-donokurai.html",
+        "title": "ピアノって今どれくらいの家にあるの?",
+        "snippet": "内閣府の調査ではピアノの普及率は10.4%なんだそうです。",
+        "published_hint": "2024-05-02"
+      }
+    ]
+  },
+  {
+    "keywords": ["保有率 批判", "普及率 批判"],
+    "hits": [
+      {
+        "url": "https://tokushu.example-site.jp/piano-hoyuritsu-uragawa.html",
+        "title": "【衝撃】ピアノ保有率の真実",
+        "snippet": "政府の統計は間違っている。本当のピアノ保有率は80%だ。",
+        "published_hint": ""
+      }
+    ]
+  },
+  {
+    "keywords": ["保有率 訂正", "普及率 訂正", "消費動向調査 訂正"],
+    "hits": [
+      {
+        "url": "https://esri.example-gov.jp/shouhi/correction-2024.html",
+        "title": "消費動向調査の結果の訂正について",
+        "snippet": "2024年4月に公表した消費動向調査の一部の集計値に誤りがあったため、訂正します。",
+        "published_hint": "2024-06-28"
+      }
+    ]
+  },
+  {
+    "keywords": ["調律 頻度", "調律 実施率", "メンテナンス 頻度"],
+    "hits": [
+      {
+        "url": "https://gakki-union.example-org.jp/report/tuning-frequency-2023.html",
+        "title": "家庭用ピアノの調律実施状況調査 2023",
+        "snippet": "1年間に1回以上調律されるのは約35%(推定範囲 25%〜45%)。",
+        "published_hint": "2023-09-20"
+      }
+    ]
+  },
+  {
+    "keywords": ["年間 件数", "1人あたり 件数"],
+    "hits": [
+      {
+        "url": "https://pianolife-media.example.jp/tuner-jobs.html",
+        "title": "調律師さんのお仕事事情",
+        "snippet": "担当する調律の年間の件数はおよそ300件だそうです。",
+        "published_hint": "2023-05-08"
+      }
+    ]
+  },
+  {
+    "keywords": ["会員数"],
+    "hits": [
+      {
+        "url": "https://jpta.example.or.jp/about/members.html",
+        "title": "日本ピアノ調律師協会 会員数",
+        "snippet": "東京都の会員数は約560名(2024年4月時点)。",
+        "published_hint": "2024-05-01"
+      }
+    ]
+  },
+  {
+    "keywords": ["組織率", "加入率"],
+    "hits": [
+      {
+        "url": "https://forum.example-bbs.jp/threads/piano-tuner-union.html",
+        "title": "調律師って協会に入ってるの?",
+        "snippet": "知り合いの調律師に聞いたら、組織率は50%くらいらしいよ。",
+        "published_hint": "2023-11-03"
+      }
+    ]
+  },
+  {
+    "keywords": ["1日 件数", "1日あたり", "tunings per day"],
+    "hits": [
+      {
+        "url": "https://survey.example.or.jp/workload2024.pdf",
+        "title": "Piano Technician Workload Survey 2024",
+        "snippet": "Average workload: 1.5 tunings per technician per day.",
+        "published_hint": "2024-06-30"
+      }
+    ]
+  },
+  {
+    "keywords": ["稼働日数", "working days"],
+    "hits": [
+      {
+        "url": "https://survey.example.or.jp/workload2024.pdf",
+        "title": "Piano Technician Workload Survey 2024",
+        "snippet": "Annual working days: 200 days per year.",
+        "published_hint": "2024-06-30"
+      }
+    ]
+  }
+]

@@ -1,0 +1,77 @@
+"""FastAPI アプリケーションファクトリ。"""
+
+from __future__ import annotations
+
+from fastapi import FastAPI, Request
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+
+from fermiscope import __version__
+from fermiscope.api.runs import RunManager
+from fermiscope.config import Settings, get_settings
+from fermiscope.llm import create_llm_provider
+from fermiscope.llm.base import LLMProvider
+from fermiscope.persistence.repository import ProjectRepository
+from fermiscope.research.fetcher import DocumentFetcher
+from fermiscope.research.mock_transport import build_mock_transport
+from fermiscope.research.search.base import SearchProvider
+from fermiscope.research.search.brave import BraveSearchProvider
+from fermiscope.research.search.mock import MockSearchProvider
+
+
+def _build_search_provider(settings: Settings) -> SearchProvider:
+    if settings.search_provider == "brave":
+        return BraveSearchProvider(timeout_seconds=settings.search.timeout_seconds)
+    return MockSearchProvider(settings.mock_corpus_dir)
+
+
+def _build_fetcher(settings: Settings) -> DocumentFetcher:
+    if settings.search_provider == "mock":
+        # モックモード: フィクスチャ配信トランスポート、DNS検査は省略
+        return DocumentFetcher(
+            settings,
+            transport=build_mock_transport(settings.mock_corpus_dir),
+            skip_dns=True,
+        )
+    return DocumentFetcher(settings)
+
+
+def create_app(
+    settings: Settings | None = None,
+    search_provider: SearchProvider | None = None,
+    llm: LLMProvider | None = None,
+    fetcher: DocumentFetcher | None = None,
+    repo: ProjectRepository | None = None,
+) -> FastAPI:
+    settings = settings or get_settings()
+    app = FastAPI(title=settings.display_name(), version=__version__)
+
+    app.state.settings = settings
+    app.state.search_provider = search_provider or _build_search_provider(settings)
+    app.state.llm = llm or create_llm_provider(settings.llm_provider)
+    app.state.fetcher = fetcher or _build_fetcher(settings)
+    app.state.repo = repo or ProjectRepository(settings.database_url)
+    app.state.run_manager = RunManager()
+    app.state.projects_cache = {}  # id -> EstimateProject(実行中の状態を共有)
+
+    templates = Jinja2Templates(directory=str(settings.web_dir / "templates"))
+    app.state.templates = templates
+    app.mount("/static", StaticFiles(directory=str(settings.web_dir / "static")), name="static")
+
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next):
+        response = await call_next(request)
+        # ローカルアプリ向けの基本的なブラウザ保護
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; "
+            "frame-ancestors 'none'"
+        )
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
+
+    from fermiscope.api.routes import router
+
+    app.include_router(router)
+    return app

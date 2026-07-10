@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}{{ app_name }} — {{ question }}{% endblock %}
+{% block content %}
+<section class="panel">
+  <h1 id="project-question">{{ question }}</h1>
+  <div class="run-controls">
+    <button class="btn primary" id="research-btn">調査を開始</button>
+    <button class="btn" id="cancel-btn" hidden>キャンセル</button>
+    <button class="btn" id="recalc-btn">ローカル再計算</button>
+    <span id="run-status" role="status" aria-live="polite"></span>
+  </div>
+</section>
+
+<nav class="tabs" role="tablist" aria-label="結果の表示切り替え">
+  <button class="tab active" role="tab" aria-selected="true" data-tab="result">結果</button>
+  <button class="tab" role="tab" aria-selected="false" data-tab="scope">スコープ</button>
+  <button class="tab" role="tab" aria-selected="false" data-tab="models">モデル</button>
+  <button class="tab" role="tab" aria-selected="false" data-tab="progress">調査状況</button>
+  <button class="tab" role="tab" aria-selected="false" data-tab="formula">推定式</button>
+  <button class="tab" role="tab" aria-selected="false" data-tab="charts">図表</button>
+  <button class="tab" role="tab" aria-selected="false" data-tab="params">パラメータ</button>
+  <button class="tab" role="tab" aria-selected="false" data-tab="evidence">証拠一覧</button>
+  <button class="tab" role="tab" aria-selected="false" data-tab="audit">監査ログ</button>
+  <button class="tab" role="tab" aria-selected="false" data-tab="export">エクスポート</button>
+</nav>
+
+<section class="tab-panel active" id="tab-result" role="tabpanel">
+  <div id="conclusion-card" class="conclusion-card">
+    <p class="hint">まだ結果がありません。「調査を開始」を押してください。</p>
+  </div>
+  <div id="scenario-summary"></div>
+  <div id="caveats"></div>
+  <div id="validation-summary"></div>
+  <div id="irreducible-summary"></div>
+  <div id="contradiction-summary"></div>
+</section>
+
+<section class="tab-panel" id="tab-scope" role="tabpanel" hidden>
+  <h2>スコープ確認(編集できます)</h2>
+  <form id="scope-form" class="scope-form"></form>
+</section>
+
+<section class="tab-panel" id="tab-models" role="tabpanel" hidden>
+  <h2>モデル候補</h2>
+  <div id="model-list"></div>
+</section>
+
+<section class="tab-panel" id="tab-progress" role="tabpanel" hidden>
+  <h2>調査状況</h2>
+  <dl class="counter-grid" id="progress-counters"></dl>
+  <h3>処理イベント(実際の処理に基づく表示)</h3>
+  <ul id="event-log" class="event-log" aria-live="polite"></ul>
+</section>
+
+<section class="tab-panel" id="tab-formula" role="tabpanel" hidden>
+  <h2>推定式と分解ツリー</h2>
+  <div id="formula-view"></div>
+</section>
+
+<section class="tab-panel" id="tab-charts" role="tabpanel" hidden>
+  <h2>図表</h2>
+  <div class="chart-grid">
+    <figure><figcaption>シナリオ比較</figcaption><div id="chart-scenarios"></div></figure>
+    <figure><figcaption>モンテカルロ分布(主モデル)</figcaption><div id="chart-histogram"></div></figure>
+    <figure><figcaption>トルネードチャート(感度)</figcaption><div id="chart-tornado"></div></figure>
+    <figure><figcaption>パラメータ重要度</figcaption><div id="chart-importance"></div></figure>
+    <figure><figcaption>主モデル vs 検算モデル</figcaption><div id="chart-models"></div></figure>
+  </div>
+</section>
+
+<section class="tab-panel" id="tab-params" role="tabpanel" hidden>
+  <h2>パラメータ詳細</h2>
+  <p class="hint">値を編集すると、Web検索を再実行せずローカルで再計算されます。</p>
+  <div id="param-list"></div>
+</section>
+
+<section class="tab-panel" id="tab-evidence" role="tabpanel" hidden>
+  <h2>証拠一覧</h2>
+  <div id="evidence-list"></div>
+</section>
+
+<section class="tab-panel" id="tab-audit" role="tabpanel" hidden>
+  <h2>監査ログ</h2>
+  <div id="audit-list"></div>
+</section>
+
+<section class="tab-panel" id="tab-export" role="tabpanel" hidden>
+  <h2>エクスポート</h2>
+  <ul class="export-list">
+    <li><a class="btn" id="export-json" href="#" download>JSON(全データ)</a></li>
+    <li><a class="btn" id="export-csv" href="#" download>CSV(パラメータ+証拠)</a></li>
+    <li><a class="btn" id="export-html" href="#" download>HTMLレポート(単体で開けます)</a></li>
+    <li><a class="btn" id="export-md" href="#" download>Markdown</a></li>
+  </ul>
+</section>
+
+<div id="detail-dialog-backdrop" class="dialog-backdrop" hidden>
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
+    <div class="dialog-head">
+      <h3 id="dialog-title"></h3>
+      <button class="btn" id="dialog-close" aria-label="閉じる">✕</button>
+    </div>
+    <div id="dialog-body"></div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+{# CSP(script-src 'self')に適合するよう、インラインスクリプトは使わず data属性で渡す #}
+<div id="project-root" data-project-id="{{ project_id }}" hidden></div>
+<script src="/static/js/charts.js"></script>
+<script src="/static/js/formula.js"></script>
+<script src="/static/js/project.js"></script>
+{% endblock %}
