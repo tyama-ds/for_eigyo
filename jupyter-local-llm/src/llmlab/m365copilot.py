@@ -202,7 +202,7 @@ class BridgeConnector(BaseConnector):
 class SeleniumConnector(BaseConnector):
     r"""実運用で動作確認済みのスクラッチスクリプトを **そのまま移植** したコネクタ。
 
-    1 章 = スクリプト 1 回分（章ごとにブラウザを起動し直す使い切り。状態を持たない）:
+    1 回のリサーチはスクリプト原文の手順:
 
       _login()（Edge 起動 → office.com → sleep(1)）
       → メニュー click → リサーチツール入口 click → タブを閉じる（WebDriverWait 60）
@@ -210,21 +210,32 @@ class SeleniumConnector(BaseConnector):
       → 「長い, 5 ページ以上」を scrollIntoView → sleep(5) → 再定義 → click
       → 入力欄 全選択 → 削除 → "go ahead" + ENTER（おまかせ）
       → wait_until_generation_done（停止ボタン■の出現→消滅。1秒ポーリング・10分毎 refresh）
-      → 「応答のコピー」click → クリップボードから本文取得 → driver.quit()
+      → 「応答のコピー」click → クリップボードから本文取得
 
-    移植にあたっての追加は 3 点のみ:
-      1. クリップボードの読み取り（本文をアプリへ返すため。pyperclip 推奨）
-      2. 例外を ChapterResult(ok=False) として返す（アプリを落とさないため）
-      3. プロンプトの改行を空白へ潰して 1 行で送る（入力欄では Enter=送信のため）
+    章のまたぎ方（``session_mode``）:
+
+    - ``same_chat``（既定）: **同一チャットでリサーチを繰り返す**。2 章目以降はログイン・
+      画面遷移を省略して同じ入力欄へ続きのプロンプトを送る（Researcher が前章の文脈を
+      引き継ぐ）。同一チャットでは「応答のコピー」が応答の数だけ並ぶため、**送信前の
+      ボタン数を数えて増えた最後の 1 個**を押す。「長い」の質問が出た時だけ go ahead を送る。
+      ブラウザは run 終了時（close()）に閉じる。※擬似GEPAで同じ章を聞き直すと文脈が
+      混ざるので、予算 0〜1 推奨。
+    - ``per_chapter``: スクリプト原文どおり、章ごとにブラウザを起動し直す使い切り。
+
+    移植にあたっての追加は: クリップボード読み取り / 例外の ChapterResult 化 /
+    プロンプト改行の 1 行化 / 上記 same_chat の継続処理、のみ。
 
     options（既定はスクリプトの値そのまま。tenant/言語が違う時だけ上書き）:
+      session_mode      : "same_chat"（既定・同一チャット継続）/ "per_chapter"（原文どおり使い切り）
       driver_path       : msedgedriver の場所（既定 C:\Driver\edgedriver_win32\msedgedriver.exe。
                           環境変数 EDGEDRIVER_PATH / MSEDGEDRIVER_PATH でも指定可）
       login_url         : https://www.office.com/?auth=2
       menu_button_xpath / agent_entrance_xpath / close_tab_selector : Researcher への導線
       editor_id         : m365-chat-editor-target-element
       length_selector   : button[aria-label='長い, 5 ページ以上']（空で選択をスキップ）
-      proceed_text      : "go ahead"
+      length_timeout_sec: 「長い」の出現待ち秒（スクリプト既定 50。同一チャットの 2 章目以降で
+                          質問が出ないテナントでは短くすると速い）
+      proceed_text      : "go ahead"（「長い」を選んだ時だけ送る）
       stop_selector     : button[aria-label='生成を停止する']
       copy_selector     : button[aria-label='応答のコピー']
       poll_sec / refresh_every_sec / total_timeout_sec : 生成待ち（スクリプト既定 1 / 600 / None=無制限）
@@ -234,6 +245,7 @@ class SeleniumConnector(BaseConnector):
     label = "Selenium（実証スクリプト移植・Edge）"
 
     DEFAULTS = {
+        "session_mode": "same_chat",
         "driver_path": r"C:\Driver\edgedriver_win32\msedgedriver.exe",
         "login_url": "https://www.office.com/?auth=2",
         "menu_button_xpath":
@@ -244,6 +256,7 @@ class SeleniumConnector(BaseConnector):
         "close_tab_selector": "button[data-testid='header-branding-container']",
         "editor_id": "m365-chat-editor-target-element",
         "length_selector": "button[aria-label='長い, 5 ページ以上']",
+        "length_timeout_sec": 50,
         "proceed_text": "go ahead",
         "stop_selector": "button[aria-label='生成を停止する']",
         "copy_selector": "button[aria-label='応答のコピー']",
@@ -252,8 +265,15 @@ class SeleniumConnector(BaseConnector):
         "total_timeout_sec": None,
     }
 
+    def __init__(self, options: dict | None = None):
+        super().__init__(options)
+        self._driver = None  # same_chat モードで run 内に使い回すセッション
+
     def _opt(self, key):
         return self.options.get(key, self.DEFAULTS.get(key))
+
+    def _mode(self) -> str:
+        return str(self._opt("session_mode") or "same_chat").lower()
 
     def _driver_path(self) -> str:
         import os
@@ -362,48 +382,77 @@ class SeleniumConnector(BaseConnector):
 
         # 入力欄では Enter=送信のため、章プロンプトは 1 行へ潰して送る（移植上の必要調整）
         research_prompt = " ".join(s.strip() for s in str(prompt).splitlines() if s.strip())
+        same_chat = self._mode() == "same_chat"
+        copy_sel = self._opt("copy_selector")
         t0 = time.time()
         driver = None
         try:
-            # ログインして
-            self._emit(emit, type="progress", stage="se_login", text="Edge 起動 → office.com")
-            driver = self._login()
-            driver.find_element(By.XPATH, self._opt("menu_button_xpath")).click()
-            _agent_entrance = driver.find_element(By.XPATH, self._opt("agent_entrance_xpath"))
+            # --- セッション: same_chat は 2 章目以降を同じチャットで続ける ---------
+            if same_chat and self._driver is not None:
+                driver = self._driver
+                try:
+                    _ = driver.current_url  # 生存確認（閉じられていたら作り直す）
+                    self._emit(emit, type="progress", stage="se_agent",
+                               text="同一チャットで続きのリサーチ")
+                except Exception:  # noqa: BLE001
+                    self.close()
+                    driver = None
+            if driver is None:
+                # ログインして
+                self._emit(emit, type="progress", stage="se_login", text="Edge 起動 → office.com")
+                driver = self._login()
+                driver.find_element(By.XPATH, self._opt("menu_button_xpath")).click()
+                _agent_entrance = driver.find_element(By.XPATH, self._opt("agent_entrance_xpath"))
 
-            # リサーチツールをクリックして移動。
-            _agent_entrance.click()
-            self._emit(emit, type="progress", stage="se_agent", text="リサーチツールへ移動")
+                # リサーチツールをクリックして移動。
+                _agent_entrance.click()
+                self._emit(emit, type="progress", stage="se_agent", text="リサーチツールへ移動")
 
-            btn = WebDriverWait(driver, 60).until(EC.element_to_be_clickable(
-                (By.CSS_SELECTOR, self._opt("close_tab_selector"))))  # タブを閉じる
-            btn.click()
+                btn = WebDriverWait(driver, 60).until(EC.element_to_be_clickable(
+                    (By.CSS_SELECTOR, self._opt("close_tab_selector"))))  # タブを閉じる
+                btn.click()
 
-            time.sleep(10)
+                time.sleep(10)
+                if same_chat:
+                    self._driver = driver
+
+            # 同一チャットでは「応答のコピー」が応答の数だけ並ぶ。
+            # 送信前の個数を控え、増えた最後の 1 個（＝今回の応答）を押す。
+            n_copy_before = len(driver.find_elements(By.CSS_SELECTOR, copy_sel))
+
             self._emit(emit, type="progress", stage="se_prompt", text="プロンプトを送信")
             driver.find_element(By.ID, self._opt("editor_id")).send_keys(
                 research_prompt, Keys.ENTER)
 
             # レポートの長い方を選ぶ。下へ移動してクリック。
+            # （同一チャットの 2 章目以降では質問が出ないことがある → 出た時だけ）
             length_sel = self._opt("length_selector")
+            length_to = float(self._opt("length_timeout_sec") or 50)
+            clicked_length = False
             if length_sel:
-                elem = WebDriverWait(driver, 50).until(
-                    EC.element_to_be_clickable((By.CSS_SELECTOR, length_sel)))
-                driver.execute_script("arguments[0].scrollIntoView();", elem)
-                time.sleep(5)
-                elem = WebDriverWait(driver, 50).until(
-                    EC.element_to_be_clickable((By.CSS_SELECTOR, length_sel)))
-                # よくわからないけど、ここで再定義必要みたい。
+                try:
+                    elem = WebDriverWait(driver, length_to).until(
+                        EC.element_to_be_clickable((By.CSS_SELECTOR, length_sel)))
+                    driver.execute_script("arguments[0].scrollIntoView();", elem)
+                    time.sleep(5)
+                    elem = WebDriverWait(driver, length_to).until(
+                        EC.element_to_be_clickable((By.CSS_SELECTOR, length_sel)))
+                    # よくわからないけど、ここで再定義必要みたい。
+                    elem.click()
+                    clicked_length = True
+                except Exception:  # noqa: BLE001  質問が出ない場合はそのまま生成が走る
+                    self._emit(emit, type="progress", stage="se_length",
+                               text="長さの質問は表示されず（そのまま生成待ちへ）")
+
+            if clicked_length:  # 「長い」を選んだ時だけ続行の合図を送る
+                elem = driver.find_element(By.ID, self._opt("editor_id"))
                 elem.click()
 
-            elem = driver.find_element(By.ID, self._opt("editor_id"))
-            elem.click()
+                # 全選択 → 削除
+                elem.send_keys(Keys.CONTROL, "a")
+                elem.send_keys(Keys.BACKSPACE)
 
-            # 全選択 → 削除
-            elem.send_keys(Keys.CONTROL, "a")
-            elem.send_keys(Keys.BACKSPACE)
-
-            elem.send_keys(str(self._opt("proceed_text")), Keys.ENTER)  # これだとおまかせ
+                elem.send_keys(str(self._opt("proceed_text")), Keys.ENTER)  # これだとおまかせ
 
             # 生成完了まで待つ
             self._emit(emit, type="progress", stage="se_wait",
@@ -411,10 +460,12 @@ class SeleniumConnector(BaseConnector):
             self._wait_until_generation_done(driver, should_cancel)
             self._emit(emit, type="progress", stage="se_copy", text="✅ 生成完了！ → 応答のコピー")
 
-            # ① 出現＆クリック可能まで待つ ② クリック
-            copy_btn = WebDriverWait(driver, 60).until(EC.element_to_be_clickable(
-                (By.CSS_SELECTOR, self._opt("copy_selector"))))
-            copy_btn.click()
+            # ① 今回の応答のコピーが増えるまで待つ ② 最後の 1 個をクリック
+            WebDriverWait(driver, 60).until(
+                lambda d: len(d.find_elements(By.CSS_SELECTOR, copy_sel)) > n_copy_before)
+            btns = [e for e in driver.find_elements(By.CSS_SELECTOR, copy_sel)
+                    if e.is_displayed()] or driver.find_elements(By.CSS_SELECTOR, copy_sel)
+            btns[-1].click()
             time.sleep(1)
             text = (self._read_clipboard(driver) or "").strip()  # 移植追加: 本文の取得
 
@@ -424,14 +475,27 @@ class SeleniumConnector(BaseConnector):
                 error="" if text else
                 "クリップボードから本文を取得できませんでした（`pip install pyperclip` を確認）")
         except Exception as e:  # noqa: BLE001  失敗は UI に返す（アプリは落とさない）
+            if same_chat:  # 失敗した章のセッションは破棄 → 次章は新しいチャットでやり直す
+                self.close()
+                driver = None
             return ChapterResult(ok=False, connector=self.kind, latency_sec=time.time() - t0,
                                  error=f"{type(e).__name__}: {e}")
         finally:
+            if not same_chat:  # per_chapter はスクリプト原文どおり使い切り
+                try:
+                    if driver:
+                        driver.quit()
+                except Exception:  # noqa: BLE001
+                    pass
+
+    def close(self) -> None:
+        """same_chat モードのセッションを閉じる（run 終了時にオーケストレータから呼ばれる）。"""
+        if self._driver is not None:
             try:
-                if driver:
-                    driver.quit()
+                self._driver.quit()
             except Exception:  # noqa: BLE001
                 pass
+            self._driver = None
 
     @staticmethod
     def _read_clipboard(driver) -> str:

@@ -108,4 +108,4 @@ __all__ = [
     "build_index",
 ]
 
-__version__ = "0.7.1"  # llmlab.__version__ で更新確認できる（copilotresearch.APP_VERSION と合わせる）
+__version__ = "0.7.2"  # llmlab.__version__ で更新確認できる（copilotresearch.APP_VERSION と合わせる）
