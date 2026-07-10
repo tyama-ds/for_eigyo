@@ -344,16 +344,9 @@ $("segMode").addEventListener("click",e=>{
 const CONN_OPTS={
   demo:[], bridge:[],
   selenium:[
-    {k:"browser",label:"ブラウザ",type:"select",choices:["edge","chrome"]},
-    {k:"driver_path",label:"WebDriverの場所（msedgedriver/chromedriver。空なら自動解決）",ph:"C:\\Driver\\edgedriver_win32\\msedgedriver.exe"},
-    {k:"browser_binary",label:"ブラウザ実行ファイル（空なら既定）",ph:"（空でOK）"},
-    {k:"user_data_dir",label:"プロファイル（空=既定/業務SSOを流用。同時実行時のみ指定）",ph:"（空でOK）"},
-    {k:"length_selector",label:"レポート長さボタンのCSS（空で無効）",ph:"button[aria-label='長い, 5 ページ以上']"},
-    {k:"stop_selector",label:"生成停止ボタンのCSS（完了検知に使用）",ph:"button[aria-label='生成を停止する']"},
-    {k:"copy_selector",label:"応答コピーのボタンCSS",ph:"button[aria-label='応答のコピー']"},
-    {k:"timeout_ms",label:"生成待ち上限ミリ秒（Researcherは長め・既定1800000）",type:"number",ph:"1800000"},
-    {k:"headless",label:"headless（無人・初回SSOはOFF必須）",type:"check"},
-    {k:"__advanced__",label:"詳細設定JSON（menu_button_xpath / editor_id 等を上書き・任意）",type:"json",ph:'{"editor_id":"m365-chat-editor-target-element"}'},
+    {k:"driver_path",label:"msedgedriver の場所（実証スクリプトと同じ既定値）",ph:"C:\\Driver\\edgedriver_win32\\msedgedriver.exe"},
+    {k:"total_timeout_sec",label:"生成待ち上限秒（空=無制限・スクリプト準拠）",type:"number",ph:"3600"},
+    {k:"__advanced__",label:"詳細設定JSON（menu_button_xpath / length_selector 等を上書き・任意）",type:"json",ph:'{"editor_id":"m365-chat-editor-target-element"}'},
   ],
   graph:[
     {k:"endpoint",label:"POST エンドポイント",ph:"https://graph.microsoft.com/beta/..."},
@@ -366,6 +359,7 @@ function renderConnOpts(){
   const kind=$("connector").value, opts=CONN_OPTS[kind]||[], box=$("connOpts"); box.innerHTML="";
   if(kind==="bridge"){ box.innerHTML=`<div class="hint" style="margin-top:8px">各章のプロンプトを画面に表示 → 人が M365 Copilot に貼り、回答を貼り戻す方式。自動化不可の環境でも確実。</div>`; return; }
   if(kind==="demo"){ box.innerHTML=`<div class="hint" style="margin-top:8px">モック。指示が濃くなるほど回答も濃くなり、擬似GEPA の改善が見えます。</div>`; return; }
+  if(kind==="selenium"){ box.insertAdjacentHTML("beforeend",`<div class="hint" style="margin-top:8px">実証済みスクリプトの移植（Edge）。章ごとに office.com→Researcher→送信→「長い」→go ahead→完了待ち→コピー を実行します。ログインは開いた Edge 上で（SSO想定）。</div>`); }
   opts.forEach(o=>{
     const id="opt_"+o.k, ph=esc(o.ph||"");
     if(o.type==="check"){

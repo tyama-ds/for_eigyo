@@ -580,20 +580,18 @@ flowchart TD
 - **M365 Copilot コネクタ 4 種**（差し替え可能・`m365copilot.py`）:
   - `bridge`（**既定・確実**）: 各章のプロンプトを画面に出す → 人が M365 Copilot に貼り、
     回答を貼り戻す（自動化/APIが塞がれた社内環境でも動く）
-  - `selenium`: **Edge（既定）/ Chrome** を Selenium WebDriver で実駆動し、**M365 Copilot の
-    Researcher（リサーチ）を実際に操作**する（動作実績のあるフローを実装）:
-    office.com を開く → 必要なら**ブラウザで SSO 完了**（`login_timeout_ms` 待つ）→ メニュー→
-    エージェント入口で Researcher を開く → 入力欄（`editor_id`=`m365-chat-editor-target-element`）へ
-    プロンプト送信 → レポート長さ（`length_selector`=「長い, 5 ページ以上」）を選択 → 続行の合図
-    （`proceed_text`=`go ahead`）→ **停止ボタン（`stop_selector`=「生成を停止する」）の出現→消滅で
-    生成完了を検知**（`refresh_every_ms` ごとにリロード、`timeout_ms` 既定 **30 分**）→
-    「応答のコピー」（`copy_selector`）→ **クリップボードから本文取得**（`pip install pyperclip` 推奨）。
-    **`driver_path` で msedgedriver / chromedriver の場所を明示指定可**（空なら Selenium Manager 自動解決。
-    環境変数 `EDGEDRIVER_PATH` / `CHROMEDRIVER_PATH`、`EDGE_BINARY` / `CHROME_BINARY` でも可）。
-    `user_data_dir` 空なら**ブラウザ既定プロファイル（業務 SSO を流用）**。セレクタ類は tenant/言語で
-    変わるため **すべて options で上書き可**（UI の「詳細設定JSON」から `menu_button_xpath` 等も指定可能）。
-    セッションは run 内で使い回し、run 終了時にブラウザを閉じる。**Researcher は 1 章数分〜十数分**
-    かかるので擬似GEPA の予算は小さめ（0〜1）推奨
+  - `selenium`: **実運用で動作確認済みのスクラッチスクリプトをそのまま移植**（Edge）。
+    1 章 = スクリプト 1 回分: `webdriver.Edge(service=Service(driver_path))` で起動 →
+    office.com → メニュー → リサーチツール入口 → タブを閉じる → `sleep(10)` →
+    入力欄（`m365-chat-editor-target-element`）へ送信 → 「長い, 5 ページ以上」を選択 →
+    入力欄を全消去して `go ahead` → **停止ボタン「生成を停止する」の出現→消滅で生成完了を
+    検知**（1 秒ポーリング・10 分ごとに refresh・上限は既定なし=スクリプト準拠）→
+    「応答のコピー」→ **クリップボードから本文取得**（`pip install pyperclip` 推奨）→ `quit()`。
+    章ごとにブラウザを開き直す（状態を持たない）。移植上の追加は「クリップボード読み取り・
+    エラーの結果化・改行の 1 行化」のみ。`driver_path` 既定はスクリプトと同じ
+    `C:\Driver\edgedriver_win32\msedgedriver.exe`（UI から変更可）。セレクタ/XPath は
+    UI の「詳細設定JSON」で上書き可。**Researcher は 1 章数分〜十数分**かかるので
+    擬似GEPA の予算は小さめ（0〜1）推奨
   - `graph`: 任意の HTTP エンドポイント（Microsoft Graph / 社内 Copilot プロキシ）へ Bearer POST。
     プロンプト/回答の JSON パスは設定可能
   - `demo`: モック（指示が濃いほど回答も濃くなり、擬似GEPA の改善が見える）
@@ -679,7 +677,8 @@ jupyter-local-llm/
 
 | バージョン | 内容 |
 |-----------|------|
-| **0.7.0** | Copilot Research の selenium コネクタを **参照スクリプト完全準拠**に再実装（Edge 素起動・find_element 直呼び・send_keys 一発送信・停止ボタンの出現→消滅で完了検知・応答コピー→クリップボード取得）。多エージェント監査で確認された 11 件を修正（セッション死亡復帰・失敗を再試行・キャンセル即応・章の一意ID化 など）。GUI にバージョン表示を追加 |
+| **0.7.1** | selenium コネクタを**ユーザー実証済みスクリプトの忠実移植**へ全面差し替え（Edge 固定・章ごとにブラウザ使い切り・セッション管理/独自待機ロジックを全廃。追加はクリップボード読取・エラー結果化・改行1行化のみ） |
+| 0.7.0 | Copilot Research の selenium コネクタを **参照スクリプト完全準拠**に再実装（Edge 素起動・find_element 直呼び・send_keys 一発送信・停止ボタンの出現→消滅で完了検知・応答コピー→クリップボード取得）。多エージェント監査で確認された 11 件を修正（セッション死亡復帰・失敗を再試行・キャンセル即応・章の一意ID化 など）。GUI にバージョン表示を追加 |
 | 0.6.1 | RAG 監査で確定した 10 指摘の修正（XSS/移行dedup/モード降格/logレース ほか） |
 | 0.6.0 | RAG に index_mode（fast/hierarchy/graph）+ doc_id 中心の文書レジストリ + GUI を追加 |
 | 0.5.0 | ⑫ Copilot Research 追加 — M365 Copilot（Researcher）×擬似GEPA で 目次→章別リサーチ→統合。コネクタ4種（demo/bridge/selenium/graph）・使い方ノート `08` |
