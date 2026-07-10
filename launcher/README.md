@@ -9,6 +9,9 @@ python launcher/launcher.py            # http://127.0.0.1:8770
 python launcher/launcher.py --port 9200 --open
 ```
 
+**Windows なら** `launcher/start_portal.bat` を**ダブルクリック**するだけでよい
+（ポータルを起動してブラウザを自動で開く。ポート変更は `start_portal.bat --port 9200`）。
+
 ## できること
 
 - **カードをクリック → 起動 → 自動で開く**
@@ -94,5 +97,7 @@ launcher/
 ├── launcher.py   # サーバ本体（標準ライブラリのみ）
 ├── index.html    # ポータルUI（生成SVGアートワーク・ローディング演出込み）
 ├── apps.json     # アプリ登録（UIからも編集される）
+├── previews/     # ホバープレビュー用の実画面スクリーンショット
+├── start_portal.bat  # Windows 用起動バッチ（ダブルクリックで起動）
 └── README.md
 ```
