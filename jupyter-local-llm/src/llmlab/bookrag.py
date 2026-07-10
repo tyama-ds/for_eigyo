@@ -1,4 +1,8 @@
-"""BookRAG — 論文 (arXiv:2512.03413) 忠実版の RAG。
+"""BookRAG — arXiv:2512.03413 に着想を得た軽量版 RAG（BookRAG-inspired / lightweight）。
+
+論文の考え方（階層ツリー + 知識グラフ + エージェント検索）を取り入れているが、
+論文の完全再現ではない。ローカルLLMでの実用性を優先し、Entity/Relation 抽出は
+明示時（graph）だけ行う高コスト拡張として扱う。
 
 BookIndex B=(T,G,M) の上で、Information Foraging Theory に着想した
 エージェント型検索（Section 5）を行う:
@@ -82,7 +86,13 @@ class BookAnswer:
 
 
 class BookRAG:
-    """論文忠実な BookRAG。BookIndex 構築 + エージェント検索。"""
+    """BookRAG-inspired（軽量版）。BookIndex 構築 + エージェント型検索。
+
+    arXiv:2512.03413 の考え方（階層ツリー + 知識グラフ + エージェント検索）を
+    OpenAI 互換のローカルLLM上で実用化した **BookRAG-style / lightweight** 実装で、
+    論文の完全再現（"論文忠実版"）ではない。Entity/Relation 抽出は高コストなため、
+    hierarchy モード（build_graph=False）では木のみを作り抽出をスキップできる。
+    """
 
     def __init__(
         self,
@@ -119,60 +129,83 @@ class BookRAG:
     def add_book(self, path: str | Path, *, title: str | None = None,
                  use_llm_sections: bool = False, max_nodes: int | None = None,
                  chunk_chars: int | None = None, ocr=False, layout=False,
-                 vlm: bool | None = None, force: bool = False) -> str:
-        """文書を取り込み、BookIndex（Tree + KG + GT-Link）へ統合する。
+                 vlm: bool | None = None, force: bool = False,
+                 build_graph: bool = True, doc_id: str | None = None,
+                 all_nodes: bool = False) -> str:
+        """文書を取り込み、BookIndex（Tree [+ KG + GT-Link]）へ統合する。
 
-        既定は速度重視（見出し判定は LLM 不使用、本文はチャンク化、ノード数に上限）。
-        精度を上げたいときは use_llm_sections=True / max_nodes を増やす / er_use_llm=True。
+        build_graph:
+          - True（既定・graph 相当）: Entity/Relation 抽出まで行う（高コスト。LLM 多用）。
+          - False（hierarchy 相当）: セクション木とチャンクだけ作り、Entity/Relation 抽出は
+            スキップ（ローカルLLMでも軽い）。graph 未構築でも検索は動く。
+        doc_id: 明示指定時はその ID で登録（IndexManager が内容ハッシュ ID を共有）。
+        all_nodes=True で max_nodes 打ち切りをせず全ノードを抽出対象にする。
 
         PDF の版面解析・OCR（要 `pip install -e ".[ocr]"` + Tesseract）:
         - layout="auto": pymupdf のフォントサイズで見出し階層を判定（pypdf より高精度）
         - layout="mineru": MinerU(magic_pdf) 導入時はそれを使う
         - ocr="auto": テキストの薄いページのみ OCR / ocr=True: 全ページ OCR
-        - vlm=True: 図を VLM が読解して Image ノード化（画像対応モデルが必要。
-          省略時はコンストラクタの vlm 設定に従う。通常のローカルLLMのみなら False のまま）
+        - vlm=True: 図を VLM が読解して Image ノード化（画像対応モデルが必要）
         """
         path = Path(path)
         if not path.exists():
             raise FileNotFoundError(f"ファイルがありません: {path}")
+        from .pagedrag import make_doc_id
+
+        doc_id = doc_id or make_doc_id(path, title)
         use_vlm = self.vlm if vlm is None else vlm
         if use_vlm:
             bx.log("vlm=True: 図の読解には画像入力対応モデルが必要です"
                    f"（使用モデル: {self.vlm_model or '接続設定の model'}）")
         bi = self._index(create=True)
         book = title or path.stem
-        # 同一タイトルの二重取り込みを防ぐ（木とKGが重複し検索結果も二重になるため）
-        if any(bi.nodes[r].title == book for r in bi.roots) and not force:
+        # 同一文書(doc_id)の二重取り込みを防ぐ（木とKGが重複し検索結果も二重になるため）。
+        # doc_id が無い旧索引は title で後方互換的に判定。
+        if any((bi.nodes[r].doc_id == doc_id) or
+               (bi.nodes[r].doc_id is None and bi.nodes[r].title == book)
+               for r in bi.roots) and not force:
             bx.log(f"「{book}」は取り込み済みのためスキップします"
                    "（再取り込みは force=True、索引の作り直しは reset()）")
             return book
 
-        bx.log(f"[1/5] 解析（レイアウト{'+OCR' if ocr else ''}{'+VLM' if use_vlm else ''}）: {path.name}")
+        n_steps = 5 if build_graph else 4
+        bx.log(f"[1/{n_steps}] 解析（レイアウト{'+OCR' if ocr else ''}{'+VLM' if use_vlm else ''}）: {path.name}")
         blocks = bx.parse_blocks(path, ocr=ocr, layout=layout,      # 4.2.1 Layout Parsing
                                  vlm=use_vlm, vlm_model=self.vlm_model)
-        bx.log(f"[2/5] 見出し判定{'（LLM）' if use_llm_sections else '（ヒューリスティック）'}"
+        bx.log(f"[2/{n_steps}] 見出し判定{'（LLM）' if use_llm_sections else '（ヒューリスティック）'}"
                f": ブロック {len(blocks)} 個")
         blocks = bx.section_filter(blocks, use_llm=use_llm_sections)  # 4.2.2 Section Filtering
-        bx.log("[3/5] 木（BookIndex Tree）を構築中…")
+        bx.log(f"[3/{n_steps}] 木（BookIndex Tree）を構築中…")
         root = bx.build_tree(bi, blocks, book,                     # 木 T（本文はチャンク化）
                              chunk_chars=chunk_chars or self.chunk_chars)
         bi.nodes[root].source = str(path.resolve())  # 出典リンク用に元ファイルの絶対パスを記録
         new_nodes = bi.subtree(root)
+        for n in new_nodes:  # 文書ID を全ノードに付与（title ではなく doc_id で識別）
+            bi.nodes[n].doc_id = doc_id
         # 見出しが1つも検出できなかった場合はフラットな木になる（BookRAG の強みが出ない）
         if path.suffix.lower() == ".pdf" and not layout and \
                 not any(bi.nodes[n].type == "Section" for n in new_nodes if n != root):
             bx.log("見出しを検出できず木がフラットです。add_book(layout=\"auto\") で"
                    "フォントサイズによる見出し判定を試せます（要 pip install -e \".[ocr]\"）。"
                    "構造が薄い文書なら PagedRAG の方が適している場合もあります。")
-        bx.log(f"[4/5] 知識グラフ構築（抽出→名寄せ）: ノード {len(new_nodes)} 個")
-        bx.build_graph(bi, new_nodes, gradient_g=self.gradient_g,  # 4.3 KG + Gradient ER
-                       er_top_k=self.er_top_k, max_workers=self.max_workers,
-                       max_nodes=max_nodes or self.max_nodes, er_use_llm=self.er_use_llm,
-                       reranker=self._reranker)  # Algorithm 1 の Rerank model R
-        bx.log("[5/5] 保存中…")
+        if build_graph:
+            bx.log(f"[4/{n_steps}] 知識グラフ構築（抽出→名寄せ）: ノード {len(new_nodes)} 個")
+            bx.build_graph(bi, new_nodes, gradient_g=self.gradient_g,  # 4.3 KG + Gradient ER
+                           er_top_k=self.er_top_k, max_workers=self.max_workers,
+                           max_nodes=max_nodes or self.max_nodes, er_use_llm=self.er_use_llm,
+                           reranker=self._reranker, all_nodes=all_nodes)
+        else:
+            bx.log("[4/4] hierarchy モード: Entity/Relation 抽出はスキップ（木のみ）")
+        bx.log(f"[{n_steps}/{n_steps}] 保存中…")
         bi.persist(self.storage_dir)
-        bx.log(f"完了: {book}（エンティティ {len(bi.entities)} / 関係 {len(bi.relations)}）")
+        bx.log(f"完了: {book}（ノード {len(new_nodes)} / エンティティ {len(bi.entities)} / "
+               f"関係 {len(bi.relations)}）")
         return book
+
+    def has_graph(self) -> bool:
+        """このインデックスに Entity/Relation（graph）が構築済みか。"""
+        bi = self._index(create=False)
+        return bool(bi and bi.entities)
 
     def tree(self, *, max_chars: int = 42, show_entities: bool = False,
              do_print: bool = True) -> str:
@@ -387,7 +420,19 @@ class BookRAG:
             # 「これは<書名>です」のような無内容な回答になるため必ず除外する。
             body = [n for n, node in bi.nodes.items() if node.type != "Section"]
             return body or list(bi.nodes.keys())
-        listing = [{"id": nid, "title": t} for nid, t in sections][:200]
+        # セクションが多い文書では、先頭 200 件だけを LLM に渡すと後半の節を
+        # 構造的に選べず「前半しか見ない」誤選択になる。まずタイトル埋め込みの
+        # コサイン類似で候補を絞ってから LLM に渡す（全節をカバーしつつトークン節約）。
+        cand_limit = 60
+        if len(sections) > cand_limit:
+            qv = bx.embed([query])[0]
+            tvs = bx.embed([t or "" for _, t in sections])
+            sims = tvs @ qv
+            top_idx = list(np.argsort(-sims)[:cand_limit])
+            cand_sections = [sections[i] for i in sorted(top_idx)]  # 文書順を保つ
+        else:
+            cand_sections = sections
+        listing = [{"id": nid, "title": t} for nid, t in cand_sections]
         result = bx.llm_json(
             _P_SELECT_SECTION + f"\n\nQuery: {query}\nSections: {json.dumps(listing, ensure_ascii=False)}"
         )
@@ -452,7 +497,7 @@ class BookRAG:
         """
         if not ns:
             return {}
-        contents = [bi.nodes[n].content[:500] or " " for n in ns]
+        contents = [self._representative_text(bi.nodes[n].content) or " " for n in ns]
         try:
             scores = self._reranker.rerank(query, contents)
         except Exception as e:  # noqa: BLE001
@@ -463,6 +508,22 @@ class BookRAG:
         # Skyline 後の (S_G + S_T) ソートでグラフスコア（minmax 済み）との釣り合いが崩れる。
         # 単調変換なので Pareto 支配関係（Skyline の中身）は変わらない。
         return _minmax({n: float(scores[i]) for i, n in enumerate(ns)})
+
+    @staticmethod
+    def _representative_text(text: str, *, cap: int = 1600) -> str:
+        """長いチャンクを先頭だけで判定しないための代表テキスト。
+
+        従来は content[:500] で先頭しか見ず、後半にだけ答えがあるチャンクを
+        取りこぼしていた。cap 以内なら全文、超える場合は 先頭/中央/末尾 を連結する。
+        """
+        text = (text or "").strip()
+        if len(text) <= cap:
+            return text
+        third = cap // 3
+        mid = len(text) // 2
+        return (text[:third] + " … "
+                + text[mid - third // 2: mid + third // 2] + " … "
+                + text[-third:])
 
     def _op_skyline(self, ns: list[int], s_graph: dict, s_text: dict) -> list[int]:
         """Skyline_Ranker（式(14)）: (S_G, S_T) の Pareto 前線を残す（top-k 固定ではない）。"""

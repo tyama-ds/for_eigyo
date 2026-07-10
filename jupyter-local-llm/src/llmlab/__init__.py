@@ -23,7 +23,8 @@ from .config import (
     is_configured,
     settings_form,
 )
-from .pagedrag import Answer, DocRank, DocRAG, PagedRAG, Source, make_doc_id
+from .pagedrag import Answer, DocRank, DocRAG, PagedRAG, Source, content_hash, make_doc_id
+from .indexmanager import IndexManager, SearchHit
 from .multipaper import Comparison, MultiPaperRAG
 from .tableqa import TableAnswer, TableQA
 from .docqa import DocQA, DocResult
@@ -72,7 +73,11 @@ __all__ = [
     "Source",
     "DocRank",
     "make_doc_id",
-    # 論文忠実 BookRAG（BookIndex + エージェント検索）
+    "content_hash",
+    # doc_id 中心・index_mode 切替の文書間RAG（fast/hierarchy/graph）
+    "IndexManager",
+    "SearchHit",
+    # BookRAG-inspired 軽量版（BookIndex + エージェント検索）
     "BookRAG",
     "BookAnswer",
     "Evidence",
@@ -103,4 +108,4 @@ __all__ = [
     "build_index",
 ]
 
-__version__ = "0.5.1"  # llmlab.__version__ で更新確認できる
+__version__ = "0.6.0"  # llmlab.__version__ で更新確認できる

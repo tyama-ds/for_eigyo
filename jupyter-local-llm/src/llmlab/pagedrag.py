@@ -2,7 +2,7 @@
 
 LlamaIndex の素直なベクトル検索に、書名・ページ番号の出典付与と本単位フィルタを
 足した実装。**論文 BookRAG（階層ツリー＋KG＋エージェント検索）とは別物**で、
-「複数文書をまとめてページ出典つきで引きたい」軽量用途向け。論文忠実版は
+「複数文書をまとめてページ出典つきで引きたい」軽量用途向け。BookRAG-inspired 版は
 `llmlab.BookRAG`（bookrag.py）を参照。
 
 使い方::
@@ -43,17 +43,28 @@ DEFAULT_TOP_K = 5
 _DOC_ID_KEY = "llmlab_doc_id"
 
 
-def make_doc_id(path: str | Path, title: str | None = None) -> str:
-    """文書の一意な ID を作る（物理ファイルの**絶対パス**から決定的に導出）。
+def content_hash(path: str | Path, *, chunk: int = 1 << 20) -> str:
+    """ファイル内容の SHA-256（先頭16桁）。同一内容→同一、版違い→別。"""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(chunk), b""):
+            h.update(block)
+    return h.hexdigest()[:16]
 
-    - `path.name` **だけ** には依存しない（同名ファイルでも別フォルダなら別 ID）。
-    - 逆に同じファイルは **title に関係なく** 常に同じ ID になる（再取り込みの冪等性）。
-      title を混ぜると `add_book(p, title="A")` と `add_book(p)` が別 ID になり、
-      同一ファイルが二重登録される（= 文書多様化が壊れる）ため、混ぜない。
+
+def make_doc_id(path: str | Path, title: str | None = None) -> str:
+    """文書の一意な ID を作る（既定は **内容ハッシュ** ベース）。
+
+    - `title` / `path.name` には依存しない。同名文書・版違い・別ファイルを正しく区別
+      できる（内容が同じなら別パスでも同一 ID = 冪等な再取り込み）。
+    - 読み取れない場合のみ絶対パスのハッシュにフォールバックする。
     - title 引数は呼び出し側の互換のため残すが、ID には影響しない。
     """
-    resolved = str(Path(path).resolve())
-    return "d" + hashlib.md5(resolved.encode("utf-8")).hexdigest()[:12]
+    try:
+        return "d" + content_hash(path)
+    except OSError:
+        resolved = str(Path(path).resolve())
+        return "d" + hashlib.md5(resolved.encode("utf-8")).hexdigest()[:12]
 
 
 @dataclass
@@ -123,12 +134,15 @@ class PagedRAG:
     # ---- 取り込み ----------------------------------------------------------
 
     def add_book(self, path: str | Path, *, title: str | None = None,
-                 force: bool = False) -> str:
+                 force: bool = False, doc_id: str | None = None) -> str:
         """1冊の本（PDF/txt/md/docx など）を取り込み、インデックスへ追加する。
 
-        同じ文書（= 同じ絶対パス）が取り込み済みの場合は重複追加を防ぐためスキップする
-        （ベクトル索引は追記型のため、再取り込みすると検索結果が重複する）。
+        同じ文書（= 同じ内容ハッシュの doc_id）が取り込み済みの場合は重複追加を防ぐため
+        スキップする（ベクトル索引は追記型のため、再取り込みすると検索結果が重複する）。
         取り込み直したいときは force=True か reset() を使う。
+
+        doc_id を明示指定すると、その ID で登録する（IndexManager が内容ハッシュ ID を
+        共有するため）。省略時は make_doc_id(path) で内容ハッシュから導出する。
         """
         from llama_index.core import SimpleDirectoryReader
         from llama_index.core.node_parser import SentenceSplitter
@@ -139,7 +153,7 @@ class PagedRAG:
         if not path.exists():
             raise FileNotFoundError(f"ファイルがありません: {path}")
 
-        doc_id = make_doc_id(path, title)
+        doc_id = doc_id or make_doc_id(path, title)
         # doc_id で重複判定（同名ファイルが別フォルダにある場合でも衝突しない）。
         # 旧カタログ（doc_id 無し）は source 名で後方互換的に判定する。
         existing = next(
@@ -432,6 +446,23 @@ class PagedRAG:
         doc["summary"] = summary
         (self.documents_dir / f"{doc_id}.json").write_text(
             json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def delete_document(self, doc_id: str) -> bool:
+        """1文書分のチャンクを索引・カタログ・文書JSONから削除する。"""
+        index = self._get_or_create_index(create_if_missing=False)
+        removed = False
+        if index is not None:
+            self._delete_doc_nodes(index, doc_id)
+            index.storage_context.persist(persist_dir=str(self.storage_dir))
+            removed = True
+        catalog = [b for b in self.books() if b.get("doc_id") != doc_id]
+        if self._catalog_path.exists():
+            self._catalog_path.write_text(
+                json.dumps(catalog, ensure_ascii=False, indent=2), encoding="utf-8")
+        jp = self.documents_dir / f"{doc_id}.json"
+        if jp.exists():
+            jp.unlink()
+        return removed
 
     def reset(self) -> None:
         """インデックスとカタログ・文書JSONを削除する（全消去）。"""

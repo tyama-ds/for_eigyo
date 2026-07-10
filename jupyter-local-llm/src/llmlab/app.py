@@ -152,6 +152,54 @@ def _run_build(task_id: str, payload: dict, root: str) -> None:
         q.put({"type": "done"})
 
 
+def _index_manager(root: str):
+    """doc_id 中心の文書レジストリ（root/index に置く）。"""
+    from .indexmanager import IndexManager
+
+    return IndexManager(storage_dir=str(Path(root) / "index"))
+
+
+def _run_docs_task(task_id: str, payload: dict, root: str) -> None:
+    """文書の追加/再構築/検索をバックグラウンド実行し、進捗を SSE へ流す。"""
+    q = _tasks[task_id]
+
+    def emit(evt: dict) -> None:
+        q.put({"type": "progress", **evt})
+
+    try:
+        im = _index_manager(payload.get("root") or root)
+        op = payload.get("op", "add")
+        if op in ("add", "rebuild"):
+            mode = str(payload.get("index_mode", "fast"))
+            if op == "rebuild":
+                meta = im.rebuild(str(payload.get("doc_id", "")), index_mode=mode)
+            else:
+                path = str(payload.get("path", "")).strip()
+                if not path:
+                    raise ValueError("文書ファイルのパスを入力してください")
+                meta = im.add_document(
+                    path, title=(payload.get("title") or None), index_mode=mode,
+                    force=bool(payload.get("force", False)),
+                    layout=bool(payload.get("layout", False)), progress=emit)
+            q.put({"type": "result", "kind": "docmeta", "meta": meta})
+        elif op == "search":
+            hits = im.search(
+                str(payload.get("question", "")),
+                document_top_n=int(payload.get("document_top_n", 4) or 4),
+                chunk_top_k_per_doc=int(payload.get("chunk_top_k_per_doc", 4) or 4),
+                max_chunks_per_doc=(int(payload["max_chunks_per_doc"])
+                                    if payload.get("max_chunks_per_doc") else None),
+                use_graph=bool(payload.get("use_graph", False)))
+            q.put({"type": "result", "kind": "docsearch",
+                   "hits": [h.to_dict() for h in hits]})
+        else:
+            raise ValueError(f"未知の op: {op}")
+    except Exception as e:  # noqa: BLE001  失敗は握りつぶさず UI に出す
+        q.put({"type": "error", "message": f"{type(e).__name__}: {e}"})
+    finally:
+        q.put({"type": "done"})
+
+
 class _Handler(BaseHTTPRequestHandler):
     server_version = "llmlabStudio"
     root_dir = DEFAULT_ROOT  # serve() が差し替える
@@ -208,6 +256,16 @@ class _Handler(BaseHTTPRequestHandler):
             self._json({"history": _history_read()})
         elif url.path == "/api/test":
             self._api_test()
+        elif url.path == "/api/docs":
+            qs = parse_qs(url.query)
+            root = (qs.get("root") or [self.root_dir])[0]
+            self._json({"root": root, "documents": _index_manager(root).documents()})
+        elif url.path == "/api/docs/detail":
+            qs = parse_qs(url.query)
+            root = (qs.get("root") or [self.root_dir])[0]
+            doc_id = (qs.get("doc_id") or [""])[0]
+            detail = _index_manager(root).document(doc_id)
+            self._json(detail or {"error": "not found"}, 200 if detail else 404)
         else:
             self._json({"error": "not found"}, 404)
 
@@ -227,6 +285,13 @@ class _Handler(BaseHTTPRequestHandler):
             with _history_lock:
                 _write_json_file(_history_path(), [])
             self._json({"ok": True})
+        elif url.path in ("/api/docs/add", "/api/docs/rebuild", "/api/docs/search"):
+            self._api_docs_task(url.path.rsplit("/", 1)[-1])
+        elif url.path == "/api/docs/delete":
+            p = self._read_json()
+            root = p.get("root") or self.root_dir
+            existed = _index_manager(root).delete(str(p.get("doc_id", "")))
+            self._json({"ok": True, "existed": existed})
         else:
             self._json({"error": "not found"}, 404)
 
@@ -290,6 +355,22 @@ class _Handler(BaseHTTPRequestHandler):
         with _tasks_lock:
             _tasks[task_id] = Queue()
         threading.Thread(target=_run_build, args=(task_id, payload, self.root_dir),
+                         daemon=True).start()
+        self._json({"task_id": task_id})
+
+    def _api_docs_task(self, op: str) -> None:
+        """文書の追加/再構築/検索を SSE タスクとして開始する（要接続設定）。"""
+        from .config import is_configured
+
+        if not is_configured():
+            self._json({"error": "接続設定が未入力です（取り込み・検索には埋め込みAPIが必要）"}, 400)
+            return
+        payload = self._read_json()
+        payload["op"] = {"add": "add", "rebuild": "rebuild", "search": "search"}[op]
+        task_id = uuid.uuid4().hex[:12]
+        with _tasks_lock:
+            _tasks[task_id] = Queue()
+        threading.Thread(target=_run_docs_task, args=(task_id, payload, self.root_dir),
                          daemon=True).start()
         self._json({"task_id": task_id})
 
