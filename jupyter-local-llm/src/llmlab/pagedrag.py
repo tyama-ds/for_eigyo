@@ -154,18 +154,27 @@ class PagedRAG:
             raise FileNotFoundError(f"ファイルがありません: {path}")
 
         doc_id = doc_id or make_doc_id(path, title)
-        # doc_id で重複判定（同名ファイルが別フォルダにある場合でも衝突しない）。
-        # 旧カタログ（doc_id 無し）は source 名で後方互換的に判定する。
-        existing = next(
-            (b for b in self.books()
-             if (b.get("doc_id") == doc_id) or
-                (b.get("doc_id") is None and b.get("source") == path.name)),
+        resolved = str(path.resolve())
+        # 重複判定は2段:
+        #  1) 同じ doc_id（=同じ内容）→ 取り込み済みなのでスキップ（force で置換）
+        #  2) 同じファイル（catalog の path 一致 / 旧々形式は source 名）だが別 doc_id
+        #     → 旧形式ID（〜v0.5.1 のパスハッシュ）か、内容が変わった版違い。
+        #       どちらも旧チャンクを削除してから新IDで取り込み直す（置き換え）。
+        #       これを怠ると追記型ストアに新旧が併存し検索が二重になる。
+        books = self.books()
+        by_id = next((b for b in books if b.get("doc_id") == doc_id), None)
+        by_path = next(
+            (b for b in books
+             if b is not by_id and (
+                 (b.get("path") and b.get("path") == resolved) or
+                 (b.get("doc_id") is None and b.get("source") == path.name))),
             None,
         )
-        if existing and not force:
+        if by_id and not force:
             print(f"[PagedRAG] {path.name} は取り込み済みのためスキップします"
                   "（重複防止。再取り込みは force=True、全消去は reset()）")
-            return existing["title"]
+            return by_id["title"]
+        existing = by_id or by_path
 
         apply_llama_settings()
         book_title = title or path.stem
@@ -189,10 +198,20 @@ class PagedRAG:
             n.metadata.setdefault(_DOC_ID_KEY, doc_id)
 
         index = self._get_or_create_index()
-        if existing and force:
+        if existing:
             # 追記型ストアなので、削除せず insert すると同じチャンクが二重に入り、
             # その文書が top-k を独占して多様化が壊れる。再取り込み前に旧チャンクを消す。
-            self._delete_doc_nodes(index, doc_id)
+            # 旧形式ID/版違い（by_path）の場合は **旧IDの** チャンクを消す。
+            old_id = existing.get("doc_id") or doc_id
+            if by_path is existing:
+                print(f"[PagedRAG] {path.name}: 既存の登録（doc_id={old_id}）を"
+                      "新しい内容で置き換えます")
+            self._delete_doc_nodes(index, old_id)
+            if old_id != doc_id:  # 旧IDのカタログ/チャンクJSONを掃除して新IDへ移行
+                jp = self.documents_dir / f"{old_id}.json"
+                if jp.exists():
+                    jp.unlink()
+                self._drop_catalog_entry(old_id)
         index.insert_nodes(nodes)
         index.storage_context.persist(persist_dir=str(self.storage_dir))
         self._register_book(book_title, path.name, len(nodes), doc_id,
@@ -447,22 +466,36 @@ class PagedRAG:
         (self.documents_dir / f"{doc_id}.json").write_text(
             json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    def _drop_catalog_entry(self, doc_id: str) -> bool:
+        """カタログから doc_id のエントリを外す。外したら True。"""
+        catalog = self.books()
+        kept = [b for b in catalog if b.get("doc_id") != doc_id]
+        if len(kept) != len(catalog):
+            self.storage_dir.mkdir(parents=True, exist_ok=True)
+            self._catalog_path.write_text(
+                json.dumps(kept, ensure_ascii=False, indent=2), encoding="utf-8")
+            return True
+        return False
+
     def delete_document(self, doc_id: str) -> bool:
-        """1文書分のチャンクを索引・カタログ・文書JSONから削除する。"""
+        """1文書分のチャンクを索引・カタログ・文書JSONから削除する。
+
+        返り値は「実際に何かを削除できたか」。チャンクIDの記録（文書JSON）が無い
+        旧索引ではベクトル側を特定できないため、その場合カタログ/JSONのみ削除し、
+        何も見つからなければ False を返す（UI が成功と誤認しないように）。
+        """
+        doc = self.document(doc_id)
+        had_chunks = bool((doc or {}).get("chunks"))
         index = self._get_or_create_index(create_if_missing=False)
-        removed = False
-        if index is not None:
+        if index is not None and had_chunks:
             self._delete_doc_nodes(index, doc_id)
             index.storage_context.persist(persist_dir=str(self.storage_dir))
-            removed = True
-        catalog = [b for b in self.books() if b.get("doc_id") != doc_id]
-        if self._catalog_path.exists():
-            self._catalog_path.write_text(
-                json.dumps(catalog, ensure_ascii=False, indent=2), encoding="utf-8")
+        dropped = self._drop_catalog_entry(doc_id)
         jp = self.documents_dir / f"{doc_id}.json"
         if jp.exists():
             jp.unlink()
-        return removed
+            dropped = True
+        return had_chunks or dropped
 
     def reset(self) -> None:
         """インデックスとカタログ・文書JSONを削除する（全消去）。"""

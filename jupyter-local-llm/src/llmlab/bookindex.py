@@ -168,7 +168,44 @@ def progress(iterable, *, total: int | None = None, desc: str = ""):
         return _gen()
 
 
+# ログ転送はスレッドローカル。以前は呼び出し側が bx.log をグローバルに差し替えて
+# いたが、Studio はタスクごとに別スレッドで動くため、並行実行で転送先が混線し
+# 復元順によっては死んだタスクの Queue を永久に指す事故が起きる。log_to() を使う。
+_log_local = __import__("threading").local()
+
+
+def log_to(callback):
+    """このスレッドの log() 出力を callback にも転送するコンテキストマネージャ。
+
+    使い方::
+        with bx.log_to(lambda msg: progress_queue.put(msg)):
+            book.add_book(...)
+
+    ネスト可（内側が優先、抜けると外側に戻る）。他スレッドには影響しない。
+    注意: ThreadPoolExecutor 内の子スレッドからの log() には転送されない
+    （現状 log() を呼ぶのはタスクの主スレッドのみ）。
+    """
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _cm():
+        prev = getattr(_log_local, "cb", None)
+        _log_local.cb = callback
+        try:
+            yield
+        finally:
+            _log_local.cb = prev
+
+    return _cm()
+
+
 def log(msg: str) -> None:
+    cb = getattr(_log_local, "cb", None)
+    if cb is not None:
+        try:
+            cb(msg)
+        except Exception:  # noqa: BLE001  転送失敗で本処理は止めない
+            pass
     print(f"[BookRAG] {msg}")
 
 
@@ -786,23 +823,25 @@ def _even_sample(bi: "BookIndex", targets: list[int], budget: int) -> list[int]:
 
     従来は先頭から budget 件だけ採用していたため、後半セクションが丸ごと無視され
     「前半しか見ない」偏りが出ていた。文書全体を薄く広くカバーするよう変更。
+    後段の Gradient ER は順序依存のため、**返り値は文書順（targets の元の並び）**を保つ。
     """
     from collections import OrderedDict
+    from itertools import zip_longest
 
+    if budget >= len(targets):
+        return list(targets)
     buckets: "OrderedDict[int, list[int]]" = OrderedDict()
     for nid in targets:  # 入力順（=文書順）を保ったままセクション別に束ねる
         buckets.setdefault(_section_ancestor_id(bi, nid), []).append(nid)
-    chosen: list[int] = []
-    lists = list(buckets.values())
-    i = 0
-    while len(chosen) < budget and any(lists):
-        lst = lists[i % len(lists)]
-        if lst:
-            chosen.append(lst.pop(0))
-        i += 1
-        if i % len(lists) == 0:  # 空になったバケツを掃除して無限ループを防ぐ
-            lists = [x for x in lists if x]
-    return chosen
+    # ラウンドロビンで各セクションから均等に採用（O(total)）
+    picked: set[int] = set()
+    for row in zip_longest(*buckets.values()):
+        for nid in row:
+            if nid is not None and len(picked) < budget:
+                picked.add(nid)
+        if len(picked) >= budget:
+            break
+    return [nid for nid in targets if nid in picked]  # 文書順を復元
 
 
 def build_graph(bi: BookIndex, node_ids: list[int], *, gradient_g: float = 0.6,

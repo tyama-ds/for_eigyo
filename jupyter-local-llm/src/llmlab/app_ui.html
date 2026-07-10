@@ -381,6 +381,10 @@
       </select>
       <div class="warnrow" id="d_modewarn"></div>
       <div class="switch" style="margin:8px 0 2px">
+        <input type="checkbox" id="d_layout" style="accent-color:var(--accent-a)">
+        <label for="d_layout" style="font-size:.8rem">見出し判定を強化（PDFの構造化に。要 pip install -e ".[ocr]"）</label>
+      </div>
+      <div class="switch" style="margin:2px 0 2px">
         <input type="checkbox" id="d_force" style="accent-color:var(--accent-a)">
         <label for="d_force" style="font-size:.8rem">再構築する（force・同一内容でも作り直す）</label>
       </div>
@@ -1051,57 +1055,78 @@ $("#d_mode").onchange = ()=>{ $("#d_modewarn").textContent = D_MODEWARN[$("#d_mo
 
 const ST_JA = {ready:"準備OK", running:"処理中", failed:"失敗", skipped:"変更なし",
                pending:"待機", unknown:"不明"};
+let DOCS = [];   // 直近の文書一覧（ボタンは data-i でここを参照。文字列をJSに埋め込まない）
 async function docsScan(){
   const tb = $("#docRows");
   tb.innerHTML = '<tr><td colspan="9" style="color:var(--ink-mute)">読込中…</td></tr>';
   try{
     const j = await api("/api/docs?root="+encodeURIComponent($("#root").value));
-    if(!j.documents.length){
+    DOCS = j.documents;
+    if(!DOCS.length){
       tb.innerHTML = '<tr><td colspan="9" style="color:var(--ink-mute)">文書がありません。左の「文書を追加」から登録してください。</td></tr>';
       return;
     }
-    tb.innerHTML = j.documents.map(m=>{
+    tb.innerHTML = DOCS.map((m,i)=>{
       const st = m.status||"unknown";
       const err = m.error ? ` title="${esc(m.error)}"` : "";
       return `<tr>
         <td>${esc(m.title||"")}</td>
         <td class="mono">${esc(m.doc_id||"")}</td>
         <td class="mono">${esc((m.source_path||"").split(/[\\/]/).pop())}</td>
-        <td><span class="modechip ${m.index_mode}">${esc(m.index_mode||"")}</span></td>
+        <td><span class="modechip ${esc(m.index_mode)}">${esc(m.index_mode||"")}</span></td>
         <td><span class="st ${st}"${err}>${ST_JA[st]||st}</span></td>
         <td>${m.chunk_count||0}</td>
         <td>${m.graph_index?"✓":"—"}</td>
         <td class="mono">${esc((m.updated_at||"").replace("T"," "))}</td>
         <td>
-          <button class="btn sm ghost" onclick="docsDetail('${esc(m.doc_id)}')">詳細</button>
-          <button class="btn sm ghost" onclick="docsRebuild('${esc(m.doc_id)}')">再構築</button>
-          <button class="btn sm ghost" onclick="docsDelete('${esc(m.doc_id)}','${esc(m.title)}')">削除</button>
+          <button class="btn sm ghost" data-act="detail" data-i="${i}">詳細</button>
+          <button class="btn sm ghost" data-act="rebuild" data-i="${i}">再構築</button>
+          <button class="btn sm ghost" data-act="delete" data-i="${i}">削除</button>
         </td></tr>`;
     }).join("");
   }catch(e){ tb.innerHTML = `<tr><td colspan="9" class="err">${esc(e.message)}</td></tr>`; }
 }
 $("#btnDocScan").onclick = docsScan;
+// ボタンはイベント委譲で処理する。title 等のユーザー文字列を inline onclick に
+// 埋め込むと、引用符を含む題名で JS が壊れる/任意コードが動く（XSS）ため。
+$("#docRows").addEventListener("click", e=>{
+  const b = e.target.closest("button[data-act]");
+  if(!b) return;
+  const m = DOCS[+b.dataset.i];
+  if(!m) return;
+  if(b.dataset.act === "detail") docsDetail(m);
+  else if(b.dataset.act === "rebuild") docsRebuild(m);
+  else if(b.dataset.act === "delete") docsDelete(m);
+});
 
 /* SSE 実行の共通ヘルパ（進捗バー + 完了/エラー） */
 function runTask(url, body, {bar, stage, prog, onResult, onDone}){
   prog.style.display = "block";
-  bar.style.width = "3%"; stage.textContent = "開始…";
+  bar.style.width = "3%";
+  stage.dataset.msg = "開始…"; stage.textContent = "開始…";
   const t0 = Date.now();
-  const tick = setInterval(()=>{ stage.dataset.el = Math.round((Date.now()-t0)/1000); }, 1000);
+  // 進捗イベントが来ない処理（検索など）でも経過秒が動き続けるよう、
+  // 表示はタイマー側で組み立てる（「開始…」のまま固まって見えるのを防ぐ）
+  const tick = setInterval(()=>{
+    stage.textContent = `${stage.dataset.msg}  ⏱${Math.round((Date.now()-t0)/1000)}s`;
+  }, 1000);
+  const stop = ()=> clearInterval(tick);
   api(url, body).then(({task_id})=>{
     const es = new EventSource("/api/events?id="+task_id);
     es.onmessage = ev=>{
       const e = JSON.parse(ev.data);
       if(e.type==="progress"){
         bar.style.width = Math.max(3,Math.min(97,Math.round(100*e.current/(e.total||1))))+"%";
-        stage.textContent = `⟳ ${e.stage||""} ${e.detail||""}  ⏱${stage.dataset.el||0}s`;
-      }else if(e.type==="result"){ bar.style.width="100%"; stage.textContent="✓ 完了"; onResult&&onResult(e); }
-      else if(e.type==="error"){ stage.textContent="✗ 失敗"; onResult&&onResult(e); }
-      else if(e.type==="done"){ es.close(); clearInterval(tick);
+        stage.dataset.msg = `⟳ ${e.stage||""} ${e.detail||""}`;
+        stage.textContent = `${stage.dataset.msg}  ⏱${Math.round((Date.now()-t0)/1000)}s`;
+      }else if(e.type==="result"){ bar.style.width="100%"; stop();
+        stage.textContent=`✓ 完了（${Math.round((Date.now()-t0)/1000)}s）`; onResult&&onResult(e); }
+      else if(e.type==="error"){ stop(); stage.textContent="✗ 失敗"; onResult&&onResult(e); }
+      else if(e.type==="done"){ es.close(); stop();
         setTimeout(()=>{ prog.style.display="none"; }, 1200); onDone&&onDone(); }
     };
-    es.onerror = ()=>{ es.close(); clearInterval(tick); stage.textContent="✗ 接続断"; };
-  }).catch(e=>{ clearInterval(tick); prog.style.display="none";
+    es.onerror = ()=>{ es.close(); stop(); stage.textContent="✗ 接続断"; };
+  }).catch(e=>{ stop(); prog.style.display="none";
     stage.textContent = "✗ "+e.message; });
 }
 
@@ -1109,26 +1134,40 @@ $("#btnDocAdd").onclick = ()=>{
   const m = $("#dMsg"); m.className="msg"; m.textContent="";
   runTask("/api/docs/add", {
     path:$("#d_path").value, title:$("#d_title").value, index_mode:$("#d_mode").value,
-    force:$("#d_force").checked, root:$("#root").value,
+    force:$("#d_force").checked, layout:$("#d_layout").checked, root:$("#root").value,
   }, {bar:$("#dbar"), stage:$("#dstage"), prog:$("#dProg"),
     onResult:e=>{ if(e.type==="error"){ m.className="msg ng"; m.textContent="✗ "+e.message; }
       else { m.className="msg ok";
         m.textContent = `✓ ${e.meta.title}（${e.meta.index_mode} / ${e.meta.status} / chunks ${e.meta.chunk_count}）`; } },
     onDone:docsScan});
 };
-window.docsRebuild = did=>{
-  const mode = prompt("再構築モードを入力（fast / hierarchy / graph）", "fast");
-  if(!mode) return;
-  runTask("/api/docs/rebuild", {doc_id:did, index_mode:mode.trim(), root:$("#root").value},
-    {bar:$("#dbar"), stage:$("#dstage"), prog:$("#dProg"), onDone:docsScan});
-  $("#dMsg").className="msg"; $("#dMsg").textContent="再構築中…";
+window.docsRebuild = m=>{
+  // 既定値は現在のモード（"fast" 固定にすると graph 文書が黙って降格してしまう）
+  const cur = m.index_mode || "fast";
+  let mode = prompt(
+    `「${m.title}」を再構築します。モードを入力（fast / hierarchy / graph）\n` +
+    `※ graph は Entity/Relation 抽出のため低速です`, cur);
+  if(mode === null) return;                       // キャンセル
+  mode = mode.trim().toLowerCase() || cur;
+  if(!["fast","hierarchy","graph"].includes(mode)){
+    alert(`モードは fast / hierarchy / graph のいずれかです（入力: ${mode}）`);
+    return;
+  }
+  const msg = $("#dMsg"); msg.className="msg"; msg.textContent=`再構築中…（${mode}）`;
+  runTask("/api/docs/rebuild", {doc_id:m.doc_id, index_mode:mode, root:$("#root").value},
+    {bar:$("#dbar"), stage:$("#dstage"), prog:$("#dProg"),
+     onResult:e=>{ if(e.type==="error"){ msg.className="msg ng"; msg.textContent="✗ "+e.message; }
+       else { msg.className="msg ok";
+         msg.textContent=`✓ 再構築完了: ${e.meta.title}（${e.meta.index_mode}）`; } },
+     onDone:docsScan});
 };
-window.docsDelete = async (did, title)=>{
-  if(!confirm(`文書「${title}」(${did}) を削除しますか？`)) return;
-  try{ await api("/api/docs/delete", {doc_id:did, root:$("#root").value}); docsScan(); }
+window.docsDelete = async m=>{
+  if(!confirm(`文書「${m.title}」(${m.doc_id}) を削除しますか？`)) return;
+  try{ await api("/api/docs/delete", {doc_id:m.doc_id, root:$("#root").value}); docsScan(); }
   catch(e){ alert("削除に失敗: "+e.message); }
 };
-window.docsDetail = async did=>{
+window.docsDetail = async m=>{
+  const did = m.doc_id;
   const box = $("#docDetail"); box.style.display="block";
   box.innerHTML = '<div style="color:var(--ink-mute)">読込中…</div>';
   window.scrollTo({top:document.body.scrollHeight, behavior:"smooth"});

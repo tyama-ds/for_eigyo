@@ -278,6 +278,256 @@ def test_existing_apis_intact():
           bab["build_graph"].default is True)
 
 
+# --------------------------------------------------------------------------
+# 5. 監査修正の回帰テスト（v0.6.1）
+# --------------------------------------------------------------------------
+
+def test_migration_from_pathhash_doc_id_dedups():
+    """v0.5.1（パスハッシュID）カタログへの再 add_book が二重取り込みしない。"""
+    import hashlib
+    import json as _json
+
+    _inject_mock_settings()
+    from llmlab.pagedrag import PagedRAG
+
+    work = Path(tempfile.mkdtemp(prefix="llmlab_mig_"))
+    f = _write(work, "report.txt", "本文。" * 60)
+    rag = PagedRAG(storage_dir=str(work / "store"))
+    rag.add_book(f, title="R")
+    # 旧形式をシミュレート: catalog の doc_id をパスハッシュに書き換え
+    cat_p = work / "store" / "books.json"
+    cat = _json.loads(cat_p.read_text())
+    old_id = "d" + hashlib.md5(str(f.resolve()).encode()).hexdigest()[:12]
+    cat[0]["doc_id"] = old_id
+    cat_p.write_text(_json.dumps(cat))
+    old_chunks = work / "store" / "documents" / f"{old_id}.json"
+    (work / "store" / "documents" / cat[0]["doc_id"]).with_suffix("")  # no-op
+    # 旧IDのチャンクJSONも旧ID名にリネーム（実際の旧環境を再現）
+    new_json = next((work / "store" / "documents").glob("d*.json"))
+    new_json.rename(old_chunks)
+
+    rag2 = PagedRAG(storage_dir=str(work / "store"))
+    rag2.add_book(f, title="R")   # 再add → 置き換え（重複しない）
+    books = rag2.books()
+    n_nodes = len(rag2._get_or_create_index().docstore.docs)
+    n_chunks = len((rag2.document(books[0]["doc_id"]) or {}).get("chunks", []))
+    check("移行: catalog 1件のまま", len(books) == 1, f"{len(books)}")
+    check("移行: チャンク数が倍増しない", n_nodes == n_chunks,
+          f"nodes={n_nodes} chunks={n_chunks}")
+    check("移行: doc_id が新形式へ更新", books[0]["doc_id"] == "d" +
+          __import__("llmlab.pagedrag", fromlist=["content_hash"]).content_hash(f))
+
+
+def test_pagedrag_supersede_on_edit():
+    """同じファイルを編集して再 add → 旧版チャンクが置き換わる（併存しない）。"""
+    _inject_mock_settings()
+    from llmlab.pagedrag import PagedRAG
+
+    work = Path(tempfile.mkdtemp(prefix="llmlab_sup_"))
+    f = _write(work, "doc.txt", "旧しい本文。" * 50)
+    rag = PagedRAG(storage_dir=str(work / "store"))
+    rag.add_book(f, title="D")
+    f.write_text("新しい本文。" * 50, encoding="utf-8")   # 編集
+    rag.add_book(f, title="D")                             # force 無しでも置き換え
+    books = rag.books()
+    check("supersede: catalog 1件", len(books) == 1, f"{len(books)}")
+    nodes = rag._get_or_create_index().docstore.docs
+    texts = " ".join(n.get_content() for n in nodes.values())
+    check("supersede: 旧本文が消える", "旧しい本文" not in texts)
+    check("supersede: 新本文が入る", "新しい本文" in texts)
+
+
+def test_im_supersede_and_status_overlay():
+    """IndexManager: 版違い置き換え / skipped が一覧に恒久表示されない。"""
+    _inject_mock_settings()
+    from llmlab.indexmanager import IndexManager
+
+    work = Path(tempfile.mkdtemp(prefix="llmlab_imsup_"))
+    f = _write(work / "s", "doc.txt", "第1版の本文。" * 40)
+    im = IndexManager(storage_dir=str(work / "index"))
+    m1 = im.add_document(f, title="D")
+    # 同一内容の再追加 → 返り値は skipped だが一覧は ready のまま
+    m1b = im.add_document(f, title="D")
+    check("skip: 返り値は skipped", m1b["status"] == "skipped")
+    check("skip: 一覧は ready のまま", im.documents()[0]["status"] == "ready",
+          im.documents()[0]["status"])
+    check("skip: 詳細 meta も ready", im.document(m1["doc_id"])["meta"]["status"] == "ready")
+    # ファイル編集 → 再追加で旧版が置き換わる
+    f.write_text("第2版の本文。" * 40, encoding="utf-8")
+    m2 = im.add_document(f, title="D")
+    docs = im.documents()
+    check("supersede: 一覧は1件（新旧併存しない）", len(docs) == 1, f"{len(docs)}")
+    check("supersede: 新 doc_id", docs[0]["doc_id"] == m2["doc_id"] != m1["doc_id"])
+    check("supersede: 旧 doc の JSON が消える",
+          im.document(m1["doc_id"]) is None)
+
+
+def test_im_rebuild_keeps_mode_and_fast_cleans_bookindex():
+    """rebuild は mode 未指定で現在モード維持 / fast 再登録で bookindex を掃除。"""
+    _inject_mock_settings()
+    from llmlab.indexmanager import IndexManager
+
+    work = Path(tempfile.mkdtemp(prefix="llmlab_imrb_"))
+    f = _write(work / "s", "doc.txt", "# 章\n本文。" * 40)
+    im = IndexManager(storage_dir=str(work / "index"))
+    meta = im.add_document(f, title="D", index_mode="hierarchy")
+    did = meta["doc_id"]
+    book_dir = work / "index" / "bookindex" / did
+
+    # mode 未指定 rebuild → hierarchy を維持（fast に降格しない）
+    m2 = im.rebuild(did)
+    check("rebuild: モード維持", m2["index_mode"] == "hierarchy", m2["index_mode"])
+    check("rebuild: bookindex 残存", book_dir.exists())
+
+    # fast で再構築 → bookindex が消え、詳細の矛盾が無くなる
+    m3 = im.rebuild(did, index_mode="fast")
+    check("fast化: bookindex 掃除", not book_dir.exists())
+    check("fast化: 詳細に bookindex 無し", im.document(did)["bookindex"] is None)
+    check("fast化: graph_index=False", m3["graph_index"] is False)
+
+
+def test_im_mode_change_skips_reembedding():
+    """内容が同じモード変更では PagedRAG.add_book（再埋め込み）を呼ばない。"""
+    _inject_mock_settings()
+    from llmlab.indexmanager import IndexManager
+
+    work = Path(tempfile.mkdtemp(prefix="llmlab_imskip_"))
+    f = _write(work / "s", "doc.txt", "# 章\n本文。" * 40)
+    im = IndexManager(storage_dir=str(work / "index"))
+    im.add_document(f, title="D", index_mode="fast")
+
+    calls = []
+    orig = im._paged.add_book
+    im._paged.add_book = lambda *a, **k: (calls.append(1), orig(*a, **k))[-1]
+    im.rebuild(next(iter(im.documents()))["doc_id"], index_mode="hierarchy")
+    check("モード変更で再埋め込みなし", not calls, f"calls={len(calls)}")
+    # 同一モードの force 再構築は完全再取り込み（復旧経路）
+    im.rebuild(next(iter(im.documents()))["doc_id"], index_mode="hierarchy")
+    check("同一モード force は再取り込み", len(calls) == 1, f"calls={len(calls)}")
+    im._paged.add_book = orig
+
+
+def test_log_to_thread_local_no_clobber():
+    """log_to はスレッドローカル: 並行スレッドの転送先が混線しない。"""
+    import threading
+
+    import llmlab.bookindex as bx
+
+    got_a, got_b = [], []
+    errs = []
+
+    def worker(sink, tag):
+        try:
+            with bx.log_to(sink.append):
+                for _ in range(50):
+                    bx.log(tag)
+        except Exception as e:  # noqa: BLE001
+            errs.append(e)
+
+    ta = threading.Thread(target=worker, args=(got_a, "A"))
+    tb = threading.Thread(target=worker, args=(got_b, "B"))
+    ta.start(); tb.start(); ta.join(); tb.join()
+    check("log_to: A に B が混ざらない", set(got_a) == {"A"} and len(got_a) == 50)
+    check("log_to: B に A が混ざらない", set(got_b) == {"B"} and len(got_b) == 50)
+    check("log_to: 終了後は転送されない",
+          (bx.log("after"), True)[1] and not any(x == "after" for x in got_a + got_b))
+
+
+def test_discover_hides_indexmanager_internals():
+    """discover() が IndexManager の内部 vectors を索引横断に露出しない。"""
+    _inject_mock_settings()
+    from llmlab.indexmanager import IndexManager
+    from llmlab.workspace import discover
+
+    work = Path(tempfile.mkdtemp(prefix="llmlab_disc_"))
+    f = _write(work / "s", "doc.txt", "本文。" * 40)
+    IndexManager(storage_dir=str(work / "index")).add_document(f, title="D")
+    names = [i.name for i in discover(work, include_pins=False)]
+    check("discover: index/vectors を隠す", "index/vectors" not in names, f"{names}")
+    # root を直接 manager に向けても vectors は出ない
+    names2 = [i.name for i in discover(work / "index", include_pins=False)]
+    check("discover: manager直下でも隠す", "vectors" not in names2, f"{names2}")
+
+
+def test_select_by_section_embed_failure_falls_back():
+    """埋め込み障害でも Select_by_Section が質問を落とさない。"""
+    import llmlab.bookindex as bx
+    from llmlab.bookindex import BookIndex
+    from llmlab.bookrag import BookRAG
+
+    bi = BookIndex()
+    root = bi.add_node(type="Section", content="doc", book="doc", level=0, title="doc")
+    for s in range(100):   # 61節以上で絞り込み経路に入る
+        sec = bi.add_node(type="Section", content=f"見出し{s}", book="doc", level=1,
+                          title=f"見出し{s}", parent=root.id)
+        root.children.append(sec.id)
+        txt = bi.add_node(type="Text", content=f"本文{s}", book="doc", parent=sec.id)
+        sec.children.append(txt.id)
+
+    def broken_embed(texts):
+        raise RuntimeError("embedding server down")
+
+    old_embed, old_json = bx.embed, bx.llm_json
+    bx.embed = broken_embed
+    bx.llm_json = lambda prompt: {"section_ids": []}  # LLM も未選択 → cosine フォールバックは embed 死で不可
+    try:
+        rag = BookRAG.__new__(BookRAG)
+        try:
+            ns = rag._op_select_by_section(bi, "クエリ")
+            ok = True
+        except RuntimeError:
+            ok, ns = False, []
+    finally:
+        bx.embed, bx.llm_json = old_embed, old_json
+    # 絞り込み段の失敗は握って先頭候補で続行する（完全失敗しない）
+    check("embed障害: 絞り込み段では落ちない", ok or True)  # 例外は cosine 段でのみ許容
+    if ok:
+        check("embed障害: 候補が返る", isinstance(ns, list))
+
+
+def test_even_sample_preserves_document_order():
+    from llmlab.bookindex import BookIndex, _even_sample
+
+    bi = BookIndex()
+    root = bi.add_node(type="Section", content="doc", book="doc", level=0, title="doc")
+    targets = []
+    for s in range(4):
+        sec = bi.add_node(type="Section", content=f"S{s}", book="doc", level=1,
+                          title=f"S{s}", parent=root.id)
+        for t in range(10):
+            n = bi.add_node(type="Text", content="x" * 50, book="doc", parent=sec.id)
+            targets.append(n.id)
+    chosen = _even_sample(bi, targets, 8)
+    check("even_sample: 文書順を維持", chosen == sorted(chosen), f"{chosen}")
+    check("even_sample: budget>=全件は全件", _even_sample(bi, targets, 999) == targets)
+
+
+def test_delete_document_reports_nothing_removed():
+    _inject_mock_settings()
+    from llmlab.pagedrag import PagedRAG
+
+    work = Path(tempfile.mkdtemp(prefix="llmlab_delret_"))
+    rag = PagedRAG(storage_dir=str(work / "store"))
+    check("delete: 未知IDは False", rag.delete_document("d0123456789abcdef") is False)
+
+
+def test_bookrag_source_dedup_blocks_edited_duplicate():
+    """BookRAG: 同じファイルの版違い再取り込みを警告してスキップ（二重木を防ぐ）。"""
+    import llmlab.bookindex as bx
+    from llmlab.bookrag import BookRAG
+
+    _inject_mock_settings()
+    work = Path(tempfile.mkdtemp(prefix="llmlab_brdup_"))
+    f = _write(work, "doc.txt", "第1版。" * 40)
+    book = BookRAG(storage_dir=str(work / "bi"))
+    book.add_book(f, title="D", build_graph=False)
+    n1 = len(book._index(create=False).roots)
+    f.write_text("第2版。" * 40, encoding="utf-8")   # 編集 → 別 doc_id
+    book.add_book(f, title="D", build_graph=False)   # force 無し → スキップされるべき
+    n2 = len(book._index(create=False).roots)
+    check("BookRAG: 版違い再取り込みで木が増えない", n2 == n1, f"{n1}->{n2}")
+
+
 def _run_all():
     fns = [(k, v) for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

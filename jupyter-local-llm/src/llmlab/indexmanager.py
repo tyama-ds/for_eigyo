@@ -35,7 +35,6 @@ index_mode:
 
 from __future__ import annotations
 
-import json
 import shutil
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -106,12 +105,13 @@ class IndexManager:
         chash = content_hash(path)
         doc_id = "d" + chash
         title = title or path.stem
+        resolved = str(path.resolve())
 
         prev = self._read(self.docs_dir, doc_id)
         if prev and prev.get("content_hash") == chash and prev.get("status") == "ready" \
                 and prev.get("index_mode") == index_mode and not force:
             self._set_status(doc_id, "skipped", index_mode, note="変更なし（キャッシュ利用）")
-            prev["status"] = "skipped"
+            prev["status"] = "skipped"  # 呼び出し元への通知のみ（永続の status は ready のまま）
             return prev
 
         created = prev.get("created_at") if prev else _now()
@@ -119,41 +119,63 @@ class IndexManager:
         def _log(msg):
             if progress:
                 try:
-                    progress({"stage": msg, "current": 0, "total": 1, "detail": ""})
+                    progress({"stage": str(msg), "current": 0, "total": 1, "detail": ""})
                 except Exception:  # noqa: BLE001
                     pass
 
+        # 同じ元ファイルの旧版（別 doc_id）が登録済みなら置き換える。
+        # 内容ハッシュIDのため、ファイル編集後の再登録は新IDになる — 旧版を残すと
+        # 一覧に新旧が並び、検索が古い本文を混ぜて返す。
+        for old in self.documents():
+            if old.get("source_path") == resolved and old["doc_id"] != doc_id:
+                _log(f"旧版 {old['doc_id']} を置き換えます（内容が変更されたため）")
+                print(f"[IndexManager] {path.name}: 旧版（doc_id={old['doc_id']}）を"
+                      "削除して新しい内容で登録します")
+                self.delete(old["doc_id"])
+
         self._set_status(doc_id, "running", index_mode)
         meta = {
-            "doc_id": doc_id, "title": title, "source_path": str(path.resolve()),
+            "doc_id": doc_id, "title": title, "source_path": resolved,
             "content_hash": chash, "index_mode": index_mode, "status": "running",
             "chunk_count": 0, "created_at": created, "updated_at": _now(),
-            "graph_index": False, "error": None,
+            "graph_index": False, "layout": bool(layout), "error": None,
         }
         self._write(self.docs_dir, doc_id, meta)
         try:
-            # 1) fast: 共有ベクトル索引に chunk+embedding（全モード共通の土台）
-            _log("チャンク化＋埋め込み（fast）")
-            self._route_bx_progress(progress,
-                lambda: self._paged.add_book(path, title=title, doc_id=doc_id, force=True))
+            # 1) 共有ベクトル索引に chunk+embedding（全モード共通の土台）。
+            #    内容が変わらないモード変更（fast→graph 等）では再埋め込みしない
+            #    （ローカルの埋め込みサーバでは embedding が高コストなため）。
+            same_content = bool(prev and prev.get("content_hash") == chash)
+            have_chunks = (self.chunks_dir / f"{doc_id}.json").exists()
+            same_mode_force = force and prev is not None \
+                and prev.get("index_mode") == index_mode
+            if (not same_content) or (not have_chunks) or same_mode_force:
+                _log("チャンク化＋埋め込み")
+                with self._forward_logs(progress):
+                    self._paged.add_book(path, title=title, doc_id=doc_id, force=True)
+            else:
+                _log("チャンク/埋め込みは変更なしのため再利用")
             chunks = self._paged.document(doc_id) or {}
             meta["chunk_count"] = len(chunks.get("chunks", []))
 
-            # 2) hierarchy / graph: 文書ごとの BookRAG 索引
+            # 2) hierarchy / graph: 文書ごとの BookRAG 索引。
+            #    fast では作らず、既存の木/KG が残っていれば消す（詳細表示との矛盾防止）。
+            book_dir = self.bookindex_dir / doc_id
             if index_mode in ("hierarchy", "graph"):
                 from .bookrag import BookRAG
 
-                book_dir = self.bookindex_dir / doc_id
                 if book_dir.exists():
                     shutil.rmtree(book_dir)
                 book = BookRAG(storage_dir=str(book_dir))
                 build_graph = index_mode == "graph"
                 _log("セクション木を構築" + ("＋Entity/Relation抽出（graph・低速）"
                                           if build_graph else "（hierarchy）"))
-                self._route_bx_progress(progress, lambda: book.add_book(
-                    path, title=title, doc_id=doc_id, force=True,
-                    build_graph=build_graph, layout=layout, ocr=ocr))
+                with self._forward_logs(progress):
+                    book.add_book(path, title=title, doc_id=doc_id, force=True,
+                                  build_graph=build_graph, layout=layout, ocr=ocr)
                 meta["graph_index"] = build_graph and book.has_graph()
+            else:
+                shutil.rmtree(book_dir, ignore_errors=True)
 
             meta.update(status="ready", updated_at=_now())
             self._write(self.docs_dir, doc_id, meta)
@@ -165,8 +187,12 @@ class IndexManager:
             self._set_status(doc_id, "failed", index_mode, error=meta["error"])
             raise
 
-    def rebuild(self, doc_id: str, *, index_mode: str | None = None) -> dict:
-        """文書を（必要なら別モードで）作り直す（force=True 相当）。"""
+    def rebuild(self, doc_id: str, *, index_mode: str | None = None,
+                progress=None) -> dict:
+        """文書を（必要なら別モードで）作り直す（force=True 相当）。
+
+        index_mode 省略時は **現在のモードを維持** する（fast に降格しない）。
+        """
         meta = self._read(self.docs_dir, doc_id)
         if not meta:
             raise KeyError(f"未登録の doc_id: {doc_id}")
@@ -175,7 +201,8 @@ class IndexManager:
             raise FileNotFoundError(f"元ファイルが見つかりません: {src}")
         return self.add_document(src, title=meta.get("title"),
                                  index_mode=index_mode or meta.get("index_mode", "fast"),
-                                 force=True)
+                                 layout=meta.get("layout", False),  # 見出し判定設定を維持
+                                 force=True, progress=progress)
 
     def delete(self, doc_id: str) -> bool:
         """文書を全ストア（索引・チャンク・木/KG・メタ・status）から削除する。"""
@@ -194,15 +221,20 @@ class IndexManager:
     # ---- 一覧・詳細 --------------------------------------------------------
 
     def documents(self) -> list[dict]:
-        """登録済み文書のメタ一覧（更新日時の新しい順）。"""
+        """登録済み文書のメタ一覧（更新日時の新しい順）。
+
+        status JSON は「進行中/失敗」の過渡状態のみ上書きに使う。skipped（変更なし
+        キャッシュ）は直近操作の記録であって索引の状態ではないため、一覧では
+        meta の ready をそのまま見せる（恒久的に「変更なし」と表示しない）。
+        """
         out = []
         if self.docs_dir.exists():
             for p in self.docs_dir.glob("*.json"):
                 m = self._read_path(p)
                 if m:
-                    st = self._read(self.status_dir, m["doc_id"])
-                    if st:  # status JSON を正とする（running 中に落ちた場合の整合）
-                        m["status"] = st.get("status", m.get("status"))
+                    st = self._read(self.status_dir, m["doc_id"]) or {}
+                    if st.get("status") in ("running", "failed", "pending"):
+                        m["status"] = st["status"]
                         m["error"] = st.get("error") or m.get("error")
                     out.append(m)
         out.sort(key=lambda m: m.get("updated_at", ""), reverse=True)
@@ -253,11 +285,11 @@ class IndexManager:
         ranked = self._paged.rank_documents(
             question, candidate_chunk_k=cand_k, top_n=document_top_n,
             chunks_per_doc=chunk_top_k_per_doc)
-        metas = {m["doc_id"]: m for m in self.documents()}
 
         hits: list[SearchHit] = []
         for r in ranked:
-            meta = metas.get(r.doc_id, {})
+            # メタは候補文書（top-N 件）だけ遅延読み込み（全件走査しない）
+            meta = self._read(self.docs_dir, r.doc_id) or {}
             title = meta.get("title") or r.title
             hit = SearchHit(doc_id=r.doc_id, title=title, score=round(r.score, 4),
                             source_path=meta.get("source_path"))
@@ -305,26 +337,27 @@ class IndexManager:
 
     # ---- 内部: JSON I/O ----------------------------------------------------
 
-    def _route_bx_progress(self, progress, fn):
-        """BookRAG/PagedRAG の内部ログ（bx.log）を progress へ転送しつつ fn を実行。"""
-        if progress is None:
-            return fn()
+    @staticmethod
+    def _forward_logs(progress):
+        """BookRAG/PagedRAG の内部ログ（bx.log）を progress へ転送するコンテキスト。
+
+        bx.log_to はスレッドローカルのため、Studio で複数タスクが並行しても
+        転送先が混線しない（旧実装のグローバル差し替えは並行実行で競合していた）。
+        """
+        from contextlib import nullcontext
+
         from . import bookindex as bx
 
-        old = bx.log
+        if progress is None:
+            return nullcontext()
 
         def _fwd(msg):
-            old(msg)
             try:
                 progress({"stage": str(msg), "current": 0, "total": 1, "detail": ""})
             except Exception:  # noqa: BLE001
                 pass
 
-        bx.log = _fwd
-        try:
-            return fn()
-        finally:
-            bx.log = old
+        return bx.log_to(_fwd)
 
     def _set_status(self, doc_id, status, index_mode, *, error=None, note=None) -> None:
         self._write(self.status_dir, doc_id, {
@@ -334,16 +367,15 @@ class IndexManager:
 
     @staticmethod
     def _read_path(p: Path) -> dict | None:
-        try:
-            return json.loads(p.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return None
+        from .workspace import _read_json_file
+
+        return _read_json_file(p, None)
 
     def _read(self, d: Path, doc_id: str) -> dict | None:
         return self._read_path(d / f"{doc_id}.json")
 
     @staticmethod
     def _write(d: Path, doc_id: str, obj: dict) -> None:
-        d.mkdir(parents=True, exist_ok=True)
-        (d / f"{doc_id}.json").write_text(
-            json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
+        from .workspace import _write_json_file
+
+        _write_json_file(d / f"{doc_id}.json", obj)

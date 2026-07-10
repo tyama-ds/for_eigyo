@@ -152,11 +152,23 @@ def _run_build(task_id: str, payload: dict, root: str) -> None:
         q.put({"type": "done"})
 
 
+# IndexManager はルートごとにキャッシュする。リクエストごとに作り直すと
+# PagedRAG のベクトル索引（大きい JSON）を毎回ディスクから再ロードしてしまう。
+_im_cache: dict = {}
+_im_lock = threading.Lock()
+
+
 def _index_manager(root: str):
-    """doc_id 中心の文書レジストリ（root/index に置く）。"""
+    """doc_id 中心の文書レジストリ（root/index に置く）。ルート単位で使い回す。"""
     from .indexmanager import IndexManager
 
-    return IndexManager(storage_dir=str(Path(root) / "index"))
+    key = str(Path(root).resolve())
+    with _im_lock:
+        im = _im_cache.get(key)
+        if im is None:
+            im = IndexManager(storage_dir=str(Path(root) / "index"))
+            _im_cache[key] = im
+        return im
 
 
 def _run_docs_task(task_id: str, payload: dict, root: str) -> None:
@@ -170,17 +182,22 @@ def _run_docs_task(task_id: str, payload: dict, root: str) -> None:
         im = _index_manager(payload.get("root") or root)
         op = payload.get("op", "add")
         if op in ("add", "rebuild"):
-            mode = str(payload.get("index_mode", "fast"))
             if op == "rebuild":
-                meta = im.rebuild(str(payload.get("doc_id", "")), index_mode=mode)
+                # index_mode 未指定なら None → 現在のモードを維持
+                #（既定 "fast" を渡すと graph/hierarchy 文書が黙って降格してしまう）
+                mode = str(payload["index_mode"]) if payload.get("index_mode") else None
+                meta = im.rebuild(str(payload.get("doc_id", "")), index_mode=mode,
+                                  progress=emit)
             else:
                 path = str(payload.get("path", "")).strip()
                 if not path:
                     raise ValueError("文書ファイルのパスを入力してください")
                 meta = im.add_document(
-                    path, title=(payload.get("title") or None), index_mode=mode,
+                    path, title=(payload.get("title") or None),
+                    index_mode=str(payload.get("index_mode", "fast")),
                     force=bool(payload.get("force", False)),
-                    layout=bool(payload.get("layout", False)), progress=emit)
+                    layout=bool(payload.get("layout", False)),
+                    ocr=payload.get("ocr", False), progress=emit)
             q.put({"type": "result", "kind": "docmeta", "meta": meta})
         elif op == "search":
             hits = im.search(
@@ -366,7 +383,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._json({"error": "接続設定が未入力です（取り込み・検索には埋め込みAPIが必要）"}, 400)
             return
         payload = self._read_json()
-        payload["op"] = {"add": "add", "rebuild": "rebuild", "search": "search"}[op]
+        payload["op"] = op  # ルート一致で保証済み（add / rebuild / search）
         task_id = uuid.uuid4().hex[:12]
         with _tasks_lock:
             _tasks[task_id] = Queue()

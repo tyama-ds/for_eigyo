@@ -159,14 +159,29 @@ class BookRAG:
                    f"（使用モデル: {self.vlm_model or '接続設定の model'}）")
         bi = self._index(create=True)
         book = title or path.stem
-        # 同一文書(doc_id)の二重取り込みを防ぐ（木とKGが重複し検索結果も二重になるため）。
-        # doc_id が無い旧索引は title で後方互換的に判定。
-        if any((bi.nodes[r].doc_id == doc_id) or
-               (bi.nodes[r].doc_id is None and bi.nodes[r].title == book)
-               for r in bi.roots) and not force:
-            bx.log(f"「{book}」は取り込み済みのためスキップします"
-                   "（再取り込みは force=True、索引の作り直しは reset()）")
+        resolved = str(path.resolve())
+        # 同一文書の二重取り込みを防ぐ（木とKGが重複し検索結果も二重になるため）。
+        # 判定は doc_id（内容）→ source（同じファイル。内容が変わった版違いも捕捉）
+        # → title（doc_id の無い旧索引の後方互換）の順。
+        dup = next((r for r in bi.roots
+                    if bi.nodes[r].doc_id == doc_id
+                    or (bi.nodes[r].source and bi.nodes[r].source == resolved)
+                    or (bi.nodes[r].doc_id is None and bi.nodes[r].title == book)),
+                   None)
+        if dup is not None and not force:
+            if bi.nodes[dup].doc_id not in (None, doc_id):
+                bx.log(f"「{book}」は同じファイルの別版が取り込み済みのためスキップします。"
+                       "BookIndex は木の部分削除に未対応のため、内容を更新した場合は "
+                       "reset() で作り直すか、文書ごとに索引を分ける IndexManager を"
+                       "使ってください。")
+            else:
+                bx.log(f"「{book}」は取り込み済みのためスキップします"
+                       "（再取り込みは force=True、索引の作り直しは reset()）")
             return book
+        if dup is not None and force:
+            bx.log(f"警告: force=True ですが BookIndex は既存木の削除に未対応のため、"
+                   f"「{book}」の旧い木が索引に残ります（完全な置換は reset() か "
+                   "IndexManager を使用）。")
 
         n_steps = 5 if build_graph else 4
         bx.log(f"[1/{n_steps}] 解析（レイアウト{'+OCR' if ocr else ''}{'+VLM' if use_vlm else ''}）: {path.name}")
@@ -425,11 +440,17 @@ class BookRAG:
         # コサイン類似で候補を絞ってから LLM に渡す（全節をカバーしつつトークン節約）。
         cand_limit = 60
         if len(sections) > cand_limit:
-            qv = bx.embed([query])[0]
-            tvs = bx.embed([t or "" for _, t in sections])
-            sims = tvs @ qv
-            top_idx = list(np.argsort(-sims)[:cand_limit])
-            cand_sections = [sections[i] for i in sorted(top_idx)]  # 文書順を保つ
+            try:
+                qv = bx.embed([query])[0]
+                # 空タイトルは "" だと埋め込みAPIが 400 を返す実装があるため置換
+                tvs = bx.embed([(t or "(無題)") for _, t in sections])
+                sims = tvs @ qv
+                top_idx = list(np.argsort(-sims)[:cand_limit])
+                cand_sections = [sections[i] for i in sorted(top_idx)]  # 文書順を保つ
+            except Exception as e:  # noqa: BLE001  埋め込み障害で質問全体を落とさない
+                print(f"[BookRAG] セクション候補の埋め込み絞り込みに失敗したため"
+                      f"先頭 {cand_limit*2} 節で続行: {e}")
+                cand_sections = sections[:cand_limit * 2]
         else:
             cand_sections = sections
         listing = [{"id": nid, "title": t} for nid, t in cand_sections]
