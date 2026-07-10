@@ -271,6 +271,7 @@ class SeleniumConnector(BaseConnector):
         "post_open_wait_ms": 10000,
         # 入力・レポート長さ・続行
         "editor_id": "m365-chat-editor-target-element",
+        "multiline": "flatten",       # "flatten"=改行を空白に潰して一発送信（スクリプト準拠）/ "shift_enter"
         "length_selector": "button[aria-label='長い, 5 ページ以上']",
         "length_timeout_ms": 50000,
         "send_proceed": True,
@@ -347,7 +348,12 @@ class SeleniumConnector(BaseConnector):
                       f"{clip}）。初回は headless=False で office.com にサインインしてください。")
 
     def _make_driver(self):
-        """設定に応じた Edge / Chrome WebDriver を作る（browser / driver_path / browser_binary を尊重）。"""
+        """Edge / Chrome WebDriver を作る。
+
+        参照スクリプトに合わせ、既定では **Options を一切付けない**
+        （`webdriver.Edge(service=Service(driver_path))` 相当）。headless / user_data_dir /
+        browser_binary を明示指定したときだけ、その項目のみ Options に載せる。
+        """
         from selenium import webdriver
 
         if self._browser() == "chrome":
@@ -359,54 +365,70 @@ class SeleniumConnector(BaseConnector):
             from selenium.webdriver.edge.service import Service
             make = webdriver.Edge
 
-        opts = Options()
-        if bool(self._opt("headless")):
-            opts.add_argument("--headless=new")
-        profile = self._profile_dir()
-        if profile:  # 空なら付けない＝ブラウザ既定プロファイル（業務SSO）を使う
-            opts.add_argument(f"--user-data-dir={profile}")
-            if self._opt("profile_directory"):
-                opts.add_argument(f"--profile-directory={self._opt('profile_directory')}")
-        opts.add_argument("--no-first-run")
-        opts.add_argument("--no-default-browser-check")
-        opts.add_argument("--disable-blink-features=AutomationControlled")
-        bb = self._browser_binary()
-        if bb:
-            opts.binary_location = bb
         dp = self._driver_path()
         # driver_path 明示時はそれを、未指定なら Selenium Manager（selenium 4.6+）に任せる
         service = Service(executable_path=dp) if dp else Service()
+
+        profile = self._profile_dir()
+        bb = self._browser_binary()
+        if not (bool(self._opt("headless")) or profile or bb):
+            return make(service=service)  # ← スクリプトと同じ素の起動
+
+        opts = Options()
+        if bool(self._opt("headless")):
+            opts.add_argument("--headless=new")
+        if profile:
+            opts.add_argument(f"--user-data-dir={profile}")
+            if self._opt("profile_directory"):
+                opts.add_argument(f"--profile-directory={self._opt('profile_directory')}")
+        if bb:
+            opts.binary_location = bb
         return make(options=opts, service=service)
 
     # ---- セッション（ログイン→Researcher を開く。run 内で使い回す） -----------
 
+    @staticmethod
+    def _find_retry(driver, by, value, timeout: float):
+        """スクリプトと同じ素の find_element を、見つかるまで 1 秒おきに繰り返すだけの待機。
+
+        EC.element_to_be_clickable のような可視/有効判定はしない（参照スクリプトは
+        find_element().click() 直呼びで動いているため、判定を足すと逆に固まる）。"""
+        deadline = time.time() + timeout
+        while True:
+            try:
+                return driver.find_element(by, value)
+            except Exception:  # noqa: BLE001  NoSuchElement 等 → まだ描画/ログイン前
+                if time.time() >= deadline:
+                    raise
+                time.sleep(1)
+
     def _open_researcher(self, driver, emit=None) -> None:
-        """office.com を開き、メニュー→エージェント入口 で Researcher に入る。案内タブを閉じる。"""
+        """office.com を開き、メニュー→エージェント入口 で Researcher に入る（参照スクリプト準拠）。"""
         from selenium.webdriver.common.by import By
         from selenium.webdriver.support import expected_conditions as EC
         from selenium.webdriver.support.ui import WebDriverWait
 
-        ready = int(self._opt("ready_timeout_ms")) / 1000
         login = int(self._opt("login_timeout_ms")) / 1000
         driver.get(self._opt("login_url"))
+        time.sleep(1)  # スクリプト準拠の小休止
         self._emit(emit, type="progress", stage="se_login",
                    text="サインイン待ち（必要ならブラウザで完了してください）")
-        # メニューボタンが押せるようになる＝サインイン済み。SSO/MFA を待てるよう長め。
-        WebDriverWait(driver, login).until(
-            EC.element_to_be_clickable((By.XPATH, self._opt("menu_button_xpath")))).click()
+        # スクリプトどおり find_element → click。未ログインでまだ無ければ 1 秒おきに再試行
+        # （手動 SSO/MFA の時間を login_timeout_ms まで確保）。
+        self._find_retry(driver, By.XPATH, self._opt("menu_button_xpath"), login).click()
         self._emit(emit, type="progress", stage="se_agent",
                    text=f"{self._opt('agent_hint')} を開く")
-        WebDriverWait(driver, ready).until(
-            EC.element_to_be_clickable((By.XPATH, self._opt("agent_entrance_xpath")))).click()
-        # 案内タブ/ブランディングを閉じる（環境により無いことも）
+        self._find_retry(driver, By.XPATH, self._opt("agent_entrance_xpath"),
+                         int(self._opt("ready_timeout_ms")) / 1000).click()
+        # 案内タブ/ブランディングを閉じる（スクリプトどおり WebDriverWait 60 秒）
         close_sel = self._opt("close_tab_selector")
         if close_sel:
             try:
                 WebDriverWait(driver, 60).until(
                     EC.element_to_be_clickable((By.CSS_SELECTOR, close_sel))).click()
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001  環境により無いことも
                 pass
-        time.sleep(int(self._opt("post_open_wait_ms")) / 1000)
+        time.sleep(int(self._opt("post_open_wait_ms")) / 1000)  # スクリプトの sleep(10)
 
     @staticmethod
     def _is_alive(driver) -> bool:
@@ -469,18 +491,27 @@ class SeleniumConnector(BaseConnector):
             EC.presence_of_element_located((By.ID, self._opt("editor_id"))))
 
     def _type_and_submit(self, driver, editor, text: str) -> None:
-        """複数行を途中送信せず入力（改行は Shift+Enter）→ 最後に Enter で送信。"""
-        from selenium.webdriver.common.action_chains import ActionChains
+        """プロンプトを入力して送信する（参照スクリプト準拠: send_keys(text, ENTER) 一発）。
+
+        既定（multiline="flatten"）では改行を空白へ潰して 1 行にする — 入力欄では Enter が
+        送信になるため、改行入りをそのまま送ると途中送信になる。multiline="shift_enter" で
+        改行を Shift+Enter として打つ方式にも切替可。"""
         from selenium.webdriver.common.keys import Keys
 
-        editor.click()
-        for i, line in enumerate(text.split("\n")):
-            if i:
-                ActionChains(driver).key_down(Keys.SHIFT).send_keys(Keys.ENTER)\
-                    .key_up(Keys.SHIFT).perform()
-            if line:
-                editor.send_keys(line)
-        editor.send_keys(Keys.ENTER)
+        if str(self._opt("multiline")) == "shift_enter":
+            from selenium.webdriver.common.action_chains import ActionChains
+
+            editor.click()
+            for i, line in enumerate(text.split("\n")):
+                if i:
+                    ActionChains(driver).key_down(Keys.SHIFT).send_keys(Keys.ENTER)\
+                        .key_up(Keys.SHIFT).perform()
+                if line:
+                    editor.send_keys(line)
+            editor.send_keys(Keys.ENTER)
+            return
+        flat = " ".join(seg.strip() for seg in text.splitlines() if seg.strip())
+        editor.send_keys(flat, Keys.ENTER)  # ← スクリプトと同じ
 
     def _pick_length(self, driver, emit=None) -> None:
         """レポートの長さボタン（例「長い, 5 ページ以上」）が出れば選択（出なければスキップ）。"""
@@ -493,12 +524,11 @@ class SeleniumConnector(BaseConnector):
 
         to = int(self._opt("length_timeout_ms")) / 1000
         try:
-            WebDriverWait(driver, to).until(
+            elem = WebDriverWait(driver, to).until(
                 EC.element_to_be_clickable((By.CSS_SELECTOR, sel)))
-            driver.execute_script(
-                "arguments[0].scrollIntoView();", driver.find_element(By.CSS_SELECTOR, sel))
-            time.sleep(3)
-            # スクロール後に要素が差し替わることがあるので取り直してからクリック
+            driver.execute_script("arguments[0].scrollIntoView();", elem)
+            time.sleep(5)  # スクリプト準拠
+            # スクロール後に要素が差し替わることがあるので取り直してからクリック（スクリプト準拠）
             WebDriverWait(driver, to).until(
                 EC.element_to_be_clickable((By.CSS_SELECTOR, sel))).click()
             self._emit(emit, type="progress", stage="se_length", text="レポート長さを選択")
@@ -578,16 +608,21 @@ class SeleniumConnector(BaseConnector):
         text = ""
         copy_sel = self._opt("copy_selector")
         if copy_sel:
-            # コピー前にユニークな目印をクリップボードへ。コピー後も目印のままなら
-            # 「実際にはコピーされていない（前章の値のまま）」と判断して失敗扱いにする。
+            # コピー前にユニークな目印をクリップボードへ（pyperclip がある時だけ）。
+            # コピー後も目印のままなら「前章の値の取り違え」と判断できる。
             sentinel = f"__llmlab_copy_{int(time.time() * 1000)}__"
-            self._set_clipboard(driver, sentinel)
+            wrote_sentinel = self._set_clipboard(sentinel)
             try:
+                # スクリプト準拠: WebDriverWait 60 秒で clickable を待ってクリック
                 WebDriverWait(driver, 60).until(
                     EC.element_to_be_clickable((By.CSS_SELECTOR, copy_sel))).click()
-                time.sleep(1)
-                got = self._read_clipboard(driver)
-                text = "" if got == sentinel else got
+                deadline = time.time() + 10  # コピー反映を最大 10 秒待つ
+                while time.time() < deadline:
+                    time.sleep(1)
+                    got = self._read_clipboard(driver)
+                    if got and not (wrote_sentinel and got == sentinel):
+                        text = got
+                        break
             except Exception:  # noqa: BLE001
                 text = ""
         if not text and self._opt("answer_selector"):  # DOM フォールバック
@@ -599,21 +634,16 @@ class SeleniumConnector(BaseConnector):
         return (text or "").strip()
 
     @staticmethod
-    def _set_clipboard(driver, value: str) -> None:
-        """クリップボードに目印を書く（pyperclip → JS の順。ベストエフォート）。"""
+    def _set_clipboard(value: str) -> bool:
+        """クリップボードに目印を書く（pyperclip がある時だけ。書けたら True）。
+
+        JS の writeText はフォーカス要求でページ側の挙動に干渉し得るため使わない。"""
         try:
             import pyperclip
             pyperclip.copy(value)
-            return
+            return True
         except Exception:  # noqa: BLE001
-            pass
-        try:
-            driver.execute_async_script(
-                "var cb=arguments[arguments.length-1];"
-                "navigator.clipboard.writeText(arguments[0]).then(function(){cb(1);})"
-                ".catch(function(){cb(0);});", value)
-        except Exception:  # noqa: BLE001
-            pass
+            return False
 
     @staticmethod
     def _read_clipboard(driver) -> str:
