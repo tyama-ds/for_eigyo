@@ -35,6 +35,9 @@
   .logo{font-weight:800;font-size:1.15rem;letter-spacing:.12em}
   .logo b{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
   .logo small{color:var(--ink-mute);letter-spacing:.28em;font-weight:600;margin-left:8px}
+  .logo .ver{font-size:.66rem;font-weight:700;letter-spacing:.05em;color:var(--ink-mute);
+    border:1px solid var(--line-strong);border-radius:999px;padding:1px 8px;margin-left:10px;
+    vertical-align:2px}
   .spacer{flex:1}
   .pill{display:inline-flex;align-items:center;gap:8px;font-size:.8rem;color:var(--ink-2);
     border:1px solid var(--line);border-radius:999px;padding:4px 12px}
@@ -143,7 +146,7 @@
 </head>
 <body>
 <header>
-  <div class="logo"><b>COPILOT</b> RESEARCH<small>M365 × 擬似GEPA</small></div>
+  <div class="logo"><b>COPILOT</b> RESEARCH<small>M365 × 擬似GEPA</small><span class="ver" id="appVer" title="アプリのバージョン"></span></div>
   <div class="spacer"></div>
   <span class="pill"><span class="dot" id="connDot"></span><span id="connText">未接続</span></span>
   <button class="btn ghost sm" id="btnConnect">CONNECT</button>
@@ -342,13 +345,15 @@ const CONN_OPTS={
   demo:[], bridge:[],
   selenium:[
     {k:"browser",label:"ブラウザ",type:"select",choices:["edge","chrome"]},
-    {k:"url",label:"Copilot URL",ph:"https://m365.cloud.microsoft/chat"},
-    {k:"driver_path",label:"WebDriverの場所（msedgedriver/chromedriver。空なら自動解決）",ph:"/usr/local/bin/msedgedriver"},
-    {k:"browser_binary",label:"ブラウザ実行ファイル（空なら既定）",ph:"/usr/bin/microsoft-edge"},
-    {k:"agent_selector",label:"エージェント選択チップのCSS（Researcher自動選択・任意）",ph:"button[aria-label*='Researcher']"},
-    {k:"busy_selector",label:"生成中インジケータのCSS（消えるまで待機・任意）",ph:"button[aria-label*='停止'], [class*='typing']"},
-    {k:"timeout_ms",label:"回答待ち上限ミリ秒（Researcherは長め・既定300000）",type:"number",ph:"300000"},
-    {k:"headless",label:"headless（無人・初回はOFF推奨）",type:"check"},
+    {k:"driver_path",label:"WebDriverの場所（msedgedriver/chromedriver。空なら自動解決）",ph:"C:\\Driver\\edgedriver_win32\\msedgedriver.exe"},
+    {k:"browser_binary",label:"ブラウザ実行ファイル（空なら既定）",ph:"（空でOK）"},
+    {k:"user_data_dir",label:"プロファイル（空=既定/業務SSOを流用。同時実行時のみ指定）",ph:"（空でOK）"},
+    {k:"length_selector",label:"レポート長さボタンのCSS（空で無効）",ph:"button[aria-label='長い, 5 ページ以上']"},
+    {k:"stop_selector",label:"生成停止ボタンのCSS（完了検知に使用）",ph:"button[aria-label='生成を停止する']"},
+    {k:"copy_selector",label:"応答コピーのボタンCSS",ph:"button[aria-label='応答のコピー']"},
+    {k:"timeout_ms",label:"生成待ち上限ミリ秒（Researcherは長め・既定1800000）",type:"number",ph:"1800000"},
+    {k:"headless",label:"headless（無人・初回SSOはOFF必須）",type:"check"},
+    {k:"__advanced__",label:"詳細設定JSON（menu_button_xpath / editor_id 等を上書き・任意）",type:"json",ph:'{"editor_id":"m365-chat-editor-target-element"}'},
   ],
   graph:[
     {k:"endpoint",label:"POST エンドポイント",ph:"https://graph.microsoft.com/beta/..."},
@@ -362,29 +367,47 @@ function renderConnOpts(){
   if(kind==="bridge"){ box.innerHTML=`<div class="hint" style="margin-top:8px">各章のプロンプトを画面に表示 → 人が M365 Copilot に貼り、回答を貼り戻す方式。自動化不可の環境でも確実。</div>`; return; }
   if(kind==="demo"){ box.innerHTML=`<div class="hint" style="margin-top:8px">モック。指示が濃くなるほど回答も濃くなり、擬似GEPA の改善が見えます。</div>`; return; }
   opts.forEach(o=>{
-    const id="opt_"+o.k;
+    const id="opt_"+o.k, ph=esc(o.ph||"");
     if(o.type==="check"){
       box.insertAdjacentHTML("beforeend",`<label class="f"><input type="checkbox" id="${id}" style="width:auto;margin-right:6px">${o.label}</label>`);
     }else if(o.type==="select"){
       box.insertAdjacentHTML("beforeend",`<label class="f">${o.label}</label><select id="${id}">${(o.choices||[]).map(c=>`<option value="${c}">${c}</option>`).join("")}</select>`);
+    }else if(o.type==="json"){
+      box.insertAdjacentHTML("beforeend",`<label class="f">${o.label}</label><textarea id="${id}" style="min-height:56px;font-size:.8rem" placeholder="${ph}"></textarea>`);
     }else{
-      box.insertAdjacentHTML("beforeend",`<label class="f">${o.label}</label><input type="${o.type||"text"}" id="${id}" placeholder="${o.ph||""}">`);
+      box.insertAdjacentHTML("beforeend",`<label class="f">${o.label}</label><input type="${o.type||"text"}" id="${id}" placeholder="${ph}">`);
     }
   });
 }
+// 不正な入力があれば null を返す（呼び出し側は実行を中止する）
 function collectConnOpts(){
   const kind=$("connector").value, out={};
+  let bad=false;
   (CONN_OPTS[kind]||[]).forEach(o=>{
     const el=$("opt_"+o.k); if(!el) return;
-    if(o.type==="check") out[o.k]=el.checked;
-    else if(o.type==="select") out[o.k]=el.value;
-    else if(String(el.value).trim()) out[o.k]=String(el.value).trim();
+    if(o.type==="check"){ out[o.k]=el.checked; }
+    else if(o.type==="select"){ out[o.k]=el.value; }
+    else if(o.type==="number"){
+      const v=String(el.value).trim();
+      if(v){ const n=parseInt(v,10); if(Number.isFinite(n)) out[o.k]=n; else { toast(`${o.k} は整数で入力してください`); bad=true; } }
+    }
+    else if(o.type==="json"){
+      const v=String(el.value).trim();
+      if(v){
+        let parsed;
+        try{ parsed=JSON.parse(v); }catch(e){ toast("詳細設定JSONが不正です: "+e.message); bad=true; return; }
+        if(!parsed || typeof parsed!=="object" || Array.isArray(parsed)){ toast("詳細設定JSONはオブジェクト {..} にしてください"); bad=true; return; }
+        Object.assign(out, parsed);
+      }
+    }
+    else if(String(el.value).trim()){ out[o.k]=String(el.value).trim(); }
   });
-  return out;
+  return bad ? null : out;
 }
 $("btnTest").onclick=async()=>{
+  const opts=collectConnOpts(); if(opts===null) return;
   $("testMsg").textContent="テスト中…";
-  const r=await api("/api/connector/test",{kind:$("connector").value,options:collectConnOpts()});
+  const r=await api("/api/connector/test",{kind:$("connector").value,options:opts});
   $("testMsg").innerHTML=`<span style="color:${r.ok?'var(--ok)':'var(--err)'}">${r.ok?'✅':'❌'} ${esc(r.message||'')}</span>`;
 };
 
@@ -425,11 +448,12 @@ $("btnOutline").onclick=async()=>{
 
 /* ================= 実行 ================= */
 function collectPayload(){
+  const co=collectConnOpts(); if(co===null) return null;  // 不正なコネクタ設定
   return {
     request:$("request").value.trim(),
     demo: mode==="demo",
     connector: $("connector").value,
-    connector_options: collectConnOpts(),
+    connector_options: co,
     gepa_budget: +$("budget").value||0,
     minibatch: +$("minibatch").value||2,
     outline: collectOutline(),
@@ -437,6 +461,7 @@ function collectPayload(){
 }
 $("btnRun").onclick=async()=>{
   const p=collectPayload();
+  if(!p) return;                                    // コネクタ設定が不正
   if(!p.request){toast("調査依頼を入力してください");return;}
   // reset UI
   $("lineage").innerHTML=""; $("finalChapters").innerHTML=""; $("reportPanel").style.display="none";
@@ -644,6 +669,8 @@ $("btnConnSave").onclick=async()=>{
 };
 async function refreshStatus(){
   const s=await api("/api/status");
+  $("appVer").textContent=s.version?("v"+s.version):"";
+  document.title=`Copilot Research${s.version?" v"+s.version:""}`;
   $("connDot").className="dot"+(s.configured?" on":"");
   $("connText").textContent=s.configured?`${s.model||"接続済み"}`:"未接続";
   if(s.configured&&s.base_url){ $("cBase").value=s.base_url; $("cModel").value=s.model||""; }
