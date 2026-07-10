@@ -1356,9 +1356,11 @@ async function diagnoseSource(s){
   }
 }
 function diagVerdict(diag){
-  const p=diag.primary||{}, a=diag.alternative, errl=(p.error||"").toLowerCase();
+  const p=diag.primary||{}, alts=diag.alternatives||(diag.alternative?[diag.alternative]:[]),
+        errl=(p.error||"").toLowerCase();
   if(p.items>0) return ["ok","✓ 正常に取得できています（"+p.items+"件）。"];
-  if(a && a.items>0) return ["info","このURLでは取得できませんが、代替（Bing⇄Google）では "+a.items+" 件取得できます。実際の表示ではこの代替へ自動フォールバックします。"];
+  const okAlt=alts.find(a=>a&&a.items>0);
+  if(okAlt) return ["info","このURLでは取得できませんが、代替経路では "+okAlt.items+" 件取得できます。実際の表示では自動的にこの代替へフォールバックします。"];
   if(errl.includes("ssl")||errl.includes("certificate")||errl.includes("cert_")) return ["warn","TLS証明書エラー。社内プロキシがHTTPSを傍受している可能性 →「AI・プロキシ設定」でCA証明書（ca_bundle）を指定してください。"];
   if(p.status===403||p.status===407||errl.includes("forbidden")||errl.includes("proxy authentication")) return ["warn","アクセス拒否（HTTP "+(p.status||"?")+"）。社内プロキシのカテゴリ制限／認証の可能性が高いです。管理者に news.google.com / bing.com の許可を依頼するか、代替を利用してください。"];
   if(errl.includes("urlerror")||errl.includes("timed out")||errl.includes("timeout")||errl.includes("refused")||errl.includes("name or service")||errl.includes("getaddrinfo")) return ["warn","接続できません（"+(p.error||"")+"）。プロキシ未経由／ブロック／DNS の可能性。プロキシ設定を確認してください。"];
@@ -1390,7 +1392,8 @@ function renderDiag(diag){
   const v=diagVerdict(diag);
   box.append(el("div",{class:"diag-verdict "+v[0], text:v[1]}));
   box.append(probeCard("このURL", diag.primary||{}));
-  if(diag.alternative) box.append(probeCard("代替アグリゲータ（Bing⇄Google）", diag.alternative));
+  const alts=diag.alternatives||(diag.alternative?[diag.alternative]:[]);
+  alts.forEach((a,i)=>{ if(a) box.append(probeCard("代替経路 "+(i+1)+"（"+(new URL(a.url).hostname)+"）", a)); });
 }
 
 // ============================================================ overlays（重ね対応）

@@ -34,7 +34,9 @@
 | `api.jstage.jst.go.jp` | 鉄と鋼・ISIJ International（J-STAGE WebAPI） |
 | `newswitch.jp` | ニュースイッチ（日刊工業新聞） |
 | `news.google.com` | 電気新聞・日刊鉄鋼新聞・日刊産業新聞・電波新聞・日刊工業新聞・化学工業日報・環境新聞・日刊建設工業新聞・Harvard Business Review・日刊自動車新聞・日本海事新聞・建設通信新聞・日本物流新聞・物流ニッポン・繊研新聞（各紙を Google ニュース RSS で取得） |
-| `www.bing.com` | 上記 Google ニュース系の**自動フォールバック**先（Bing ニュース RSS） |
+| `www.bing.com` | Google ニュース系の**自動フォールバック**先（Bing ニュース RSS）。直接フィードが遮断された媒体の `site:` 検索にも使用 |
+| `export.arxiv.org` | arXiv の代替経路（`rss.arxiv.org` が取得できない場合の公式API） |
+| `news.ycombinator.com` | Hacker News の代替経路（`hnrss.org` が取得できない場合の本家RSS） |
 
 ## 2. 生成AI アシスタント（使う場合のみ）
 
@@ -58,7 +60,7 @@ AIパネルで記事コンテキストに本文を含める設定にすると、
 ## コピー用（カンマ区切り・必須＋フォールバック）
 
 ```
-www.nhk.or.jp,news.yahoo.co.jp,rss.itmedia.co.jp,gigazine.net,www.publickey1.jp,b.hatena.ne.jp,techcrunch.com,www.theverge.com,hnrss.org,feeds.bbci.co.uk,www.theguardian.com,www.nature.com,www.science.org,spectrum.ieee.org,www.technologyreview.com,www.sciencedaily.com,feeds.arstechnica.com,rss.arxiv.org,api.jstage.jst.go.jp,newswitch.jp,news.google.com,www.bing.com
+www.nhk.or.jp,news.yahoo.co.jp,rss.itmedia.co.jp,gigazine.net,www.publickey1.jp,b.hatena.ne.jp,techcrunch.com,www.theverge.com,hnrss.org,feeds.bbci.co.uk,www.theguardian.com,www.nature.com,www.science.org,spectrum.ieee.org,www.technologyreview.com,www.sciencedaily.com,feeds.arstechnica.com,rss.arxiv.org,api.jstage.jst.go.jp,newswitch.jp,news.google.com,www.bing.com,export.arxiv.org,news.ycombinator.com
 ```
 
 ## コピー用（＋生成AI）
@@ -73,7 +75,7 @@ api.anthropic.com,api.openai.com
 *.nhk.or.jp, *.yahoo.co.jp, *.itmedia.co.jp, gigazine.net, *.publickey1.jp, *.hatena.ne.jp,
 techcrunch.com, *.theverge.com, hnrss.org, *.bbci.co.uk, *.theguardian.com, *.nature.com,
 *.science.org, *.ieee.org, *.technologyreview.com, *.sciencedaily.com, *.arstechnica.com,
-*.arxiv.org, *.jst.go.jp, newswitch.jp, *.google.com, *.bing.com,
+*.arxiv.org, *.jst.go.jp, newswitch.jp, *.google.com, *.bing.com, news.ycombinator.com,
 api.anthropic.com, api.openai.com
 ```
 

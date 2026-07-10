@@ -363,6 +363,18 @@ def parse_feed(raw: bytes, src: dict) -> list[dict]:
     for it in items:
         title = strip_html(_text(_find_local(it, ("title",))))
         link = safe_url(_extract_link(it))
+        # J-STAGE WebAPI 互換: 標準の title/link ではなく
+        # <article_title><ja>…</ja></article_title> / <article_link> を使う
+        if not title:
+            at = _find_local(it, ("article_title",))
+            if at is not None:
+                title = strip_html(_text(_find_local(at, ("ja", "en")))
+                                   or "".join(at.itertext()).strip())
+        if not link:
+            al = _find_local(it, ("article_link",))
+            if al is not None:
+                link = safe_url(_text(_find_local(al, ("ja", "en")))
+                                or "".join(al.itertext()).strip())
         if not title or not link:
             continue
         raw_summary = _text(_find_local(
@@ -483,19 +495,63 @@ def _fetch_and_parse(url: str, src: dict):
     return arts[:MAX_PER_SOURCE], None
 
 
+def _fallback_urls(url: str) -> list[str]:
+    """主URLで取得できない/0件のときに順に試す代替URL（最大2つ）。
+
+    - Google⇄Bing ニュース検索は相互フォールバック（従来どおり）。
+      Google が対象ドメインを索引していない「正常だが0件」も Bing で救う。
+    - arXiv (rss.arxiv.org) → 公式の export.arxiv.org API（Atom・別ホスト）。
+    - Hacker News (hnrss.org) → 本家 news.ycombinator.com/rss。
+    - その他の直接フィード → Google ニュース site:ドメイン 検索 → Bing 同検索。
+      社内プロキシが配信元ドメインを遮断していても news.google.com が通れば
+      同じ媒体の記事を取得できる（プロキシ環境での主要な救済経路）。
+    - IPアドレス直指定やドットなしホスト（イントラ/テスト）は対象外。
+    """
+    try:
+        p = urlparse(url)
+        host = (p.hostname or "").lower()
+        if not host or "." not in host:
+            return []
+        try:
+            ipaddress.ip_address(host)
+            return []                        # IP直指定はフォールバックしない
+        except ValueError:
+            pass
+        alt = _alt_aggregator(url)           # Google⇄Bing のニュース検索URL
+        if alt:
+            return [alt]
+        if host == "rss.arxiv.org" and p.path.startswith("/rss/"):
+            cat = p.path[len("/rss/"):]
+            return ["https://export.arxiv.org/api/query?search_query=cat:" + quote(cat)
+                    + "&sortBy=submittedDate&sortOrder=descending&max_results=30"]
+        if host == "hnrss.org":
+            return ["https://news.ycombinator.com/rss"]
+        if host.endswith("google.com") or host.endswith("bing.com"):
+            return []                        # 検索URL以外の google/bing は対象外
+        domain = host[4:] if host.startswith("www.") else host
+        q = quote("site:" + domain)
+        return ["https://news.google.com/rss/search?q=" + q + "&hl=ja&gl=JP&ceid=JP:ja",
+                "https://www.bing.com/news/search?q=" + q + "&format=RSS&setlang=ja"]
+    except (ValueError, UnicodeError):
+        return []
+
+
 def fetch_source(src: dict) -> tuple[str, list[dict], str | None]:
     sid, url = src.get("id", ""), src.get("url", "")
     arts, err = _fetch_and_parse(url, src)
     if arts:
         return sid, arts, None
-    # 取得失敗/非フィード/0件 → 代替アグリゲータ(Google⇄Bing)があれば試す
-    alt = _alt_aggregator(url)
-    if alt and err is not None:   # err=None は「正常なフィードだが0件」なので代替不要
+    # 取得失敗/非フィード/0件 → 代替URLを順に試す（0件でも試す:
+    # Google が索引していないドメインを Bing が持っているケース等があるため）
+    primary_ok_but_empty = err is None
+    for alt in _fallback_urls(url)[:2]:
         alt_arts, alt_err = _fetch_and_parse(alt, src)
         if alt_arts:
             return sid, alt_arts, None
-        if alt_err:
-            err = f"{err} / 代替も失敗: {alt_err}"
+        host = urlparse(alt).hostname or "?"
+        err = f"{err or '記事0件'} / 代替({host}): {alt_err or '0件'}"
+    if primary_ok_but_empty and err is not None and not _fallback_urls(url):
+        err = None   # 正常な空フィードで代替も無い場合はエラー扱いにしない
     return sid, [], err
 
 
@@ -534,8 +590,9 @@ def diagnose_source(src: dict) -> dict:
     out = {"id": src.get("id", ""), "name": src.get("name", ""), "url": url,
            "proxy_mode": mode, "ca_bundle": ca or "(未設定/システム既定)",
            "primary": probe(url)}
-    alt = _alt_aggregator(url)
-    out["alternative"] = probe(alt) if alt else None
+    alts = [probe(u) for u in _fallback_urls(url)[:2]]
+    out["alternatives"] = alts
+    out["alternative"] = alts[0] if alts else None   # 旧フィールド互換
     return out
 
 
