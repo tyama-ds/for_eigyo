@@ -453,10 +453,13 @@ python -m llmlab.app --port 9000 --root ./storage
 - 接続情報（APIキー等）は UI から入力し**プロセスメモリのみ**に保持(ファイル保存なし)。
   127.0.0.1 のみに bind し外部公開しない
 - **文書管理ビュー（ヘッダの「文書管理」）**: ⑬ IndexManager を GUI から操作する。
-  文書追加（index_mode 選択）・文書一覧（doc_id/モード/状態/chunks/graph）・詳細（JSON/
-  チャンク/セクション）・再構築・削除・検索（`対象文書数`/`文書内チャンク`/`最大チャンク`/
-  `BookRAG(graph)を使う`）を行える。graph 未作成の文書に BookRAG 検索を要求しても落とさず
-  通常RAGにフォールバックし、その旨を各文書に表示する。
+  文書追加（index_mode 選択。**パスにフォルダを指定すると一括取り込み** — 1ファイル=
+  1文書で個別 doc_id、失敗は続行して集計）・文書一覧（doc_id/モード/状態/chunks/graph）・
+  詳細（JSON/チャンク/セクション）・再構築・削除に加え、**回答生成 / 要約 / チャンク検索**
+  の3アクション（`対象文書数`/`文書内チャンク`/`最大チャンク`/`BookRAG(graph)を使う`）。
+  「要約してください」のような依頼文にも応え、一覧の ✓ で対象文書を絞れる。
+  graph 未作成の文書に BookRAG 検索を要求しても落とさず通常RAGにフォールバックし、
+  その旨を各文書に表示する。
 
 ### ⑬ IndexManager — index_mode で速度と精度を選ぶ文書間RAG（ローカルLLM実用重視）
 
@@ -474,10 +477,14 @@ python -m llmlab.app --port 9000 --root ./storage
 im = llmlab.IndexManager()                       # 既定 ./storage/index
 im.add_document("./docs/2024規程.pdf")            # fast（既定・高速）
 im.add_document("./docs/規程.pdf", index_mode="graph")   # 明示時だけ重い抽出
+im.add_folder("./docs/2024")                      # フォルダ一括（1ファイル=1文書、失敗は続行）
 im.documents()                                    # doc_id 単位の一覧（title/status/mode…）
 im.document(doc_id)                               # メタ + status + チャンク + 木の要約
 res = im.search("退職金は？", document_top_n=4, chunk_top_k_per_doc=4, use_graph=False)
 for h in res: print(h.title, h.doc_id, h.score, len(h.chunks))
+print(im.ask("退職金の計算方法は？"))              # 回答を生成（要約・比較などの依頼文もOK）
+print(im.summarize())                              # 文書ごとに要約 → 統合要約
+print(im.summarize("リスク面を中心に", doc_ids=[doc_id]))  # 観点・対象文書の指定
 im.rebuild(doc_id, index_mode="hierarchy")        # 作り直し（force 相当）
 im.delete(doc_id)
 ```

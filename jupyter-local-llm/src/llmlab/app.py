@@ -191,7 +191,17 @@ def _run_docs_task(task_id: str, payload: dict, root: str) -> None:
             else:
                 path = str(payload.get("path", "")).strip()
                 if not path:
-                    raise ValueError("文書ファイルのパスを入力してください")
+                    raise ValueError("文書ファイル（またはフォルダ）のパスを入力してください")
+                if Path(path).is_dir():
+                    # フォルダ一括: 1ファイル=1文書として順に処理（失敗は続行して集計）
+                    batch = im.add_folder(
+                        path, index_mode=str(payload.get("index_mode", "fast")),
+                        force=bool(payload.get("force", False)),
+                        layout=bool(payload.get("layout", False)),
+                        ocr=payload.get("ocr", False), progress=emit)
+                    q.put({"type": "result", "kind": "docbatch", **batch,
+                           "results": [m for m in batch["results"]]})
+                    return
                 meta = im.add_document(
                     path, title=(payload.get("title") or None),
                     index_mode=str(payload.get("index_mode", "fast")),
@@ -200,15 +210,30 @@ def _run_docs_task(task_id: str, payload: dict, root: str) -> None:
                     ocr=payload.get("ocr", False), progress=emit)
             q.put({"type": "result", "kind": "docmeta", "meta": meta})
         elif op == "search":
-            hits = im.search(
-                str(payload.get("question", "")),
+            action = str(payload.get("action", "search"))
+            question = str(payload.get("question", ""))
+            doc_ids = payload.get("doc_ids") or None
+            kw = dict(
                 document_top_n=int(payload.get("document_top_n", 4) or 4),
                 chunk_top_k_per_doc=int(payload.get("chunk_top_k_per_doc", 4) or 4),
                 max_chunks_per_doc=(int(payload["max_chunks_per_doc"])
                                     if payload.get("max_chunks_per_doc") else None),
-                use_graph=bool(payload.get("use_graph", False)))
-            q.put({"type": "result", "kind": "docsearch",
-                   "hits": [h.to_dict() for h in hits]})
+                use_graph=bool(payload.get("use_graph", False)),
+                doc_ids=doc_ids,
+            )
+            if action == "answer":       # 回答生成（要約・比較などの依頼文もOK）
+                if not question.strip():
+                    raise ValueError("質問・依頼を入力してください")
+                r = im.ask(question, progress=emit, **kw)
+                q.put({"type": "result", "kind": "docanswer", **r.to_dict()})
+            elif action == "summarize":  # 文書ごと要約 → 統合要約
+                r = im.summarize(question.strip() or None, doc_ids=doc_ids,
+                                 progress=emit)
+                q.put({"type": "result", "kind": "docanswer", **r.to_dict()})
+            else:                        # チャンク検索（従来）
+                hits = im.search(question, **kw)
+                q.put({"type": "result", "kind": "docsearch",
+                       "hits": [h.to_dict() for h in hits]})
         else:
             raise ValueError(f"未知の op: {op}")
     except Exception as e:  # noqa: BLE001  失敗は握りつぶさず UI に出す

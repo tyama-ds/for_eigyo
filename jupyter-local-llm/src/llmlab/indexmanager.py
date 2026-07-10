@@ -46,6 +46,12 @@ INDEX_MODES = ("fast", "hierarchy", "graph")
 STATUSES = ("pending", "running", "ready", "failed", "skipped")
 DEFAULT_STORAGE = "./storage/index"
 
+# フォルダ一括取り込みの対応拡張子（fast はベクトル索引に入る全形式）
+FOLDER_EXTS = {".pdf", ".txt", ".md", ".docx", ".doc", ".pptx",
+               ".csv", ".xlsx", ".xls", ".html", ".epub"}
+# hierarchy/graph（BookRAG の木/KG）を作れる形式。それ以外は fast に自動降格
+BOOK_EXTS = {".pdf", ".docx", ".md", ".txt", ".pptx", ".xlsx"}
+
 
 def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
@@ -69,6 +75,31 @@ class SearchHit:
             "source_path": self.source_path, "used_graph": self.used_graph,
             "fallback_reason": self.fallback_reason, "chunks": self.chunks,
         }
+
+
+@dataclass
+class DocAnswer:
+    """ask() / summarize() の結果。text が回答/要約本文（Markdown 可）。"""
+
+    text: str
+    hits: list[SearchHit] = field(default_factory=list)   # 根拠（ask）
+    per_doc: list[dict] = field(default_factory=list)     # 文書別の部分要約（summarize）
+
+    def to_dict(self) -> dict:
+        return {"text": self.text, "hits": [h.to_dict() for h in self.hits],
+                "per_doc": self.per_doc}
+
+    def __str__(self) -> str:
+        out = [self.text]
+        if self.hits:
+            out += ["", "── 根拠（文書別） ──"]
+            for h in self.hits:
+                out.append(f"■ {h.title}（{h.doc_id}, score {h.score}）")
+        if self.per_doc:
+            out += ["", "── 文書別の要約 ──"]
+            for p in self.per_doc:
+                out.append(f"■ {p['title']}（{p['doc_id']}）\n{p['text']}")
+        return "\n".join(out)
 
 
 class IndexManager:
@@ -187,6 +218,68 @@ class IndexManager:
             self._set_status(doc_id, "failed", index_mode, error=meta["error"])
             raise
 
+    def add_folder(self, docs_dir: str | Path, *, index_mode: str = "fast",
+                   force: bool = False, layout=False, ocr=False,
+                   progress=None) -> dict:
+        """フォルダ内の対応文書を **1ファイル=1文書** として順に取り込む。
+
+        - 各ファイルは個別の doc_id を持つ独立文書になる（検索は従来どおり
+          文書ごとに chunk top-k を取り doc_id 単位で集約・多様化する）。
+        - hierarchy/graph 指定時、木/KG を作れない形式（csv/html 等）は
+          そのファイルだけ fast に自動降格して取り込む（スキップしない）。
+        - 1ファイルの失敗で全体を止めない（status=failed に記録して続行）。
+        - 返り値: {"results": [meta...], "added", "skipped", "failed", "errors"}
+        """
+        docs_dir = Path(docs_dir)
+        if not docs_dir.is_dir():
+            raise NotADirectoryError(f"フォルダではありません: {docs_dir}")
+        files = sorted(f for f in docs_dir.iterdir()
+                       if f.is_file() and f.suffix.lower() in FOLDER_EXTS)
+        if not files:
+            raise FileNotFoundError(
+                f"{docs_dir} に対応文書がありません"
+                f"（対応: {', '.join(sorted(FOLDER_EXTS))}）")
+
+        def emit(stage, cur, detail=""):
+            if progress:
+                try:
+                    progress({"stage": stage, "current": cur, "total": len(files),
+                              "detail": detail})
+                except Exception:  # noqa: BLE001
+                    pass
+
+        results, errors = [], []
+        added = skipped = failed = 0
+        for i, f in enumerate(files):
+            eff_mode = index_mode
+            if index_mode != "fast" and f.suffix.lower() not in BOOK_EXTS:
+                eff_mode = "fast"
+                emit(f"[{i + 1}/{len(files)}] {f.name}", i,
+                     f"{f.suffix} は木/KG 非対応のため fast で取り込み")
+
+            # ファイル内の進捗（チャンク化・抽出フェーズ等）は detail に流し、
+            # バーはフォルダ全体（i/total）で進める
+            def _inner(evt, _i=i, _name=f.name):
+                emit(f"[{_i + 1}/{len(files)}] {_name}", _i, str(evt.get("stage", "")))
+
+            emit(f"[{i + 1}/{len(files)}] {f.name}", i, f"取り込み中（{eff_mode}）")
+            try:
+                meta = self.add_document(f, index_mode=eff_mode, force=force,
+                                         layout=layout, ocr=ocr, progress=_inner)
+                results.append(meta)
+                if meta.get("status") == "skipped":
+                    skipped += 1
+                else:
+                    added += 1
+            except Exception as e:  # noqa: BLE001  1件の失敗で全体を止めない
+                failed += 1
+                errors.append({"file": f.name, "error": f"{type(e).__name__}: {e}"})
+                print(f"[IndexManager] {f.name} の取り込みに失敗（続行）: {e}")
+        emit("完了", len(files),
+             f"追加 {added} / 変更なし {skipped} / 失敗 {failed}")
+        return {"results": results, "added": added, "skipped": skipped,
+                "failed": failed, "errors": errors}
+
     def rebuild(self, doc_id: str, *, index_mode: str | None = None,
                 progress=None) -> dict:
         """文書を（必要なら別モードで）作り直す（force=True 相当）。
@@ -273,18 +366,34 @@ class IndexManager:
 
     def search(self, question: str, *, document_top_n: int = 4,
                chunk_top_k_per_doc: int = 4, max_chunks_per_doc: int | None = None,
-               use_graph: bool = False) -> list[SearchHit]:
+               use_graph: bool = False, doc_ids: list[str] | None = None) -> list[SearchHit]:
         """文書間検索。まず doc_id 単位で候補文書を選び、各文書内で chunk top-k を取る。
 
         - いきなり全チャンク global top_k を取らず、doc_id で集約して多様化する。
         - use_graph=True で graph 索引がある文書は BookRAG 検索を使い、無ければ通常RAG
           へフォールバック（落とさない。fallback_reason に理由を記録）。
+        - doc_ids 指定時はその文書だけを対象にする（文書ごとに検索して集約）。
         """
         cap = max_chunks_per_doc or chunk_top_k_per_doc
-        cand_k = max(document_top_n * chunk_top_k_per_doc * 5, 50)
-        ranked = self._paged.rank_documents(
-            question, candidate_chunk_k=cand_k, top_n=document_top_n,
-            chunks_per_doc=chunk_top_k_per_doc)
+        if doc_ids:
+            # 対象文書が指定されているときは文書ごとに検索してスコア順に並べる
+            from types import SimpleNamespace
+
+            ranked = []
+            for did in doc_ids:
+                nodes = self._paged.retrieve_in_doc(question, doc_id=did,
+                                                    top_m=chunk_top_k_per_doc)
+                score = max((getattr(n, "score", 0.0) or 0.0 for n in nodes), default=0.0)
+                meta = self._read(self.docs_dir, did) or {}
+                ranked.append(SimpleNamespace(doc_id=did, score=score,
+                                              title=meta.get("title", did)))
+            ranked.sort(key=lambda r: r.score, reverse=True)
+            ranked = ranked[:document_top_n]
+        else:
+            cand_k = max(document_top_n * chunk_top_k_per_doc * 5, 50)
+            ranked = self._paged.rank_documents(
+                question, candidate_chunk_k=cand_k, top_n=document_top_n,
+                chunks_per_doc=chunk_top_k_per_doc)
 
         hits: list[SearchHit] = []
         for r in ranked:
@@ -305,6 +414,111 @@ class IndexManager:
             hit.used_graph = used_graph
             hits.append(hit)
         return hits
+
+    # ---- 回答生成・要約（検索 + LLM 合成） ----------------------------------
+
+    def ask(self, question: str, *, document_top_n: int = 4,
+            chunk_top_k_per_doc: int = 4, max_chunks_per_doc: int | None = None,
+            use_graph: bool = False, doc_ids: list[str] | None = None,
+            progress=None) -> DocAnswer:
+        """質問に **回答を生成** する（検索 → 文書別の根拠を文脈に LLM で合成）。
+
+        「要約してください」「比較してください」のような依頼文にもそのまま応える。
+        根拠は doc_id 単位で多様化され、回答には文書名を明示させる。
+        """
+        from . import bookindex as bx
+
+        def emit(stage, cur, total):
+            if progress:
+                try:
+                    progress({"stage": stage, "current": cur, "total": total, "detail": ""})
+                except Exception:  # noqa: BLE001
+                    pass
+
+        emit("関連文書を検索", 0, 2)
+        hits = self.search(question, document_top_n=document_top_n,
+                           chunk_top_k_per_doc=chunk_top_k_per_doc,
+                           max_chunks_per_doc=max_chunks_per_doc,
+                           use_graph=use_graph, doc_ids=doc_ids)
+        if not hits or not any(h.chunks for h in hits):
+            return DocAnswer(text="該当する文書が見つかりませんでした。"
+                                  "文書が登録済みか、質問の言い換えを確認してください。",
+                             hits=hits)
+        ctx = "\n\n".join(
+            f"### 文書「{h.title}」\n" + "\n".join(
+                f"- {('p.' + str(c['page']) + ' ') if c.get('page') else ''}{c['text'][:800]}"
+                for c in h.chunks)
+            for h in hits)
+        emit("回答を生成", 1, 2)
+        text = bx.llm_text(
+            f"依頼: {question}\n\n文書からの抜粋:\n{ctx}",
+            system=("あなたは文書アシスタントです。以下の抜粋のみに基づいて依頼に日本語で"
+                    "応えてください（回答・要約・比較など依頼の種類に従う）。"
+                    "どの文書の情報かを文書名で明示し、抜粋に無い内容は推測しないでください。"),
+        ).strip()
+        emit("完了", 2, 2)
+        return DocAnswer(text=text, hits=hits)
+
+    def summarize(self, instruction: str | None = None, *,
+                  doc_ids: list[str] | None = None, chunks_per_doc: int = 6,
+                  progress=None) -> DocAnswer:
+        """登録文書を **要約** する（文書ごとに部分要約 → 統合要約の Map-Reduce）。
+
+        - doc_ids 省略時は登録済みの全文書が対象（文書ごとに1回 LLM を呼ぶため、
+          ローカルLLMでは文書数に比例して時間がかかる）。
+        - instruction で観点を指定できる（例: 「リスク面を中心に」）。
+        - 検索ベースではなく各文書のチャンクを頭から均等に読むため、
+          「全体を要約」のような特定トピックの無い依頼に強い。
+        """
+        from . import bookindex as bx
+
+        metas = [m for m in self.documents()
+                 if (not doc_ids) or m["doc_id"] in set(doc_ids)]
+        if not metas:
+            return DocAnswer(text="対象の文書がありません。先に文書を追加してください。")
+
+        def emit(stage, cur, total):
+            if progress:
+                try:
+                    progress({"stage": stage, "current": cur, "total": total, "detail": ""})
+                except Exception:  # noqa: BLE001
+                    pass
+
+        per_doc: list[dict] = []
+        total = len(metas) + 1
+        for i, m in enumerate(metas):
+            emit(f"文書を要約: {m['title']}", i, total)
+            doc = self._paged.document(m["doc_id"]) or {}
+            chunks = doc.get("chunks", [])
+            # 文書全体をカバーするよう均等に間引く（先頭だけ読まない）
+            step = max(1, len(chunks) // chunks_per_doc)
+            picked = chunks[::step][:chunks_per_doc]
+            body = "\n".join(f"- {c.get('text', '')[:800]}" for c in picked)
+            if not body.strip():
+                per_doc.append({"doc_id": m["doc_id"], "title": m["title"],
+                                "text": "（本文を取得できませんでした）"})
+                continue
+            focus = f"特に次の観点を重視: {instruction}\n" if instruction else ""
+            try:
+                summ = bx.llm_text(
+                    f"次の文書抜粋を、重要な数値・固有名詞を落とさず簡潔に要約してください。\n"
+                    f"{focus}\n文書「{m['title']}」の抜粋:\n{body}").strip()
+            except Exception as e:  # noqa: BLE001  1文書の失敗で全体を止めない
+                summ = f"（要約に失敗: {type(e).__name__}: {e}）"
+            per_doc.append({"doc_id": m["doc_id"], "title": m["title"], "text": summ})
+
+        emit("統合要約を生成", len(metas), total)
+        if len(per_doc) == 1:
+            final = per_doc[0]["text"]
+        else:
+            blocks = "\n\n".join(f"■ {p['title']}\n{p['text']}" for p in per_doc)
+            focus = f"特に次の観点を重視: {instruction}\n" if instruction else ""
+            final = bx.llm_text(
+                "以下は文書ごとの要約です。全体を貫く共通点・相違点が分かるように、"
+                f"文書名を明示しながら日本語で統合要約を書いてください。\n{focus}\n{blocks}"
+            ).strip()
+        emit("完了", total, total)
+        return DocAnswer(text=final, per_doc=per_doc)
 
     def _normal_chunks(self, doc_id, question, hit, top_k, cap) -> None:
         nodes = self._paged.retrieve_in_doc(question, doc_id=doc_id, top_m=max(top_k, cap))

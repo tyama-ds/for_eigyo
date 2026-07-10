@@ -369,9 +369,9 @@
     <!-- 左: 文書を追加 -->
     <section class="panel">
       <h2>文書を追加</h2>
-      <label class="f">文書ファイルのパス</label>
-      <input type="text" id="d_path" placeholder="./docs/2024規程.pdf">
-      <label class="f">表示名（任意・省略時はファイル名）</label>
+      <label class="f">文書ファイル or フォルダのパス</label>
+      <input type="text" id="d_path" placeholder="./docs/2024規程.pdf ／ ./docs/2024（フォルダで一括）">
+      <label class="f">表示名（任意・単一ファイル時のみ。フォルダは各ファイル名を使用）</label>
       <input type="text" id="d_title" placeholder="2024年度 就業規程">
       <label class="f">処理モード</label>
       <select id="d_mode">
@@ -407,13 +407,24 @@
       </h2>
       <div style="overflow-x:auto">
         <table class="doctbl"><thead><tr>
+          <th title="検索・回答・要約の対象に含める">✓</th>
           <th>表示名</th><th>doc_id</th><th>ファイル</th><th>モード</th><th>状態</th>
           <th>chunks</th><th>graph</th><th>更新</th><th></th>
         </tr></thead><tbody id="docRows"></tbody></table>
       </div>
+      <div style="font-size:.72rem;color:var(--ink-mute);margin-top:4px">
+        ✓ を付けるとその文書だけが対象になります（未選択なら全文書から自動選定）
+      </div>
 
-      <h2 style="margin-top:18px">検索（文書単位で多様化）</h2>
-      <textarea id="s_q" rows="2" placeholder="質問（例: 退職金の計算方法は？）"></textarea>
+      <h2 style="margin-top:18px">検索・質問・要約</h2>
+      <div class="row" style="margin-bottom:6px">
+        <select id="s_act" style="width:auto">
+          <option value="answer">💬 回答を生成 — 質問・依頼に文書を根拠として答える</option>
+          <option value="summarize">📝 要約を生成 — 文書ごとに要約して統合</option>
+          <option value="search">🔍 チャンク検索 — 該当箇所を表示するだけ（LLM不使用）</option>
+        </select>
+      </div>
+      <textarea id="s_q" rows="2" placeholder="質問・依頼（例: 退職金の計算方法は？ / 各文書の要点を要約してください）"></textarea>
       <div class="row" style="margin-top:8px;flex-wrap:wrap;gap:10px">
         <label style="font-size:.75rem;color:var(--ink-2)">対象文書数
           <input type="number" id="s_topn" value="4" style="width:64px"></label>
@@ -425,8 +436,8 @@
           <input type="checkbox" id="s_graph" style="accent-color:var(--accent-a)">BookRAG(graph)を使う</label>
       </div>
       <div class="row" style="margin-top:8px">
-        <button class="btn" id="btnDocSearch">🔍 検索</button>
-        <span style="font-size:.76rem;color:var(--ink-mute)">結果は文書ごとにまとめて表示します</span>
+        <button class="btn" id="btnDocSearch">▶ 実行</button>
+        <span style="font-size:.76rem;color:var(--ink-mute)" id="s_hint"></span>
       </div>
       <div id="sProg" style="display:none;margin-top:10px">
         <div class="bar"><i id="sbar"></i></div>
@@ -1058,18 +1069,20 @@ const ST_JA = {ready:"準備OK", running:"処理中", failed:"失敗", skipped:"
 let DOCS = [];   // 直近の文書一覧（ボタンは data-i でここを参照。文字列をJSに埋め込まない）
 async function docsScan(){
   const tb = $("#docRows");
-  tb.innerHTML = '<tr><td colspan="9" style="color:var(--ink-mute)">読込中…</td></tr>';
+  tb.innerHTML = '<tr><td colspan="10" style="color:var(--ink-mute)">読込中…</td></tr>';
   try{
     const j = await api("/api/docs?root="+encodeURIComponent($("#root").value));
     DOCS = j.documents;
     if(!DOCS.length){
-      tb.innerHTML = '<tr><td colspan="9" style="color:var(--ink-mute)">文書がありません。左の「文書を追加」から登録してください。</td></tr>';
+      tb.innerHTML = '<tr><td colspan="10" style="color:var(--ink-mute)">文書がありません。左の「文書を追加」から登録してください。</td></tr>';
       return;
     }
     tb.innerHTML = DOCS.map((m,i)=>{
       const st = m.status||"unknown";
       const err = m.error ? ` title="${esc(m.error)}"` : "";
       return `<tr>
+        <td><input type="checkbox" class="dsel" data-i="${i}"
+             style="accent-color:var(--accent-a)"></td>
         <td>${esc(m.title||"")}</td>
         <td class="mono">${esc(m.doc_id||"")}</td>
         <td class="mono">${esc((m.source_path||"").split(/[\\/]/).pop())}</td>
@@ -1084,7 +1097,7 @@ async function docsScan(){
           <button class="btn sm ghost" data-act="delete" data-i="${i}">削除</button>
         </td></tr>`;
     }).join("");
-  }catch(e){ tb.innerHTML = `<tr><td colspan="9" class="err">${esc(e.message)}</td></tr>`; }
+  }catch(e){ tb.innerHTML = `<tr><td colspan="10" class="err">${esc(e.message)}</td></tr>`; }
 }
 $("#btnDocScan").onclick = docsScan;
 // ボタンはイベント委譲で処理する。title 等のユーザー文字列を inline onclick に
@@ -1137,7 +1150,13 @@ $("#btnDocAdd").onclick = ()=>{
     force:$("#d_force").checked, layout:$("#d_layout").checked, root:$("#root").value,
   }, {bar:$("#dbar"), stage:$("#dstage"), prog:$("#dProg"),
     onResult:e=>{ if(e.type==="error"){ m.className="msg ng"; m.textContent="✗ "+e.message; }
-      else { m.className="msg ok";
+      else if(e.kind === "docbatch"){   // フォルダ一括の集計
+        m.className = e.failed ? "msg ng" : "msg ok";
+        m.textContent = `${e.failed ? "⚠" : "✓"} フォルダ取り込み完了: `
+          + `追加 ${e.added} / 変更なし ${e.skipped} / 失敗 ${e.failed}`
+          + (e.errors && e.errors.length
+             ? ` — 例: ${e.errors[0].file}: ${e.errors[0].error}` : "");
+      } else { m.className="msg ok";
         m.textContent = `✓ ${e.meta.title}（${e.meta.index_mode} / ${e.meta.status} / chunks ${e.meta.chunk_count}）`; } },
     onDone:docsScan});
 };
@@ -1193,18 +1212,60 @@ window.docsDetail = async m=>{
   }catch(e){ box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
 };
 
+// 対象チェック（✓列）で選択された doc_id（未選択なら null = 全文書から自動選定）
+const selectedDocIds = ()=>{
+  const ids = [...document.querySelectorAll("#docRows .dsel:checked")]
+    .map(cb=>DOCS[+cb.dataset.i]?.doc_id).filter(Boolean);
+  return ids.length ? ids : null;
+};
+const S_HINTS = {
+  answer: "検索した根拠を文脈に LLM が回答します（要約・比較などの依頼文もOK）",
+  summarize: "文書ごとに要約→統合します。空欄なら全体要約、入力すると観点指定",
+  search: "該当チャンクを表示するだけ（LLM を呼ばず高速）",
+};
+$("#s_act").onchange = ()=>{ $("#s_hint").textContent = S_HINTS[$("#s_act").value]; };
+$("#s_hint").textContent = S_HINTS.answer;
+
 $("#btnDocSearch").onclick = ()=>{
   const res = $("#docSearchRes"); res.innerHTML="";
+  const act = $("#s_act").value;
+  const ids = selectedDocIds();
+  if(act === "summarize" && !ids && DOCS.length > 5 &&
+     !confirm(`全 ${DOCS.length} 文書を要約します（文書ごとにLLMを呼ぶため時間がかかります）。`+
+              `続けますか？\n※一覧の ✓ で対象を絞れます`)) return;
   runTask("/api/docs/search", {
-    question:$("#s_q").value, document_top_n:$("#s_topn").value,
+    action: act, question:$("#s_q").value, doc_ids: ids,
+    document_top_n:$("#s_topn").value,
     chunk_top_k_per_doc:$("#s_k").value, max_chunks_per_doc:$("#s_max").value,
     use_graph:$("#s_graph").checked, root:$("#root").value,
   }, {bar:$("#sbar"), stage:$("#sstage"), prog:$("#sProg"),
     onResult:e=>{
       if(e.type==="error"){ res.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
-      renderDocSearch(e.hits, res);
+      if(e.kind === "docanswer") renderDocAnswer(e, res);
+      else renderDocSearch(e.hits, res);
     }});
 };
+
+function renderDocAnswer(e, box){
+  const perDoc = (e.per_doc||[]).map(p=>`
+    <details class="part"><summary>文書「${esc(p.title)}」の要約
+      <span style="font-size:.7rem;color:var(--ink-mute);font-family:ui-monospace,monospace">${esc(p.doc_id)}</span></summary>
+      <div class="md" style="font-size:.88rem">${md(p.text)}</div>
+    </details>`).join("");
+  const hitsBox = (e.hits && e.hits.length)
+    ? '<h3 style="color:var(--ink-2);font-size:.85rem;margin-top:14px">根拠（文書別）</h3><div id="daHits"></div>'
+    : "";
+  box.innerHTML = `<div class="md" style="border:1px solid var(--line);border-radius:12px;
+      padding:14px 16px;background:rgba(34,211,238,.03)">${md(e.text||"")}</div>
+    <div class="row" style="margin-top:8px">
+      <button class="btn sm ghost" id="daCopy">📋 コピー</button>
+    </div>
+    ${perDoc ? '<h3 style="color:var(--ink-2);font-size:.85rem;margin-top:14px">文書別の要約</h3>'+perDoc : ""}
+    ${hitsBox}`;
+  $("#daCopy").onclick = ev=>{ navigator.clipboard.writeText(e.text||"");
+    ev.target.textContent="✓ コピーしました"; setTimeout(()=>ev.target.textContent="📋 コピー",1500); };
+  if(e.hits && e.hits.length) renderDocSearch(e.hits, $("#daHits"));
+}
 function renderDocSearch(hits, box){
   if(!hits || !hits.length){ box.innerHTML = '<div class="err">該当する文書がありませんでした</div>'; return; }
   box.innerHTML = `<div style="font-size:.78rem;color:var(--ink-mute);margin-bottom:6px">

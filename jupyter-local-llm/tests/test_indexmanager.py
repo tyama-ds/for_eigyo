@@ -279,6 +279,163 @@ def test_existing_apis_intact():
 
 
 # --------------------------------------------------------------------------
+# 4.5 回答生成・要約（v0.6.2: ask / summarize / doc_ids 絞り込み）
+# --------------------------------------------------------------------------
+
+def test_ask_answers_with_doc_grounding():
+    """ask(): 検索した根拠を文脈に LLM で回答し、根拠(hits)を返す。"""
+    _inject_mock_settings()
+    import llmlab.bookindex as bx
+    from llmlab.indexmanager import IndexManager
+
+    work = Path(tempfile.mkdtemp(prefix="llmlab_ask_"))
+    im = IndexManager(storage_dir=str(work / "index"))
+    for i in range(3):
+        f = _write(work / "s", f"doc{i}.txt", f"文書{i}の本文。退職金の規定あり。" * 30)
+        im.add_document(f, title=f"文書{i}")
+
+    prompts = []
+    old = bx.llm_text
+    bx.llm_text = lambda p, **k: (prompts.append((p, k)), "回答: 規定は文書0にあります")[-1]
+    try:
+        events = []
+        ans = im.ask("退職金は？", document_top_n=2, progress=events.append)
+    finally:
+        bx.llm_text = old
+    check("ask: 回答テキスト", "回答:" in ans.text)
+    check("ask: 根拠 hits が文書単位", ans.hits and
+          len({h.doc_id for h in ans.hits}) == len(ans.hits))
+    check("ask: 抜粋がプロンプトに入る", "文書「" in prompts[0][0])
+    check("ask: 文書名明示を指示", "文書名" in prompts[0][1].get("system", ""))
+    check("ask: 進捗イベント", any("回答" in e["stage"] for e in events))
+    d = ans.to_dict()
+    check("ask: to_dict", set(d) == {"text", "hits", "per_doc"})
+
+
+def test_summarize_maps_each_doc_then_reduces():
+    """summarize(): 文書ごとに部分要約 → 統合。doc_ids で対象を絞れる。"""
+    _inject_mock_settings()
+    import llmlab.bookindex as bx
+    from llmlab.indexmanager import IndexManager
+
+    work = Path(tempfile.mkdtemp(prefix="llmlab_summ_"))
+    im = IndexManager(storage_dir=str(work / "index"))
+    ids = []
+    for i in range(3):
+        f = _write(work / "s", f"doc{i}.txt", f"文書{i}の内容。" * 30)
+        ids.append(im.add_document(f, title=f"文書{i}")["doc_id"])
+
+    calls = []
+    old = bx.llm_text
+    bx.llm_text = lambda p, **k: (calls.append(p), f"要約{len(calls)}")[-1]
+    try:
+        ans = im.summarize()                       # 全文書
+        ans2 = im.summarize("リスク面", doc_ids=ids[:1])   # 1文書に絞る + 観点
+    finally:
+        bx.llm_text = old
+    check("summarize: 全文書の部分要約", len(ans.per_doc) == 3,
+          f"{[p['title'] for p in ans.per_doc]}")
+    check("summarize: 統合要約あり", bool(ans.text))
+    check("summarize: 文書ごと+統合のLLM回数", len(calls) >= 3 + 1)
+    check("summarize: doc_ids 絞り込み", len(ans2.per_doc) == 1)
+    check("summarize: 1文書なら統合を省略", ans2.text == ans2.per_doc[0]["text"])
+    check("summarize: 観点がプロンプトへ", any("リスク面" in c for c in calls))
+
+
+def test_search_scoped_by_doc_ids():
+    _inject_mock_settings()
+    from llmlab.indexmanager import IndexManager
+
+    work = Path(tempfile.mkdtemp(prefix="llmlab_scope_"))
+    im = IndexManager(storage_dir=str(work / "index"))
+    ids = []
+    for i in range(3):
+        f = _write(work / "s", f"doc{i}.txt", f"文書{i}の内容。" * 30)
+        ids.append(im.add_document(f, title=f"文書{i}")["doc_id"])
+    res = im.search("内容", doc_ids=ids[:2], document_top_n=4)
+    got = {h.doc_id for h in res}
+    check("search: doc_ids で対象を制限", got <= set(ids[:2]) and got, f"{got}")
+
+
+# --------------------------------------------------------------------------
+# 4.6 フォルダ一括取り込み（v0.6.3: 1ファイル=1文書、失敗続行、fast自動降格）
+# --------------------------------------------------------------------------
+
+def test_add_folder_one_doc_per_file():
+    _inject_mock_settings()
+    from llmlab.indexmanager import IndexManager
+
+    work = Path(tempfile.mkdtemp(prefix="llmlab_folder_"))
+    src = work / "docs"
+    for i in range(3):
+        _write(src, f"doc{i}.txt", f"文書{i}の本文。" * 30)
+    _write(src, "ignore.bin", "x")           # 非対応拡張子は対象外
+    im = IndexManager(storage_dir=str(work / "index"))
+
+    events = []
+    r = im.add_folder(src, progress=events.append)
+    check("folder: 3件追加", r["added"] == 3 and r["failed"] == 0, f"{r}")
+    docs = im.documents()
+    check("folder: 1ファイル=1文書（doc_id 個別）",
+          len(docs) == 3 and len({d['doc_id'] for d in docs}) == 3)
+    check("folder: 進捗にファイル位置", any("[2/3]" in e["stage"] for e in events))
+    # 再実行は全件 skipped（キャッシュ）
+    r2 = im.add_folder(src)
+    check("folder: 再実行は変更なし", r2["skipped"] == 3 and r2["added"] == 0, f"{r2}")
+    # 検索は従来どおり文書単位で多様化（構造維持の確認）
+    hits = im.search("本文", document_top_n=3, chunk_top_k_per_doc=2)
+    check("folder: 検索は文書ごとに集約", len({h.doc_id for h in hits}) == len(hits) >= 2)
+
+
+def test_add_folder_continues_on_failure_and_downgrades():
+    _inject_mock_settings()
+    from llmlab.indexmanager import IndexManager
+
+    work = Path(tempfile.mkdtemp(prefix="llmlab_folderfail_"))
+    src = work / "docs"
+    _write(src, "ok.txt", "正常な文書。" * 30)
+    _write(src, "data.csv", "a,b\n1,2\n")     # BOOK 非対応 → graph 指定でも fast 降格
+    bad = _write(src, "broken.txt", "壊れる文書。" * 30)
+    im = IndexManager(storage_dir=str(work / "index"))
+
+    orig = im.add_document
+    def flaky(path, **kw):
+        if Path(path).name == "broken.txt":
+            raise RuntimeError("解析失敗")
+        return orig(path, **kw)
+    im.add_document = flaky
+    r = im.add_folder(src, index_mode="graph")
+    im.add_document = orig
+    check("folder: 失敗しても続行", r["added"] == 2 and r["failed"] == 1, f"{r}")
+    check("folder: 失敗ファイルを記録",
+          r["errors"] and r["errors"][0]["file"] == "broken.txt")
+    modes = {m["title"]: m["index_mode"] for m in r["results"]}
+    check("folder: 非対応形式は fast へ自動降格", modes.get("data") == "fast", f"{modes}")
+    check("folder: 対応形式は指定モード", modes.get("ok") == "graph", f"{modes}")
+
+
+def test_add_folder_rejects_non_dir_and_empty():
+    _inject_mock_settings()
+    from llmlab.indexmanager import IndexManager
+
+    work = Path(tempfile.mkdtemp(prefix="llmlab_folderng_"))
+    im = IndexManager(storage_dir=str(work / "index"))
+    f = _write(work, "a.txt", "x")
+    try:
+        im.add_folder(f)
+        check("folder: ファイル指定はエラー", False)
+    except NotADirectoryError:
+        check("folder: ファイル指定はエラー", True)
+    empty = work / "empty"
+    empty.mkdir()
+    try:
+        im.add_folder(empty)
+        check("folder: 空フォルダはエラー", False)
+    except FileNotFoundError:
+        check("folder: 空フォルダはエラー", True)
+
+
+# --------------------------------------------------------------------------
 # 5. 監査修正の回帰テスト（v0.6.1）
 # --------------------------------------------------------------------------
 

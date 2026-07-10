@@ -48,7 +48,7 @@ from urllib.parse import parse_qs, urlparse
 from . import m365copilot
 
 APP_NAME = "Copilot Research"
-APP_VERSION = "0.7.2"  # llmlab.__version__ と合わせて更新する。/api/status と GUI ヘッダに表示される
+APP_VERSION = "0.7.3"  # llmlab.__version__ と合わせて更新する。/api/status と GUI ヘッダに表示される
 
 DEFAULT_PORT = 8767
 _UI_PATH = Path(__file__).parent / "copilot_ui.html"

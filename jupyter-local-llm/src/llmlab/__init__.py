@@ -24,7 +24,7 @@ from .config import (
     settings_form,
 )
 from .pagedrag import Answer, DocRank, DocRAG, PagedRAG, Source, content_hash, make_doc_id
-from .indexmanager import IndexManager, SearchHit
+from .indexmanager import DocAnswer, IndexManager, SearchHit
 from .multipaper import Comparison, MultiPaperRAG
 from .tableqa import TableAnswer, TableQA
 from .docqa import DocQA, DocResult
@@ -77,6 +77,7 @@ __all__ = [
     # doc_id 中心・index_mode 切替の文書間RAG（fast/hierarchy/graph）
     "IndexManager",
     "SearchHit",
+    "DocAnswer",
     # BookRAG-inspired 軽量版（BookIndex + エージェント検索）
     "BookRAG",
     "BookAnswer",
@@ -108,4 +109,4 @@ __all__ = [
     "build_index",
 ]
 
-__version__ = "0.7.2"  # llmlab.__version__ で更新確認できる（copilotresearch.APP_VERSION と合わせる）
+__version__ = "0.7.3"  # llmlab.__version__ で更新確認できる（copilotresearch.APP_VERSION と合わせる）
