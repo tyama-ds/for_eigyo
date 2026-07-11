@@ -317,6 +317,7 @@ async def get_project(request: Request, project_id: str):
 
 @router.patch("/api/projects/{project_id}/question")
 async def update_question(request: Request, project_id: str, body: UpdateQuestionRequest):
+    _ensure_not_running(request, project_id)
     project = _get_project(request, project_id)
     spec = project.question
     changed = []
@@ -357,6 +358,7 @@ async def update_question(request: Request, project_id: str, body: UpdateQuestio
 
 @router.post("/api/projects/{project_id}/models/select")
 async def select_models(request: Request, project_id: str, body: SelectModelsRequest):
+    _ensure_not_running(request, project_id)
     project = _get_project(request, project_id)
     ids = {m.id for m in project.models}
     if body.primary_id not in ids or (body.check_id and body.check_id not in ids):
@@ -428,14 +430,17 @@ async def start_research(request: Request, project_id: str, wait: bool = False):
                     project_id, "warning", "結果の保存に失敗しました(状態は保持されています)", {}
                 )
 
+    # wait=true でも必ず RunManager に登録する。直接 await すると is_running() が
+    # False のままになり、実行中ロック(_ensure_not_running / 二重起動防止)が
+    # すべて無効化される(同一プロジェクトへの同時実行・実行中編集を許してしまう)。
+    manager.start(project_id, run_and_save())
     if wait:
-        await run_and_save()
+        await manager.wait(project_id)
         run = project.current_run()
         return {
             "status": run.status.value if run else "unknown",
             "project_id": project_id,
         }
-    manager.start(project_id, run_and_save())
     return {"status": "started", "project_id": project_id}
 
 

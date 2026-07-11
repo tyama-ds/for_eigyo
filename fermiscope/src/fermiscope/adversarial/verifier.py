@@ -16,6 +16,7 @@ from fermiscope.domain.models import Critique, EvidenceItem, ModelCandidate, Par
 from fermiscope.evidence.dates import parse_year
 from fermiscope.evidence.normalize import normalize_value
 from fermiscope.llm.base import LLMProvider
+from fermiscope.security.boundary import wrap_untrusted
 
 _REVISION_PATTERN = re.compile(r"訂正|撤回|改訂|修正版|revised|correction|retraction")
 
@@ -290,8 +291,12 @@ async def verify_parameter(
     # 決定論チェックで批判が出なかった場合のみ、LLMに仮説を出させる(補助)
     if not critiques and llm is not None and llm.available:
         used = _used_evidence(param, evidence)
-        summary = "; ".join(
-            f"{e.title}({e.source_class.value}, score={e.evidence_score})" for e in used[:5]
+        # 証拠タイトルは取得した外部Webページ由来の不信データ。プロンプト
+        # インジェクションを防ぐため、LLM へ渡す前にデータ境界で包む。
+        summary = wrap_untrusted(
+            "; ".join(
+                f"{e.title}({e.source_class.value}, score={e.evidence_score})" for e in used[:5]
+            )
         )
         proposals = await llm.propose_critique(param.name, param.definition, summary)
         for p in proposals or []:

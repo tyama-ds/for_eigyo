@@ -1,8 +1,10 @@
 services:
   fermiscope:
     build: .
+    # アプリには認証機構がないため、ホストのループバックにのみ公開する。
+    # LAN やインターネットへ公開する場合は、必ずリバースプロキシで認証をかけること。
     ports:
-      - "8720:8720"
+      - "127.0.0.1:8720:8720"
     environment:
       SEARCH_PROVIDER: ${SEARCH_PROVIDER:-mock}
       BRAVE_API_KEY: ${BRAVE_API_KEY:-}

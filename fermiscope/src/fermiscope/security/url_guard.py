@@ -31,6 +31,18 @@ _BLOCKED_HOSTNAMES = {
 
 _METADATA_IPS = {"169.254.169.254", "fd00:ec2::254"}
 
+# ipaddress の is_private 等では捕捉されないが到達させるべきでないネットワーク。
+# 100.64.0.0/10 は CGNAT 共有アドレス空間(RFC 6598)、198.18.0.0/15 はベンチマーク用、
+# 192.0.0.0/24 は IETF プロトコル割当。いずれも内部ネットワークで実在し得る。
+_EXTRA_BLOCKED_NETWORKS = [
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("192.0.0.0/24"),
+    ipaddress.ip_network("198.18.0.0/15"),
+    ipaddress.ip_network("192.0.2.0/24"),
+    ipaddress.ip_network("198.51.100.0/24"),
+    ipaddress.ip_network("203.0.113.0/24"),
+]
+
 
 def default_resolver(host: str) -> list[str]:
     """socket.getaddrinfo による全アドレス解決。"""
@@ -58,6 +70,8 @@ def validate_ip(ip_text: str) -> None:
         or ip.is_unspecified
     ):
         raise UrlGuardError(f"プライベート/予約IPへのアクセスは拒否します: {ip_text}")
+    if any(ip in net for net in _EXTRA_BLOCKED_NETWORKS):
+        raise UrlGuardError(f"到達を許可しないネットワークのIPです: {ip_text}")
 
 
 def validate_url(
@@ -74,16 +88,23 @@ def validate_url(
     """
     if not url or len(url) > 4096:
         raise UrlGuardError("URLが空または長すぎます")
-    parsed = urlparse(url)
+    # 不正なURL(壊れたIPv6リテラル・不正ポート等)で urlparse / hostname 参照が
+    # 素の ValueError を投げると呼び出し側(FetchError/UrlGuardError のみ捕捉)を
+    # 貫通して調査全体を落とす。ここで UrlGuardError に正規化する。
+    try:
+        parsed = urlparse(url)
+        host = parsed.hostname
+        username, password = parsed.username, parsed.password
+    except ValueError as exc:
+        raise UrlGuardError(f"URLを解釈できません: {exc}") from exc
     if parsed.scheme not in ("http", "https"):
         raise UrlGuardError(f"http/https 以外のスキームは拒否します: {parsed.scheme or '(なし)'}")
-    host = parsed.hostname
     if not host:
         raise UrlGuardError("ホスト名がありません")
     host_lower = host.lower().rstrip(".")
     if host_lower in _BLOCKED_HOSTNAMES or host_lower.endswith(".localhost"):
         raise UrlGuardError(f"拒否対象のホスト名です: {host}")
-    if parsed.username or parsed.password:
+    if username or password:
         raise UrlGuardError("URL内の認証情報は拒否します")
 
     # ホスト名が直接IPの場合
