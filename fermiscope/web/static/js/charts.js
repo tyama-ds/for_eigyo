@@ -51,7 +51,10 @@
   /** ヒストグラム edges: n+1境界, counts: n個, markers: [{value,label}] */
   function histogram(container, edges, counts, markers) {
     container.textContent = "";
-    if (!edges || edges.length < 2) { container.textContent = "データなし"; return; }
+    if (!edges || edges.length < 2 || !counts || !counts.length) { container.textContent = "データなし"; return; }
+    // edges は counts+1 本が契約。境界数が足りない末尾ビンは描画しない(NaN幅を防ぐ)
+    const nbins = Math.min(counts.length, edges.length - 1);
+    counts = counts.slice(0, nbins);
     const W = 460, H = 220, padL = 40, padB = 34, padT = 8;
     const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, class: "chart-svg", role: "img", width: "100%" });
     const maxC = Math.max(...counts, 1);
@@ -82,8 +85,10 @@
     const W = 460, rowH = 32, labelW = 165;
     const H = items.length * rowH + 30;
     const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, class: "chart-svg", role: "img", width: "100%" });
-    const values = items.flatMap((d) => [d.low, d.high]).filter((v) => v !== null && v !== undefined);
-    const minV = Math.min(...values, base), maxV = Math.max(...values, base);
+    const values = items.flatMap((d) => [d.low, d.high]).filter((v) => v !== null && v !== undefined && Number.isFinite(v));
+    if (Number.isFinite(base)) values.push(base);
+    if (!values.length) { container.textContent = "データなし"; return; }
+    const minV = Math.min(...values), maxV = Math.max(...values);
     const plotW = W - labelW - 60;
     const sx = (v) => labelW + ((v - minV) / (maxV - minV || 1)) * plotW;
     items.forEach((d, i) => {
@@ -110,7 +115,8 @@
     const W = 460, rowH = 44, labelW = 130;
     const H = items.length * rowH + 26;
     const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, class: "chart-svg", role: "img", width: "100%" });
-    const values = items.flatMap((d) => [d.low, d.high, d.central]).filter((v) => v != null);
+    const values = items.flatMap((d) => [d.low, d.high, d.central]).filter((v) => v != null && Number.isFinite(v));
+    if (!values.length) { container.textContent = "データなし"; return; }
     const minV = Math.min(...values), maxV = Math.max(...values);
     const plotW = W - labelW - 70;
     const sx = (v) => labelW + ((v - minV) / (maxV - minV || 1)) * plotW;

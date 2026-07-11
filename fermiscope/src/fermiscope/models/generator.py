@@ -50,6 +50,9 @@ class TemplateResult:
     double_counting_risk: str = ""
     dependency_risk: str = ""
     correlated_parameter_ids: list[str] | None = None
+    # 単位検査で用いる目標単位。None なら spec.target_unit を使う。
+    # フロー質問など、式が per-year 次元を持つ場合にここで /year を付与する。
+    target_unit_override: str | None = None
 
 
 def _tpl_maintenance_demand(spec: QuestionSpec) -> TemplateResult | None:
@@ -180,56 +183,81 @@ def _tpl_association_supply(spec: QuestionSpec) -> TemplateResult | None:
 
 
 def _tpl_population_ratio(spec: QuestionSpec) -> TemplateResult | None:
-    """人口 × 該当率 × 1人あたり数量(汎用)。"""
+    """人口 × 該当率(× 1人あたり数量)(汎用)。
+
+    - 人数を数える問い(target=person): 人口 × 該当率 → person。
+    - 物量ストック(target≠person): 人口 × 該当率 × 1人あたり数量 → <unit>。
+    - フロー: 1人あたり年間数量を用い、目標単位を <unit>/year として検査する。
+    """
     if spec.target_unit == "person" and _OCCUPATION_PATTERN.search(spec.subject):
         return None  # 職業人数は専用テンプレートに委ねる
     geo = spec.geography
-    per_unit = spec.target_unit if spec.target_unit != "person" else "event"
     is_flow = spec.stock_or_flow == StockOrFlow.FLOW
+    population = ParameterEstimate(
+        id="population",
+        name=f"{geo}の人口",
+        symbol="N_pop",
+        definition=f"{geo}の総人口",
+        unit="person",
+        target_geography=geo,
+        target_period=spec.reference_date,
+        search_terms_ja=[f"{geo} 人口", "人口推計"],
+        search_terms_en=[f"{geo} population"],
+    )
+    applicable_rate = ParameterEstimate(
+        id="applicable_rate",
+        name=f"{spec.subject}の該当率",
+        symbol="r_app",
+        definition=f"人口のうち{spec.subject}に該当・関与する割合",
+        unit="dimensionless",
+        target_geography=geo,
+        target_period=spec.reference_date,
+        search_terms_ja=[f"{spec.subject} 割合", f"{spec.subject} 比率"],
+        search_terms_en=[f"{spec.subject} rate"],
+    )
+
+    if spec.target_unit == "person":
+        # 人数を数える: 人口 × 該当率(1人あたり数量は不要)。次元は person。
+        return TemplateResult(
+            key="population_ratio",
+            name="人口比率モデル(人口×該当率)",
+            approach="population_ratio",
+            description=f"{geo}の人口に該当率を掛けて対象人数を推定する。",
+            expression="population * applicable_rate",
+            parameters=[population, applicable_rate],
+            base_scores={
+                "estimability": 0.7,
+                "explainability": 0.85,
+                "evidence_availability": 0.6,
+                "double_counting_risk": 0.8,
+                "dependency_risk": 0.7,
+                "independence": 0.6,
+            },
+        )
+
+    # 物量: 人口 × 該当率 × 1人あたり数量。
+    per_unit = spec.target_unit or "item"
     qty_unit = f"{per_unit}/(person*year)" if is_flow else f"{per_unit}/person"
-    params = [
-        ParameterEstimate(
-            id="population",
-            name=f"{geo}の人口",
-            symbol="N_pop",
-            definition=f"{geo}の総人口",
-            unit="person",
-            target_geography=geo,
-            target_period=spec.reference_date,
-            search_terms_ja=[f"{geo} 人口", "人口推計"],
-            search_terms_en=[f"{geo} population"],
-        ),
-        ParameterEstimate(
-            id="applicable_rate",
-            name=f"{spec.subject}の該当率",
-            symbol="r_app",
-            definition=f"人口のうち{spec.subject}に該当・関与する割合",
-            unit="dimensionless",
-            target_geography=geo,
-            target_period=spec.reference_date,
-            search_terms_ja=[f"{spec.subject} 割合", f"{spec.subject} 比率"],
-            search_terms_en=[f"{spec.subject} rate"],
-        ),
-        ParameterEstimate(
-            id="quantity_per_person",
-            name="該当者1人あたり数量",
-            symbol="q_pp",
-            definition=f"該当者1人あたりの{spec.subject}の数量"
-            + ("(年間)" if is_flow else ""),
-            unit=qty_unit,
-            target_geography=geo,
-            target_period=spec.reference_date,
-            search_terms_ja=[f"{spec.subject} 1人あたり"],
-            search_terms_en=[f"{spec.subject} per capita"],
-        ),
-    ]
+    # フローは式が <unit>/year を返すため、目標単位も /year を付けて検査する。
+    target_override = f"({per_unit})/year" if is_flow else None
+    quantity_per_person = ParameterEstimate(
+        id="quantity_per_person",
+        name="該当者1人あたり数量" + ("(年間)" if is_flow else ""),
+        symbol="q_pp",
+        definition=f"該当者1人あたりの{spec.subject}の数量" + ("(年間)" if is_flow else ""),
+        unit=qty_unit,
+        target_geography=geo,
+        target_period=spec.reference_date,
+        search_terms_ja=[f"{spec.subject} 1人あたり"],
+        search_terms_en=[f"{spec.subject} per capita"],
+    )
     return TemplateResult(
         key="population_ratio",
         name="人口比率モデル(人口×該当率×1人あたり数量)",
         approach="population_ratio",
         description=f"{geo}の人口に該当率と1人あたり数量を掛けて推定する。",
         expression="population * applicable_rate * quantity_per_person",
-        parameters=params,
+        parameters=[population, applicable_rate, quantity_per_person],
         base_scores={
             "estimability": 0.7,
             "explainability": 0.85,
@@ -238,6 +266,7 @@ def _tpl_population_ratio(spec: QuestionSpec) -> TemplateResult | None:
             "dependency_risk": 0.7,
             "independence": 0.6,
         },
+        target_unit_override=target_override,
     )
 
 
@@ -297,8 +326,9 @@ def _build_candidate(
 ) -> tuple[ModelCandidate, dict[str, ParameterEstimate]] | None:
     params = {p.id: p for p in result.parameters}
     units = {pid: p.unit for pid, p in params.items()}
+    target_unit = result.target_unit_override or spec.target_unit
     try:
-        graph = build_graph(result.expression, spec.target_unit, units)
+        graph = build_graph(result.expression, target_unit, units)
     except FormulaParseError:
         return None
     scores = dict(result.base_scores)

@@ -83,17 +83,37 @@ LLMは**補助機能のみ**に使われます(曖昧な問いの構造化・検
 ルール抽出が失敗した文書からの構造化抽出・批判仮説・分解候補・説明文)。
 無くてもモックデモ・ローカル再計算・実検索は動作します。
 
-OpenAI互換APIならすべて使えます(OpenAI / vLLM / Ollama / 各社ゲートウェイ):
+### GUIから設定(推奨)
+
+`fermiscope serve` で起動後、トップページの「**⚙ 生成AI(LLM)接続設定**」を開き、
+プロバイダ・接続先・モデルID・APIキー・プロキシを入力して「保存」、「接続テスト」で疎通確認できます。
+APIキーはサーバー内にのみ保存され、画面には表示されません(有無のみ表示)。
+
+対応プロバイダ:
+- **ローカルLLM / OpenAI / OpenAI互換**(vLLM・Ollama・LM Studio・各社ゲートウェイ)
+- **Anthropic API**
+- すべて**プロキシ**経由の接続に対応
+
+### 環境変数から設定(初期値)
 
 ```bash
+# OpenAI互換(ローカルLLM含む)
 export LLM_PROVIDER=openai_compatible
-export LLM_API_BASE=https://api.openai.com/v1   # または http://localhost:11434/v1 等
+export LLM_API_BASE=https://api.openai.com/v1   # ローカル例: http://localhost:11434/v1
 export LLM_API_KEY=あなたのキー                   # ローカルLLMなら不要な場合あり
 export LLM_MODEL=使いたいモデルID                 # モデルIDはコードに固定されません
+
+# Anthropic API
+export LLM_PROVIDER=anthropic
+export ANTHROPIC_API_KEY=あなたのキー
+export ANTHROPIC_MODEL=claude-sonnet-5
+
+# 共通(任意): プロキシ
+export LLM_PROXY=http://user:pass@proxy.example:8080
 ```
 
 AIフォールバックが使われた箇所はGUIの「AI補助」バッジと監査ログに必ず表示されます。
-LLM出力はPydanticスキーマで検証され、引用が原文に実在しない場合は棄却されます。
+LLM出力はPydanticスキーマで検証され、引用・数値が原文に実在しない場合は棄却されます。
 
 ## 主な環境変数
 

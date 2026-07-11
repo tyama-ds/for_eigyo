@@ -16,6 +16,21 @@ def export_json(project: EstimateProject) -> str:
     return json.dumps(build_report(project), ensure_ascii=False, indent=2, default=str)
 
 
+def _csv_safe(value: Any) -> Any:
+    """CSVインジェクション対策: 表計算ソフトで数式と解釈され得る先頭文字を無害化する。
+
+    先頭が = + - @ タブ CR の文字列セルは、先頭にアポストロフィを付けて
+    数式実行を防ぐ(数値・None等はそのまま)。
+    """
+    if isinstance(value, str) and value and value[0] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + value
+    return value
+
+
+def _csv_row(writer: Any, cells: list[Any]) -> None:
+    writer.writerow([_csv_safe(c) for c in cells])
+
+
 def export_csv(project: EstimateProject) -> dict[str, str]:
     """CSVは2ファイル(パラメータ・証拠)を返す。"""
     report = build_report(project)
@@ -41,7 +56,8 @@ def export_csv(project: EstimateProject) -> dict[str, str]:
         ]
     )
     for p in report["parameters"]:
-        pw.writerow(
+        _csv_row(
+            pw,
             [
                 p["id"],
                 p["name"],
@@ -57,7 +73,7 @@ def export_csv(project: EstimateProject) -> dict[str, str]:
                 p["critique_count"],
                 p["decomposition_status"],
                 " / ".join(p["assumptions"]),
-            ]
+            ],
         )
 
     ev_buf = io.StringIO()
@@ -82,7 +98,8 @@ def export_csv(project: EstimateProject) -> dict[str, str]:
         ]
     )
     for e in report["evidence"]:
-        ew.writerow(
+        _csv_row(
+            ew,
             [
                 e["id"],
                 e["parameter_id"],
@@ -99,7 +116,7 @@ def export_csv(project: EstimateProject) -> dict[str, str]:
                 e["excerpt"],
                 e["accepted"],
                 e["ai_assisted"],
-            ]
+            ],
         )
     return {"parameters.csv": params_buf.getvalue(), "evidence.csv": ev_buf.getvalue()}
 

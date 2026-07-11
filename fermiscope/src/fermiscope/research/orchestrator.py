@@ -145,7 +145,7 @@ class ResearchOrchestrator:
                 project.searches.append(sq)
                 return
             project.searches.append(sq)
-            run.searches_executed = self.search.executed_count
+            run.searches_executed = self.search.session_searches
             run.search_cache_hits = self.search.cache_hits
             project.audit(
                 "search",

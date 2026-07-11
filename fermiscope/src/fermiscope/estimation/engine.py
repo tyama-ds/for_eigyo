@@ -14,7 +14,7 @@ from fermiscope.domain.models import (
     SimulationResult,
 )
 from fermiscope.estimation.distributions import sample_parameters
-from fermiscope.formula.graph import evaluate_graph
+from fermiscope.formula.graph import FormulaEvalError, evaluate_graph
 
 
 class EstimationError(ValueError):
@@ -184,7 +184,9 @@ def compute_scenarios(
                 model_id=model.id,
             )
         )
-    except EstimationError:
+    except (EstimationError, FormulaEvalError, ArithmeticError):
+        # 参考の極端範囲はベストエフォート。境界値でゼロ除算等が起きても
+        # 本体のシナリオ生成は続行する(ここで全体を落とさない)。
         pass
 
     if custom_overrides:

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -190,6 +191,22 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _int_env(env: dict[str, str], key: str, default: int) -> int:
+    """整数の環境変数を安全に読む。不正値は警告扱いでデフォルトにフォールバックする
+    (アプリ全体の起動失敗を避ける)。"""
+    raw = env.get(key, "")
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        logging.getLogger(__name__).warning(
+            "環境変数 %s の値 %r は整数として解釈できません。既定値 %d を使用します。",
+            key,
+            raw,
+            default,
+        )
+        return default
+
+
 def _hash_configs(paths: list[Path]) -> str:
     h = hashlib.sha256()
     for p in sorted(paths):
@@ -231,9 +248,13 @@ def load_settings(config_dir: Path | None = None, env: dict[str, str] | None = N
     if env.get("LLM_PROVIDER"):
         settings.llm_provider = env["LLM_PROVIDER"].lower()
     if env.get("FERMISCOPE_MC_ITERATIONS"):
-        settings.simulation.iterations = int(env["FERMISCOPE_MC_ITERATIONS"])
+        settings.simulation.iterations = _int_env(
+            env, "FERMISCOPE_MC_ITERATIONS", settings.simulation.iterations
+        )
     if env.get("FERMISCOPE_MAX_SEARCHES"):
-        settings.search.max_searches_per_project = int(env["FERMISCOPE_MAX_SEARCHES"])
+        settings.search.max_searches_per_project = _int_env(
+            env, "FERMISCOPE_MAX_SEARCHES", settings.search.max_searches_per_project
+        )
     if env.get("FERMISCOPE_WEB_DIR"):
         settings.web_dir = Path(env["FERMISCOPE_WEB_DIR"])
 

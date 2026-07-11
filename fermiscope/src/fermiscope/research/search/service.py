@@ -43,16 +43,19 @@ class SearchService:
         settings: Settings,
         max_searches: int | None = None,
         max_cost_usd: float | None = None,
+        executed_count: int = 0,
+        total_cost_usd: float = 0.0,
     ) -> None:
         self.provider = provider
         self.settings = settings
         self.max_searches = max_searches or settings.search.max_searches_per_project
         self.max_cost_usd = max_cost_usd if max_cost_usd is not None else settings.search.max_cost_per_project_usd
-        self.executed_count = 0
+        # プロジェクト単位の累積を引き継ぐ(再実行で予算がリセットされないように)
+        self.executed_count = executed_count  # プロジェクト累積(予算判定に使用)
+        self.session_searches = 0  # このサービス(=この実行)での検索回数
         self.cache_hits = 0
-        self.total_cost_usd = 0.0
+        self.total_cost_usd = total_cost_usd
         self._cache: dict[str, tuple[float, list[SearchHit]]] = {}
-        self._seen_queries: set[str] = set()
         # レート制限は実プロバイダのみ(モックはローカル完結でAPI負荷がない)
         rate = 0.0 if provider.name == "mock" else settings.search.rate_limit_per_second
         self._rate = _RateLimiter(rate)
@@ -65,12 +68,9 @@ class SearchService:
         key = self._cache_key(sq.query, sq.language)
         sq.provider = self.provider.name
 
-        # 同一クエリの重複排除
-        if key in self._seen_queries and key not in self._cache:
-            sq.deduplicated = True
-            sq.error = "同一クエリが既に失敗しているためスキップしました"
-            return []
-        # キャッシュ
+        # キャッシュ(成功済みクエリ=空結果含む)は再実行せず重複排除する。
+        # 失敗したクエリはキャッシュされないため、後続の同一クエリは再試行できる
+        # (一時的障害が他パラメータの取得を恒久的に阻害しない)。
         cached = self._cache.get(key)
         if cached is not None:
             ts, hits = cached
@@ -78,11 +78,9 @@ class SearchService:
             if time.time() - ts < ttl:
                 self.cache_hits += 1
                 sq.cache_hit = True
+                sq.deduplicated = True
                 sq.executed_at = utcnow()
                 sq.results_count = len(hits)
-                if key in self._seen_queries:
-                    sq.deduplicated = True
-                self._seen_queries.add(key)
                 return [h.model_copy(update={"query_id": sq.id}) for h in hits]
 
         # 上限検査
@@ -98,7 +96,6 @@ class SearchService:
                 f"検索コスト上限(${self.max_cost_usd:.2f})に達しました。"
             )
 
-        self._seen_queries.add(key)
         await self._rate.wait()
 
         last_error: Exception | None = None
@@ -113,6 +110,7 @@ class SearchService:
                     timeout=self.settings.search.timeout_seconds,
                 )
                 self.executed_count += 1
+                self.session_searches += 1
                 self.total_cost_usd += cost
                 sq.executed_at = utcnow()
                 sq.results_count = len(hits)
@@ -129,6 +127,7 @@ class SearchService:
                 await asyncio.sleep(self.settings.search.retry_backoff_seconds * (2**attempt))
 
         self.executed_count += 1
+        self.session_searches += 1
         sq.executed_at = utcnow()
         sq.error = f"検索に失敗しました: {type(last_error).__name__}: {last_error}"
         return []

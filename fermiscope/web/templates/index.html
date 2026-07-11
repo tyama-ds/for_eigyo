@@ -73,6 +73,48 @@
     <li class="hint">読み込み中…</li>
   </ul>
 </section>
+
+<section class="panel">
+  <details id="llm-settings-details">
+    <summary><strong>⚙ 生成AI(LLM)接続設定</strong> — ローカルLLM / OpenAI / Anthropic / プロキシ</summary>
+    <p class="hint">
+      LLMは補助機能(曖昧な問いの構造化・検索語生成・非構造化文書からの候補抽出・
+      批判仮説・説明文)にのみ使われます。数値計算・最終値の確定には使いません。
+      未設定でもモック検索デモとローカル再計算は動作します。APIキーはこのサーバー内にのみ保存され、画面には表示されません。
+    </p>
+    <form id="llm-settings-form" class="new-form">
+      <div class="field">
+        <label for="llm-provider">プロバイダ</label>
+        <select id="llm-provider" name="provider"></select>
+      </div>
+      <div class="field" id="llm-base-field" hidden>
+        <label for="llm-base">接続先(API Base URL)</label>
+        <input id="llm-base" name="api_base" type="text" autocomplete="off">
+        <span class="hint" id="llm-base-hint"></span>
+      </div>
+      <div class="field" id="llm-model-field" hidden>
+        <label for="llm-model">モデルID</label>
+        <input id="llm-model" name="model" type="text" autocomplete="off">
+        <span class="hint" id="llm-model-hint"></span>
+      </div>
+      <div class="field" id="llm-key-field" hidden>
+        <label for="llm-key">APIキー <span id="llm-key-state" class="hint"></span></label>
+        <input id="llm-key" name="api_key" type="password" autocomplete="off"
+          placeholder="変更する場合のみ入力(空欄なら現在のキーを維持)">
+      </div>
+      <div class="field" id="llm-proxy-field" hidden>
+        <label for="llm-proxy">プロキシ(任意)</label>
+        <input id="llm-proxy" name="proxy" type="text" autocomplete="off"
+          placeholder="例: http://user:pass@proxy.example:8080">
+      </div>
+      <div class="actions">
+        <button type="submit" class="btn primary" id="llm-save-btn">保存</button>
+        <button type="button" class="btn" id="llm-test-btn">接続テスト</button>
+        <span id="llm-settings-status" role="status" aria-live="polite"></span>
+      </div>
+    </form>
+  </details>
+</section>
 {% endblock %}
 {% block scripts %}
 <script src="/static/js/index.js"></script>
