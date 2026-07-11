@@ -21,12 +21,19 @@ from fermiscope.domain.models import EvidenceItem, ParameterEstimate
 from fermiscope.evidence.normalize import expected_units_for
 from fermiscope.research.fetcher import FetchedDocument
 
-# 数値表現: 「約7,227,180世帯」「10.4%」「1.5 tunings」「7万2千」等
+# 数値表現: 「約7,227,180世帯」「10.4%」「1.5 tunings」「7万2千」「1億2000万」等。
+# 数値部(group 1)は「数字+スケール」が連続する複合表現をまとめて捕捉する。
+# こうしないと「7万2千」を「7万」と「2千」に分断し、下位桁(2千)を取りこぼす。
 _NUMBER_PATTERN = re.compile(
-    r"(?:約|およそ|平均|Average\s+|approx\.?\s+)?([0-9][0-9,]*(?:\.[0-9]+)?)\s*(兆|億|万|千)?\s*"
+    r"(?:約|およそ|平均|Average\s+|approx\.?\s+)?"
+    r"((?:[0-9][0-9,]*(?:\.[0-9]+)?\s*[兆億万千]\s*)*[0-9][0-9,]*(?:\.[0-9]+)?(?:\s*[兆億万千])?)"
+    r"\s*"
     r"(世帯|人|名|台|件|回|円|%|パーセント|店舗|店|社|日間?|時間|km|kg|"
     r"tunings?|jobs?|days?|households?|people|persons?|yen)?",
 )
+
+# 複合数値内の1セグメント(「7万」「2千」)を取り出す。
+_NUMBER_SEGMENT = re.compile(r"([0-9][0-9,]*(?:\.[0-9]+)?)\s*(兆|億|万|千)?")
 
 _SCALE = {"兆": 1e12, "億": 1e8, "万": 1e4, "千": 1e3, None: 1.0, "": 1.0}
 
@@ -82,9 +89,33 @@ _RANGE_PATTERN = re.compile(
 )
 
 
-def parse_japanese_number(num_text: str, scale_text: str | None) -> float:
-    value = float(num_text.replace(",", ""))
-    return value * _SCALE.get(scale_text, 1.0)
+def parse_japanese_number(num_text: str, scale_text: str | None = None) -> float:
+    """日本語数値を float へ変換する。
+
+    - 単一セグメント指定(num_text + scale_text)としても、
+    - 複合数値文字列(「7万2千」を num_text に丸ごと渡す)としても解釈できる。
+
+    複合の場合は連続する (数字, スケール) を合算し、下位桁の切り捨てを防ぐ。
+    数字が1つも含まれない場合は ValueError。
+    """
+    if scale_text is not None:
+        return float(num_text.replace(",", "")) * _SCALE.get(scale_text, 1.0)
+    total = 0.0
+    matched = False
+    for seg in _NUMBER_SEGMENT.finditer(num_text):
+        digits = seg.group(1)
+        if not digits:
+            continue
+        matched = True
+        total += float(digits.replace(",", "")) * _SCALE.get(seg.group(2), 1.0)
+    if not matched:
+        raise ValueError(f"数値として解釈できません: {num_text!r}")
+    return total
+
+
+def _has_scale(num_run: str) -> bool:
+    """複合数値文字列がスケール語(兆・億・万・千)を含むか。"""
+    return any(s in num_run for s in ("兆", "億", "万", "千"))
 
 
 def _doc_meta(doc: FetchedDocument) -> dict[str, str]:
@@ -210,12 +241,13 @@ def _try_number_near(
         tail = segment[m.end() : m.end() + 2]
         if tail[:1] in ("以", "超") or tail[:2] in ("未満",):
             continue
-        num, scale, unit = m.group(1), m.group(2), m.group(3)
+        num_run, unit = m.group(1), m.group(2)
         unit_norm = _UNIT_NORMALIZE.get((unit or "").lower(), "") if unit else ""
-        if not _acceptable(unit_norm, num, expected) and not (scale and not unit):
+        has_scale = _has_scale(num_run)
+        if not _acceptable(unit_norm, num_run, expected) and not (has_scale and not unit):
             continue
         try:
-            value = parse_japanese_number(num, scale)
+            value = parse_japanese_number(num_run)
         except ValueError:
             continue
         priority = 0 if unit_norm else 1
@@ -261,11 +293,11 @@ def extract_from_tables(
                 m = _NUMBER_PATTERN.search(cell)
                 if not m:
                     continue
-                unit_norm = _UNIT_NORMALIZE.get((m.group(3) or "").lower(), "")
-                if not _acceptable(unit_norm, m.group(1), expected) and not m.group(2):
+                unit_norm = _UNIT_NORMALIZE.get((m.group(2) or "").lower(), "")
+                if not _acceptable(unit_norm, m.group(1), expected) and not _has_scale(m.group(1)):
                     continue
                 try:
-                    value = parse_japanese_number(m.group(1), m.group(2))
+                    value = parse_japanese_number(m.group(1))
                 except ValueError:
                     continue
                 item = _base_item(doc, param, query, purpose, meta)
@@ -399,9 +431,9 @@ def _value_supported_by_excerpt(value: float, excerpt: str) -> bool:
     normalized = excerpt.replace(",", "").replace(",", "")
     candidates: list[float] = []
     for m in _NUMBER_PATTERN.finditer(normalized):
-        num, scale, unit = m.group(1), m.group(2), m.group(3)
+        num_run, unit = m.group(1), m.group(2)
         try:
-            base = parse_japanese_number(num, scale)
+            base = parse_japanese_number(num_run)
         except ValueError:
             continue
         candidates.append(base)
@@ -444,11 +476,11 @@ def validate_llm_extraction(
         return False, "根拠抜粋がありません"
     normalized_doc = re.sub(r"\s+", "", doc.text)
     normalized_excerpt = re.sub(r"\s+", "", excerpt)
-    # 抜粋全体(先頭200文字まで)が元文書に実在すること。先頭80文字だけの照合では
-    # 実在文の切り貼りで任意の値を通せてしまうため、抜粋長に応じて照合幅を広げる。
-    probe = normalized_excerpt[:200]
-    if not probe or probe not in normalized_doc:
-        return False, "根拠抜粋が元文書に見つかりません(捏造の可能性)"
+    # 抜粋『全体』が元文書に連続して実在すること。先頭数百文字だけの照合では、
+    # 実在文の後ろに捏造値を継ぎ足す(先頭は本物・末尾に架空の数値)手口で
+    # 任意の値を通せてしまうため、抜粋の全長を照合する。
+    if not normalized_excerpt or normalized_excerpt not in normalized_doc:
+        return False, "根拠抜粋が元文書に連続して見つかりません(捏造・切り貼りの可能性)"
     # 抽出値そのものが抜粋に含まれることを必須化する(値の捏造防止)。
     # 桁区切り・スケール語(万/億等)・%小数の差異を吸収して照合する。
     if not _value_supported_by_excerpt(value, excerpt):
@@ -460,6 +492,10 @@ def validate_llm_extraction(
     for name, v in (("low", low), ("high", high)):
         if v is not None and (not isinstance(v, int | float) or isinstance(v, bool)):
             return False, f"{name}が数値ではありません"
+        # 不確実性区間(low/high)も原文に裏付けが必要(捏造区間の受理を防ぐ)。
+        # 裏付けのない区間を黙って採用するより、未解決として扱う方が安全。
+        if v is not None and not _value_supported_by_excerpt(float(v), excerpt):
+            return False, f"{name}({v})が根拠抜粋に含まれていません(区間の捏造の可能性)"
     if low is not None and high is not None and low > high:
         return False, "low > high です"
     return True, ""

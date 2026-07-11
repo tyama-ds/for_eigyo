@@ -13,6 +13,10 @@ venv/
 # データベース(ローカル生成)
 *.db
 fermiscope.db
+# SQLite の付随ファイル(WAL/ジャーナル)
+*.db-journal
+*.db-wal
+*.db-shm
 
 # 環境変数(秘密情報)
 .env

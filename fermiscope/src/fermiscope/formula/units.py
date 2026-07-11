@@ -35,6 +35,12 @@ _ENTITY_DEFINITIONS = [
     "worker = person",
     "customer = person",
     "tuner = person",  # 調律師は人の部分集合(次元は person)
+    # スケール付き単位は Pint の定義として登録する。
+    # (単位式 "1e8 JPY" は parse_units が拒否するため、単位そのものとして定義する)
+    "man_yen = 1e4 * JPY = 万円",
+    "oku_yen = 1e8 * JPY = 億円",
+    "cho_yen = 1e12 * JPY = 兆円",
+    "wari = 10 * percent = 割",  # 1割 = 10%(無次元比)
 ]
 
 # 日本語の単位表現 → pint 単位への変換表(問い・証拠の単位正規化に使用)
@@ -43,9 +49,9 @@ _JA_UNIT_MAP = {
     "名": "person",
     "世帯": "household",
     "円": "JPY",
-    "億円": "1e8 JPY",
-    "兆円": "1e12 JPY",
-    "万円": "1e4 JPY",
+    "億円": "oku_yen",
+    "兆円": "cho_yen",
+    "万円": "man_yen",
     "台": "item",
     "本": "item",
     "個": "item",
@@ -64,7 +70,7 @@ _JA_UNIT_MAP = {
     "km²": "kilometer**2",
     "%": "percent",
     "パーセント": "percent",
-    "割": "10 percent",
+    "割": "wari",
     "無次元": "dimensionless",
 }
 
@@ -187,8 +193,25 @@ def check_graph_units(
             result_unit=str(result_q.units),
         )
 
-    # 年率などの時間次元も含めて次元で比較する
+    # 年率などの時間次元も含めて次元で比較する。
+    # 次元が一致しても倍率が異なる(日↔年=365倍、%↔比=100倍、万円↔円=1万倍等)
+    # ケースを見逃さないよう、目標単位への換算係数が 1 であることも検査する。
     if result_q.dimensionality == target_q.dimensionality:
+        try:
+            scale_factor = (result_q / target_q).to("dimensionless").magnitude
+        except Exception:  # noqa: BLE001 — 換算不能時は次元一致のみで合格とする
+            scale_factor = 1.0
+        if abs(scale_factor - 1.0) > 1e-6:
+            return UnitCheckResult(
+                passed=False,
+                detail=(
+                    f"単位の倍率不整合: 式の単位 [{result_q.units}] は目標単位 "
+                    f"[{target_q.units}] と次元は一致しますが約 {scale_factor:g} 倍のスケール差が"
+                    f"あります(例: 日↔年・%↔比・万円↔円)。パラメータの単位を目標単位に"
+                    f"揃えてください。"
+                ),
+                result_unit=str(result_q.units),
+            )
         return UnitCheckResult(
             passed=True,
             detail=f"単位整合: 式の単位 [{result_q.units}] は目標単位 [{target_q.units}] と一致します。",

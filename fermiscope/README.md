@@ -121,7 +121,7 @@ LLM出力はPydanticスキーマで検証され、引用・数値が原文に実
 |------|--------|------|
 | `SEARCH_PROVIDER` | `mock` | `mock`(同梱資料)/ `brave`(実検索) |
 | `BRAVE_API_KEY` | — | Brave Search APIキー |
-| `LLM_PROVIDER` | `noop` | `noop` / `mock` / `openai_compatible` |
+| `LLM_PROVIDER` | `noop` | `noop` / `openai_compatible` / `anthropic`(`mock` はテスト用) |
 | `LLM_API_BASE` / `LLM_API_KEY` / `LLM_MODEL` | — | OpenAI互換APIの接続情報 |
 | `FERMISCOPE_APP_NAME` | `FermiScope` | 表示名 |
 | `FERMISCOPE_DATABASE_URL` | SQLite | 例: `postgresql+psycopg://…` |
@@ -151,7 +151,7 @@ LLM出力はPydanticスキーマで検証され、引用・数値が原文に実
 
 ```bash
 pip install -e ".[dev]"
-pytest                          # 204件(単体・統合・敵対的・UI)。全て外部ネットワーク不要
+pytest                          # 単体・統合・敵対的・UIテスト一式。全て外部ネットワーク不要
 ruff check src tests scripts   # lint
 mypy                            # 型検査
 

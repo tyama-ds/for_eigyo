@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -536,6 +537,14 @@ class ResearchOrchestrator:
             run.finished_at = utcnow()
             project.audit("run_done", "調査が完了しました", **self._counters(run))
             self._emit("done", "調査が完了しました", self._counters(run))
+        except asyncio.CancelledError:
+            # サーバ停止やタスクキャンセルで送出される。status を確定させてから
+            # 再送出し、RUNNING のまま永続化されるのを防ぐ(呼び出し側の finally で保存)。
+            run.status = RunStatus.CANCELLED
+            run.stage = RunStage.CANCELLED
+            run.finished_at = utcnow()
+            project.audit("run_cancelled", "調査が中断されました(タスクキャンセル)")
+            raise
         except CancelledError:
             run.status = RunStatus.CANCELLED
             run.stage = RunStage.CANCELLED
