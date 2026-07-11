@@ -56,7 +56,19 @@ def evaluate_node(node: FormulaNode, values: Mapping[str, Number]) -> Number:
                 result = result / c
         return result
     if node.op == "**":
-        return children[0] ** children[1]
+        base, exponent = children[0], children[1]
+        if isinstance(base, np.ndarray) or isinstance(exponent, np.ndarray):
+            with np.errstate(divide="ignore", invalid="ignore"):
+                result = np.power(
+                    np.asarray(base, dtype=float), np.asarray(exponent, dtype=float)
+                )
+            # 負の底×非整数指数(複素数)やゼロ底×負指数(inf)は無効値化し失敗反復として集計
+            return np.where(np.isfinite(result), result, np.nan)
+        if base == 0 and exponent < 0:
+            raise FormulaEvalError("ゼロの負べき乗が発生しました")
+        if base < 0 and float(exponent) != int(exponent):
+            raise FormulaEvalError("負の底に対する非整数べき乗は実数になりません")
+        return base**exponent
     raise FormulaEvalError(f"未知の演算子: {node.op}")
 
 

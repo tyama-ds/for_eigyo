@@ -171,6 +171,24 @@ class DocumentFetcher:
             request.extensions["sni_hostname"] = sni  # TLS証明書は元ホスト名で検証
         return await self._client.send(request, stream=stream)
 
+    async def _read_capped(self, resp: httpx.Response, max_bytes: int) -> bytes:
+        """ストリーム応答を上限つきで読み切る。超過時は FetchError。"""
+        declared = resp.headers.get("content-length")
+        if declared:
+            try:
+                if int(declared) > max_bytes:
+                    raise FetchError(f"応答サイズが上限({max_bytes}バイト)を超えています")
+            except ValueError:
+                pass  # 不正な Content-Length はヘッダ値を無視しストリームで実測検査する
+        chunks: list[bytes] = []
+        total = 0
+        async for chunk in resp.aiter_bytes():
+            total += len(chunk)
+            if total > max_bytes:
+                raise FetchError(f"応答サイズが上限({max_bytes}バイト)を超えました")
+            chunks.append(chunk)
+        return b"".join(chunks)
+
     async def _robots_allows(self, url: str) -> bool:
         if not self._respect_robots:
             return True
@@ -179,14 +197,21 @@ class DocumentFetcher:
         if base not in self._robots_cache:
             rp = urllib.robotparser.RobotFileParser()
             try:
-                resp = await self._pinned_send(base + "/robots.txt", stream=False)
-                if resp.status_code == 200:
-                    rp.parse(resp.text.splitlines())
+                resp = await self._pinned_send(base + "/robots.txt", stream=True)
+                try:
+                    # robots.txt も応答サイズ上限を適用(巨大 robots によるDoS防止)
+                    cap = min(self.settings.fetch.max_response_bytes, 1024 * 1024)
+                    body = await self._read_capped(resp, cap)
+                    status = resp.status_code
+                finally:
+                    await resp.aclose()
+                if status == 200:
+                    rp.parse(body.decode("utf-8", errors="replace").splitlines())
                     self._robots_cache[base] = rp
                 else:
                     self._robots_cache[base] = None  # robotsなし → 許可
-            except (httpx.HTTPError, UrlGuardError):
-                # robots取得先が解決不能/プライベートIPでも許可扱い(本体fetchで再検査される)
+            except (httpx.HTTPError, UrlGuardError, FetchError):
+                # robots取得先が解決不能/プライベートIP/巨大でも許可扱い(本体fetchで再検査)
                 self._robots_cache[base] = None
         rp2 = self._robots_cache[base]
         if rp2 is None:
@@ -198,21 +223,7 @@ class DocumentFetcher:
         max_bytes = self.settings.fetch.max_response_bytes
         resp = await self._pinned_send(url, stream=True)
         try:
-            declared = resp.headers.get("content-length")
-            if declared:
-                try:
-                    if int(declared) > max_bytes:
-                        raise FetchError(f"応答サイズが上限({max_bytes}バイト)を超えています")
-                except ValueError:
-                    pass  # 不正な Content-Length はヘッダ値を無視しストリームで実測検査する
-            chunks: list[bytes] = []
-            total = 0
-            async for chunk in resp.aiter_bytes():
-                total += len(chunk)
-                if total > max_bytes:
-                    raise FetchError(f"応答サイズが上限({max_bytes}バイト)を超えました")
-                chunks.append(chunk)
-            content = b"".join(chunks)
+            content = await self._read_capped(resp, max_bytes)
         finally:
             await resp.aclose()
         resp._content = content  # noqa: SLF001
@@ -226,11 +237,12 @@ class DocumentFetcher:
             return cached[1]
 
         current = validate_url(url, resolver=self._resolver, skip_dns=self._skip_dns)
-        if not await self._robots_allows(current):
-            raise FetchError(f"robots.txt により取得が許可されていません: {current}")
 
         redirects = 0
         while True:
+            # 各ホップで robots.txt を確認(リダイレクト先のポリシーも尊重する)
+            if not await self._robots_allows(current):
+                raise FetchError(f"robots.txt により取得が許可されていません: {current}")
             try:
                 resp = await self._get_limited(current)
             except httpx.HTTPError as exc:
@@ -254,8 +266,12 @@ class DocumentFetcher:
         content_type = resp.headers.get("content-type", "")
         base_ct = content_type.split(";")[0].strip().lower()
         allowed = self.settings.fetch.allowed_content_types
-        if base_ct and base_ct not in allowed:
-            raise FetchError(f"許可されていないContent-Typeです: {base_ct}")
+        # Content-Type が空/未宣言、または許可リスト外は拒否する
+        # (空ヘッダで許可検査をすり抜けさせない)
+        if base_ct not in allowed:
+            raise FetchError(
+                f"許可されていない/未宣言のContent-Typeです: {base_ct or '(なし)'}"
+            )
 
         data = resp.content
         doc_type = _detect_doc_type(content_type, current)

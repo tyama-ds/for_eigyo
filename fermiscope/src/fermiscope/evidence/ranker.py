@@ -82,7 +82,14 @@ def infer_source_class(ev: EvidenceItem, settings: Settings) -> SourceClass:
 
 
 def _year_of(ev: EvidenceItem) -> int | None:
-    return parse_year(ev.revision_date) or parse_year(ev.publication_date) or parse_year(ev.time_period)
+    # データの対象時点を優先する(contradiction/verifier と一致させる)。
+    # revision_date(再掲載日)を優先すると、古いデータの再アップロードが
+    # 新鮮と誤評価されるため最後に回す。
+    return (
+        parse_year(ev.time_period)
+        or parse_year(ev.publication_date)
+        or parse_year(ev.revision_date)
+    )
 
 
 def _geography_fit(ev_geo: str, target_geo: str) -> tuple[float, str]:
@@ -207,7 +214,10 @@ def rank_evidence(
             reasons.append(f"データが {age} 年前と古いため減点。")
 
     # --- independence(クラスタリング結果を反映)---
-    if ev.parent_source_id or (ev.cluster_id and not ev.cluster_id.startswith(ev.id)):
+    # 自分自身が代表の単独クラスタ(cluster_id == "cluster_<自ID>")は独立とみなす。
+    # 他IDを代表とするクラスタに属する(=転載クラスタの一員)場合のみ独立性を下げる。
+    in_shared_cluster = bool(ev.cluster_id) and ev.cluster_id != f"cluster_{ev.id}"
+    if ev.parent_source_id or in_shared_cluster:
         sub["independence"] = 30.0
         reasons.append("同一の一次資料に由来する可能性が高く、独立性は低い。")
     else:

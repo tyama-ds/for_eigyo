@@ -19,6 +19,9 @@
    */
   function render(node, labels, onClick, parentPrec) {
     parentPrec = parentPrec || 0;
+    if (!node || typeof node !== "object") {
+      return span("fconst", "?");
+    }
     if (node.kind === "constant") {
       return span("fconst", String(node.value));
     }
@@ -35,8 +38,12 @@
       }
       return v;
     }
+    const children = Array.isArray(node.children) ? node.children : [];
+    if (!children.length) {
+      return span("fconst", labels[node.parameter_id] || node.op || "?");
+    }
     // 除算は分数として表示
-    if (node.op === "/" && node.children.length === 2) {
+    if (node.op === "/" && children.length === 2) {
       const frac = span("frac");
       const top = span("top");
       top.appendChild(render(node.children[0], labels, onClick, 0));
@@ -50,7 +57,7 @@
     const wrap = span("fexpr");
     const needParen = prec < parentPrec;
     if (needParen) wrap.appendChild(span("", "("));
-    node.children.forEach((child, i) => {
+    children.forEach((child, i) => {
       if (i > 0) wrap.appendChild(span("fop", ` ${node.op === "*" ? "×" : node.op} `));
       wrap.appendChild(render(child, labels, onClick, prec + (i > 0 && node.op === "-" ? 1 : 0)));
     });

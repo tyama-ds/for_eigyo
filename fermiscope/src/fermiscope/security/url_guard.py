@@ -99,11 +99,14 @@ def validate_url(
         validate_ip(bare_host)
         return url
 
-    # 数値のみ/16進/8進ドット表記の「IPリテラルもどき」を拒否する。
-    # ipaddress.ip_address は "2130706433" や "0x7f000001"、"0177.0.0.1"、"127.1" を
-    # IPとして解釈しないが、OS の getaddrinfo はこれらを 127.0.0.1 等へ解決し得る。
-    # skip_dns=True(オフライン検査)でも確実にブロックするための保険。
-    if re.fullmatch(r"0x[0-9a-fA-F]+|[0-9]+|[0-9]+(\.[0-9]+){1,3}", bare_host):
+    # 数値のみ/16進/8進/混在ドット表記の「IPリテラルもどき」を拒否する。
+    # ipaddress.ip_address は "2130706433"・"0x7f000001"・"0177.0.0.1"・"127.1"・
+    # "0x7f.0.0.1" を IP として解釈しないが、OS の getaddrinfo はこれらを
+    # 127.0.0.1 等へ解決し得る。skip_dns=True(オフライン検査)でも確実にブロックする保険。
+    labels = bare_host.split(".")
+    all_numeric = re.fullmatch(r"[0-9]+(\.[0-9]+)*", bare_host) is not None
+    any_hex_label = any(lbl.lower().startswith("0x") for lbl in labels)
+    if all_numeric or any_hex_label:
         raise UrlGuardError(f"数値形式のホストは許可しません: {host}")
 
     if not skip_dns:

@@ -2,21 +2,26 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from fermiscope import __version__
 from fermiscope.api.runs import RunManager
-from fermiscope.config import Settings, get_settings
-from fermiscope.llm import create_llm_provider
+from fermiscope.config import PROJECT_ROOT, Settings, get_settings
 from fermiscope.llm.base import LLMProvider
+from fermiscope.llm.settings_store import LLMSettingsStore
 from fermiscope.persistence.repository import ProjectRepository
 from fermiscope.research.fetcher import DocumentFetcher
 from fermiscope.research.mock_transport import build_mock_transport
 from fermiscope.research.search.base import SearchProvider
 from fermiscope.research.search.brave import BraveSearchProvider
 from fermiscope.research.search.mock import MockSearchProvider
+
+PROJECT_LLM_SETTINGS_PATH = PROJECT_ROOT / "llm_settings.json"
 
 
 def _build_search_provider(settings: Settings) -> SearchProvider:
@@ -48,7 +53,17 @@ def create_app(
 
     app.state.settings = settings
     app.state.search_provider = search_provider or _build_search_provider(settings)
-    app.state.llm = llm or create_llm_provider(settings.llm_provider)
+    # LLMは実行時に GUI から切替できるよう settings store 経由で解決する。
+    # テスト等で明示注入された場合はそれを固定利用する(store は None)。
+    if llm is not None:
+        app.state.llm = llm
+        app.state.llm_store = None
+    else:
+        settings_path = Path(
+            os.environ.get("FERMISCOPE_LLM_SETTINGS_PATH", str(PROJECT_LLM_SETTINGS_PATH))
+        )
+        app.state.llm_store = LLMSettingsStore(settings_path)
+        app.state.llm = None  # current_llm() が store から取得する
     app.state.fetcher = fetcher or _build_fetcher(settings)
     app.state.repo = repo or ProjectRepository(settings.database_url)
     app.state.run_manager = RunManager()

@@ -390,6 +390,41 @@ def extract_evidence(
     return items
 
 
+def _value_supported_by_excerpt(value: float, excerpt: str) -> bool:
+    """抽出値が抜粋テキスト中の数値表現から復元できるかを検査する。
+
+    抜粋に現れる各数値(スケール語・パーセント・桁区切りを解釈)を実数化し、
+    value と相対誤差 1% 以内で一致するものがあれば「根拠あり」とみなす。
+    """
+    normalized = excerpt.replace(",", "").replace(",", "")
+    candidates: list[float] = []
+    for m in _NUMBER_PATTERN.finditer(normalized):
+        num, scale, unit = m.group(1), m.group(2), m.group(3)
+        try:
+            base = parse_japanese_number(num, scale)
+        except ValueError:
+            continue
+        candidates.append(base)
+        # 「%」表記は比率(/100)としても解釈し得る
+        if unit in ("%", "パーセント"):
+            candidates.append(base / 100.0)
+    # スケール語を伴わない裸の数字も拾う(単位パターンに一致しなかった場合の保険)
+    for m in re.finditer(r"[0-9]+(?:\.[0-9]+)?", normalized):
+        try:
+            candidates.append(float(m.group(0)))
+        except ValueError:
+            continue
+    target = abs(float(value))
+    for c in candidates:
+        c = abs(c)
+        if target == 0.0:
+            if c == 0.0:
+                return True
+        elif abs(c - target) <= max(abs(target), abs(c)) * 0.01:
+            return True
+    return False
+
+
 def validate_llm_extraction(
     doc: FetchedDocument,
     param: ParameterEstimate,
@@ -409,8 +444,15 @@ def validate_llm_extraction(
         return False, "根拠抜粋がありません"
     normalized_doc = re.sub(r"\s+", "", doc.text)
     normalized_excerpt = re.sub(r"\s+", "", excerpt)
-    if normalized_excerpt[:80] not in normalized_doc:
+    # 抜粋全体(先頭200文字まで)が元文書に実在すること。先頭80文字だけの照合では
+    # 実在文の切り貼りで任意の値を通せてしまうため、抜粋長に応じて照合幅を広げる。
+    probe = normalized_excerpt[:200]
+    if not probe or probe not in normalized_doc:
         return False, "根拠抜粋が元文書に見つかりません(捏造の可能性)"
+    # 抽出値そのものが抜粋に含まれることを必須化する(値の捏造防止)。
+    # 桁区切り・スケール語(万/億等)・%小数の差異を吸収して照合する。
+    if not _value_supported_by_excerpt(value, excerpt):
+        return False, "抽出値が根拠抜粋に含まれていません(値の捏造の可能性)"
     unit = payload.get("unit", "")
     if not isinstance(unit, str):
         return False, "unitが文字列ではありません"

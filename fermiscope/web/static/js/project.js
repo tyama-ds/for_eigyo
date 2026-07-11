@@ -27,6 +27,11 @@
     return h("span", cls, label);
   }
   function aiBadge() { return h("span", "badge ai", "AI補助"); }
+  // 外部由来URLは http/https のみ許可(javascript:/data: 等のクリック時XSSを防ぐ)
+  function safeHref(url) {
+    if (typeof url !== "string") return "#";
+    return /^https?:\/\//i.test(url.trim()) ? url : "#";
+  }
   async function api(path, options) {
     const res = await fetch(path, options);
     if (!res.ok) {
@@ -401,8 +406,10 @@
   function renderCharts() {
     const primary = report.models.find((m) => m.role === "primary");
     const check = report.models.find((m) => m.role === "check");
-    const primarySim = primary ? report.simulation.results.find((r) => r.model_id === primary.id) : null;
-    const checkSim = check ? report.simulation.results.find((r) => r.model_id === check.id) : null;
+    const simResults = (report.simulation && report.simulation.results) || [];
+    const sensResults = report.sensitivity || [];
+    const primarySim = primary ? simResults.find((r) => r.model_id === primary.id) : null;
+    const checkSim = check ? simResults.find((r) => r.model_id === check.id) : null;
 
     window.FermiCharts.barChart(
       document.getElementById("chart-scenarios"),
@@ -424,7 +431,7 @@
     } else {
       document.getElementById("chart-histogram").textContent = "シミュレーション結果がありません";
     }
-    const primarySens = report.sensitivity.filter((s) => primary && s.model_id === primary.id);
+    const primarySens = sensResults.filter((s) => primary && s.model_id === primary.id);
     const base = primarySim ? primarySim.median : null;
     window.FermiCharts.tornado(
       document.getElementById("chart-tornado"),
@@ -487,7 +494,7 @@
         const title = h("p");
         title.appendChild(h("strong", "", `[${e.source_class}] `));
         const link = h("a", "", e.title || e.url);
-        link.href = e.url; link.target = "_blank"; link.rel = "noopener noreferrer";
+        link.href = safeHref(e.url); link.target = "_blank"; link.rel = "noopener noreferrer";
         title.appendChild(link);
         if (e.ai_assisted) title.appendChild(aiBadge());
         card.appendChild(title);
@@ -656,7 +663,7 @@
       tr.appendChild(h("td", "num", e.evidence_score !== null ? String(e.evidence_score) : "—"));
       const tdTitle = h("td");
       const link = h("a", "", e.title || e.url);
-      link.href = e.url; link.target = "_blank"; link.rel = "noopener noreferrer";
+      link.href = safeHref(e.url); link.target = "_blank"; link.rel = "noopener noreferrer";
       tdTitle.appendChild(link);
       if (e.ai_assisted) tdTitle.appendChild(aiBadge());
       tdTitle.appendChild(h("div", "meta", e.url));

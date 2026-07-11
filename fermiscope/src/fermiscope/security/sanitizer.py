@@ -3,14 +3,19 @@
 - 抽出時: script/style/iframe 等を除去してテキスト化(JSは実行しない)
 - 表示時: 証拠の抜粋等はフロントエンドでもテキストノードとして挿入するが、
   サーバ側でも二重にサニタイズする(多層防御)
+
+不正・未閉鎖のHTML(閉じない <script>/<style> 等)でも本文を落とさないよう、
+寛容にツリーを構築する BeautifulSoup をパーサとして用いる。
 """
 
 from __future__ import annotations
 
+import html as _html
 import re
-from html.parser import HTMLParser
 
-# 中身ごと除去するタグ(終了タグを持つコンテナ)
+from bs4 import BeautifulSoup, Comment, NavigableString, Tag
+
+# 中身ごと除去するタグ
 _DANGEROUS_TAGS = {
     "script",
     "style",
@@ -22,98 +27,78 @@ _DANGEROUS_TAGS = {
     "applet",
     "form",
     "noscript",
+    "meta",
+    "link",
+    "base",
 }
 
-# タグ自体を除去する void 要素(終了タグが無いため skip 深度を増やさない)
-_DANGEROUS_VOID_TAGS = {"meta", "link", "base"}
+# 表示時に許可するタグ(属性はすべて除去)
+_ALLOWED_DISPLAY_TAGS = {
+    "b",
+    "strong",
+    "i",
+    "em",
+    "u",
+    "br",
+    "p",
+    "ul",
+    "ol",
+    "li",
+    "table",
+    "tr",
+    "td",
+    "th",
+}
 
-_ALLOWED_DISPLAY_TAGS = {"b", "strong", "i", "em", "u", "br", "p", "ul", "ol", "li", "table", "tr", "td", "th"}
+# テキスト抽出時に改行を挿入するブロック要素
+_BLOCK_TAGS = {"p", "div", "br", "tr", "li", "h1", "h2", "h3", "h4", "table"}
 
 
-class _TextExtractor(HTMLParser):
-    """危険タグの中身を捨ててテキストを抽出する。"""
-
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self._chunks: list[str] = []
-        self._skip_depth = 0
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag in _DANGEROUS_VOID_TAGS:
-            return
-        if tag in _DANGEROUS_TAGS:
-            self._skip_depth += 1
-        elif tag in ("p", "div", "br", "tr", "li", "h1", "h2", "h3", "h4", "table"):
-            self._chunks.append("\n")
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag in _DANGEROUS_TAGS and self._skip_depth > 0:
-            self._skip_depth -= 1
-
-    def handle_data(self, data: str) -> None:
-        if self._skip_depth == 0:
-            self._chunks.append(data)
-
-    def text(self) -> str:
-        raw = "".join(self._chunks)
-        raw = re.sub(r"[ \t\r\f\v]+", " ", raw)
-        return re.sub(r"\n\s*\n+", "\n", raw).strip()
+def _clean_soup(html: str) -> BeautifulSoup:
+    soup = BeautifulSoup(html, "html.parser")
+    # 危険タグは中身ごと除去(未閉鎖でも bs4 が木を閉じるため取り残しが本文を汚さない)
+    for tag in soup.find_all(_DANGEROUS_TAGS):
+        tag.decompose()
+    # コメント(条件付きコメント等)も除去
+    for comment in soup.find_all(string=lambda s: isinstance(s, Comment)):
+        comment.extract()
+    return soup
 
 
 def strip_html_to_text(html: str) -> str:
     """HTMLからスクリプト等を除去したプレーンテキストを得る(JS非実行)。"""
-    parser = _TextExtractor()
-    parser.feed(html)
-    parser.close()
-    return parser.text()
-
-
-class _DisplaySanitizer(HTMLParser):
-    """表示用: 許可タグ(属性なし)以外を除去する。"""
-
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=False)
-        self._out: list[str] = []
-        self._skip_depth = 0
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag in _DANGEROUS_VOID_TAGS:
-            return
-        if tag in _DANGEROUS_TAGS:
-            self._skip_depth += 1
-            return
-        if self._skip_depth == 0 and tag in _ALLOWED_DISPLAY_TAGS:
-            self._out.append(f"<{tag}>")  # 属性は一切許可しない(onclick等の除去)
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag in _DANGEROUS_TAGS:
-            if self._skip_depth > 0:
-                self._skip_depth -= 1
-            return
-        if self._skip_depth == 0 and tag in _ALLOWED_DISPLAY_TAGS:
-            self._out.append(f"</{tag}>")
-
-    def handle_data(self, data: str) -> None:
-        if self._skip_depth == 0:
-            self._out.append(
-                data.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-            )
-
-    def handle_entityref(self, name: str) -> None:
-        if self._skip_depth == 0:
-            self._out.append(f"&{name};")
-
-    def handle_charref(self, name: str) -> None:
-        if self._skip_depth == 0:
-            self._out.append(f"&#{name};")
-
-    def html(self) -> str:
-        return "".join(self._out)
+    soup = _clean_soup(html)
+    parts: list[str] = []
+    for element in soup.descendants:
+        if isinstance(element, Comment):
+            continue
+        if isinstance(element, NavigableString):
+            parts.append(str(element))
+        elif isinstance(element, Tag) and element.name in _BLOCK_TAGS:
+            parts.append("\n")
+    raw = "".join(parts)
+    raw = re.sub(r"[ \t\r\f\v]+", " ", raw)
+    return re.sub(r"\n\s*\n+", "\n", raw).strip()
 
 
 def sanitize_html(html: str) -> str:
-    """表示用HTMLサニタイズ: 許可タグ以外・全属性・script等を除去する。"""
-    parser = _DisplaySanitizer()
-    parser.feed(html)
-    parser.close()
-    return parser.html()
+    """表示用HTMLサニタイズ: 許可タグ以外・全属性・script等を除去する。
+
+    許可タグは属性を全て落として温存し、非許可タグは中身のテキストのみ残す。
+    テキストは HTML エスケープする。
+    """
+    soup = _clean_soup(html)
+
+    def render(node: object) -> str:
+        if isinstance(node, Comment):
+            return ""
+        if isinstance(node, NavigableString):
+            return _html.escape(str(node))
+        if isinstance(node, Tag):
+            inner = "".join(render(c) for c in node.children)
+            if node.name in _ALLOWED_DISPLAY_TAGS:
+                return f"<{node.name}>{inner}</{node.name}>"  # 属性は一切許可しない
+            return inner  # 非許可タグは剥がして中身だけ残す
+        return ""
+
+    return "".join(render(child) for child in soup.children)

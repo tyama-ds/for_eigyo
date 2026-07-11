@@ -9,6 +9,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Str
 from pydantic import BaseModel, Field
 
 from fermiscope import __version__
+from fermiscope.api.app_state import current_llm
 from fermiscope.api.runs import sse_format
 from fermiscope.domain.enums import DistributionKind, ParameterStatus, ResearchMode, ValueBasis
 from fermiscope.domain.models import EstimateProject, SimulationConfig
@@ -79,6 +80,15 @@ class RecalculateRequest(BaseModel):
     correlations: list[tuple[str, str, float]] | None = None
 
 
+class LLMSettingsRequest(BaseModel):
+    provider: str | None = None  # noop | openai_compatible | anthropic (mock はテスト用)
+    api_base: str | None = None
+    model: str | None = None
+    api_key: str | None = None  # 空文字は「変更なし」
+    proxy: str | None = None
+    timeout_seconds: float | None = Field(default=None, ge=1, le=600)
+
+
 # ---------- ヘルパ ----------
 
 
@@ -98,6 +108,15 @@ def _save(request: Request, project: EstimateProject) -> None:
     request.app.state.projects_cache[project.id] = project
 
 
+def _ensure_not_running(request: Request, project_id: str) -> None:
+    """調査実行中はパラメータ/証拠の編集・再計算を拒否する(状態競合の防止)。"""
+    if request.app.state.run_manager.is_running(project_id):
+        raise HTTPException(
+            status_code=409,
+            detail="調査の実行中は編集・再計算できません。完了までお待ちください。",
+        )
+
+
 # ---------- 画面 ----------
 
 
@@ -111,7 +130,7 @@ async def index(request: Request):
             "app_name": settings.display_name(),
             "version": __version__,
             "search_provider": request.app.state.search_provider.name,
-            "llm_provider": request.app.state.llm.name,
+            "llm_provider": current_llm(request.app).name,
         },
     )
 
@@ -142,8 +161,8 @@ async def get_config(request: Request):
         "app_name": settings.display_name(),
         "version": __version__,
         "search_provider": request.app.state.search_provider.name,
-        "llm_provider": request.app.state.llm.name,
-        "llm_available": request.app.state.llm.available,
+        "llm_provider": current_llm(request.app).name,
+        "llm_available": current_llm(request.app).available,
         "research_modes": [m.value for m in ResearchMode],
         "config_hash": settings.config_hash,
         "defaults": {
@@ -154,13 +173,91 @@ async def get_config(request: Request):
     }
 
 
+# ---------- LLM 接続設定(GUIから編集)----------
+
+
+_LLM_PROVIDER_CHOICES = [
+    {"value": "noop", "label": "使用しない(LLM補助なし)", "needs_key": False, "needs_base": False},
+    {
+        "value": "openai_compatible",
+        "label": "OpenAI / OpenAI互換(ローカルLLM・vLLM・Ollama等)",
+        "needs_key": True,
+        "needs_base": True,
+        "base_hint": "例: https://api.openai.com/v1 、http://localhost:11434/v1",
+        "model_hint": "例: gpt-4o-mini 、qwen2.5 等",
+    },
+    {
+        "value": "anthropic",
+        "label": "Anthropic API",
+        "needs_key": True,
+        "needs_base": False,
+        "base_hint": "省略可(既定 https://api.anthropic.com)。プロキシ/ゲートウェイ時のみ指定",
+        "model_hint": "例: claude-sonnet-5 、claude-opus-4-8 等",
+    },
+]
+
+
+def _llm_store_or_409(request: Request):
+    store = getattr(request.app.state, "llm_store", None)
+    if store is None:
+        raise HTTPException(
+            status_code=409,
+            detail="このインスタンスではLLMプロバイダが固定されており、GUIから変更できません。",
+        )
+    return store
+
+
+@router.get("/api/settings/llm")
+async def get_llm_settings(request: Request):
+    store = getattr(request.app.state, "llm_store", None)
+    editable = store is not None
+    if store is None:
+        provider = current_llm(request.app)
+        current = {
+            "provider": provider.name,
+            "api_base": "",
+            "model": "",
+            "proxy": "",
+            "timeout_seconds": 60.0,
+            "key_set": False,
+        }
+    else:
+        current = store.config.public_dict()
+    return {"editable": editable, "providers": _LLM_PROVIDER_CHOICES, "current": current}
+
+
+@router.put("/api/settings/llm")
+async def update_llm_settings(request: Request, body: LLMSettingsRequest):
+    store = _llm_store_or_409(request)
+    patch = {k: v for k, v in body.model_dump().items() if v is not None}
+    if body.provider is not None and body.provider not in (
+        "noop",
+        "mock",
+        "openai_compatible",
+        "anthropic",
+    ):
+        raise HTTPException(status_code=400, detail="未知のプロバイダです")
+    try:
+        config = await store.update(patch)
+    except Exception as exc:  # noqa: BLE001 — 構築失敗は 400 で返す
+        raise HTTPException(status_code=400, detail=f"設定を適用できません: {exc}") from exc
+    return {"current": config.public_dict()}
+
+
+@router.post("/api/settings/llm/test")
+async def test_llm_settings(request: Request):
+    store = _llm_store_or_409(request)
+    ok, message = await store.test_connection()
+    return {"ok": ok, "message": message}
+
+
 # ---------- プロジェクトCRUD ----------
 
 
 @router.post("/api/projects")
 async def create_project(request: Request, body: CreateProjectRequest):
     settings = request.app.state.settings
-    llm = request.app.state.llm
+    llm = current_llm(request.app)
     from datetime import UTC, datetime
 
     spec, ai_assisted = await parse_question(
@@ -247,7 +344,7 @@ async def update_question(request: Request, project_id: str, body: UpdateQuestio
     project.audit("question_updated", f"スコープを更新: {', '.join(changed)}", fields=changed)
 
     if body.regenerate_models and changed:
-        models, params, _ = await generate_model_candidates(spec, request.app.state.llm)
+        models, params, _ = await generate_model_candidates(spec, current_llm(request.app))
         project.models = models
         # 既存の調査済みパラメータは温存し、新規のみ追加
         for pid, p in params.items():
@@ -304,18 +401,32 @@ async def start_research(request: Request, project_id: str, wait: bool = False):
         settings,
         max_searches=project.max_searches,
         max_cost_usd=project.max_cost_usd,
+        # プロジェクト累積を引き継ぎ、再実行で予算がリセットされないようにする
+        executed_count=project.searches_spent,
+        total_cost_usd=project.cost_spent_usd,
     )
     orchestrator = ResearchOrchestrator(
         settings,
         service,
         request.app.state.fetcher,
-        request.app.state.llm,
+        current_llm(request.app),
         emit=lambda et, msg, data: manager.emit(project_id, et, msg, data),
     )
 
     async def run_and_save():
-        await orchestrator.run_research(project)
-        request.app.state.repo.save(project)
+        try:
+            await orchestrator.run_research(project)
+        finally:
+            # 累積予算を保存し、結果は必ず永続化する(save失敗は監査に残す)
+            project.searches_spent = service.executed_count
+            project.cost_spent_usd = service.total_cost_usd
+            try:
+                request.app.state.repo.save(project)
+            except Exception as exc:  # noqa: BLE001
+                project.audit("persist_error", f"結果の保存に失敗しました: {type(exc).__name__}")
+                manager.emit(
+                    project_id, "warning", "結果の保存に失敗しました(状態は保持されています)", {}
+                )
 
     if wait:
         await run_and_save()
@@ -375,6 +486,16 @@ async def event_stream(request: Request, project_id: str):
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=15.0)
                 except TimeoutError:
+                    # 終端イベントがキュー溢れ等で失われても、実行終了を検知して閉じる
+                    if not manager.is_running(project_id) and queue.empty():
+                        project = request.app.state.projects_cache.get(project_id)
+                        run = project.current_run() if project else None
+                        status = run.status.value if run else "done"
+                        yield sse_format(
+                            {"type": status if status in ("done", "failed", "cancelled") else "done",
+                             "message": "調査は終了しています", "data": {"stage": status}}
+                        )
+                        break
                     yield ": keepalive\n\n"
                     continue
                 yield sse_format(event)
@@ -397,6 +518,7 @@ async def event_stream(request: Request, project_id: str):
 async def update_parameter(
     request: Request, project_id: str, parameter_id: str, body: UpdateParameterRequest
 ):
+    _ensure_not_running(request, project_id)
     project = _get_project(request, project_id)
     param = project.parameters.get(parameter_id)
     if param is None:
@@ -439,6 +561,7 @@ async def update_parameter(
 async def update_evidence(
     request: Request, project_id: str, evidence_id: str, body: UpdateEvidenceRequest
 ):
+    _ensure_not_running(request, project_id)
     project = _get_project(request, project_id)
     evidence = project.evidence.get(evidence_id)
     if evidence is None:
@@ -484,6 +607,7 @@ async def update_evidence(
 
 @router.post("/api/projects/{project_id}/recalculate")
 async def recalculate(request: Request, project_id: str, body: RecalculateRequest | None = None):
+    _ensure_not_running(request, project_id)
     project = _get_project(request, project_id)
     if body is not None:
         if body.seed is not None:
@@ -522,6 +646,7 @@ async def recalculate(request: Request, project_id: str, body: RecalculateReques
 @router.post("/api/projects/{project_id}/reverify")
 async def reverify(request: Request, project_id: str):
     """既存の証拠に対して敵対的検証を再実行する(追加検索なし)。"""
+    _ensure_not_running(request, project_id)
     project = _get_project(request, project_id)
     from fermiscope.adversarial.verifier import verify_parameter
 
@@ -546,7 +671,7 @@ async def reverify(request: Request, project_id: str):
                 model,
                 request.app.state.settings,
                 reference_year,
-                request.app.state.llm,
+                current_llm(request.app),
             )
             for c in critiques:
                 project.critiques[c.id] = c

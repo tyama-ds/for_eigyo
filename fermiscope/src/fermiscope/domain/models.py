@@ -464,6 +464,9 @@ class EstimateProject(BaseModel):
     key_caveats: list[str] = Field(default_factory=list)
     app_version: str = ""
     config_hash: str = ""
+    # プロジェクト単位の累積検索(再実行しても予算がリセットされないよう保持)
+    searches_spent: int = 0
+    cost_spent_usd: float = 0.0
 
     def primary_model(self) -> ModelCandidate | None:
         return next((m for m in self.models if m.role == "primary"), None)

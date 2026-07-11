@@ -241,7 +241,7 @@ def analyze_counter_evidence(
                     recommended_action="訂正後の値を確認し、証拠を更新してください。",
                 )
             )
-        if ce.extracted_value is not None and param.central:
+        if ce.extracted_value is not None and param.central is not None:
             counter_value, _note = normalize_value(ce.extracted_value, ce.unit, param.unit)
             if counter_value is not None and counter_value > 0 and param.central > 0:
                 ratio = max(counter_value, param.central) / min(counter_value, param.central)

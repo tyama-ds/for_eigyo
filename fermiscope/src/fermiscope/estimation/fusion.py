@@ -153,6 +153,17 @@ def fuse_evidence(
     usable = list(seen_clusters.values())
 
     if not usable:
+        # 過去に証拠から値が入っていても、証拠が無くなった以上は値を残さない
+        # (未解決を「値あり」に見せない/古い値をMCへ流さない — 絶対条件4・8)。
+        if param.central is not None:
+            param.record_change(
+                "central", param.central, None, actor="system",
+                note="採用可能な証拠が無くなったため未解決化(値をクリア)",
+            )
+        param.central = None
+        param.low = None
+        param.high = None
+        param.confidence = None
         param.status = ParameterStatus.UNRESOLVED
         param.value_basis = ValueBasis.UNRESOLVED
         param.unresolved_reason = (
@@ -193,12 +204,17 @@ def fuse_evidence(
             notes.append("単一証拠のため、証拠自身の範囲を low/high として採用しました。")
         else:
             factor = 1.5
-            low = central / factor if positive else central * 0.5
-            high = central * factor if positive else central * 1.5
+            if positive:
+                low, high = central / factor, central * factor
+            else:
+                # 非正値(負値・ゼロ含む)は乗算で符号が反転し low>high になり得るため、
+                # 絶対値スケールの加減で対称な幅を作り、必ず low<=high を保証する。
+                spread = abs(central) * (factor - 1.0) or 1.0
+                low, high = central - spread, central + spread
             param.assumptions.append(
-                "単一証拠のため不確実性幅(×/÷1.5)を仮定として設定しました。"
+                "単一証拠のため不確実性幅(×/÷1.5相当)を仮定として設定しました。"
             )
-            notes.append("単一証拠: 幅は仮定(×/÷1.5)です。")
+            notes.append("単一証拠: 幅は仮定です。")
     else:
         central = weighted_median(values, weights, log_space=log_space)
         low = weighted_quantile(values, weights, fusion.low_quantile, log_space=log_space)

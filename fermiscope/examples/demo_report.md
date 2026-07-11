@@ -88,7 +88,7 @@
 
 ## 結論
 
-**中心推定値: 884 person**(P10–P90: 471 〜 1,677、信頼度 0.58)
+**中心推定値: 884 person**(P10–P90: 471 〜 1,677、信頼度 0.61)
 
 ## シナリオ
 
@@ -108,15 +108,15 @@
 
 | ID | 名称 | 中心値 | 範囲 | 単位 | 由来 | 信頼度 |
 |---|---|---|---|---|---|---|
-| association_members | 調律師団体の東京都会員数 | 560 | 373.333 – 840 | person | evidence | 0.828 |
-| base_households | 東京都の世帯数 | 7.319e+06 | 6.36434e+06 – 8.41684e+06 | household | evidence | 0.885 |
+| association_members | 調律師団体の東京都会員数 | 560 | 373.333 – 840 | person | evidence | 0.856 |
+| base_households | 東京都の世帯数 | 7.31955e+06 | 6.36483e+06 – 8.41749e+06 | household | evidence | 0.908 |
 | direct_value | ピアノ調律師の公表値 | 未解決 | — | person | unresolved | — |
-| membership_rate | 組織率(団体加入率) | 0.5 | 0.333333 – 0.75 | dimensionless | evidence | 0.221 |
-| ownership_rate | ピアノ保有率 | 0.104 | 0.0693333 – 0.156 | piano/household | evidence | 0.807 |
-| provider_capacity | 調律師1人あたり年間対応件数 | 300 | 200 – 450 | tuning/(person*year) | derived | 0.257 |
-| provider_capacity_daily | 調律師1人あたり年間対応件数(1日あたり) | 1.5 | 1 – 2 | tuning/(person*day) | evidence | 0.598 |
-| provider_capacity_working_days | 年間稼働日数 | 200 | 180 – 220 | day/year | evidence | 0.598 |
-| service_frequency | ピアノ1台あたり年間調律回数 | 0.35 | 0.25 – 0.45 | tuning/(piano*year) | evidence | 0.776 |
+| membership_rate | 組織率(団体加入率) | 0.5 | 0.333333 – 0.75 | dimensionless | evidence | 0.249 |
+| ownership_rate | ピアノ保有率 | 0.104 | 0.0693333 – 0.156 | piano/household | evidence | 0.835 |
+| provider_capacity | 調律師1人あたり年間対応件数 | 300 | 200 – 450 | tuning/(person*year) | derived | 0.285 |
+| provider_capacity_daily | 調律師1人あたり年間対応件数(1日あたり) | 1.5 | 1 – 2 | tuning/(person*day) | evidence | 0.625 |
+| provider_capacity_working_days | 年間稼働日数 | 200 | 180 – 220 | day/year | evidence | 0.625 |
+| service_frequency | ピアノ1台あたり年間調律回数 | 0.35 | 0.25 – 0.45 | tuning/(piano*year) | evidence | 0.804 |
 
 ## 分解不能な仮定
 - **membership_rate**: これ以上、信頼できる下位データへ分解できませんでした。
@@ -133,19 +133,19 @@
 
 | クラス | スコア | タイトル | URL | 発行日 | 取得日 |
 |---|---|---|---|---|---|
-| S | 83.4 | 令和2年国勢調査 東京都の世帯数(モック) | https://stats.example-gov.jp/kokusei/tokyo-households-2020.html | 2021年11月30日 | 2026-07-10 |
-| S | 85.2 | 住民基本台帳による東京都の世帯数(2025年・モック) | https://tokyo.example-gov.jp/toukei/setai-2025.html | 2025年2月10日 | 2026-07-10 |
-| S | 80.7 | 内閣府経済社会総合研究所 | https://esri.example-gov.jp/shouhi/piano-ownership.csv | 2024年4月15日 | 2026-07-10 |
-| S | 60.4 | 耐久消費財の普及率(1996年・モックアーカイブ) | https://archive.example-media.jp/1996/piano-survey.html | 1996年5月10日 | 2026-07-10 |
-| D | 12.9 | ピアノのある家庭は1割 内閣府調査(モック記事) | https://news.example-media.jp/articles/piano-ownership.html | 2024年4月20日 | 2026-07-10 |
-| E | 9.3 | ピアノって今どれくらいの家にあるの?(モックブログ) | https://kurashi.example-blog.jp/piano-donokurai.html | 2024年5月2日 | 2026-07-10 |
-| D | 20.2 | 【衝撃】ピアノ保有率の真実(モック・敵対的フィクスチャ) | https://tokushu.example-site.jp/piano-hoyuritsu-uragawa.html | 不明 | 2026-07-10 |
-| A | 77.6 | 家庭用ピアノの調律実施状況調査 2023(モック) | https://gakki-union.example-org.jp/report/tuning-frequency-2023.html | 2023年9月20日 | 2026-07-10 |
-| D | 25.7 | 調律師さんのお仕事事情(モックブログ) | https://pianolife-media.example.jp/tuner-jobs.html | 2023年5月8日 | 2026-07-10 |
-| A | 82.8 | 日本ピアノ調律師協会 会員数(モック) | https://jpta.example.or.jp/about/members.html | 2024年5月1日 | 2026-07-10 |
-| E | 22.1 | 調律師って協会に入ってるの?(モック掲示板) | https://forum.example-bbs.jp/threads/piano-tuner-union.html | 2023年11月3日 | 2026-07-10 |
-| B | 59.8 | Piano Technicians Research Panel | https://survey.example.or.jp/workload2024.pdf | 2024-06-30 | 2026-07-10 |
-| B | 59.8 | Piano Technicians Research Panel | https://survey.example.or.jp/workload2024.pdf | 2024-06-30 | 2026-07-10 |
+| S | 85.0 | 令和2年国勢調査 東京都の世帯数(モック) | https://stats.example-gov.jp/kokusei/tokyo-households-2020.html | 2021年11月30日 | 2026-07-11 |
+| S | 87.9 | 住民基本台帳による東京都の世帯数(2025年・モック) | https://tokyo.example-gov.jp/toukei/setai-2025.html | 2025年2月10日 | 2026-07-11 |
+| S | 83.5 | 内閣府経済社会総合研究所 | https://esri.example-gov.jp/shouhi/piano-ownership.csv | 2024年4月15日 | 2026-07-11 |
+| S | 63.1 | 耐久消費財の普及率(1996年・モックアーカイブ) | https://archive.example-media.jp/1996/piano-survey.html | 1996年5月10日 | 2026-07-11 |
+| D | 12.9 | ピアノのある家庭は1割 内閣府調査(モック記事) | https://news.example-media.jp/articles/piano-ownership.html | 2024年4月20日 | 2026-07-11 |
+| E | 9.3 | ピアノって今どれくらいの家にあるの?(モックブログ) | https://kurashi.example-blog.jp/piano-donokurai.html | 2024年5月2日 | 2026-07-11 |
+| D | 23.0 | 【衝撃】ピアノ保有率の真実(モック・敵対的フィクスチャ) | https://tokushu.example-site.jp/piano-hoyuritsu-uragawa.html | 不明 | 2026-07-11 |
+| A | 80.4 | 家庭用ピアノの調律実施状況調査 2023(モック) | https://gakki-union.example-org.jp/report/tuning-frequency-2023.html | 2023年9月20日 | 2026-07-11 |
+| D | 28.5 | 調律師さんのお仕事事情(モックブログ) | https://pianolife-media.example.jp/tuner-jobs.html | 2023年5月8日 | 2026-07-11 |
+| A | 85.6 | 日本ピアノ調律師協会 会員数(モック) | https://jpta.example.or.jp/about/members.html | 2024年5月1日 | 2026-07-11 |
+| E | 24.9 | 調律師って協会に入ってるの?(モック掲示板) | https://forum.example-bbs.jp/threads/piano-tuner-union.html | 2023年11月3日 | 2026-07-11 |
+| B | 62.5 | Piano Technicians Research Panel | https://survey.example.or.jp/workload2024.pdf | 2024-06-30 | 2026-07-11 |
+| B | 62.5 | Piano Technicians Research Panel | https://survey.example.or.jp/workload2024.pdf | 2024-06-30 | 2026-07-11 |
 
 ---
 再現情報: シード 20260710 / 反復 20000 / アプリ 0.1.0 / 設定ハッシュ c2be4541b47f5359 / 検索 48 回

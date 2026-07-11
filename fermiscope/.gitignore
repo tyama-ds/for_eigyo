@@ -17,5 +17,8 @@ fermiscope.db
 # 環境変数(秘密情報)
 .env
 
+# GUIで保存したLLM設定(APIキーを含むためコミットしない)
+llm_settings.json
+
 # OS
 .DS_Store
