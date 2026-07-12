@@ -51,6 +51,12 @@ fetch:
     - text/csv
     - application/json
     - application/pdf
+    # Office Open XML(docx / xlsx / pptx)
+    - application/vnd.openxmlformats-officedocument.wordprocessingml.document
+    - application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+    - application/vnd.openxmlformats-officedocument.presentationml.presentation
+  max_office_uncompressed_bytes: 62914560   # 60 MiB 解凍後サイズ上限(ZIP爆弾対策)
+  max_extracted_chars: 400000               # 抽出テキストの最大文字数
 
 fusion:
   low_quantile: 0.10

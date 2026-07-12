@@ -415,7 +415,8 @@ def extract_evidence(
     items: list[EvidenceItem] = []
     if doc.doc_type == DocumentType.CSV:
         items = extract_from_csv(doc, param, query, purpose)
-    elif doc.doc_type == DocumentType.HTML and doc.tables:
+    elif doc.doc_type in (DocumentType.HTML, DocumentType.XLSX) and doc.tables:
+        # HTML表・Excelシートは表(セル値)からの構造化抽出を優先する
         items = extract_from_tables(doc, param, query, purpose)
     if not items:
         items = extract_from_text(doc, param, query, purpose)

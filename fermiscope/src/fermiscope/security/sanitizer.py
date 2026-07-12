@@ -81,6 +81,38 @@ def strip_html_to_text(html: str) -> str:
     return re.sub(r"\n\s*\n+", "\n", raw).strip()
 
 
+# 不可視・方向制御文字: 人間には見えないがLLMには読める文字で指示を隠す
+# 「不可視プロンプトインジェクション」を無害化するために除去する。
+# - ゼロ幅系: U+200B–200D, U+2060, U+FEFF
+# - 双方向制御: U+202A–202E, U+2066–2069
+# - タグ文字(不可視テキストの隠蔽に悪用): U+E0000–E007F
+_INVISIBLE_CHARS = re.compile(
+    "[​-‏‪-‮⁠-⁯﻿\U000e0000-\U000e007f]"
+)
+# 制御文字(改行・タブ以外)を除去
+_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def sanitize_extracted_text(text: str, max_chars: int = 400_000) -> str:
+    """外部文書から抽出した本文を無害化する(表示・抽出・LLM入力の前処理)。
+
+    テキストはあくまで「データ」であり指示ではない、という原則を補強する多層防御:
+    - 不可視文字・双方向制御文字(隠しプロンプトの常套手段)を除去
+    - 制御文字を除去
+    - 長さを上限で切り詰め(メモリ・インジェクション面の抑制)
+
+    ※ これは無害化であって信頼化ではない。LLM へ渡す際は別途 wrap_untrusted で
+      データ境界に包むこと。
+    """
+    if not text:
+        return ""
+    cleaned = _INVISIBLE_CHARS.sub("", text)
+    cleaned = _CONTROL_CHARS.sub("", cleaned)
+    if len(cleaned) > max_chars:
+        cleaned = cleaned[:max_chars]
+    return cleaned
+
+
 def sanitize_html(html: str) -> str:
     """表示用HTMLサニタイズ: 許可タグ以外・全属性・script等を除去する。
 

@@ -24,7 +24,7 @@ import httpx
 
 from fermiscope.config import Settings
 from fermiscope.domain.enums import DocumentType
-from fermiscope.security.sanitizer import strip_html_to_text
+from fermiscope.security.sanitizer import sanitize_extracted_text, strip_html_to_text
 from fermiscope.security.url_guard import (
     Resolver,
     UrlGuardError,
@@ -54,15 +54,41 @@ class FetchedDocument:
     size_bytes: int = 0
 
 
+_OOXML_CONTENT_TYPES = {
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": DocumentType.DOCX,
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": DocumentType.XLSX,
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": DocumentType.PPTX,
+}
+_OOXML_EXTENSIONS = {
+    ".docx": DocumentType.DOCX,
+    ".xlsx": DocumentType.XLSX,
+    ".pptx": DocumentType.PPTX,
+}
+# 実サーバが office/pdf を配る際に使いがちな汎用バイナリ Content-Type。
+# これらのときだけ拡張子ベースの判定を許す(空ヘッダは含めない)。
+_GENERIC_BINARY_TYPES = {
+    "application/octet-stream",
+    "application/zip",
+    "application/x-zip-compressed",
+    "binary/octet-stream",
+}
+
+
 def _detect_doc_type(content_type: str, url: str) -> DocumentType:
     ct = content_type.split(";")[0].strip().lower()
+    path = urlparse(url).path.lower()
     if ct in ("text/html", "application/xhtml+xml"):
         return DocumentType.HTML
-    if ct == "application/pdf" or url.lower().endswith(".pdf"):
+    if ct in _OOXML_CONTENT_TYPES:
+        return _OOXML_CONTENT_TYPES[ct]
+    for ext, dt in _OOXML_EXTENSIONS.items():
+        if path.endswith(ext):
+            return dt
+    if ct == "application/pdf" or path.endswith(".pdf"):
         return DocumentType.PDF
-    if ct == "text/csv" or url.lower().endswith(".csv"):
+    if ct == "text/csv" or path.endswith(".csv"):
         return DocumentType.CSV
-    if ct == "application/json" or url.lower().endswith(".json"):
+    if ct == "application/json" or path.endswith(".json"):
         return DocumentType.JSON
     if ct.startswith("text/"):
         return DocumentType.TEXT
@@ -96,6 +122,91 @@ def _extract_pdf_text(data: bytes) -> str:
             parts.append(page.extract_text() or "")
         except Exception:  # noqa: S112 — 壊れたページは飛ばして残りを抽出する
             continue
+    return "\n".join(parts).strip()
+
+
+def _guard_zip_bomb(data: bytes, max_uncompressed: int) -> None:
+    """Office(ZIP)文書の解凍後合計サイズを検査し、ZIP爆弾を弾く。
+
+    実際に解凍せず、ZIPディレクトリが申告する非圧縮サイズの合計で判定する。
+    ZIPとして開けない場合はここでは何もしない(後段のパーサが弾く)。
+    """
+    import zipfile
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            total = sum(info.file_size for info in zf.infolist())
+    except (zipfile.BadZipFile, OSError):
+        return
+    if total > max_uncompressed:
+        raise FetchError(
+            f"文書の解凍後サイズが大きすぎます({total} > {max_uncompressed} バイト)"
+        )
+
+
+def _extract_docx_text(data: bytes) -> str:
+    """.docx(Word)から本文・表テキストを抽出する(マクロ・外部参照は実行しない)。"""
+    import docx  # python-docx
+
+    document = docx.Document(io.BytesIO(data))
+    parts: list[str] = []
+    for para in document.paragraphs[:50000]:
+        if para.text.strip():
+            parts.append(para.text)
+    for table in document.tables[:500]:
+        for row in table.rows:
+            cells = [c.text.strip() for c in row.cells]
+            if any(cells):
+                parts.append(" ".join(cells))
+    return "\n".join(parts).strip()
+
+
+def _extract_xlsx(data: bytes) -> tuple[str, list[list[list[str]]]]:
+    """.xlsx(Excel)から表(セル値)とテキストを抽出する。
+
+    read_only=True でストリーミング読み出し、data_only=True で数式は評価せず
+    保存済みの計算結果値のみを読む(数式文字列の露出・評価を避ける)。
+    """
+    import openpyxl
+
+    wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+    tables: list[list[list[str]]] = []
+    text_parts: list[str] = []
+    try:
+        for ws in wb.worksheets[:50]:
+            rows: list[list[str]] = []
+            for r_idx, row in enumerate(ws.iter_rows(values_only=True)):
+                if r_idx >= 5000:
+                    break
+                cells = ["" if v is None else str(v) for v in row[:200]]
+                if any(c.strip() for c in cells):
+                    rows.append(cells)
+                    text_parts.append(" ".join(cells))
+            if rows:
+                tables.append(rows)
+    finally:
+        wb.close()
+    return "\n".join(text_parts).strip(), tables
+
+
+def _extract_pptx_text(data: bytes) -> str:
+    """.pptx(PowerPoint)からスライド上の可視テキスト・表を抽出する。
+
+    ノート(発表者メモ)は通常の閲覧者に見えず隠しテキストの温床になるため抽出しない。
+    """
+    from pptx import Presentation
+
+    prs = Presentation(io.BytesIO(data))
+    parts: list[str] = []
+    for slide in list(prs.slides)[:1000]:
+        for shape in slide.shapes:
+            if shape.has_text_frame and shape.text_frame.text.strip():
+                parts.append(shape.text_frame.text)
+            if shape.has_table:
+                for row in shape.table.rows:
+                    cells = [c.text.strip() for c in row.cells]
+                    if any(cells):
+                        parts.append(" ".join(cells))
     return "\n".join(parts).strip()
 
 
@@ -266,15 +377,17 @@ class DocumentFetcher:
         content_type = resp.headers.get("content-type", "")
         base_ct = content_type.split(";")[0].strip().lower()
         allowed = self.settings.fetch.allowed_content_types
-        # Content-Type が空/未宣言、または許可リスト外は拒否する
-        # (空ヘッダで許可検査をすり抜けさせない)
-        if base_ct not in allowed:
+        data = resp.content
+        doc_type = _detect_doc_type(content_type, current)
+        # 実サーバは office/pdf を汎用バイナリ(octet-stream / zip)で配ることがある。
+        # その場合に限り URL拡張子で文書型を判定し、実バイトをパーサに検証させる。
+        # 空/未宣言の Content-Type は従来どおり拒否(拡張子だけでは通さない)。
+        allow_by_extension = base_ct in _GENERIC_BINARY_TYPES and doc_type != DocumentType.UNKNOWN
+        if base_ct not in allowed and not allow_by_extension:
             raise FetchError(
                 f"許可されていない/未宣言のContent-Typeです: {base_ct or '(なし)'}"
             )
 
-        data = resp.content
-        doc_type = _detect_doc_type(content_type, current)
         doc = FetchedDocument(
             url=url,
             final_url=current,
@@ -284,6 +397,7 @@ class DocumentFetcher:
             content_hash=hashlib.sha256(data).hexdigest()[:16],
             size_bytes=len(data),
         )
+        max_chars = self.settings.fetch.max_extracted_chars
         if doc_type == DocumentType.HTML:
             html = data.decode(resp.encoding or "utf-8", errors="replace")
             doc.html = html
@@ -295,10 +409,31 @@ class DocumentFetcher:
                 doc.text = _extract_pdf_text(data)
             except Exception as exc:
                 raise FetchError(f"PDFのテキスト抽出に失敗しました: {type(exc).__name__}") from exc
+        elif doc_type in (DocumentType.DOCX, DocumentType.XLSX, DocumentType.PPTX):
+            _guard_zip_bomb(data, self.settings.fetch.max_office_uncompressed_bytes)
+            try:
+                if doc_type == DocumentType.DOCX:
+                    doc.text = _extract_docx_text(data)
+                elif doc_type == DocumentType.XLSX:
+                    doc.text, doc.tables = _extract_xlsx(data)
+                else:
+                    doc.text = _extract_pptx_text(data)
+            except FetchError:
+                raise
+            except Exception as exc:
+                raise FetchError(
+                    f"Office文書の抽出に失敗しました({doc_type.value}): {type(exc).__name__}"
+                ) from exc
         elif doc_type in (DocumentType.CSV, DocumentType.JSON, DocumentType.TEXT):
             doc.text = data.decode(resp.encoding or "utf-8", errors="replace")
         else:
             raise FetchError(f"未対応の文書タイプです: {content_type}")
+
+        # 外部文書由来の本文は不信データ。不可視・制御文字を除去し長さを制限する
+        # (隠しプロンプトの無害化・多層防御)。タイトルも同様に無害化する。
+        doc.text = sanitize_extracted_text(doc.text, max_chars)
+        if doc.title:
+            doc.title = sanitize_extracted_text(doc.title, 300)
 
         self._cache[url] = (time.time(), doc)
         return doc

@@ -33,6 +33,8 @@ class DocumentType(StrEnum):
     CSV = "csv"
     JSON = "json"
     XLSX = "xlsx"
+    DOCX = "docx"
+    PPTX = "pptx"
     TEXT = "text"
     UNKNOWN = "unknown"
 
