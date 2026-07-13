@@ -65,7 +65,22 @@ docker compose up --build
 
 ## 実Web検索を有効化する(任意)
 
-[Brave Search API](https://api-dashboard.search.brave.com/) のAPIキーを取得し:
+### DuckDuckGo(APIキー不要・おすすめ)
+
+APIキーが無くても実Web検索ができます:
+
+```bash
+export SEARCH_PROVIDER=duckduckgo
+fermiscope serve
+```
+
+DuckDuckGo の HTML エンドポイントを取得して結果を抽出します(無料・キー不要)。
+各ページ本文の取得は従来どおり SSRFガード付きの `DocumentFetcher` が担当します。
+※ 短時間に多数検索すると bot 判定でブロックされることがあります。
+
+### Brave Search API
+
+[Brave Search API](https://api-dashboard.search.brave.com/) のAPIキーがある場合:
 
 ```bash
 export SEARCH_PROVIDER=brave
@@ -76,6 +91,26 @@ fermiscope serve
 検索回数・コスト上限は `config/estimation.yaml`(または画面の作成フォーム)で
 制御できます。プロバイダは `SearchProvider` インターフェース
 (`src/fermiscope/research/search/base.py`)の実装を追加すれば交換できます。
+
+## JS描画ページを Selenium で取得する(任意)
+
+JavaScript 描画が必須で httpx では本文が取れないページ向けに、**Selenium ハイブリッド
+取得**を有効化できます。既定では httpx で取得し、本文が乏しいページのみ
+URL検証(SSRFガード)を通したうえで Selenium(headless Chromium)で開き直します。
+
+```bash
+pip install -e ".[selenium]"        # selenium 本体(別途 Chromium と chromedriver が必要)
+export FERMISCOPE_USE_SELENIUM=1
+export FERMISCOPE_SELENIUM_DRIVER=/path/to/chromedriver   # 省略時は PATH / Selenium Manager
+export FERMISCOPE_SELENIUM_BINARY=/path/to/chrome         # 省略可
+fermiscope serve
+```
+
+> ⚠️ セキュリティ注意: Selenium はブラウザが自分でDNS解決・リダイレクト追跡・
+> サブリソース読込・JS実行を行うため、robots.txt・応答サイズ上限・Content-Type
+> 許可リスト等の一部防御をバイパスします(navigation 前のURL検証は実施)。
+> 既定では **無効** です。chromedriver は Chromium 本体とメジャーバージョンを
+> 一致させてください。
 
 ## 生成AI補助を有効化する(任意)
 
@@ -151,8 +186,9 @@ Web取得(`research/fetcher.py`)は以下の形式を解析し、テキスト・
 
 | 変数 | 既定値 | 説明 |
 |------|--------|------|
-| `SEARCH_PROVIDER` | `mock` | `mock`(同梱資料)/ `brave`(実検索) |
-| `BRAVE_API_KEY` | — | Brave Search APIキー |
+| `SEARCH_PROVIDER` | `mock` | `mock`(同梱資料)/ `duckduckgo`(キー不要)/ `brave` |
+| `BRAVE_API_KEY` | — | Brave Search APIキー(`brave` 使用時) |
+| `FERMISCOPE_USE_SELENIUM` | `0` | `1` でJS描画ページのSelenium取得を有効化 |
 | `LLM_PROVIDER` | `noop` | `noop` / `openai_compatible` / `anthropic`(`mock` はテスト用) |
 | `LLM_API_BASE` / `LLM_API_KEY` / `LLM_MODEL` | — | OpenAI互換APIの接続情報 |
 | `FERMISCOPE_APP_NAME` | `FermiScope` | 表示名 |
@@ -241,9 +277,9 @@ fermiscope/
 - **問題類型テンプレートは代表的な型のみ**実装しています(保守職業人数・
   団体供給・人口比率・直接調査)。適合しない問いはLLM提案(検証付き)か、
   未解決パラメータのユーザー入力で進める設計です。
-- **JavaScript描画が必須のページの取得は未対応**です(fetcherのtransport
-  差し替えで拡張可能な構造にはなっています)。OCRも未実装です(要件上も
-  最終手段の扱い)。
+- **JavaScript描画が必須のページ**は、既定の httpx 取得では本文を取れません。
+  任意の **Selenium ハイブリッド取得**(`FERMISCOPE_USE_SELENIUM=1`)で対応できますが、
+  一部のSSRF系防御をバイパスするため既定は無効です。OCRは未実装です。
 - **旧バイナリ形式(.doc / .xls / .ppt)は未対応**です。Office文書は
   Office Open XML(.docx / .xlsx / .pptx)に対応しています。
 - **図表・数式表示は自作の軽量実装**です(Plotly/MathJaxは本開発環境の

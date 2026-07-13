@@ -38,6 +38,10 @@ e2e = [
     "playwright>=1.48,<2.0",
     "pytest-playwright>=0.5,<1.0",
 ]
+# JS描画ページ用の Selenium ハイブリッド取得(任意)。別途 Chromium と chromedriver が必要。
+selenium = [
+    "selenium>=4.15,<5.0",
+]
 
 [project.scripts]
 fermiscope = "fermiscope.main:main"
