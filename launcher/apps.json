@@ -128,11 +128,16 @@
       "icon": "fermiscope",
       "cwd": "../fermiscope",
       "command": [
-        ".venv/bin/fermiscope",
+        "{python}",
+        "-m",
+        "fermiscope.main",
         "serve",
         "--port",
         "8720"
       ],
+      "env": {
+        "PYTHONPATH": "src"
+      },
       "url": "http://127.0.0.1:8720",
       "wait_port": 8720
     }
