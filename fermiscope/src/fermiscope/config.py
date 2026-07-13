@@ -77,8 +77,16 @@ class FetchSettings(BaseModel):
             "text/csv",
             "application/json",
             "application/pdf",
+            # Office Open XML(docx / xlsx / pptx)
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         ]
     )
+    # Office(ZIPベース)文書の解凍後サイズ上限。ZIP爆弾対策。
+    max_office_uncompressed_bytes: int = 60 * 1024 * 1024
+    # 抽出テキストの最大文字数(プロンプトインジェクション面・メモリの抑制)
+    max_extracted_chars: int = 400_000
 
 
 class FusionSettings(BaseModel):
