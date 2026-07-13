@@ -120,6 +120,21 @@
       ],
       "url": "http://127.0.0.1:8802",
       "wait_port": 8802
+    },
+    {
+      "id": "fermiscope",
+      "name": "FermiScope",
+      "description": "証拠に基づくフェルミ推定。問いを分解→Web検索で各パラメータの出典を収集・採点→敵対的検証→モンテカルロで弱気/基準/強気と感度分析。数値はローカルPythonで決定論計算。HTML/PDF/Word/Excel/PowerPointを取得し、出典・仮定・監査ログつきで表示",
+      "icon": "fermiscope",
+      "cwd": "../fermiscope",
+      "command": [
+        ".venv/bin/fermiscope",
+        "serve",
+        "--port",
+        "8720"
+      ],
+      "url": "http://127.0.0.1:8720",
+      "wait_port": 8720
     }
   ]
 }
