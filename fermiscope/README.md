@@ -294,7 +294,21 @@ fermiscope/
 - **相関行列はAPI/設定から指定可能**ですが、GUIに専用の編集画面はありません
   (再計算APIの `correlations` で指定)。
 - 認証・マルチテナントは範囲外です(要件どおり)。ローカル実行を前提とし、
-  既定では127.0.0.1にバインドします。
+  既定では127.0.0.1にバインドします。LAN公開時は `FERMISCOPE_ALLOWED_HOSTS` の設定と
+  リバースプロキシ認証が必須です。
+- **進捗イベント(SSE)は現状プロジェクト単位**で、run ID 単位の分離・ページ再読込時の
+  実行状態復元・再接続は未実装です(次の作業。詳細は監査レポート参照)。
+- **調査開始前の確認ウィザード、既知情報の構造化採用、UIアクセシビリティ強化**等の
+  UI機能改良は今後の作業です。
+
+## 配布(wheel / データ配置)
+
+- `pip install fermiscope`(非editable)でも `fermiscope serve` / `fermiscope demo` が動作します。
+  設定YAML・テンプレート・静的ファイルは wheel に同梱されます。
+- 書き込みデータ(SQLite DB・GUI保存のLLM設定)は、開発時はリポジトリ直下、インストール時は
+  ユーザーデータディレクトリ(`FERMISCOPE_DATA_DIR` で上書き可)に置かれ、パッケージ
+  ディレクトリには書き込みません。
+- PostgreSQL は任意 extra: `pip install "fermiscope[postgres]"` + `FERMISCOPE_DATABASE_URL`。
 
 ## ライセンス
 
