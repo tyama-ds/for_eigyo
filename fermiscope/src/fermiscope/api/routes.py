@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from collections.abc import Callable
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from fermiscope import __version__
 from fermiscope.api.app_state import current_llm
@@ -58,12 +59,36 @@ class UpdateQuestionRequest(BaseModel):
     regenerate_models: bool = True
 
 
+def _validate_correlations(
+    v: list[tuple[str, str, float]] | None,
+) -> list[tuple[str, str, float]] | None:
+    if v is None:
+        return v
+    for a, b, rho in v:
+        if not math.isfinite(rho):
+            raise ValueError(f"相関係数が有限ではありません({a},{b},{rho})")
+        if not -1.0 <= rho <= 1.0:
+            raise ValueError(f"相関係数は -1〜1 の範囲である必要があります({a},{b},{rho})")
+    return v
+
+
+def _reject_non_finite_floats(v: float | None) -> float | None:
+    if v is not None and not math.isfinite(v):
+        raise ValueError("値が NaN または無限大です(有限の実数のみ許可)")
+    return v
+
+
 class UpdateParameterRequest(BaseModel):
     central: float | None = None
     low: float | None = None
     high: float | None = None
     distribution: DistributionKind | None = None
     note: str = ""
+
+    @field_validator("central", "low", "high")
+    @classmethod
+    def _finite(cls, v: float | None) -> float | None:
+        return _reject_non_finite_floats(v)
 
 
 class UpdateEvidenceRequest(BaseModel):
@@ -81,6 +106,22 @@ class RecalculateRequest(BaseModel):
     iterations: int | None = Field(default=None, ge=1000, le=100000)
     custom_overrides: dict[str, float] | None = None
     correlations: list[tuple[str, str, float]] | None = None
+
+    @field_validator("correlations")
+    @classmethod
+    def _corr(
+        cls, v: list[tuple[str, str, float]] | None
+    ) -> list[tuple[str, str, float]] | None:
+        return _validate_correlations(v)
+
+    @field_validator("custom_overrides")
+    @classmethod
+    def _overrides_finite(cls, v: dict[str, float] | None) -> dict[str, float] | None:
+        if v is not None:
+            for k, val in v.items():
+                if not math.isfinite(val):
+                    raise ValueError(f"custom_overrides[{k}] が NaN/無限大です")
+        return v
 
 
 class LLMSettingsRequest(BaseModel):
@@ -153,6 +194,26 @@ async def _atomic_update_async(
 def _validate_param_estimate(param: ParameterEstimate) -> None:
     """パラメータ値の整合性を検証する。不正なら 422 を送出する(500 にしない)。"""
     low, central, high = param.low, param.central, param.high
+    # NaN / 無限大 の拒否(誤った値の無警告表示を防ぐ)
+    for name, v in (("low", low), ("central", central), ("high", high),
+                    ("confidence", param.confidence), ("sensitivity", param.sensitivity)):
+        if v is not None and not math.isfinite(v):
+            raise HTTPException(
+                status_code=422, detail=f"{name} が NaN または無限大です(有限の実数のみ許可)。"
+            )
+    # 有効範囲メタデータによる範囲外の拒否(割合は0〜1、非負カウントは0以上など)
+    vmin, vmax = param.valid_min, param.valid_max
+    for name, v in (("low", low), ("central", central), ("high", high)):
+        if v is None:
+            continue
+        if vmin is not None and v < vmin:
+            raise HTTPException(
+                status_code=422, detail=f"{name}={v} が有効範囲の下限({vmin})を下回っています。"
+            )
+        if vmax is not None and v > vmax:
+            raise HTTPException(
+                status_code=422, detail=f"{name}={v} が有効範囲の上限({vmax})を上回っています。"
+            )
     # 大小関係(部分更新後の完全な値で検査)
     for lo, hi, msg in (
         (low, central, "low は central 以下である必要があります"),

@@ -6,11 +6,12 @@
 
 from __future__ import annotations
 
+import math
 import uuid
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from fermiscope.domain.enums import (
     DecompositionStatus,
@@ -27,6 +28,11 @@ from fermiscope.domain.enums import (
     StockOrFlow,
     ValueBasis,
 )
+
+
+def _is_finite(v: float | None) -> bool:
+    """None または有限の実数なら True(NaN/Inf は False)。"""
+    return v is None or (isinstance(v, int | float) and math.isfinite(v))
 
 
 def new_id(prefix: str) -> str:
@@ -164,6 +170,28 @@ class ParameterEstimate(BaseModel):
     adjustments: list[TimeAdjustment] = Field(default_factory=list)
     history: list[ValueChange] = Field(default_factory=list)
     fusion_note: str = ""  # 統合方法の説明(重み付き中央値等)
+    # 有効範囲メタデータ(割合は 0〜1、非負カウントは 0 以上など)。範囲外は拒否する。
+    valid_min: float | None = None
+    valid_max: float | None = None
+
+    @field_validator("central", "low", "high", "confidence", "sensitivity")
+    @classmethod
+    def _reject_non_finite(cls, v: float | None) -> float | None:
+        if not _is_finite(v):
+            raise ValueError("値が NaN または無限大です(有限の実数のみ許可)")
+        return v
+
+    @model_validator(mode="after")
+    def _check_value_range(self) -> ParameterEstimate:
+        lo, hi = self.valid_min, self.valid_max
+        for name, v in (("central", self.central), ("low", self.low), ("high", self.high)):
+            if v is None:
+                continue
+            if lo is not None and v < lo:
+                raise ValueError(f"{name}={v} が有効範囲の下限({lo})を下回っています")
+            if hi is not None and v > hi:
+                raise ValueError(f"{name}={v} が有効範囲の上限({hi})を上回っています")
+        return self
 
     def record_change(
         self,
@@ -332,10 +360,31 @@ class Scenario(BaseModel):
 
 
 class SimulationConfig(BaseModel):
-    iterations: int = 20000
+    iterations: int = Field(default=20000, ge=1)
     seed: int = 20260710
     correlations: list[tuple[str, str, float]] = Field(default_factory=list)
     independence_note: str = "相関未指定のパラメータは独立と仮定しています。"
+
+    @field_validator("iterations")
+    @classmethod
+    def _check_iterations(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("iterations は 1 以上である必要があります")
+        if v > 10_000_000:
+            raise ValueError("iterations が大きすぎます(最大 10,000,000)")
+        return v
+
+    @field_validator("correlations")
+    @classmethod
+    def _check_correlations(
+        cls, v: list[tuple[str, str, float]]
+    ) -> list[tuple[str, str, float]]:
+        for a, b, rho in v:
+            if not math.isfinite(rho):
+                raise ValueError(f"相関係数が有限ではありません({a},{b},{rho})")
+            if not -1.0 <= rho <= 1.0:
+                raise ValueError(f"相関係数は -1〜1 の範囲である必要があります({a},{b},{rho})")
+        return v
 
 
 class SimulationResult(BaseModel):

@@ -16,6 +16,43 @@ from fermiscope.formula.parser import FormulaParseError
 from fermiscope.formula.units import period_to_unit
 from fermiscope.llm.base import LLMProvider
 
+# 割合・比率を示す名称ヒント(dimensionless 単位を 0〜1 範囲とみなす根拠)。
+_RATIO_NAME_HINTS = (
+    "率", "割合", "比率", "シェア", "proportion", "rate", "ratio", "percentage", "確率",
+)
+# 非負の外延量(カウント・通貨・物理量)の分子。負値を許さない。
+_NONNEG_NUMERATORS = {
+    "person", "household", "store", "company", "item", "piano", "vehicle",
+    "umbrella", "bottle", "charger", "tuning", "event", "jpy",
+    "kilogram", "kg", "kilometer", "km", "day", "hour",
+}
+
+
+def default_value_range(param: ParameterEstimate) -> tuple[float | None, float | None]:
+    """パラメータ単位・名称から有効範囲(下限, 上限)を推定する。
+
+    - 割合・確率(dimensionless で名称に率/割合等)→ (0, 1)
+    - percent → (0, 100)
+    - 非負カウント・通貨・物理量、および dimensionless の非比率 → (0, None)
+    - 上記に当てはまらなければ制約なし (None, None)
+    """
+    unit = (param.unit or "").strip()
+    numerator = unit.split("/", 1)[0].strip("() ").lower()
+    text = f"{param.name} {param.definition} {param.description}".lower()
+    if unit in ("dimensionless", "") and any(h in text for h in _RATIO_NAME_HINTS):
+        return 0.0, 1.0
+    if unit == "percent":
+        return 0.0, 100.0
+    if numerator in _NONNEG_NUMERATORS or unit == "dimensionless":
+        return 0.0, None
+    return None, None
+
+
+def apply_default_range(param: ParameterEstimate) -> None:
+    """有効範囲メタデータが未設定なら単位・名称から補う。"""
+    if param.valid_min is None and param.valid_max is None:
+        param.valid_min, param.valid_max = default_value_range(param)
+
 
 def flow_period_unit(spec: QuestionSpec) -> str:
     """フロー質問の期間 pint 単位(day/month/year)。不明時は year を仮定。"""
@@ -464,6 +501,10 @@ async def generate_model_candidates(
         else:
             c.role = "rejected"
             c.selection_reason = c.selection_reason or "スコアが採用候補に及ばないため不採用。"
+
+    # 有効範囲メタデータ(割合0〜1・非負カウント等)を単位・名称から補う
+    for param in all_params.values():
+        apply_default_range(param)
 
     # 採用されなかったパラメータは削除しない(監査のため保持)
     return candidates, all_params, ai_assisted

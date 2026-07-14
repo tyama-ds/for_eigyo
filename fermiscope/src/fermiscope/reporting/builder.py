@@ -62,6 +62,8 @@ def build_report(project: EstimateProject) -> dict[str, Any]:
                 "central": p.central,
                 "low": p.low,
                 "high": p.high,
+                "valid_min": p.valid_min,
+                "valid_max": p.valid_max,
                 "central_display": _format_number(p.central),
                 "distribution": p.distribution.value,
                 "distribution_rationale": p.distribution_rationale,
