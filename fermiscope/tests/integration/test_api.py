@@ -118,7 +118,7 @@ def test_error_handling(app_client):
     assert app_client.patch(f"/api/projects/{pid}/parameters/nope",
                             json={"central": 1.0}).status_code == 404
     assert app_client.patch(f"/api/projects/{pid}/parameters/base_households",
-                            json={"low": 10.0, "high": 5.0}).status_code == 400
+                            json={"low": 10.0, "high": 5.0}).status_code in (400, 422)
     assert app_client.post(f"/api/projects/{pid}/research/cancel").status_code == 409
     assert app_client.get(f"/api/projects/{pid}/export/bogus").status_code == 400
 

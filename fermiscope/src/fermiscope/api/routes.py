@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
@@ -12,7 +14,8 @@ from fermiscope import __version__
 from fermiscope.api.app_state import current_llm
 from fermiscope.api.runs import sse_format
 from fermiscope.domain.enums import DistributionKind, ParameterStatus, ResearchMode, ValueBasis
-from fermiscope.domain.models import EstimateProject, SimulationConfig
+from fermiscope.domain.models import EstimateProject, ParameterEstimate, SimulationConfig
+from fermiscope.estimation.distributions import DistributionError
 from fermiscope.estimation.fusion import fuse_evidence
 from fermiscope.evidence.dates import parse_year
 from fermiscope.models.generator import generate_model_candidates
@@ -116,6 +119,48 @@ def _ensure_not_running(request: Request, project_id: str) -> None:
             status_code=409,
             detail="調査の実行中は編集・再計算できません。完了までお待ちください。",
         )
+
+
+def _atomic_update(
+    request: Request, project_id: str, mutate: Callable[[EstimateProject], Any]
+) -> tuple[EstimateProject, Any]:
+    """状態変更を原子的に行う。
+
+    キャッシュ上のプロジェクトの deep copy に対して mutate を適用し、検証・再計算が
+    すべて成功した場合にのみ、キャッシュとDBを新しい状態へ差し替える。mutate 内で
+    HTTPException 等が送出された場合はキャッシュもDBも変更前のまま保たれる。
+    """
+    current = _get_project(request, project_id)
+    working = current.model_copy(deep=True)
+    result = mutate(working)
+    request.app.state.repo.save(working)
+    request.app.state.projects_cache[project_id] = working
+    return working, result
+
+
+def _validate_param_estimate(param: ParameterEstimate) -> None:
+    """パラメータ値の整合性を検証する。不正なら 422 を送出する(500 にしない)。"""
+    low, central, high = param.low, param.central, param.high
+    # 大小関係(部分更新後の完全な値で検査)
+    for lo, hi, msg in (
+        (low, central, "low は central 以下である必要があります"),
+        (central, high, "central は high 以下である必要があります"),
+        (low, high, "low は high 以下である必要があります"),
+    ):
+        if lo is not None and hi is not None and lo > hi:
+            raise HTTPException(status_code=422, detail=msg)
+    kind = param.distribution
+    if kind in (DistributionKind.LOGNORMAL, DistributionKind.LOGUNIFORM):
+        for name, v in (("low", low), ("central", central), ("high", high)):
+            if v is not None and v <= 0:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"{kind.value} 分布は正の値のみ扱えます({name}={v})。",
+                )
+    if kind == DistributionKind.FIXED and central is None:
+        raise HTTPException(status_code=422, detail="固定分布には central(中心値)が必要です。")
+    if kind == DistributionKind.TRIANGULAR and central is None and (low is not None or high is not None):
+        raise HTTPException(status_code=422, detail="三角分布には central(最頻値)が必要です。")
 
 
 # ---------- 画面 ----------
@@ -525,41 +570,59 @@ async def update_parameter(
     request: Request, project_id: str, parameter_id: str, body: UpdateParameterRequest
 ):
     _ensure_not_running(request, project_id)
-    project = _get_project(request, project_id)
-    param = project.parameters.get(parameter_id)
-    if param is None:
-        raise HTTPException(status_code=404, detail="パラメータが見つかりません")
-    if body.low is not None and body.high is not None and body.low > body.high:
-        raise HTTPException(status_code=400, detail="low は high 以下にしてください")
 
-    for field in ("central", "low", "high"):
-        value = getattr(body, field)
-        if value is not None:
-            old = getattr(param, field)
-            setattr(param, field, value)
-            param.record_change(field, old, value, actor="user", note=body.note)
-    if body.distribution is not None:
-        param.record_change(
-            "distribution", param.distribution.value, body.distribution.value, actor="user"
+    def mutate(project: EstimateProject) -> None:
+        param = project.parameters.get(parameter_id)
+        if param is None:
+            raise HTTPException(status_code=404, detail="パラメータが見つかりません")
+
+        for field in ("central", "low", "high"):
+            value = getattr(body, field)
+            if value is not None:
+                old = getattr(param, field)
+                setattr(param, field, value)
+                param.record_change(field, old, value, actor="user", note=body.note)
+        if body.distribution is not None:
+            param.record_change(
+                "distribution", param.distribution.value, body.distribution.value, actor="user"
+            )
+            param.distribution = body.distribution
+            param.distribution_rationale = "ユーザーが分布を指定しました。"
+
+        # 部分更新後の完全な値を検証する(不正なら 422、500 にしない)
+        _validate_param_estimate(param)
+
+        value_provided = any(
+            getattr(body, f) is not None for f in ("central", "low", "high")
         )
-        param.distribution = body.distribution
-        param.distribution_rationale = "ユーザーが分布を指定しました。"
-    param.user_overridden = True
-    param.value_basis = ValueBasis.USER_INPUT
-    param.status = ParameterStatus.USER_OVERRIDDEN
-    param.unresolved_reason = ""
-    project.audit(
-        "value_change",
-        f"ユーザーがパラメータを編集: {param.name}",
-        parameter_id=parameter_id,
-        central=param.central,
-        low=param.low,
-        high=param.high,
-        note=body.note,
-    )
-    # 編集後は検索を再実行せずローカル再計算(要件§16)
-    recalculate_project(project, request.app.state.settings)
-    _save(request, project)
+        if value_provided:
+            # 数値が与えられたときのみユーザー上書きとして確定し、未解決を解除する
+            param.user_overridden = True
+            param.value_basis = ValueBasis.USER_INPUT
+            param.status = ParameterStatus.USER_OVERRIDDEN
+            param.unresolved_reason = ""
+        elif param.central is None:
+            # 分布だけ変更し数値が無い場合、未解決状態を誤って解除しない
+            param.status = ParameterStatus.UNRESOLVED
+            param.value_basis = ValueBasis.UNRESOLVED
+        project.audit(
+            "value_change",
+            f"ユーザーがパラメータを編集: {param.name}",
+            parameter_id=parameter_id,
+            central=param.central,
+            low=param.low,
+            high=param.high,
+            note=body.note,
+        )
+        # 編集後は検索を再実行せずローカル再計算(要件§16)
+        try:
+            recalculate_project(project, request.app.state.settings)
+        except DistributionError as exc:
+            raise HTTPException(
+                status_code=422, detail=f"この値では分布を構成できません: {exc}"
+            ) from exc
+
+    project, _ = _atomic_update(request, project_id, mutate)
     return build_report(project)
 
 
