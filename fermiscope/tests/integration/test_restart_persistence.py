@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
+from tests.conftest import PIANO_QUESTION
 
 from fermiscope.api.app import create_app
 from fermiscope.config import load_settings
@@ -10,7 +11,6 @@ from fermiscope.llm import NoOpLLMProvider
 from fermiscope.research.fetcher import DocumentFetcher
 from fermiscope.research.mock_transport import build_mock_transport
 from fermiscope.research.search.mock import MockSearchProvider
-from tests.conftest import PIANO_QUESTION
 
 
 def _make_app(db_url: str, settings):
