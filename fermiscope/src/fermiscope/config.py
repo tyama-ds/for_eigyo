@@ -18,9 +18,63 @@ from pydantic import BaseModel, Field
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = PACKAGE_ROOT.parent.parent
-DEFAULT_CONFIG_DIR = PROJECT_ROOT / "config"
-DEFAULT_WEB_DIR = PROJECT_ROOT / "web"
+# wheel 同梱リソース(hatch force-include で fermiscope/_bundled 以下に配置)
+_BUNDLED = PACKAGE_ROOT / "_bundled"
+
+
+def _resolve_resource_dir(name: str, env_key: str) -> Path:
+    """設定・静的ファイルのディレクトリを解決する。
+
+    優先順: 環境変数 > wheel同梱(_bundled) > 開発時のリポジトリ直下。
+    非editable wheel でも起動できるよう、同梱リソースを最優先で探索する。
+    """
+    env_val = os.environ.get(env_key)
+    if env_val:
+        return Path(env_val)
+    bundled = _BUNDLED / name
+    if bundled.exists():
+        return bundled
+    return PROJECT_ROOT / name  # 開発(editable)時
+
+
+DEFAULT_CONFIG_DIR = _resolve_resource_dir("config", "FERMISCOPE_CONFIG_DIR")
+DEFAULT_WEB_DIR = _resolve_resource_dir("web", "FERMISCOPE_WEB_DIR")
 DEFAULT_MOCK_CORPUS_DIR = PACKAGE_ROOT / "data" / "mock_corpus"
+
+
+def default_data_dir() -> Path:
+    """書き込み可能なデータ(DB・LLM設定)を置くディレクトリ。
+
+    パッケージディレクトリには書き込まない。editable開発時はリポジトリ直下、
+    インストール済みならユーザーデータディレクトリを使う。
+    """
+    env_val = os.environ.get("FERMISCOPE_DATA_DIR")
+    if env_val:
+        return Path(env_val)
+    if (PROJECT_ROOT / "pyproject.toml").exists():
+        return PROJECT_ROOT  # 開発時は従来どおりリポジトリ直下
+    base = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+    return Path(base) / "fermiscope"
+
+
+def require_resources(config_dir: Path, web_dir: Path) -> None:
+    """必須の設定・静的ファイルが存在することを確認する。無ければ明示エラー。
+
+    黙って空設定へフォールバックしない(要件 §7)。
+    """
+    missing: list[str] = []
+    if not (config_dir / "estimation.yaml").exists():
+        missing.append(f"設定ファイル {config_dir / 'estimation.yaml'}")
+    if not (web_dir / "templates" / "index.html").exists():
+        missing.append(f"テンプレート {web_dir / 'templates' / 'index.html'}")
+    if not (web_dir / "static").is_dir():
+        missing.append(f"静的ディレクトリ {web_dir / 'static'}")
+    if missing:
+        raise RuntimeError(
+            "必須リソースが見つかりません: " + " / ".join(missing) +
+            "。wheelが正しく同梱されていないか、FERMISCOPE_CONFIG_DIR / "
+            "FERMISCOPE_WEB_DIR の指定を確認してください。"
+        )
 
 
 class DecompositionConfig(BaseModel):
@@ -188,7 +242,9 @@ class Settings(BaseModel):
     config_dir: Path = DEFAULT_CONFIG_DIR
     web_dir: Path = DEFAULT_WEB_DIR
     mock_corpus_dir: Path = DEFAULT_MOCK_CORPUS_DIR
-    database_url: str = f"sqlite:///{PROJECT_ROOT / 'fermiscope.db'}"
+    database_url: str = Field(
+        default_factory=lambda: f"sqlite:///{default_data_dir() / 'fermiscope.db'}"
+    )
 
     # 全コンポーネント共通のHTTP(S)プロキシ(検索・文書取得・Selenium)。
     # 空なら直接接続。認証情報を含み得るためログ・API応答には出さない。

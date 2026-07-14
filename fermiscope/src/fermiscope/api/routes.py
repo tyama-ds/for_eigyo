@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
@@ -12,7 +14,8 @@ from fermiscope import __version__
 from fermiscope.api.app_state import current_llm
 from fermiscope.api.runs import sse_format
 from fermiscope.domain.enums import DistributionKind, ParameterStatus, ResearchMode, ValueBasis
-from fermiscope.domain.models import EstimateProject, SimulationConfig
+from fermiscope.domain.models import EstimateProject, ParameterEstimate, SimulationConfig
+from fermiscope.estimation.distributions import DistributionError
 from fermiscope.estimation.fusion import fuse_evidence
 from fermiscope.evidence.dates import parse_year
 from fermiscope.models.generator import generate_model_candidates
@@ -84,7 +87,8 @@ class LLMSettingsRequest(BaseModel):
     provider: str | None = None  # noop | openai_compatible | anthropic (mock はテスト用)
     api_base: str | None = None
     model: str | None = None
-    api_key: str | None = None  # 空文字は「変更なし」
+    api_key: str | None = None  # 空文字は「変更なし」、clear_api_key=true で明示削除
+    clear_api_key: bool = False
     proxy: str | None = None
     timeout_seconds: float | None = Field(default=None, ge=1, le=600)
 
@@ -115,6 +119,60 @@ def _ensure_not_running(request: Request, project_id: str) -> None:
             status_code=409,
             detail="調査の実行中は編集・再計算できません。完了までお待ちください。",
         )
+
+
+def _atomic_update(
+    request: Request, project_id: str, mutate: Callable[[EstimateProject], Any]
+) -> tuple[EstimateProject, Any]:
+    """状態変更を原子的に行う。
+
+    キャッシュ上のプロジェクトの deep copy に対して mutate を適用し、検証・再計算が
+    すべて成功した場合にのみ、キャッシュとDBを新しい状態へ差し替える。mutate 内で
+    HTTPException 等が送出された場合はキャッシュもDBも変更前のまま保たれる。
+    """
+    current = _get_project(request, project_id)
+    working = current.model_copy(deep=True)
+    result = mutate(working)
+    request.app.state.repo.save(working)
+    request.app.state.projects_cache[project_id] = working
+    return working, result
+
+
+async def _atomic_update_async(
+    request: Request, project_id: str, mutate: Callable[[EstimateProject], Any]
+) -> tuple[EstimateProject, Any]:
+    """_atomic_update の非同期版(mutate が await を含む場合に使う)。"""
+    current = _get_project(request, project_id)
+    working = current.model_copy(deep=True)
+    result = await mutate(working)
+    request.app.state.repo.save(working)
+    request.app.state.projects_cache[project_id] = working
+    return working, result
+
+
+def _validate_param_estimate(param: ParameterEstimate) -> None:
+    """パラメータ値の整合性を検証する。不正なら 422 を送出する(500 にしない)。"""
+    low, central, high = param.low, param.central, param.high
+    # 大小関係(部分更新後の完全な値で検査)
+    for lo, hi, msg in (
+        (low, central, "low は central 以下である必要があります"),
+        (central, high, "central は high 以下である必要があります"),
+        (low, high, "low は high 以下である必要があります"),
+    ):
+        if lo is not None and hi is not None and lo > hi:
+            raise HTTPException(status_code=422, detail=msg)
+    kind = param.distribution
+    if kind in (DistributionKind.LOGNORMAL, DistributionKind.LOGUNIFORM):
+        for name, v in (("low", low), ("central", central), ("high", high)):
+            if v is not None and v <= 0:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"{kind.value} 分布は正の値のみ扱えます({name}={v})。",
+                )
+    if kind == DistributionKind.FIXED and central is None:
+        raise HTTPException(status_code=422, detail="固定分布には central(中心値)が必要です。")
+    if kind == DistributionKind.TRIANGULAR and central is None and (low is not None or high is not None):
+        raise HTTPException(status_code=422, detail="三角分布には central(最頻値)が必要です。")
 
 
 # ---------- 画面 ----------
@@ -318,67 +376,106 @@ async def get_project(request: Request, project_id: str):
 @router.patch("/api/projects/{project_id}/question")
 async def update_question(request: Request, project_id: str, body: UpdateQuestionRequest):
     _ensure_not_running(request, project_id)
-    project = _get_project(request, project_id)
-    spec = project.question
-    changed = []
-    for field in (
-        "subject",
-        "geography",
-        "reference_date",
-        "target_unit",
-        "time_period",
-        "inclusions",
-        "exclusions",
-        "known_facts",
-    ):
+    from fermiscope.domain.enums import StockOrFlow
+
+    # スコープを定義するフィールド(変更時は旧スコープの派生状態を破棄する)
+    scope_fields = ("subject", "geography", "reference_date", "target_unit", "time_period")
+
+    # 値が実際に変わったフィールドだけを検出する(同値保存は暫定解除・再生成しない)
+    current_spec = _get_project(request, project_id).question
+    changed: list[str] = []
+    for field in (*scope_fields, "inclusions", "exclusions", "known_facts"):
         value = getattr(body, field)
-        if value is not None:
-            setattr(spec, field, value)
+        if value is not None and value != getattr(current_spec, field):
             changed.append(field)
-    if body.stock_or_flow in ("stock", "flow"):
-        from fermiscope.domain.enums import StockOrFlow
-
-        spec.stock_or_flow = StockOrFlow(body.stock_or_flow)
+    if body.stock_or_flow in ("stock", "flow") and (
+        StockOrFlow(body.stock_or_flow) != current_spec.stock_or_flow
+    ):
         changed.append("stock_or_flow")
-    # ユーザーが修正した項目は暫定フラグを解除
-    spec.provisional = [p for p in spec.provisional if p.field not in changed]
-    project.audit("question_updated", f"スコープを更新: {', '.join(changed)}", fields=changed)
 
-    if body.regenerate_models and changed:
-        models, params, _ = await generate_model_candidates(spec, current_llm(request.app))
-        project.models = models
-        # 既存の調査済みパラメータは温存し、新規のみ追加
-        for pid, p in params.items():
-            if pid not in project.parameters:
-                project.parameters[pid] = p
-        project.audit("models_generated", "スコープ変更に伴いモデル候補を再生成しました")
-    _save(request, project)
+    async def mutate(project: EstimateProject) -> None:
+        spec = project.question
+        for field in (*scope_fields, "inclusions", "exclusions", "known_facts"):
+            if field in changed:
+                setattr(spec, field, getattr(body, field))
+        if "stock_or_flow" in changed:
+            spec.stock_or_flow = StockOrFlow(body.stock_or_flow)  # type: ignore[arg-type]
+        if not changed:
+            return  # 同値保存: 暫定フラグ・モデルID・派生状態を一切変えない
+        # ユーザーが修正した項目は暫定フラグを解除
+        spec.provisional = [p for p in spec.provisional if p.field not in changed]
+        project.audit("question_updated", f"スコープを更新: {', '.join(changed)}", fields=changed)
+
+        scope_changed = any(f in changed for f in (*scope_fields, "stock_or_flow"))
+        if body.regenerate_models and scope_changed:
+            models, params, _ = await generate_model_candidates(spec, current_llm(request.app))
+            # 新スコープのモデル・パラメータへ完全置換し、旧スコープの派生状態を破棄する
+            project.models = models
+            project.parameters = params
+            project.evidence = {}
+            project.critiques = {}
+            project.contradictions = []
+            project.irreducible_assumptions = []
+            project.decomposition_attempts = []
+            project.simulation_results = []
+            project.sensitivity_results = []
+            project.scenarios = []
+            project.validation = None
+            project.overall_confidence = None
+            project.confidence_reasons = []
+            project.key_caveats = []
+            project.search_hits = []
+            project.audit(
+                "models_generated",
+                "スコープ変更に伴いモデル・パラメータを再生成し、旧スコープの証拠・"
+                "批判・矛盾・シミュレーション・検算・信頼度を破棄しました",
+            )
+
+    project, _ = await _atomic_update_async(request, project_id, mutate)
     return build_report(project)
 
 
 @router.post("/api/projects/{project_id}/models/select")
 async def select_models(request: Request, project_id: str, body: SelectModelsRequest):
     _ensure_not_running(request, project_id)
-    project = _get_project(request, project_id)
-    ids = {m.id for m in project.models}
+    project0 = _get_project(request, project_id)
+    ids = {m.id for m in project0.models}
     if body.primary_id not in ids or (body.check_id and body.check_id not in ids):
         raise HTTPException(status_code=400, detail="指定されたモデルIDが存在しません")
-    for m in project.models:
-        if m.id == body.primary_id:
-            m.role = "primary"
-            m.selection_reason = "ユーザーが主モデルとして選択。"
-        elif body.check_id and m.id == body.check_id:
-            m.role = "check"
-            m.selection_reason = "ユーザーが検算モデルとして選択。"
-        else:
-            m.role = "rejected"
-    project.audit(
-        "models_selected",
-        "ユーザーがモデルを選択しました",
-        primary=body.primary_id,
-        check=body.check_id,
-    )
-    _save(request, project)
+    if body.check_id and body.check_id == body.primary_id:
+        raise HTTPException(status_code=400, detail="主モデルと検算モデルに同じIDは指定できません")
+    primary_model = next(m for m in project0.models if m.id == body.primary_id)
+    if not primary_model.formula.unit_check_passed:
+        raise HTTPException(
+            status_code=400, detail="単位検査に不合格のモデルは主モデルにできません"
+        )
+
+    def mutate(project: EstimateProject) -> None:
+        for m in project.models:
+            if m.id == body.primary_id:
+                m.role = "primary"
+                m.selection_reason = "ユーザーが主モデルとして選択。"
+            elif body.check_id and m.id == body.check_id:
+                m.role = "check"
+                m.selection_reason = "ユーザーが検算モデルとして選択。"
+            else:
+                m.role = "rejected"
+        project.audit(
+            "models_selected",
+            "ユーザーがモデルを選択しました",
+            primary=body.primary_id,
+            check=body.check_id,
+        )
+        # モデル変更に伴い、シミュレーション・シナリオ・検算・信頼度を再計算する
+        # (recalculate_project が古い派生状態を破棄して再構築する)。
+        try:
+            recalculate_project(project, request.app.state.settings)
+        except DistributionError as exc:
+            raise HTTPException(
+                status_code=422, detail=f"選択したモデルで再計算できません: {exc}"
+            ) from exc
+
+    project, _ = _atomic_update(request, project_id, mutate)
     return build_report(project)
 
 
@@ -524,41 +621,59 @@ async def update_parameter(
     request: Request, project_id: str, parameter_id: str, body: UpdateParameterRequest
 ):
     _ensure_not_running(request, project_id)
-    project = _get_project(request, project_id)
-    param = project.parameters.get(parameter_id)
-    if param is None:
-        raise HTTPException(status_code=404, detail="パラメータが見つかりません")
-    if body.low is not None and body.high is not None and body.low > body.high:
-        raise HTTPException(status_code=400, detail="low は high 以下にしてください")
 
-    for field in ("central", "low", "high"):
-        value = getattr(body, field)
-        if value is not None:
-            old = getattr(param, field)
-            setattr(param, field, value)
-            param.record_change(field, old, value, actor="user", note=body.note)
-    if body.distribution is not None:
-        param.record_change(
-            "distribution", param.distribution.value, body.distribution.value, actor="user"
+    def mutate(project: EstimateProject) -> None:
+        param = project.parameters.get(parameter_id)
+        if param is None:
+            raise HTTPException(status_code=404, detail="パラメータが見つかりません")
+
+        for field in ("central", "low", "high"):
+            value = getattr(body, field)
+            if value is not None:
+                old = getattr(param, field)
+                setattr(param, field, value)
+                param.record_change(field, old, value, actor="user", note=body.note)
+        if body.distribution is not None:
+            param.record_change(
+                "distribution", param.distribution.value, body.distribution.value, actor="user"
+            )
+            param.distribution = body.distribution
+            param.distribution_rationale = "ユーザーが分布を指定しました。"
+
+        # 部分更新後の完全な値を検証する(不正なら 422、500 にしない)
+        _validate_param_estimate(param)
+
+        value_provided = any(
+            getattr(body, f) is not None for f in ("central", "low", "high")
         )
-        param.distribution = body.distribution
-        param.distribution_rationale = "ユーザーが分布を指定しました。"
-    param.user_overridden = True
-    param.value_basis = ValueBasis.USER_INPUT
-    param.status = ParameterStatus.USER_OVERRIDDEN
-    param.unresolved_reason = ""
-    project.audit(
-        "value_change",
-        f"ユーザーがパラメータを編集: {param.name}",
-        parameter_id=parameter_id,
-        central=param.central,
-        low=param.low,
-        high=param.high,
-        note=body.note,
-    )
-    # 編集後は検索を再実行せずローカル再計算(要件§16)
-    recalculate_project(project, request.app.state.settings)
-    _save(request, project)
+        if value_provided:
+            # 数値が与えられたときのみユーザー上書きとして確定し、未解決を解除する
+            param.user_overridden = True
+            param.value_basis = ValueBasis.USER_INPUT
+            param.status = ParameterStatus.USER_OVERRIDDEN
+            param.unresolved_reason = ""
+        elif param.central is None:
+            # 分布だけ変更し数値が無い場合、未解決状態を誤って解除しない
+            param.status = ParameterStatus.UNRESOLVED
+            param.value_basis = ValueBasis.UNRESOLVED
+        project.audit(
+            "value_change",
+            f"ユーザーがパラメータを編集: {param.name}",
+            parameter_id=parameter_id,
+            central=param.central,
+            low=param.low,
+            high=param.high,
+            note=body.note,
+        )
+        # 編集後は検索を再実行せずローカル再計算(要件§16)
+        try:
+            recalculate_project(project, request.app.state.settings)
+        except DistributionError as exc:
+            raise HTTPException(
+                status_code=422, detail=f"この値では分布を構成できません: {exc}"
+            ) from exc
+
+    project, _ = _atomic_update(request, project_id, mutate)
     return build_report(project)
 
 
@@ -567,46 +682,58 @@ async def update_evidence(
     request: Request, project_id: str, evidence_id: str, body: UpdateEvidenceRequest
 ):
     _ensure_not_running(request, project_id)
-    project = _get_project(request, project_id)
-    evidence = project.evidence.get(evidence_id)
-    if evidence is None:
-        raise HTTPException(status_code=404, detail="証拠が見つかりません")
-    evidence.accepted = body.accepted
-    evidence.rejection_reason = body.rejection_reason if not body.accepted else ""
-    project.audit(
-        "evidence_updated",
-        f"証拠の採用状態を変更: {evidence.title}({'採用' if body.accepted else '不採用'})",
-        evidence_id=evidence_id,
-        reason=body.rejection_reason,
-    )
-    # 影響を受けるパラメータを再統合(ユーザー上書きは温存)
-    param = project.parameters.get(evidence.parameter_id)
-    if param is not None and not param.user_overridden:
-        from fermiscope.domain.enums import SearchPurpose
 
-        items = [
-            e
-            for e in project.evidence.values()
-            if e.parameter_id == param.id
-            and (
-                e.search_purpose
-                in (
-                    SearchPurpose.DIRECT_VALUE,
-                    SearchPurpose.PRIMARY_SOURCE,
-                    SearchPurpose.LATEST_VALUE,
-                    SearchPurpose.ALTERNATIVE_VALUE,
-                )
-                or e.search_purpose is None
-            )
-        ]
-        fuse_evidence(
-            param,
-            items,
-            request.app.state.settings,
-            reference_year=parse_year(project.question.reference_date),
+    def mutate(project: EstimateProject) -> None:
+        evidence = project.evidence.get(evidence_id)
+        if evidence is None:
+            raise HTTPException(status_code=404, detail="証拠が見つかりません")
+        evidence.accepted = body.accepted
+        evidence.rejection_reason = body.rejection_reason if not body.accepted else ""
+        project.audit(
+            "evidence_updated",
+            f"証拠の採用状態を変更: {evidence.title}({'採用' if body.accepted else '不採用'})",
+            evidence_id=evidence_id,
+            reason=body.rejection_reason,
         )
-    recalculate_project(project, request.app.state.settings)
-    _save(request, project)
+        # 影響を受けるパラメータを再統合(ユーザー上書きは温存)。統合前に旧い
+        # incompatible_reason をクリアし、現在の採用状態で判定し直す。
+        param = project.parameters.get(evidence.parameter_id)
+        if param is not None and not param.user_overridden:
+            from fermiscope.domain.enums import SearchPurpose
+
+            for e in project.evidence.values():
+                if e.parameter_id == param.id:
+                    e.incompatible_reason = ""
+            items = [
+                e
+                for e in project.evidence.values()
+                if e.parameter_id == param.id
+                and (
+                    e.search_purpose
+                    in (
+                        SearchPurpose.DIRECT_VALUE,
+                        SearchPurpose.PRIMARY_SOURCE,
+                        SearchPurpose.LATEST_VALUE,
+                        SearchPurpose.ALTERNATIVE_VALUE,
+                    )
+                    or e.search_purpose is None
+                )
+            ]
+            fuse_evidence(
+                param,
+                items,
+                request.app.state.settings,
+                reference_year=parse_year(project.question.reference_date),
+            )
+        # 統合・矛盾・検算・信頼度・注意点を再構築(不採用証拠の古い矛盾を残さない)
+        try:
+            recalculate_project(project, request.app.state.settings)
+        except DistributionError as exc:
+            raise HTTPException(
+                status_code=422, detail=f"再計算できません: {exc}"
+            ) from exc
+
+    project, _ = _atomic_update(request, project_id, mutate)
     return build_report(project)
 
 

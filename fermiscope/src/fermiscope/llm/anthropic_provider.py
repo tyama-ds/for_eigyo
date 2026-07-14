@@ -37,7 +37,12 @@ class AnthropicProvider(HttpLLMProvider):
         proxy: str | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
-        key = api_key or os.environ.get("ANTHROPIC_API_KEY", "") or os.environ.get("LLM_API_KEY", "")
+        # None=未指定(環境変数から解決)/ ""=明示的にキー無し(環境変数で補完しない)
+        key = (
+            (os.environ.get("ANTHROPIC_API_KEY", "") or os.environ.get("LLM_API_KEY", ""))
+            if api_key is None
+            else api_key
+        )
         self.model = model or os.environ.get("ANTHROPIC_MODEL", "") or os.environ.get("LLM_MODEL", "")
         # プロキシ/ゲートウェイ経由の場合は api_base を差し替え可能
         self.api_base = (api_base or os.environ.get("ANTHROPIC_API_BASE", "") or _DEFAULT_BASE).rstrip("/")

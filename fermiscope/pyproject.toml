@@ -42,6 +42,10 @@ e2e = [
 selenium = [
     "selenium>=4.15,<5.0",
 ]
+# PostgreSQL バックエンド(任意)。FERMISCOPE_DATABASE_URL=postgresql+psycopg://... で使用。
+postgres = [
+    "psycopg[binary]>=3.1,<4.0",
+]
 
 [project.scripts]
 fermiscope = "fermiscope.main:main"
@@ -52,6 +56,12 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fermiscope"]
+
+# 設定YAML・テンプレート・静的ファイルを wheel へ同梱し、非editable install でも
+# 起動できるようにする(fermiscope/_bundled 以下に配置し、config._resolve_resource_dir が解決)。
+[tool.hatch.build.targets.wheel.force-include]
+"config" = "fermiscope/_bundled/config"
+"web" = "fermiscope/_bundled/web"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

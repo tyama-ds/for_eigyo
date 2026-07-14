@@ -39,7 +39,9 @@ class OpenAICompatProvider(HttpLLMProvider):
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.api_base = (api_base or os.environ.get("LLM_API_BASE", "")).rstrip("/")
-        key = api_key or os.environ.get("LLM_API_KEY", "")
+        # None=未指定(環境変数から解決)/ ""=明示的にキー無し(環境変数で補完しない)。
+        # 接続先変更後にキー未設定なら、旧キーを新接続先へ送らないための区別。
+        key = os.environ.get("LLM_API_KEY", "") if api_key is None else api_key
         self.model = model or os.environ.get("LLM_MODEL", "")
         proxy = proxy or os.environ.get("LLM_PROXY") or None
         if not self.api_base or not self.model:

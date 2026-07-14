@@ -145,9 +145,10 @@ def _ev(publisher: str = "", url: str = "https://example.com/a") -> EvidenceItem
 def test_government_detection_avoids_substring_false_positives(settings):
     for pub in ("反省堂出版", "株式会社ABC省エネ", "庁舎メンテナンス"):
         assert infer_source_class(_ev(publisher=pub), settings) != SourceClass.S
-    # 明示リストに無い府省庁も政府一次統計(S)として扱う
+    # 明示リストに無い府省庁も、政府ドメインで裏付けられれば S(自己申告だけでは不可)
     for pub in ("財務省", "デジタル庁", "気象庁"):
-        assert infer_source_class(_ev(publisher=pub), settings) == SourceClass.S
+        gov = _ev(publisher=pub, url="https://www.mof.go.jp/data")
+        assert infer_source_class(gov, settings) == SourceClass.S
 
 
 def test_sns_matching_respects_domain_boundary(settings):

@@ -6,10 +6,27 @@
 
 from __future__ import annotations
 
+import re
+
 from fermiscope.config import Settings
 from fermiscope.domain.models import Contradiction, EvidenceItem, ParameterEstimate
 from fermiscope.evidence.dates import parse_year
 from fermiscope.evidence.normalize import normalize_value
+
+# 定義・母集団テキストの表記揺れ(空白・句読点・全角半角)を吸収して比較する
+_NORM_STRIP = re.compile(r"[\s、。,.　・:：/／()()「」\"']+")
+_FULLWIDTH_DIGITS = str.maketrans("0123456789", "0123456789")
+
+
+def _norm_text(s: str) -> str:
+    return _NORM_STRIP.sub("", (s or "").translate(_FULLWIDTH_DIGITS)).lower()
+
+
+def _text_conflict(a: str, b: str) -> bool:
+    """双方に記載があり、正規化しても内容が異なる場合のみ True(表記揺れは無視)。"""
+    if not a or not b:
+        return False
+    return _norm_text(a) != _norm_text(b)
 
 
 def _normalized(ev: EvidenceItem, unit: str) -> float | None:
@@ -23,7 +40,7 @@ def _normalized(ev: EvidenceItem, unit: str) -> float | None:
 
 def _analyze_differences(a: EvidenceItem, b: EvidenceItem) -> dict[str, str]:
     analysis: dict[str, str] = {}
-    if a.exact_definition and b.exact_definition and a.exact_definition != b.exact_definition:
+    if _text_conflict(a.exact_definition, b.exact_definition):
         analysis["definition"] = (
             f"定義差: 「{a.exact_definition}」と「{b.exact_definition}」で対象の定義が異なります。"
         )
@@ -39,7 +56,7 @@ def _analyze_differences(a: EvidenceItem, b: EvidenceItem) -> dict[str, str]:
         analysis["method"] = "調査方法差: 両者の調査方法が異なります(各証拠の方法欄を参照)。"
     elif ma != mb:
         analysis["method"] = "調査方法差: 一方は方法を明示、他方は方法不明です。"
-    if a.population_definition and b.population_definition and a.population_definition != b.population_definition:
+    if _text_conflict(a.population_definition, b.population_definition):
         analysis["population"] = (
             f"母集団差: 「{a.population_definition}」と「{b.population_definition}」。"
         )

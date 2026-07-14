@@ -88,17 +88,19 @@ def build_provider(config: LLMRuntimeConfig) -> LLMProvider:
         return NoOpLLMProvider()
     if name == "mock":
         return MockLLMProvider()
+    # api_key は config の値をそのまま渡す(環境変数解決は設定ロード時に一度だけ)。
+    # 空文字は「キー無し」を意味し、プロバイダは環境変数で補完しない。
     if name == "openai_compatible":
         return OpenAICompatProvider(
             api_base=config.api_base or None,
-            api_key=config.api_key or None,
+            api_key=config.api_key,
             model=config.model or None,
             timeout_seconds=config.timeout_seconds,
             proxy=config.proxy or None,
         )
     if name == "anthropic":
         return AnthropicProvider(
-            api_key=config.api_key or None,
+            api_key=config.api_key,
             model=config.model or None,
             api_base=config.api_base or None,
             timeout_seconds=config.timeout_seconds,
@@ -202,6 +204,8 @@ class LLMSettingsStore:
         current = self.config.model_dump()
         new_key = patch.get("api_key")
         has_new_key = isinstance(new_key, str) and new_key != ""
+        # 明示的なキー削除(GUIの「キーを削除」)。空送信の「変更なし」とは区別する。
+        clear_key = bool(patch.get("clear_api_key"))
         # GET応答でマスクした proxy(***@host)をGUIがそのまま送り返す場合は
         # 「変更なし」として扱い、マスク文字列で実プロキシを上書きしない。
         proxy_in = patch.get("proxy")
@@ -223,7 +227,9 @@ class LLMSettingsStore:
             if k in current and v is not None:
                 current[k] = v
 
-        if endpoint_changed and not has_new_key:
+        # 接続先変更で新キーが無ければ、旧キーを新接続先へ流用しない。
+        # 明示削除でも空にする。
+        if clear_key or (endpoint_changed and not has_new_key):
             current["api_key"] = ""
 
         # 接続先URL(api_base / proxy)のスキームを検査(http/https のみ)

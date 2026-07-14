@@ -71,32 +71,83 @@ def _is_sns_host(host: str) -> bool:
     return any(kw in label for kw in _SNS_LABEL_KEYWORDS for label in labels)
 
 
-def infer_source_class(ev: EvidenceItem, settings: Settings) -> SourceClass:
-    """情報源クラスを推定する。文書メタデータ > ドメインヒント。"""
-    if ev.source_class != SourceClass.UNKNOWN:
-        return ev.source_class
+_ASSOC_KEYWORDS = ("協会", "組合", "工業会", "連合会")
 
-    publisher = ev.publisher or ""
-    for keywords, cls in _PUBLISHER_CLASS_RULES:
-        if any(k in publisher for k in keywords):
-            # 業界団体は方法明示がなければ B→C 相当へ降格
-            if cls == SourceClass.A and any(k in publisher for k in ("協会", "組合", "工業会", "連合会")):
-                return SourceClass.A if ev.methodology_summary else SourceClass.B
-            return cls
-    # 明示キーワードに無い府省庁(財務省・デジタル庁 等)も政府一次統計として扱う
-    if _GOV_BODY_PATTERN.search(publisher):
-        return SourceClass.S
 
-    host = urlparse(ev.url).hostname or ""
-    if _is_sns_host(host):
-        return SourceClass.E
+def _domain_hint_class(host: str, settings: Settings) -> SourceClass | None:
+    """ドメイン接尾辞からクラスヒントを得る(該当なしは None)。"""
     for hint in settings.source_classes.domain_hints:
         if any(host.endswith(suf) for suf in hint.suffixes):
             try:
                 return SourceClass(hint.hint_class)
             except ValueError:
                 continue
-    return SourceClass.D
+    return None
+
+
+def _high_authority_corroborated(ev: EvidenceItem, host: str, settings: Settings) -> bool:
+    """S/A クラスの自己申告が、信頼ドメイン or 一次資料URLで裏付けられるか。"""
+    if _domain_hint_class(host, settings) in (SourceClass.S, SourceClass.A):
+        return True
+    # 一次資料(転載元)が信頼ドメインを指す場合も裏付けとみなす
+    ref = ev.parent_source_id or ""
+    if ref.startswith("http"):
+        ref_host = urlparse(ref).hostname or ""
+        if _domain_hint_class(ref_host, settings) in (SourceClass.S, SourceClass.A):
+            return True
+    return False
+
+
+def publisher_authority_unverified(ev: EvidenceItem, settings: Settings) -> bool:
+    """発行主体が政府・国際機関を自称するがドメインで裏付けられない場合 True。"""
+    publisher = ev.publisher or ""
+    host = urlparse(ev.url).hostname or ""
+    claims_high = _GOV_BODY_PATTERN.search(publisher) is not None or any(
+        any(k in publisher for k in kw) and cls in (SourceClass.S, SourceClass.A)
+        and not any(a in publisher for a in _ASSOC_KEYWORDS)
+        for kw, cls in _PUBLISHER_CLASS_RULES
+    )
+    return claims_high and not _high_authority_corroborated(ev, host, settings)
+
+
+def infer_source_class(ev: EvidenceItem, settings: Settings) -> SourceClass:
+    """情報源クラスを推定する。文書メタデータ > ドメインヒント。
+
+    政府・国際機関を自称する高権威クラス(S/A)は、信頼ドメインまたは一次資料URLで
+    裏付けられない限り昇格させない(本文に「発行: 総務省統計局」と書くだけでは不可)。
+    """
+    if ev.source_class != SourceClass.UNKNOWN:
+        return ev.source_class
+
+    publisher = ev.publisher or ""
+    host = urlparse(ev.url).hostname or ""
+    domain_class = _domain_hint_class(host, settings)
+
+    claimed: SourceClass | None = None
+    needs_domain = False
+    for keywords, cls in _PUBLISHER_CLASS_RULES:
+        if any(k in publisher for k in keywords):
+            if cls == SourceClass.A and any(k in publisher for k in _ASSOC_KEYWORDS):
+                # 業界団体は方法明示があればA、無ければB(ドメイン裏付けは要求しない)
+                claimed = SourceClass.A if ev.methodology_summary else SourceClass.B
+            else:
+                claimed = cls
+                needs_domain = cls in (SourceClass.S, SourceClass.A)
+            break
+    if claimed is None and _GOV_BODY_PATTERN.search(publisher):
+        claimed, needs_domain = SourceClass.S, True
+
+    if claimed is not None:
+        if needs_domain and not _high_authority_corroborated(ev, host, settings):
+            # 自己申告の高権威はドメインで裏付けられないため認めず、ドメイン相当へ抑制
+            if _is_sns_host(host):
+                return SourceClass.E
+            return domain_class or SourceClass.D
+        return claimed
+
+    if _is_sns_host(host):
+        return SourceClass.E
+    return domain_class or SourceClass.D
 
 
 def _year_of(ev: EvidenceItem) -> int | None:
@@ -143,6 +194,12 @@ def rank_evidence(
     class_def = settings.source_classes.classes.get(cls.value)
     sub["source_authority"] = class_def.base_authority if class_def else 30.0
     reasons.append(f"情報源クラス {cls.value}({class_def.label if class_def else '不明'})。")
+    if publisher_authority_unverified(ev, settings):
+        penalties["unverifiable_claim_penalty"] = pen_conf.unverifiable_claim_penalty
+        reasons.append(
+            "発行主体が政府・国際機関を自称していますが、ドメイン・一次資料で裏付けられないため"
+            "高権威を付与せず要確認とします(自己申告のみでは昇格しない)。"
+        )
 
     # --- primaryness ---
     if ev.parent_source_id:

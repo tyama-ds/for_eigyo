@@ -562,61 +562,85 @@ class ResearchOrchestrator:
         return project
 
     def _finalize_confidence(self, project: EstimateProject) -> None:
-        primary = project.primary_model()
-        reasons: list[str] = []
-        caveats: list[str] = []
-        if primary is None:
-            project.overall_confidence = None
-            return
-        leaf_ids = primary.formula.leaf_parameter_ids()
-        confs = [c for p in leaf_ids if (c := project.parameters[p].confidence) is not None]
-        base = sum(confs) / len(confs) if confs else 0.2
-        reasons.append(f"主モデル{len(leaf_ids)}パラメータの証拠信頼度平均: {base:.2f}")
+        finalize_confidence(project)
 
-        unresolved = [p for p in leaf_ids if project.parameters[p].central is None]
-        if unresolved:
-            base -= 0.2
-            caveats.append(
-                f"未解決のパラメータが{len(unresolved)}件あります(値を入力してください)。"
-            )
 
-        severe = [
-            c
-            for c in project.critiques.values()
-            if c.parameter_id in leaf_ids and c.severity >= 0.6 and c.resolution_status == "open"
-        ]
-        if severe:
-            base -= min(0.05 * len(severe), 0.2)
-            reasons.append(f"未解決の重大な批判 {len(severe)} 件により減点。")
+def finalize_confidence(project: EstimateProject) -> None:
+    """信頼度・注意点を現在の状態から再計算する(研究・再計算の両経路で共用)。"""
+    primary = project.primary_model()
+    reasons: list[str] = []
+    caveats: list[str] = []
+    if primary is None:
+        project.overall_confidence = None
+        project.confidence_reasons = []
+        project.key_caveats = []
+        return
+    leaf_ids = primary.formula.leaf_parameter_ids()
+    confs = [c for p in leaf_ids if (c := project.parameters[p].confidence) is not None]
+    base = sum(confs) / len(confs) if confs else 0.2
+    reasons.append(f"主モデル{len(leaf_ids)}パラメータの証拠信頼度平均: {base:.2f}")
 
-        if project.validation is not None:
-            if project.validation.agreement == "consistent":
-                base += 0.05
-                reasons.append("検算モデルと桁が整合(+0.05)。")
-            elif project.validation.agreement == "discrepant":
-                base -= 0.15
-                caveats.append("検算モデルと大きな不一致があります(モデル間不一致を参照)。")
+    unresolved = [p for p in leaf_ids if project.parameters[p].central is None]
+    if unresolved:
+        base -= 0.2
+        caveats.append(f"未解決のパラメータが{len(unresolved)}件あります(値を入力してください)。")
 
-        for irr in project.irreducible_assumptions:
-            p = project.parameters.get(irr.parameter_id)
-            caveats.append(
-                f"「{p.name if p else irr.parameter_id}」はこれ以上分解できない仮定です: {irr.reason}"
-            )
-        for con in project.contradictions:
-            p = project.parameters.get(con.parameter_id)
-            caveats.append(f"「{p.name if p else con.parameter_id}」の証拠間に矛盾があります。")
+    severe = [
+        c
+        for c in project.critiques.values()
+        if c.parameter_id in leaf_ids and c.severity >= 0.6 and c.resolution_status == "open"
+    ]
+    if severe:
+        base -= min(0.05 * len(severe), 0.2)
+        reasons.append(f"未解決の重大な批判 {len(severe)} 件により減点。")
 
-        project.overall_confidence = round(min(max(base, 0.05), 0.95), 2)
-        project.confidence_reasons = reasons
-        project.key_caveats = caveats
+    if project.validation is not None:
+        if project.validation.agreement == "consistent":
+            base += 0.05
+            reasons.append("検算モデルと桁が整合(+0.05)。")
+        elif project.validation.agreement == "discrepant":
+            base -= 0.15
+            caveats.append("検算モデルと大きな不一致があります(モデル間不一致を参照)。")
+        elif project.validation.agreement == "incompatible":
+            caveats.append("検算モデルと目標単位・期間が非互換で検算できていません。")
+
+    for irr in project.irreducible_assumptions:
+        p = project.parameters.get(irr.parameter_id)
+        caveats.append(
+            f"「{p.name if p else irr.parameter_id}」はこれ以上分解できない仮定です: {irr.reason}"
+        )
+    for con in project.contradictions:
+        p = project.parameters.get(con.parameter_id)
+        caveats.append(f"「{p.name if p else con.parameter_id}」の証拠間に矛盾があります。")
+
+    project.overall_confidence = round(min(max(base, 0.05), 0.95), 2)
+    project.confidence_reasons = reasons
+    project.key_caveats = caveats
 
 
 def recalculate_project(project: EstimateProject, settings: Settings) -> EstimateProject:
-    """検索を再実行せず、現在のパラメータ値でローカル再計算する。"""
+    """検索を再実行せず、現在のパラメータ値でローカル再計算する。
+
+    シミュレーション・シナリオ・検算・矛盾・信頼度・注意点を現在の状態から再構築する
+    (古い派生状態を残さない)。custom シナリオの上書きは保持する。
+    """
     primary = project.primary_model()
     check = project.check_model()
+    custom = next(
+        (s.parameter_overrides for s in project.scenarios if s.kind == "custom"), None
+    )
+    # 派生状態を一旦無効化してから再構築する(モデル/証拠変更後の古い結果を残さない)
     project.simulation_results = []
     project.sensitivity_results = []
+    project.scenarios = []
+    project.validation = None
+
+    # 矛盾は現在の採用状態の証拠から再検出する(不採用にした証拠の古い矛盾を残さない)
+    project.contradictions = []
+    for pid, param in project.parameters.items():
+        items = [e for e in project.evidence.values() if e.parameter_id == pid]
+        project.contradictions.extend(detect_contradictions(param, items, settings))
+
     sims: dict[str, SimulationResult] = {}
     for model in [m for m in (primary, check) if m is not None]:
         try:
@@ -632,9 +656,6 @@ def recalculate_project(project: EstimateProject, settings: Settings) -> Estimat
             analyze_sensitivity(model, project.parameters, result, project.critiques)
         )
     if primary is not None and primary.id in sims:
-        custom = next(
-            (s.parameter_overrides for s in project.scenarios if s.kind == "custom"), None
-        )
         project.scenarios = compute_scenarios(
             primary, project.parameters, sims[primary.id], settings, custom_overrides=custom
         )
@@ -649,6 +670,8 @@ def recalculate_project(project: EstimateProject, settings: Settings) -> Estimat
             project.critiques,
             settings,
         )
+    # 信頼度・注意点を再計算(矛盾・検算・未解決の最新状態を反映)
+    finalize_confidence(project)
     project.audit(
         "recalculate",
         "ローカル再計算を実行しました(Web検索なし)",

@@ -6,12 +6,13 @@ import os
 from pathlib import Path
 
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from fermiscope import __version__
 from fermiscope.api.runs import RunManager
-from fermiscope.config import PROJECT_ROOT, Settings, get_settings
+from fermiscope.config import Settings, default_data_dir, get_settings, require_resources
 from fermiscope.llm.base import LLMProvider
 from fermiscope.llm.settings_store import LLMSettingsStore
 from fermiscope.persistence.repository import ProjectRepository
@@ -22,7 +23,9 @@ from fermiscope.research.search.brave import BraveSearchProvider
 from fermiscope.research.search.duckduckgo import DuckDuckGoSearchProvider
 from fermiscope.research.search.mock import MockSearchProvider
 
-PROJECT_LLM_SETTINGS_PATH = PROJECT_ROOT / "llm_settings.json"
+
+def _default_llm_settings_path() -> str:
+    return str(default_data_dir() / "llm_settings.json")
 
 
 def _build_search_provider(settings: Settings) -> SearchProvider:
@@ -53,6 +56,8 @@ def create_app(
     repo: ProjectRepository | None = None,
 ) -> FastAPI:
     settings = settings or get_settings()
+    # 必須の設定・静的ファイルが無ければ黙って空へフォールバックせず明示エラー
+    require_resources(settings.config_dir, settings.web_dir)
     app = FastAPI(title=settings.display_name(), version=__version__)
 
     app.state.settings = settings
@@ -64,7 +69,7 @@ def create_app(
         app.state.llm_store = None
     else:
         settings_path = Path(
-            os.environ.get("FERMISCOPE_LLM_SETTINGS_PATH", str(PROJECT_LLM_SETTINGS_PATH))
+            os.environ.get("FERMISCOPE_LLM_SETTINGS_PATH", _default_llm_settings_path())
         )
         app.state.llm_store = LLMSettingsStore(settings_path)
         app.state.llm = None  # current_llm() が store から取得する
@@ -76,6 +81,34 @@ def create_app(
     templates = Jinja2Templates(directory=str(settings.web_dir / "templates"))
     app.state.templates = templates
     app.mount("/static", StaticFiles(directory=str(settings.web_dir / "static")), name="static")
+
+    # DNSリバインディング対策の Host 許可リスト。既定はループバックのみ。
+    # LAN/外部公開時は FERMISCOPE_ALLOWED_HOSTS にホスト名を明示し、加えて
+    # リバースプロキシで認証をかけること(READMEに明記)。
+    allowed_hosts = {"127.0.0.1", "localhost", "::1", "testserver"}
+    extra_hosts = os.environ.get("FERMISCOPE_ALLOWED_HOSTS", "")
+    for h in extra_hosts.split(","):
+        h = h.strip().lower()
+        if h:
+            allowed_hosts.add(h)
+    app.state.allowed_hosts = allowed_hosts
+
+    def _host_only(raw: str) -> str:
+        raw = raw.strip().lower()
+        if raw.startswith("["):  # IPv6 リテラル [::1]:8720
+            return raw[1 : raw.find("]")] if "]" in raw else raw.strip("[]")
+        return raw.rsplit(":", 1)[0] if ":" in raw else raw
+
+    @app.middleware("http")
+    async def host_guard(request: Request, call_next):
+        host = _host_only(request.headers.get("host", ""))
+        # Host 未指定(HTTP/1.0 等)は許容。指定があれば許可リストで検証する。
+        if host and host not in app.state.allowed_hosts:
+            return JSONResponse(
+                status_code=400,
+                content={"detail": "許可されないHostヘッダです(DNSリバインディング対策)。"},
+            )
+        return await call_next(request)
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
