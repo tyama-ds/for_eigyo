@@ -730,15 +730,16 @@ async def event_stream(request: Request, project_id: str):
                         project = request.app.state.projects_cache.get(project_id)
                         run = project.current_run() if project else None
                         status = run.status.value if run else "done"
+                        terminal = ("done", "failed", "cancelled", "completed_with_errors")
                         yield sse_format(
-                            {"type": status if status in ("done", "failed", "cancelled") else "done",
+                            {"type": status if status in terminal else "done",
                              "message": "調査は終了しています", "data": {"stage": status}}
                         )
                         break
                     yield ": keepalive\n\n"
                     continue
                 yield sse_format(event)
-                if event.get("type") in ("done", "failed", "cancelled"):
+                if event.get("type") in ("done", "failed", "cancelled", "completed_with_errors"):
                     break
         finally:
             manager.unsubscribe(project_id, queue)

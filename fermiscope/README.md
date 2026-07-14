@@ -191,14 +191,68 @@ Web取得(`research/fetcher.py`)は以下の形式を解析し、テキスト・
 | `FERMISCOPE_USE_SELENIUM` | `0` | `1` でJS描画ページのSelenium取得を有効化 |
 | `LLM_PROVIDER` | `noop` | `noop` / `openai_compatible` / `anthropic`(`mock` はテスト用) |
 | `LLM_API_BASE` / `LLM_API_KEY` / `LLM_MODEL` | — | OpenAI互換APIの接続情報 |
-| `FERMISCOPE_HTTP_PROXY` | — | 共通プロキシ(検索・取得・Selenium・LLM)。`HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` も自動で拾う |
+| `HTTP_PROXY` / `HTTPS_PROXY` | — | http:// と https:// で**別々**に指定可能(1つに潰しません)。小文字版も可 |
+| `ALL_PROXY` | — | スキーム別指定が無い場合の既定(SOCKS 可。要 `pip install "fermiscope[socks]"`) |
+| `NO_PROXY` | — | プロキシ非経由にするホスト(`localhost,127.0.0.1,host.docker.internal,.internal.example`。`*` で全バイパス) |
+| `FERMISCOPE_HTTP_PROXY` / `FERMISCOPE_HTTPS_PROXY` | — | 上記の専用版(最優先) |
+| `FERMISCOPE_SELENIUM_STRICT` | `true` | Selenium有効時に利用不能なら起動時エラー。`false` でhttpxへ退避(非推奨) |
 | `FERMISCOPE_ALLOWED_HOSTS` | ループバックのみ | 許可するHostヘッダ(DNSリバインディング対策)。LAN公開時のみ設定し、別途リバースプロキシ認証を併用 |
+| `FERMISCOPE_BUILD_ID` / `GIT_COMMIT` | — | アプリバージョンに連結するビルド/コミットID(再現性記録用) |
 | `FERMISCOPE_APP_NAME` | `FermiScope` | 表示名 |
-| `FERMISCOPE_DATABASE_URL` | SQLite | 例: `postgresql+psycopg://…` |
+| `FERMISCOPE_DATABASE_URL` | SQLite | 例: `postgresql+psycopg://…`(要 `pip install "fermiscope[postgres]"`)。SQLite は親ディレクトリを自動作成 |
+| `FERMISCOPE_DATA_DIR` | 自動 | DB・LLM設定の保存先(存在しなくてもアプリが作成) |
 | `FERMISCOPE_MC_ITERATIONS` | 20000 | モンテカルロ反復回数 |
 | `FERMISCOPE_MAX_SEARCHES` | 80 | 1プロジェクトの検索回数上限 |
 
 すべての例は [.env.example](.env.example) を参照してください。
+
+## 運用(プロキシ・企業内・Docker・リバースプロキシ)
+
+### プロキシ / NO_PROXY
+- `HTTP_PROXY` と `HTTPS_PROXY` は別々に保持します(混在させません)。大文字・小文字の
+  標準変数を両対応し、`FERMISCOPE_*` が最優先です。認証情報(`user:pass@`)を含む URL は
+  ログ・API 応答・診断・Selenium のプロセス引数に**出しません**(`scheme://host` のみ)。
+- `NO_PROXY` に `localhost,127.0.0.1,host.docker.internal` 等を並べると直接接続になります。
+  直接接続になる URL でも SSRF/DNS リバインディング対策(IP 固定・プライベート/メタデータ遮断)は
+  維持され、弱まりません。
+- **SOCKS** を使う場合は `pip install "fermiscope[socks]"` を導入してください。未導入で
+  `socks5://...` を指定すると起動時に明示エラーになります(黙って無視しません)。
+
+### TLS 検査(SSL インスペクション)プロキシ
+社内の TLS 検査プロキシは独自 CA で証明書を差し替えます。その CA を信頼させるには:
+- 環境変数で CA バンドルを指定: `export SSL_CERT_FILE=/path/corp-ca.pem`
+  (httpx/certifi が参照します。`REQUESTS_CA_BUNDLE` も可)。
+- Docker では CA を OS 信頼ストアに入れる例:
+  ```dockerfile
+  COPY corp-ca.pem /usr/local/share/ca-certificates/corp-ca.crt
+  RUN update-ca-certificates
+  ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+  ```
+  検証を無効化する回避策(`verify=false` 等)は用意しません。
+
+### Docker のローカルLLM接続(OS 別)
+コンテナ内の `localhost` はコンテナ自身を指します。ホストで動く LLM(Ollama 等)へは:
+- **macOS / Windows(Docker Desktop)**: `LLM_API_BASE=http://host.docker.internal:11434/v1`
+- **Linux**: `--add-host=host.docker.internal:host-gateway` を付けて同上、または
+  `LLM_API_BASE=http://172.17.0.1:11434/v1`(docker0 ブリッジIP)。
+- いずれも `NO_PROXY` に `host.docker.internal` を含めると、社内プロキシ設定下でも
+  ローカル LLM へ直接接続できます。
+
+### リバースプロキシ / サブパス公開・SSE
+- **Host ヘッダ**: 公開ホスト名を `FERMISCOPE_ALLOWED_HOSTS` に追加してください
+  (未許可の Host は 400。DNS リバインディング対策)。プロキシは `Host` を透過するか、
+  透過先ホスト名を許可リストに入れます。
+- **SSE(進捗配信)**: `/api/projects/{id}/events` は Server-Sent Events です。
+  リバースプロキシでは**バッファリングを無効化**してください
+  (nginx: `proxy_buffering off;` と `proxy_read_timeout` を延長。`X-Accel-Buffering: no` も可)。
+- **サブパス公開**: 静的アセットは相対パスで解決されるため、`location /fermiscope/ { proxy_pass ...; }`
+  のようにパス末尾を保って転送してください。`Origin` を書き換えるプロキシでは、状態変更 API の
+  CSRF 検証(Origin 照合)のため、転送先ホストを `FERMISCOPE_ALLOWED_HOSTS` に含めます。
+
+### 診断
+- `fermiscope doctor` で設定・DB・プロキシ(秘密は伏せる)・必須リソースを点検できます。
+- `GET /healthz`(liveness)、`GET /readyz`(readiness、未準備は 503)、
+  `GET /api/health`(詳細診断。秘密は含めません)。
 
 ## デモの操作手順
 

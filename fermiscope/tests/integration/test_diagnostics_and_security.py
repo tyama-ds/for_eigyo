@@ -71,3 +71,22 @@ def test_get_requests_not_origin_guarded(app_client):
     """GET は Origin 検証の対象外(安全メソッド)。"""
     r = app_client.get("/api/health", headers={"origin": "https://evil.example.com"})
     assert r.status_code == 200
+
+
+def test_sse_disables_proxy_buffering(app_client):
+    """SSE 応答はリバースプロキシのバッファリングを無効化するヘッダを持つ。"""
+    project = app_client.post("/api/projects", json={"question": PIANO_QUESTION}).json()
+    pid = project["project"]["id"]
+    with app_client.stream("GET", f"/api/projects/{pid}/events") as r:
+        assert r.status_code == 200
+        assert r.headers.get("content-type", "").startswith("text/event-stream")
+        assert r.headers.get("x-accel-buffering") == "no"
+        assert "no-cache" in r.headers.get("cache-control", "")
+
+
+def test_host_guard_rejects_unknown_host(app_client):
+    """未許可 Host は 400(DNSリバインディング対策)。許可ホストは通す。"""
+    r = app_client.get("/api/config", headers={"host": "evil.attacker.example"})
+    assert r.status_code == 400
+    r_ok = app_client.get("/api/config", headers={"host": "localhost"})
+    assert r_ok.status_code == 200
