@@ -84,7 +84,8 @@ class LLMSettingsRequest(BaseModel):
     provider: str | None = None  # noop | openai_compatible | anthropic (mock はテスト用)
     api_base: str | None = None
     model: str | None = None
-    api_key: str | None = None  # 空文字は「変更なし」
+    api_key: str | None = None  # 空文字は「変更なし」、clear_api_key=true で明示削除
+    clear_api_key: bool = False
     proxy: str | None = None
     timeout_seconds: float | None = Field(default=None, ge=1, le=600)
 

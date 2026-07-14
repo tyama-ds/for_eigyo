@@ -192,6 +192,7 @@ Web取得(`research/fetcher.py`)は以下の形式を解析し、テキスト・
 | `LLM_PROVIDER` | `noop` | `noop` / `openai_compatible` / `anthropic`(`mock` はテスト用) |
 | `LLM_API_BASE` / `LLM_API_KEY` / `LLM_MODEL` | — | OpenAI互換APIの接続情報 |
 | `FERMISCOPE_HTTP_PROXY` | — | 共通プロキシ(検索・取得・Selenium・LLM)。`HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` も自動で拾う |
+| `FERMISCOPE_ALLOWED_HOSTS` | ループバックのみ | 許可するHostヘッダ(DNSリバインディング対策)。LAN公開時のみ設定し、別途リバースプロキシ認証を併用 |
 | `FERMISCOPE_APP_NAME` | `FermiScope` | 表示名 |
 | `FERMISCOPE_DATABASE_URL` | SQLite | 例: `postgresql+psycopg://…` |
 | `FERMISCOPE_MC_ITERATIONS` | 20000 | モンテカルロ反復回数 |

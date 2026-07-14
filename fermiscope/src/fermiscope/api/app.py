@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -76,6 +77,34 @@ def create_app(
     templates = Jinja2Templates(directory=str(settings.web_dir / "templates"))
     app.state.templates = templates
     app.mount("/static", StaticFiles(directory=str(settings.web_dir / "static")), name="static")
+
+    # DNSリバインディング対策の Host 許可リスト。既定はループバックのみ。
+    # LAN/外部公開時は FERMISCOPE_ALLOWED_HOSTS にホスト名を明示し、加えて
+    # リバースプロキシで認証をかけること(READMEに明記)。
+    allowed_hosts = {"127.0.0.1", "localhost", "::1", "testserver"}
+    extra_hosts = os.environ.get("FERMISCOPE_ALLOWED_HOSTS", "")
+    for h in extra_hosts.split(","):
+        h = h.strip().lower()
+        if h:
+            allowed_hosts.add(h)
+    app.state.allowed_hosts = allowed_hosts
+
+    def _host_only(raw: str) -> str:
+        raw = raw.strip().lower()
+        if raw.startswith("["):  # IPv6 リテラル [::1]:8720
+            return raw[1 : raw.find("]")] if "]" in raw else raw.strip("[]")
+        return raw.rsplit(":", 1)[0] if ":" in raw else raw
+
+    @app.middleware("http")
+    async def host_guard(request: Request, call_next):
+        host = _host_only(request.headers.get("host", ""))
+        # Host 未指定(HTTP/1.0 等)は許容。指定があれば許可リストで検証する。
+        if host and host not in app.state.allowed_hosts:
+            return JSONResponse(
+                status_code=400,
+                content={"detail": "許可されないHostヘッダです(DNSリバインディング対策)。"},
+            )
+        return await call_next(request)
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
