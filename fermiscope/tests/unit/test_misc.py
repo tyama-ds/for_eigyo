@@ -40,6 +40,40 @@ def test_normalize_value_impossible():
     assert v is None
 
 
+def test_normalize_no_generic_dimensionless_to_count():
+    """無次元→任意カウント単位の汎用変換は行わない(未解決化)。"""
+    v, _ = normalize_value(0.5, "dimensionless", "store")
+    assert v is None
+    v2, _ = normalize_value(0.5, "dimensionless", "item")
+    assert v2 is None
+
+
+def test_normalize_no_generic_count_to_arbitrary_rate():
+    """分子が一致しないカウント→合成レートの汎用変換は行わない。"""
+    v, _ = normalize_value(5.0, "store", "JPY/month")
+    assert v is None
+    v2, _ = normalize_value(5.0, "person", "item/day")
+    assert v2 is None
+
+
+def test_normalize_empty_unit_only_for_ratio_targets():
+    """単位なしの値は比率・無次元にのみ採用し、カウント単位へは変換しない。"""
+    v, _ = normalize_value(0.3, "", "dimensionless")
+    assert v == 0.3
+    v2, _ = normalize_value(0.3, "", "store")
+    assert v2 is None
+
+
+def test_normalize_count_to_rate_numerator_must_match():
+    """カウント→レートは分子が同義表で一致する場合のみ許す。"""
+    # tuning の分子として event は許容
+    v, note = normalize_value(300.0, "event", "tuning/(person*year)")
+    assert v == 300.0 and note
+    # store の分子に item は不許可
+    v2, _ = normalize_value(300.0, "item", "store/year")
+    assert v2 is None
+
+
 def test_expected_units():
     assert "percent" in expected_units_for("dimensionless")
     assert expected_units_for("person") == {"person"}

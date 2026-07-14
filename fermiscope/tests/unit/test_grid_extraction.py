@@ -72,3 +72,37 @@ def test_excel_grid_via_tables_path():
     assert items
     assert items[0].extracted_value == 8800000.0
     assert items[0].geography == "大阪府"  # 地域列は付随情報へ
+
+
+def test_header_scale_thousands_applied():
+    """列ヘッダー「人口(千人)」のスケールを反映する(14100 → 14,100,000)。"""
+    tables = [[["地域", "人口(千人)"], ["東京都", "14100"]]]
+    doc = _doc("", DocumentType.HTML, tables=tables)
+    items = extract_evidence(doc, _pop_param(), "人口", SearchPurpose.DIRECT_VALUE)
+    assert items
+    assert items[0].extracted_value == 14_100_000.0
+    assert items[0].unit == "person"
+    assert "千" in items[0].locator  # スケール適用が監査可能
+
+
+def test_header_scale_millions_yen_applied():
+    """列ヘッダー「(百万円)」のスケールを反映する。"""
+    param = ParameterEstimate(
+        id="sales", name="売上", unit="JPY", definition="年間売上",
+        target_geography="日本", search_terms_ja=["売上"], search_terms_en=["sales"],
+    )
+    tables = [[["年", "売上(百万円)"], ["2025", "1200"]]]
+    doc = _doc("", DocumentType.HTML, tables=tables)
+    items = extract_evidence(doc, param, "売上", SearchPurpose.DIRECT_VALUE)
+    assert items
+    assert items[0].extracted_value == 1_200_000_000.0  # 1200百万円 = 12億円
+
+
+def test_header_scale_not_double_applied_when_cell_has_scale_word():
+    """セル自身がスケール語(万)を含む場合、列スケールを二重適用しない。"""
+    tables = [[["地域", "人口(万人)"], ["東京都", "1410万"]]]
+    doc = _doc("", DocumentType.HTML, tables=tables)
+    items = extract_evidence(doc, _pop_param(), "人口", SearchPurpose.DIRECT_VALUE)
+    assert items
+    # 「1410万」= 14,100,000。列の「万」を二重適用して 1.41e11 にしない。
+    assert items[0].extracted_value == 14_100_000.0

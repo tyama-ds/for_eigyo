@@ -28,6 +28,16 @@ def test_government_domain_corroborates_s(settings):
     assert infer_source_class(ev, settings) == SourceClass.S
 
 
+def test_body_source_url_alone_does_not_promote(settings):
+    """本文の `一次資料: <政府URL>` だけでは権威を S へ昇格しない(なりすまし対策)。"""
+    ev = _ev(
+        url="https://news.example.com/article",  # 実際に取得したのは非信頼ドメイン
+        publisher="総務省統計局",
+        parent_source_id="https://www.stat.go.jp/data",  # 本文の自己申告URL
+    )
+    assert infer_source_class(ev, settings) != SourceClass.S
+
+
 def test_mock_gov_domain_still_s(settings):
     # 同梱デモの擬似政府ドメインは S を維持(オフライン動作の互換)
     ev = _ev(url="https://stats.example-gov.jp/x", publisher="総務省統計局")

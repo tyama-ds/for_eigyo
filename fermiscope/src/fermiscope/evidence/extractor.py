@@ -308,6 +308,31 @@ def _infer_column_unit(header_cell: str) -> str:
     return ""
 
 
+# 列ヘッダーの単位スケール語 → 乗数(長い接頭辞を先に判定)。
+_HEADER_SCALE_WORDS: tuple[tuple[str, float], ...] = (
+    ("百万", 1e6),
+    ("千", 1e3),
+    ("万", 1e4),
+    ("億", 1e8),
+    ("兆", 1e12),
+)
+
+
+def _column_scale(header_cell: str) -> tuple[float, str]:
+    """列ヘッダーの単位スケール語(千人・万人・百万円・億円等)から乗数を返す。
+
+    「人口(千人)」→(1000, "千")。括弧内の単位表記を優先し、無ければヘッダー全体を見る。
+    スケール語が無ければ (1.0, "")。
+    """
+    h = header_cell or ""
+    m = re.search(r"[(（]([^)）]*)[)）]", h)
+    scope = m.group(1) if m else h
+    for word, mult in _HEADER_SCALE_WORDS:
+        if word in scope:
+            return mult, word
+    return 1.0, ""
+
+
 def _parse_cell_number(cell: str) -> tuple[float, str] | None:
     """セル文字列から (数値, 正規化単位) を取り出す。数値が無ければ None。"""
     text = (cell or "").strip()
@@ -408,6 +433,13 @@ def _extract_from_grid(
     # 単位が判明していて期待単位に合わない場合は採らない(空欄を無条件採用しない)
     if unit and unit not in expected and "" not in expected:
         return []
+    # 列ヘッダーのスケール語(千人・万人・百万円・億円等)を値に反映する。
+    # セル自体がスケール語を含む場合(「1,410万」)は二重適用しない。
+    scale_note = ""
+    scale_mult, scale_word = _column_scale(col_header(value_col))
+    if scale_mult != 1.0 and not _has_scale(row[value_col]):
+        value *= scale_mult
+        scale_note = f"; 列スケール={scale_word}(×{scale_mult:g})"
 
     time_val = next(
         (row[i] for i in sorted(year_cols) if i < len(row) and row[i].strip()), ""
@@ -423,7 +455,9 @@ def _extract_from_grid(
     if geo_val and not item.geography:
         item.geography = geo_val
     item.short_supporting_excerpt = f"{','.join(header)} | {','.join(row)}"[:220]
-    item.locator = f"{source_label} 行{r_idx + 1} 列{value_col + 1}: {reason}; 単位根拠={unit_basis}"
+    item.locator = (
+        f"{source_label} 行{r_idx + 1} 列{value_col + 1}: {reason}; 単位根拠={unit_basis}{scale_note}"
+    )
     item.extraction_method = "structured"
     return [item]
 

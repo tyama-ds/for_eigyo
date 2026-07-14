@@ -108,16 +108,14 @@ def _domain_hint_class(host: str, settings: Settings) -> SourceClass | None:
 
 
 def _high_authority_corroborated(ev: EvidenceItem, host: str, settings: Settings) -> bool:
-    """S/A クラスの自己申告が、信頼ドメイン or 一次資料URLで裏付けられるか。"""
-    if _domain_hint_class(host, settings) in (SourceClass.S, SourceClass.A):
-        return True
-    # 一次資料(転載元)が信頼ドメインを指す場合も裏付けとみなす
-    ref = ev.parent_source_id or ""
-    if ref.startswith("http"):
-        ref_host = urlparse(ref).hostname or ""
-        if _domain_hint_class(ref_host, settings) in (SourceClass.S, SourceClass.A):
-            return True
-    return False
+    """S/A クラスの自己申告が、実際に取得したドメインで裏付けられるか。
+
+    裏付けは『実際に取得したホスト』が信頼ドメインである場合のみとする。本文中の
+    `Source: https://...` や `一次資料:` の記述(parent_source_id)は検証不能な
+    自己申告であり、これだけで権威を S/A へ昇格させない(なりすまし対策)。
+    転載元URLは重複排除(クラスタリング)には使うが、権威の根拠にはしない。
+    """
+    return _domain_hint_class(host, settings) in (SourceClass.S, SourceClass.A)
 
 
 def publisher_authority_unverified(ev: EvidenceItem, settings: Settings) -> bool:
