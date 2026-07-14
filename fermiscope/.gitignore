@@ -10,6 +10,12 @@ __pycache__/
 .venv/
 venv/
 
+# ビルド成果物
+dist/
+build/
+*.whl
+src/fermiscope/_bundled/
+
 # データベース(ローカル生成)
 *.db
 fermiscope.db

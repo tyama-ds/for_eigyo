@@ -12,7 +12,7 @@ from fastapi.templating import Jinja2Templates
 
 from fermiscope import __version__
 from fermiscope.api.runs import RunManager
-from fermiscope.config import PROJECT_ROOT, Settings, get_settings
+from fermiscope.config import Settings, default_data_dir, get_settings, require_resources
 from fermiscope.llm.base import LLMProvider
 from fermiscope.llm.settings_store import LLMSettingsStore
 from fermiscope.persistence.repository import ProjectRepository
@@ -23,7 +23,9 @@ from fermiscope.research.search.brave import BraveSearchProvider
 from fermiscope.research.search.duckduckgo import DuckDuckGoSearchProvider
 from fermiscope.research.search.mock import MockSearchProvider
 
-PROJECT_LLM_SETTINGS_PATH = PROJECT_ROOT / "llm_settings.json"
+
+def _default_llm_settings_path() -> str:
+    return str(default_data_dir() / "llm_settings.json")
 
 
 def _build_search_provider(settings: Settings) -> SearchProvider:
@@ -54,6 +56,8 @@ def create_app(
     repo: ProjectRepository | None = None,
 ) -> FastAPI:
     settings = settings or get_settings()
+    # 必須の設定・静的ファイルが無ければ黙って空へフォールバックせず明示エラー
+    require_resources(settings.config_dir, settings.web_dir)
     app = FastAPI(title=settings.display_name(), version=__version__)
 
     app.state.settings = settings
@@ -65,7 +69,7 @@ def create_app(
         app.state.llm_store = None
     else:
         settings_path = Path(
-            os.environ.get("FERMISCOPE_LLM_SETTINGS_PATH", str(PROJECT_LLM_SETTINGS_PATH))
+            os.environ.get("FERMISCOPE_LLM_SETTINGS_PATH", _default_llm_settings_path())
         )
         app.state.llm_store = LLMSettingsStore(settings_path)
         app.state.llm = None  # current_llm() が store から取得する
