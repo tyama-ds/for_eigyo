@@ -29,7 +29,8 @@ classes:
 
 # ドメイン接尾辞からのクラス推定ヒント(確定ではなくヒント。文書メタデータが優先)
 domain_hints:
-  - suffixes: [".go.jp", ".gov", ".gc.ca", ".gov.uk", ".europa.eu"]
+  # 実政府ドメイン。末尾に同梱デモ用の擬似政府ドメイン(example-gov.jp)を含む。
+  - suffixes: [".go.jp", ".gov", ".gc.ca", ".gov.uk", ".europa.eu", "example-gov.jp"]
     hint_class: S
   - suffixes: [".ac.jp", ".edu", ".or.jp"]
     hint_class: B

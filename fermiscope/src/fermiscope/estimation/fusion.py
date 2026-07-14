@@ -18,6 +18,48 @@ from fermiscope.domain.enums import DistributionKind, ParameterStatus, ValueBasi
 from fermiscope.domain.models import EvidenceItem, ParameterEstimate
 from fermiscope.evidence.dates import parse_year
 from fermiscope.evidence.normalize import normalize_value
+from fermiscope.formula.units import period_to_unit
+
+# 全国・国名・全世界(英語含む)。これらの証拠は按分の仮定つきで地域に適用可能。
+_NATIONWIDE = {
+    "日本", "全国", "国内", "日本全国", "japan", "nationwide", "national",
+    "世界", "全世界", "world", "worldwide", "global", "国際", "international",
+}
+
+
+def _geo_compatible(ev_geo: str, target_geo: str) -> bool:
+    """証拠の地域が目標地域と統合可能か(全国・全世界値は按分で許容)。"""
+    e, t = ev_geo.strip().lower(), target_geo.strip().lower()
+    if not e or not t or e == t or t in e or e in t:
+        return True
+    return e in _NATIONWIDE  # 全国/全世界→地域は按分の仮定つきで許容
+
+
+def _period_of_unit(unit: str) -> str:
+    """単位のレート分母から期間(day/month/year)を取り出す(無ければ空)。"""
+    if "/" not in (unit or ""):
+        return ""
+    denom = unit.split("/", 1)[1].strip("() ")
+    if denom in ("day", "month", "year", "hour", "week"):
+        return denom
+    return period_to_unit(denom)
+
+
+def _incompatible_with_param(ev: EvidenceItem, param: ParameterEstimate) -> str:
+    """証拠がパラメータの目標(地域・期間)と非互換なら理由文字列を返す。
+
+    値の乖離率に関係なく統合『前』に判定する。非互換な証拠は統合(平均・中央値・
+    分位点)から除外する。
+    """
+    tg = (param.target_geography or "").strip()
+    eg = (ev.geography or "").strip()
+    if tg and eg and not _geo_compatible(eg, tg):
+        return f"対象地域が非互換(証拠={eg} / 目標={tg})のため統合から除外"
+    p_period = _period_of_unit(param.unit)
+    e_period = period_to_unit(ev.time_period) or _period_of_unit(ev.unit)
+    if p_period and e_period and p_period != e_period:
+        return f"対象期間が非互換(証拠={e_period} / 目標={p_period}、換算根拠なし)のため統合から除外"
+    return ""
 
 
 def weighted_quantile(
@@ -101,8 +143,13 @@ def fuse_evidence(
     for ev in evidence_items:
         if not ev.accepted:
             continue
+        # 地域・期間の互換性を値の乖離率に関係なく統合前に判定する
+        incompat = _incompatible_with_param(ev, param)
+        if incompat:
+            ev.incompatible_reason = incompat
         if ev.incompatible_reason:
-            continue  # 非互換な定義は無理に平均しない
+            notes.append(f"{ev.id}: {ev.incompatible_reason}")
+            continue  # 非互換な証拠は平均・中央値・分位点から除外
         if ev.evidence_score is None or ev.evidence_score < fusion.min_evidence_score:
             continue
         value, bridge_note = _normalize_evidence_value(ev, param.unit)
