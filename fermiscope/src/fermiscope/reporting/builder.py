@@ -200,7 +200,8 @@ def build_report(project: EstimateProject) -> dict[str, Any]:
         "conclusion": {
             "central": primary_sim.median if primary_sim else None,
             "central_display": _format_number(primary_sim.median if primary_sim else None),
-            "unit": project.question.target_unit,
+            # 期間を含む単位を表示する(フローは item/day 等)。主モデルの目標単位を優先。
+            "unit": (primary.formula.target_unit if primary else "") or project.question.target_unit,
             "range_low": primary_sim.quantiles.get("0.1") if primary_sim else None,
             "range_high": primary_sim.quantiles.get("0.9") if primary_sim else None,
             "range_display": (

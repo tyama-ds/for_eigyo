@@ -396,7 +396,9 @@ class ValidationResult(BaseModel):
     shared_evidence_ids: list[str] = Field(default_factory=list)
     shared_weak_primary_source: bool = False
     difference_analysis: dict[str, str] = Field(default_factory=dict)
-    agreement: Literal["consistent", "moderate", "discrepant", "unknown"] = "unknown"
+    # incompatible: 目標単位・期間が非互換で数値比較不可(検算不成立)
+    agreement: Literal["consistent", "moderate", "discrepant", "unknown", "incompatible"] = "unknown"
+    comparable: bool = True  # False なら単位・期間非互換で数値比較していない
     note: str = ""
 
 

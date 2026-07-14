@@ -13,7 +13,21 @@ from fermiscope.domain.enums import StockOrFlow
 from fermiscope.domain.models import ModelCandidate, ParameterEstimate, QuestionSpec
 from fermiscope.formula.graph import build_graph
 from fermiscope.formula.parser import FormulaParseError
+from fermiscope.formula.units import period_to_unit
 from fermiscope.llm.base import LLMProvider
+
+
+def flow_period_unit(spec: QuestionSpec) -> str:
+    """フロー質問の期間 pint 単位(day/month/year)。不明時は year を仮定。"""
+    return period_to_unit(spec.time_period) or "year"
+
+
+def flow_target_unit(spec: QuestionSpec) -> str:
+    """問いの目標単位(フローなら期間を含める。例 item/day, JPY/month)。"""
+    base = spec.target_unit or "event"
+    if spec.stock_or_flow == StockOrFlow.FLOW:
+        return f"{base}/{flow_period_unit(spec)}"
+    return base
 
 # 対象物 → エンティティ単位
 _OBJECT_UNITS = {
@@ -237,14 +251,16 @@ def _tpl_population_ratio(spec: QuestionSpec) -> TemplateResult | None:
 
     # 物量: 人口 × 該当率 × 1人あたり数量。
     per_unit = spec.target_unit or "item"
-    qty_unit = f"{per_unit}/(person*year)" if is_flow else f"{per_unit}/person"
-    # フローは式が <unit>/year を返すため、目標単位も /year を付けて検査する。
-    target_override = f"({per_unit})/year" if is_flow else None
+    period_unit = flow_period_unit(spec)  # day / month / year(問いの期間に一致)
+    period_label = {"day": "日次", "month": "月次", "year": "年間"}.get(period_unit, "期間")
+    qty_unit = f"{per_unit}/(person*{period_unit})" if is_flow else f"{per_unit}/person"
+    # フローは式が <unit>/<period> を返すため、目標単位も /<period> を付けて検査する。
+    target_override = f"({per_unit})/{period_unit}" if is_flow else None
     quantity_per_person = ParameterEstimate(
         id="quantity_per_person",
-        name="該当者1人あたり数量" + ("(年間)" if is_flow else ""),
+        name="該当者1人あたり数量" + (f"({period_label})" if is_flow else ""),
         symbol="q_pp",
-        definition=f"該当者1人あたりの{spec.subject}の数量" + ("(年間)" if is_flow else ""),
+        definition=f"該当者1人あたりの{spec.subject}の数量" + (f"({period_label})" if is_flow else ""),
         unit=qty_unit,
         target_geography=geo,
         target_period=spec.reference_date,
@@ -272,13 +288,15 @@ def _tpl_population_ratio(spec: QuestionSpec) -> TemplateResult | None:
 
 def _tpl_direct_lookup(spec: QuestionSpec) -> TemplateResult | None:
     """直接値の探索(統計・登録数がそのまま公表されている場合の検算用)。"""
+    # フローは公表値も期間つき単位(item/day 等)で扱い、単位を全工程で一貫させる。
+    direct_unit = flow_target_unit(spec)
     params = [
         ParameterEstimate(
             id="direct_value",
             name=f"{spec.subject}の公表値",
             symbol="V_direct",
             definition=f"{spec.geography}における{spec.subject}の数を直接示す統計・調査値",
-            unit=spec.target_unit,
+            unit=direct_unit,
             target_geography=spec.geography,
             target_period=spec.reference_date,
             search_terms_ja=[f"{spec.geography} {spec.subject} 数", f"{spec.subject} 統計"],
@@ -300,6 +318,8 @@ def _tpl_direct_lookup(spec: QuestionSpec) -> TemplateResult | None:
             "dependency_risk": 0.95,
             "independence": 0.7,
         },
+        # フローでは期間つき単位(item/day 等)で単位検査する
+        target_unit_override=direct_unit if spec.stock_or_flow == StockOrFlow.FLOW else None,
     )
 
 

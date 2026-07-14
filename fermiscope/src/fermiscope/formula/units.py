@@ -92,6 +92,75 @@ def get_registry(extra_definitions_path: str | None = None) -> pint.UnitRegistry
     return reg
 
 
+# 問いの対象期間(time_period)→ pint の時間単位。
+_PERIOD_TO_UNIT = {
+    "1日": "day",
+    "日": "day",
+    "1か月": "month",
+    "1ヶ月": "month",
+    "か月": "month",
+    "月": "month",
+    "1年間": "year",
+    "1年": "year",
+    "年": "year",
+    "年間": "year",
+}
+
+
+def period_to_unit(time_period: str) -> str:
+    """問いの対象期間文字列を pint の時間単位へ変換する(不明なら空文字)。"""
+    text = (time_period or "").strip()
+    if not text:
+        return ""
+    if text in _PERIOD_TO_UNIT:
+        return _PERIOD_TO_UNIT[text]
+    for key, unit in _PERIOD_TO_UNIT.items():
+        if key in text:
+            return unit
+    return ""
+
+
+def units_same_dimension(unit_a: str, unit_b: str) -> bool:
+    """2つの単位(日本語表現/pint構文)が同じ次元を持つか判定する。
+
+    解釈不能な場合は正規化した文字列の一致で判定する(保守的)。
+    日/年のように次元は同じでも倍率が違う場合は True(次元一致)を返すため、
+    検算では units_directly_comparable を使うこと。
+    """
+    reg = get_registry()
+    a = translate_unit_ja(unit_a or "dimensionless")
+    b = translate_unit_ja(unit_b or "dimensionless")
+    try:
+        qa = reg.Quantity(1.0, a)
+        qb = reg.Quantity(1.0, b)
+    except Exception:
+        return normalize_unit(unit_a) == normalize_unit(unit_b)
+    return qa.dimensionality == qb.dimensionality
+
+
+def units_directly_comparable(unit_a: str, unit_b: str) -> bool:
+    """換算なしに数値をそのまま比較できるか(次元一致かつ倍率≈1)。
+
+    日次(item/day)と年次(item/year)は次元は同じでも倍率が 365 異なるため
+    False を返す。検算(主モデル vs 検算モデル)の可否判定に使う。
+    """
+    reg = get_registry()
+    a = translate_unit_ja(unit_a or "dimensionless")
+    b = translate_unit_ja(unit_b or "dimensionless")
+    try:
+        qa = reg.Quantity(1.0, a)
+        qb = reg.Quantity(1.0, b)
+    except Exception:
+        return normalize_unit(unit_a) == normalize_unit(unit_b)
+    if qa.dimensionality != qb.dimensionality:
+        return False
+    try:
+        factor = (qa / qb).to("dimensionless").magnitude
+    except Exception:
+        return False
+    return abs(factor - 1.0) <= 1e-6
+
+
 def translate_unit_ja(unit_text: str) -> str:
     """日本語単位表現を pint 構文へ変換する(未知語はそのまま返す)。"""
     text = unit_text.strip()

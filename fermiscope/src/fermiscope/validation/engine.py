@@ -19,6 +19,7 @@ from fermiscope.domain.models import (
     SimulationResult,
     ValidationResult,
 )
+from fermiscope.formula.units import units_directly_comparable
 
 
 def _interval_overlap(a: tuple[float, float], b: tuple[float, float]) -> float:
@@ -51,6 +52,24 @@ def validate_models(
     )
     warnings: list[str] = []
     analysis: dict[str, str] = {}
+
+    # 目標単位・期間の互換性を先に判定する。非互換(例: 日次 vs 年次)なら
+    # 換算根拠なしに数値比較してはならない → 検算不成立として返す。
+    primary_unit = primary.formula.target_unit
+    check_unit = check.formula.target_unit
+    if not units_directly_comparable(primary_unit, check_unit):
+        result.comparable = False
+        result.agreement = "incompatible"
+        result.warnings = [
+            f"主モデルの目標単位 [{primary_unit or '(無次元)'}] と検算モデルの目標単位 "
+            f"[{check_unit or '(無次元)'}] は次元・期間が非互換です。換算根拠がないため"
+            f"数値比較(中心値の比・区間の重なり)は行いません(検算不成立)。"
+        ]
+        result.note = (
+            "両モデルの目標単位・期間が非互換のため検算できませんでした。"
+            "同じ期間・単位に揃えるか、明示的な換算根拠を与えてください。"
+        )
+        return result
 
     # 中心値の比
     if primary_sim.median and check_sim.median and primary_sim.median > 0 and check_sim.median > 0:
