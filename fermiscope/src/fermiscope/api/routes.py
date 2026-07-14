@@ -191,6 +191,26 @@ async def _atomic_update_async(
     return working, result
 
 
+def _discard_derived_state(project: EstimateProject) -> None:
+    """スコープ変更時に旧スコープの派生状態(証拠・批判・矛盾・計算結果等)を破棄する。
+
+    モデル・パラメータ自体の扱い(再生成 or 空化)は呼び出し側が決める。
+    """
+    project.evidence = {}
+    project.critiques = {}
+    project.contradictions = []
+    project.irreducible_assumptions = []
+    project.decomposition_attempts = []
+    project.simulation_results = []
+    project.sensitivity_results = []
+    project.scenarios = []
+    project.validation = None
+    project.overall_confidence = None
+    project.confidence_reasons = []
+    project.key_caveats = []
+    project.search_hits = []
+
+
 def _validate_param_estimate(param: ParameterEstimate) -> None:
     """パラメータ値の整合性を検証する。不正なら 422 を送出する(500 にしない)。"""
     low, central, high = param.low, param.central, param.high
@@ -468,29 +488,31 @@ async def update_question(request: Request, project_id: str, body: UpdateQuestio
         project.audit("question_updated", f"スコープを更新: {', '.join(changed)}", fields=changed)
 
         scope_changed = any(f in changed for f in (*scope_fields, "stock_or_flow"))
-        if body.regenerate_models and scope_changed:
-            models, params, _ = await generate_model_candidates(spec, current_llm(request.app))
-            # 新スコープのモデル・パラメータへ完全置換し、旧スコープの派生状態を破棄する
-            project.models = models
-            project.parameters = params
-            project.evidence = {}
-            project.critiques = {}
-            project.contradictions = []
-            project.irreducible_assumptions = []
-            project.decomposition_attempts = []
-            project.simulation_results = []
-            project.sensitivity_results = []
-            project.scenarios = []
-            project.validation = None
-            project.overall_confidence = None
-            project.confidence_reasons = []
-            project.key_caveats = []
-            project.search_hits = []
-            project.audit(
-                "models_generated",
-                "スコープ変更に伴いモデル・パラメータを再生成し、旧スコープの証拠・"
-                "批判・矛盾・シミュレーション・検算・信頼度を破棄しました",
-            )
+        if scope_changed:
+            # スコープが変われば、regenerate_models の値に関わらず旧スコープの派生状態を
+            # 必ず破棄する(旧証拠・旧モデルを新スコープの問いに混ぜない)。
+            _discard_derived_state(project)
+            if body.regenerate_models:
+                models, params, _ = await generate_model_candidates(
+                    spec, current_llm(request.app)
+                )
+                project.models = models
+                project.parameters = params
+                project.audit(
+                    "models_generated",
+                    "スコープ変更に伴いモデル・パラメータを再生成し、旧スコープの証拠・"
+                    "批判・矛盾・シミュレーション・検算・信頼度を破棄しました",
+                )
+            else:
+                # 再生成しない場合はモデル・パラメータも空にし、未生成状態へ戻す。
+                project.models = []
+                project.parameters = {}
+                project.audit(
+                    "scope_reset",
+                    "スコープを変更しました。再生成を指定しなかったため、モデル・"
+                    "パラメータ・証拠等の派生状態を破棄し未生成状態に戻しました"
+                    "(モデルの再生成が必要です)。",
+                )
 
     project, _ = await _atomic_update_async(request, project_id, mutate)
     return build_report(project)
@@ -618,9 +640,10 @@ async def research_status(request: Request, project_id: str):
     run = project.current_run()
     manager = request.app.state.run_manager
     if run is None:
-        return {"status": "idle"}
+        return {"status": "idle", "run_id": None}
     return {
         "status": run.status.value,
+        "run_id": run.id,
         "stage": run.stage.value,
         "running": manager.is_running(project_id),
         "searches_executed": run.searches_executed,

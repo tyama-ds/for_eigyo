@@ -35,6 +35,28 @@ def test_scope_change_replaces_params(app_client):
     assert after["conclusion"]["central"] is None
 
 
+def test_scope_change_without_regenerate_resets_to_ungenerated(app_client):
+    """再生成しない場合でも、スコープ変更で旧スコープの派生状態を破棄し未生成へ戻す。"""
+    pid = _create_and_research(app_client)
+    before = app_client.get(f"/api/projects/{pid}").json()
+    assert before["models"] and before["parameters"]  # 生成済み
+
+    r = app_client.patch(
+        f"/api/projects/{pid}/question",
+        json={"geography": "大阪府", "regenerate_models": False},
+    )
+    assert r.status_code == 200
+    after = app_client.get(f"/api/projects/{pid}").json()
+    # スコープ変更は反映されるが、旧スコープのモデル・パラメータ・証拠は残らない
+    assert after["question"]["geography"] == "大阪府"
+    assert after["models"] == []
+    assert after["parameters"] == []
+    assert after["evidence"] == []
+    assert after["conclusion"]["central"] is None
+    # 旧「東京」由来のパラメータ名が混ざらない
+    assert not any("東京" in p["name"] for p in after["parameters"])
+
+
 def test_same_value_scope_save_is_noop(app_client):
     """同値スコープ保存ではモデルIDと暫定状態が変わらない。"""
     report = app_client.post("/api/projects", json={"question": PIANO_QUESTION}).json()

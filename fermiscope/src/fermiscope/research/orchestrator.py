@@ -97,6 +97,7 @@ class ResearchOrchestrator:
 
     def _counters(self, run: ResearchRun) -> dict[str, Any]:
         return {
+            "run_id": run.id,  # イベントを run 単位で識別する(古い run の再送防止)
             "stage": run.stage.value,
             "searches_executed": run.searches_executed,
             "cache_hits": run.search_cache_hits,
@@ -368,6 +369,21 @@ class ResearchOrchestrator:
 
     # ---- メインパイプライン ----
 
+    def _reset_derived_for_rerun(self, project: EstimateProject) -> None:
+        """再実行に備え、証拠・矛盾・批判など再生成される派生状態を破棄する。
+
+        ユーザーが上書きしたパラメータ値(user_overridden)は保持する。証拠・批判への
+        参照(evidence_ids/critique_ids)は、破棄したコレクションと整合させるためクリアし、
+        統合で再構築させる。
+        """
+        project.evidence = {}
+        project.contradictions = []
+        project.critiques = {}
+        project.decomposition_attempts = []
+        for param in project.parameters.values():
+            param.evidence_ids = []
+            param.critique_ids = []
+
     async def run_research(self, project: EstimateProject) -> EstimateProject:
         run = ResearchRun(
             project_id=project.id,
@@ -381,6 +397,9 @@ class ResearchOrchestrator:
         project.runs.append(run)
         project.app_version = __version__
         project.config_hash = self.settings.config_hash
+        # 再実行時に前 run の派生状態(証拠・矛盾・批判・分解)をクリアし、
+        # 同一プロジェクトを2回実行しても重複しないようにする(絶対条件: 状態の混在防止)。
+        self._reset_derived_for_rerun(project)
         project.audit(
             "run_start",
             "調査を開始しました",

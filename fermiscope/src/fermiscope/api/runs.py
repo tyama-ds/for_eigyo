@@ -18,15 +18,27 @@ class RunManager:
         self._tasks: dict[str, asyncio.Task] = {}
         self._subscribers: dict[str, list[asyncio.Queue]] = {}
         self._last_events: dict[str, list[dict]] = {}
+        # プロジェクトごとの「現在の run_id」。新しい run の最初のイベントで
+        # 履歴を破棄し、前 run の終端イベント(done 等)を再送しないようにする。
+        self._current_run: dict[str, str] = {}
 
     def is_running(self, project_id: str) -> bool:
         task = self._tasks.get(project_id)
         return task is not None and not task.done()
 
+    def current_run_id(self, project_id: str) -> str:
+        return self._current_run.get(project_id, "")
+
     def emit(self, project_id: str, event_type: str, message: str, data: dict[str, Any]) -> None:
+        run_id = str((data or {}).get("run_id", ""))
+        # 新しい run のイベントを検知したら、前 run の履歴(終端 done 等)を破棄する。
+        if run_id and self._current_run.get(project_id) != run_id:
+            self._current_run[project_id] = run_id
+            self._last_events[project_id] = []
         event = {
             "type": event_type,
             "message": message,
+            "run_id": run_id,
             "data": data,
             "timestamp": datetime.now(UTC).isoformat(),
         }
