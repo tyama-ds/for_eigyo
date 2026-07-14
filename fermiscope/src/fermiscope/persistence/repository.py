@@ -79,8 +79,32 @@ class SearchQueryRow(Base):
     results_count: Mapped[float] = mapped_column(Float, default=0)
 
 
+def _ensure_sqlite_parent_dir(database_url: str) -> None:
+    """SQLite ファイルURLの親ディレクトリを事前に作成する(無ければ作る)。
+
+    データディレクトリを事前作成しなくてもアプリが安全に起動できるようにする。
+    メモリDB(sqlite:///:memory: 等)やファイル以外のURLでは何もしない。
+    """
+    from pathlib import Path
+    from urllib.parse import urlparse
+
+    if not database_url.startswith("sqlite"):
+        return
+    # sqlite:///relative や sqlite:////absolute、sqlite:///:memory: を扱う
+    path_part = database_url.split("sqlite://", 1)[1].lstrip("/")
+    if not path_part or path_part.startswith(":memory:") or "mode=memory" in database_url:
+        return
+    # sqlite:////abs → 先頭の / を1つ残す(絶対パス)
+    if urlparse(database_url).path.startswith("//"):
+        path_part = "/" + path_part
+    parent = Path(path_part).expanduser().parent
+    if str(parent) and parent != Path():
+        parent.mkdir(parents=True, exist_ok=True)
+
+
 class ProjectRepository:
     def __init__(self, database_url: str) -> None:
+        _ensure_sqlite_parent_dir(database_url)
         connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
         self.engine = create_engine(database_url, connect_args=connect_args, future=True)
         Base.metadata.create_all(self.engine)

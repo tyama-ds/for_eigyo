@@ -1,0 +1,103 @@
+name: FermiScope CI
+
+on:
+  push:
+    branches: [main]
+    paths: ["fermiscope/**", ".github/workflows/fermiscope-ci.yml"]
+  pull_request:
+    paths: ["fermiscope/**", ".github/workflows/fermiscope-ci.yml"]
+
+defaults:
+  run:
+    working-directory: fermiscope
+
+jobs:
+  # Lint / 型 / 単体・統合テスト を OS × Python のマトリクスで実行する。
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.12", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install (dev)
+        run: pip install -e ".[dev]"
+      - name: Ruff
+        run: ruff check src tests scripts
+      - name: mypy
+        run: mypy
+      - name: pytest
+        run: pytest -q
+      - name: JavaScript syntax check
+        if: runner.os != 'Windows'
+        run: |
+          for f in web/static/js/*.js; do node --check "$f"; done
+
+  # 非editable wheel のスモーク(demo + serve + 静的取得)。データディレクトリは
+  # 事前作成せず、アプリが親ディレクトリを安全に作成できることを検証する。
+  wheel-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install build
+        run: pip install build
+      - name: Wheel smoke test (demo + serve + static, non-editable)
+        run: bash scripts/wheel_smoke_test.sh
+
+  # PostgreSQL バックエンドの統合テスト(psycopg)。サービスコンテナを使う。
+  postgres-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: fermi
+          POSTGRES_PASSWORD: fermi
+          POSTGRES_DB: fermi
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fermi"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install (dev + postgres)
+        run: pip install -e ".[dev,postgres]"
+      - name: Run PostgreSQL integration tests
+        env:
+          FERMISCOPE_TEST_POSTGRES_URL: postgresql+psycopg://fermi:fermi@localhost:5432/fermi
+        run: pytest -q -m postgres tests/integration/test_postgres_repository.py
+
+  # Docker イメージのビルドと最小起動確認。ビルドコンテキストは fermiscope/。
+  # 失敗を隠さない(continue-on-error は付けない)。
+  docker-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+      - name: Docker build
+        run: docker build -t fermiscope:ci ./fermiscope
+      - name: Docker smoke (health)
+        run: |
+          docker run -d --name fermi -p 8720:8720 fermiscope:ci
+          for _ in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8720/healthz >/dev/null 2>&1; then break; fi
+            sleep 2
+          done
+          curl -sf http://127.0.0.1:8720/healthz
+          docker rm -f fermi

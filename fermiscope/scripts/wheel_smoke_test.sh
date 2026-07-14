@@ -15,8 +15,8 @@ WHEEL="$(ls dist/*.whl)"
 python -m venv "$WORK/venv"
 "$WORK/venv/bin/pip" install -q "$WHEEL"
 
-export FERMISCOPE_DATA_DIR="$WORK/data"
-mkdir -p "$FERMISCOPE_DATA_DIR"
+# データディレクトリは事前作成しない。アプリが親ディレクトリを安全に作成できることを検証する。
+export FERMISCOPE_DATA_DIR="$WORK/data/nested"
 
 # 1) demo(パッケージ外のCWDから実行)
 cd /tmp

@@ -15,6 +15,7 @@ import hashlib
 import io
 import ipaddress
 import logging
+import os
 import re
 import time
 import urllib.robotparser
@@ -291,9 +292,32 @@ class DocumentFetcher:
         # mounts の直接トランスポートで表現し、per-URL の判定は proxy_for_url に委ねる。
         self._proxy_mounts = settings.httpx_mounts() if transport is None else None
         self._any_proxy = settings.any_proxy_configured()
-        # Selenium ハイブリッド: 注入があればそれを使う。無ければ設定で有効時に遅延構築。
+        # Selenium ハイブリッド: 注入があればそれを使う。無ければ設定で有効時に構築。
         self._selenium_renderer = selenium_renderer
         self._selenium_enabled = selenium_renderer is not None or settings.fetch.use_selenium_fallback
+        self._selenium_strict = (
+            os.environ.get("FERMISCOPE_SELENIUM_STRICT", "true").lower()
+            not in ("0", "false", "no")
+        )
+        # Selenium を明示的に有効化した場合は起動時に検証し、利用不能なら明示エラーに
+        # する(httpx へ黙ってフォールバックしない)。モック/テスト(transport 指定)は除外。
+        if (
+            settings.fetch.use_selenium_fallback
+            and selenium_renderer is None
+            and transport is None
+            and self._selenium_strict
+        ):
+            try:
+                self._selenium_renderer = build_selenium_renderer(settings)
+            except Exception as exc:  # noqa: BLE001 — 明示エラーとして再送出する
+                raise RuntimeError(
+                    "Selenium フォールバックが有効(FERMISCOPE_USE_SELENIUM)ですが、"
+                    f"初期化に失敗しました: {type(exc).__name__}: {exc}。"
+                    "Docker の selenium プロファイルを使うか、ドライバ/バイナリの設定"
+                    "(FERMISCOPE_SELENIUM_DRIVER / FERMISCOPE_SELENIUM_BINARY)を確認して"
+                    "ください。httpx のみで継続する場合は FERMISCOPE_SELENIUM_STRICT=false "
+                    "を設定してください。"
+                ) from exc
         self._cache: dict[str, tuple[float, FetchedDocument]] = {}
         self._robots_cache: dict[str, urllib.robotparser.RobotFileParser | None] = {}
         client_kwargs: dict = {
