@@ -25,6 +25,7 @@ def settings(tmp_path: Path) -> Settings:
     s = load_settings()
     s.database_url = f"sqlite:///{tmp_path}/test.db"
     s.simulation.iterations = 4000  # テスト高速化(それでも統計的に安定)
+    s.http_proxy = ""  # ホスト環境の *_PROXY を持ち込まず、テストを決定論的にする
     return s
 
 

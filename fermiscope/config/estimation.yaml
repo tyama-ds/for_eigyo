@@ -58,6 +58,11 @@ fetch:
   max_office_uncompressed_bytes: 62914560   # 60 MiB 解凍後サイズ上限(ZIP爆弾対策)
   max_extracted_chars: 400000               # 抽出テキストの最大文字数
 
+# 全コンポーネント共通のHTTP(S)プロキシ(検索・文書取得・Selenium・LLM)。
+# 環境変数 FERMISCOPE_HTTP_PROXY / HTTPS_PROXY / HTTP_PROXY / ALL_PROXY でも設定可
+# (環境変数が優先)。認証情報を含む場合はログ・API応答でマスクされる。
+# http_proxy: "http://user:pass@proxy.example:8080"
+
 fusion:
   low_quantile: 0.10
   high_quantile: 0.90

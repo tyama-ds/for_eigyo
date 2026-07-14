@@ -244,6 +244,9 @@ def build_selenium_renderer(settings: Settings) -> SeleniumRenderer:
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-gpu")
         options.add_argument("--disable-dev-shm-usage")
+        # 共通プロキシ経由でブラウザを接続させる(認証情報付きURLはブラウザ側の制約に注意)
+        if settings.http_proxy:
+            options.add_argument(f"--proxy-server={settings.http_proxy}")
         # 画像・不要リソースを抑制(取得は本文DOMのみが目的)
         options.set_capability("pageLoadStrategy", "eager")
         if fetch.selenium_binary_path:
@@ -280,17 +283,23 @@ class DocumentFetcher:
         self._resolver = resolver
         self._skip_dns = skip_dns
         self._respect_robots = respect_robots
+        # 全コンポーネント共通プロキシ。設定時は forward proxy 経由で接続する。
+        self._proxy = (settings.http_proxy or "").strip() or None
         # Selenium ハイブリッド: 注入があればそれを使う。無ければ設定で有効時に遅延構築。
         self._selenium_renderer = selenium_renderer
         self._selenium_enabled = selenium_renderer is not None or settings.fetch.use_selenium_fallback
         self._cache: dict[str, tuple[float, FetchedDocument]] = {}
         self._robots_cache: dict[str, urllib.robotparser.RobotFileParser | None] = {}
-        self._client = httpx.AsyncClient(
-            transport=transport,
-            follow_redirects=False,  # リダイレクトは手動で辿り、各ホップを再検査する
-            timeout=settings.fetch.timeout_seconds,
-            headers={"User-Agent": settings.fetch.user_agent},
-        )
+        client_kwargs: dict = {
+            "transport": transport,
+            "follow_redirects": False,  # リダイレクトは手動で辿り、各ホップを再検査する
+            "timeout": settings.fetch.timeout_seconds,
+            "headers": {"User-Agent": settings.fetch.user_agent},
+        }
+        # プロキシはトランスポート未指定(実ネットワーク)時のみ適用する
+        if self._proxy and transport is None:
+            client_kwargs["proxy"] = self._proxy
+        self._client = httpx.AsyncClient(**client_kwargs)
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -332,6 +341,11 @@ class DocumentFetcher:
         """
         # モック(オフライン)モードでは書き換えない — フィクスチャは元URLで配信される
         if self._skip_dns:
+            return url, None, None
+        # プロキシ利用時はクライアントが直接接続しない(接続はプロキシが担う)ため
+        # IP固定は不可。SSRFは fetch() 側の validate_url(スキーム・プライベート/
+        # CGNAT/メタデータ遮断)で担保する。
+        if self._proxy:
             return url, None, None
         parsed = urlparse(url)
         host = parsed.hostname or ""
