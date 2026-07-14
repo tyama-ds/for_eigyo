@@ -146,5 +146,7 @@ class RunStatus(StrEnum):
     IDLE = "idle"
     RUNNING = "running"
     DONE = "done"
+    # 実行は完了したが検索/取得に重大な問題があった(全検索失敗・証拠ゼロ等)。
+    COMPLETED_WITH_ERRORS = "completed_with_errors"
     FAILED = "failed"
     CANCELLED = "cancelled"

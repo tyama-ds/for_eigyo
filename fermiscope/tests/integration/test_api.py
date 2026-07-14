@@ -124,14 +124,15 @@ def test_error_handling(app_client):
 
 
 def test_zero_search_results_leaves_unresolved(app_client):
-    """検索結果ゼロの問い: 値を捏造せず未解決として返す。"""
+    """検索結果ゼロの問い: 値を捏造せず、done ではなく completed_with_errors を返す。"""
     report = app_client.post("/api/projects", json={
         "question": "アンドロメダ銀河のコーヒーショップは何店あるか",
     }).json()
     pid = report["project"]["id"]
     r = app_client.post(f"/api/projects/{pid}/research/start?wait=true")
     assert r.status_code == 200
-    assert r.json()["status"] == "done"  # 全体は失敗しない
+    # 証拠がまったく得られない場合は成功(done)扱いにしない(誤った完了表示を防ぐ)
+    assert r.json()["status"] == "completed_with_errors"
     rep = app_client.get(f"/api/projects/{pid}").json()
     assert rep["conclusion"]["central"] is None  # 捏造しない
     primary_params = [p for p in rep["parameters"] if p["status"] == "unresolved"]

@@ -20,12 +20,20 @@ from fermiscope.research.search.service import SearchService
 PIANO_QUESTION = "東京都内にはピアノ調律師が何人いるか"
 
 
+def _clear_proxy(s: Settings) -> None:
+    """ホスト環境の *_PROXY を持ち込まず、テストを決定論的にする。"""
+    s.http_proxy = ""
+    s.https_proxy = ""
+    s.all_proxy = ""
+    s.no_proxy = ""
+
+
 @pytest.fixture()
 def settings(tmp_path: Path) -> Settings:
     s = load_settings()
     s.database_url = f"sqlite:///{tmp_path}/test.db"
     s.simulation.iterations = 4000  # テスト高速化(それでも統計的に安定)
-    s.http_proxy = ""  # ホスト環境の *_PROXY を持ち込まず、テストを決定論的にする
+    _clear_proxy(s)
     return s
 
 
@@ -34,7 +42,7 @@ def settings_brave(tmp_path: Path) -> Settings:
     """実検索(brave)設定。モック用擬似信頼ドメインは注入されない。"""
     s = load_settings(env={"SEARCH_PROVIDER": "brave"})
     s.database_url = f"sqlite:///{tmp_path}/test_brave.db"
-    s.http_proxy = ""
+    _clear_proxy(s)
     return s
 
 

@@ -244,9 +244,13 @@ def build_selenium_renderer(settings: Settings) -> SeleniumRenderer:
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-gpu")
         options.add_argument("--disable-dev-shm-usage")
-        # 共通プロキシ経由でブラウザを接続させる(認証情報付きURLはブラウザ側の制約に注意)
-        if settings.http_proxy:
-            options.add_argument(f"--proxy-server={settings.http_proxy}")
+        # プロキシ経由でブラウザを接続させる。プロセス引数に資格情報を渡さない
+        # (ps 等で漏洩するため)。認証プロキシはブラウザ側で別途認証が必要。
+        selenium_proxy = settings.effective_proxy("https") or settings.effective_proxy("http")
+        if selenium_proxy:
+            from fermiscope.config import proxy_without_credentials
+
+            options.add_argument(f"--proxy-server={proxy_without_credentials(selenium_proxy)}")
         # 画像・不要リソースを抑制(取得は本文DOMのみが目的)
         options.set_capability("pageLoadStrategy", "eager")
         if fetch.selenium_binary_path:
@@ -283,8 +287,10 @@ class DocumentFetcher:
         self._resolver = resolver
         self._skip_dns = skip_dns
         self._respect_robots = respect_robots
-        # 全コンポーネント共通プロキシ。設定時は forward proxy 経由で接続する。
-        self._proxy = (settings.http_proxy or "").strip() or None
+        # HTTP と HTTPS で別々のプロキシを許容する(1つに潰さない)。NO_PROXY は
+        # mounts の直接トランスポートで表現し、per-URL の判定は proxy_for_url に委ねる。
+        self._proxy_mounts = settings.httpx_mounts() if transport is None else None
+        self._any_proxy = settings.any_proxy_configured()
         # Selenium ハイブリッド: 注入があればそれを使う。無ければ設定で有効時に遅延構築。
         self._selenium_renderer = selenium_renderer
         self._selenium_enabled = selenium_renderer is not None or settings.fetch.use_selenium_fallback
@@ -296,9 +302,10 @@ class DocumentFetcher:
             "timeout": settings.fetch.timeout_seconds,
             "headers": {"User-Agent": settings.fetch.user_agent},
         }
-        # プロキシはトランスポート未指定(実ネットワーク)時のみ適用する
-        if self._proxy and transport is None:
-            client_kwargs["proxy"] = self._proxy
+        # プロキシはトランスポート未指定(実ネットワーク)時のみ適用する。
+        # HTTP/HTTPS 別プロキシと NO_PROXY を mounts で表現する。
+        if self._proxy_mounts:
+            client_kwargs["mounts"] = self._proxy_mounts
         self._client = httpx.AsyncClient(**client_kwargs)
 
     async def close(self) -> None:
@@ -344,8 +351,9 @@ class DocumentFetcher:
             return url, None, None
         # プロキシ利用時はクライアントが直接接続しない(接続はプロキシが担う)ため
         # IP固定は不可。SSRFは fetch() 側の validate_url(スキーム・プライベート/
-        # CGNAT/メタデータ遮断)で担保する。
-        if self._proxy:
+        # CGNAT/メタデータ遮断)で担保する。NO_PROXY で直接接続になるURLでは
+        # 従来どおりIP固定を行う(SSRF対策を弱めない)。
+        if self._any_proxy and self.settings.proxy_for_url(url) is not None:
             return url, None, None
         parsed = urlparse(url)
         host = parsed.hostname or ""

@@ -14,10 +14,28 @@ def test_dedicated_env_sets_common_proxy():
     assert s.http_proxy == PROXY
 
 
-def test_standard_proxy_env_is_picked_up():
-    for key in ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "https_proxy"):
-        s = load_settings(env={key: PROXY})
-        assert s.http_proxy == PROXY, key
+def test_standard_proxy_env_populates_correct_field():
+    """HTTP と HTTPS は潰さず、それぞれの専用フィールドに入る。"""
+    assert load_settings(env={"HTTP_PROXY": PROXY}).http_proxy == PROXY
+    assert load_settings(env={"HTTPS_PROXY": PROXY}).https_proxy == PROXY
+    assert load_settings(env={"ALL_PROXY": PROXY}).all_proxy == PROXY
+    assert load_settings(env={"https_proxy": PROXY}).https_proxy == PROXY
+    # HTTP と HTTPS を別々に指定でき、混ざらない
+    s = load_settings(env={"HTTP_PROXY": "http://h:1", "HTTPS_PROXY": "http://s:2"})
+    assert s.http_proxy == "http://h:1"
+    assert s.https_proxy == "http://s:2"
+    assert s.effective_proxy("http") == "http://h:1"
+    assert s.effective_proxy("https") == "http://s:2"
+
+
+def test_no_proxy_bypass_for_localhost_and_docker():
+    s = load_settings(
+        env={"HTTPS_PROXY": PROXY, "NO_PROXY": "localhost,127.0.0.1,host.docker.internal"}
+    )
+    assert s.proxy_for_url("https://example.com/x") == PROXY  # 公開先はプロキシ経由
+    assert s.proxy_for_url("http://localhost:8080/x") is None  # バイパス
+    assert s.proxy_for_url("http://127.0.0.1:11434/x") is None
+    assert s.proxy_for_url("http://host.docker.internal:11434/x") is None
 
 
 def test_dedicated_env_takes_precedence_over_standard():
@@ -41,7 +59,7 @@ def test_fetcher_skips_ip_pinning_when_proxied():
         return ["93.184.216.34"]
 
     fetcher = DocumentFetcher(s, resolver=resolver, skip_dns=False)
-    assert fetcher._proxy == PROXY
+    assert fetcher._any_proxy is True
     connect_url, host_header, sni = fetcher._pin_connection("https://example.com/x")
     assert connect_url == "https://example.com/x"
     assert host_header is None and sni is None
@@ -51,11 +69,21 @@ def test_fetcher_skips_ip_pinning_when_proxied():
 def test_fetcher_pins_ip_without_proxy():
     """プロキシ未設定時は従来どおり検証済みIPへ接続を固定する。"""
     s = load_settings(env={})
+    s.http_proxy = s.https_proxy = s.all_proxy = ""  # ホスト環境の proxy を無視
     fetcher = DocumentFetcher(s, resolver=lambda host: ["93.184.216.34"], skip_dns=False)
-    assert fetcher._proxy is None
+    assert fetcher._any_proxy is False
     connect_url, host_header, sni = fetcher._pin_connection("https://example.com/x")
     assert "93.184.216.34" in connect_url
     assert host_header == "example.com" and sni == "example.com"
+
+
+def test_fetcher_pins_ip_for_no_proxy_host_even_with_proxy():
+    """NO_PROXY 対象で直接接続になるURLでは IP 固定(SSRF対策)を維持する。"""
+    s = load_settings(env={"HTTPS_PROXY": PROXY, "NO_PROXY": "example.com"})
+    fetcher = DocumentFetcher(s, resolver=lambda host: ["93.184.216.34"], skip_dns=False)
+    connect_url, host_header, sni = fetcher._pin_connection("https://example.com/x")
+    assert "93.184.216.34" in connect_url  # プロキシ有でもバイパス先は IP 固定
+    assert host_header == "example.com"
 
 
 def test_llm_common_proxy_fallback():

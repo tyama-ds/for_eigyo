@@ -74,10 +74,15 @@ def main() -> None:
     serve_cmd.add_argument("--port", type=int, default=8720)
 
     sub.add_parser("demo", help="モック環境でヘッドレスデモを実行する")
+    sub.add_parser("doctor", help="環境診断を実行する(設定・DB・プロキシ・リソース)")
 
     args = parser.parse_args()
     if args.command == "demo":
         sys.exit(asyncio.run(_demo()))
+    elif args.command == "doctor":
+        from fermiscope.diagnostics import run_doctor
+
+        sys.exit(run_doctor())
     elif args.command == "serve" or args.command is None:
         host = getattr(args, "host", "127.0.0.1")
         port = getattr(args, "port", 8720)

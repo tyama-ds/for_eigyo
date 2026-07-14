@@ -256,6 +256,43 @@ def _validate_param_estimate(param: ParameterEstimate) -> None:
         raise HTTPException(status_code=422, detail="三角分布には central(最頻値)が必要です。")
 
 
+# ---------- ヘルスチェック・診断 ----------
+
+
+@router.get("/healthz")
+async def healthz():
+    """Liveness: プロセスが応答することのみを示す(依存関係は見ない)。"""
+    return {"status": "ok"}
+
+
+@router.get("/readyz")
+async def readyz(request: Request):
+    """Readiness: DB・必須リソースが利用可能かを確認する。未準備なら 503。"""
+    from fermiscope.diagnostics import collect_diagnostics
+
+    diag = collect_diagnostics(
+        request.app.state.settings,
+        repo=request.app.state.repo,
+        search_provider=request.app.state.search_provider,
+        llm=current_llm(request.app),
+    )
+    status = 200 if diag["ready"] else 503
+    return JSONResponse(status_code=status, content={"ready": diag["ready"], "checks": diag["checks"]})
+
+
+@router.get("/api/health")
+async def api_health(request: Request):
+    """詳細診断(秘密は隠す)。プロキシは有無・scheme/host のみ、DBはスキームのみ。"""
+    from fermiscope.diagnostics import collect_diagnostics
+
+    return collect_diagnostics(
+        request.app.state.settings,
+        repo=request.app.state.repo,
+        search_provider=request.app.state.search_provider,
+        llm=current_llm(request.app),
+    )
+
+
 # ---------- 画面 ----------
 
 

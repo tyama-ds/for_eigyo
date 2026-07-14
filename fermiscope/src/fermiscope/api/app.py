@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -29,7 +30,8 @@ def _default_llm_settings_path() -> str:
 
 
 def _build_search_provider(settings: Settings) -> SearchProvider:
-    proxy = settings.http_proxy or None
+    # 検索APIは https。NO_PROXY 対象でなければ https 用の実効プロキシを使う。
+    proxy = (settings.effective_proxy("https") or None) if settings.any_proxy_configured() else None
     if settings.search_provider == "brave":
         return BraveSearchProvider(timeout_seconds=settings.search.timeout_seconds, proxy=proxy)
     if settings.search_provider == "duckduckgo":
@@ -108,6 +110,22 @@ def create_app(
                 status_code=400,
                 content={"detail": "許可されないHostヘッダです(DNSリバインディング対策)。"},
             )
+        return await call_next(request)
+
+    @app.middleware("http")
+    async def origin_guard(request: Request, call_next):
+        # 状態変更(POST/PATCH/PUT/DELETE)への CSRF 対策。ブラウザが付与する
+        # Origin ヘッダを許可 Host リストで検証する(Origin 無し=非ブラウザは許容)。
+        if request.method in ("POST", "PATCH", "PUT", "DELETE"):
+            origin = request.headers.get("origin", "")
+            if origin:
+                netloc = urlparse(origin).netloc or origin
+                origin_host = _host_only(netloc)
+                if origin_host not in app.state.allowed_hosts:
+                    return JSONResponse(
+                        status_code=403,
+                        content={"detail": "許可されないOriginです(CSRF対策)。"},
+                    )
         return await call_next(request)
 
     @app.middleware("http")

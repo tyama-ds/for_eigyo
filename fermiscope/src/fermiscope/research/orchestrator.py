@@ -551,11 +551,34 @@ class ResearchOrchestrator:
             self._stage(project, run, RunStage.REPORTING, "結果を整理中")
             self._finalize_confidence(project)
 
-            run.status = RunStatus.DONE
-            run.stage = RunStage.DONE
             run.finished_at = utcnow()
-            project.audit("run_done", "調査が完了しました", **self._counters(run))
-            self._emit("done", "調査が完了しました", self._counters(run))
+            # 全検索が失敗、または検索したのに証拠が全く得られなかった場合は、
+            # 成功(done)扱いにせず completed_with_errors とする(誤った完了表示を防ぐ)。
+            attempted = [q for q in project.searches if q.executed_at is not None]
+            all_failed = bool(attempted) and all(q.error for q in attempted)
+            no_evidence = bool(attempted) and len(project.evidence) == 0
+            if all_failed or no_evidence:
+                run.status = RunStatus.COMPLETED_WITH_ERRORS
+                run.stage = RunStage.DONE
+                reason = (
+                    "すべての検索が失敗しました" if all_failed
+                    else "検索は実行されましたが証拠が得られませんでした"
+                )
+                run.error = run.error or reason
+                project.audit(
+                    "run_completed_with_errors", f"調査は完了しましたが問題があります: {reason}",
+                    **self._counters(run),
+                )
+                self._emit(
+                    "completed_with_errors",
+                    f"調査は完了しましたが問題があります: {reason}",
+                    self._counters(run),
+                )
+            else:
+                run.status = RunStatus.DONE
+                run.stage = RunStage.DONE
+                project.audit("run_done", "調査が完了しました", **self._counters(run))
+                self._emit("done", "調査が完了しました", self._counters(run))
         except asyncio.CancelledError:
             # サーバ停止やタスクキャンセルで送出される。status を確定させてから
             # 再送出し、RUNNING のまま永続化されるのを防ぐ(呼び出し側の finally で保存)。
