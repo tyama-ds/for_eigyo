@@ -29,10 +29,14 @@ classes:
 
 # ドメイン接尾辞からのクラス推定ヒント(確定ではなくヒント。文書メタデータが優先)
 domain_hints:
-  # 実政府ドメイン。末尾に同梱デモ用の擬似政府ドメイン(example-gov.jp)を含む。
-  - suffixes: [".go.jp", ".gov", ".gc.ca", ".gov.uk", ".europa.eu", "example-gov.jp"]
+  # 実政府ドメインのみ(ラベル境界一致)。デモ用擬似ドメインはここに含めない
+  # (モック検索時のみ config._MOCK_DOMAIN_HINTS を追加する)。
+  - suffixes: [".go.jp", ".gov", ".gc.ca", ".gov.uk", ".europa.eu", ".govt.nz", ".gov.au"]
     hint_class: S
-  - suffixes: [".ac.jp", ".edu", ".or.jp"]
+  # 国際機関(検証可能な実ドメイン)
+  - suffixes: ["worldbank.org", "who.int", "oecd.org", "un.org", "imf.org", "iea.org", "oecd-ilibrary.org"]
+    hint_class: A
+  - suffixes: [".ac.jp", ".edu", ".or.jp", ".ac.uk"]
     hint_class: B
   - suffixes: [".co.jp", ".com", ".jp", ".net"]
     hint_class: D

@@ -74,15 +74,37 @@ def _is_sns_host(host: str) -> bool:
 _ASSOC_KEYWORDS = ("協会", "組合", "工業会", "連合会")
 
 
+def _host_matches_suffix(host: str, suffix: str) -> bool:
+    """ホスト名が接尾辞にドメイン境界で一致するか。
+
+    `evil-example-gov.jp` を `example-gov.jp` として信頼しないよう、完全一致または
+    ラベル境界(直前がドット)での一致のみ許す。先頭ドットは無視する。
+    """
+    h = host.lower().rstrip(".")
+    base = suffix.lower().lstrip(".").rstrip(".")
+    if not h or not base:
+        return False
+    return h == base or h.endswith("." + base)
+
+
 def _domain_hint_class(host: str, settings: Settings) -> SourceClass | None:
-    """ドメイン接尾辞からクラスヒントを得る(該当なしは None)。"""
+    """ドメイン接尾辞からクラスヒントを得る(境界一致・最長一致優先)。
+
+    `.jp`(汎用D)と `example-gov.jp`(S)が両方一致する場合、より具体的(最長)な
+    接尾辞のクラスを採用する。該当なしは None。
+    """
+    best_len = -1
+    best_cls: SourceClass | None = None
     for hint in settings.source_classes.domain_hints:
-        if any(host.endswith(suf) for suf in hint.suffixes):
-            try:
-                return SourceClass(hint.hint_class)
-            except ValueError:
-                continue
-    return None
+        for suf in hint.suffixes:
+            base = suf.lower().lstrip(".").rstrip(".")
+            if _host_matches_suffix(host, suf) and len(base) > best_len:
+                try:
+                    best_cls = SourceClass(hint.hint_class)
+                    best_len = len(base)
+                except ValueError:
+                    continue
+    return best_cls
 
 
 def _high_authority_corroborated(ev: EvidenceItem, host: str, settings: Settings) -> bool:

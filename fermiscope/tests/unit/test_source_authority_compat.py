@@ -34,6 +34,32 @@ def test_mock_gov_domain_still_s(settings):
     assert infer_source_class(ev, settings) == SourceClass.S
 
 
+def test_lookalike_gov_domain_not_trusted(settings):
+    """`evil-example-gov.jp` を `example-gov.jp` として信頼しない(サブドメイン境界一致)。"""
+    ev = _ev(url="https://evil-example-gov.jp/x", publisher="総務省統計局")
+    assert infer_source_class(ev, settings) != SourceClass.S
+    # ラベル境界を越える偽装(prefix)も政府ドメイン扱いしない
+    ev2 = _ev(url="https://notexample-gov.jp/x")
+    assert infer_source_class(ev2, settings) != SourceClass.S
+
+
+def test_real_intl_org_domain_class_a(settings):
+    """実在の国際機関ドメイン(WHO/World Bank)は A に分類する。"""
+    assert infer_source_class(_ev(url="https://www.who.int/data"), settings) == SourceClass.A
+    assert (
+        infer_source_class(_ev(url="https://data.worldbank.org/x"), settings) == SourceClass.A
+    )
+
+
+def test_mock_domains_separated_from_real_search(settings_brave):
+    """モック用擬似ドメインは実検索設定(brave等)へ混入しない。"""
+    # brave 設定では example-gov.jp は S ヒントを持たない(一般 .jp = D 相当)
+    ev = _ev(url="https://stats.example-gov.jp/x")
+    assert infer_source_class(ev, settings_brave) != SourceClass.S
+    # 実在ドメインの分類は実検索設定でも維持される
+    assert infer_source_class(_ev(url="https://www.who.int/data"), settings_brave) == SourceClass.A
+
+
 # ---- 証拠互換性: 統合前に地域・期間を判定 ----
 
 
@@ -74,12 +100,32 @@ def test_daily_and_annual_not_fused_without_conversion(settings):
     assert not daily.incompatible_reason
 
 
-def test_nationwide_value_allowed_for_regional_param(settings):
-    """全国値は(按分の仮定つきで)地域パラメータに使える=非互換ではない。"""
-    param = _param(target_geography="東京都")
-    nationwide = _scored_ev(5000, geo="日本", eid="jp")
+def test_nationwide_total_count_not_reused_as_regional_total(settings):
+    """全国の合計値(店舗数=外延量)を地域の合計へ流用しない(明示按分が必要)。"""
+    param = _param(target_geography="東京都", unit="store")  # 店舗数=外延的な合計
+    nationwide = _scored_ev(5000, geo="日本", eid="jp", unit="store")
+    fuse_evidence(param, [nationwide], settings, reference_year=2026)
+    assert nationwide.incompatible_reason  # 全国合計→地域合計は流用不可
+    # 唯一の証拠が非互換なので値は捏造せず未解決化する
+    assert param.central is None
+
+
+def test_nationwide_ratio_allowed_for_regional_param(settings):
+    """全国の比率(強度量)は地域へ適用可能=非互換ではない。"""
+    param = _param(target_geography="東京都", name="該当率", unit="dimensionless")
+    nationwide = _scored_ev(0.12, geo="日本", eid="jp", unit="dimensionless")
     fuse_evidence(param, [nationwide], settings, reference_year=2026)
     assert not nationwide.incompatible_reason
+    assert param.central == 0.12
+
+
+def test_nationwide_per_capita_allowed_for_regional_param(settings):
+    """全国の1人あたり値(強度量)は地域へ適用可能=非互換ではない。"""
+    param = _param(target_geography="東京都", name="1人あたり消費", unit="item/person")
+    nationwide = _scored_ev(3.0, geo="日本", eid="jp", unit="item/person")
+    fuse_evidence(param, [nationwide], settings, reference_year=2026)
+    assert not nationwide.incompatible_reason
+    assert param.central == 3.0
 
 
 # ---- 定義の表記揺れだけで除外しない ----

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 from functools import lru_cache
@@ -292,6 +293,47 @@ def _hash_configs(paths: list[Path]) -> str:
     return h.hexdigest()[:16]
 
 
+# モック検索時のみ追加する擬似信頼ドメイン(実検索設定からは分離する)
+_MOCK_DOMAIN_HINTS = [
+    ("example-gov.jp", "S"),
+    ("example-org.jp", "B"),
+]
+
+
+def _effective_config_hash(settings: Settings, config_files: list[Path]) -> str:
+    """秘密値を除いた実効設定から再現性ハッシュを生成する。
+
+    設定ファイルの内容に加え、検索・LLMプロバイダ、反復数・シード、検索/コスト上限、
+    主要機能フラグ(Selenium)を含める。APIキー・プロキシ資格情報等の秘密は含めない。
+    """
+    h = hashlib.sha256()
+    for p in sorted(config_files):
+        if p.exists():
+            h.update(p.name.encode())
+            h.update(p.read_bytes())
+    effective = {
+        "app_version": _app_version(),
+        "search_provider": settings.search_provider,
+        "llm_provider": settings.llm_provider,
+        "iterations": settings.simulation.iterations,
+        "seed": settings.simulation.default_seed,
+        "max_searches": settings.search.max_searches_per_project,
+        "max_cost_usd": settings.search.max_cost_per_project_usd,
+        "use_selenium": settings.fetch.use_selenium_fallback,
+        "proxy_set": bool(settings.http_proxy),  # 値は含めない(秘密)
+    }
+    h.update(json.dumps(effective, sort_keys=True, ensure_ascii=False).encode())
+    return h.hexdigest()[:16]
+
+
+def _app_version() -> str:
+    """アプリのバージョン(+可能ならビルド/コミットID)。"""
+    from fermiscope import __version__
+
+    build = os.environ.get("FERMISCOPE_BUILD_ID") or os.environ.get("GIT_COMMIT")
+    return f"{__version__}+{build}" if build else __version__
+
+
 def load_settings(config_dir: Path | None = None, env: dict[str, str] | None = None) -> Settings:
     """YAML設定と環境変数から Settings を構築する。"""
     env = dict(os.environ) if env is None else env
@@ -354,8 +396,16 @@ def load_settings(config_dir: Path | None = None, env: dict[str, str] | None = N
     if env.get("FERMISCOPE_SELENIUM_BINARY"):
         settings.fetch.selenium_binary_path = env["FERMISCOPE_SELENIUM_BINARY"]
 
-    settings.config_hash = _hash_configs(
-        [cdir / "estimation.yaml", cdir / "evidence_scoring.yaml", cdir / "source_classes.yaml"]
+    # モック検索時のみ擬似信頼ドメインを追加する(実検索では実ドメインのみ)
+    if settings.search_provider == "mock":
+        settings.source_classes.domain_hints = [
+            *settings.source_classes.domain_hints,
+            *(DomainHint(suffixes=[d], hint_class=c) for d, c in _MOCK_DOMAIN_HINTS),
+        ]
+
+    settings.config_hash = _effective_config_hash(
+        settings,
+        [cdir / "estimation.yaml", cdir / "evidence_scoring.yaml", cdir / "source_classes.yaml"],
     )
     return settings
 

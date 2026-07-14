@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import math
+import re
 
 import numpy as np
 
@@ -27,12 +28,57 @@ _NATIONWIDE = {
 }
 
 
-def _geo_compatible(ev_geo: str, target_geo: str) -> bool:
-    """証拠の地域が目標地域と統合可能か(全国・全世界値は按分で許容)。"""
+# 時間の分母語。分母がこれらだけの単位(item/day 等)は「期間あたりの合計」であり
+# 外延量(地域で規模が変わる)とみなす。
+_TIME_DENOMS = {
+    "day", "week", "month", "year", "hour", "minute", "second", "sec",
+    "日", "週", "月", "年", "時間", "分", "秒", "毎日", "毎年", "毎月",
+}
+_DIMENSIONLESS_UNITS = {
+    "", "dimensionless", "ratio", "rate", "%", "percent", "割合", "パーセント", "割",
+}
+
+
+def _is_intensive_ratio(unit: str) -> bool:
+    """単位が強度量(地域スケール不変)か。
+
+    強度量 = 無次元比率、または分母に『非時間のエンティティ』(person / piano /
+    household / store 等)を含む率(1人あたり・1台あたり・保有率)。これらは地域で
+    概ね不変なので、全国値を地域へ適用できる。
+
+    外延量 = 店舗数・総量など bare count、および分母が時間だけの率(item/day=
+    期間あたり合計)。全国の合計を地域の合計へ無換算で流用してはならない。
+    """
+    u = (unit or "").strip().lower()
+    if u in _DIMENSIONLESS_UNITS:
+        return True
+    if "/" in u:
+        denom = u.split("/", 1)[1].strip("() ")
+        factors = re.split(r"[*·・×\s]+", denom)
+        # 時間以外の因子(エンティティ)が分母に残れば強度量
+        return any(f and f not in _TIME_DENOMS for f in factors)
+    return False
+
+
+def _geo_compatible(ev_geo: str, target_geo: str, param_unit: str = "") -> bool:
+    """証拠の地域が目標地域と統合可能か。
+
+    全国・全世界の『比率/1人あたり』値は地域へ適用可能(スケール不変)。一方、
+    全国・全世界の『合計値(店舗数・総量など外延量)』は、按分の明示的換算なしに
+    地域の合計へ流用できないため非互換とする(絶対条件: 誤推定より停止)。
+    """
     e, t = ev_geo.strip().lower(), target_geo.strip().lower()
     if not e or not t or e == t or t in e or e in t:
         return True
-    return e in _NATIONWIDE  # 全国/全世界→地域は按分の仮定つきで許容
+    e_nation = e in _NATIONWIDE
+    t_nation = t in _NATIONWIDE
+    if e_nation and t_nation:
+        return True  # 全国・全世界どうし(表記/言語違いの日本=Japan など)は同一スコープ
+    if e_nation and not t_nation:
+        # 全国→地域: 強度量(比率・1人あたり)のみ按分の仮定つきで許容。
+        # 外延的な合計(店舗数など)は流用不可。
+        return _is_intensive_ratio(param_unit)
+    return False
 
 
 def _period_of_unit(unit: str) -> str:
@@ -53,7 +99,14 @@ def _incompatible_with_param(ev: EvidenceItem, param: ParameterEstimate) -> str:
     """
     tg = (param.target_geography or "").strip()
     eg = (ev.geography or "").strip()
-    if tg and eg and not _geo_compatible(eg, tg):
+    if tg and eg and not _geo_compatible(eg, tg, param.unit):
+        e_nation = eg.strip().lower() in _NATIONWIDE
+        t_nation = tg.strip().lower() in _NATIONWIDE
+        if e_nation and not t_nation and not _is_intensive_ratio(param.unit):
+            return (
+                f"全国・全世界の合計値(証拠={eg})を{tg}の合計へ流用できません"
+                "(地域按分の明示的な換算根拠がありません)。統合から除外"
+            )
         return f"対象地域が非互換(証拠={eg} / 目標={tg})のため統合から除外"
     p_period = _period_of_unit(param.unit)
     e_period = period_to_unit(ev.time_period) or _period_of_unit(ev.unit)

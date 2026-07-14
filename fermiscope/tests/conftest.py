@@ -30,6 +30,15 @@ def settings(tmp_path: Path) -> Settings:
 
 
 @pytest.fixture()
+def settings_brave(tmp_path: Path) -> Settings:
+    """実検索(brave)設定。モック用擬似信頼ドメインは注入されない。"""
+    s = load_settings(env={"SEARCH_PROVIDER": "brave"})
+    s.database_url = f"sqlite:///{tmp_path}/test_brave.db"
+    s.http_proxy = ""
+    return s
+
+
+@pytest.fixture()
 def mock_search(settings: Settings) -> MockSearchProvider:
     return MockSearchProvider(settings.mock_corpus_dir)
 
