@@ -10,12 +10,15 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import io
 import ipaddress
+import logging
 import re
 import time
 import urllib.robotparser
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from urllib.parse import urljoin, urlparse
@@ -32,6 +35,8 @@ from fermiscope.security.url_guard import (
     validate_ip,
     validate_url,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class FetchError(RuntimeError):
@@ -215,6 +220,54 @@ def _html_title(html: str) -> str:
     return m.group(1).strip()[:300] if m else ""
 
 
+# 型: URL -> レンダリング済みHTML
+SeleniumRenderer = Callable[[str], str]
+
+
+def build_selenium_renderer(settings: Settings) -> SeleniumRenderer:
+    """設定から Selenium(headless Chromium)レンダラを構築する。
+
+    selenium 未インストール時は ImportError。呼び出し側で握って httpx のみに退避する。
+    レンダラはURL1件を開き、描画後の DOM(page_source)を文字列で返す。
+    ※ SSRF検証は呼び出し側(fetch)が navigation 前に validate_url で実施する。
+    """
+    from selenium import webdriver
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.chrome.service import Service
+
+    fetch = settings.fetch
+    max_bytes = settings.fetch.max_response_bytes
+
+    def render(url: str) -> str:
+        options = Options()
+        options.add_argument("--headless=new")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-gpu")
+        options.add_argument("--disable-dev-shm-usage")
+        # 共通プロキシ経由でブラウザを接続させる(認証情報付きURLはブラウザ側の制約に注意)
+        if settings.http_proxy:
+            options.add_argument(f"--proxy-server={settings.http_proxy}")
+        # 画像・不要リソースを抑制(取得は本文DOMのみが目的)
+        options.set_capability("pageLoadStrategy", "eager")
+        if fetch.selenium_binary_path:
+            options.binary_location = fetch.selenium_binary_path
+        service = Service(executable_path=fetch.selenium_driver_path or None)
+        driver = webdriver.Chrome(options=options, service=service)
+        try:
+            driver.set_page_load_timeout(fetch.selenium_page_timeout_seconds)
+            driver.get(url)
+            if fetch.selenium_wait_seconds > 0:
+                driver.implicitly_wait(fetch.selenium_wait_seconds)
+            html = driver.page_source or ""
+        finally:
+            with contextlib.suppress(Exception):
+                driver.quit()
+        # 巨大DOM対策で上限を課す
+        return html[: max_bytes]
+
+    return render
+
+
 class DocumentFetcher:
     def __init__(
         self,
@@ -223,23 +276,59 @@ class DocumentFetcher:
         resolver: Resolver | None = None,
         skip_dns: bool = False,
         respect_robots: bool = True,
+        selenium_renderer: SeleniumRenderer | None = None,
     ) -> None:
         self.settings = settings
         self._transport = transport
         self._resolver = resolver
         self._skip_dns = skip_dns
         self._respect_robots = respect_robots
+        # 全コンポーネント共通プロキシ。設定時は forward proxy 経由で接続する。
+        self._proxy = (settings.http_proxy or "").strip() or None
+        # Selenium ハイブリッド: 注入があればそれを使う。無ければ設定で有効時に遅延構築。
+        self._selenium_renderer = selenium_renderer
+        self._selenium_enabled = selenium_renderer is not None or settings.fetch.use_selenium_fallback
         self._cache: dict[str, tuple[float, FetchedDocument]] = {}
         self._robots_cache: dict[str, urllib.robotparser.RobotFileParser | None] = {}
-        self._client = httpx.AsyncClient(
-            transport=transport,
-            follow_redirects=False,  # リダイレクトは手動で辿り、各ホップを再検査する
-            timeout=settings.fetch.timeout_seconds,
-            headers={"User-Agent": settings.fetch.user_agent},
-        )
+        client_kwargs: dict = {
+            "transport": transport,
+            "follow_redirects": False,  # リダイレクトは手動で辿り、各ホップを再検査する
+            "timeout": settings.fetch.timeout_seconds,
+            "headers": {"User-Agent": settings.fetch.user_agent},
+        }
+        # プロキシはトランスポート未指定(実ネットワーク)時のみ適用する
+        if self._proxy and transport is None:
+            client_kwargs["proxy"] = self._proxy
+        self._client = httpx.AsyncClient(**client_kwargs)
 
     async def close(self) -> None:
         await self._client.aclose()
+
+    def _render_with_selenium(self, url: str) -> str:
+        """Selenium で URL をレンダリングして DOM を返す。失敗時は空文字(httpx結果を維持)。
+
+        navigation 前に validate_url を再実行し、SSRF対策を可能な範囲で維持する
+        (スキーム・localhost・プライベート/予約/CGNAT等の遮断)。Selenium 未導入や
+        ドライバ不在時は一度だけ無効化して httpx のみに退避する。
+        """
+        # 多層防御: ブラウザに渡す前にもう一度URLを検証する
+        try:
+            validate_url(url, resolver=self._resolver, skip_dns=self._skip_dns)
+        except UrlGuardError as exc:
+            logger.warning("Selenium取得を中止(URL検証に失敗): %s", exc)
+            return ""
+        if self._selenium_renderer is None:
+            try:
+                self._selenium_renderer = build_selenium_renderer(self.settings)
+            except Exception as exc:  # noqa: BLE001 — 未導入/構築失敗時はhttpxのみに退避
+                logger.warning("Seleniumを初期化できませんでした(httpxのみで継続): %s", type(exc).__name__)
+                self._selenium_enabled = False
+                return ""
+        try:
+            return self._selenium_renderer(url) or ""
+        except Exception as exc:  # noqa: BLE001 — レンダリング失敗はhttpx結果を維持
+            logger.warning("Seleniumレンダリングに失敗しました: %s", type(exc).__name__)
+            return ""
 
     def _pin_connection(self, url: str) -> tuple[str, str | None, str | None]:
         """ホスト名を1回だけ解決して検証済みIPへ接続を固定する(DNSリバインディング対策)。
@@ -252,6 +341,11 @@ class DocumentFetcher:
         """
         # モック(オフライン)モードでは書き換えない — フィクスチャは元URLで配信される
         if self._skip_dns:
+            return url, None, None
+        # プロキシ利用時はクライアントが直接接続しない(接続はプロキシが担う)ため
+        # IP固定は不可。SSRFは fetch() 側の validate_url(スキーム・プライベート/
+        # CGNAT/メタデータ遮断)で担保する。
+        if self._proxy:
             return url, None, None
         parsed = urlparse(url)
         host = parsed.hostname or ""
@@ -404,6 +498,15 @@ class DocumentFetcher:
             doc.text = strip_html_to_text(html)  # scriptは除去され実行されない
             doc.tables = _extract_html_tables(html)
             doc.title = _html_title(html)
+            # 本文が乏しい(JS描画必須)ページは、URL検証済みの final_url を
+            # Selenium で開き直してレンダリング後のDOMから再抽出する(任意機能)。
+            if self._selenium_enabled and len(doc.text) < self.settings.fetch.selenium_min_text_chars:
+                rendered = self._render_with_selenium(current)
+                if rendered:
+                    doc.html = rendered
+                    doc.text = strip_html_to_text(rendered)
+                    doc.tables = _extract_html_tables(rendered)
+                    doc.title = _html_title(rendered)
         elif doc_type == DocumentType.PDF:
             try:
                 doc.text = _extract_pdf_text(data)

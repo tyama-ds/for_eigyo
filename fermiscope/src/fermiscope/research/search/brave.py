@@ -28,6 +28,7 @@ class BraveSearchProvider(SearchProvider):
         api_key: str | None = None,
         timeout_seconds: float = 15.0,
         transport: httpx.AsyncBaseTransport | None = None,
+        proxy: str | None = None,
     ) -> None:
         key = api_key or os.environ.get("BRAVE_API_KEY", "")
         if not key:
@@ -36,14 +37,17 @@ class BraveSearchProvider(SearchProvider):
                 "SEARCH_PROVIDER=mock を使用してください。"
             )
         self._api_key = key
-        self._client = httpx.AsyncClient(
-            timeout=timeout_seconds,
-            transport=transport,
-            headers={
+        client_kwargs: dict = {
+            "timeout": timeout_seconds,
+            "transport": transport,
+            "headers": {
                 "Accept": "application/json",
                 "X-Subscription-Token": key,
             },
-        )
+        }
+        if proxy and transport is None:
+            client_kwargs["proxy"] = proxy
+        self._client = httpx.AsyncClient(**client_kwargs)
 
     async def search(self, query: str, max_results: int = 6, language: str = "ja") -> list[SearchHit]:
         params: dict[str, str | int] = {

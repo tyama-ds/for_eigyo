@@ -107,24 +107,40 @@ def build_provider(config: LLMRuntimeConfig) -> LLMProvider:
     raise LLMProviderError(f"未知のLLMプロバイダです: {name}")
 
 
+def _common_proxy(env: dict[str, str]) -> str:
+    """LLM専用の LLM_PROXY を最優先し、無ければ全体共通プロキシを引き継ぐ。"""
+    return (
+        env.get("LLM_PROXY")
+        or env.get("FERMISCOPE_HTTP_PROXY")
+        or env.get("HTTPS_PROXY")
+        or env.get("https_proxy")
+        or env.get("HTTP_PROXY")
+        or env.get("http_proxy")
+        or env.get("ALL_PROXY")
+        or env.get("all_proxy")
+        or ""
+    )
+
+
 def _config_from_env(env: dict[str, str]) -> LLMRuntimeConfig:
     provider = (env.get("LLM_PROVIDER", "noop") or "noop").lower()
     if provider not in ("noop", "mock", "openai_compatible", "anthropic"):
         provider = "noop"
+    proxy = _common_proxy(env)
     if provider == "anthropic":
         return LLMRuntimeConfig(
             provider="anthropic",
             api_base=env.get("ANTHROPIC_API_BASE", ""),
             model=env.get("ANTHROPIC_MODEL", "") or env.get("LLM_MODEL", ""),
             api_key=env.get("ANTHROPIC_API_KEY", "") or env.get("LLM_API_KEY", ""),
-            proxy=env.get("LLM_PROXY", ""),
+            proxy=proxy,
         )
     return LLMRuntimeConfig(
         provider=provider,  # type: ignore[arg-type]
         api_base=env.get("LLM_API_BASE", ""),
         model=env.get("LLM_MODEL", ""),
         api_key=env.get("LLM_API_KEY", ""),
-        proxy=env.get("LLM_PROXY", ""),
+        proxy=proxy,
     )
 
 

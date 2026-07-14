@@ -19,14 +19,18 @@ from fermiscope.research.fetcher import DocumentFetcher
 from fermiscope.research.mock_transport import build_mock_transport
 from fermiscope.research.search.base import SearchProvider
 from fermiscope.research.search.brave import BraveSearchProvider
+from fermiscope.research.search.duckduckgo import DuckDuckGoSearchProvider
 from fermiscope.research.search.mock import MockSearchProvider
 
 PROJECT_LLM_SETTINGS_PATH = PROJECT_ROOT / "llm_settings.json"
 
 
 def _build_search_provider(settings: Settings) -> SearchProvider:
+    proxy = settings.http_proxy or None
     if settings.search_provider == "brave":
-        return BraveSearchProvider(timeout_seconds=settings.search.timeout_seconds)
+        return BraveSearchProvider(timeout_seconds=settings.search.timeout_seconds, proxy=proxy)
+    if settings.search_provider == "duckduckgo":
+        return DuckDuckGoSearchProvider(timeout_seconds=settings.search.timeout_seconds, proxy=proxy)
     return MockSearchProvider(settings.mock_corpus_dir)
 
 

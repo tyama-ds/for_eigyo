@@ -87,6 +87,14 @@ class FetchSettings(BaseModel):
     max_office_uncompressed_bytes: int = 60 * 1024 * 1024
     # 抽出テキストの最大文字数(プロンプトインジェクション面・メモリの抑制)
     max_extracted_chars: int = 400_000
+    # --- Selenium ハイブリッド取得(任意) ---
+    # httpx取得の本文が乏しい(JS描画必須)ページのみ、URL検証後にSeleniumでDOMを取得する。
+    use_selenium_fallback: bool = False
+    selenium_min_text_chars: int = 200          # httpx本文がこれ未満ならSeleniumを試す
+    selenium_page_timeout_seconds: float = 20.0
+    selenium_wait_seconds: float = 2.0          # 描画待ち
+    selenium_driver_path: str = ""              # chromedriver。空ならPATH/Selenium Manager
+    selenium_binary_path: str = ""              # Chromium/Chrome本体。空なら既定
 
 
 class FusionSettings(BaseModel):
@@ -182,8 +190,12 @@ class Settings(BaseModel):
     mock_corpus_dir: Path = DEFAULT_MOCK_CORPUS_DIR
     database_url: str = f"sqlite:///{PROJECT_ROOT / 'fermiscope.db'}"
 
+    # 全コンポーネント共通のHTTP(S)プロキシ(検索・文書取得・Selenium)。
+    # 空なら直接接続。認証情報を含み得るためログ・API応答には出さない。
+    http_proxy: str = ""
+
     # 環境変数由来(値はログに出さない)
-    search_provider: str = "mock"  # mock | brave
+    search_provider: str = "mock"  # mock | brave | duckduckgo
     llm_provider: str = "noop"  # noop | mock | openai_compatible
     config_hash: str = ""
 
@@ -244,6 +256,7 @@ def load_settings(config_dir: Path | None = None, env: dict[str, str] | None = N
         scoring=ScoringConfig(**scoring) if scoring else ScoringConfig(),
         source_classes=SourceClassConfig(**source_classes) if source_classes else SourceClassConfig(),
         config_dir=cdir,
+        http_proxy=est.get("http_proxy", ""),
     )
 
     # 環境変数による上書き
@@ -265,6 +278,25 @@ def load_settings(config_dir: Path | None = None, env: dict[str, str] | None = N
         )
     if env.get("FERMISCOPE_WEB_DIR"):
         settings.web_dir = Path(env["FERMISCOPE_WEB_DIR"])
+    # 共通HTTP(S)プロキシ: 専用変数を最優先し、標準の *_PROXY 環境変数も拾う
+    proxy = (
+        env.get("FERMISCOPE_HTTP_PROXY")
+        or env.get("HTTPS_PROXY")
+        or env.get("https_proxy")
+        or env.get("HTTP_PROXY")
+        or env.get("http_proxy")
+        or env.get("ALL_PROXY")
+        or env.get("all_proxy")
+    )
+    if proxy:
+        settings.http_proxy = proxy
+    # Selenium ハイブリッド取得(任意)
+    if env.get("FERMISCOPE_USE_SELENIUM", "").lower() in ("1", "true", "yes"):
+        settings.fetch.use_selenium_fallback = True
+    if env.get("FERMISCOPE_SELENIUM_DRIVER"):
+        settings.fetch.selenium_driver_path = env["FERMISCOPE_SELENIUM_DRIVER"]
+    if env.get("FERMISCOPE_SELENIUM_BINARY"):
+        settings.fetch.selenium_binary_path = env["FERMISCOPE_SELENIUM_BINARY"]
 
     settings.config_hash = _hash_configs(
         [cdir / "estimation.yaml", cdir / "evidence_scoring.yaml", cdir / "source_classes.yaml"]
