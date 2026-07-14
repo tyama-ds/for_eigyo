@@ -273,46 +273,179 @@ def _try_range_near(text: str, num_pos: int, value: float) -> tuple[float | None
     return None, None
 
 
+# 列ヘッダーの意味分類(年・地域列は値として採らない)
+_YEAR_COL_RE = re.compile(
+    r"^\s*(年|年度|年次|対象年|調査年|基準年|year|date|時点|期間|月|日付|day)\s*$", re.IGNORECASE
+)
+_GEO_COL_RE = re.compile(
+    r"^\s*(地域|都道府県|県|府|市|region|prefecture|area|都市|国|country)\s*$", re.IGNORECASE
+)
+# 値列らしいヘッダー語
+_VALUE_WORD_RE = re.compile(
+    r"値|value|人口|台数|件数|金額|population|count|total|amount|売上|規模|数$|数量", re.IGNORECASE
+)
+
+
+def _infer_column_unit(header_cell: str) -> str:
+    """列ヘッダーから単位を推定する(不明なら空文字)。"""
+    h = header_cell or ""
+    if "%" in h or "率" in h or "パーセント" in h:
+        return "percent"
+    if "人口" in h or "人数" in h or h.strip() in ("人", "名"):
+        return "person"
+    if "世帯" in h:
+        return "household"
+    if "台" in h:
+        return "item"
+    if "件" in h or "回" in h:
+        return "event"
+    if "金額" in h or "売上" in h or "円" in h or "規模" in h:
+        return "JPY"
+    if "店" in h:
+        return "store"
+    if "社" in h:
+        return "company"
+    return ""
+
+
+def _parse_cell_number(cell: str) -> tuple[float, str] | None:
+    """セル文字列から (数値, 正規化単位) を取り出す。数値が無ければ None。"""
+    text = (cell or "").strip()
+    if not text:
+        return None
+    m = _NUMBER_PATTERN.search(text)
+    if not m:
+        return None
+    try:
+        value = parse_japanese_number(m.group(1))
+    except ValueError:
+        return None
+    unit_norm = _UNIT_NORMALIZE.get((m.group(2) or "").lower(), "") if m.group(2) else ""
+    return value, unit_norm
+
+
+def _extract_from_grid(
+    doc: FetchedDocument,
+    param: ParameterEstimate,
+    query: str,
+    purpose: SearchPurpose,
+    header: list[str],
+    data_rows: list[list[str]],
+    source_label: str,
+) -> list[EvidenceItem]:
+    """ヘッダー・列意味に基づき値列を決めてから抽出する(行の最初の数値を採らない)。
+
+    - 年・地域列は値として採用しない(時点・地域として付随情報に回す)。
+    - パラメータ別名/期待単位/値語に一致する列を値列とする。
+    - 複数候補があれば先頭を採用しつつ、候補と判断理由を locator に残す(自動確定しない)。
+    - 単位はセル→列ヘッダーの順で推定し、根拠がなければ空欄(目標単位を無条件採用しない)。
+    """
+    aliases = _param_aliases(param)
+    expected = expected_units_for(param.unit)
+    meta = _doc_meta(doc)
+    ncols = max([len(header), *(len(r) for r in data_rows)], default=0)
+    if ncols == 0:
+        return []
+
+    def col_header(i: int) -> str:
+        return header[i] if i < len(header) else ""
+
+    year_cols = {i for i in range(ncols) if _YEAR_COL_RE.search(col_header(i))}
+    geo_cols = {i for i in range(ncols) if _GEO_COL_RE.search(col_header(i))}
+    excluded = year_cols | geo_cols
+
+    alias_cols = [
+        i for i in range(ncols)
+        if i not in excluded and any(a and a in col_header(i) for a in aliases)
+    ]
+    unit_word_cols = [
+        i for i in range(ncols)
+        if i not in excluded
+        and (_VALUE_WORD_RE.search(col_header(i)) or (_infer_column_unit(col_header(i)) or "?") in expected)
+    ]
+    numeric_cols = [
+        i for i in range(ncols)
+        if i not in excluded and any(
+            r[i].strip() and _parse_cell_number(r[i]) is not None for r in data_rows if i < len(r)
+        )
+    ]
+
+    candidates = alias_cols or unit_word_cols or numeric_cols
+    if not candidates:
+        return []
+    value_col = candidates[0]
+    basis = "別名一致" if alias_cols else ("値語/単位一致" if unit_word_cols else "年・地域を除く数値列")
+    reason = f"値列=「{col_header(value_col)}」({basis})"
+    if len(candidates) > 1:
+        reason += f" / 候補: {[col_header(i) for i in candidates]}(先頭を採用)"
+
+    header_alias_match = bool(alias_cols) or any(
+        a and a in col_header(i) for i in range(ncols) for a in aliases
+    )
+
+    chosen: tuple[int, list[str]] | None = None
+    for r_idx, row in enumerate(data_rows):
+        if any(a and a in " ".join(row) for a in aliases):
+            chosen = (r_idx, row)
+            break
+    if chosen is None and header_alias_match:
+        for r_idx, row in enumerate(data_rows):
+            if value_col < len(row) and _parse_cell_number(row[value_col]) is not None:
+                chosen = (r_idx, row)
+                break
+    if chosen is None:
+        return []
+
+    r_idx, row = chosen
+    if value_col >= len(row):
+        return []
+    parsed = _parse_cell_number(row[value_col])
+    if parsed is None:
+        return []
+    value, cell_unit = parsed
+    unit = cell_unit or _infer_column_unit(col_header(value_col))
+    unit_basis = "セル単位" if cell_unit else ("列ヘッダー" if unit else "不明")
+    # 単位が判明していて期待単位に合わない場合は採らない(空欄を無条件採用しない)
+    if unit and unit not in expected and "" not in expected:
+        return []
+
+    time_val = next(
+        (row[i] for i in sorted(year_cols) if i < len(row) and row[i].strip()), ""
+    )
+    geo_val = next(
+        (row[i] for i in sorted(geo_cols) if i < len(row) and row[i].strip()), ""
+    )
+    item = _base_item(doc, param, query, purpose, meta)
+    item.extracted_value = value
+    item.unit = unit
+    if time_val and not item.time_period:
+        item.time_period = time_val
+    if geo_val and not item.geography:
+        item.geography = geo_val
+    item.short_supporting_excerpt = f"{','.join(header)} | {','.join(row)}"[:220]
+    item.locator = f"{source_label} 行{r_idx + 1} 列{value_col + 1}: {reason}; 単位根拠={unit_basis}"
+    item.extraction_method = "structured"
+    return [item]
+
+
 def extract_from_tables(
     doc: FetchedDocument,
     param: ParameterEstimate,
     query: str,
     purpose: SearchPurpose,
 ) -> list[EvidenceItem]:
-    """HTML表から、パラメータ別名にマッチする行の数値を抽出する。"""
-    aliases = _param_aliases(param)
-    expected = expected_units_for(param.unit)
-    meta = _doc_meta(doc)
-    items: list[EvidenceItem] = []
+    """HTML/Excel 表から、列意味に基づいて値を抽出する。"""
     for t_idx, table in enumerate(doc.tables):
-        for r_idx, row in enumerate(table):
-            row_text = " ".join(row)
-            if not any(a in row_text for a in aliases):
-                continue
-            for cell in row:
-                m = _NUMBER_PATTERN.search(cell)
-                if not m:
-                    continue
-                unit_norm = _UNIT_NORMALIZE.get((m.group(2) or "").lower(), "")
-                if not _acceptable(unit_norm, m.group(1), expected) and not _has_scale(m.group(1)):
-                    continue
-                try:
-                    value = parse_japanese_number(m.group(1))
-                except ValueError:
-                    continue
-                item = _base_item(doc, param, query, purpose, meta)
-                item.extracted_value = value
-                item.unit = unit_norm or ("" if "" in expected else param.unit)
-                item.short_supporting_excerpt = row_text[:220]
-                item.locator = f"表{t_idx + 1} 行{r_idx + 1}"
-                item.extraction_method = "structured"
-                items.append(item)
-                break
-            if items:
-                break
+        if not table:
+            continue
+        header = table[0]
+        data_rows = table[1:] if len(table) > 1 else table
+        items = _extract_from_grid(
+            doc, param, query, purpose, header, data_rows, f"表{t_idx + 1}"
+        )
         if items:
-            break
-    return items
+            return items
+    return []
 
 
 def extract_from_csv(
@@ -321,9 +454,6 @@ def extract_from_csv(
     query: str,
     purpose: SearchPurpose,
 ) -> list[EvidenceItem]:
-    aliases = _param_aliases(param)
-    meta = _doc_meta(doc)
-    items: list[EvidenceItem] = []
     try:
         reader = csv.reader(io.StringIO(doc.text))
         rows = [row for row in reader if row]
@@ -338,34 +468,8 @@ def extract_from_csv(
             header_idx = i
             break
     header = rows[header_idx]
-    for r_idx, row in enumerate(rows[header_idx + 1 :], start=header_idx + 2):
-        row_text = " ".join(row)
-        if not any(a in row_text for a in aliases):
-            continue
-        for c_idx, cell in enumerate(row):
-            m = re.fullmatch(r"\s*([0-9][0-9,]*(?:\.[0-9]+)?)\s*", cell)
-            if not m:
-                continue
-            value = float(m.group(1).replace(",", ""))
-            col_name = header[c_idx] if c_idx < len(header) else ""
-            unit = ""
-            if "%" in col_name or "率" in col_name:
-                unit = "percent"
-            elif "台" in col_name:
-                unit = "item"
-            elif "世帯" in col_name:
-                unit = "household"
-            item = _base_item(doc, param, query, purpose, meta)
-            item.extracted_value = value
-            item.unit = unit
-            item.short_supporting_excerpt = f"{','.join(header)} | {','.join(row)}"[:220]
-            item.locator = f"CSV 行{r_idx} 列{c_idx + 1}({col_name})"
-            item.extraction_method = "structured"
-            items.append(item)
-            break
-        if items:
-            break
-    return items
+    data_rows = rows[header_idx + 1 :]
+    return _extract_from_grid(doc, param, query, purpose, header, data_rows, "CSV")
 
 
 def extract_from_text(
