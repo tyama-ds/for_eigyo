@@ -58,10 +58,16 @@ class QuestionSpec(BaseModel):
     subject: str = ""
     geography: str = ""
     reference_date: str = ""  # 例 "2026" / "2026-07"
-    time_period: str = ""  # フローの場合の対象期間 例 "1年間"
+    time_period: str = ""  # 表示用の対象期間文字列 例 "1年間" / "7日間"
+    # 構造化した期間(文字列に頼らず量・単位・レート/合計を区別する)。
+    # 「毎日」= (1, day, rate=True)、「7日間の合計」= (7, day, rate=False)。
+    period_quantity: float = 1.0
+    period_unit: str = ""  # 正準単位: hour/day/week/month/year(空=期間なし)
+    period_is_rate: bool = True  # True=単位あたりのレート、False=期間全体の合計
     stock_or_flow: StockOrFlow = StockOrFlow.UNKNOWN
     target_metric: str = ""
-    target_unit: str = ""
+    target_unit: str = ""  # 正準単位(person/item/event/store/JPY 等)
+    target_unit_display: str = ""  # 日本語の助数詞(本/台/匹/件/人 等。表示専用)
     inclusions: list[str] = Field(default_factory=list)
     exclusions: list[str] = Field(default_factory=list)
     known_facts: list[str] = Field(default_factory=list)

@@ -55,8 +55,11 @@ def apply_default_range(param: ParameterEstimate) -> None:
 
 
 def flow_period_unit(spec: QuestionSpec) -> str:
-    """フロー質問の期間 pint 単位(day/month/year)。不明時は year を仮定。"""
-    return period_to_unit(spec.time_period) or "year"
+    """フロー質問の期間 pint 単位(hour/day/week/month/year)。不明時は year を仮定。
+
+    構造化済みの period_unit を最優先し、無ければ表示文字列から復元する。
+    """
+    return spec.period_unit or period_to_unit(spec.time_period) or "year"
 
 
 def flow_target_unit(spec: QuestionSpec) -> str:

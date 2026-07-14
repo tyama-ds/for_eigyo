@@ -436,6 +436,14 @@ async def create_project(request: Request, body: CreateProjectRequest):
     llm = current_llm(request.app)
     from datetime import UTC, datetime
 
+    from fermiscope.question.parser import is_known_target_unit
+
+    if not is_known_target_unit(body.target_unit):
+        raise HTTPException(
+            status_code=422,
+            detail=f"未知の単位『{body.target_unit}』です。既知の助数詞(人/台/本/件/店/社/円 等)"
+            "または正準単位で指定してください。",
+        )
     spec, ai_assisted = await parse_question(
         body.question,
         llm,
@@ -495,6 +503,14 @@ async def get_project(request: Request, project_id: str):
 async def update_question(request: Request, project_id: str, body: UpdateQuestionRequest):
     _ensure_not_running(request, project_id)
     from fermiscope.domain.enums import StockOrFlow
+    from fermiscope.question.parser import is_known_target_unit
+
+    # 単位はスコープ更新でも create と同じ検証をかける(未知単位を無言変換しない)
+    if body.target_unit is not None and not is_known_target_unit(body.target_unit):
+        raise HTTPException(
+            status_code=422,
+            detail=f"未知の単位『{body.target_unit}』です。既知の助数詞または正準単位で指定してください。",
+        )
 
     # スコープを定義するフィールド(変更時は旧スコープの派生状態を破棄する)
     scope_fields = ("subject", "geography", "reference_date", "target_unit", "time_period")

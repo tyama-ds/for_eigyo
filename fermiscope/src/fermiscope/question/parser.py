@@ -20,14 +20,80 @@ _GEO_PATTERN = re.compile(
 
 _YEAR_PATTERN = re.compile(r"((?:19|20)\d{2})年")
 
-# フロー(期間あたりの流量)判定。
-# 「2021年」「2026年1月1日」のような日付・年号の部分一致で誤ってフロー判定しないよう、
-# レート/継続を示す表現(毎日・N日あたり・N日に・N日間・年間 等)に限定する。
-_FLOW_HINTS = [
-    (re.compile(r"毎日|日あたり|日当たり|[0-9０-９]+\s*日\s*(?:に|で|間|あたり|当たり)"), "1日"),
-    (re.compile(r"毎年|年あたり|年当たり|年間|[0-9０-９]+\s*年\s*(?:に|で|間)"), "1年間"),
-    (re.compile(r"毎月|月あたり|月当たり|月間|[0-9０-９]*\s*か?月\s*(?:に|で|間)"), "1か月"),
+# 全角数字→半角
+_ZEN2HAN = str.maketrans("０１２３４５６７８９", "0123456789")
+
+# 期間単位語 → 正準単位(長い語を先に判定)。
+_PERIOD_UNIT_WORDS: list[tuple[str, str]] = [
+    ("時間", "hour"),
+    ("週間", "week"),
+    ("週", "week"),
+    ("か月", "month"),
+    ("ヶ月", "month"),
+    ("カ月", "month"),
+    ("箇月", "month"),
+    ("日", "day"),
+    ("年", "year"),
+    ("月", "month"),
 ]
+
+# 正準単位 → 表示用の期間文字列(レート、量=1)。
+_RATE_PERIOD_LABEL = {
+    "hour": "1時間", "day": "1日", "week": "1週間", "month": "1か月", "year": "1年間",
+}
+
+
+def _period_unit_of(word: str) -> str:
+    for w, unit in _PERIOD_UNIT_WORDS:
+        if w in word:
+            return unit
+    return ""
+
+
+def _parse_period(question: str) -> tuple[str, float, str, bool] | None:
+    """問いから期間を構造化して取り出す。
+
+    Returns (表示文字列, 量, 正準単位, レートか) または None(期間なし)。
+    「毎日」→ (1日, 1, day, True)。「7日間」→ (7日間, 7, day, False)。
+    「年間」→ (1年間, 1, year, True)。日付・年号(2021年 等)は期間として拾わない。
+    """
+    q = question.translate(_ZEN2HAN)
+    # 1) 「毎<単位>」= 単位あたりのレート(量=1)
+    for word, unit in (("毎時", "hour"), ("毎日", "day"), ("毎週", "week"),
+                       ("毎月", "month"), ("毎年", "year")):
+        if word in q:
+            return _RATE_PERIOD_LABEL[unit], 1.0, unit, True
+    # 2) 「<単位>あたり/当たり」= レート(量=1)。例: 1日あたり、日当たり
+    m = re.search(r"([0-9]*)\s*(時間|日|週間?|か月|ヶ月|カ月|年)\s*(?:あたり|当たり)", q)
+    if m:
+        unit = _period_unit_of(m.group(2))
+        if unit:
+            return _RATE_PERIOD_LABEL[unit], 1.0, unit, True
+    # 3) 数値つき「N<単位>間」= 期間全体の合計(量=N)。例: 7日間、3か月間
+    m = re.search(r"([0-9]+)\s*(時間|日間|週間|か月間|ヶ月間|カ月間|年間)", q)
+    if m:
+        n = float(m.group(1))
+        unit = _period_unit_of(m.group(2))
+        if unit and n != 1:
+            return f"{m.group(1)}{m.group(2)}", n, unit, False
+        if unit:
+            return _RATE_PERIOD_LABEL[unit], 1.0, unit, True
+    # 4) 数値なしの「<単位>間」= レート(年間/月間/週間/日間 = 〜あたり)
+    m = re.search(r"(?<![0-9])(時間|日間|週間|か月間|ヶ月間|カ月間|年間|月間)", q)
+    if m:
+        unit = _period_unit_of(m.group(1))
+        if unit:
+            return _RATE_PERIOD_LABEL[unit], 1.0, unit, True
+    # 5) 「N<単位>に/で」= N==1 ならレート、それ以外は合計。例: 1日に、7日で
+    m = re.search(r"([0-9]+)\s*(時間|日|週間?|か月|ヶ月|カ月|年)\s*(?:に|で)", q)
+    if m:
+        n = float(m.group(1))
+        unit = _period_unit_of(m.group(2))
+        if unit and n == 1:
+            return _RATE_PERIOD_LABEL[unit], 1.0, unit, True
+        if unit:
+            return f"{m.group(1)}{m.group(2)}間", n, unit, False
+    return None
 
 _UNIT_HINTS: list[tuple[re.Pattern[str], str, str]] = [
     (re.compile(r"何人|人数|何名"), "人", "person"),
@@ -43,19 +109,50 @@ _UNIT_HINTS: list[tuple[re.Pattern[str], str, str]] = [
 
 _STOCK_HINTS = re.compile(r"何人いる|何台ある|何店ある|存在する|台数は|人数は|何人か")
 
+# 既知の目標単位(日本語助数詞 + 正準単位)。未知の単位は無言変換せず 422 にする。
+_KNOWN_DISPLAY_UNITS = {ja for _, ja, _ in _UNIT_HINTS} | {
+    "名", "匹", "個", "軒", "機", "隻", "冊", "枚", "杯", "着", "足",
+}
+_KNOWN_CANONICAL_UNITS = {pint for _, _, pint in _UNIT_HINTS} | {
+    "person", "household", "item", "event", "JPY", "store", "company", "dimensionless",
+}
+
+
+def is_known_target_unit(unit: str) -> bool:
+    """目標単位が既知(日本語助数詞または正準単位)か。空は許容(暫定推定)。"""
+    u = (unit or "").strip()
+    if not u:
+        return True
+    return u in _KNOWN_DISPLAY_UNITS or u in _KNOWN_CANONICAL_UNITS
+
 
 def _extract_subject(question: str, geography: str) -> str:
     text = question
     if geography:
         text = text.replace(geography, "")
+    # 期間表現を除去(毎日/N日に/N日間/1日あたり/年間 等)。subject に混ぜない。
+    text = re.sub(
+        r"(毎[時日週月年]"
+        r"|[0-9０-９]+\s*(?:時間|日間?|週間?|か月間?|ヶ月間?|カ月間?|年間?)\s*(?:に|で|の間)?"
+        r"|(?:時間|日|週|か月|年)\s*(?:あたり|当たり)"
+        r"|年間|月間|週間)",
+        "",
+        text,
+    )
     # 「都内」「市内」等の残り(地域語の接尾)を除去
     text = re.sub(r"^(都内|市内|県内|府内|国内|内)", "", text.strip())
-    # 助詞・疑問表現を刈り込む
-    text = re.sub(r"(には|では|における|の中で|に|で)", " ", text, count=1)
+    # 先頭に残る助詞(の/で/に/は/が/を/における/では/には/の中で)を除去
     text = re.sub(
-        r"(は|が)?(何人|何台|何本|何件|何世帯|何社|何店|何回|いくら|どれ(?:くらい|ぐらい)|"
-        r"何人いる|いる|ある|存在する|必要|売れる|使われる|使用される|廃棄される|"
-        r"います|ますか?|です|だ|である|でしょうか?|の?数|か|\?|\?|。|\s)+$",
+        r"^[\s、。]*(における|の中で|には|では|の|で|に|は|が|を)\s*",
+        "",
+        text.strip(),
+    )
+    # 末尾の疑問・述語を刈り込む
+    text = re.sub(
+        r"(は|が)?(何人いる|何人|何台|何本|何匹|何件|何世帯|何社|何店|何回|いくら|"
+        r"どれ(?:くらい|ぐらい)|いる|ある|存在する|必要|売れる|使われる|使用される|"
+        r"廃棄される|消費される|います|ますか?|です|だ|である|でしょうか?|の?数量?|"
+        r"か|\?|？|。|\s)+$",
         "",
         text.strip(),
     )
@@ -103,11 +200,13 @@ def parse_question_rule_based(
 
     stock_or_flow = StockOrFlow.UNKNOWN
     time_period = ""
-    for pattern, period in _FLOW_HINTS:
-        if pattern.search(question):
-            stock_or_flow = StockOrFlow.FLOW
-            time_period = period
-            break
+    period_quantity = 1.0
+    period_unit = ""
+    period_is_rate = True
+    parsed_period = _parse_period(question)
+    if parsed_period is not None:
+        time_period, period_quantity, period_unit, period_is_rate = parsed_period
+        stock_or_flow = StockOrFlow.FLOW
     if stock_or_flow == StockOrFlow.UNKNOWN:
         if _STOCK_HINTS.search(question) or re.search(r"何人|何台|人数|台数", question):
             stock_or_flow = StockOrFlow.STOCK
@@ -150,9 +249,13 @@ def parse_question_rule_based(
         geography=geography,
         reference_date=reference_date,
         time_period=time_period,
+        period_quantity=period_quantity,
+        period_unit=period_unit,
+        period_is_rate=period_is_rate,
         stock_or_flow=stock_or_flow,
         target_metric=f"{subject}の{'数量' if stock_or_flow == StockOrFlow.STOCK else 'フロー量'}",
         target_unit=target_unit,
+        target_unit_display=target_unit_ja,
         known_facts=known_facts or [],
         requested_precision="order_of_magnitude",
         language="ja",

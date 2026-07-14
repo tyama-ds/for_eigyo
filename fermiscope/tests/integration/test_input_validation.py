@@ -103,6 +103,24 @@ def test_parameter_range_metadata_present(app_client):
     assert counts and counts[0]["valid_min"] == 0.0 and counts[0]["valid_max"] is None
 
 
+def test_create_rejects_unknown_unit(app_client):
+    """未知の目標単位は無言変換せず 422。"""
+    r = app_client.post(
+        "/api/projects",
+        json={"question": PIANO_QUESTION, "target_unit": "グワイヤー"},
+    )
+    assert r.status_code == 422
+
+
+def test_scope_update_rejects_unknown_unit(app_client):
+    """スコープ更新でも未知単位は 422。"""
+    pid = _make_project(app_client)
+    r = app_client.patch(
+        f"/api/projects/{pid}/question", json={"target_unit": "架空単位ZZ"}
+    )
+    assert r.status_code == 422
+
+
 def test_parameter_update_out_of_range_is_422(app_client):
     """割合(0〜1)パラメータを 1 超へ更新すると 422。"""
     pid = _make_project(app_client)
