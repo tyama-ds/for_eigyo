@@ -12,8 +12,11 @@ python kaleido-agents/server.py --port 9400 --open
 
 - **標準ライブラリのみ**（pip install 不要）。127.0.0.1 にのみ bind し外部公開しない
 - **LLM なしでも動く**。ルールベースの計画立案とツール実行だけで依頼を完結できる
-- ⚙️ 設定から LLM（Ollama / OpenAI 互換 API / Anthropic Claude）を接続すると、
+- ⚙️ 設定から LLM（**ローカルLLM** / OpenAI 互換クラウド / Anthropic Claude）を接続すると、
   計画立案・要約・自由質問・最終回答の文章生成が LLM で強化される
+- ローカルLLM の扱いは llmlab / news-portal と同じ流儀:
+  OpenAI 互換エンドポイント・APIキー任意・**プロキシ非経由で直結**・
+  推論系モデル（DeepSeek-R1 / QwQ 等）の `<think>` 分離に対応
 
 ## アーキテクチャ
 
@@ -69,9 +72,28 @@ python kaleido-agents/server.py --port 9400 --open
 
 | プロバイダ | ベースURL 既定値 | 備考 |
 |-----------|------------------|------|
-| Ollama | `http://127.0.0.1:11434` | ローカル |
-| OpenAI 互換 | `http://127.0.0.1:1234/v1` | LM Studio / vLLM など |
-| Anthropic | `https://api.anthropic.com` | API キー必須 |
+| ローカルLLM (`local`) | `http://localhost:11434/v1`（Ollama） | OpenAI 互換。LM Studio は `http://localhost:1234/v1`、llama.cpp / vLLM も可。**APIキー任意・プロキシ非経由で直結** |
+| OpenAI 互換クラウド (`openai`) | `https://api.openai.com/v1` | API キー必須 |
+| Anthropic (`anthropic`) | `https://api.anthropic.com` | API キー必須 |
+
+### プロキシ（社内ネットワーク向け・llmlab と同じ3モード）
+
+設定画面の「プロキシ設定」から指定。**クラウドAIと Web 取得にのみ適用**され、
+ローカルLLM（内部アドレス）へは常にプロキシを経由せず直結する。
+
+| 設定 | 動作 |
+|------|------|
+| プロキシを使う = オフ | 直結（環境変数のプロキシも無視） |
+| オン + プロキシURL 空欄 | 環境変数 `HTTP(S)_PROXY` を使用（既定） |
+| オン + プロキシURL 指定 | その URL を使用 |
+
+TLS を傍受する社内プロキシの環境では、CA 証明書のパスを
+`ca_bundle`（または環境変数 `SSL_CERT_FILE`）で指定できる。検証は常に有効。
+
+### 推論系ローカルLLM
+
+DeepSeek-R1 / QwQ などが本文に混ぜて出力する `<think>…</think>`（および
+`reasoning_content` フィールド）は本文から自動分離し、最終回答のみを利用する。
 
 ## セキュリティ上の注意
 

@@ -12,8 +12,17 @@
 - エージェントの実行エンジンと GUI はブラウザ側（index.html / app.js）
 - サーバーはブラウザからは扱えない2つのツールを提供する
     /api/fetch  … Web ページ取得（SSRF対策つき、テキスト抽出して返す）
-    /api/llm    … LLM 呼び出し（Ollama / OpenAI互換 / Anthropic。設定は kaleido.config.json）
+    /api/llm    … LLM 呼び出し（ローカルLLM / OpenAI互換 / Anthropic。設定は kaleido.config.json）
 - LLM 未設定でもルールベースの計画・実行だけで動作する
+
+ローカルLLM（news-portal / llmlab と同じ流儀）:
+- provider "local" は OpenAI 互換エンドポイント（Ollama / LM Studio / llama.cpp 等）。
+  既定は Ollama の http://localhost:11434/v1。APIキーは任意
+- ローカル（内部アドレス）の LLM へは常にプロキシ非経由で直結する
+- クラウドAI・Web取得は use_proxy 設定に従う
+  （use_proxy=False → 直結 / proxy_url 指定 → そのURL / 空 → 環境変数 HTTP(S)_PROXY）
+- TLS を傍受する社内プロキシの CA は ca_bundle（任意）で指定できる
+- 推論系ローカルLLM（DeepSeek-R1 / QwQ 等）の <think>…</think> は本文から分離する
 """
 from __future__ import annotations
 
@@ -21,8 +30,10 @@ import argparse
 import html
 import ipaddress
 import json
+import os
 import re
 import socket
+import ssl
 import sys
 import threading
 import webbrowser
@@ -42,11 +53,18 @@ FETCH_MAX_BYTES = 800_000
 FETCH_MAX_REDIRECTS = 3
 LLM_TIMEOUT = 180        # 秒。ローカルLLMは遅いことがあるので長め
 
+PROVIDERS = ("none", "local", "openai", "anthropic")
+LOCAL_DEFAULT_BASE = "http://localhost:11434/v1"   # Ollama の OpenAI互換エンドポイント
+
 DEFAULT_CONFIG = {
-    "provider": "none",          # none | ollama | openai | anthropic
-    "base_url": "",              # ollama: http://127.0.0.1:11434 / openai互換: http://.../v1
+    "provider": "none",          # none | local | openai | anthropic
+    "base_url": "",              # local: http://localhost:11434/v1 など OpenAI互換の /v1
     "model": "",
-    "api_key": "",
+    "api_key": "",               # local はキー任意
+    # プロキシ（llmlab / news-portal と同じ3モード）
+    "use_proxy": True,           # False=直結（環境変数のプロキシも無視）
+    "proxy_url": "",             # 空なら環境変数 HTTP(S)_PROXY を使用
+    "ca_bundle": "",             # 社内プロキシのCA証明書パス（任意）
 }
 
 _config_lock = threading.Lock()
@@ -61,6 +79,11 @@ def load_config() -> dict:
                 data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
                 cfg = dict(DEFAULT_CONFIG)
                 cfg.update({k: data.get(k, v) for k, v in DEFAULT_CONFIG.items()})
+                if cfg["provider"] == "ollama":     # 旧設定の移行（native API → OpenAI互換）
+                    cfg["provider"], cfg["base_url"] = "local", ""
+                if cfg["provider"] not in PROVIDERS:
+                    cfg["provider"] = "none"
+                cfg["use_proxy"] = bool(cfg["use_proxy"])
                 return cfg
             except (OSError, ValueError):
                 pass
@@ -69,9 +92,15 @@ def load_config() -> dict:
 
 def save_config(new_cfg: dict) -> dict:
     cfg = load_config()
-    for key in ("provider", "base_url", "model"):
+    for key in ("provider", "base_url", "model", "proxy_url", "ca_bundle"):
         if key in new_cfg and isinstance(new_cfg[key], str):
             cfg[key] = new_cfg[key].strip()
+    if cfg["provider"] not in PROVIDERS:
+        cfg["provider"] = "none"
+    if "use_proxy" in new_cfg:
+        cfg["use_proxy"] = bool(new_cfg["use_proxy"])
+    if not cfg["use_proxy"]:
+        cfg["proxy_url"] = ""    # 直結時は URL を保持しない（news-portal と同じ）
     # api_key は空文字で送られてきたら「変更なし」扱い（UIに平文を返さないため）
     if isinstance(new_cfg.get("api_key"), str) and new_cfg["api_key"].strip():
         cfg["api_key"] = new_cfg["api_key"].strip()
@@ -90,10 +119,14 @@ def public_config(cfg: dict) -> dict:
         "base_url": cfg["base_url"],
         "model": cfg["model"],
         "has_key": bool(cfg["api_key"]),
+        "use_proxy": cfg["use_proxy"],
+        "proxy_url": cfg["proxy_url"],
+        "ca_bundle": cfg["ca_bundle"],
+        "providers": list(PROVIDERS),
     }
 
 
-# ---------------------------------------------------------------- /api/fetch
+# ---------------------------------------------------------------- proxy / opener
 
 def _is_private_addr(host: str) -> bool:
     """host が私有/ループバック/リンクローカル等のIPに解決されるなら True。"""
@@ -112,12 +145,55 @@ def _is_private_addr(host: str) -> bool:
     return False
 
 
+def _host_is_internal(url: str) -> bool:
+    """URL のホストが内部（ローカル/プライベート）アドレスに解決されるか。"""
+    try:
+        host = urlparse(url).hostname
+        return bool(host) and _is_private_addr(host)
+    except (ValueError, UnicodeError):
+        return False
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: N802
         return None
 
 
-_opener = urllib.request.build_opener(_NoRedirect)
+def _ssl_context(cfg: dict):
+    """HTTPS 検証用の SSL コンテキスト。TLS を傍受する社内プロキシの CA は
+    ca_bundle か環境変数 SSL_CERT_FILE で指定できる。検証は常に有効。"""
+    ca = cfg.get("ca_bundle") or os.environ.get("SSL_CERT_FILE") or ""
+    try:
+        if ca and os.path.exists(ca):
+            return ssl.create_default_context(cafile=ca)
+    except (ssl.SSLError, OSError):
+        pass
+    return None   # None → urllib 既定（システムCA・環境変数を反映）
+
+
+def _make_opener(force_direct: bool = False, cfg: dict | None = None):
+    """設定に従って urllib の opener を作る（llmlab / news-portal と同じ3モード）。
+
+    - force_direct=True または use_proxy=False → 直結（環境変数のプロキシも無視）
+    - use_proxy=True + proxy_url             → その URL を使用
+    - use_proxy=True + 空                     → 環境変数 HTTP(S)_PROXY を使用
+    リダイレクトは自前で検査するため常に無効化する。
+    """
+    cfg = cfg or load_config()
+    handlers = [_NoRedirect()]
+    ctx = _ssl_context(cfg)
+    if ctx is not None:
+        handlers.append(urllib.request.HTTPSHandler(context=ctx))   # 社内CAを信頼
+    if force_direct or not cfg["use_proxy"]:
+        handlers.append(urllib.request.ProxyHandler({}))            # 直結
+    elif cfg["proxy_url"]:
+        p = cfg["proxy_url"]
+        handlers.append(urllib.request.ProxyHandler({"http": p, "https": p}))
+    # それ以外は環境変数のプロキシ（build_opener が既定の ProxyHandler を付与）
+    return urllib.request.build_opener(*handlers)
+
+
+# ---------------------------------------------------------------- /api/fetch
 
 _TAG_DROP_RE = re.compile(
     r"<(script|style|noscript|svg|iframe|head)[^>]*>.*?</\1>",
@@ -138,6 +214,7 @@ def _html_to_text(raw: str) -> str:
 
 def fetch_url(url: str) -> dict:
     """SSRF 対策つきで URL を取得し、タイトルとプレーンテキストを返す。"""
+    opener = _make_opener()
     current = url
     for _ in range(FETCH_MAX_REDIRECTS + 1):
         parsed = urlparse(current)
@@ -153,7 +230,7 @@ def fetch_url(url: str) -> dict:
             "Accept-Language": "ja,en;q=0.8",
         })
         try:
-            with _opener.open(req, timeout=FETCH_TIMEOUT) as res:
+            with opener.open(req, timeout=FETCH_TIMEOUT) as res:
                 body = res.read(FETCH_MAX_BYTES)
                 ctype = res.headers.get("Content-Type", "")
                 charset = res.headers.get_content_charset() or "utf-8"
@@ -181,47 +258,57 @@ def fetch_url(url: str) -> dict:
 
 # ---------------------------------------------------------------- /api/llm
 
-def _post_json(url: str, payload: dict, headers: dict) -> dict:
+def _post_json(url: str, payload: dict, headers: dict,
+               no_proxy: bool = False, cfg: dict | None = None) -> dict:
+    """JSON を POST して JSON を返す。no_proxy=True はローカルLLM向けの直結。"""
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=body, method="POST", headers={
         "Content-Type": "application/json", **headers,
     })
-    with urllib.request.urlopen(req, timeout=LLM_TIMEOUT) as res:
+    with _make_opener(force_direct=no_proxy, cfg=cfg).open(req, timeout=LLM_TIMEOUT) as res:
         return json.loads(res.read().decode("utf-8", errors="replace"))
 
 
-def call_llm(prompt: str, system: str = "", max_tokens: int = 1200) -> dict:
-    cfg = load_config()
+_THINK_PAIR_RE = re.compile(r"<think(?:ing)?>(.*?)</think(?:ing)?>\s*",
+                            re.DOTALL | re.IGNORECASE)
+_THINK_CLOSE_RE = re.compile(r"</think(?:ing)?>\s*", re.IGNORECASE)
+
+
+def _split_reasoning(text: str) -> tuple[str, str]:
+    """推論系ローカルLLM（DeepSeek-R1 / QwQ 等）が本文に混ぜて出力する
+    <think>…</think> の推論過程を分離する。開きタグ無しで </think> だけ来る
+    ケース（テンプレート側で <think> が消される LM Studio 等）にも対応。
+    戻り値は (最終解答, 推論過程)。全部が推論だった場合は推論を解答として返す。"""
+    if not text or "</think" not in text.lower():
+        return text, ""
+    chunks: list[str] = []
+
+    def _grab(m):
+        chunks.append(m.group(1).strip())
+        return ""
+
+    stripped = _THINK_PAIR_RE.sub(_grab, text)
+    if "</think" in stripped.lower():   # 開きタグの無い残骸: 先頭〜</think> が推論
+        parts = _THINK_CLOSE_RE.split(stripped, maxsplit=1)
+        chunks.insert(0, parts[0].strip())
+        stripped = parts[1] if len(parts) > 1 else ""
+    answer = stripped.strip()
+    reasoning = "\n\n".join(c for c in chunks if c)
+    if not answer:
+        return (reasoning or text.strip()), ""
+    return answer, reasoning
+
+
+def call_llm(prompt: str, system: str = "", max_tokens: int = 1200,
+             cfg: dict | None = None) -> dict:
+    cfg = cfg or load_config()
     provider = cfg["provider"]
     if provider == "none":
         return {"error": "LLM が未設定です（設定画面から接続先を登録してください）"}
+    # ローカルLLM はAPIキー不要。クラウドはキー必須。
+    if provider in ("openai", "anthropic") and not cfg["api_key"]:
+        return {"error": f"{provider} には API キーが必要です（設定画面から登録してください）"}
     try:
-        if provider == "ollama":
-            base = (cfg["base_url"] or "http://127.0.0.1:11434").rstrip("/")
-            messages = ([{"role": "system", "content": system}] if system else [])
-            messages.append({"role": "user", "content": prompt})
-            data = _post_json(f"{base}/api/chat", {
-                "model": cfg["model"] or "llama3.1",
-                "messages": messages,
-                "stream": False,
-                "options": {"num_predict": max_tokens},
-            }, {})
-            return {"text": (data.get("message") or {}).get("content", "")}
-        if provider == "openai":
-            base = (cfg["base_url"] or "http://127.0.0.1:1234/v1").rstrip("/")
-            headers = {}
-            if cfg["api_key"]:
-                headers["Authorization"] = f"Bearer {cfg['api_key']}"
-            messages = ([{"role": "system", "content": system}] if system else [])
-            messages.append({"role": "user", "content": prompt})
-            data = _post_json(f"{base}/chat/completions", {
-                "model": cfg["model"] or "gpt-4o-mini",
-                "messages": messages,
-                "max_tokens": max_tokens,
-            }, headers)
-            choices = data.get("choices") or []
-            text = (choices[0].get("message") or {}).get("content", "") if choices else ""
-            return {"text": text}
         if provider == "anthropic":
             base = (cfg["base_url"] or "https://api.anthropic.com").rstrip("/")
             payload = {
@@ -234,11 +321,42 @@ def call_llm(prompt: str, system: str = "", max_tokens: int = 1200) -> dict:
             data = _post_json(f"{base}/v1/messages", payload, {
                 "x-api-key": cfg["api_key"],
                 "anthropic-version": "2023-06-01",
-            })
+            }, cfg=cfg)
             blocks = data.get("content") or []
             text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
             return {"text": text}
-        return {"error": f"未知のプロバイダです: {provider}"}
+
+        # OpenAI 互換（Chat Completions）— local / openai 共通
+        if provider == "local":
+            base = (cfg["base_url"] or LOCAL_DEFAULT_BASE).rstrip("/")
+            default_model = "llama3.1"
+            # ローカル(=内部アドレス)のみプロキシ非経由で直結。外部URLならプロキシ設定に従う
+            no_proxy = _host_is_internal(base)
+        else:
+            base = (cfg["base_url"] or "https://api.openai.com/v1").rstrip("/")
+            default_model = "gpt-4o-mini"
+            no_proxy = False
+        headers = {"Authorization": f"Bearer {cfg['api_key']}"} if cfg["api_key"] else {}
+        messages = ([{"role": "system", "content": system}] if system else [])
+        messages.append({"role": "user", "content": prompt})
+        data = _post_json(f"{base}/chat/completions", {
+            "model": cfg["model"] or default_model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+        }, headers, no_proxy=no_proxy, cfg=cfg)
+        choices = data.get("choices") or [{}]
+        msg = choices[0].get("message") or {}
+        content = (msg.get("content") or "").strip()
+        # 推論を別フィールドで返す実装（DeepSeek API / Ollama 等）は <think> に畳み、
+        # 下の _split_reasoning で本文と一元的に分離する
+        rc = (msg.get("reasoning_content") or msg.get("reasoning") or "").strip()
+        if rc:
+            content = f"<think>{rc}</think>\n{content}"
+        answer, reasoning = _split_reasoning(content)
+        out = {"text": answer}
+        if reasoning:
+            out["reasoning"] = reasoning[:4000]
+        return out
     except urllib.error.HTTPError as e:
         detail = ""
         try:

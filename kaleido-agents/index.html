@@ -86,13 +86,15 @@
   <form method="dialog" class="dialog-body" id="settings-form">
     <h3>⚙️ 設定 — LLM 接続</h3>
     <p class="dialog-note">LLM は任意です。未設定でもルールベースの計画・ツール実行だけで動きます。<br>
-       接続すると計画立案・要約・文章生成が LLM で強化されます。</p>
+       接続すると計画立案・要約・文章生成が LLM で強化されます。<br>
+       <strong>ローカルLLM</strong> は OpenAI 互換エンドポイント（Ollama / LM Studio / llama.cpp 等）。
+       APIキー任意・プロキシ非経由で直結します。</p>
     <label class="field">
       <span>プロバイダ</span>
       <select id="cfg-provider">
         <option value="none">使わない（ルールベースのみ）</option>
-        <option value="ollama">Ollama（ローカル）</option>
-        <option value="openai">OpenAI 互換 API（LM Studio / vLLM など）</option>
+        <option value="local">ローカルLLM（Ollama / LM Studio / llama.cpp — OpenAI互換）</option>
+        <option value="openai">OpenAI 互換クラウド API</option>
         <option value="anthropic">Anthropic Claude</option>
       </select>
     </label>
@@ -105,9 +107,24 @@
       <input id="cfg-model" type="text" placeholder="例: llama3.1 / gpt-4o-mini / claude-haiku-4-5-20251001">
     </label>
     <label class="field">
-      <span>API キー <small id="cfg-key-state"></small></span>
+      <span>API キー <small id="cfg-key-state"></small>（ローカルLLMは空欄でOK）</span>
       <input id="cfg-key" type="password" placeholder="変更しない場合は空欄のまま">
     </label>
+    <details id="cfg-proxy-box" class="cfg-details">
+      <summary>プロキシ設定（クラウドAI・Web取得に適用。ローカルLLMは常に直結）</summary>
+      <label class="field field-check">
+        <input id="cfg-use-proxy" type="checkbox" checked>
+        <span>プロキシを使う（オフ = 環境変数のプロキシも無視して直結）</span>
+      </label>
+      <label class="field">
+        <span>プロキシ URL（空欄 = 環境変数 HTTP(S)_PROXY を使用）</span>
+        <input id="cfg-proxy-url" type="text" placeholder="例: http://proxy.example:8080">
+      </label>
+      <label class="field">
+        <span>社内プロキシ CA 証明書パス（任意。TLS傍受プロキシ環境向け）</span>
+        <input id="cfg-ca" type="text" placeholder="例: C:\certs\company-ca.pem">
+      </label>
+    </details>
     <div class="dialog-actions">
       <button type="button" id="btn-test-llm" class="ghost-btn">接続テスト</button>
       <span id="test-result" class="test-result"></span>

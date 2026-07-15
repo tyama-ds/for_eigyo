@@ -566,6 +566,18 @@ body {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--c-orchestra) 20%, transparent);
 }
 .field-row { display: flex; gap: 10px; }
+.field-check { flex-direction: row; align-items: center; gap: 8px; }
+.field-check span { font-size: .78rem; font-weight: 500; }
+.field-check input { accent-color: var(--c-orchestra); width: 15px; height: 15px; }
+.cfg-details {
+  border: 1px dashed var(--border); border-radius: 10px;
+  padding: 9px 12px;
+}
+.cfg-details summary {
+  cursor: pointer; font-size: .74rem; font-weight: 700; color: var(--fg-dim);
+}
+.cfg-details[open] summary { margin-bottom: 10px; }
+.cfg-details .field { margin-bottom: 9px; }
 .field-icon { max-width: 90px; }
 .dialog-actions { display: flex; align-items: center; gap: 9px; margin-top: 4px; }
 .dialog-actions .spacer { flex: 1; }
