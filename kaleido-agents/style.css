@@ -455,6 +455,31 @@ body {
 .md table { border-collapse: collapse; margin: .5em 0; font-size: .84rem; }
 .md th, .md td { border: 1px solid var(--border); padding: 4px 10px; }
 
+/* 図表（chart ツールが生成する SVG） */
+.chart-box {
+  margin: 12px 0 4px;
+  padding: 12px 12px 8px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-panel);
+  overflow-x: auto;
+}
+.chart-box svg {
+  display: block;
+  width: 100%;
+  max-width: 560px;
+  height: auto;
+  margin: 0 auto;
+  color: var(--fg);          /* SVG 内テキストは currentColor でテーマ追従 */
+}
+
+/* ツールカードの担当候補ドット */
+.cap-dots { display: inline-flex; gap: 3px; align-items: center; }
+.cap-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  display: inline-block; flex: none;
+}
+
 /* ---------------- コンポーザ ---------------- */
 .composer {
   display: flex; gap: 10px; align-items: flex-end;
