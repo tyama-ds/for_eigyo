@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="ja" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kaleido Agents — マルチエージェント・オーケストレータ</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%238b5cf6'/%3E%3Cstop offset='.5' stop-color='%23ec4899'/%3E%3Cstop offset='1' stop-color='%23f59e0b'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='100' height='100' rx='24' fill='url(%23g)'/%3E%3Ccircle cx='38' cy='38' r='12' fill='%23fff' opacity='.95'/%3E%3Ccircle cx='66' cy='52' r='9' fill='%23fff' opacity='.8'/%3E%3Ccircle cx='44' cy='68' r='7' fill='%23fff' opacity='.65'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-logo" aria-hidden="true">
+      <span class="dot d1"></span><span class="dot d2"></span><span class="dot d3"></span>
+    </div>
+    <div class="brand-text">
+      <h1>Kaleido <span class="grad">Agents</span></h1>
+      <p>依頼を分解し、サブエージェントとツールで完結させるオーケストレータ</p>
+    </div>
+  </div>
+  <div class="topbar-actions">
+    <span id="llm-badge" class="llm-badge off" title="LLM 接続状態">LLM 未接続</span>
+    <button id="btn-theme" class="icon-btn" title="テーマ切替" aria-label="テーマ切替">🌗</button>
+    <button id="btn-settings" class="icon-btn" title="設定" aria-label="設定">⚙️</button>
+  </div>
+</header>
+
+<main class="layout">
+
+  <!-- ============ 左: エージェント & ツールのレジストリ ============ -->
+  <aside class="panel panel-left">
+    <section class="reg-section">
+      <h2 class="panel-title"><span class="title-chip chip-agents">TEAM</span>サブエージェント</h2>
+      <div id="agent-list" class="agent-list"></div>
+    </section>
+    <section class="reg-section">
+      <h2 class="panel-title"><span class="title-chip chip-tools">TOOLS</span>ツールモジュール
+        <button id="btn-add-tool" class="mini-btn" title="カスタムツールを追加">＋ 追加</button>
+      </h2>
+      <div id="tool-list" class="tool-list"></div>
+    </section>
+  </aside>
+
+  <!-- ============ 中央: 依頼と実行 ============ -->
+  <section class="panel panel-center">
+    <div id="chat" class="chat" aria-live="polite">
+      <div id="hero" class="hero">
+        <div class="hero-orbs" aria-hidden="true">
+          <span class="orb o1"></span><span class="orb o2"></span><span class="orb o3"></span>
+          <span class="orb o4"></span><span class="orb o5"></span>
+        </div>
+        <h2>なにを完結させますか？</h2>
+        <p>依頼を入力すると、オーケストレータが計画を立て、<br>
+           サブエージェントがツールを使い分けて最後まで実行します。</p>
+        <div id="sample-chips" class="sample-chips"></div>
+      </div>
+    </div>
+    <form id="composer" class="composer" autocomplete="off">
+      <textarea id="composer-input" rows="2" placeholder="依頼を書く…（例: 1280×(12+8)÷4 を計算して、結果をメモに保存して）&#10;Shift+Enter で改行 / Enter で実行"></textarea>
+      <button id="btn-run" type="submit" class="run-btn">
+        <span class="run-label">実行</span><span class="run-icon">▶</span>
+      </button>
+    </form>
+  </section>
+
+  <!-- ============ 右: インスペクタ & 履歴 ============ -->
+  <aside class="panel panel-right">
+    <section class="reg-section">
+      <h2 class="panel-title"><span class="title-chip chip-inspect">TRACE</span>インスペクタ</h2>
+      <div id="inspector" class="inspector">
+        <p class="placeholder">実行するとステップごとのツール入出力がここに表示されます。</p>
+      </div>
+    </section>
+    <section class="reg-section">
+      <h2 class="panel-title"><span class="title-chip chip-history">LOG</span>実行履歴
+        <button id="btn-clear-history" class="mini-btn" title="履歴を消去">消去</button>
+      </h2>
+      <div id="history" class="history"></div>
+    </section>
+  </aside>
+</main>
+
+<!-- ============ 設定モーダル ============ -->
+<dialog id="dlg-settings" class="dialog">
+  <form method="dialog" class="dialog-body" id="settings-form">
+    <h3>⚙️ 設定 — LLM 接続</h3>
+    <p class="dialog-note">LLM は任意です。未設定でもルールベースの計画・ツール実行だけで動きます。<br>
+       接続すると計画立案・要約・文章生成が LLM で強化されます。</p>
+    <label class="field">
+      <span>プロバイダ</span>
+      <select id="cfg-provider">
+        <option value="none">使わない（ルールベースのみ）</option>
+        <option value="ollama">Ollama（ローカル）</option>
+        <option value="openai">OpenAI 互換 API（LM Studio / vLLM など）</option>
+        <option value="anthropic">Anthropic Claude</option>
+      </select>
+    </label>
+    <label class="field">
+      <span>ベース URL <small id="cfg-base-hint"></small></span>
+      <input id="cfg-base" type="text" placeholder="空欄で既定値">
+    </label>
+    <label class="field">
+      <span>モデル名</span>
+      <input id="cfg-model" type="text" placeholder="例: llama3.1 / gpt-4o-mini / claude-haiku-4-5-20251001">
+    </label>
+    <label class="field">
+      <span>API キー <small id="cfg-key-state"></small></span>
+      <input id="cfg-key" type="password" placeholder="変更しない場合は空欄のまま">
+    </label>
+    <div class="dialog-actions">
+      <button type="button" id="btn-test-llm" class="ghost-btn">接続テスト</button>
+      <span id="test-result" class="test-result"></span>
+      <span class="spacer"></span>
+      <button type="button" class="ghost-btn" data-close>閉じる</button>
+      <button type="submit" class="primary-btn">保存</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ============ カスタムツール作成モーダル ============ -->
+<dialog id="dlg-tool" class="dialog">
+  <form method="dialog" class="dialog-body" id="tool-form">
+    <h3>🧩 カスタムツールを追加</h3>
+    <p class="dialog-note">JavaScript でツールを定義します。このブラウザ内でのみ実行・保存されます。<br>
+       <strong>信頼できるコードだけを登録してください。</strong></p>
+    <div class="field-row">
+      <label class="field">
+        <span>ツール名</span>
+        <input id="tool-name" type="text" required placeholder="例: 税込計算">
+      </label>
+      <label class="field field-icon">
+        <span>アイコン</span>
+        <input id="tool-icon" type="text" maxlength="4" placeholder="🛠️">
+      </label>
+    </div>
+    <label class="field">
+      <span>説明</span>
+      <input id="tool-desc" type="text" placeholder="このツールが何をするか">
+    </label>
+    <div class="field-row">
+      <label class="field">
+        <span>起動キーワード（読点・カンマ区切り）</span>
+        <input id="tool-keywords" type="text" placeholder="例: 税込, 消費税">
+      </label>
+      <label class="field">
+        <span>担当エージェント</span>
+        <select id="tool-agent"></select>
+      </label>
+    </div>
+    <label class="field">
+      <span>関数本体 — <code>async (input, ctx) =&gt; { ... }</code> の中身</span>
+      <textarea id="tool-body" rows="7" spellcheck="false" placeholder="// input: 依頼文字列, ctx.results: これまでのステップ結果
+const n = parseFloat(input.replace(/[^\d.]/g, '')) || 0;
+return `${n}円の税込は ${Math.round(n * 1.1)}円です`;"></textarea>
+    </label>
+    <div class="dialog-actions">
+      <span class="spacer"></span>
+      <button type="button" class="ghost-btn" data-close>キャンセル</button>
+      <button type="submit" class="primary-btn">登録</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ============ ツール単体実行モーダル ============ -->
+<dialog id="dlg-run-tool" class="dialog">
+  <form method="dialog" class="dialog-body" id="run-tool-form">
+    <h3 id="run-tool-title">ツールを単体実行</h3>
+    <label class="field">
+      <span>入力</span>
+      <textarea id="run-tool-input" rows="3" spellcheck="false"></textarea>
+    </label>
+    <pre id="run-tool-output" class="tool-output" hidden></pre>
+    <div class="dialog-actions">
+      <span class="spacer"></span>
+      <button type="button" class="ghost-btn" data-close>閉じる</button>
+      <button type="submit" class="primary-btn">実行</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast-box" class="toast-box" aria-live="assertive"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
