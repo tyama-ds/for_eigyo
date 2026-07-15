@@ -297,7 +297,7 @@ function jsonToDataset(data) {
     （系列の区切りは / ; 改行、系列名の後に : ）。 */
 function extractChartDataset(request, ctx) {
   const jsonPrev = [...ctx.results].reverse()
-    .find((r) => r.ok && r.toolId === "json-tool" && r.data !== undefined);
+    .find((r) => r.ok && !r.superseded && r.toolId === "json-tool" && r.data !== undefined);
   if (jsonPrev) {
     const ds = jsonToDataset(jsonPrev.data);
     if (ds) return { ...ds, source: "JSON整形の結果" };
@@ -560,7 +560,9 @@ const BUILTIN_TOOLS = [
       };
       const norm = normalizeExpr(input).toLowerCase();
       const unitPat = "(km/h|m/s|mph|マイル|フィート|インチ|ポンド|トン|キロ毎時|mm|cm|km|mi|ft|in|kg|oz|lb|tb|gb|mb|kb|[mgtb℃℉])";
-      const m = norm.match(new RegExp(`(-?\\d+(?:\\.\\d+)?)\\s*${unitPat}\\s*(?:を|から|は|\\s|=|→|to)+\\s*${unitPat}`, "i"));
+      const m = norm.match(new RegExp(`(-?\\d+(?:\\.\\d+)?)\\s*${unitPat}\\s*(?:を|から|は|\\s|=|→|to)+\\s*${unitPat}`, "i"))
+        // パイプ注入後の「42 を km として マイルに」のような言い回しにも対応
+        || norm.match(new RegExp(`(-?\\d+(?:\\.\\d+)?)\\s*を?\\s*${unitPat}\\s*(?:として|とみなして|で)\\s*${unitPat}`, "i"));
       if (!m) throw new Error("「42.195km をマイルに」のような形式で書いてください");
       const [, numStr, fromU, toU] = m;
       const val = parseFloat(numStr);
@@ -642,7 +644,8 @@ const BUILTIN_TOOLS = [
     id: "summarize", name: "要約", icon: "📝", color: "#ec4899", agents: ["writer", "researcher"],
     desc: "取得したページや与えられた文章を要約する（LLM 接続時は LLM、未接続時は抽出型）",
     async run(input, ctx) {
-      const fetched = [...ctx.results].reverse().find((r) => r.toolId === "web-fetch" && r.data?.text);
+      const fetched = [...ctx.results].reverse()
+        .find((r) => r.toolId === "web-fetch" && !r.superseded && r.data?.text);
       const source = fetched ? fetched.data.text : (extractQuoted(ctx.request) || input);
       if (!source || source.length < 30) throw new Error("要約する対象のテキストが見つかりませんでした");
       const label = fetched ? `ページ「${fetched.data.title || fetched.data.url}」` : "与えられたテキスト";
@@ -667,7 +670,8 @@ const BUILTIN_TOOLS = [
         let body = extractQuoted(req) ||
           req.replace(/^.*?(覚えて|記憶して|メモして|保存して)[:：、\s]*/s, "").trim();
         if (/(結果|answer|それ)を?(メモ|保存|覚)/.test(req)) {
-          const prev = [...ctx.results].reverse().find((r) => r.data !== undefined || r.text);
+          const prev = [...ctx.results].reverse()
+            .find((r) => r.ok && !r.superseded && (r.data !== undefined || r.text));
           if (prev) {
             const prevTxt = prev.text ? prev.text.replace(/[*`]/g, "") : String(prev.data);
             body = body && !/^(結果|それ)$/.test(body) ? `${body} → ${prevTxt}` : prevTxt;
@@ -767,7 +771,7 @@ const BUILTIN_TOOLS = [
     desc: "データを表（テーブル）に整形。複数系列や JSON 整形の結果にも対応、数値列は合計行つき",
     run(input, ctx) {
       const jsonPrev = [...ctx.results].reverse()
-        .find((r) => r.ok && r.toolId === "json-tool" && r.data !== undefined);
+        .find((r) => r.ok && !r.superseded && r.toolId === "json-tool" && r.data !== undefined);
       // 1) オブジェクト配列の JSON → 汎用テーブル（キー = 列）
       if (jsonPrev && Array.isArray(jsonPrev.data)
           && jsonPrev.data.some((r) => r && typeof r === "object" && !Array.isArray(r))) {
@@ -817,7 +821,7 @@ const BUILTIN_TOOLS = [
     async run(input, ctx) {
       if (!ctx.llmOn) throw new Error("LLM が未設定です（⚙️ 設定から接続してください）");
       const prior = ctx.results
-        .filter((r) => r.text)
+        .filter((r) => r.ok && r.text && !r.superseded)
         .map((r) => `【${r.toolName} の結果】\n${r.text.replace(/\*\*/g, "")}`)
         .join("\n\n");
       const prompt = prior
@@ -966,6 +970,64 @@ function assignAgents(steps) {
   return { steps: out, notes };
 }
 
+/* ---- パイプ機構: ステップ入力に前ステップの結果を注入する ---- */
+
+/** 直近の成功結果を短いテキストにする（数値ならそのまま、文章は整形して切り詰め） */
+function resultToText(r) {
+  if (!r) return "";
+  if (r.data !== undefined && typeof r.data !== "object") return String(r.data);
+  return truncate((r.text || "").replace(/[*`#>]/g, "").replace(/\s+/g, " ").trim(), 400);
+}
+
+/** {{前の結果}} / {{ステップN}} / 「その結果」を実行時に解決する */
+function resolvePipes(input, ctx) {
+  const active = ctx.results.filter((r) => !r.superseded);
+  const lastOk = [...active].reverse().find((r) => r.ok);
+  const prevStr = resultToText(lastOk);
+  let out = String(input);
+  out = out.replace(/\{\{\s*(前の結果|直前の結果|結果|prev|previous)\s*\}\}/gi, prevStr);
+  out = out.replace(/\{\{\s*(?:ステップ|step)\s*(\d+)\s*\}\}/gi, (_, n) => {
+    const r = active.filter((x) => x.ok)[+n - 1];
+    return resultToText(r);
+  });
+  // 日本語の指示語も、すでに結果がある場合のみ直前の結果に解決する
+  if (prevStr) out = out.replace(/その(結果|値|答え)/g, prevStr);
+  return out;
+}
+
+/* ---- 条件実行: LLM プランナーが step.when を付けたステップのガード ---- */
+
+/** 機械判定できる日本語条件を評価する。解釈できない条件は実行（run: true）扱い。
+    対応: 「前の結果が成功/失敗」「前の結果に◯◯を含む/含まない」
+          「前の結果が N 以上/以下/より大きい/未満」 */
+function evalCondition(when, ctx) {
+  if (!when) return { run: true };
+  const active = ctx.results.filter((r) => !r.superseded);
+  const last = active[active.length - 1];
+  const prevOk = !!(last && last.ok);
+  const prevText = last ? `${last.text || ""} ${last.data ?? ""}` : "";
+  const prevNum = last && typeof last.data === "number"
+    ? last.data
+    : parseFloat(String(last?.data ?? last?.text ?? "").replace(/[^\d.-]/g, ""));
+  let m;
+  if (/前の結果が成功/.test(when)) return { run: prevOk, why: `前の結果は${prevOk ? "成功" : "失敗"}` };
+  if (/前の結果が失敗/.test(when)) return { run: !prevOk, why: `前の結果は${prevOk ? "成功" : "失敗"}` };
+  if ((m = when.match(/前の結果[にが]「?(.+?)」?を?含まない/))) {
+    return { run: !prevText.includes(m[1]), why: `「${m[1]}」を${prevText.includes(m[1]) ? "含む" : "含まない"}` };
+  }
+  if ((m = when.match(/前の結果[にが]「?(.+?)」?を?含む/))) {
+    return { run: prevText.includes(m[1]), why: `「${m[1]}」を${prevText.includes(m[1]) ? "含む" : "含まない"}` };
+  }
+  if ((m = when.match(/前の結果が\s*(-?\d+(?:\.\d+)?)\s*(以上|以下|より大きい|未満)/))) {
+    const n = +m[1];
+    const ok = Number.isFinite(prevNum) && (
+      m[2] === "以上" ? prevNum >= n : m[2] === "以下" ? prevNum <= n
+        : m[2] === "より大きい" ? prevNum > n : prevNum < n);
+    return { run: ok, why: `前の結果 ${Number.isFinite(prevNum) ? fmtNum(prevNum) : "(数値なし)"} は条件${ok ? "を満たす" : "を満たさない"}` };
+  }
+  return { run: true };
+}
+
 /** LLM がいる場合は LLM に計画を作らせてみる（失敗時は null）。
     LLM はツールに加えて担当エージェントも指名できる。指名が不正なら
     未指名として扱い、assignAgents の動的割り当てに委ねる。 */
@@ -984,7 +1046,7 @@ async function planWithLLM(request) {
     system: "あなたはタスクプランナーです。JSON配列のみを返してください。説明文は不要です。",
     prompt: `ユーザーの依頼を、以下のエージェントとツールを使うステップに分解してください。
 各ステップには、そのツールの「担当可能」に含まれるエージェントから最適な1人を割り当ててください。
-使うべきツールがなければ "llm-chat" を1つ選んでください。最大4ステップ。
+使うべきツールがなければ "llm-chat" を1つ選んでください。最大8ステップ。
 
 エージェント:
 ${agentDocs}
@@ -992,11 +1054,18 @@ ${agentDocs}
 ツール:
 ${toolDocs}
 
+input には前のステップの結果を参照するプレースホルダを使えます:
+- {{前の結果}} … 直前に成功したステップの結果
+- {{ステップN}} … N番目に成功したステップの結果
+
+条件つき実行が必要なステップには "when" を付けられます（不成立ならスキップ）:
+"前の結果が成功" / "前の結果が失敗" / "前の結果に◯◯を含む" / "前の結果が N 以上" など
+
 依頼: ${request}
 
 次の形式の JSON 配列のみを出力:
-[{"agent": "エージェントid", "tool": "ツールid", "input": "そのツールに渡す入力", "title": "ステップ名(8文字以内)"}]`,
-    max_tokens: 700,
+[{"agent": "エージェントid", "tool": "ツールid", "input": "そのツールに渡す入力", "title": "ステップ名(8文字以内)", "when": "条件(任意)"}]`,
+    max_tokens: 1000,
   });
   if (res.error || !res.text) return null;
   try {
@@ -1005,7 +1074,7 @@ ${toolDocs}
     const arr = JSON.parse(m[0]);
     if (!Array.isArray(arr) || !arr.length) return null;
     const steps = [];
-    for (const s of arr.slice(0, 4)) {
+    for (const s of arr.slice(0, 8)) {
       const tool = toolById(String(s.tool));
       if (!tool || !isToolOn(tool.id)) continue;
       const aid = String(s.agent || "");
@@ -1015,6 +1084,7 @@ ${toolDocs}
         agentId: toolAgents(tool).includes(aid) && isAgentOn(aid) ? aid : undefined,
         input: String(s.input || request),
         title: truncate(String(s.title || tool.name), 12),
+        when: s.when ? truncate(String(s.when), 60) : undefined,
       });
     }
     return steps.length ? steps : null;
@@ -1099,53 +1169,50 @@ async function orchestrate(request) {
       emit: (type, text) => emitLog("orchestrator", text),
     };
 
-    let finalMd = "";
-    for (let i = 0; i < pipeline.length; i++) {
-      const step = pipeline[i];
-      const agent = agentById(step.agentId);
-      setStepState(card, i, "running");
-      setAgentActive(agent.id, true);
-      const t0 = performance.now();
+    const toolCount = steps.length;
+    for (let i = 0; i < toolCount; i++) {
+      await runToolStep(card, i, pipeline[i], ctx, emitLog, run);
+    }
 
+    // 失敗があれば レビュアー → プランナー の差し戻しで再計画・再実行
+    await repairFailures(card, ctx, emitLog, run);
+    run.ok = ctx.results.filter((r) => !r.superseded).every((r) => r.ok);
+
+    let finalMd = "";
+    const composeIdx = pipeline.findIndex((s) => s.toolId === "_compose");
+    if (composeIdx >= 0) {
+      setStepState(card, composeIdx, "running");
+      setAgentActive("writer", true);
+      emitLog("writer", "各ステップの結果を統合して回答を作成中…");
       try {
-        if (step.toolId === "_compose") {
-          emitLog("writer", "各ステップの結果を統合して回答を作成中…");
-          finalMd = await composeAnswer(request, ctx);
-        } else if (step.toolId === "_review") {
-          emitLog("reviewer", "全ステップの結果を検査中…");
-          const rv = reviewRun(ctx, run);
-          finalMd += "\n\n---\n" + rv.text;
-          if (!rv.ok) run.ok = false;
-        } else {
-          const tool = toolById(step.toolId);
-          emitLog(agent.id, `${tool.icon} ${tool.name} を実行 — 入力: 「${truncate(step.input, 60)}」`);
-          await sleep(250);
-          const result = await tool.run(step.input, ctx);
-          ctx.results.push({
-            toolId: tool.id, toolName: tool.name, agentId: agent.id,
-            text: result.text, data: result.data, html: result.html, ok: true,
-          });
-          emitLog(agent.id, `→ 完了: ${truncate(result.text.replace(/[*`\n#>]/g, " "), 90)}`);
-          addTrace(run, { step, agent, tool, input: step.input, output: result.text, ms: performance.now() - t0, ok: true });
-        }
-        setStepState(card, i, "done");
+        finalMd = await composeAnswer(request, ctx);
+        setStepState(card, composeIdx, "done");
       } catch (err) {
-        const tool = toolById(step.toolId) || { id: step.toolId, name: step.title, icon: "⚠️" };
-        ctx.results.push({ toolId: tool.id, toolName: tool.name, agentId: agent.id, text: String(err.message || err), ok: false });
-        emitLog(agent.id, `⚠️ エラー: ${err.message || err}`);
-        addTrace(run, { step, agent, tool, input: step.input, output: "ERROR: " + (err.message || err), ms: performance.now() - t0, ok: false });
-        setStepState(card, i, "error");
-        run.ok = false;
+        emitLog("writer", `⚠️ 回答作成でエラー: ${err.message || err}`);
+        setStepState(card, composeIdx, "error");
       }
-      setAgentActive(agent.id, false);
-      await sleep(300);
+      setAgentActive("writer", false);
+      await sleep(250);
+    }
+    const reviewIdx = pipeline.findIndex((s) => s.toolId === "_review");
+    if (reviewIdx >= 0) {
+      setStepState(card, reviewIdx, "running");
+      setAgentActive("reviewer", true);
+      emitLog("reviewer", "全ステップの結果を検査中…");
+      await sleep(250);
+      const rv = reviewRun(ctx, run);
+      finalMd += "\n\n---\n" + rv.text;
+      if (!rv.ok) run.ok = false;
+      setStepState(card, reviewIdx, "done");
+      setAgentActive("reviewer", false);
     }
 
     if (!finalMd) finalMd = fallbackAnswer(request, ctx);
 
     /* --- 完了 --- */
     // 図表などツールが生成したHTML（自前のSVG生成のみ）は回答の下に併載する
-    const extraHtml = ctx.results.filter((r) => r.ok && r.html).map((r) => r.html).join("");
+    const extraHtml = ctx.results
+      .filter((r) => r.ok && r.html && !r.superseded).map((r) => r.html).join("");
     const secs = ((performance.now() - run.t0) / 1000).toFixed(1);
     finishRunCard(card, run.ok, secs);
     appendFinalMsg(finalMd, extraHtml);
@@ -1164,10 +1231,148 @@ async function orchestrate(request) {
   }
 }
 
-/** ライター: ツール結果を最終回答にまとめる */
+/** 1ステップを実行する（条件ガード → パイプ解決 → ツール実行 → 記録）。
+    chipId は計画ステッパー上のチップ ID（数値 or 再実行チップの文字列 ID）。 */
+async function runToolStep(card, chipId, step, ctx, emitLog, run) {
+  const agent = agentById(step.agentId);
+  const tool = toolById(step.toolId) || { id: step.toolId, name: step.title, icon: "⚠️" };
+  const cond = evalCondition(step.when, ctx);
+  if (!cond.run) {
+    emitLog("orchestrator", `条件「${step.when}」が不成立（${cond.why}）のため「${step.title}」をスキップ`);
+    setStepState(card, chipId, "skipped");
+    return null;
+  }
+  const input = resolvePipes(step.input, ctx);
+  setStepState(card, chipId, "running");
+  setAgentActive(agent.id, true);
+  const t0 = performance.now();
+  try {
+    if (input !== step.input) {
+      emitLog("orchestrator", `「${step.title}」の入力に前ステップの結果を注入しました`);
+    }
+    emitLog(agent.id, `${tool.icon} ${tool.name} を実行 — 入力: 「${truncate(input, 60)}」`);
+    await sleep(250);
+    const result = await tool.run(input, ctx);
+    const rec = {
+      toolId: tool.id, toolName: tool.name, agentId: agent.id,
+      text: result.text, data: result.data, html: result.html,
+      ok: true, step, chipId, usedInput: input,
+    };
+    ctx.results.push(rec);
+    emitLog(agent.id, `→ 完了: ${truncate(result.text.replace(/[*`\n#>]/g, " "), 90)}`);
+    addTrace(run, { step, agent, tool, input, output: result.text, ms: performance.now() - t0, ok: true });
+    setStepState(card, chipId, "done");
+    return rec;
+  } catch (err) {
+    const rec = {
+      toolId: tool.id, toolName: tool.name, agentId: agent.id,
+      text: String(err.message || err), ok: false, step, chipId, usedInput: input,
+    };
+    ctx.results.push(rec);
+    emitLog(agent.id, `⚠️ エラー: ${err.message || err}`);
+    addTrace(run, { step, agent, tool, input, output: "ERROR: " + (err.message || err), ms: performance.now() - t0, ok: false });
+    setStepState(card, chipId, "error");
+    return rec;
+  } finally {
+    setAgentActive(agent.id, false);
+    await sleep(300);
+  }
+}
+
+/* ---- 再計画ループ: 失敗をレビュアーが検出し、プランナーが修正して再実行 ---- */
+
+// LLM なしでも再実行する価値があるツール（ネットワーク等の一時的失敗がありうる）
+const RETRYABLE_TOOLS = new Set(["web-fetch", "llm-chat", "summarize"]);
+
+async function repairFailures(card, ctx, emitLog, run) {
+  const maxRounds = ctx.llmOn ? 2 : 1;
+  for (let round = 1; round <= maxRounds; round++) {
+    const failures = ctx.results.filter((r) => !r.ok && !r.superseded && r.step);
+    if (!failures.length) return;
+    emitLog("reviewer", `${failures.length} 件の失敗を検出 — プランナーに差し戻します（再計画 ${round}/${maxRounds} 回目）`);
+    setAgentActive("reviewer", true);
+    await sleep(350);
+    setAgentActive("reviewer", false);
+    for (const fr of failures) {
+      let newStep = null;
+      if (ctx.llmOn) {
+        setAgentActive("planner", true);
+        newStep = await replanStepWithLLM(fr, ctx);
+        setAgentActive("planner", false);
+      }
+      if (!newStep) {
+        // ルールベース: 同じ入力の決定的ツールは結果が変わらないので見送る
+        const rerunInput = resolvePipes(fr.step.input, ctx);
+        const custom = String(fr.toolId).startsWith("custom-");
+        if (!RETRYABLE_TOOLS.has(fr.toolId) && !custom && rerunInput === fr.usedInput) {
+          emitLog("planner", `「${fr.step.title}」は同じ入力では結果が変わらないため再実行を見送り`
+            + (ctx.llmOn ? "" : "（LLM を接続すると入力を修正した再計画ができます）"));
+          continue;
+        }
+        newStep = { ...fr.step };
+      }
+      // 動的割り当て（LLM の指名が不正なら候補の先頭）
+      const tool = toolById(newStep.toolId);
+      const caps = tool ? toolAgents(tool).filter((id) => isAgentOn(id)) : [];
+      if (!caps.length) {
+        emitLog("planner", `「${fr.step.title}」を再実行できるエージェントがいません`);
+        continue;
+      }
+      if (!newStep.agentId || !caps.includes(newStep.agentId)) newStep.agentId = caps[0];
+      newStep.title = fr.step.title;
+      emitLog("planner", newStep.revised
+        ? `再計画: 「${fr.step.title}」の入力を修正して再実行します`
+        : `「${fr.step.title}」を再実行します`);
+      run.retrySeq = (run.retrySeq || 0) + 1;
+      const chipId = `retry${run.retrySeq}`;
+      addRetryChip(card, fr.chipId, newStep, chipId);
+      const rec = await runToolStep(card, chipId, newStep, ctx, emitLog, run);
+      fr.superseded = true;   // 新しい結果（成功でも失敗でも）で置き換え
+      if (rec?.ok) emitLog("reviewer", `「${fr.step.title}」の再実行が成功しました`);
+    }
+  }
+}
+
+/** LLM に失敗ステップの修正案（ツール・入力）を作らせる */
+async function replanStepWithLLM(fr, ctx) {
+  const tools = TOOLS.filter((t) => isToolOn(t.id) && toolAgents(t).some((id) => isAgentOn(id)));
+  const okResults = ctx.results.filter((r) => r.ok && !r.superseded);
+  const res = await ctx.callLLM(
+    `エージェントのステップが失敗しました。修正した1ステップを JSON で出力してください。
+
+依頼: ${ctx.request}
+失敗したステップ: ツール "${fr.toolId}" / 入力「${truncate(fr.usedInput || "", 200)}」
+エラー: ${truncate(fr.text, 200)}
+これまでの成功結果:
+${okResults.map((r, i) => `${i + 1}. 【${r.toolName}】${truncate(r.text.replace(/[*`#>]/g, ""), 160)}`).join("\n") || "(なし)"}
+
+利用可能ツール: ${tools.map((t) => `"${t.id}"`).join(", ")}
+input には {{前の結果}} や {{ステップN}}（N番目の成功結果）を埋め込めます。
+JSONのみ出力: {"tool": "ツールid", "input": "修正した入力", "agent": "エージェントid(任意)"}`,
+    "あなたはタスクプランナーです。JSONのみを返してください。", 400,
+  );
+  if (res.error || !res.text) return null;
+  try {
+    const m = res.text.match(/\{[\s\S]*\}/);
+    if (!m) return null;
+    const obj = JSON.parse(m[0]);
+    const tool = toolById(String(obj.tool));
+    if (!tool || !isToolOn(tool.id)) return null;
+    const aid = String(obj.agent || "");
+    return {
+      toolId: tool.id,
+      input: String(obj.input || fr.step.input),
+      agentId: toolAgents(tool).includes(aid) && isAgentOn(aid) ? aid : undefined,
+      revised: true,
+    };
+  } catch { return null; }
+}
+
+/** ライター: ツール結果を最終回答にまとめる（置き換え済みの旧結果は除く） */
 async function composeAnswer(request, ctx) {
-  const okResults = ctx.results.filter((r) => r.ok);
-  const ngResults = ctx.results.filter((r) => !r.ok);
+  const active = ctx.results.filter((r) => !r.superseded);
+  const okResults = active.filter((r) => r.ok);
+  const ngResults = active.filter((r) => !r.ok);
 
   if (ctx.llmOn && okResults.length) {
     const material = okResults
@@ -1183,8 +1388,9 @@ async function composeAnswer(request, ctx) {
 
 /** テンプレートによる回答合成（LLM なし・LLM 失敗時） */
 function fallbackAnswer(request, ctx) {
-  const ok = ctx.results.filter((r) => r.ok);
-  const ng = ctx.results.filter((r) => !r.ok);
+  const active = ctx.results.filter((r) => !r.superseded);
+  const ok = active.filter((r) => r.ok);
+  const ng = active.filter((r) => !r.ok);
   const parts = [];
   if (!ok.length && !ng.length) {
     return [
@@ -1210,9 +1416,11 @@ function fallbackAnswer(request, ctx) {
 
 /** レビュアー: 実行全体の検査 */
 function reviewRun(ctx, run) {
-  const total = ctx.results.length;
-  const okN = ctx.results.filter((r) => r.ok).length;
-  const toolNames = [...new Set(ctx.results.map((r) => r.toolName))].join("、") || "なし";
+  const active = ctx.results.filter((r) => !r.superseded);
+  const total = active.length;
+  const okN = active.filter((r) => r.ok).length;
+  const retried = ctx.results.length - active.length;
+  const toolNames = [...new Set(active.map((r) => r.toolName))].join("、") || "なし";
   const secs = ((performance.now() - run.t0) / 1000).toFixed(1);
   if (total === 0) {
     return { ok: true, text: `🟢 **レビュアー検査**: 実行ツールなし（利用案内を回答） · ${secs}秒` };
@@ -1222,9 +1430,10 @@ function reviewRun(ctx, run) {
   const verdict = allOk ? "すべてのステップが成功しました"
     : okN > 0 ? `${total - okN} 件のステップが失敗しました（結果は上記参照）`
     : "すべてのステップが失敗しました";
+  const retryNote = retried ? ` · 再計画による再実行 ${retried} 件` : "";
   return {
     ok: allOk,
-    text: `${icon} **レビュアー検査**: ${verdict} — 成功 ${okN}/${total} · 使用ツール: ${toolNames} · ${secs}秒`,
+    text: `${icon} **レビュアー検査**: ${verdict} — 成功 ${okN}/${total}${retryNote} · 使用ツール: ${toolNames} · ${secs}秒`,
   };
 }
 
@@ -1381,10 +1590,35 @@ function renderPlanSteps(card, steps) {
 function setStepState(card, index, stateName) {
   const el = $(`[data-step="${index}"]`, card);
   if (!el) return;
-  el.classList.remove("pending", "running", "done", "error");
+  el.classList.remove("pending", "running", "done", "error", "skipped");
   el.classList.add(stateName);
   $(".step-state", el).textContent =
-    stateName === "running" ? "…" : stateName === "done" ? "✓" : stateName === "error" ? "✗" : "○";
+    stateName === "running" ? "…" : stateName === "done" ? "✓"
+      : stateName === "error" ? "✗" : stateName === "skipped" ? "⊘" : "○";
+  scrollChat();
+}
+
+/** 再実行ステップのチップを、失敗したチップの直後に挿入する */
+function addRetryChip(card, afterChipId, step, chipId) {
+  const agent = agentById(step.agentId);
+  const tool = toolById(step.toolId);
+  const el = document.createElement("span");
+  el.className = "plan-step pending";
+  el.dataset.step = chipId;
+  el.style.setProperty("--sc", agent.color);
+  el.innerHTML = `<span class="step-icon">🔁</span>
+    <span>${escapeHtml(truncate(step.title, 12))}</span><span class="step-state">○</span>`;
+  el.title = `${agent.name} / ${tool?.name || step.title}（再実行）`;
+  const ref = $(`[data-step="${afterChipId}"]`, card);
+  if (ref) {
+    const arrow = document.createElement("span");
+    arrow.className = "plan-arrow";
+    arrow.textContent = "↻";
+    ref.insertAdjacentElement("afterend", el);
+    ref.insertAdjacentElement("afterend", arrow);
+  } else {
+    $("[data-plan]", card)?.appendChild(el);
+  }
   scrollChat();
 }
 
@@ -1492,6 +1726,7 @@ const SAMPLES = [
   "1280 × (12 + 8) ÷ 4 を計算して",
   "今日から100日後は何曜日？",
   "42.195km をマイルに変換して",
+  "3.5 * 12 を計算して、その結果をkmとしてマイルに変換して",
   "https://www.un.org/en/ を取得して要約して",
   "覚えて: 定例会議は毎週金曜 15:00",
   "メモを一覧して",

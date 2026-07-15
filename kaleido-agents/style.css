@@ -398,6 +398,7 @@ body {
 .plan-step.done .step-state { color: var(--c-reviewer); }
 .plan-step.error { border-color: #ef4444; }
 .plan-step.error .step-state { color: #ef4444; }
+.plan-step.skipped { opacity: .45; border-style: dashed; }
 .plan-arrow { align-self: center; color: var(--fg-dim); font-size: .8rem; }
 
 /* ライブログ */
