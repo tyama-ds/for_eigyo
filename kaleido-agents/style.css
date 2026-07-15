@@ -523,6 +523,32 @@ body {
   display: inline-block; flex: none;
 }
 
+/* 承認ゲート（人間の確認待ち） */
+.approval-box {
+  margin: 10px 14px;
+  padding: 12px 14px;
+  border: 1.5px dashed color-mix(in srgb, var(--c-analyst) 60%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--c-analyst) 8%, transparent);
+  display: flex; flex-direction: column; gap: 8px;
+  animation: approvalPulse 1.6s ease-in-out infinite;
+}
+@keyframes approvalPulse {
+  50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--c-analyst) 12%, transparent); }
+}
+.approval-head { font-size: .8rem; font-weight: 700; line-height: 1.6; }
+.approval-label { font-size: .68rem; color: var(--fg-dim); font-weight: 700; }
+.approval-input {
+  border: 1px solid var(--border); border-radius: 9px;
+  background: var(--bg-input); color: var(--fg);
+  padding: 8px 11px; font: inherit; font-size: .82rem; resize: vertical;
+}
+.approval-input:focus {
+  outline: none; border-color: var(--c-analyst);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--c-analyst) 22%, transparent);
+}
+.approval-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
 /* ---------------- コンポーザ ---------------- */
 .composer {
   display: flex; gap: 10px; align-items: flex-end;
