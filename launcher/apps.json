@@ -108,6 +108,21 @@
       "wait_port": 8780
     },
     {
+      "id": "kaleido-agents",
+      "name": "Kaleido Agents",
+      "description": "依頼を投げると、プランナー/リサーチャー/アナリスト/ライター/レビュアーの5サブエージェントがツールモジュール（計算・日付・単位変換・Web取得・メモリ・LLM等）を使い分けて完結させるマルチエージェント・オーケストレータ。実行を多色UIで可視化。LLMなしでも動作、Ollama/OpenAI互換/Claude接続で強化",
+      "icon": "agents",
+      "cwd": "../kaleido-agents",
+      "command": [
+        "{python}",
+        "server.py",
+        "--port",
+        "8790"
+      ],
+      "url": "http://127.0.0.1:8790",
+      "wait_port": 8790
+    },
+    {
       "id": "deep-research",
       "name": "Deep Research Tool",
       "description": "Web検索→調査ループ→根拠管理→ハルシネーション検証→レポート生成 まで自動で行うディープリサーチ",

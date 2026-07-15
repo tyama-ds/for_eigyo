@@ -1,0 +1,3 @@
+# APIキーを含むローカル設定（コミット禁止）
+kaleido.config.json
+__pycache__/
