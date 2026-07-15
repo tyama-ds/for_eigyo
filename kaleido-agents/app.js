@@ -234,46 +234,17 @@ function extractiveSummary(text, maxSentences = 5) {
     .join("\n");
 }
 
-/* ---- 図表作成（SVG 生成、外部ライブラリなし） ---- */
+/* ---- 図表・表作成（SVG/HTML 生成、外部ライブラリなし） ----
+   dataset = { labels: [...], series: [{name, values: [...]}], source }
+   単一系列は series.length === 1。複数系列はグループ棒・積み上げ棒・
+   複数折れ線として描画する。 */
 
 const CHART_COLORS = ["#8b5cf6", "#06b6d4", "#f59e0b", "#ec4899", "#22c55e",
   "#f97316", "#0ea5e9", "#14b8a6", "#ef4444", "#a3e635"];
 
-function jsonToItems(data) {
-  const items = [];
-  if (Array.isArray(data)) {
-    if (data.every((v) => typeof v === "number")) {
-      data.forEach((v, i) => items.push({ label: String(i + 1), value: v }));
-    } else {
-      for (const row of data) {
-        if (!row || typeof row !== "object") continue;
-        const label = row.label ?? row.name ?? row.key ?? row["名前"] ?? row["項目"];
-        const numKey = Object.keys(row).find((k) => typeof row[k] === "number");
-        if (label !== undefined && numKey) {
-          items.push({ label: String(label), value: row[numKey] });
-        }
-      }
-    }
-  } else if (data && typeof data === "object") {
-    for (const [k, v] of Object.entries(data)) {
-      if (typeof v === "number") items.push({ label: k, value: v });
-    }
-  }
-  return items;
-}
-
-/** 依頼文・直前のJSON結果からグラフ用の {label, value} 列を取り出す */
-function extractChartData(request, ctx) {
-  const jsonPrev = [...ctx.results].reverse()
-    .find((r) => r.ok && r.toolId === "json-tool" && r.data !== undefined);
-  if (jsonPrev) {
-    const items = jsonToItems(jsonPrev.data);
-    if (items.length) return { items: items.slice(0, 24), source: "JSON整形の結果" };
-  }
-  const cleaned = (extractQuoted(request) || request)
-    .replace(/を?(棒|円|折れ線|パイ)?(グラフ|チャート|図表)+(に|で|へ|を)?(して|作成|作って|描いて|書いて|表示)?(して)?(ください)?/g, " ")
-    .replace(/の?(推移|変化|トレンド|内訳|割合|比率|シェア)(を|に|で)?/g, " ");
-  const segs = cleaned.split(/[、,;\n]/).map((s) => s.trim()).filter(Boolean);
+/** テキストから {label, value} ペア列を取り出す */
+function parsePairs(text) {
+  const segs = text.split(/[、,;\n]/).map((s) => s.trim()).filter(Boolean);
   const items = [];
   for (const seg of segs) {
     let m = seg.match(/^(.+?)[\s:：=]+(-?\d+(?:\.\d+)?)\s*(?:個|件|円|人|台|kg|km|%|％)?$/);
@@ -281,25 +252,131 @@ function extractChartData(request, ctx) {
     m = seg.match(/^(-?\d+(?:\.\d+)?)$/);
     if (m) items.push({ label: String(items.length + 1), value: +m[1] });
   }
-  return { items: items.slice(0, 24), source: "依頼文のデータ" };
+  return items;
 }
 
-function renderChartSVG(type, items) {
-  const W = 560; const H = 320; const padT = 20;
-  const body = type === "pie" ? pieBody(items, W, H, padT) : xyBody(type, items, W, H, padT);
-  return `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" role="img" font-family="inherit">${body}</svg>`;
+/** グラフ/表の指示語をデータ解析の邪魔にならないよう取り除く */
+function stripChartPhrases(text) {
+  return text
+    .replace(/を?(積み上げ|積上げ|グループ)?(棒|円|折れ線|パイ)?(グラフ|チャート|図表)+(に|で|へ|を)?(して|作成|作って|描いて|書いて|表示)?(して)?(ください)?/g, " ")
+    .replace(/を?(表|テーブル|一覧表)(に|で|へ)(して|作成|作って|整理|まとめて|表示)?(して)?(ください)?/g, " ")
+    .replace(/の?(推移|変化|トレンド|内訳|割合|比率|シェア)(を|に|で)?/g, " ");
 }
 
-function xyBody(type, items, W, H, padT) {
+function jsonToDataset(data) {
+  if (Array.isArray(data)) {
+    if (data.length && data.every((v) => typeof v === "number")) {
+      const vals = data.slice(0, 24);
+      return { labels: vals.map((_, i) => String(i + 1)), series: [{ name: "値", values: vals }] };
+    }
+    const rows = data.filter((r) => r && typeof r === "object" && !Array.isArray(r)).slice(0, 24);
+    if (rows.length) {
+      const keys = [...new Set(rows.flatMap((r) => Object.keys(r)))];
+      const labelKey = keys.find((k) => rows.some((r) => typeof r[k] === "string"));
+      const numKeys = keys.filter((k) => rows.some((r) => typeof r[k] === "number")).slice(0, 8);
+      if (numKeys.length) {
+        return {
+          labels: rows.map((r, i) => truncate(String(labelKey ? r[labelKey] ?? i + 1 : i + 1), 14)),
+          series: numKeys.map((k) => ({ name: k, values: rows.map((r) => Number(r[k]) || 0) })),
+        };
+      }
+    }
+    return null;
+  }
+  if (data && typeof data === "object") {
+    const entries = Object.entries(data).filter(([, v]) => typeof v === "number").slice(0, 24);
+    if (entries.length) {
+      return { labels: entries.map(([k]) => truncate(k, 14)), series: [{ name: "値", values: entries.map(([, v]) => v) }] };
+    }
+  }
+  return null;
+}
+
+/** 依頼文・直前のJSON結果から系列つきデータセットを作る。
+    複数系列は「A店: 1月 10、2月 20 / B店: 1月 15、2月 25」の形式
+    （系列の区切りは / ; 改行、系列名の後に : ）。 */
+function extractChartDataset(request, ctx) {
+  const jsonPrev = [...ctx.results].reverse()
+    .find((r) => r.ok && r.toolId === "json-tool" && r.data !== undefined);
+  if (jsonPrev) {
+    const ds = jsonToDataset(jsonPrev.data);
+    if (ds) return { ...ds, source: "JSON整形の結果" };
+  }
+  const quoted = (request.match(/[「『]([\s\S]+?)[」』]/) || [])[1];
+  const cleaned = stripChartPhrases(quoted || request);
+  const segs = cleaned.split(/[\n/;／]/).map((s) => s.trim()).filter(Boolean);
+  const named = [];
+  for (const seg of segs) {
+    const m = seg.match(/^([^:：]{1,24})[:：]\s*(.+)$/s);
+    if (!m) continue;
+    const items = parsePairs(m[2]);
+    if (items.length) named.push({ name: truncate(m[1].trim(), 12), items });
+  }
+  if (named.length >= 2) {   // 複数系列: ラベルは出現順の和集合、欠損は 0
+    const labels = [];
+    for (const s of named.slice(0, 8)) {
+      for (const it of s.items) if (!labels.includes(it.label)) labels.push(it.label);
+    }
+    const use = labels.slice(0, 24);
+    return {
+      labels: use,
+      series: named.slice(0, 8).map((s) => ({
+        name: s.name,
+        values: use.map((l) => s.items.find((it) => it.label === l)?.value ?? 0),
+      })),
+      source: "依頼文のデータ（複数系列）",
+    };
+  }
+  const single = (named.length === 1 ? named[0].items : parsePairs(cleaned)).slice(0, 24);
+  if (!single.length) return null;
+  return {
+    labels: single.map((d) => d.label),
+    series: [{ name: named.length === 1 ? named[0].name : "値", values: single.map((d) => d.value) }],
+    source: "依頼文のデータ",
+  };
+}
+
+function svgTextW(s) {   // 凡例レイアウト用のざっくり文字幅（px, font-size 11）
+  return [...String(s)].reduce((a, c) => a + (c.charCodeAt(0) < 256 ? 6.5 : 11), 0);
+}
+
+function renderChartSVG(type, ds) {
+  const W = 560; const H = 340;
+  const multi = ds.series.length > 1;
+  const padT = multi && type !== "pie" ? 44 : 20;
+  let legend = "";
+  if (multi && type !== "pie") {
+    let x = 14;
+    ds.series.forEach((s, i) => {
+      const name = truncate(s.name, 8);
+      legend += `<rect x="${x}" y="12" width="11" height="11" rx="3" fill="${CHART_COLORS[i % CHART_COLORS.length]}"/>`;
+      legend += `<text x="${x + 16}" y="22" font-size="11" fill="currentColor">${escapeHtml(name)}</text>`;
+      x += 16 + svgTextW(name) + 16;
+    });
+  }
+  const body = type === "pie" ? pieBody(ds, W, H, padT) : xyBody(type, ds, W, H, padT);
+  return `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" role="img" font-family="inherit">${legend}${body}</svg>`;
+}
+
+function xyBody(type, ds, W, H, padT) {
   const padL = 56; const padR = 18; const padB = 44;
   const plotW = W - padL - padR; const plotH = H - padT - padB;
-  const values = items.map((d) => d.value);
-  const minV = Math.min(0, ...values); const maxV = Math.max(0, ...values);
+  const { labels, series } = ds;
+  const n = labels.length;
+  const stacked = type === "sbar";
+  let minV = 0; let maxV = 0;
+  if (stacked) {   // 積み上げは各ラベルの正負それぞれの合計がスケール
+    labels.forEach((_, i) => {
+      maxV = Math.max(maxV, series.reduce((a, s) => a + Math.max(s.values[i] || 0, 0), 0));
+      minV = Math.min(minV, series.reduce((a, s) => a + Math.min(s.values[i] || 0, 0), 0));
+    });
+  } else {
+    for (const s of series) for (const v of s.values) { maxV = Math.max(maxV, v); minV = Math.min(minV, v); }
+  }
   const span = (maxV - minV) || 1;
   const y = (v) => padT + plotH - ((v - minV) / span) * plotH;
-  const n = items.length;
   const slot = plotW / n;
-  const xs = items.map((_, i) => type === "line"
+  const xs = labels.map((_, i) => type === "line"
     ? padL + (n === 1 ? plotW / 2 : (plotW * i) / (n - 1))
     : padL + slot * i + slot / 2);
   let out = "";
@@ -310,31 +387,76 @@ function xyBody(type, items, W, H, padT) {
     out += `<text x="${padL - 8}" y="${yy + 4}" text-anchor="end" font-size="10" fill="currentColor" fill-opacity="0.65">${fmtNum(Math.round(v * 100) / 100)}</text>`;
   }
   const labelEvery = Math.ceil(n / 12);   // ラベルが密になりすぎたら間引く
-  items.forEach((d, i) => {
+  labels.forEach((label, i) => {
     if (i % labelEvery === 0) {
-      out += `<text x="${xs[i]}" y="${H - padB + 16}" text-anchor="middle" font-size="10" fill="currentColor" fill-opacity="0.75">${escapeHtml(truncate(d.label, 6))}</text>`;
+      out += `<text x="${xs[i]}" y="${H - padB + 16}" text-anchor="middle" font-size="10" fill="currentColor" fill-opacity="0.75">${escapeHtml(truncate(label, 6))}</text>`;
     }
   });
+  const showValues = series.length === 1 || (!stacked && n * series.length <= 12);
   if (type === "line") {
-    const pts = items.map((d, i) => [xs[i], y(d.value)]);
-    out += `<polyline points="${pts.map((p) => p.map((c) => Math.round(c * 10) / 10).join(",")).join(" ")}" fill="none" stroke="#06b6d4" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>`;
-    pts.forEach((p, i) => {
-      out += `<circle cx="${p[0]}" cy="${p[1]}" r="4" fill="${CHART_COLORS[i % CHART_COLORS.length]}"/>`;
-      out += `<text x="${p[0]}" y="${p[1] - 9}" text-anchor="middle" font-size="10" font-weight="700" fill="currentColor">${fmtNum(items[i].value)}</text>`;
+    series.forEach((s, si) => {
+      const col = CHART_COLORS[si % CHART_COLORS.length];
+      const pts = labels.map((_, i) => [Math.round(xs[i] * 10) / 10, Math.round(y(s.values[i] || 0) * 10) / 10]);
+      out += `<polyline points="${pts.map((p) => p.join(",")).join(" ")}" fill="none" stroke="${col}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>`;
+      pts.forEach((p, i) => {
+        out += `<circle cx="${p[0]}" cy="${p[1]}" r="${series.length > 1 ? 3.2 : 4}" fill="${series.length > 1 ? col : CHART_COLORS[i % CHART_COLORS.length]}"/>`;
+        if (showValues) {
+          out += `<text x="${p[0]}" y="${p[1] - 9}" text-anchor="middle" font-size="10" font-weight="700" fill="currentColor">${fmtNum(s.values[i] || 0)}</text>`;
+        }
+      });
     });
-  } else {
+  } else if (stacked) {
     const barW = Math.min(slot * 0.62, 60);
-    items.forEach((d, i) => {
-      const yv = y(d.value); const y0 = y(0);
-      const top = Math.min(yv, y0); const h = Math.max(Math.abs(yv - y0), 1);
-      out += `<rect x="${xs[i] - barW / 2}" y="${top}" width="${barW}" height="${h}" rx="4" fill="${CHART_COLORS[i % CHART_COLORS.length]}"/>`;
-      out += `<text x="${xs[i]}" y="${top - 5}" text-anchor="middle" font-size="10" font-weight="700" fill="currentColor">${fmtNum(d.value)}</text>`;
+    labels.forEach((_, i) => {
+      let accPos = 0; let accNeg = 0;
+      series.forEach((s, si) => {
+        const v = s.values[i] || 0;
+        if (!v) return;
+        const col = CHART_COLORS[si % CHART_COLORS.length];
+        let top; let bottom;
+        if (v > 0) { top = y(accPos + v); bottom = y(accPos); accPos += v; }
+        else { top = y(accNeg); bottom = y(accNeg + v); accNeg += v; }
+        out += `<rect x="${xs[i] - barW / 2}" y="${top}" width="${barW}" height="${Math.max(bottom - top, 1)}" fill="${col}"/>`;
+      });
+      out += `<text x="${xs[i]}" y="${y(accPos) - 5}" text-anchor="middle" font-size="10" font-weight="700" fill="currentColor">${fmtNum(Math.round(accPos * 100) / 100)}</text>`;
+    });
+  } else {   // bar（単一系列）/ グループ棒（複数系列）
+    const groupW = Math.min(slot * 0.72, 64 * series.length);
+    const eachW = groupW / series.length;
+    const barW = Math.max(eachW - 2, 3);
+    labels.forEach((_, i) => {
+      series.forEach((s, si) => {
+        const v = s.values[i] || 0;
+        const col = CHART_COLORS[(series.length > 1 ? si : i) % CHART_COLORS.length];
+        const x = xs[i] - groupW / 2 + si * eachW + 1;
+        const yv = y(v); const y0 = y(0);
+        const top = Math.min(yv, y0); const h = Math.max(Math.abs(yv - y0), 1);
+        out += `<rect x="${x}" y="${top}" width="${barW}" height="${h}" rx="3" fill="${col}"/>`;
+        if (showValues) {
+          out += `<text x="${x + barW / 2}" y="${top - 5}" text-anchor="middle" font-size="10" font-weight="700" fill="currentColor">${fmtNum(v)}</text>`;
+        }
+      });
     });
   }
   return out;
 }
 
-function pieBody(items, W, H, padT) {
+/** 表（テーブル）HTML を生成。foot は合計などの強調行 */
+function buildTableHTML(headers, rows, foot) {
+  const cell = (c, tag = "td") => {
+    const num = typeof c === "number";
+    const body = num ? fmtNum(c) : escapeHtml(String(c ?? ""));
+    return `<${tag}${num ? ' class="num"' : ""}>${body}</${tag}>`;
+  };
+  const thead = `<thead><tr>${headers.map((h) => cell(h, "th")).join("")}</tr></thead>`;
+  const tbody = `<tbody>${rows.map((r) => `<tr>${r.map((c) => cell(c)).join("")}</tr>`).join("")}</tbody>`;
+  const tfoot = foot ? `<tfoot><tr>${foot.map((c) => cell(c)).join("")}</tr></tfoot>` : "";
+  return `<figure class="table-box"><table>${thead}${tbody}${tfoot}</table></figure>`;
+}
+
+function pieBody(ds, W, H, padT) {
+  // 円グラフは先頭の系列を表示する
+  const items = ds.labels.map((label, i) => ({ label, value: ds.series[0].values[i] || 0 }));
   const pos = items.filter((d) => d.value > 0).slice(0, 10);
   if (!pos.length) return `<text x="20" y="60" fill="currentColor">正の値のデータがありません</text>`;
   const total = pos.reduce((a, d) => a + d.value, 0);
@@ -611,22 +733,82 @@ const BUILTIN_TOOLS = [
   },
   {
     id: "chart", name: "図表作成", icon: "📊", color: "#a855f7", agents: ["analyst", "writer"],
-    desc: "データから棒・折れ線・円グラフを SVG で作成（例: 1月 120、2月 150 を棒グラフに）",
+    desc: "棒・グループ棒・積み上げ棒・折れ線・円グラフを SVG で作成。複数系列は「A店: 1月 10、2月 20 / B店: 1月 15、2月 25」",
     run(input, ctx) {
       const req = ctx.request;
-      const { items, source } = extractChartData(req, ctx);
-      if (!items.length) {
-        throw new Error("グラフにするデータが見つかりませんでした（例: 「A 10、B 20、C 30 を棒グラフにして」）");
+      const ds = extractChartDataset(req, ctx);
+      if (!ds || !ds.labels.length) {
+        throw new Error("グラフにするデータが見つかりませんでした（例: 「A 10、B 20、C 30 を棒グラフにして」、複数系列は「A店: 1月 10、2月 20 / B店: 1月 15、2月 25」）");
       }
-      const type = /円グラフ|パイ|割合|比率|シェア/.test(req) ? "pie"
+      const multi = ds.series.length > 1;
+      const type = /積み上げ|積上げ|スタック/.test(req) ? "sbar"
+        : /円グラフ|パイ|割合|比率|シェア/.test(req) ? "pie"
         : /折れ線|推移|トレンド|ライン/.test(req) ? "line" : "bar";
-      const names = { bar: "棒グラフ", line: "折れ線グラフ", pie: "円グラフ" };
-      const sum = items.reduce((a, d) => a + d.value, 0);
-      return {
-        text: `📊 **${names[type]}** を作成しました — ${items.length} 項目（データ: ${source}、合計 ${fmtNum(Math.round(sum * 100) / 100)}）`,
-        html: `<figure class="chart-box">${renderChartSVG(type, items)}</figure>`,
-        data: items,
+      const names = {
+        bar: multi ? "グループ棒グラフ" : "棒グラフ",
+        sbar: "積み上げ棒グラフ", line: "折れ線グラフ", pie: "円グラフ",
       };
+      const notes = [`${ds.labels.length} 項目`];
+      if (multi) notes.push(`${ds.series.length} 系列（${ds.series.map((s) => s.name).join(" / ")}）`);
+      else {
+        const sum = ds.series[0].values.reduce((a, v) => a + (v || 0), 0);
+        notes.push(`合計 ${fmtNum(Math.round(sum * 100) / 100)}`);
+      }
+      if (type === "pie" && multi) notes.push(`円グラフは系列「${ds.series[0].name}」を表示`);
+      return {
+        text: `📊 **${names[type]}** を作成しました — ${notes.join("、")}（データ: ${ds.source}）`,
+        html: `<figure class="chart-box">${renderChartSVG(type, ds)}</figure>`,
+        data: ds,
+      };
+    },
+  },
+  {
+    id: "table", name: "表作成", icon: "📋", color: "#38bdf8", agents: ["analyst", "writer"],
+    desc: "データを表（テーブル）に整形。複数系列や JSON 整形の結果にも対応、数値列は合計行つき",
+    run(input, ctx) {
+      const jsonPrev = [...ctx.results].reverse()
+        .find((r) => r.ok && r.toolId === "json-tool" && r.data !== undefined);
+      // 1) オブジェクト配列の JSON → 汎用テーブル（キー = 列）
+      if (jsonPrev && Array.isArray(jsonPrev.data)
+          && jsonPrev.data.some((r) => r && typeof r === "object" && !Array.isArray(r))) {
+        const rows = jsonPrev.data
+          .filter((r) => r && typeof r === "object" && !Array.isArray(r)).slice(0, 50);
+        const keys = [...new Set(rows.flatMap((r) => Object.keys(r)))].slice(0, 8);
+        const body = rows.map((r) => keys.map((k) => {
+          const v = r[k];
+          if (v === undefined || v === null) return "";
+          return typeof v === "object" ? JSON.stringify(v) : v;
+        }));
+        return {
+          text: `📋 **表** を作成しました — ${body.length} 行 × ${keys.length} 列（データ: JSON整形の結果）`,
+          html: buildTableHTML(keys, body),
+          data: { headers: keys, rows: body },
+        };
+      }
+      // 2) 系列データ / 「ラベル 値」の列挙 → 項目×系列の表 + 合計行
+      const ds = extractChartDataset(ctx.request, ctx);
+      if (ds && ds.labels.length) {
+        const headers = ["項目", ...ds.series.map((s) => s.name)];
+        const body = ds.labels.map((l, i) => [l, ...ds.series.map((s) => s.values[i] ?? 0)]);
+        const foot = ["合計", ...ds.series.map(
+          (s) => Math.round(s.values.reduce((a, v) => a + (v || 0), 0) * 100) / 100)];
+        return {
+          text: `📋 **表** を作成しました — ${body.length} 行 × ${headers.length} 列 + 合計行（データ: ${ds.source}）`,
+          html: buildTableHTML(headers, body, foot),
+          data: { headers, rows: body, foot },
+        };
+      }
+      // 3) 単純なオブジェクト JSON → キー / 値の2列
+      if (jsonPrev && jsonPrev.data && typeof jsonPrev.data === "object" && !Array.isArray(jsonPrev.data)) {
+        const body = Object.entries(jsonPrev.data).slice(0, 50)
+          .map(([k, v]) => [k, typeof v === "object" ? JSON.stringify(v) : v]);
+        return {
+          text: `📋 **表** を作成しました — ${body.length} 行 × 2 列（データ: JSON整形の結果）`,
+          html: buildTableHTML(["キー", "値"], body),
+          data: { headers: ["キー", "値"], rows: body },
+        };
+      }
+      throw new Error("表にするデータが見つかりませんでした（例: 「A 10、B 20、C 30 を表にして」）");
     },
   },
   {
@@ -698,7 +880,11 @@ function planWithRules(request) {
   const urls = request.match(/https?:\/\/[^\s、。」』)>"']+/g) || [];
   for (const u of urls.slice(0, 3)) add("web-fetch", u, "ページ取得");
 
-  if (/(要約|まとめて|サマリ|summariz)/i.test(request)) add("summarize", request, "要約");
+  // 「表にまとめて」「グラフにまとめて」は要約ではなく表/図表の依頼
+  if (/(要約|サマリ|summariz)/i.test(request)
+      || (/まとめて/.test(request) && !/(表|テーブル|グラフ|チャート|図)に?まとめ/.test(request))) {
+    add("summarize", request, "要約");
+  }
 
   const expr = extractExpression(request);
   if (expr && (/[+\-*/%^×÷]/.test(expr)) &&
@@ -725,6 +911,11 @@ function planWithRules(request) {
 
   if (/(グラフ|チャート|図表|可視化|プロット|plot)/i.test(request)) {
     add("chart", request, "図表作成");
+  }
+
+  // 「図表」で誤起動しないよう、「表」は助詞つきの言い回しだけ拾う
+  if (/(?<!図)表(にして|に整理|にまとめ|でまとめ|を作|形式)|テーブル|一覧表/.test(request)) {
+    add("table", request, "表作成");
   }
 
   if (/(覚えて|記憶して|メモして|保存して|思い出して|メモを|忘れて)/.test(request)) {
@@ -1306,7 +1497,10 @@ const SAMPLES = [
   "メモを一覧して",
   "サイコロを3個振って",
   "1月 120、2月 150、3月 300、4月 210 を棒グラフにして",
+  "A店: 1月 10、2月 25、3月 40 / B店: 1月 20、2月 15、3月 30 をグラフにして",
+  "国内: Q1 40、Q2 55 / 海外: Q1 25、Q2 35 を積み上げグラフにして",
   "シェア: A社 45、B社 30、C社 25 を円グラフにして",
+  "製品X 120、製品Y 80、製品Z 200 を表にして",
   "このJSONを整形して: {\"name\":\"kaleido\",\"tools\":[1,2,3]}",
   "カレー か 寿司 か ラーメン から選んで",
 ];

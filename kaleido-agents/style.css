@@ -473,6 +473,48 @@ body {
   color: var(--fg);          /* SVG 内テキストは currentColor でテーマ追従 */
 }
 
+/* 表（table ツールが生成するテーブル） */
+.table-box {
+  margin: 12px 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-panel);
+  overflow-x: auto;
+  padding: 4px;
+}
+.table-box table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: .82rem;
+}
+.table-box th, .table-box td {
+  padding: 7px 13px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.table-box th {
+  font-size: .74rem;
+  font-weight: 800;
+  letter-spacing: .03em;
+  background: linear-gradient(120deg,
+    color-mix(in srgb, var(--c-planner) 22%, transparent),
+    color-mix(in srgb, var(--c-researcher) 22%, transparent));
+}
+.table-box th:first-child { border-top-left-radius: 8px; }
+.table-box th:last-child { border-top-right-radius: 8px; }
+.table-box tbody tr:nth-child(even) { background: var(--bg-input); }
+.table-box td.num, .table-box th.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.table-box tfoot td {
+  font-weight: 800;
+  border-top: 2px solid color-mix(in srgb, var(--c-analyst) 55%, transparent);
+  border-bottom: none;
+  background: color-mix(in srgb, var(--c-analyst) 8%, transparent);
+}
+
 /* ツールカードの担当候補ドット */
 .cap-dots { display: inline-flex; gap: 3px; align-items: center; }
 .cap-dot {
