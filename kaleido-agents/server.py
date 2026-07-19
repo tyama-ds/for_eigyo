@@ -299,6 +299,151 @@ def _split_reasoning(text: str) -> tuple[str, str]:
     return answer, reasoning
 
 
+# ---- function calling: 正規化フォーマット <-> 各プロバイダ形式の変換 ----
+# クライアントは正規化形式のみを扱う:
+#   messages: [{role: user|assistant|tool, content, tool_calls?, tool_call_id?}]
+#   tools:    [{name, description, parameters(JSON Schema)}]
+#   応答:     {text, tool_calls: [{id, name, arguments(dict)}]}
+
+def _to_openai_messages(msgs: list, system: str) -> list:
+    out = [{"role": "system", "content": system}] if system else []
+    for m in msgs:
+        role = m.get("role")
+        if role == "assistant":
+            entry = {"role": "assistant", "content": m.get("content") or None}
+            tcs = m.get("tool_calls") or []
+            if tcs:
+                entry["tool_calls"] = [{
+                    "id": str(t.get("id", "")), "type": "function",
+                    "function": {
+                        "name": str(t.get("name", "")),
+                        "arguments": json.dumps(t.get("arguments") or {}, ensure_ascii=False),
+                    },
+                } for t in tcs]
+            out.append(entry)
+        elif role == "tool":
+            out.append({"role": "tool", "tool_call_id": str(m.get("tool_call_id", "")),
+                        "content": str(m.get("content", ""))[:8000]})
+        else:
+            out.append({"role": "user", "content": str(m.get("content", ""))})
+    return out
+
+
+def _parse_openai_tool_calls(msg: dict) -> list:
+    calls = []
+    for t in msg.get("tool_calls") or []:
+        fn = t.get("function") or {}
+        try:
+            args = json.loads(fn.get("arguments") or "{}")
+            if not isinstance(args, dict):
+                args = {"input": str(args)}
+        except ValueError:
+            args = {"input": str(fn.get("arguments", ""))}
+        calls.append({"id": str(t.get("id", "")), "name": str(fn.get("name", "")), "arguments": args})
+    return calls
+
+
+def _to_anthropic_messages(msgs: list) -> list:
+    out: list = []
+    for m in msgs:
+        role = m.get("role")
+        if role == "assistant":
+            blocks = []
+            if m.get("content"):
+                blocks.append({"type": "text", "text": str(m["content"])})
+            for t in m.get("tool_calls") or []:
+                blocks.append({"type": "tool_use", "id": str(t.get("id", "")),
+                               "name": str(t.get("name", "")), "input": t.get("arguments") or {}})
+            entry = {"role": "assistant", "content": blocks or [{"type": "text", "text": "…"}]}
+        elif role == "tool":
+            entry = {"role": "user", "content": [{
+                "type": "tool_result", "tool_use_id": str(m.get("tool_call_id", "")),
+                "content": str(m.get("content", ""))[:8000]}]}
+        else:
+            entry = {"role": "user", "content": [{"type": "text", "text": str(m.get("content", ""))}]}
+        # Anthropic は同一 role の連続を許さないため結合する
+        if out and out[-1]["role"] == entry["role"]:
+            out[-1]["content"].extend(entry["content"])
+        else:
+            out.append(entry)
+    return out
+
+
+def call_llm_chat(messages: list, system: str = "", tools: list | None = None,
+                  max_tokens: int = 1400, cfg: dict | None = None) -> dict:
+    """messages / tools（正規化形式）で LLM を呼び、text と tool_calls を返す。"""
+    cfg = cfg or load_config()
+    provider = cfg["provider"]
+    if provider == "none":
+        return {"error": "LLM が未設定です（設定画面から接続先を登録してください）"}
+    if provider in ("openai", "anthropic") and not cfg["api_key"]:
+        return {"error": f"{provider} には API キーが必要です"}
+    try:
+        if provider == "anthropic":
+            base = (cfg["base_url"] or "https://api.anthropic.com").rstrip("/")
+            payload = {
+                "model": cfg["model"] or "claude-haiku-4-5-20251001",
+                "max_tokens": max_tokens,
+                "messages": _to_anthropic_messages(messages),
+            }
+            if system:
+                payload["system"] = system
+            if tools:
+                payload["tools"] = [{
+                    "name": t["name"], "description": t.get("description", ""),
+                    "input_schema": t.get("parameters") or {"type": "object", "properties": {}},
+                } for t in tools]
+            data = _post_json(f"{base}/v1/messages", payload, {
+                "x-api-key": cfg["api_key"], "anthropic-version": "2023-06-01",
+            }, cfg=cfg)
+            blocks = data.get("content") or []
+            text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+            calls = [{"id": b.get("id", ""), "name": b.get("name", ""),
+                      "arguments": b.get("input") or {}}
+                     for b in blocks if b.get("type") == "tool_use"]
+            return {"text": text, "tool_calls": calls}
+
+        # OpenAI 互換（local / openai）
+        if provider == "local":
+            base = (cfg["base_url"] or LOCAL_DEFAULT_BASE).rstrip("/")
+            default_model, no_proxy = "llama3.1", _host_is_internal(base)
+        else:
+            base = (cfg["base_url"] or "https://api.openai.com/v1").rstrip("/")
+            default_model, no_proxy = "gpt-4o-mini", False
+        headers = {"Authorization": f"Bearer {cfg['api_key']}"} if cfg["api_key"] else {}
+        payload = {
+            "model": cfg["model"] or default_model,
+            "messages": _to_openai_messages(messages, system),
+            "max_tokens": max_tokens,
+        }
+        if tools:
+            payload["tools"] = [{"type": "function", "function": {
+                "name": t["name"], "description": t.get("description", ""),
+                "parameters": t.get("parameters") or {"type": "object", "properties": {}},
+            }} for t in tools]
+        data = _post_json(f"{base}/chat/completions", payload, headers,
+                          no_proxy=no_proxy, cfg=cfg)
+        msg = (data.get("choices") or [{}])[0].get("message") or {}
+        content = (msg.get("content") or "").strip()
+        rc = (msg.get("reasoning_content") or msg.get("reasoning") or "").strip()
+        if rc:
+            content = f"<think>{rc}</think>\n{content}"
+        answer, reasoning = _split_reasoning(content)
+        out = {"text": answer, "tool_calls": _parse_openai_tool_calls(msg)}
+        if reasoning:
+            out["reasoning"] = reasoning[:4000]
+        return out
+    except urllib.error.HTTPError as e:
+        detail = ""
+        try:
+            detail = e.read().decode("utf-8", errors="replace")[:400]
+        except OSError:
+            pass
+        return {"error": f"LLM API エラー HTTP {e.code}: {detail or e.reason}"}
+    except (urllib.error.URLError, socket.timeout, OSError, ValueError) as e:
+        return {"error": f"LLM に接続できません: {e}"}
+
+
 def call_llm(prompt: str, system: str = "", max_tokens: int = 1200,
              cfg: dict | None = None) -> dict:
     cfg = cfg or load_config()
@@ -436,16 +581,24 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(public_config(cfg))
         elif route == "/api/llm":
             body = self._read_body_json()
-            prompt = str(body.get("prompt", ""))[:60_000]
             system = str(body.get("system", ""))[:8_000]
             try:
                 max_tokens = max(64, min(int(body.get("max_tokens", 1200)), 8192))
             except (TypeError, ValueError):
                 max_tokens = 1200
-            if not prompt.strip():
-                self._send_json({"error": "prompt が空です"}, 400)
+            messages = body.get("messages")
+            tools = body.get("tools")
+            if isinstance(messages, list) and messages:
+                # function calling / マルチターン経路（正規化形式）
+                tools = tools if isinstance(tools, list) else None
+                self._send_json(call_llm_chat(messages[:64], system,
+                                              (tools or [])[:32] or None, max_tokens))
             else:
-                self._send_json(call_llm(prompt, system, max_tokens))
+                prompt = str(body.get("prompt", ""))[:60_000]
+                if not prompt.strip():
+                    self._send_json({"error": "prompt が空です"}, 400)
+                else:
+                    self._send_json(call_llm(prompt, system, max_tokens))
         elif route == "/api/llm/test":
             result = call_llm("「接続OK」とだけ返答してください。", max_tokens=64)
             self._send_json(result)

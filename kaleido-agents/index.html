@@ -58,9 +58,15 @@
     </div>
     <form id="composer" class="composer" autocomplete="off">
       <textarea id="composer-input" rows="2" placeholder="依頼を書く…（例: 1280×(12+8)÷4 を計算して、結果をメモに保存して）&#10;Shift+Enter で改行 / Enter で実行"></textarea>
-      <button id="btn-run" type="submit" class="run-btn">
-        <span class="run-label">実行</span><span class="run-icon">▶</span>
-      </button>
+      <div class="composer-side">
+        <select id="run-mode" class="mode-select" title="実行モード&#10;🧭 計画モード: プランナーが事前に全ステップを計画（LLMなしでも動作）&#10;⚡ Fn呼び出し: LLMが function calling でツールを逐次呼び出し（LLM接続が必要）">
+          <option value="plan">🧭 計画モード</option>
+          <option value="fc">⚡ Fn呼び出し</option>
+        </select>
+        <button id="btn-run" type="submit" class="run-btn">
+          <span class="run-label">実行</span><span class="run-icon">▶</span>
+        </button>
+      </div>
     </form>
   </section>
 

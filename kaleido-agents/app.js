@@ -1532,6 +1532,202 @@ JSONのみ出力: {"tool": "ツールid", "input": "修正した入力", "agent"
   } catch { return null; }
 }
 
+/* ---------------- function calling（⚡ Fn呼び出しモード） ----------------
+   LLM に関数スキーマ（ツールレジストリから自動生成）を渡し、
+   「ツール呼び出し → 結果を返す → 次を判断」の逐次ループで依頼を解決する。 */
+
+const FC_MAX_ROUNDS = 8;      // 1依頼あたりの LLM 往復上限
+const FC_MAX_CALLS_PER_ROUND = 4;
+
+const FC_SYSTEM = `あなたは Kaleido Agents のオーケストレータです。
+ユーザーの依頼を、提供された関数（ツール）を必要なだけ呼び出して解決してください。
+- 各ツールの input には、そのツールが単体で理解できる日本語の指示を渡すこと
+- 前のツール結果を使う場合は、その値を input に直接埋め込むこと
+- ツールが不要、またはすべての作業が完了したら、最終回答を日本語の Markdown で返すこと
+- 同じツールを同じ入力で繰り返し呼ばないこと`;
+
+/** ツールレジストリから function calling 用スキーマを生成（llm-chat は再帰になるので除外） */
+function toolSchemas() {
+  return TOOLS
+    .filter((t) => t.id !== "llm-chat" && isToolOn(t.id) && toolAgents(t).some((id) => isAgentOn(id)))
+    .map((t) => ({
+      name: t.id,
+      description: `${t.name}: ${t.desc}`,
+      parameters: {
+        type: "object",
+        properties: {
+          input: { type: "string", description: "このツールへの入力（日本語の指示や対象データ）" },
+        },
+        required: ["input"],
+      },
+    }));
+}
+
+/** Fnモードの計画ステッパーへ呼び出しチップを動的に追加する */
+function addFcChip(card, agent, tool, chipId, withArrow) {
+  const box = $("[data-plan]", card);
+  if (withArrow) {
+    const arrow = document.createElement("span");
+    arrow.className = "plan-arrow";
+    arrow.textContent = "→";
+    box.appendChild(arrow);
+  }
+  const el = document.createElement("span");
+  el.className = "plan-step pending";
+  el.dataset.step = chipId;
+  el.style.setProperty("--sc", agent.color);
+  el.innerHTML = `<span class="step-icon">${tool.icon}</span>
+    <span>${escapeHtml(truncate(tool.name, 10))}</span><span class="step-state">○</span>`;
+  el.title = `${agent.name} / ${tool.name}`;
+  box.appendChild(el);
+  scrollChat();
+}
+
+/** Fnモードの1ツール呼び出しを実行し、LLM へ返す文字列を返す */
+async function runFcToolCall(card, chipId, call, ctx, emitLog, run, load, approveAll) {
+  const tool = toolById(call.name);
+  if (!tool || !isToolOn(tool.id)) {
+    emitLog("orchestrator", `未知または無効なツール "${call.name}" の呼び出しを拒否しました`);
+    return `ERROR: ツール "${call.name}" は存在しないか無効です`;
+  }
+  const caps = toolAgents(tool).filter((id) => isAgentOn(id));
+  if (!caps.length) return `ERROR: ツール "${call.name}" を担当できるエージェントがいません`;
+  const agentId = caps.reduce((best, id) => (load[id] < load[best] ? id : best), caps[0]);
+  load[agentId] += 1;
+  const agent = agentById(agentId);
+  addFcChip(card, agent, tool, chipId, ctx.results.length > 0);
+  let input = String(call.arguments?.input ?? "").trim() || ctx.request;
+
+  if (approveAll) {
+    setStepState(card, chipId, "running");
+    emitLog("orchestrator", `⏸ 「${tool.name}」はユーザーの承認待ちです`);
+    const ap = await requestApproval(card, { title: tool.name }, agent, tool, input);
+    if (!ap.ok) {
+      emitLog("orchestrator", `ユーザーの判断で「${tool.name}」をスキップしました`);
+      setStepState(card, chipId, "skipped");
+      return "ユーザーがこの呼び出しをスキップしました。別の方法を検討するか、完了として最終回答を返してください。";
+    }
+    input = ap.input;
+  }
+
+  setStepState(card, chipId, "running");
+  setAgentActive(agent.id, true);
+  const t0 = performance.now();
+  try {
+    emitLog(agent.id, `${tool.icon} ${tool.name} を実行 — 入力: 「${truncate(input, 60)}」`);
+    await sleep(200);
+    // Fnモードでは LLM が渡した input をそのツールの依頼文として扱う
+    const callCtx = { ...ctx, request: input };
+    const result = await tool.run(input, callCtx);
+    const rec = {
+      toolId: tool.id, toolName: tool.name, agentId: agent.id,
+      text: result.text, data: result.data, html: result.html,
+      ok: true, step: { title: tool.name }, chipId, usedInput: input,
+    };
+    ctx.results.push(rec);
+    emitLog(agent.id, `→ 完了: ${truncate(result.text.replace(/[*`\n#>]/g, " "), 90)}`);
+    addTrace(run, { step: { title: tool.name }, agent, tool, input, output: result.text, ms: performance.now() - t0, ok: true });
+    setStepState(card, chipId, "done");
+    return truncate(result.text.replace(/[*`#>]/g, ""), 1600);
+  } catch (err) {
+    const msg = String(err.message || err);
+    ctx.results.push({
+      toolId: tool.id, toolName: tool.name, agentId: agent.id,
+      text: msg, ok: false, step: { title: tool.name }, chipId, usedInput: input,
+    });
+    emitLog(agent.id, `⚠️ エラー: ${msg}`);
+    addTrace(run, { step: { title: tool.name }, agent, tool, input, output: "ERROR: " + msg, ms: performance.now() - t0, ok: false });
+    setStepState(card, chipId, "error");
+    return `ERROR: ${msg}`;
+  } finally {
+    setAgentActive(agent.id, false);
+    await sleep(200);
+  }
+}
+
+/** ⚡ Fn呼び出しモードのオーケストレーション本体 */
+async function orchestrateAgentic(request) {
+  state.running = true;
+  $("#btn-run").disabled = true;
+  removeHero();
+  appendUserMsg(request);
+
+  const run = { id: "run" + Date.now(), request, t0: performance.now(), traces: [], ok: true };
+  const card = appendRunCard(run);
+  $("[data-state]", card).textContent = "⚡ Fn呼び出しモードで実行中…";
+  const emitLog = (agentId, text) => appendLog(card, agentId, text);
+  clearInspector();
+
+  const ctx = { request, results: [], llmOn: true, callLLM, emit: (t, x) => emitLog("orchestrator", x) };
+  const load = {};
+  AGENTS.forEach((a) => { load[a.id] = 0; });
+  const approveAll = /確認しながら|承認し(ながら|てから)|(一つ|1つ)ずつ確認/.test(request);
+  const seenCalls = new Map();
+  const messages = [{ role: "user", content: request }];
+  let finalText = "";
+  let rounds = 0;
+  let chipSeq = 0;
+
+  try {
+    const schemas = toolSchemas();
+    emitLog("orchestrator", `⚡ function calling で開始 — 関数スキーマ ${schemas.length} 件を LLM に提示`);
+    while (rounds < FC_MAX_ROUNDS) {
+      rounds += 1;
+      const res = await api("/api/llm", {
+        system: FC_SYSTEM, messages, tools: schemas, max_tokens: 1600,
+      });
+      if (res.error) throw new Error(res.error);
+      const calls = (res.tool_calls || []).slice(0, FC_MAX_CALLS_PER_ROUND);
+      if (!calls.length) {
+        finalText = res.text || "";
+        break;
+      }
+      messages.push({ role: "assistant", content: res.text || "", tool_calls: calls });
+      emitLog("orchestrator", `LLM がツール呼び出しを要求（第${rounds}ラウンド・${calls.length}件）`);
+      for (const call of calls) {
+        const key = call.name + "::" + JSON.stringify(call.arguments || {});
+        const seen = (seenCalls.get(key) || 0) + 1;
+        seenCalls.set(key, seen);
+        let output;
+        if (seen > 2) {
+          output = "ERROR: 同じ呼び出しの繰り返しです。別の入力にするか、最終回答を返してください。";
+          emitLog("orchestrator", `同一呼び出しの繰り返しを遮断: ${call.name}`);
+        } else {
+          chipSeq += 1;
+          output = await runFcToolCall(card, `fc${chipSeq}`, call, ctx, emitLog, run, load, approveAll);
+        }
+        messages.push({ role: "tool", tool_call_id: call.id || `call${chipSeq}`, content: output });
+      }
+    }
+
+    if (!finalText) {
+      emitLog("orchestrator", `ラウンド上限（${FC_MAX_ROUNDS}）に達したため、ここまでの結果で回答します`);
+      finalText = fallbackAnswer(request, ctx);
+    }
+
+    const active = ctx.results;
+    const okN = active.filter((r) => r.ok).length;
+    run.ok = active.length === 0 || okN === active.length;
+    const secs = ((performance.now() - run.t0) / 1000).toFixed(1);
+    const icon = run.ok ? "🟢" : okN > 0 ? "🟡" : "🔴";
+    const toolNames = [...new Set(active.map((r) => r.toolName))].join("、") || "なし";
+    finalText += `\n\n---\n${icon} **レビュアー検査**: Fnループ ${rounds} ラウンド · ツール呼び出し 成功 ${okN}/${active.length} · 使用ツール: ${toolNames} · ${secs}秒`;
+
+    const extraHtml = active.filter((r) => r.ok && r.html).map((r) => r.html).join("");
+    finishRunCard(card, run.ok, secs);
+    appendFinalMsg(finalText, extraHtml);
+    saveHistory({ q: request, ok: run.ok, ts: Date.now(), final: finalText, secs, chart: extraHtml.slice(0, 60_000) });
+    renderHistory();
+  } catch (err) {
+    finishRunCard(card, false, "—");
+    appendFinalMsg(`⚠️ Fn呼び出しモードでエラーが発生しました: ${escapeHtml(String(err.message || err))}\n\n🧭 計画モードに切り替えると LLM なしでも実行できます。`);
+  } finally {
+    AGENTS.forEach((a) => setAgentActive(a.id, false));
+    state.running = false;
+    $("#btn-run").disabled = false;
+  }
+}
+
 /** ライター: ツール結果を最終回答にまとめる（置き換え済みの旧結果は除く） */
 async function composeAnswer(request, ctx) {
   const active = ctx.results.filter((r) => !r.superseded);
@@ -2084,12 +2280,29 @@ function setupTheme() {
 function setupComposer() {
   const form = $("#composer");
   const input = $("#composer-input");
+  const mode = $("#run-mode");
+  mode.value = LS.get("runMode", "plan");
+  mode.addEventListener("change", () => {
+    LS.set("runMode", mode.value);
+    if (mode.value === "fc" && !llmOn()) {
+      toast("⚡ Fn呼び出しモードには LLM 接続が必要です（⚙️ 設定から接続してください）", true);
+    }
+  });
   form.addEventListener("submit", (e) => {
     e.preventDefault();
     const text = input.value.trim();
     if (!text || state.running) return;
     input.value = "";
-    orchestrate(text);
+    if (mode.value === "fc") {
+      if (!llmOn()) {
+        toast("LLM 未接続のため 🧭 計画モードで実行します", true);
+        orchestrate(text);
+      } else {
+        orchestrateAgentic(text);
+      }
+    } else {
+      orchestrate(text);
+    }
   });
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
