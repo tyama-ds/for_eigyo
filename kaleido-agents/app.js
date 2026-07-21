@@ -633,6 +633,50 @@ const BUILTIN_TOOLS = [
     },
   },
   {
+    id: "weather", name: "天気", icon: "🌤️", color: "#22d3ee", agents: ["researcher", "analyst"],
+    desc: "地名から現在の天気・気温・週間予報を取得（Open-Meteo・キー不要。例: 東京の今日の天気）",
+    async run(input, ctx) {
+      const req = input || ctx.request;
+      const m = req.match(/([一-龠ァ-ヴーA-Za-z0-9]+)の(?:今日|明日|今週|週間)?の?(?:天気|気温|降水|予報)/);
+      let place = m ? m[1] : "";
+      if (!place || /^(今日|明日|明後日|今週|来週|現在|いま)$/.test(place)) place = "東京";
+      const res = await fetch("/api/weather?place=" + encodeURIComponent(place));
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      const c = data.current || {};
+      const days = data.days || [];
+      const noPlace = !m || place !== m[1];
+      const lines = [
+        `🌤️ **${data.place}${data.admin ? `（${data.admin}）` : ""} の天気**${noPlace ? "（場所未指定のため東京）" : ""}`,
+        `- 現在: **${c.weather}** ${fmtNum(c.temperature)}℃（体感 ${fmtNum(c.feels_like)}℃）· 湿度 ${c.humidity}% · 風速 ${c.wind}m/s`,
+      ];
+      const wantWeek = /今週|週間|7日/.test(req);
+      const wantTomorrow = /明日|明後日/.test(req);
+      const shown = wantWeek ? days : days.slice(0, wantTomorrow ? 3 : 1);
+      shown.forEach((d, i) => {
+        const label = i === 0 ? "今日" : i === 1 ? "明日" : i === 2 ? "明後日" : d.date;
+        lines.push(`- ${label}（${d.date}）: ${d.weather} · 最高 ${fmtNum(d.tmax)}℃ / 最低 ${fmtNum(d.tmin)}℃ · 降水確率 ${d.pop ?? "?"}%`);
+      });
+      return { text: lines.join("\n"), data };
+    },
+  },
+  {
+    id: "web-search", name: "Web 検索", icon: "🔍", color: "#10b981", agents: ["researcher", "analyst"],
+    desc: "キーワードでWebを検索し、上位結果のタイトル・URL・抜粋を取得（DuckDuckGo・キー不要）",
+    async run(input, ctx) {
+      const raw = input || ctx.request;
+      const q = raw.replace(/(を|について)?(web)?検索(して|を)?(ください)?|ぐぐって|調べて(ください)?|要約して|まとめて/gi, " ")
+        .replace(/(最新)?ニュース(を|は)?/g, " 最新ニュース ")
+        .replace(/[、。？?]/g, " ").replace(/\s+/g, " ").replace(/の$/, "").trim() || raw;
+      const res = await fetch("/api/search?q=" + encodeURIComponent(q));
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      const lines = data.results.map((r, i) =>
+        `${i + 1}. **${r.title}**\n   [${truncate(r.url.replace(/^https?:\/\//, ""), 60)}](${r.url})${r.snippet ? `\n   ${truncate(r.snippet, 130)}` : ""}`);
+      return { text: `🔍 「${q}」の検索結果 ${data.results.length} 件:\n${lines.join("\n")}`, data: data.results };
+    },
+  },
+  {
     id: "web-fetch", name: "Web 取得", icon: "🌐", color: "#06b6d4", agents: ["researcher", "analyst"],
     desc: "URL のページを取得して本文テキストを抽出する（サーバー経由・SSRF対策つき）",
     async run(input) {
@@ -654,9 +698,14 @@ const BUILTIN_TOOLS = [
     async run(input, ctx) {
       const fetched = [...ctx.results].reverse()
         .find((r) => r.toolId === "web-fetch" && !r.superseded && r.data?.text);
-      const source = fetched ? fetched.data.text : (extractQuoted(ctx.request) || input);
+      const searched = fetched ? null : [...ctx.results].reverse()
+        .find((r) => r.toolId === "web-search" && !r.superseded && Array.isArray(r.data));
+      const source = fetched ? fetched.data.text
+        : searched ? searched.data.map((r) => `${r.title}。${r.snippet}`).join("\n")
+        : (extractQuoted(ctx.request) || input);
       if (!source || source.length < 30) throw new Error("要約する対象のテキストが見つかりませんでした");
-      const label = fetched ? `ページ「${fetched.data.title || fetched.data.url}」` : "与えられたテキスト";
+      const label = fetched ? `ページ「${fetched.data.title || fetched.data.url}」`
+        : searched ? `検索結果（${searched.data.length}件）` : "与えられたテキスト";
       if (ctx.llmOn) {
         const res = await ctx.callLLM(
           `次のテキストを日本語で簡潔に要約してください。重要な点を箇条書き3〜6項目で。\n\n---\n${source.slice(0, 16000)}`,
@@ -836,7 +885,9 @@ const BUILTIN_TOOLS = [
         ? `これまでのツール実行結果:\n${prior}\n\n上記を踏まえて、次の依頼に答えてください:\n${input}`
         : input;
       const res = await ctx.callLLM(prompt,
-        "あなたは Kaleido Agents のリサーチャーです。簡潔かつ正確に日本語で答えます。Markdown 使用可。");
+        "あなたは Kaleido Agents のリサーチャーです。簡潔かつ正確に日本語で答えます。Markdown 使用可。"
+        + "天気・ニュース・価格などのリアルタイム情報は学習知識で推測せず、ツール結果が与えられて"
+        + "いない場合は「リアルタイム情報を取得できていない」ことを明言してください。");
       if (res.error) throw new Error(res.error);
       return { text: res.text || "(空の応答)" };
     },
@@ -904,7 +955,13 @@ function planWithRules(request) {
     add("calculator", request, "計算");
   }
 
-  if (/(\d+\s*(日|週間|か月|ヶ月|年)(後|前))|何曜日|何日間?|日数|今日の日付|明日|明後日|昨日|今何時/.test(request)) {
+  // 天気・気温はライブ情報ツールで取得（「明日の天気」の「明日」で日付ツールは起動しない）
+  const isWeather = /(天気|気温|降水確率|予報)/.test(request);
+  if (isWeather) add("weather", request, "天気取得");
+
+  const dateExplicit = /(\d+\s*(日|週間|か月|ヶ月|年)(後|前))|何曜日|何日間?|日数|今日の日付|今何時/.test(request);
+  const dateLoose = /(明日|明後日|昨日)/.test(request);
+  if (dateExplicit || (dateLoose && !isWeather)) {
     add("datetime", request, "日付計算");
   }
 
@@ -942,12 +999,35 @@ function planWithRules(request) {
     }
   }
 
+  // Web検索: 明示的な検索依頼、鮮度が必要な話題、または他ツールに該当しない「調べて」
+  const freshTime = /(今日|現在|いま|最新|明日|今週|速報)/.test(request);
+  const freshTopic = /(ニュース|株価|為替|相場|価格|値段|リリース|発表|動向)/.test(request);
+  if (!urls.length && !/(メモ|覚え)/.test(request) && isToolOn("web-search")) {
+    if (/(検索して|を検索|ぐぐって|ニュース)/.test(request) || (freshTime && freshTopic)
+        || (/調べて/.test(request) && steps.length === 0)) {
+      add("web-search", request, "Web検索");
+    }
+  }
+
+  // 要約は情報源（Web検索・Web取得）より後に実行する
+  const sumIdx = steps.findIndex((s) => s.toolId === "summarize");
+  if (sumIdx >= 0) {
+    let lastSrc = -1;
+    steps.forEach((s, i) => {
+      if (s.toolId === "web-search" || s.toolId === "web-fetch") lastSrc = i;
+    });
+    if (lastSrc > sumIdx) {
+      const [sum] = steps.splice(sumIdx, 1);
+      steps.splice(lastSrc, 0, sum);   // splice後に情報源が1つ前へ詰まるので lastSrc 位置で直後になる
+    }
+  }
+
   // 繰り返し: 「A、B、C」+ それぞれ/各/ごとに → 対応ツールのステップを foreach 化
   if (/それぞれ|各|ごとに/.test(request)) {
     const list = extractQuoted(request);
     const items = list ? list.split(/[、,\/]/).map((s) => s.trim()).filter(Boolean) : [];
     if (items.length >= 2) {
-      const FOREACHABLE = new Set(["text-stats", "calculator", "unit-convert", "summarize", "llm-chat", "web-fetch"]);
+      const FOREACHABLE = new Set(["text-stats", "calculator", "unit-convert", "summarize", "llm-chat", "web-fetch", "weather", "web-search"]);
       for (const s of steps) {
         if (FOREACHABLE.has(s.toolId) || s.toolId.startsWith("custom-")) {
           s.foreach = items;
@@ -1544,7 +1624,9 @@ const FC_SYSTEM = `あなたは Kaleido Agents のオーケストレータです
 - 各ツールの input には、そのツールが単体で理解できる日本語の指示を渡すこと
 - 前のツール結果を使う場合は、その値を input に直接埋め込むこと
 - ツールが不要、またはすべての作業が完了したら、最終回答を日本語の Markdown で返すこと
-- 同じツールを同じ入力で繰り返し呼ばないこと`;
+- 同じツールを同じ入力で繰り返し呼ばないこと
+- 天気・ニュース・最新情報などのリアルタイム情報は、必ず weather や web-search 等の
+  ツールで取得すること。学習知識だけで推測して答えないこと`;
 
 /** ツールレジストリから function calling 用スキーマを生成（llm-chat は再帰になるので除外） */
 function toolSchemas() {
@@ -1711,7 +1793,7 @@ async function orchestrateAgentic(request) {
     const secs = ((performance.now() - run.t0) / 1000).toFixed(1);
     const icon = run.ok ? "🟢" : okN > 0 ? "🟡" : "🔴";
     const toolNames = [...new Set(active.map((r) => r.toolName))].join("、") || "なし";
-    finalText += `\n\n---\n${icon} **レビュアー検査**: Fnループ ${rounds} ラウンド · ツール呼び出し 成功 ${okN}/${active.length} · 使用ツール: ${toolNames} · ${secs}秒`;
+    finalText += `\n\n---\n${icon} **レビュアー検査**: Fnループ ${rounds} ラウンド · ツール呼び出し 成功 ${okN}/${active.length} · 使用ツール: ${toolNames} · ${secs}秒${freshnessWarning(request, active)}`;
 
     const extraHtml = active.filter((r) => r.ok && r.html).map((r) => r.html).join("");
     finishRunCard(card, run.ok, secs);
@@ -1777,6 +1859,22 @@ function fallbackAnswer(request, ctx) {
   return parts.join("\n\n");
 }
 
+/* ---- 鮮度検査: リアルタイム情報が必要な質問にライブ情報ツールを使ったか ---- */
+
+const LIVE_TOOLS = new Set(["weather", "web-search", "web-fetch"]);
+
+function freshnessWarning(request, results) {
+  const needs = /(天気|気温|降水確率|予報)/.test(request)
+    || (/(今日|現在|いま|最新|明日|今週|速報)/.test(request)
+        && /(ニュース|株価|為替|相場|価格|値段|リリース|発表|動向)/.test(request));
+  if (!needs) return "";
+  const used = results.some((r) => r.ok && !r.superseded && LIVE_TOOLS.has(r.toolId));
+  if (used) return "";
+  return "\n🟠 **鮮度警告**: リアルタイム情報を取得せずに回答しています"
+    + "（天気/Web検索ツールが無効か、取得に失敗した可能性があります）。"
+    + "内容が古い・不正確なおそれがあります";
+}
+
 /** レビュアー: 実行全体の検査 */
 function reviewRun(ctx, run) {
   const active = ctx.results.filter((r) => !r.superseded);
@@ -1786,7 +1884,11 @@ function reviewRun(ctx, run) {
   const toolNames = [...new Set(active.map((r) => r.toolName))].join("、") || "なし";
   const secs = ((performance.now() - run.t0) / 1000).toFixed(1);
   if (total === 0) {
-    return { ok: true, text: `🟢 **レビュアー検査**: 実行ツールなし（利用案内を回答） · ${secs}秒` };
+    const fresh = freshnessWarning(ctx.request, ctx.results);
+    return {
+      ok: !fresh,
+      text: `${fresh ? "🟠" : "🟢"} **レビュアー検査**: 実行ツールなし（利用案内を回答） · ${secs}秒${fresh}`,
+    };
   }
   const allOk = okN === total;
   const icon = allOk ? "🟢" : okN > 0 ? "🟡" : "🔴";
@@ -1794,9 +1896,10 @@ function reviewRun(ctx, run) {
     : okN > 0 ? `${total - okN} 件のステップが失敗しました（結果は上記参照）`
     : "すべてのステップが失敗しました";
   const retryNote = retried ? ` · 再計画による再実行 ${retried} 件` : "";
+  const fresh = freshnessWarning(ctx.request, ctx.results);
   return {
-    ok: allOk,
-    text: `${icon} **レビュアー検査**: ${verdict} — 成功 ${okN}/${total}${retryNote} · 使用ツール: ${toolNames} · ${secs}秒`,
+    ok: allOk && !fresh,
+    text: `${icon} **レビュアー検査**: ${verdict} — 成功 ${okN}/${total}${retryNote} · 使用ツール: ${toolNames} · ${secs}秒${fresh}`,
   };
 }
 
@@ -2088,6 +2191,8 @@ function renderHistory() {
 const SAMPLES = [
   "1280 × (12 + 8) ÷ 4 を計算して",
   "今日から100日後は何曜日？",
+  "東京の今日の天気は？",
+  "生成AIの最新ニュースを検索して要約して",
   "42.195km をマイルに変換して",
   "3.5 * 12 を計算して、その結果をkmとしてマイルに変換して",
   "https://www.un.org/en/ を取得して要約して",

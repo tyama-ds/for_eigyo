@@ -569,6 +569,130 @@ def call_llm(prompt: str, system: str = "", max_tokens: int = 1200,
         return {"error": msg}
 
 
+# ---------------------------------------------------------------- /api/weather /api/search
+# リアルタイム情報ツール。どちらもAPIキー不要。プロキシは設定（use_proxy等）に従う。
+# 社内ミラーやテスト用にベースURLを環境変数で差し替えられる。
+
+GEOCODE_BASE = os.environ.get("KALEIDO_GEOCODE_BASE", "https://geocoding-api.open-meteo.com").rstrip("/")
+FORECAST_BASE = os.environ.get("KALEIDO_FORECAST_BASE", "https://api.open-meteo.com").rstrip("/")
+SEARCH_BASE = os.environ.get("KALEIDO_SEARCH_BASE", "https://html.duckduckgo.com").rstrip("/")
+
+WMO_CODES = {
+    0: "快晴", 1: "晴れ", 2: "晴れ時々曇り", 3: "曇り", 45: "霧", 48: "霧氷",
+    51: "霧雨(弱)", 53: "霧雨", 55: "霧雨(強)", 56: "着氷性霧雨", 57: "着氷性霧雨(強)",
+    61: "雨(弱)", 63: "雨", 65: "雨(強)", 66: "着氷性の雨", 67: "着氷性の雨(強)",
+    71: "雪(弱)", 73: "雪", 75: "雪(強)", 77: "霧雪",
+    80: "にわか雨(弱)", 81: "にわか雨", 82: "にわか雨(強)", 85: "にわか雪", 86: "にわか雪(強)",
+    95: "雷雨", 96: "雷雨(雹)", 99: "雷雨(激しい雹)",
+}
+
+
+def _wmo(code) -> str:
+    try:
+        return WMO_CODES.get(int(code), f"不明(コード{code})")
+    except (TypeError, ValueError):
+        return "不明"
+
+
+def get_weather(place: str) -> dict:
+    """Open-Meteo で地名→現在天気+7日予報を取得する。"""
+    from urllib.parse import quote
+    try:
+        g = _get_json(f"{GEOCODE_BASE}/v1/search?name={quote(place)}&count=1&language=ja&format=json",
+                      timeout=10)
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"地名検索に失敗しました: {e}"}
+    results = g.get("results") or []
+    if not results:
+        return {"error": f"地名「{place}」が見つかりませんでした"}
+    r = results[0]
+    try:
+        f = _get_json(
+            f"{FORECAST_BASE}/v1/forecast?latitude={r['latitude']}&longitude={r['longitude']}"
+            "&current=temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,"
+            "weather_code,wind_speed_10m"
+            "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max"
+            "&timezone=auto&forecast_days=7",
+            timeout=10)
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"天気データの取得に失敗しました: {e}"}
+    cur = f.get("current") or {}
+    daily = f.get("daily") or {}
+    times = daily.get("time") or []
+
+    def _d(key, i):
+        arr = daily.get(key) or []
+        return arr[i] if i < len(arr) else None
+
+    days = [{
+        "date": times[i],
+        "weather": _wmo(_d("weather_code", i)),
+        "tmax": _d("temperature_2m_max", i),
+        "tmin": _d("temperature_2m_min", i),
+        "pop": _d("precipitation_probability_max", i),
+    } for i in range(min(len(times), 7))]
+    return {
+        "place": r.get("name", place),
+        "admin": r.get("admin1") or "",
+        "country": r.get("country") or "",
+        "current": {
+            "temperature": cur.get("temperature_2m"),
+            "feels_like": cur.get("apparent_temperature"),
+            "humidity": cur.get("relative_humidity_2m"),
+            "precipitation": cur.get("precipitation"),
+            "weather": _wmo(cur.get("weather_code")),
+            "wind": cur.get("wind_speed_10m"),
+        },
+        "days": days,
+    }
+
+
+_DDG_RESULT_RE = re.compile(r'<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
+                            re.IGNORECASE | re.DOTALL)
+_DDG_SNIPPET_RE = re.compile(r'class="result__snippet"[^>]*>(.*?)</a>',
+                             re.IGNORECASE | re.DOTALL)
+
+
+def _strip_tags(s: str) -> str:
+    return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", "", s))).strip()
+
+
+def web_search(query: str) -> dict:
+    """DuckDuckGo(HTML版) でWeb検索し、上位結果のタイトル/URL/抜粋を返す。"""
+    from urllib.parse import quote
+    url = f"{SEARCH_BASE}/html/?q={quote(query)}&kl=jp-jp"
+    req = urllib.request.Request(url, headers={
+        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                       "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"),
+        "Accept-Language": "ja,en;q=0.8",
+    })
+    try:
+        with _make_opener().open(req, timeout=FETCH_TIMEOUT) as res:
+            page = res.read(FETCH_MAX_BYTES).decode("utf-8", errors="replace")
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"検索に失敗しました: {e}（ネットワーク/プロキシ遮断の可能性）", "query": query}
+    links = _DDG_RESULT_RE.findall(page)
+    snippets = [_strip_tags(s) for s in _DDG_SNIPPET_RE.findall(page)]
+    out = []
+    for i, (href, title) in enumerate(links):
+        u = href
+        if "uddg=" in href:   # DDG のリダイレクトURLから実URLを取り出す
+            qs = parse_qs(urlparse(html.unescape(href)).query)
+            u = (qs.get("uddg") or [href])[0]
+        u = html.unescape(u)
+        if u.startswith("//"):
+            u = "https:" + u
+        if not u.startswith("http") or _host_is_internal(u):
+            continue
+        out.append({"title": _strip_tags(title), "url": u,
+                    "snippet": snippets[i] if i < len(snippets) else ""})
+        if len(out) >= 6:
+            break
+    if not out:
+        return {"error": "検索結果を取得できませんでした（ネットワーク/プロキシ遮断の可能性）", "query": query}
+    return {"query": query, "results": out}
+
+
 # ---------------------------------------------------------------- /api/llm/diagnose
 
 def diagnose_llm() -> dict:
@@ -713,6 +837,20 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"error": "url パラメータが必要です"}, 400)
             else:
                 self._send_json(fetch_url(url))
+        elif route == "/api/weather":
+            qs = parse_qs(parsed.query)
+            place = (qs.get("place") or [""])[0].strip()
+            if not place:
+                self._send_json({"error": "place パラメータが必要です"}, 400)
+            else:
+                self._send_json(get_weather(place[:80]))
+        elif route == "/api/search":
+            qs = parse_qs(parsed.query)
+            q = (qs.get("q") or [""])[0].strip()
+            if not q:
+                self._send_json({"error": "q パラメータが必要です"}, 400)
+            else:
+                self._send_json(web_search(q[:200]))
         elif route == "/api/llm/diagnose":
             self._send_json(diagnose_llm())
         elif route == "/api/health":
