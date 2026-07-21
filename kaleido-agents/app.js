@@ -2197,6 +2197,26 @@ function setupSettingsDialog() {
     if (res.text) { out.textContent = "✓ 接続OK: " + truncate(res.text, 40); out.className = "test-result ok"; }
     else { out.textContent = "✗ " + truncate(res.error || "失敗", 80); out.className = "test-result err"; }
   });
+  $("#btn-diag-llm").addEventListener("click", async () => {
+    const box = $("#diag-result");
+    box.hidden = false;
+    box.innerHTML = "🩺 診断中…";
+    // フォームの内容を保存してから、その設定で診断する
+    try {
+      state.llm = await api("/api/config", readSettingsForm());
+      updateLlmBadge();
+    } catch { /* 保存失敗でも診断は試みる */ }
+    let d;
+    try { d = await (await fetch("/api/llm/diagnose")).json(); }
+    catch (e) { box.innerHTML = `<div class="diag-line ng"><span>✗</span><div>診断APIに接続できません — ${escapeHtml(String(e))}</div></div>`; return; }
+    const lines = (d.checks || []).map((c) => `
+      <div class="diag-line ${c.ok ? "ok" : "ng"}">
+        <span>${c.ok ? "✓" : "✗"}</span>
+        <div><b>${escapeHtml(c.name)}</b> — ${escapeHtml(c.detail || "")}
+          ${c.hint ? `<div class="diag-hint">💡 ${escapeHtml(c.hint)}</div>` : ""}</div>
+      </div>`);
+    box.innerHTML = lines.join("") || "診断結果がありません";
+  });
 }
 
 /* ---- カスタムツールモーダル ---- */

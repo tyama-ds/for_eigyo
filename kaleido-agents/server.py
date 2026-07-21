@@ -299,6 +299,65 @@ def _split_reasoning(text: str) -> tuple[str, str]:
     return answer, reasoning
 
 
+# ---- ローカルLLM 接続の頑健化 ----
+# つながらない典型原因を自動回避する:
+#   1. ベースURLに /v1 を書き忘れ（Ollama は http://localhost:11434/v1 が正）
+#   2. localhost が IPv6 (::1) に解決され、127.0.0.1 だけで待つサーバーに届かない
+
+def _local_base_candidates(cfg: dict) -> list:
+    base = (cfg["base_url"] or LOCAL_DEFAULT_BASE).rstrip("/")
+    cands = [base]
+    if not base.endswith("/v1"):
+        cands.append(base + "/v1")
+    for b in list(cands):
+        if "//localhost" in b:
+            alt = b.replace("//localhost", "//127.0.0.1")
+            if alt not in cands:
+                cands.append(alt)
+    return cands
+
+
+def _openai_compat_post(cfg: dict, payload: dict) -> dict:
+    """OpenAI 互換の chat/completions へ POST。local は候補ベースURLを順に試す。"""
+    provider = cfg["provider"]
+    bases = (_local_base_candidates(cfg) if provider == "local"
+             else [(cfg["base_url"] or "https://api.openai.com/v1").rstrip("/")])
+    headers = {"Authorization": f"Bearer {cfg['api_key']}"} if cfg["api_key"] else {}
+    last_err: Exception | None = None
+    for i, base in enumerate(bases):
+        no_proxy = provider == "local" and _host_is_internal(base)
+        try:
+            return _post_json(f"{base}/chat/completions", payload, headers,
+                              no_proxy=no_proxy, cfg=cfg)
+        except urllib.error.HTTPError as e:
+            # 404 は「/v1 が無い」可能性があるので次候補を試す
+            last_err = e
+            if e.code == 404 and i < len(bases) - 1:
+                continue
+            raise
+        except (urllib.error.URLError, OSError) as e:
+            last_err = e
+            if i < len(bases) - 1:
+                continue
+            raise
+    raise last_err  # 論理上ここには来ない
+
+
+def _get_json(url: str, no_proxy: bool = False, cfg: dict | None = None,
+              timeout: int = 6) -> dict:
+    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    with _make_opener(force_direct=no_proxy, cfg=cfg).open(req, timeout=timeout) as res:
+        return json.loads(res.read().decode("utf-8", errors="replace"))
+
+
+def _hint_for_local(code: int | None) -> str:
+    if code == 404:
+        return ("ヒント: ベースURLに /v1 が含まれるか、モデル名が正しいか確認してください"
+                "（Ollama: http://localhost:11434/v1、モデルは ollama pull <名前> で取得）")
+    return ("ヒント: Ollama / LM Studio が起動しているか、ポート番号が正しいか確認してください。"
+            "⚙️設定の「🩺 診断」で詳細を確認できます")
+
+
 # ---- function calling: 正規化フォーマット <-> 各プロバイダ形式の変換 ----
 # クライアントは正規化形式のみを扱う:
 #   messages: [{role: user|assistant|tool, content, tool_calls?, tool_call_id?}]
@@ -404,13 +463,7 @@ def call_llm_chat(messages: list, system: str = "", tools: list | None = None,
             return {"text": text, "tool_calls": calls}
 
         # OpenAI 互換（local / openai）
-        if provider == "local":
-            base = (cfg["base_url"] or LOCAL_DEFAULT_BASE).rstrip("/")
-            default_model, no_proxy = "llama3.1", _host_is_internal(base)
-        else:
-            base = (cfg["base_url"] or "https://api.openai.com/v1").rstrip("/")
-            default_model, no_proxy = "gpt-4o-mini", False
-        headers = {"Authorization": f"Bearer {cfg['api_key']}"} if cfg["api_key"] else {}
+        default_model = "llama3.1" if provider == "local" else "gpt-4o-mini"
         payload = {
             "model": cfg["model"] or default_model,
             "messages": _to_openai_messages(messages, system),
@@ -421,8 +474,7 @@ def call_llm_chat(messages: list, system: str = "", tools: list | None = None,
                 "name": t["name"], "description": t.get("description", ""),
                 "parameters": t.get("parameters") or {"type": "object", "properties": {}},
             }} for t in tools]
-        data = _post_json(f"{base}/chat/completions", payload, headers,
-                          no_proxy=no_proxy, cfg=cfg)
+        data = _openai_compat_post(cfg, payload)
         msg = (data.get("choices") or [{}])[0].get("message") or {}
         content = (msg.get("content") or "").strip()
         rc = (msg.get("reasoning_content") or msg.get("reasoning") or "").strip()
@@ -439,9 +491,15 @@ def call_llm_chat(messages: list, system: str = "", tools: list | None = None,
             detail = e.read().decode("utf-8", errors="replace")[:400]
         except OSError:
             pass
-        return {"error": f"LLM API エラー HTTP {e.code}: {detail or e.reason}"}
+        msg = f"LLM API エラー HTTP {e.code}: {detail or e.reason}"
+        if provider == "local":
+            msg += " / " + _hint_for_local(e.code)
+        return {"error": msg}
     except (urllib.error.URLError, socket.timeout, OSError, ValueError) as e:
-        return {"error": f"LLM に接続できません: {e}"}
+        msg = f"LLM に接続できません: {e}"
+        if provider == "local":
+            msg += " / " + _hint_for_local(None)
+        return {"error": msg}
 
 
 def call_llm(prompt: str, system: str = "", max_tokens: int = 1200,
@@ -472,23 +530,15 @@ def call_llm(prompt: str, system: str = "", max_tokens: int = 1200,
             return {"text": text}
 
         # OpenAI 互換（Chat Completions）— local / openai 共通
-        if provider == "local":
-            base = (cfg["base_url"] or LOCAL_DEFAULT_BASE).rstrip("/")
-            default_model = "llama3.1"
-            # ローカル(=内部アドレス)のみプロキシ非経由で直結。外部URLならプロキシ設定に従う
-            no_proxy = _host_is_internal(base)
-        else:
-            base = (cfg["base_url"] or "https://api.openai.com/v1").rstrip("/")
-            default_model = "gpt-4o-mini"
-            no_proxy = False
-        headers = {"Authorization": f"Bearer {cfg['api_key']}"} if cfg["api_key"] else {}
+        # local はプロキシ非経由の直結 + ベースURL候補（/v1 補完・127.0.0.1 代替）を順に試す
+        default_model = "llama3.1" if provider == "local" else "gpt-4o-mini"
         messages = ([{"role": "system", "content": system}] if system else [])
         messages.append({"role": "user", "content": prompt})
-        data = _post_json(f"{base}/chat/completions", {
+        data = _openai_compat_post(cfg, {
             "model": cfg["model"] or default_model,
             "messages": messages,
             "max_tokens": max_tokens,
-        }, headers, no_proxy=no_proxy, cfg=cfg)
+        })
         choices = data.get("choices") or [{}]
         msg = choices[0].get("message") or {}
         content = (msg.get("content") or "").strip()
@@ -508,9 +558,103 @@ def call_llm(prompt: str, system: str = "", max_tokens: int = 1200,
             detail = e.read().decode("utf-8", errors="replace")[:400]
         except OSError:
             pass
-        return {"error": f"LLM API エラー HTTP {e.code}: {detail or e.reason}"}
+        msg = f"LLM API エラー HTTP {e.code}: {detail or e.reason}"
+        if provider == "local":
+            msg += " / " + _hint_for_local(e.code)
+        return {"error": msg}
     except (urllib.error.URLError, socket.timeout, OSError, ValueError) as e:
-        return {"error": f"LLM に接続できません: {e}"}
+        msg = f"LLM に接続できません: {e}"
+        if provider == "local":
+            msg += " / " + _hint_for_local(None)
+        return {"error": msg}
+
+
+# ---------------------------------------------------------------- /api/llm/diagnose
+
+def diagnose_llm() -> dict:
+    """LLM 接続の問題を段階的に切り分ける診断。checks の各項目に ok/detail/hint を返す。"""
+    cfg = load_config()
+    checks: list = []
+
+    def add(name: str, ok: bool, detail: str = "", hint: str = "") -> None:
+        checks.append({"name": name, "ok": ok, "detail": detail[:300], "hint": hint})
+
+    provider = cfg["provider"]
+    add("プロバイダ設定", provider != "none", f"provider = {provider}",
+        "" if provider != "none" else "⚙️設定でプロバイダ（ローカルLLM等）を選択してください")
+    if provider == "none":
+        return {"ok": False, "checks": checks}
+
+    if provider == "local":
+        bases = _local_base_candidates(cfg)
+    elif provider == "openai":
+        bases = [(cfg["base_url"] or "https://api.openai.com/v1").rstrip("/")]
+    else:
+        bases = [(cfg["base_url"] or "https://api.anthropic.com").rstrip("/")]
+
+    # 1) TCP 到達性（候補を順に試す）
+    reachable = []
+    tcp_detail = ""
+    for base in bases:
+        p = urlparse(base)
+        host = p.hostname or ""
+        port = p.port or (443 if p.scheme == "https" else 80)
+        try:
+            with socket.create_connection((host, port), timeout=3):
+                pass
+            reachable.append(base)
+            tcp_detail = f"{host}:{port} に到達（{base}）"
+        except OSError as e:
+            if not tcp_detail:
+                tcp_detail = f"{host}:{port} → {e}"
+    if reachable:
+        add("TCP 接続", True, tcp_detail)
+    else:
+        hint = ("LLM サーバーが起動していないか、ポートが違います。"
+                "Ollama: アプリ/`ollama serve` を起動（既定ポート 11434、ベースURLは http://localhost:11434/v1）。"
+                "LM Studio: Developer タブで Start Server（既定ポート 1234、ベースURLは http://localhost:1234/v1）"
+                if provider == "local" else
+                "ネットワーク/プロキシ設定を確認してください（設定の「プロキシ設定」参照）")
+        add("TCP 接続", False, tcp_detail, hint)
+        return {"ok": False, "checks": checks, "config": public_config(cfg)}
+
+    # 2) モデル一覧（OpenAI互換の GET /models）
+    model_ids: list = []
+    if provider in ("local", "openai"):
+        listed = False
+        detail = ""
+        for base in reachable:
+            try:
+                no_proxy = provider == "local" and _host_is_internal(base)
+                data = _get_json(f"{base}/models", no_proxy=no_proxy, cfg=cfg)
+                model_ids = [str(m.get("id", "")) for m in (data.get("data") or [])]
+                add("モデル一覧の取得", True,
+                    f"{len(model_ids)} モデル: " + ", ".join(model_ids[:8]) + ("…" if len(model_ids) > 8 else ""))
+                listed = True
+                break
+            except Exception as e:  # noqa: BLE001
+                detail = f"{base}/models → {e}"
+        if not listed:
+            add("モデル一覧の取得", False, detail,
+                "ベースURLが OpenAI 互換の /v1 を指しているか確認してください"
+                "（Ollama: http://localhost:11434/v1 / LM Studio: http://localhost:1234/v1）")
+        # 3) 設定モデル名の確認
+        if listed:
+            model = cfg["model"] or ("llama3.1" if provider == "local" else "gpt-4o-mini")
+            hit = any(model == i or i.startswith(model + ":") or i.split(":")[0] == model
+                      for i in model_ids)
+            add("モデル名の確認", hit, f"設定モデル: {model}",
+                "" if hit else ("一覧に見つかりません。Ollama なら ollama pull "
+                                f"{model} を実行するか、上の一覧にある名前を設定してください"))
+
+    # 4) チャット応答テスト
+    res = call_llm("「接続OK」とだけ返答してください。", max_tokens=32, cfg=cfg)
+    if res.get("text"):
+        add("チャット応答", True, res["text"][:80])
+    else:
+        add("チャット応答", False, res.get("error", "不明なエラー"))
+
+    return {"ok": all(c["ok"] for c in checks), "checks": checks, "config": public_config(cfg)}
 
 
 # ---------------------------------------------------------------- HTTP server
@@ -569,6 +713,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"error": "url パラメータが必要です"}, 400)
             else:
                 self._send_json(fetch_url(url))
+        elif route == "/api/llm/diagnose":
+            self._send_json(diagnose_llm())
         elif route == "/api/health":
             self._send_json({"ok": True, "app": "kaleido-agents"})
         else:

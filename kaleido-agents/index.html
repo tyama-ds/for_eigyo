@@ -131,8 +131,10 @@
         <input id="cfg-ca" type="text" placeholder="例: C:\certs\company-ca.pem">
       </label>
     </details>
+    <div id="diag-result" class="diag-result" hidden></div>
     <div class="dialog-actions">
       <button type="button" id="btn-test-llm" class="ghost-btn">接続テスト</button>
+      <button type="button" id="btn-diag-llm" class="ghost-btn" title="つながらない原因を段階的に切り分けます">🩺 診断</button>
       <span id="test-result" class="test-result"></span>
       <span class="spacer"></span>
       <button type="button" class="ghost-btn" data-close>閉じる</button>
