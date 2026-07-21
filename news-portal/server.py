@@ -59,7 +59,8 @@ MAX_FEED_BYTES = 6 * 1024 * 1024  # 1フィードの取得上限（バイト）
 USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
 
-AI_TIMEOUT = 60           # 生成AI呼び出しのタイムアウト（秒）
+AI_TIMEOUT = 60           # 生成AI呼び出しのタイムアウト（秒・クラウド）
+AI_TIMEOUT_LOCAL = 300    # ローカルLLMは推論(思考)モデルが長考するため長め（秒）
 AI_MAX_TOKENS = 1500      # AI応答の最大トークン
 MAX_PAGE_TEXT = 6000      # 記事ページを本文コンテキストに含める最大文字数
 AI_PROVIDERS = ("anthropic", "openai", "local")  # openai/local = OpenAI互換（base_url指定）
@@ -885,7 +886,8 @@ def fetch_page_text(url: str) -> str:
         return ""
 
 
-def _http_json(url: str, body: dict, headers: dict, no_proxy: bool = False) -> dict:
+def _http_json(url: str, body: dict, headers: dict, no_proxy: bool = False,
+               timeout: float = AI_TIMEOUT) -> dict:
     """JSON を POST して JSON を返す（proxy・CA は urllib が処理）。
 
     no_proxy=True のときはプロキシを経由しない（ローカルLLM向け）。
@@ -894,7 +896,7 @@ def _http_json(url: str, body: dict, headers: dict, no_proxy: bool = False) -> d
     req = urllib.request.Request(url, data=data, method="POST",
                                  headers={**headers, "Content-Type": "application/json"})
     try:
-        with _opener(force_direct=no_proxy).open(req, timeout=AI_TIMEOUT) as r:
+        with _opener(force_direct=no_proxy).open(req, timeout=timeout) as r:
             resp = r.read(4 * 1024 * 1024)
         return json.loads(resp.decode("utf-8", "replace"))
     except urllib.error.HTTPError as e:
@@ -904,31 +906,64 @@ def _http_json(url: str, body: dict, headers: dict, no_proxy: bool = False) -> d
         raise RuntimeError(f"接続エラー: {e}")
 
 
-_THINK_PAIR_RE = re.compile(r"<think(?:ing)?>(.*?)</think(?:ing)?>\s*",
-                            re.DOTALL | re.IGNORECASE)
-_THINK_CLOSE_RE = re.compile(r"</think(?:ing)?>\s*", re.IGNORECASE)
+# 推論マーカー: <think>/<thinking>（DeepSeek-R1, QwQ, Qwen3系）、[THINK]（Magistral等）、
+# <|begin_of_thought|>（OpenThinker系）
+_THINK_PAIR_RE = re.compile(
+    r"(?:<think(?:ing)?>(.*?)</think(?:ing)?>"
+    r"|\[THINK\](.*?)\[/THINK\]"
+    r"|<\|begin_of_thought\|>(.*?)<\|end_of_thought\|>)\s*",
+    re.DOTALL | re.IGNORECASE)
+_THINK_OPEN_RE = re.compile(r"<think(?:ing)?>|\[THINK\]|<\|begin_of_thought\|>",
+                            re.IGNORECASE)
+_THINK_CLOSE_RE = re.compile(r"(?:</think(?:ing)?>|\[/THINK\]|<\|end_of_thought\|>)\s*",
+                             re.IGNORECASE)
+_TRUNCATED_NOTE = ("（モデルが思考の途中で応答を終えたため、最終解答がありません。"
+                   "下の「推論過程を表示」で途中経過を確認するか、もう一度質問してください）")
+# タグを使わず「*Output Generation*」「Final Answer」等の見出し行で最終解答を区切る
+# モデル向けのヒューリスティック（見出しの後ろが解答、前が思考）
+_SCAFFOLD_RE = re.compile(
+    r"(?im)^[ \t]*(?:#{1,3}[ \t]*)?(?:\*{1,2}|_{1,2})?"
+    r"(?:Output Generation|Final (?:Answer|Response|Output)|最終(?:解答|回答|出力))"
+    r"(?:\*{1,2}|_{1,2})?[ \t]*(?:\(.*?\))?[ \t]*[::]?[ \t]*$")
 
 
 def _split_reasoning(text: str) -> tuple[str, str]:
-    """推論系ローカルLLM（DeepSeek-R1 / QwQ 等）が本文に混ぜて出力する
-    <think>…</think> の推論過程を分離する。開きタグ無しで </think> だけ来る
-    ケース（テンプレート側で <think> が消される LM Studio 等）にも対応。
-    戻り値は (最終解答, 推論過程)。全部が推論だった場合は推論を解答として返す。"""
-    if not text or "</think" not in text.lower():
+    """推論系ローカルLLM（DeepSeek-R1 / QwQ / Qwen3 等）が本文に混ぜて出力する
+    <think>…</think> 等の推論過程を分離する。対応ケース:
+    - 通常の開閉ペア（複数ブロック・本文混在も可）
+    - 開きタグ無しで閉じタグだけ（テンプレートが開きタグを食う LM Studio 等）
+    - 閉じタグ無しで開きタグだけ（トークン上限で思考が打ち切られた Qwen3 の長考等）
+    戻り値は (最終解答, 推論過程)。解答が無い場合は案内文を解答として返し、
+    推論はそのまま折りたたみ側に渡す（生の思考を解答欄に出さない）。"""
+    if not text:
+        return text, ""
+    if not (_THINK_OPEN_RE.search(text) or _THINK_CLOSE_RE.search(text)):
+        # タグ無しで見出し形式の思考を書くモデル（*Output Generation* 等）:
+        # 最後の見出し行より後ろを解答、前を思考として分離する
+        ms = list(_SCAFFOLD_RE.finditer(text))
+        if ms:
+            after = text[ms[-1].end():].strip()
+            before = text[:ms[-1].start()].strip()
+            if after and before:
+                return after, before
         return text, ""
     chunks: list[str] = []
     def _grab(m):
-        chunks.append(m.group(1).strip())
+        chunks.append(next(g for g in m.groups() if g is not None).strip())
         return ""
     stripped = _THINK_PAIR_RE.sub(_grab, text)
-    if "</think" in stripped.lower():   # 開きタグの無い残骸: 先頭〜</think> が推論
+    if _THINK_CLOSE_RE.search(stripped):   # 開きタグの無い残骸: 先頭〜閉じタグ が推論
         parts = _THINK_CLOSE_RE.split(stripped, maxsplit=1)
         chunks.insert(0, parts[0].strip())
         stripped = parts[1] if len(parts) > 1 else ""
+    m = _THINK_OPEN_RE.search(stripped)    # 閉じられずに終わった思考（打ち切り）
+    if m:
+        chunks.append(stripped[m.end():].strip())
+        stripped = stripped[:m.start()]
     answer = stripped.strip()
     reasoning = "\n\n".join(c for c in chunks if c)
     if not answer:
-        return (reasoning or text.strip()), ""
+        return (_TRUNCATED_NOTE if reasoning else text.strip()), reasoning
     return answer, reasoning
 
 
@@ -963,9 +998,16 @@ def call_ai(cfg: dict, system: str, user_content: str, history: list[dict]) -> s
         url = (base or "https://api.openai.com/v1") + "/chat/completions"
         default_model, no_proxy = "gpt-4o-mini", False
     full = ([{"role": "system", "content": system}] if system else []) + msgs
-    body = {"model": model or default_model, "messages": full, "max_tokens": AI_MAX_TOKENS}
+    body = {"model": model or default_model, "messages": full}
+    if provider == "local":
+        # 推論(思考)モデルは max_tokens=1500 だと </think> の前に打ち切られて
+        # 生の思考が漏れるため、上限を課さない（サーバー既定=EOSまで）。時間も長めに
+        timeout = AI_TIMEOUT_LOCAL
+    else:
+        body["max_tokens"] = AI_MAX_TOKENS
+        timeout = AI_TIMEOUT
     headers = {"Authorization": "Bearer " + key} if key else {}   # ローカルはキー任意
-    data = _http_json(url, body, headers, no_proxy=no_proxy)
+    data = _http_json(url, body, headers, no_proxy=no_proxy, timeout=timeout)
     choices = data.get("choices") or [{}]
     msg = choices[0].get("message") or {}
     content = (msg.get("content") or "").strip()
@@ -994,6 +1036,13 @@ def ai_chat(payload: dict) -> dict:
     system = ("あなたはニュース閲覧を助けるアシスタントです。以下に与えられた記事情報や"
               "本文に基づいて、日本語で簡潔かつ正確に答えてください。推測が必要な場合は"
               "その旨を明示し、与えられた情報に無い事実を断定しないでください。")
+    if cfg["provider"] == "local":
+        # 推論系ローカルLLM（Qwen3 等）が思考・下書き・*見出し* 付きの検討を
+        # 本文に垂れ流すのを抑止し、出す場合はタグで機械可読にさせる
+        system += ("\n出力規律: 思考過程・分析・下書き・途中の検討（*Analysis* や "
+                   "*Output Generation* のような見出しを含む）は出力せず、最終的な"
+                   "回答本文だけを書いてください。思考過程を書く必要がある場合は、"
+                   "必ず <think> と </think> で囲み、その後に回答本文を書いてください。")
 
     parts = []
     if ctx.get("kind") == "list":
