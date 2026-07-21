@@ -109,26 +109,14 @@ def build_provider(config: LLMRuntimeConfig) -> LLMProvider:
     raise LLMProviderError(f"未知のLLMプロバイダです: {name}")
 
 
-def _common_proxy(env: dict[str, str]) -> str:
-    """LLM専用の LLM_PROXY を最優先し、無ければ全体共通プロキシを引き継ぐ。"""
-    return (
-        env.get("LLM_PROXY")
-        or env.get("FERMISCOPE_HTTP_PROXY")
-        or env.get("HTTPS_PROXY")
-        or env.get("https_proxy")
-        or env.get("HTTP_PROXY")
-        or env.get("http_proxy")
-        or env.get("ALL_PROXY")
-        or env.get("all_proxy")
-        or ""
-    )
-
-
 def _config_from_env(env: dict[str, str]) -> LLMRuntimeConfig:
     provider = (env.get("LLM_PROVIDER", "noop") or "noop").lower()
     if provider not in ("noop", "mock", "openai_compatible", "anthropic"):
         provider = "noop"
-    proxy = _common_proxy(env)
+    # 設定に保存するのは明示的な LLM_PROXY のみ。一般の HTTPS_PROXY/HTTP_PROXY は
+    # 保存時に焼き込まず、プロバイダ構築時に接続先ごとに解決する(NO_PROXY を尊重し、
+    # localhost のローカルLLMを社内プロキシへ流さないため)。
+    proxy = env.get("LLM_PROXY", "")
     if provider == "anthropic":
         return LLMRuntimeConfig(
             provider="anthropic",
@@ -252,14 +240,34 @@ class LLMSettingsStore:
         self._provider = None
 
     async def test_connection(self) -> tuple[bool, str]:
-        """現行プロバイダで軽い呼び出しを行い、疎通を確認する。"""
+        """現行プロバイダで軽い呼び出しを行い、疎通を確認する。
+
+        失敗時は原因(HTTPステータス・接続エラー種別)と接続経路(接続先・プロキシ
+        適用状況)を返す。APIキー・プロキシ資格情報は含めない。
+        """
         provider = self.get_provider()
         if not provider.available:
-            return False, "LLMは無効(provider=noop)です。"
+            return False, "LLMは無効(provider=noop)です。プロバイダを選択して保存してください。"
+
+        info: dict = {}
+        conn_info = getattr(provider, "connection_info", None)
+        if callable(conn_info):
+            info = conn_info() or {}
+        route_parts = []
+        if info.get("api_base"):
+            route_parts.append(f"接続先: {info['api_base']}")
+        if info.get("proxy"):
+            route_parts.append(f"プロキシ: {info['proxy']}")
+        if info.get("proxy_note"):
+            route_parts.append(info["proxy_note"])
+        route = "(" + " / ".join(route_parts) + ")" if route_parts else ""
+
         try:
             result = await provider.classify_question("テスト:東京都の人口は何人か")
         except Exception as exc:  # noqa: BLE001
-            return False, f"接続に失敗しました: {type(exc).__name__}"
+            return False, f"接続に失敗しました: {type(exc).__name__} {route}"
         if result is None:
-            return False, "応答が得られませんでした(接続先・モデルID・APIキーを確認してください)。"
-        return True, "接続に成功しました。"
+            last = getattr(provider, "last_error", "")
+            reason = last or "応答が得られませんでした(接続先・モデルID・APIキーを確認してください)。"
+            return False, f"{reason} {route}"
+        return True, f"接続に成功しました。{route}"

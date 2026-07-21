@@ -63,5 +63,7 @@ async def test_llm_proposal_with_invalid_units_rejected():
     spec.target_unit = "person"
     models, _, ai = await generate_model_candidates(spec, llm)
     llm_models = [m for m in models if m.proposed_by == "llm"]
-    if llm_models:  # LLM候補が生成された場合、単位不合格は不採用になる
-        assert all(m.role == "rejected" for m in llm_models)
+    # LLM有効時は提案が必ず試みられ(到達性保証)、単位不合格は不採用になる
+    assert llm_models, "LLMが有効なら提案candidatesが生成されるはず"
+    assert all(m.role == "rejected" for m in llm_models)
+    assert ai is True

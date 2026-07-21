@@ -435,8 +435,11 @@ async def generate_model_candidates(
         candidates.append(candidate)
         all_params.update(params)
 
-    # ルールテンプレートが2件未満の場合のみLLM補助(AIフォールバック条件)
-    if len(candidates) < 2 and llm is not None and llm.available:
+    # LLM が有効なら、ルール候補の数に関わらずモデル提案を試みる。
+    # (以前は「ルール候補<2件」の場合のみで、テンプレートに適合する問いでは
+    #  LLM が一切呼ばれず、設定済みの生成AIが使われない到達性問題があった。)
+    # 提案は単位検査・採点を通し、不合格は role=rejected として採用しない。
+    if llm is not None and llm.available:
         proposals = await llm.propose_models(
             f"{spec.original_question}(対象: {spec.subject}、地域: {spec.geography})",
             spec.target_unit,

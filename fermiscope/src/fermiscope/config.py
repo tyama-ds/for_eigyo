@@ -381,6 +381,55 @@ def _no_proxy_match(host: str, no_proxy: str) -> bool:
     return False
 
 
+def env_no_proxy(env: dict[str, str] | None = None) -> str:
+    """環境変数から NO_PROXY 値を取得する(専用変数 > 小文字 > 大文字)。"""
+    e = dict(os.environ) if env is None else env
+    return e.get("FERMISCOPE_NO_PROXY") or e.get("no_proxy") or e.get("NO_PROXY") or ""
+
+
+def resolve_proxy_for_url(
+    url: str,
+    explicit_proxy: str | None = None,
+    env: dict[str, str] | None = None,
+) -> tuple[str | None, str]:
+    """単一の接続先(LLM API 等)に適用するプロキシを解決する。
+
+    優先順位:
+      1. NO_PROXY に合致するホスト → 常に直接接続(明示プロキシより優先。
+         localhost のローカルLLMを社内プロキシへ流さない)
+      2. 明示指定されたプロキシ(GUI設定 / LLM_PROXY)
+      3. スキーム別の環境変数(https → HTTPS_PROXY 系、http → HTTP_PROXY 系。
+         大文字・小文字の両方を受け付け、小文字を優先)
+
+    Returns:
+        (プロキシURL or None, 人間可読の適用理由)。理由に秘密は含まない。
+    """
+    e = dict(os.environ) if env is None else env
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    if _no_proxy_match(host, env_no_proxy(e)):
+        return None, "NO_PROXYにより直接接続"
+    if explicit_proxy:
+        return explicit_proxy, "明示設定のプロキシ"
+    scheme = (parsed.scheme or "https").lower()
+    names: tuple[str, ...]
+    if scheme == "https":
+        names = (
+            "FERMISCOPE_HTTPS_PROXY", "https_proxy", "HTTPS_PROXY",
+            "FERMISCOPE_HTTP_PROXY", "http_proxy", "HTTP_PROXY",
+            "all_proxy", "ALL_PROXY",
+        )
+    else:
+        names = (
+            "FERMISCOPE_HTTP_PROXY", "http_proxy", "HTTP_PROXY",
+            "all_proxy", "ALL_PROXY",
+        )
+    for name in names:
+        if e.get(name):
+            return e[name], f"環境変数({name})"
+    return None, "プロキシなし(直接接続)"
+
+
 def proxy_without_credentials(proxy: str) -> str:
     """プロキシURLから認証情報(user:pass@)を取り除く。
 

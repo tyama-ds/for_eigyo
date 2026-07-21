@@ -16,7 +16,7 @@ import os
 import httpx
 
 from fermiscope.llm.base import LLMProviderError
-from fermiscope.llm.http_base import HttpLLMProvider
+from fermiscope.llm.http_base import HttpLLMProvider, build_llm_http_client
 
 logger = logging.getLogger(__name__)
 
@@ -58,12 +58,11 @@ class AnthropicProvider(HttpLLMProvider):
             "x-api-key": key,
             "anthropic-version": _ANTHROPIC_VERSION,
         }
-        client_kwargs: dict = {"timeout": timeout_seconds, "headers": headers}
-        if transport is not None:
-            client_kwargs["transport"] = transport
-        elif proxy:
-            client_kwargs["proxy"] = proxy
-        self._client = httpx.AsyncClient(**client_kwargs)
+        # 接続先ごとのプロキシ解決(NO_PROXY 最優先)+ trust_env=False
+        self._client, self._connection_info = build_llm_http_client(
+            self.api_base, headers, timeout_seconds, explicit_proxy=proxy, transport=transport
+        )
+        self.last_error = ""
         self.available = True
 
     async def close(self) -> None:
@@ -80,19 +79,25 @@ class AnthropicProvider(HttpLLMProvider):
         try:
             resp = await self._client.post(f"{self.api_base}/v1/messages", json=payload)
         except httpx.HTTPError as exc:
+            self.last_error = f"接続エラー: {type(exc).__name__}"
             logger.warning("Anthropic API接続エラー: %s", type(exc).__name__)  # キーは含めない
             return None
         if resp.status_code == 429:
+            self.last_error = "HTTP 429(レート制限)"
             logger.warning("Anthropic APIレート制限(429)")
             return None
         if resp.status_code != 200:
+            body = " ".join(resp.text.split())[:160]
+            self.last_error = f"HTTP {resp.status_code}: {body}"
             logger.warning("Anthropic APIエラー: HTTP %s", resp.status_code)
             return None
         try:
             data = resp.json()
             blocks = data.get("content", [])
             texts = [b.get("text", "") for b in blocks if isinstance(b, dict) and b.get("type") == "text"]
+            self.last_error = "" if texts else "応答にテキストブロックがありません"
             return "".join(texts) or None
         except (KeyError, IndexError, ValueError, AttributeError):
+            self.last_error = "応答の形式が不正です(content ブロックがありません)"
             logger.warning("Anthropic API応答の形式が不正です")
             return None

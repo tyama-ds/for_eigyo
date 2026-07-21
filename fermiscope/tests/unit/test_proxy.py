@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from fermiscope.config import load_settings
-from fermiscope.llm.settings_store import _common_proxy
 from fermiscope.research.fetcher import DocumentFetcher
 
 PROXY = "http://user:pass@proxy.example:8080"
@@ -86,13 +85,25 @@ def test_fetcher_pins_ip_for_no_proxy_host_even_with_proxy():
     assert host_header == "example.com"
 
 
-def test_llm_common_proxy_fallback():
-    # LLM_PROXY 未設定なら共通プロキシを引き継ぐ
-    assert _common_proxy({"FERMISCOPE_HTTP_PROXY": PROXY}) == PROXY
-    assert _common_proxy({"HTTPS_PROXY": PROXY}) == PROXY
-    # LLM_PROXY があれば最優先
-    assert _common_proxy({"LLM_PROXY": "http://llm:9", "HTTPS_PROXY": PROXY}) == "http://llm:9"
-    assert _common_proxy({}) == ""
+def test_llm_proxy_resolution_per_url():
+    """LLM のプロキシは接続先URLごとに解決し、NO_PROXY を最優先する。"""
+    from fermiscope.config import resolve_proxy_for_url
+
+    env = {"HTTPS_PROXY": PROXY, "HTTP_PROXY": "http://h:1", "NO_PROXY": "localhost,127.0.0.1"}
+    # localhost のローカルLLMは、プロキシ設定があっても直接接続(バイパス)
+    p, note = resolve_proxy_for_url("http://127.0.0.1:11434/v1", env=env)
+    assert p is None and "NO_PROXY" in note
+    # 明示プロキシですら NO_PROXY のバイパスが勝つ
+    p2, _ = resolve_proxy_for_url("http://localhost:11434/v1", "http://corp:3128", env=env)
+    assert p2 is None
+    # 公開HTTPSホストはスキームに応じた環境変数プロキシを使う
+    p3, _ = resolve_proxy_for_url("https://api.example.com/v1", env=env)
+    assert p3 == PROXY
+    p4, _ = resolve_proxy_for_url("http://api.example.com/v1", env=env)
+    assert p4 == "http://h:1"
+    # 明示指定は(NO_PROXY 対象外なら)環境変数より優先
+    p5, note5 = resolve_proxy_for_url("https://api.example.com/v1", "http://llm:9", env=env)
+    assert p5 == "http://llm:9" and "明示" in note5
 
 
 def test_brave_and_ddg_accept_proxy():

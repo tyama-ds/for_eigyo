@@ -10,8 +10,9 @@ from __future__ import annotations
 import json
 import logging
 from abc import abstractmethod
-from typing import TypeVar
+from typing import Any, TypeVar
 
+import httpx
 from pydantic import BaseModel, ValidationError
 
 from fermiscope.llm.base import LLMProvider
@@ -36,12 +37,64 @@ SYSTEM_PROMPT = (
 )
 
 
+def build_llm_http_client(
+    api_base: str,
+    headers: dict[str, str],
+    timeout_seconds: float,
+    explicit_proxy: str | None = None,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> tuple[httpx.AsyncClient, dict[str, Any]]:
+    """LLM 用 httpx クライアントを構築する。
+
+    - 接続先(api_base)ごとにプロキシを解決する。NO_PROXY(localhost 等)に合致する
+      接続先は明示プロキシより優先で直接接続にする(ローカルLLMを社内プロキシへ
+      流してしまう事故の防止)。
+    - `trust_env=False` で httpx の暗黙のプロキシ適用を止め、解決を一元化する。
+    - 診断用の接続情報(秘密を含まない)を併せて返す。
+    """
+    from fermiscope.config import (
+        _require_socks_if_needed,
+        proxy_without_credentials,
+        resolve_proxy_for_url,
+    )
+
+    info: dict[str, Any] = {
+        "api_base": proxy_without_credentials(api_base),
+        "proxy": "",
+        "proxy_note": "",
+    }
+    kwargs: dict[str, Any] = {
+        "timeout": timeout_seconds,
+        "headers": headers,
+        "trust_env": False,  # 環境変数プロキシの暗黙適用を止める(解決は下で明示)
+    }
+    if transport is not None:
+        kwargs["transport"] = transport
+        info["proxy_note"] = "テスト用トランスポート"
+        return httpx.AsyncClient(**kwargs), info
+    proxy, note = resolve_proxy_for_url(api_base, explicit_proxy)
+    if proxy:
+        _require_socks_if_needed(proxy)
+        kwargs["proxy"] = proxy
+        info["proxy"] = proxy_without_credentials(proxy)
+    info["proxy_note"] = note
+    return httpx.AsyncClient(**kwargs), info
+
+
 class HttpLLMProvider(LLMProvider):
     """OpenAI互換 / Anthropic 共通のプロンプト実装。
 
     サブクラスは `_raw_json_completion(system, user) -> str | None` を実装する
-    (生の応答テキストを返す。失敗・空・エラー時は None)。
+    (生の応答テキストを返す。失敗・空・エラー時は None、原因を last_error に残す)。
     """
+
+    # 直近の失敗理由(秘密を含めない。診断・接続テスト表示用)
+    last_error: str = ""
+    _connection_info: dict[str, Any] = {}
+
+    def connection_info(self) -> dict[str, Any]:
+        """接続先・プロキシ適用状況の要約(資格情報は含まない)。"""
+        return dict(self._connection_info)
 
     @abstractmethod
     async def _raw_json_completion(self, system: str, user: str) -> str | None: ...

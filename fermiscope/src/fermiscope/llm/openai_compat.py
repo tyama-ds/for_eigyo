@@ -21,9 +21,18 @@ import os
 import httpx
 
 from fermiscope.llm.base import LLMProviderError
-from fermiscope.llm.http_base import HttpLLMProvider
+from fermiscope.llm.http_base import HttpLLMProvider, build_llm_http_client
 
 logger = logging.getLogger(__name__)
+
+
+def _body_snippet(resp: httpx.Response, limit: int = 160) -> str:
+    """エラー応答本文の先頭を1行に整形して返す(診断用。長文・改行は畳む)。"""
+    try:
+        text = " ".join(resp.text.split())
+    except Exception:  # noqa: BLE001 — 本文が読めなくても診断は続行
+        return ""
+    return text[:limit]
 
 
 class OpenAICompatProvider(HttpLLMProvider):
@@ -53,41 +62,60 @@ class OpenAICompatProvider(HttpLLMProvider):
         headers = {"Content-Type": "application/json"}
         if key:
             headers["Authorization"] = f"Bearer {key}"
-        client_kwargs: dict = {"timeout": timeout_seconds, "headers": headers}
-        if transport is not None:
-            client_kwargs["transport"] = transport
-        elif proxy:
-            client_kwargs["proxy"] = proxy
-        self._client = httpx.AsyncClient(**client_kwargs)
+        # 接続先ごとのプロキシ解決(NO_PROXY 最優先)+ trust_env=False。
+        # ローカルLLM(localhost 等)は社内プロキシを経由させない。
+        self._client, self._connection_info = build_llm_http_client(
+            self.api_base, headers, timeout_seconds, explicit_proxy=proxy, transport=transport
+        )
+        self.last_error = ""
+        # response_format(JSONモード)非対応サーバへのフォールバック記憶
+        self._json_mode_unsupported = False
         self.available = True
 
     async def close(self) -> None:
         await self._client.aclose()
 
     async def _raw_json_completion(self, system: str, user: str) -> str | None:
-        payload = {
+        payload: dict = {
             "model": self.model,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
             "temperature": 0.1,
-            "response_format": {"type": "json_object"},
         }
-        try:
-            resp = await self._client.post(f"{self.api_base}/chat/completions", json=payload)
-        except httpx.HTTPError as exc:
-            logger.warning("LLM API接続エラー: %s", type(exc).__name__)  # キーは含めない
-            return None
-        if resp.status_code == 429:
-            logger.warning("LLM APIレート制限(429)")
-            return None
-        if resp.status_code != 200:
-            logger.warning("LLM APIエラー: HTTP %s", resp.status_code)
-            return None
-        try:
-            data = resp.json()
-            return data["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, ValueError):
-            logger.warning("LLM API応答の形式が不正です")
-            return None
+        if not self._json_mode_unsupported:
+            payload["response_format"] = {"type": "json_object"}
+        for attempt in range(2):
+            try:
+                resp = await self._client.post(f"{self.api_base}/chat/completions", json=payload)
+            except httpx.HTTPError as exc:
+                # キー・プロキシ資格情報は含めない
+                self.last_error = f"接続エラー: {type(exc).__name__}"
+                logger.warning("LLM API接続エラー: %s", type(exc).__name__)
+                return None
+            if resp.status_code == 429:
+                self.last_error = "HTTP 429(レート制限)"
+                logger.warning("LLM APIレート制限(429)")
+                return None
+            if resp.status_code == 400 and "response_format" in payload and attempt == 0:
+                # ローカルLLMサーバ等は response_format 未対応で 400 を返すことがある。
+                # 1回だけ外して再試行し、以後はこのプロバイダでは送らない。
+                self._json_mode_unsupported = True
+                payload.pop("response_format", None)
+                logger.info("response_format 非対応の可能性(HTTP 400)。外して再試行します。")
+                continue
+            if resp.status_code != 200:
+                self.last_error = f"HTTP {resp.status_code}: {_body_snippet(resp)}"
+                logger.warning("LLM APIエラー: HTTP %s", resp.status_code)
+                return None
+            try:
+                data = resp.json()
+                content = data["choices"][0]["message"]["content"]
+                self.last_error = ""
+                return content
+            except (KeyError, IndexError, ValueError):
+                self.last_error = "応答の形式が不正です(choices[0].message.content がありません)"
+                logger.warning("LLM API応答の形式が不正です")
+                return None
+        return None
