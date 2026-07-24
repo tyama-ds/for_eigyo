@@ -1,0 +1,2494 @@
+{
+ "openapi": "3.1.0",
+ "info": {
+  "title": "Deep Research Orchestrator API",
+  "version": "0.1.0"
+ },
+ "paths": {
+  "/api/egress-preview": {
+   "get": {
+    "tags": [
+     "jobs"
+    ],
+    "summary": "Egress Preview",
+    "description": "実行前の通信先一覧 (spec: 送信先を実行前にUIへ表示する)。",
+    "operationId": "egress_preview_api_egress_preview_get",
+    "parameters": [
+     {
+      "name": "engines",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "default": "",
+       "title": "Engines"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/EgressPreview"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/jobs": {
+   "post": {
+    "tags": [
+     "jobs"
+    ],
+    "summary": "Post Job",
+    "operationId": "post_job_api_jobs_post",
+    "parameters": [
+     {
+      "name": "Idempotency-Key",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Idempotency-Key"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/CreateJobRequest"
+       }
+      }
+     }
+    },
+    "responses": {
+     "201": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/JobView"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "get": {
+    "tags": [
+     "jobs"
+    ],
+    "summary": "List Jobs",
+    "operationId": "list_jobs_api_jobs_get",
+    "parameters": [
+     {
+      "name": "limit",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 100,
+       "minimum": 1,
+       "default": 20,
+       "title": "Limit"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "array",
+         "items": {
+          "$ref": "#/components/schemas/JobView"
+         },
+         "title": "Response List Jobs Api Jobs Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/jobs/{job_id}": {
+   "get": {
+    "tags": [
+     "jobs"
+    ],
+    "summary": "Get Job",
+    "operationId": "get_job_api_jobs__job_id__get",
+    "parameters": [
+     {
+      "name": "job_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Job Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/JobView"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/jobs/{job_id}/cancel": {
+   "post": {
+    "tags": [
+     "jobs"
+    ],
+    "summary": "Cancel Job",
+    "operationId": "cancel_job_api_jobs__job_id__cancel_post",
+    "parameters": [
+     {
+      "name": "job_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Job Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/JobView"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/jobs/{job_id}/runs/{run_id}/cancel": {
+   "post": {
+    "tags": [
+     "jobs"
+    ],
+    "summary": "Cancel Run",
+    "operationId": "cancel_run_api_jobs__job_id__runs__run_id__cancel_post",
+    "parameters": [
+     {
+      "name": "job_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Job Id"
+      }
+     },
+     {
+      "name": "run_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Run Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/JobView"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/jobs/{job_id}/results": {
+   "get": {
+    "tags": [
+     "jobs"
+    ],
+    "summary": "Get Results",
+    "operationId": "get_results_api_jobs__job_id__results_get",
+    "parameters": [
+     {
+      "name": "job_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Job Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "array",
+         "items": {
+          "$ref": "#/components/schemas/NormalizedResultView"
+         },
+         "title": "Response Get Results Api Jobs  Job Id  Results Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/jobs/{job_id}/sources": {
+   "get": {
+    "tags": [
+     "jobs"
+    ],
+    "summary": "Get Sources",
+    "operationId": "get_sources_api_jobs__job_id__sources_get",
+    "parameters": [
+     {
+      "name": "job_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Job Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "array",
+         "items": {
+          "$ref": "#/components/schemas/SourceView"
+         },
+         "title": "Response Get Sources Api Jobs  Job Id  Sources Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/jobs/{job_id}/claims": {
+   "get": {
+    "tags": [
+     "jobs"
+    ],
+    "summary": "Get Claims",
+    "operationId": "get_claims_api_jobs__job_id__claims_get",
+    "parameters": [
+     {
+      "name": "job_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Job Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "array",
+         "items": {
+          "$ref": "#/components/schemas/ClaimView"
+         },
+         "title": "Response Get Claims Api Jobs  Job Id  Claims Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/jobs/{job_id}/compare": {
+   "get": {
+    "tags": [
+     "jobs"
+    ],
+    "summary": "Get Compare",
+    "operationId": "get_compare_api_jobs__job_id__compare_get",
+    "parameters": [
+     {
+      "name": "job_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Job Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Get Compare Api Jobs  Job Id  Compare Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/jobs/{job_id}/synthesis": {
+   "get": {
+    "tags": [
+     "jobs"
+    ],
+    "summary": "Get Synthesis",
+    "operationId": "get_synthesis_api_jobs__job_id__synthesis_get",
+    "parameters": [
+     {
+      "name": "job_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Job Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/SynthesisView"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/jobs/{job_id}/synthesis/retry": {
+   "post": {
+    "tags": [
+     "jobs"
+    ],
+    "summary": "Retry Synthesis Endpoint",
+    "operationId": "retry_synthesis_endpoint_api_jobs__job_id__synthesis_retry_post",
+    "parameters": [
+     {
+      "name": "job_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Job Id"
+      }
+     },
+     {
+      "name": "profile_id",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Profile Id"
+      }
+     }
+    ],
+    "responses": {
+     "202": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": {
+          "type": "string"
+         },
+         "title": "Response Retry Synthesis Endpoint Api Jobs  Job Id  Synthesis Retry Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/jobs/{job_id}/export": {
+   "get": {
+    "tags": [
+     "jobs"
+    ],
+    "summary": "Export Job",
+    "description": "Markdown/JSONエクスポート。provenance (engine/URL/excerpt) を保持する。",
+    "operationId": "export_job_api_jobs__job_id__export_get",
+    "parameters": [
+     {
+      "name": "job_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Job Id"
+      }
+     },
+     {
+      "name": "format",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "pattern": "^(json|markdown)$",
+       "default": "json",
+       "title": "Format"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/jobs/{job_id}/events": {
+   "get": {
+    "tags": [
+     "events"
+    ],
+    "summary": "Stream Events",
+    "operationId": "stream_events_api_jobs__job_id__events_get",
+    "parameters": [
+     {
+      "name": "job_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Job Id"
+      }
+     },
+     {
+      "name": "after",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "integer",
+         "minimum": 0
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "After"
+      }
+     },
+     {
+      "name": "Last-Event-ID",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Last-Event-Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/jobs/{job_id}/events/history": {
+   "get": {
+    "tags": [
+     "events"
+    ],
+    "summary": "Event History",
+    "description": "SSEを使わない取得 (デバッグ・エクスポート用)。",
+    "operationId": "event_history_api_jobs__job_id__events_history_get",
+    "parameters": [
+     {
+      "name": "job_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Job Id"
+      }
+     },
+     {
+      "name": "after",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "minimum": 0,
+       "default": 0,
+       "title": "After"
+      }
+     },
+     {
+      "name": "limit",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 2000,
+       "minimum": 1,
+       "default": 500,
+       "title": "Limit"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/engines": {
+   "get": {
+    "tags": [
+     "engines"
+    ],
+    "summary": "List Engines",
+    "operationId": "list_engines_api_engines_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "items": {
+          "$ref": "#/components/schemas/EngineView"
+         },
+         "type": "array",
+         "title": "Response List Engines Api Engines Get"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/artifacts/{artifact_id}": {
+   "get": {
+    "tags": [
+     "artifacts"
+    ],
+    "summary": "Download Artifact",
+    "operationId": "download_artifact_api_artifacts__artifact_id__get",
+    "parameters": [
+     {
+      "name": "artifact_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Artifact Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/settings/llm-profiles": {
+   "get": {
+    "tags": [
+     "settings"
+    ],
+    "summary": "List Profiles",
+    "operationId": "list_profiles_api_settings_llm_profiles_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "items": {
+          "$ref": "#/components/schemas/LlmProfileView"
+         },
+         "type": "array",
+         "title": "Response List Profiles Api Settings Llm Profiles Get"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "tags": [
+     "settings"
+    ],
+    "summary": "Create Profile",
+    "operationId": "create_profile_api_settings_llm_profiles_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/LlmProfileIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "201": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/LlmProfileView"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/settings/llm-profiles/{profile_id}": {
+   "put": {
+    "tags": [
+     "settings"
+    ],
+    "summary": "Update Profile",
+    "operationId": "update_profile_api_settings_llm_profiles__profile_id__put",
+    "parameters": [
+     {
+      "name": "profile_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Profile Id"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/LlmProfileIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/LlmProfileView"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "tags": [
+     "settings"
+    ],
+    "summary": "Delete Profile",
+    "operationId": "delete_profile_api_settings_llm_profiles__profile_id__delete",
+    "parameters": [
+     {
+      "name": "profile_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Profile Id"
+      }
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Successful Response"
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/settings/llm-profiles/{profile_id}/test": {
+   "post": {
+    "tags": [
+     "settings"
+    ],
+    "summary": "Test Profile",
+    "description": "接続試験: 到達性・認証・model有無・最小生成。\n\n注意: 有料provider (openai/anthropic) では最小request分の実課金が発生し得る。\nUIは実行前にその旨を表示する。",
+    "operationId": "test_profile_api_settings_llm_profiles__profile_id__test_post",
+    "parameters": [
+     {
+      "name": "profile_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Profile Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Test Profile Api Settings Llm Profiles  Profile Id  Test Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/settings/roles": {
+   "get": {
+    "tags": [
+     "settings"
+    ],
+    "summary": "Get Roles",
+    "operationId": "get_roles_api_settings_roles_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ]
+         },
+         "type": "object",
+         "title": "Response Get Roles Api Settings Roles Get"
+        }
+       }
+      }
+     }
+    }
+   },
+   "put": {
+    "tags": [
+     "settings"
+    ],
+    "summary": "Put Roles",
+    "operationId": "put_roles_api_settings_roles_put",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/RoleAssignmentIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ]
+         },
+         "type": "object",
+         "title": "Response Put Roles Api Settings Roles Put"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/settings/proxy": {
+   "get": {
+    "tags": [
+     "settings"
+    ],
+    "summary": "Get Proxy",
+    "operationId": "get_proxy_api_settings_proxy_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "items": {
+          "$ref": "#/components/schemas/ProxyConfigView"
+         },
+         "type": "array",
+         "title": "Response Get Proxy Api Settings Proxy Get"
+        }
+       }
+      }
+     }
+    }
+   },
+   "put": {
+    "tags": [
+     "settings"
+    ],
+    "summary": "Put Proxy",
+    "operationId": "put_proxy_api_settings_proxy_put",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ProxyConfigIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ProxyConfigView"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/settings/proxy/test": {
+   "post": {
+    "tags": [
+     "settings"
+    ],
+    "summary": "Test Proxy",
+    "description": "Test proxy: 外部URLがproxy経由になり、internal/Local LLMがbypassされることを確認。",
+    "operationId": "test_proxy_api_settings_proxy_test_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ProxyTestIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "type": "object",
+         "title": "Response Test Proxy Api Settings Proxy Test Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/settings/llm-endpoint-allowlist": {
+   "get": {
+    "tags": [
+     "settings"
+    ],
+    "summary": "Get Allowlist",
+    "operationId": "get_allowlist_api_settings_llm_endpoint_allowlist_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "items": {
+          "additionalProperties": true,
+          "type": "object"
+         },
+         "type": "array",
+         "title": "Response Get Allowlist Api Settings Llm Endpoint Allowlist Get"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/settings/llm-endpoint-allowlist/{entry_id}": {
+   "delete": {
+    "tags": [
+     "settings"
+    ],
+    "summary": "Delete Allowlist Entry",
+    "operationId": "delete_allowlist_entry_api_settings_llm_endpoint_allowlist__entry_id__delete",
+    "parameters": [
+     {
+      "name": "entry_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Entry Id"
+      }
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Successful Response"
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/settings/search": {
+   "get": {
+    "tags": [
+     "settings"
+    ],
+    "summary": "Get Search",
+    "operationId": "get_search_api_settings_search_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "type": "object",
+         "title": "Response Get Search Api Settings Search Get"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/healthz": {
+   "get": {
+    "summary": "Healthz",
+    "operationId": "healthz_healthz_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": {
+          "type": "string"
+         },
+         "type": "object",
+         "title": "Response Healthz Healthz Get"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/readyz": {
+   "get": {
+    "summary": "Readyz",
+    "operationId": "readyz_readyz_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "components": {
+  "schemas": {
+   "ClaimView": {
+    "properties": {
+     "id": {
+      "type": "string",
+      "title": "Id"
+     },
+     "run_id": {
+      "type": "string",
+      "title": "Run Id"
+     },
+     "engine_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Engine Id"
+     },
+     "text": {
+      "type": "string",
+      "title": "Text"
+     },
+     "meta": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Meta"
+     },
+     "evidence": {
+      "items": {
+       "$ref": "#/components/schemas/EvidenceView"
+      },
+      "type": "array",
+      "title": "Evidence"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "run_id",
+     "engine_id",
+     "text",
+     "meta",
+     "evidence"
+    ],
+    "title": "ClaimView"
+   },
+   "CreateJobRequest": {
+    "properties": {
+     "topic": {
+      "type": "string",
+      "maxLength": 4000,
+      "minLength": 1,
+      "title": "Topic"
+     },
+     "objective": {
+      "anyOf": [
+       {
+        "type": "string",
+        "maxLength": 4000
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Objective"
+     },
+     "instructions": {
+      "anyOf": [
+       {
+        "type": "string",
+        "maxLength": 8000
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Instructions"
+     },
+     "language": {
+      "type": "string",
+      "title": "Language",
+      "default": "ja"
+     },
+     "engines": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "minItems": 1,
+      "title": "Engines"
+     },
+     "max_time_seconds": {
+      "anyOf": [
+       {
+        "type": "integer",
+        "maximum": 21600.0,
+        "minimum": 10.0
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Max Time Seconds"
+     },
+     "max_searches": {
+      "anyOf": [
+       {
+        "type": "integer",
+        "maximum": 200.0,
+        "minimum": 1.0
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Max Searches"
+     },
+     "max_cost_usd": {
+      "anyOf": [
+       {
+        "type": "number",
+        "minimum": 0.0
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Max Cost Usd"
+     },
+     "auto_synthesize": {
+      "type": "boolean",
+      "title": "Auto Synthesize",
+      "default": true
+     },
+     "input_urls": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "maxItems": 20,
+      "title": "Input Urls"
+     },
+     "documents": {
+      "items": {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      "type": "array",
+      "maxItems": 10,
+      "title": "Documents"
+     },
+     "engine_options": {
+      "additionalProperties": {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      "type": "object",
+      "title": "Engine Options"
+     },
+     "idempotency_key": {
+      "anyOf": [
+       {
+        "type": "string",
+        "maxLength": 200
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Idempotency Key"
+     }
+    },
+    "type": "object",
+    "required": [
+     "topic",
+     "engines"
+    ],
+    "title": "CreateJobRequest"
+   },
+   "EgressPreview": {
+    "properties": {
+     "destinations": {
+      "items": {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      "type": "array",
+      "title": "Destinations"
+     }
+    },
+    "type": "object",
+    "required": [
+     "destinations"
+    ],
+    "title": "EgressPreview",
+    "description": "実行前にUIへ表示する通信先一覧。"
+   },
+   "EngineView": {
+    "properties": {
+     "engine_id": {
+      "type": "string",
+      "title": "Engine Id"
+     },
+     "display_name": {
+      "type": "string",
+      "title": "Display Name"
+     },
+     "enabled": {
+      "type": "boolean",
+      "title": "Enabled"
+     },
+     "availability": {
+      "type": "string",
+      "title": "Availability"
+     },
+     "unavailable_reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Unavailable Reason"
+     },
+     "max_concurrency": {
+      "type": "integer",
+      "title": "Max Concurrency"
+     },
+     "capabilities": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Capabilities"
+     },
+     "healthy": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Healthy"
+     }
+    },
+    "type": "object",
+    "required": [
+     "engine_id",
+     "display_name",
+     "enabled",
+     "availability",
+     "unavailable_reason",
+     "max_concurrency",
+     "capabilities",
+     "healthy"
+    ],
+    "title": "EngineView"
+   },
+   "EvidenceView": {
+    "properties": {
+     "id": {
+      "type": "string",
+      "title": "Id"
+     },
+     "source_id": {
+      "type": "string",
+      "title": "Source Id"
+     },
+     "url": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Url"
+     },
+     "excerpt": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Excerpt"
+     },
+     "locator": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Locator"
+     },
+     "stance": {
+      "type": "string",
+      "title": "Stance"
+     },
+     "verification": {
+      "type": "string",
+      "title": "Verification"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "source_id",
+     "url",
+     "excerpt",
+     "locator",
+     "stance",
+     "verification"
+    ],
+    "title": "EvidenceView"
+   },
+   "HTTPValidationError": {
+    "properties": {
+     "detail": {
+      "items": {
+       "$ref": "#/components/schemas/ValidationError"
+      },
+      "type": "array",
+      "title": "Detail"
+     }
+    },
+    "type": "object",
+    "title": "HTTPValidationError"
+   },
+   "JobView": {
+    "properties": {
+     "id": {
+      "type": "string",
+      "title": "Id"
+     },
+     "status": {
+      "type": "string",
+      "title": "Status"
+     },
+     "topic": {
+      "type": "string",
+      "title": "Topic"
+     },
+     "objective": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Objective"
+     },
+     "instructions": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Instructions"
+     },
+     "language": {
+      "type": "string",
+      "title": "Language"
+     },
+     "options": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Options"
+     },
+     "warnings": {
+      "items": {},
+      "type": "array",
+      "title": "Warnings"
+     },
+     "error": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Error"
+     },
+     "cancel_requested": {
+      "type": "boolean",
+      "title": "Cancel Requested"
+     },
+     "created_at": {
+      "type": "string",
+      "title": "Created At"
+     },
+     "finished_at": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Finished At"
+     },
+     "runs": {
+      "items": {
+       "$ref": "#/components/schemas/RunView"
+      },
+      "type": "array",
+      "title": "Runs"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "status",
+     "topic",
+     "objective",
+     "instructions",
+     "language",
+     "options",
+     "warnings",
+     "error",
+     "cancel_requested",
+     "created_at",
+     "finished_at",
+     "runs"
+    ],
+    "title": "JobView"
+   },
+   "LlmProfileIn": {
+    "properties": {
+     "name": {
+      "type": "string",
+      "maxLength": 100,
+      "minLength": 1,
+      "title": "Name"
+     },
+     "provider": {
+      "type": "string",
+      "enum": [
+       "local",
+       "openai",
+       "anthropic"
+      ],
+      "title": "Provider"
+     },
+     "api": {
+      "type": "string",
+      "enum": [
+       "openai-compatible",
+       "anthropic"
+      ],
+      "title": "Api",
+      "default": "openai-compatible"
+     },
+     "endpoint": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Endpoint"
+     },
+     "model": {
+      "type": "string",
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Model"
+     },
+     "api_key": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Api Key"
+     },
+     "timeout_seconds": {
+      "type": "integer",
+      "maximum": 3600.0,
+      "minimum": 5.0,
+      "title": "Timeout Seconds",
+      "default": 120
+     },
+     "max_concurrency": {
+      "type": "integer",
+      "maximum": 32.0,
+      "minimum": 1.0,
+      "title": "Max Concurrency",
+      "default": 2
+     },
+     "enabled": {
+      "type": "boolean",
+      "title": "Enabled",
+      "default": true
+     }
+    },
+    "type": "object",
+    "required": [
+     "name",
+     "provider",
+     "model"
+    ],
+    "title": "LlmProfileIn"
+   },
+   "LlmProfileView": {
+    "properties": {
+     "id": {
+      "type": "string",
+      "title": "Id"
+     },
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "provider": {
+      "type": "string",
+      "title": "Provider"
+     },
+     "api": {
+      "type": "string",
+      "title": "Api"
+     },
+     "endpoint": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Endpoint"
+     },
+     "model": {
+      "type": "string",
+      "title": "Model"
+     },
+     "has_api_key": {
+      "type": "boolean",
+      "title": "Has Api Key"
+     },
+     "api_key_masked": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Api Key Masked"
+     },
+     "timeout_seconds": {
+      "type": "integer",
+      "title": "Timeout Seconds"
+     },
+     "max_concurrency": {
+      "type": "integer",
+      "title": "Max Concurrency"
+     },
+     "enabled": {
+      "type": "boolean",
+      "title": "Enabled"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "name",
+     "provider",
+     "api",
+     "endpoint",
+     "model",
+     "has_api_key",
+     "api_key_masked",
+     "timeout_seconds",
+     "max_concurrency",
+     "enabled"
+    ],
+    "title": "LlmProfileView"
+   },
+   "NormalizedResultView": {
+    "properties": {
+     "run_id": {
+      "type": "string",
+      "title": "Run Id"
+     },
+     "engine_id": {
+      "type": "string",
+      "title": "Engine Id"
+     },
+     "summary": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Summary"
+     },
+     "report_markdown": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Report Markdown"
+     },
+     "metrics": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Metrics"
+     },
+     "warnings": {
+      "items": {},
+      "type": "array",
+      "title": "Warnings"
+     },
+     "raw_artifact_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Raw Artifact Id"
+     }
+    },
+    "type": "object",
+    "required": [
+     "run_id",
+     "engine_id",
+     "summary",
+     "report_markdown",
+     "metrics",
+     "warnings",
+     "raw_artifact_id"
+    ],
+    "title": "NormalizedResultView"
+   },
+   "ProxyConfigIn": {
+    "properties": {
+     "scope": {
+      "type": "string",
+      "title": "Scope",
+      "default": "global"
+     },
+     "mode": {
+      "type": "string",
+      "enum": [
+       "off",
+       "inherit",
+       "explicit"
+      ],
+      "title": "Mode"
+     },
+     "http_proxy": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Http Proxy"
+     },
+     "https_proxy": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Https Proxy"
+     },
+     "all_proxy": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "All Proxy"
+     },
+     "no_proxy": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "No Proxy"
+     },
+     "ca_bundle_path": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Ca Bundle Path"
+     }
+    },
+    "type": "object",
+    "required": [
+     "mode"
+    ],
+    "title": "ProxyConfigIn"
+   },
+   "ProxyConfigView": {
+    "properties": {
+     "scope": {
+      "type": "string",
+      "title": "Scope"
+     },
+     "mode": {
+      "type": "string",
+      "title": "Mode"
+     },
+     "has_http_proxy": {
+      "type": "boolean",
+      "title": "Has Http Proxy"
+     },
+     "has_https_proxy": {
+      "type": "boolean",
+      "title": "Has Https Proxy"
+     },
+     "has_all_proxy": {
+      "type": "boolean",
+      "title": "Has All Proxy"
+     },
+     "no_proxy": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "No Proxy"
+     },
+     "ca_bundle_path": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Ca Bundle Path"
+     }
+    },
+    "type": "object",
+    "required": [
+     "scope",
+     "mode",
+     "has_http_proxy",
+     "has_https_proxy",
+     "has_all_proxy",
+     "no_proxy",
+     "ca_bundle_path"
+    ],
+    "title": "ProxyConfigView"
+   },
+   "ProxyTestIn": {
+    "properties": {
+     "scope": {
+      "type": "string",
+      "title": "Scope",
+      "default": "global"
+     },
+     "external_url": {
+      "type": "string",
+      "title": "External Url",
+      "default": "https://example.com/"
+     },
+     "internal_url": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Internal Url"
+     }
+    },
+    "type": "object",
+    "title": "ProxyTestIn"
+   },
+   "RoleAssignmentIn": {
+    "properties": {
+     "assignments": {
+      "additionalProperties": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "type": "object",
+      "title": "Assignments"
+     }
+    },
+    "type": "object",
+    "required": [
+     "assignments"
+    ],
+    "title": "RoleAssignmentIn"
+   },
+   "RunView": {
+    "properties": {
+     "id": {
+      "type": "string",
+      "title": "Id"
+     },
+     "engine_id": {
+      "type": "string",
+      "title": "Engine Id"
+     },
+     "status": {
+      "type": "string",
+      "title": "Status"
+     },
+     "stage": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Stage"
+     },
+     "attempt": {
+      "type": "integer",
+      "title": "Attempt"
+     },
+     "max_attempts": {
+      "type": "integer",
+      "title": "Max Attempts"
+     },
+     "error": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Error"
+     },
+     "warnings": {
+      "items": {},
+      "type": "array",
+      "title": "Warnings"
+     },
+     "metrics": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Metrics"
+     },
+     "cancel_requested": {
+      "type": "boolean",
+      "title": "Cancel Requested"
+     },
+     "created_at": {
+      "type": "string",
+      "title": "Created At"
+     },
+     "started_at": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Started At"
+     },
+     "finished_at": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Finished At"
+     },
+     "elapsed_seconds": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Elapsed Seconds"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "engine_id",
+     "status",
+     "stage",
+     "attempt",
+     "max_attempts",
+     "error",
+     "warnings",
+     "metrics",
+     "cancel_requested",
+     "created_at",
+     "started_at",
+     "finished_at",
+     "elapsed_seconds"
+    ],
+    "title": "RunView"
+   },
+   "SourceView": {
+    "properties": {
+     "id": {
+      "type": "string",
+      "title": "Id"
+     },
+     "run_id": {
+      "type": "string",
+      "title": "Run Id"
+     },
+     "engine_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Engine Id"
+     },
+     "url": {
+      "type": "string",
+      "title": "Url"
+     },
+     "canonical_url": {
+      "type": "string",
+      "title": "Canonical Url"
+     },
+     "title": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Title"
+     },
+     "fetched_at": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Fetched At"
+     },
+     "excerpt": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Excerpt"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "run_id",
+     "url",
+     "canonical_url",
+     "title",
+     "fetched_at",
+     "excerpt"
+    ],
+    "title": "SourceView"
+   },
+   "SynthesisView": {
+    "properties": {
+     "status": {
+      "type": "string",
+      "title": "Status"
+     },
+     "attempt": {
+      "type": "integer",
+      "title": "Attempt"
+     },
+     "report_markdown": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Report Markdown"
+     },
+     "sections": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Sections"
+     },
+     "citations": {
+      "items": {},
+      "type": "array",
+      "title": "Citations"
+     },
+     "llm_profile_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Llm Profile Id"
+     },
+     "error": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Error"
+     },
+     "warnings": {
+      "items": {},
+      "type": "array",
+      "title": "Warnings"
+     }
+    },
+    "type": "object",
+    "required": [
+     "status",
+     "attempt",
+     "report_markdown",
+     "sections",
+     "citations",
+     "llm_profile_id",
+     "error",
+     "warnings"
+    ],
+    "title": "SynthesisView"
+   },
+   "ValidationError": {
+    "properties": {
+     "loc": {
+      "items": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "integer"
+        }
+       ]
+      },
+      "type": "array",
+      "title": "Location"
+     },
+     "msg": {
+      "type": "string",
+      "title": "Message"
+     },
+     "type": {
+      "type": "string",
+      "title": "Error Type"
+     }
+    },
+    "type": "object",
+    "required": [
+     "loc",
+     "msg",
+     "type"
+    ],
+    "title": "ValidationError"
+   }
+  }
+ }
+}

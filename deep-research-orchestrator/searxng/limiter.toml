@@ -1,0 +1,6 @@
+# DRO内部SearXNG用limiter設定。
+# settings.yml で server.limiter: false のため通常このファイルは参照されないが、
+# limiterを有効化した場合でも内部runnerからのAPIアクセス (format=json) が
+# link_tokenで遮断されないようにしておく。
+[botdetection.ip_limit]
+link_token = false

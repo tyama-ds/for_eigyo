@@ -1,0 +1,6 @@
+# NOTE: docker buildのコンテキストはrunners/のため、BuildKitでは
+# gpt_researcher/Dockerfile.dockerignore が有効になる (同内容)。
+__pycache__/
+*.pyc
+tests/
+.pytest_cache/
