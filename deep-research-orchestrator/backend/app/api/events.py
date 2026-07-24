@@ -117,12 +117,12 @@ async def event_history(
     limit: int = Query(default=500, ge=1, le=2000),
 ):
     """SSEを使わない取得 (デバッグ・エクスポート用)。"""
+    if not await asyncio.to_thread(_job_exists, job_id):
+        raise HTTPException(status_code=404, detail="job not found")
 
     def _fetch() -> list[dict]:
         session = get_session_factory()()
         try:
-            if session.get(ResearchJob, job_id) is None:
-                return []
             return [
                 {
                     "seq": e.seq,

@@ -151,16 +151,18 @@ class ArtifactStore:
         # path traversal防御: 各segmentを再検証し、resolve後もroot配下であることを確認
         for part in rel.parts:
             _check_segment(part)
-        path = (self._root / rel).resolve()
         root_resolved = self._root.resolve()
-        if not path.is_relative_to(root_resolved):
-            raise ArtifactError("path traversalを拒否しました")
-        # symlink拒否 (中間ディレクトリ含む)
-        current = path
-        while current != root_resolved:
+        # symlink拒否: resolve前の実パス各段を検査する (resolve後ではsymlinkは消える)
+        current = self._root / rel
+        while True:
             if current.is_symlink():
                 raise ArtifactError("symlink経由のアクセスを拒否しました")
+            if current == self._root or current == current.parent:
+                break
             current = current.parent
+        path = (self._root / rel).resolve()
+        if not path.is_relative_to(root_resolved):
+            raise ArtifactError("path traversalを拒否しました")
         if not path.is_file():
             raise ArtifactError(f"artifact fileが見つかりません: id={artifact.id}")
         return path.read_bytes()

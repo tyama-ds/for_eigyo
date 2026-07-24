@@ -348,7 +348,8 @@ class GptResearcherEngine(Engine):
     engine_id = ENGINE_ID
 
     def __init__(self, worker_path: str | Path | None = None):
-        self._worker_path = Path(worker_path) if worker_path else Path(__file__).with_name("worker.py")
+        default = Path(__file__).with_name("worker.py")
+        self._worker_path = Path(worker_path) if worker_path else default
 
     def capabilities(self) -> EngineCapabilities:
         return EngineCapabilities(

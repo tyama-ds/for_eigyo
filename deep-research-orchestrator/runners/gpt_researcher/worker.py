@@ -172,16 +172,19 @@ async def _research(payload: dict[str, Any]) -> dict[str, Any]:
     for s in sources:
         emit_event("source_found", {"url": s["url"], "title": s.get("title")})
 
+    # 取得できないコストは0へ丸めず null にする (捏造禁止)
+    llm_cost: float | None
     try:
-        llm_cost = float(researcher.get_costs() or 0.0)
-    except (TypeError, ValueError):
-        llm_cost = 0.0
+        raw_cost = researcher.get_costs()
+        llm_cost = float(raw_cost) if raw_cost else None
+    except (TypeError, ValueError, AttributeError):
+        llm_cost = None
     emit_event("cost", {"llm_cost_usd": llm_cost, "estimate": True, "search_api_cost_usd": 0.0})
 
     warnings = [
         "このエンジンはclaim単位の構造化引用を返しません (レポート本文中のinline引用のみ)",
         "llm_cost_usdはgpt-researcher内蔵のOpenAI価格表による推定値です。"
-        "ローカル/独自LLMでは実費と一致しません",
+        "ローカル/独自LLMでは実費と一致しません (取得不能の場合はnull)",
         "token使用量はgpt-researcherから取得できないためnullです",
     ]
 

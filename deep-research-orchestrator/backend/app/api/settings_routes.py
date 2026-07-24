@@ -99,11 +99,11 @@ def create_profile(
         max_concurrency=body.max_concurrency,
         enabled=body.enabled,
     )
+    session.add(profile)
+    session.flush()  # idを確定させ、secret名はidベースで安定させる (名前変更に不変)
     if body.api_key:
         store = SecretStore(session, settings)
-        profile.api_key_secret_id = store.put(f"llm-profile:{body.name}", body.api_key)
-    session.add(profile)
-    session.flush()
+        profile.api_key_secret_id = store.put(f"llm-profile:{profile.id}", body.api_key)
     # 管理者登録endpointをallowlistへ登録 (private Local LLMの許可経路)
     if body.endpoint:
         host, port = endpoint_host_port(body.endpoint)

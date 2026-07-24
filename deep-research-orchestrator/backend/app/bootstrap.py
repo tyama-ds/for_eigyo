@@ -99,12 +99,14 @@ def _seed_llm_profiles(session: Session, settings: Settings) -> None:
             endpoint=endpoint,
             model=model,
         )
-        if api_key:
-            profile.api_key_secret_id = SecretStore(session, settings).put(
-                f"llm-profile:{name}", api_key
-            )
         session.add(profile)
         session.flush()
+        if api_key:
+            # secret名はprofile idベース (名前変更後の再bootstrapで他profileの
+            # keyを上書きしないため)
+            profile.api_key_secret_id = SecretStore(session, settings).put(
+                f"llm-profile:{profile.id}", api_key
+            )
         if endpoint:
             host, port = endpoint_host_port(endpoint)
             if not session.scalar(

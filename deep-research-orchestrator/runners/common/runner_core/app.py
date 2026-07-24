@@ -121,8 +121,23 @@ def create_runner_app(engines: dict[str, Engine], *, title: str) -> FastAPI:
     async def capabilities() -> list[dict[str, Any]]:
         return [e.capabilities().model_dump() for e in engines.values()]
 
+    def _evict_old_terminal_runs(max_keep: int = 200) -> None:
+        """メモリ上限対策: 終了済みrunが多すぎる場合、古いものから破棄する。
+        永続化はControl Planeの責務のため、結果取得済みの古いrunは安全に消せる。"""
+        terminal = [
+            (r.finished_at or r.created_at, run_id)
+            for run_id, r in runs.items()
+            if r.state in TERMINAL_STATES
+        ]
+        if len(terminal) <= max_keep:
+            return
+        terminal.sort()
+        for _, run_id in terminal[: len(terminal) - max_keep]:
+            runs.pop(run_id, None)
+
     @app.post("/v1/runs", dependencies=[Depends(_auth)], status_code=201)
     async def create_run(request: RunRequest) -> CreateRunResponse:
+        _evict_old_terminal_runs()
         existing = runs.get(request.client_run_id)
         if existing is not None:
             # 冪等: 同じclient_run_idの再送は既存runを返す (重複実行防止)
