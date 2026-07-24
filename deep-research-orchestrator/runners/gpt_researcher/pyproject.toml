@@ -1,0 +1,20 @@
+# DRO gpt-researcher Runner — 依存の固定ピン一覧 (PyPIのみ、git URL禁止)
+#
+# runner_core (dro-runner-core) はPyPIに存在しないため依存に書かず、
+# Dockerfile / ローカルdevで ../common から先にインストールする。
+[project]
+name = "dro-runner-gpt-researcher"
+version = "0.1.0"
+description = "Deep Research Orchestrator - gpt-researcher runner service"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+dependencies = [
+    "gpt-researcher==0.16.0",
+]
+
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+only-include = ["gptr_engine.py", "worker.py", "main.py"]

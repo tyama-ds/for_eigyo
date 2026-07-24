@@ -198,7 +198,8 @@ class Artifact(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
     job_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
     run_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
-    kind: Mapped[str] = mapped_column(String(50))  # raw_result | report_md | snapshot | log | export
+    # raw_result | report_md | snapshot | log | export
+    kind: Mapped[str] = mapped_column(String(50))
     # relative_path が null の場合は content_inline (PostgreSQL) に保存されている
     relative_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     content_inline: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
@@ -393,4 +394,6 @@ class AuditLog(Base):
     action: Mapped[str] = mapped_column(String(100))
     target: Mapped[str | None] = mapped_column(String(300), nullable=True)
     detail: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True
+    )

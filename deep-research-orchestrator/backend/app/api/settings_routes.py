@@ -37,7 +37,6 @@ from app.llm.profiles import (
     resolve_profile,
 )
 from app.security.secrets import SecretStore
-from app.security.ssrf import SsrfBlockedError, validate_url
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 

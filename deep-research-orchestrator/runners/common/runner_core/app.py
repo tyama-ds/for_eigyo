@@ -136,7 +136,9 @@ def create_runner_app(engines: dict[str, Engine], *, title: str) -> FastAPI:
                 status_code=409,
                 detail=f"engine {request.engine_id} is {caps.health}: {caps.health_reason}",
             )
-        record = _RunRecord(request.client_run_id, request, RunContext(request.client_run_id, request))
+        record = _RunRecord(
+            request.client_run_id, request, RunContext(request.client_run_id, request)
+        )
         runs[record.run_id] = record
         record.task = asyncio.create_task(_execute(record, engine))
         return CreateRunResponse(run_id=record.run_id, state=record.state)

@@ -1,0 +1,54 @@
+# =============================================================================
+# DRO (Deep Research Orchestrator) 内部利用SearXNG設定
+#
+# 利用条件 / robots・ToSに関する注意:
+# - このインスタンスは社内の内部調査 (research runner) 専用であり、
+#   公開インスタンスとして運用しないこと (public_instance: false)。
+# - SearXNGはメタ検索であり、上流検索エンジン (DuckDuckGo等) の利用条件・
+#   robots方針の対象になる。リクエストレートは低く保ち (runnerは
+#   MAX_SEARCH_RESULTS_PER_QUERY / max_react_tool_calls で件数を制限)、
+#   上流の利用条件を尊重すること。
+# - JSON format (search.formats に json) は gpt-researcher / MCPアダプタの
+#   両方に必須。
+# - server.secret_key は環境変数 SEARXNG_SECRET で必ず上書きすること
+#   (docker composeで SEARXNG_SECRET を注入する)。
+#
+# 公式イメージ searxng/searxng で /etc/searxng/settings.yml に配置して使う。
+# =============================================================================
+
+use_default_settings:
+  engines:
+    # APIキー不要の一般web検索エンジンのみ有効化 (それ以外の既定エンジンは無効)
+    keep_only:
+      - duckduckgo
+      - brave
+      - bing
+      - mojeek
+      - wikipedia
+      - wikidata
+
+general:
+  debug: false
+  instance_name: "DRO SearXNG (internal)"
+  enable_metrics: false
+
+server:
+  # 必ず環境変数 SEARXNG_SECRET で上書きすること (この値のまま運用しない)
+  secret_key: "insecure-dev-secret-override-with-SEARXNG_SECRET"
+  limiter: false          # 内部利用のみのためlimiter無効 (公開する場合は必ず有効化)
+  public_instance: false
+  image_proxy: false
+  method: "GET"
+
+search:
+  safe_search: 1          # 0=off, 1=moderate, 2=strict
+  autocomplete: ""
+  formats:                # json は runner (gpt-researcher searx retriever / MCP) に必須
+    - html
+    - json
+
+outgoing:
+  request_timeout: 10.0
+  max_request_timeout: 15.0
+  pool_connections: 20
+  pool_maxsize: 10

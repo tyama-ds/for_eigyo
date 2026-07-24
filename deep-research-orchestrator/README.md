@@ -23,8 +23,8 @@ cp .env.example .env                 # 必要な値を設定
 scripts/gen_master_key.sh            # secrets/dro_master_key を生成
 docker compose up -d --build         # baseline (Mock + SearXNG)
 # 実エンジン込み:
-#   .env に DRO_RUNNER_GPTR_URL=http://runner-gptr:9001 /
-#           DRO_RUNNER_ODR_URL=http://runner-odr:9001 を設定して
+#   .env に DRO_RUNNER_GPTR_URL=http://runner-gptr:9002 /
+#           DRO_RUNNER_ODR_URL=http://runner-odr:9003 を設定して
 docker compose --profile real up -d --build
 ```
 

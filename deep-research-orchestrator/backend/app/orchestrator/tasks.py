@@ -33,7 +33,6 @@ from app.db.session import session_scope
 from app.llm.profiles import (
     ProfileNotConfiguredError,
     effective_proxy_policy,
-    load_allowlist,
     resolve_role_profile,
 )
 from app.normalizer.normalize import normalize_run_result
@@ -127,7 +126,6 @@ def _build_run_request(session, settings, run: EngineRun, job: ResearchJob) -> d
 @celery_app.task(name="app.orchestrator.tasks.dispatch_job", bind=True, max_retries=3)
 def dispatch_job(self, job_id: str) -> None:
     """job作成後の起動タスク。冪等 (既にdispatch済みなら何もしない)。"""
-    settings = get_settings()
     with session_scope() as session:
         job = session.get(ResearchJob, job_id)
         if job is None:
@@ -185,7 +183,10 @@ def execute_run(self, run_id: str) -> None:
 
         # 同時実行制限 (PGカウントベース、durable)
         engine_cfg = session.get(EngineConfig, run.engine_id)
-        engine_limit = engine_cfg.max_concurrency if engine_cfg else settings.default_engine_max_concurrency
+        engine_limit = (
+            engine_cfg.max_concurrency if engine_cfg
+            else settings.default_engine_max_concurrency
+        )
         if (
             active_run_count(session) >= settings.global_max_concurrent_runs
             or active_run_count(session, run.engine_id) >= engine_limit
@@ -210,6 +211,7 @@ def execute_run(self, run_id: str) -> None:
                 payload={"attempt": run.attempt, "backoff_seconds": backoff,
                          "error": breaker_reason},
             )
+            run.lease_owner = None  # この実行を手放す — 再スケジュール分が取得する
             session.commit()
             execute_run.apply_async(args=[run_id], countdown=backoff)
             return
@@ -356,7 +358,10 @@ def _poll_until_terminal(
             )
             return
         if state == "timed_out":
-            _mark_terminal(run_id, RunStatus.timed_out, error=status.get("error") or "Runner内タイムアウト")
+            _mark_terminal(
+                run_id, RunStatus.timed_out,
+                error=status.get("error") or "Runner内タイムアウト",
+            )
             return
         if state == "cancelled":
             _mark_terminal(run_id, RunStatus.cancelled)

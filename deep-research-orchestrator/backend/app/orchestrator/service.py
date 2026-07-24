@@ -47,7 +47,9 @@ def transition_job(session: Session, job: ResearchJob, to: JobStatus) -> None:
     append_event(session, job_id=job.id, type="job_status", payload={"status": to.value})
 
 
-def transition_run(session: Session, run: EngineRun, to: RunStatus, *, error: str | None = None) -> None:
+def transition_run(
+    session: Session, run: EngineRun, to: RunStatus, *, error: str | None = None
+) -> None:
     current = RunStatus(run.status)
     if current == to:
         return

@@ -105,13 +105,35 @@ def test_no_github_fetch_in_application_code():
             assert not pat.search(text), f"{path} にGitHub取得: {pat.pattern}"
 
 
+# 有料検索キー名を「拒否リスト」としてのみ列挙するファイル (混入防止コードそのもの)。
+# これらのファイルではキーの設定・読み取りが行われないことを別途検証する。
+DENYLIST_ONLY_FILES = {
+    "runners/gpt_researcher/gptr_engine.py",
+    "runners/open_deep_research/odr_engine.py",
+    "backend/tests/unit/test_repo_hygiene.py",
+}
+
+
 def test_no_paid_search_api_keys_anywhere():
     """有料検索APIのkeyを要求するenv・設定・起動条件が存在しない。"""
     for path, text in _text_files({".py", ".ts", ".tsx", ".js", ".env", ".example",
                                    ".yml", ".yaml", ".toml", ".json"}):
         if "tests" in path.parts:
             continue
+        rel = str(path.relative_to(PROJECT))
         for key in PAID_SEARCH_KEYS:
+            if key in text and rel in DENYLIST_ONLY_FILES:
+                # 拒否リストとしての言及のみ許可。設定・読み取りは禁止。
+                for line in text.splitlines():
+                    if key not in line:
+                        continue
+                    assert "environ.get" not in line and "getenv" not in line, (
+                        f"{rel} が {key} を読み取っています: {line.strip()}"
+                    )
+                    assert not re.search(rf'env\[["\']{key}["\']\]\s*=', line), (
+                        f"{rel} が {key} を設定しています: {line.strip()}"
+                    )
+                continue
             assert key not in text, f"{path} が有料検索APIキー {key} を参照しています"
 
 
@@ -124,6 +146,8 @@ def test_env_example_has_no_real_values():
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, _, value = line.partition("=")
+        if key.upper().endswith(("_FILE", "_PATH")):
+            continue  # ファイルパスはsecret実値ではない
         if any(s in key.upper() for s in ("KEY", "SECRET", "PASSWORD", "TOKEN")):
             assert value in ("", '""') or value.startswith("changeme") or "例" in value, (
                 f".env.exampleに実値らしき {key} があります"

@@ -51,3 +51,5 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+# B008: FastAPIのDepends()引数既定値は標準パターン
+ignore = ["B008"]

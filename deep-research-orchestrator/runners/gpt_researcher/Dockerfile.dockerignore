@@ -1,0 +1,7 @@
+# BuildKit: -f gpt_researcher/Dockerfile でビルドした際に適用される
+**/__pycache__/
+**/*.pyc
+**/tests/
+**/.pytest_cache/
+mock/
+open_deep_research/

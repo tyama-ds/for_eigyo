@@ -72,7 +72,9 @@ def _mk_sources(topic: str, engine: str, seed: int) -> list[SourceRecord]:
     return common
 
 
-def _base_claims(topic: str, engine: str, seed: int, sources: list[SourceRecord]) -> list[ClaimRecord]:
+def _base_claims(
+    topic: str, engine: str, seed: int, sources: list[SourceRecord]
+) -> list[ClaimRecord]:
     growth = {"mock-fast": "12%", "mock-slow": "25%", "mock-partial": "12%"}.get(engine, "12%")
     claims = [
         ClaimRecord(
@@ -104,7 +106,10 @@ def _base_claims(topic: str, engine: str, seed: int, sources: list[SourceRecord]
             ],
         ),
         ClaimRecord(
-            text=f"{engine}のみが発見: {topic}には規制強化の動きがある (確度{_det_int(seed, engine, 'c3', mod=40) + 60}%)。",
+            text=(
+                f"{engine}のみが発見: {topic}には規制強化の動きがある "
+                f"(確度{_det_int(seed, engine, 'c3', mod=40) + 60}%)。"
+            ),
             key=f"unique-{engine}",
             value=None,
             evidence=[
@@ -121,7 +126,9 @@ def _base_claims(topic: str, engine: str, seed: int, sources: list[SourceRecord]
     return claims
 
 
-def _report_md(topic: str, engine: str, claims: list[ClaimRecord], sources: list[SourceRecord]) -> str:
+def _report_md(
+    topic: str, engine: str, claims: list[ClaimRecord], sources: list[SourceRecord]
+) -> str:
     lines = [f"# {topic} 調査レポート ({engine})", "", "## 主要な発見", ""]
     for i, c in enumerate(claims, 1):
         lines.append(f"{i}. {c.text} [{i}]")

@@ -440,7 +440,9 @@ def export_job(
             lines += ["### 統合レポートの引用", ""]
             for c in synthesis["citations"]:
                 engines = ", ".join(c.get("engines", []))
-                lines.append(f"- [{c['sid']}] {c.get('title') or ''} — {c['url']} (発見: {engines})")
+                lines.append(
+                    f"- [{c['sid']}] {c.get('title') or ''} — {c['url']} (発見: {engines})"
+                )
             lines.append("")
     for r in results:
         lines += [f"## エンジン別レポート: {r['engine_id']}", ""]

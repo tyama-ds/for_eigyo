@@ -93,7 +93,8 @@ def effective_proxy_policy(
         if cfg is None or cfg.mode == "off":
             if cfg is not None and cfg.mode == "off" and scope == (engine_id or "global"):
                 # 明示的off (engine override) は上位を見ずに確定
-                return EffectiveProxyPolicy(mode="off", source_scope=f"engine:{scope}" if engine_id and scope == engine_id else "off")
+                source = f"engine:{scope}" if engine_id and scope == engine_id else "off"
+                return EffectiveProxyPolicy(mode="off", source_scope=source)
             continue
         if cfg.mode == "inherit":
             policy = policy_from_environment(cfg.ca_bundle_path or settings.proxy_ca_bundle)
@@ -104,8 +105,8 @@ def effective_proxy_policy(
             if store is None:
                 store = SecretStore(session, settings)
 
-            def _reveal(secret_id: str | None) -> str | None:
-                return store.reveal(secret_id) if secret_id else None
+            def _reveal(secret_id: str | None, _store=store) -> str | None:
+                return _store.reveal(secret_id) if secret_id else None
 
             return EffectiveProxyPolicy(
                 mode="explicit",
