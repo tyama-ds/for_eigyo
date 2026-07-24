@@ -16,3 +16,4 @@ data/
 *.local
 secrets/
 *.key
+celerybeat-schedule*
