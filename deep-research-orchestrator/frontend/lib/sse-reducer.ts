@@ -57,7 +57,8 @@ export interface RunLiveState {
   tokensOutput: number | null;
   tokensTotal: number | null;
   llmCostUsd: number | null;
-  llmCostIsEstimate: boolean;
+  // null = 実測/推定の別が不明 (タグを出さない)
+  llmCostIsEstimate: boolean | null;
   searchApiCostUsd: number | null;
   /** number, or the string "not_measured", or null (=unknown) */
   infraCost: number | string | null;
@@ -147,7 +148,7 @@ function emptyRun(runId: string, engineId: string): RunLiveState {
     tokensOutput: null,
     tokensTotal: null,
     llmCostUsd: null,
-    llmCostIsEstimate: false,
+    llmCostIsEstimate: null,
     searchApiCostUsd: null,
     infraCost: null,
     log: [],
@@ -214,7 +215,7 @@ function runFromSnapshot(view: RunView, prev?: RunLiveState): RunLiveState {
     llmCostIsEstimate:
       typeof estimateRaw === "boolean"
         ? estimateRaw
-        : (prev?.llmCostIsEstimate ?? false),
+        : (prev?.llmCostIsEstimate ?? null),
     searchApiCostUsd:
       readMetricNumber(m, ["search_api_cost_usd", "search_cost_usd"]) ??
       prev?.searchApiCostUsd ??
@@ -253,6 +254,14 @@ function applyEventToRun(
       if (str(p.stage) !== null) next.stage = str(p.stage);
       if (str(p.error) !== null) next.error = str(p.error);
       if (str(p.started_at) !== null) next.startedAt = str(p.started_at);
+      // payloadにstarted_atが無い場合、researching遷移イベントの時刻を開始時刻とする
+      if (
+        next.startedAt === null &&
+        status === "researching" &&
+        typeof event.created_at === "string"
+      ) {
+        next.startedAt = event.created_at;
+      }
       if (str(p.finished_at) !== null) next.finishedAt = str(p.finished_at);
       if (num(p.elapsed_seconds) !== null)
         next.elapsedSeconds = num(p.elapsed_seconds);
@@ -293,9 +302,13 @@ function applyEventToRun(
     case "engine_cost": {
       const llm = num(p.llm_cost_usd) ?? num(p.llm_cost);
       if (llm !== null) next.llmCostUsd = llm;
-      if (typeof p.llm_cost_is_estimate === "boolean") {
-        next.llmCostIsEstimate = p.llm_cost_is_estimate;
-      }
+      const estFlag =
+        typeof p.llm_cost_is_estimate === "boolean"
+          ? p.llm_cost_is_estimate
+          : typeof p.estimate === "boolean"
+            ? p.estimate
+            : null;
+      if (estFlag !== null) next.llmCostIsEstimate = estFlag;
       const search = num(p.search_api_cost_usd) ?? num(p.search_cost_usd);
       if (search !== null) next.searchApiCostUsd = search;
       const infra = p.infra_cost ?? p.infra_cost_usd;

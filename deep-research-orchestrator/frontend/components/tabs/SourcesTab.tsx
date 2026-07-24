@@ -20,14 +20,14 @@ export function SourcesTab({
   if (loading) return <p className="text-sm text-slate-500">{t("common.loading")}</p>;
   if (error) {
     return (
-      <div role="alert" className="text-sm text-rose-700">
+      <div role="alert" className="text-sm text-rose-300">
         <p>
           {t("sources.loadFailed")}: {error}
         </p>
         <button
           type="button"
           onClick={reload}
-          className="mt-2 rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50"
+          className="mt-2 rounded-lg border border-white/15 px-2 py-1 text-xs text-slate-300 hover:bg-white/5"
         >
           {t("common.reload")}
         </button>
@@ -51,7 +51,7 @@ export function SourcesTab({
     <div className="overflow-x-auto">
       <table className="w-full text-left text-sm">
         <thead>
-          <tr className="border-b border-slate-200 text-xs text-slate-500">
+          <tr className="border-b border-white/10 text-xs text-slate-500">
             <th scope="col" className="py-1.5 pr-3 font-medium">
               {t("sources.url")}
             </th>
@@ -70,20 +70,20 @@ export function SourcesTab({
           {data.map((source) => {
             const dupCount = canonicalCounts.get(source.canonical_url) ?? 1;
             return (
-              <tr key={source.id} className="border-b border-slate-100 align-top">
+              <tr key={source.id} className="border-b border-white/5 align-top">
                 <td className="max-w-[24rem] py-2 pr-3">
                   <a
                     href={source.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="block truncate text-sky-700 underline underline-offset-2 hover:text-sky-900"
+                    className="block truncate text-indigo-300 underline underline-offset-2 hover:text-indigo-200"
                     title={source.url}
                   >
                     {source.url}
                   </a>
                   {dupCount > 1 && (
                     <span
-                      className="mt-0.5 inline-block rounded bg-violet-100 px-1.5 py-0.5 text-[11px] font-medium text-violet-800"
+                      className="mt-0.5 inline-block rounded-lg bg-violet-500/20 px-1.5 py-0.5 text-[11px] font-medium text-violet-300"
                       title={t("sources.duplicateHint")}
                     >
                       {t("sources.duplicate", { count: dupCount })}
@@ -97,12 +97,12 @@ export function SourcesTab({
                     )}
                   </span>
                 </td>
-                <td className="py-2 pr-3 text-xs text-slate-600">
+                <td className="py-2 pr-3 text-xs text-slate-400">
                   {source.engine_id
                     ? (engineNames[source.engine_id] ?? source.engine_id)
                     : t("common.unknown")}
                 </td>
-                <td className="py-2 text-xs text-slate-600">
+                <td className="py-2 text-xs text-slate-400">
                   {formatDateTime(source.fetched_at) ?? (
                     <span className="text-slate-400">{t("common.unknown")}</span>
                   )}

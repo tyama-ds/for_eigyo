@@ -62,6 +62,17 @@ export const ja = {
   "status.unavailable": "利用不可",
   "status.skipped": "スキップ",
 
+  // Engine taglines
+  "engine.tagline.gpt-researcher": "自律探索型ディープリサーチ",
+  "engine.tagline.open-deep-research": "ノードグラフ型オープンリサーチ",
+  "engine.tagline.mock-fast": "高速応答のモックエンジン",
+  "engine.tagline.mock-slow": "低速動作のモックエンジン",
+  "engine.tagline.mock-fail": "失敗系テスト用モック",
+  "engine.tagline.mock-partial": "部分成功テスト用モック",
+  "engine.tagline.mock-timeout": "タイムアウト検証用モック",
+  "engine.tagline.mock-cancellable": "キャンセル検証用モック",
+  "engine.tagline.unknown": "リサーチエンジン",
+
   // Engine availability
   "engine.availability.available": "利用可能",
   "engine.availability.experimental": "実験的",

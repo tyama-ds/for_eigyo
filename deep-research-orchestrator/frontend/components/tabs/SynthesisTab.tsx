@@ -32,20 +32,20 @@ function CitationPanel({
     <aside
       role="dialog"
       aria-label={t("synthesis.citationDetail")}
-      className="rounded border border-sky-300 bg-sky-50 p-3"
+      className="rounded-lg border border-indigo-400/40 bg-indigo-500/10 p-3"
       onKeyDown={(e) => {
         if (e.key === "Escape") onClose();
       }}
     >
       <div className="mb-2 flex items-center justify-between">
-        <h4 className="text-sm font-semibold text-sky-900">
+        <h4 className="text-sm font-semibold text-indigo-200">
           {t("synthesis.citationDetail")}
         </h4>
         <button
           ref={closeRef}
           type="button"
           onClick={onClose}
-          className="rounded border border-sky-300 px-2 py-0.5 text-xs text-sky-800 hover:bg-sky-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+          className="rounded-lg border border-indigo-400/40 px-2 py-0.5 text-xs text-indigo-300 hover:bg-indigo-500/20 focus:outline-none focus:ring-2 focus:ring-indigo-400"
         >
           {t("common.close")}
         </button>
@@ -61,7 +61,7 @@ function CitationPanel({
                 href={citation.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="break-all text-sky-700 underline underline-offset-2"
+                className="break-all text-indigo-300 underline underline-offset-2"
               >
                 {citation.url}
               </a>
@@ -95,7 +95,7 @@ function CitationPanel({
             <dt className="shrink-0 text-xs text-slate-500">
               {t("synthesis.citationExcerpt")}:
             </dt>
-            <dd className="text-slate-700">{citation.excerpt}</dd>
+            <dd className="text-slate-300">{citation.excerpt}</dd>
           </div>
         )}
         <div className="flex gap-2">
@@ -144,14 +144,14 @@ export function SynthesisTab({
   if (loading) return <p className="text-sm text-slate-500">{t("common.loading")}</p>;
   if (error) {
     return (
-      <div role="alert" className="text-sm text-rose-700">
+      <div role="alert" className="text-sm text-rose-300">
         <p>
           {t("synthesis.loadFailed")}: {error}
         </p>
         <button
           type="button"
           onClick={reload}
-          className="mt-2 rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50"
+          className="mt-2 rounded-lg border border-white/15 px-2 py-1 text-xs text-slate-300 hover:bg-white/5"
         >
           {t("common.reload")}
         </button>
@@ -186,7 +186,7 @@ export function SynthesisTab({
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-3">
-        <span className="text-sm text-slate-600">{t("synthesis.status")}:</span>
+        <span className="text-sm text-slate-400">{t("synthesis.status")}:</span>
         <StatusBadge status={data.status} />
         <span className="text-xs text-slate-500">
           {t("synthesis.attempt")}: {data.attempt}
@@ -196,7 +196,7 @@ export function SynthesisTab({
       {failed && (
         <div
           role="alert"
-          className="flex items-start gap-2 rounded border border-rose-300 bg-rose-50 p-3 text-sm text-rose-900"
+          className="flex items-start gap-2 rounded-lg border border-rose-400/40 bg-rose-500/10 p-3 text-sm text-rose-200"
         >
           <Icon name="warn" className="mt-0.5 h-4 w-4" />
           <div>
@@ -213,17 +213,17 @@ export function SynthesisTab({
       )}
 
       {/* Retry with profile selector */}
-      <div className="flex flex-wrap items-end gap-2 rounded border border-slate-200 bg-slate-50 p-3">
+      <div className="flex flex-wrap items-end gap-2 rounded-lg border border-white/10 bg-white/5 p-3">
         <div>
           <label
             htmlFor="synth-profile"
-            className="mb-1 block text-xs font-medium text-slate-600"
+            className="mb-1 block text-xs font-medium text-slate-400"
           >
             {t("synthesis.retryProfile")}
           </label>
           <select
             id="synth-profile"
-            className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
+            className="rounded-lg border border-white/15 bg-slate-950/60 px-2 py-1.5 text-sm"
             value={retryProfile}
             onChange={(e) => setRetryProfile(e.target.value)}
           >
@@ -239,12 +239,12 @@ export function SynthesisTab({
           type="button"
           onClick={handleRetry}
           disabled={retryBusy}
-          className="rounded bg-sky-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-sky-800 focus:outline-none focus:ring-2 focus:ring-sky-500 disabled:opacity-50"
+          className="rounded-lg bg-gradient-to-r from-indigo-500 via-violet-500 to-fuchsia-500 shadow-lg shadow-indigo-500/25 px-3 py-1.5 text-sm font-medium text-white hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-indigo-400 disabled:opacity-50"
         >
           {t("synthesis.retry")}
         </button>
         {retryMessage && (
-          <p role="status" className="text-xs text-slate-700">
+          <p role="status" className="text-xs text-slate-300">
             {retryMessage}
           </p>
         )}
@@ -267,7 +267,7 @@ export function SynthesisTab({
 
       {citations.length > 0 && (
         <section aria-label={t("synthesis.citations")}>
-          <h3 className="mb-2 text-sm font-semibold text-slate-900">
+          <h3 className="mb-2 text-sm font-semibold text-white">
             {t("synthesis.citations")}
           </h3>
           <ul className="space-y-1 text-sm">
@@ -279,7 +279,7 @@ export function SynthesisTab({
                     type="button"
                     onClick={() => setSelectedSid(sid)}
                     aria-label={t("synthesis.openCitation", { sid })}
-                    className="mt-0.5 inline-flex items-center rounded-full border border-sky-300 bg-sky-50 px-1.5 text-xs font-medium text-sky-800 hover:bg-sky-100 focus:outline-none focus:ring-2 focus:ring-sky-400"
+                    className="mt-0.5 inline-flex items-center rounded-full border border-indigo-400/40 bg-indigo-500/10 px-1.5 text-xs font-medium text-indigo-300 hover:bg-indigo-500/20 focus:outline-none focus:ring-2 focus:ring-indigo-400"
                   >
                     {sid}
                   </button>

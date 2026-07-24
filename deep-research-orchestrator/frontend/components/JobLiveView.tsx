@@ -33,6 +33,9 @@ const CONNECTION_LABELS = {
   closed: "job.connection.closed",
 } as const;
 
+const secondaryBtn =
+  "rounded-xl bg-white/5 px-3.5 py-2 text-sm text-slate-200 ring-1 ring-inset ring-white/15 transition-all duration-200 hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 disabled:opacity-50";
+
 export function JobLiveView({ jobId, engineNames, onBack }: JobLiveViewProps) {
   const { state, refreshSnapshot, snapshotError } = useJobEvents(jobId);
   const [activeTab, setActiveTab] = useState("overview");
@@ -108,18 +111,24 @@ export function JobLiveView({ jobId, engineNames, onBack }: JobLiveViewProps) {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          onClick={onBack}
-          className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-sky-500"
-        >
+        <button type="button" onClick={onBack} className={secondaryBtn}>
           ← {t("job.backToList")}
         </button>
         {connectionKey && (
           <span
             role="status"
-            className="inline-flex items-center gap-1 rounded border border-slate-200 bg-white px-2 py-0.5 text-xs text-slate-600"
+            className="inline-flex items-center gap-1.5 rounded-full bg-white/5 px-2.5 py-1 text-xs text-slate-400 ring-1 ring-inset ring-white/10"
           >
+            <span
+              aria-hidden="true"
+              className={`h-1.5 w-1.5 rounded-full ${
+                state.connection === "open"
+                  ? "animate-pulse bg-emerald-400"
+                  : state.connection === "closed"
+                    ? "bg-slate-500"
+                    : "animate-pulse bg-amber-400"
+              }`}
+            />
             <Icon
               name={state.connection === "open" ? "check" : "spinner"}
               className="h-3 w-3"
@@ -136,7 +145,7 @@ export function JobLiveView({ jobId, engineNames, onBack }: JobLiveViewProps) {
       {snapshotError && (
         <p
           role="alert"
-          className="rounded border border-rose-300 bg-rose-50 px-3 py-2 text-sm text-rose-800"
+          className="rounded-xl bg-rose-500/10 px-4 py-2.5 text-sm text-rose-300 ring-1 ring-inset ring-rose-400/30"
         >
           {t("job.loadFailed")}: {snapshotError}
         </p>
@@ -144,7 +153,7 @@ export function JobLiveView({ jobId, engineNames, onBack }: JobLiveViewProps) {
       {actionError && (
         <p
           role="alert"
-          className="rounded border border-rose-300 bg-rose-50 px-3 py-2 text-sm text-rose-800"
+          className="rounded-xl bg-rose-500/10 px-4 py-2.5 text-sm text-rose-300 ring-1 ring-inset ring-rose-400/30"
         >
           {actionError}
         </p>
@@ -153,45 +162,53 @@ export function JobLiveView({ jobId, engineNames, onBack }: JobLiveViewProps) {
       {/* Job status banner — partial is never shown as full success */}
       <section
         aria-label={t("jobs.status")}
-        className={`rounded-lg border p-3 ${
+        className={`relative overflow-hidden rounded-2xl p-5 shadow-xl shadow-black/20 backdrop-blur ${
           isPartial
-            ? "border-amber-300 bg-amber-50"
-            : "border-slate-200 bg-white"
+            ? "bg-amber-500/[0.08] ring-1 ring-inset ring-amber-400/40"
+            : "bg-slate-900/80 ring-1 ring-white/10"
         }`}
       >
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <span
+          aria-hidden="true"
+          className={`absolute inset-x-0 top-0 h-1 bg-gradient-to-r ${
+            isPartial
+              ? "from-amber-400 to-orange-500"
+              : "from-indigo-500 via-violet-500 to-fuchsia-500"
+          }`}
+        />
+        <div className="flex flex-wrap items-center justify-between gap-4">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               {jobStatus && <StatusBadge status={jobStatus} />}
               {isPartial && (
-                <span className="inline-flex items-center gap-1 text-sm font-semibold text-amber-900">
+                <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-amber-300">
                   <Icon name="warn" className="h-4 w-4" />
                   {t("job.statusBanner.partial")}
                 </span>
               )}
               {state.cancelRequested && active && (
-                <span className="text-sm text-slate-600">
+                <span className="text-sm text-slate-400">
                   {t("job.statusBanner.cancelRequested")}
                 </span>
               )}
             </div>
             <h2
-              className="mt-1 truncate text-base font-semibold text-slate-900"
+              className="mt-1.5 truncate text-lg font-semibold tracking-tight text-white"
               title={state.job?.topic}
             >
               {state.job?.topic ?? t("common.loading")}
             </h2>
             {state.jobError && (
-              <p className="mt-1 text-sm text-rose-700">
+              <p className="mt-1 text-sm text-rose-300">
                 {t("job.error")}: {state.jobError}
               </p>
             )}
             {state.jobWarnings.length > 0 && (
-              <ul className="mt-1 space-y-0.5">
+              <ul className="mt-1.5 space-y-0.5">
                 {state.jobWarnings.map((w, i) => (
                   <li
                     key={i}
-                    className="flex items-start gap-1 text-xs text-amber-900"
+                    className="flex items-start gap-1.5 text-xs text-amber-300"
                   >
                     <Icon name="warn" className="mt-0.5 h-3 w-3" />
                     {warningToText(w)}
@@ -205,7 +222,7 @@ export function JobLiveView({ jobId, engineNames, onBack }: JobLiveViewProps) {
               <button
                 type="button"
                 onClick={handleCancelJob}
-                className="rounded border border-rose-300 px-3 py-1.5 text-sm text-rose-700 hover:bg-rose-50 focus:outline-none focus:ring-2 focus:ring-rose-400"
+                className="rounded-xl px-3.5 py-2 text-sm text-rose-300 ring-1 ring-inset ring-rose-400/40 transition-all duration-200 hover:bg-rose-500/10 hover:text-rose-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-400"
               >
                 {t("job.cancelJob")}
               </button>
@@ -214,7 +231,7 @@ export function JobLiveView({ jobId, engineNames, onBack }: JobLiveViewProps) {
               type="button"
               onClick={() => handleExport("markdown")}
               disabled={exportBusy}
-              className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-sky-500 disabled:opacity-50"
+              className={secondaryBtn}
             >
               {t("job.exportMarkdown")}
             </button>
@@ -222,7 +239,7 @@ export function JobLiveView({ jobId, engineNames, onBack }: JobLiveViewProps) {
               type="button"
               onClick={() => handleExport("json")}
               disabled={exportBusy}
-              className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-sky-500 disabled:opacity-50"
+              className={secondaryBtn}
             >
               {t("job.exportJson")}
             </button>

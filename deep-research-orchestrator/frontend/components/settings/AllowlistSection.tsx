@@ -45,19 +45,19 @@ export function AllowlistSection() {
   return (
     <section
       aria-label={t("settings.allowlist.title")}
-      className="rounded-lg border border-slate-200 bg-white p-4"
+      className="rounded-2xl bg-slate-900/80 p-5 shadow-xl shadow-black/20 ring-1 ring-white/10 backdrop-blur"
     >
-      <h2 className="mb-3 text-base font-semibold text-slate-900">
+      <h2 className="mb-3 text-base font-semibold text-white">
         {t("settings.allowlist.title")}
       </h2>
 
       {errorMsg && (
-        <p role="alert" className="mb-2 text-sm text-rose-700">
+        <p role="alert" className="mb-2 text-sm text-rose-300">
           {errorMsg}
         </p>
       )}
       {error && (
-        <p role="alert" className="text-sm text-rose-700">
+        <p role="alert" className="text-sm text-rose-300">
           {t("settings.allowlist.loadFailed")}: {error}
         </p>
       )}
@@ -67,14 +67,14 @@ export function AllowlistSection() {
       )}
 
       {data && data.length > 0 && (
-        <ul className="divide-y divide-slate-100">
+        <ul className="divide-y divide-white/5">
           {data.map((entry, i) => (
             <li
               key={typeof entry.id === "string" ? entry.id : i}
               className="flex items-center justify-between gap-3 py-2"
             >
               <div className="min-w-0">
-                <p className="truncate font-mono text-sm text-slate-800">
+                <p className="truncate font-mono text-sm text-slate-200">
                   {entryLabel(entry)}
                 </p>
                 {typeof entry.provider === "string" && (
@@ -85,7 +85,7 @@ export function AllowlistSection() {
                 <button
                   type="button"
                   onClick={() => setDeleteTarget(entry)}
-                  className="shrink-0 rounded border border-rose-300 px-2 py-1 text-xs text-rose-700 hover:bg-rose-50 focus:outline-none focus:ring-2 focus:ring-rose-400"
+                  className="shrink-0 rounded-lg border border-rose-400/40 px-2 py-1 text-xs text-rose-300 hover:bg-rose-500/10 focus:outline-none focus:ring-2 focus:ring-rose-400"
                 >
                   {t("common.delete")}
                 </button>

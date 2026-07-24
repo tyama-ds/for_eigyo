@@ -3,9 +3,40 @@
 @tailwind utilities;
 
 :root {
-  color-scheme: light;
+  color-scheme: dark;
 }
 
 body {
-  @apply bg-slate-50 text-slate-900;
+  @apply min-h-screen bg-slate-950 text-slate-200 antialiased;
+  background-image:
+    radial-gradient(60rem 40rem at 110% -10%, rgba(99, 102, 241, 0.14), transparent 60%),
+    radial-gradient(50rem 35rem at -20% 0%, rgba(217, 70, 239, 0.08), transparent 55%),
+    linear-gradient(to bottom, theme("colors.slate.950"), theme("colors.slate.900"));
+  background-attachment: fixed;
+}
+
+/* Subtle scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.14);
+  border-radius: 9999px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.24);
+}
+
+/* Numeric alignment for metric values */
+dd,
+td {
+  font-variant-numeric: tabular-nums;
 }

@@ -13,8 +13,8 @@ import { Icon } from "../Icon";
 import { ConfirmDialog } from "../ConfirmDialog";
 
 const inputCls =
-  "w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500";
-const labelCls = "block text-xs font-medium text-slate-600 mb-1";
+  "w-full rounded-lg border border-white/15 bg-slate-950/60 px-2 py-1.5 text-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400";
+const labelCls = "block text-xs font-medium text-slate-400 mb-1";
 
 interface ProfileFormState {
   name: string;
@@ -74,7 +74,7 @@ function providerLabel(provider: string): string {
 function CheckResult({ value }: { value: boolean | undefined | null }) {
   if (value === true) {
     return (
-      <span className="inline-flex items-center gap-1 text-emerald-700">
+      <span className="inline-flex items-center gap-1 text-emerald-300">
         <Icon name="check" className="h-3.5 w-3.5" />
         {t("settings.profiles.testOk")}
       </span>
@@ -82,7 +82,7 @@ function CheckResult({ value }: { value: boolean | undefined | null }) {
   }
   if (value === false) {
     return (
-      <span className="inline-flex items-center gap-1 text-rose-700">
+      <span className="inline-flex items-center gap-1 text-rose-300">
         <Icon name="x" className="h-3.5 w-3.5" />
         {t("settings.profiles.testNg")}
       </span>
@@ -201,28 +201,28 @@ export function ProfilesSection() {
   return (
     <section
       aria-label={t("settings.profiles.title")}
-      className="rounded-lg border border-slate-200 bg-white p-4"
+      className="rounded-2xl bg-slate-900/80 p-5 shadow-xl shadow-black/20 ring-1 ring-white/10 backdrop-blur"
     >
       <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-base font-semibold text-slate-900">
+        <h2 className="text-base font-semibold text-white">
           {t("settings.profiles.title")}
         </h2>
         <button
           type="button"
           onClick={startCreate}
-          className="rounded bg-sky-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-sky-800 focus:outline-none focus:ring-2 focus:ring-sky-500"
+          className="rounded-lg bg-gradient-to-r from-indigo-500 via-violet-500 to-fuchsia-500 shadow-lg shadow-indigo-500/25 px-3 py-1.5 text-sm font-medium text-white hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-indigo-400"
         >
           {t("common.create")}
         </button>
       </div>
 
       {sectionError && (
-        <p role="alert" className="mb-3 text-sm text-rose-700">
+        <p role="alert" className="mb-3 text-sm text-rose-300">
           {sectionError}
         </p>
       )}
       {error && (
-        <p role="alert" className="text-sm text-rose-700">
+        <p role="alert" className="text-sm text-rose-300">
           {t("settings.profiles.loadFailed")}: {error}
         </p>
       )}
@@ -235,7 +235,7 @@ export function ProfilesSection() {
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
             <thead>
-              <tr className="border-b border-slate-200 text-xs text-slate-500">
+              <tr className="border-b border-white/10 text-xs text-slate-500">
                 <th scope="col" className="py-1.5 pr-3 font-medium">
                   {t("settings.profiles.name")}
                 </th>
@@ -260,7 +260,7 @@ export function ProfilesSection() {
               {profiles.map((p) => {
                 const result = testResults[p.id];
                 return (
-                  <tr key={p.id} className="border-b border-slate-100 align-top">
+                  <tr key={p.id} className="border-b border-white/5 align-top">
                     <td className="py-2 pr-3 font-medium">{p.name}</td>
                     <td className="py-2 pr-3">
                       {providerLabel(p.provider)}
@@ -286,7 +286,7 @@ export function ProfilesSection() {
                     </td>
                     <td className="py-2 pr-3">
                       {p.enabled ? (
-                        <span className="inline-flex items-center gap-1 text-emerald-700">
+                        <span className="inline-flex items-center gap-1 text-emerald-300">
                           <Icon name="check" className="h-3.5 w-3.5" />
                           {t("common.enabled")}
                         </span>
@@ -302,7 +302,7 @@ export function ProfilesSection() {
                         <button
                           type="button"
                           onClick={() => startEdit(p)}
-                          className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                          className="rounded-lg border border-white/15 px-2 py-1 text-xs text-slate-300 hover:bg-white/5 focus:outline-none focus:ring-2 focus:ring-indigo-400"
                         >
                           {t("common.edit")}
                         </button>
@@ -310,7 +310,7 @@ export function ProfilesSection() {
                           type="button"
                           onClick={() => setTestConfirm(p)}
                           disabled={result === "running"}
-                          className="rounded border border-sky-300 px-2 py-1 text-xs text-sky-800 hover:bg-sky-50 focus:outline-none focus:ring-2 focus:ring-sky-500 disabled:opacity-50"
+                          className="rounded-lg border border-indigo-400/40 px-2 py-1 text-xs text-indigo-300 hover:bg-indigo-500/10 focus:outline-none focus:ring-2 focus:ring-indigo-400 disabled:opacity-50"
                         >
                           {result === "running"
                             ? t("settings.profiles.testRunning")
@@ -319,13 +319,13 @@ export function ProfilesSection() {
                         <button
                           type="button"
                           onClick={() => setDeleteConfirm(p)}
-                          className="rounded border border-rose-300 px-2 py-1 text-xs text-rose-700 hover:bg-rose-50 focus:outline-none focus:ring-2 focus:ring-rose-400"
+                          className="rounded-lg border border-rose-400/40 px-2 py-1 text-xs text-rose-300 hover:bg-rose-500/10 focus:outline-none focus:ring-2 focus:ring-rose-400"
                         >
                           {t("common.delete")}
                         </button>
                       </div>
                       {result && result !== "running" && (
-                        <dl className="mt-2 space-y-0.5 rounded border border-slate-200 bg-slate-50 p-2 text-xs">
+                        <dl className="mt-2 space-y-0.5 rounded-lg border border-white/10 bg-white/5 p-2 text-xs">
                           <div className="flex justify-between gap-2">
                             <dt>{t("settings.profiles.testReachable")}</dt>
                             <dd>
@@ -351,13 +351,13 @@ export function ProfilesSection() {
                             </dd>
                           </div>
                           {typeof result.error === "string" && result.error && (
-                            <p role="alert" className="text-rose-700">
+                            <p role="alert" className="text-rose-300">
                               {t("common.error")}: {result.error}
                             </p>
                           )}
                           {typeof result.billing_note === "string" &&
                             result.billing_note && (
-                              <p className="text-amber-800">
+                              <p className="text-amber-300">
                                 {t("settings.profiles.testBillingNote")}:{" "}
                                 {result.billing_note}
                               </p>
@@ -376,14 +376,14 @@ export function ProfilesSection() {
       {(creating || editingId) && (
         <form
           onSubmit={handleSubmit}
-          className="mt-4 rounded border border-slate-200 bg-slate-50 p-3"
+          className="mt-4 rounded-lg border border-white/10 bg-white/5 p-3"
           aria-label={
             editingId
               ? t("settings.profiles.editTitle")
               : t("settings.profiles.createTitle")
           }
         >
-          <h3 className="mb-3 text-sm font-semibold text-slate-900">
+          <h3 className="mb-3 text-sm font-semibold text-white">
             {editingId
               ? t("settings.profiles.editTitle")
               : t("settings.profiles.createTitle")}
@@ -529,11 +529,11 @@ export function ProfilesSection() {
               <input
                 id="pf-enabled"
                 type="checkbox"
-                className="h-4 w-4 rounded border-slate-300"
+                className="h-4 w-4 rounded-lg border-white/15"
                 checked={form.enabled}
                 onChange={(e) => setForm({ ...form, enabled: e.target.checked })}
               />
-              <label htmlFor="pf-enabled" className="text-sm text-slate-800">
+              <label htmlFor="pf-enabled" className="text-sm text-slate-200">
                 {t("settings.profiles.enabled")}
               </label>
             </div>
@@ -542,14 +542,14 @@ export function ProfilesSection() {
             <button
               type="submit"
               disabled={busy}
-              className="rounded bg-sky-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-sky-800 focus:outline-none focus:ring-2 focus:ring-sky-500 disabled:opacity-50"
+              className="rounded-lg bg-gradient-to-r from-indigo-500 via-violet-500 to-fuchsia-500 shadow-lg shadow-indigo-500/25 px-3 py-1.5 text-sm font-medium text-white hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-indigo-400 disabled:opacity-50"
             >
               {t("common.save")}
             </button>
             <button
               type="button"
               onClick={closeForm}
-              className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+              className="rounded-lg border border-white/15 px-3 py-1.5 text-sm text-slate-300 hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-indigo-400"
             >
               {t("common.cancel")}
             </button>

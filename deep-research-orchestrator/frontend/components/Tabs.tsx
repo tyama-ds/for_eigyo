@@ -14,7 +14,7 @@ interface TabsProps {
   ariaLabel: string;
 }
 
-/** Accessible tablist with arrow-key navigation. */
+/** Accessible pill-style segmented tablist with arrow-key navigation. */
 export function Tabs({ tabs, active, onChange, ariaLabel }: TabsProps) {
   const refs = useRef<Record<string, HTMLButtonElement | null>>({});
 
@@ -37,7 +37,7 @@ export function Tabs({ tabs, active, onChange, ariaLabel }: TabsProps) {
     <div
       role="tablist"
       aria-label={ariaLabel}
-      className="flex flex-wrap gap-1 border-b border-slate-200"
+      className="inline-flex max-w-full flex-wrap gap-1 rounded-2xl bg-white/5 p-1 ring-1 ring-white/10 backdrop-blur"
       onKeyDown={onKeyDown}
     >
       {tabs.map((tab) => {
@@ -55,10 +55,10 @@ export function Tabs({ tabs, active, onChange, ariaLabel }: TabsProps) {
             aria-controls={`panel-${tab.id}`}
             tabIndex={selected ? 0 : -1}
             onClick={() => onChange(tab.id)}
-            className={`rounded-t px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 ${
+            className={`rounded-xl px-3.5 py-1.5 text-sm transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 ${
               selected
-                ? "border border-b-0 border-slate-200 bg-white font-semibold text-slate-900"
-                : "text-slate-600 hover:text-slate-900"
+                ? "bg-gradient-to-r from-indigo-500 via-violet-500 to-fuchsia-500 font-semibold text-white shadow-lg shadow-indigo-500/25"
+                : "text-slate-400 hover:bg-white/5 hover:text-slate-100"
             }`}
           >
             {tab.label}
@@ -85,7 +85,7 @@ export function TabPanel({
       id={`panel-${id}`}
       aria-labelledby={`tab-${id}`}
       tabIndex={0}
-      className="rounded-b-lg border border-t-0 border-slate-200 bg-white p-4 focus:outline-none"
+      className="mt-3 rounded-2xl bg-slate-900/80 p-5 shadow-xl shadow-black/20 ring-1 ring-white/10 backdrop-blur focus:outline-none focus-visible:ring-indigo-400"
     >
       {children}
     </div>

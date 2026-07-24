@@ -21,15 +21,15 @@ export function SearchSection() {
   return (
     <section
       aria-label={t("settings.search.title")}
-      className="rounded-lg border border-slate-200 bg-white p-4"
+      className="rounded-2xl bg-slate-900/80 p-5 shadow-xl shadow-black/20 ring-1 ring-white/10 backdrop-blur"
     >
-      <h2 className="mb-1 text-base font-semibold text-slate-900">
+      <h2 className="mb-1 text-base font-semibold text-white">
         {t("settings.search.title")}
       </h2>
       <p className="mb-3 text-xs text-slate-500">{t("settings.search.note")}</p>
 
       {error && (
-        <p role="alert" className="text-sm text-rose-700">
+        <p role="alert" className="text-sm text-rose-300">
           {t("settings.search.loadFailed")}: {error}
         </p>
       )}
@@ -42,7 +42,7 @@ export function SearchSection() {
               <dt className="shrink-0 font-mono text-xs text-slate-500">
                 {key}:
               </dt>
-              <dd className="break-all text-slate-800">{valueText(value)}</dd>
+              <dd className="break-all text-slate-200">{valueText(value)}</dd>
             </div>
           ))}
         </dl>

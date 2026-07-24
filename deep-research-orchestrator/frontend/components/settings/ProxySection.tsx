@@ -8,12 +8,12 @@ import { t } from "@/lib/i18n";
 import { Icon } from "../Icon";
 
 const inputCls =
-  "w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500";
-const labelCls = "block text-xs font-medium text-slate-600 mb-1";
+  "w-full rounded-lg border border-white/15 bg-slate-950/60 px-2 py-1.5 text-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400";
+const labelCls = "block text-xs font-medium text-slate-400 mb-1";
 
 function HasIndicator({ has }: { has: boolean }) {
   return has ? (
-    <span className="ml-2 inline-flex items-center gap-1 text-xs text-emerald-700">
+    <span className="ml-2 inline-flex items-center gap-1 text-xs text-emerald-300">
       <Icon name="check" className="h-3 w-3" />
       {t("common.set")}
     </span>
@@ -122,9 +122,9 @@ export function ProxySection() {
   return (
     <section
       aria-label={t("settings.proxy.title")}
-      className="rounded-lg border border-slate-200 bg-white p-4"
+      className="rounded-2xl bg-slate-900/80 p-5 shadow-xl shadow-black/20 ring-1 ring-white/10 backdrop-blur"
     >
-      <h2 className="mb-1 text-base font-semibold text-slate-900">
+      <h2 className="mb-1 text-base font-semibold text-white">
         {t("settings.proxy.title")}
       </h2>
       <p className="mb-3 text-xs text-slate-500">
@@ -132,7 +132,7 @@ export function ProxySection() {
       </p>
 
       {proxy.error && (
-        <p role="alert" className="text-sm text-rose-700">
+        <p role="alert" className="text-sm text-rose-300">
           {t("settings.proxy.loadFailed")}: {proxy.error}
         </p>
       )}
@@ -247,7 +247,7 @@ export function ProxySection() {
               type="button"
               onClick={handleSave}
               disabled={busy}
-              className="rounded bg-sky-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-sky-800 focus:outline-none focus:ring-2 focus:ring-sky-500 disabled:opacity-50"
+              className="rounded-lg bg-gradient-to-r from-indigo-500 via-violet-500 to-fuchsia-500 shadow-lg shadow-indigo-500/25 px-3 py-1.5 text-sm font-medium text-white hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-indigo-400 disabled:opacity-50"
             >
               {t("common.save")}
             </button>
@@ -255,31 +255,31 @@ export function ProxySection() {
               type="button"
               onClick={handleTest}
               disabled={testBusy}
-              className="rounded border border-sky-300 px-3 py-1.5 text-sm text-sky-800 hover:bg-sky-50 focus:outline-none focus:ring-2 focus:ring-sky-500 disabled:opacity-50"
+              className="rounded-lg border border-indigo-400/40 px-3 py-1.5 text-sm text-indigo-300 hover:bg-indigo-500/10 focus:outline-none focus:ring-2 focus:ring-indigo-400 disabled:opacity-50"
             >
               {testBusy
                 ? t("settings.proxy.testRunning")
                 : t("settings.proxy.test")}
             </button>
             {message && (
-              <p role="status" className="text-sm text-emerald-700">
+              <p role="status" className="text-sm text-emerald-300">
                 {message}
               </p>
             )}
             {errorMsg && (
-              <p role="alert" className="text-sm text-rose-700">
+              <p role="alert" className="text-sm text-rose-300">
                 {errorMsg}
               </p>
             )}
             {testError && (
-              <p role="alert" className="text-sm text-rose-700">
+              <p role="alert" className="text-sm text-rose-300">
                 {testError}
               </p>
             )}
           </div>
 
           {testResult && (
-            <div className="rounded border border-slate-200 bg-slate-50 p-3 text-sm">
+            <div className="rounded-lg border border-white/10 bg-white/5 p-3 text-sm">
               <dl className="space-y-1">
                 <div className="flex items-center gap-2">
                   <dt className="text-xs text-slate-500">
@@ -287,12 +287,12 @@ export function ProxySection() {
                   </dt>
                   <dd>
                     {viaProxy === true ? (
-                      <span className="inline-flex items-center gap-1 text-emerald-700">
+                      <span className="inline-flex items-center gap-1 text-emerald-300">
                         <Icon name="check" className="h-3.5 w-3.5" />
                         {t("settings.proxy.testViaProxy")}
                       </span>
                     ) : viaProxy === false ? (
-                      <span className="inline-flex items-center gap-1 text-amber-800">
+                      <span className="inline-flex items-center gap-1 text-amber-300">
                         <Icon name="warn" className="h-3.5 w-3.5" />
                         {t("settings.proxy.testNotViaProxy")}
                       </span>
@@ -309,12 +309,12 @@ export function ProxySection() {
                   </dt>
                   <dd>
                     {bypassed === true ? (
-                      <span className="inline-flex items-center gap-1 text-emerald-700">
+                      <span className="inline-flex items-center gap-1 text-emerald-300">
                         <Icon name="check" className="h-3.5 w-3.5" />
                         {t("settings.proxy.testBypassed")}
                       </span>
                     ) : bypassed === false ? (
-                      <span className="inline-flex items-center gap-1 text-amber-800">
+                      <span className="inline-flex items-center gap-1 text-amber-300">
                         <Icon name="warn" className="h-3.5 w-3.5" />
                         {t("settings.proxy.testNotBypassed")}
                       </span>
@@ -327,10 +327,10 @@ export function ProxySection() {
                 </div>
               </dl>
               <details className="mt-2">
-                <summary className="cursor-pointer text-xs text-slate-600">
+                <summary className="cursor-pointer text-xs text-slate-400">
                   {t("settings.proxy.testRawResult")}
                 </summary>
-                <pre className="mt-1 max-h-48 overflow-auto rounded bg-slate-900 p-2 text-xs text-slate-100">
+                <pre className="mt-1 max-h-48 overflow-auto rounded-lg bg-black/60 p-2 text-xs text-emerald-200/90 ring-1 ring-inset ring-white/10">
                   {JSON.stringify(testResult, null, 2)}
                 </pre>
               </details>

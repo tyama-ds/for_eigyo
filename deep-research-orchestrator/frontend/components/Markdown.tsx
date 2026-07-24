@@ -29,7 +29,7 @@ function renderInline(
         return <span key={key}>{node.text}</span>;
       case "strong":
         return (
-          <strong key={key}>
+          <strong key={key} className="font-semibold text-white">
             {renderInline(node.children, key, onCitationClick)}
           </strong>
         );
@@ -41,7 +41,7 @@ function renderInline(
         return (
           <code
             key={key}
-            className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[0.85em]"
+            className="rounded-md bg-white/10 px-1.5 py-0.5 font-mono text-[0.85em] text-fuchsia-200 ring-1 ring-inset ring-white/10"
           >
             {node.text}
           </code>
@@ -52,7 +52,7 @@ function renderInline(
           <a
             key={key}
             href={node.href}
-            className="text-sky-700 underline underline-offset-2 hover:text-sky-900"
+            className="text-indigo-300 underline decoration-indigo-400/40 underline-offset-2 transition-colors duration-200 hover:text-indigo-200 hover:decoration-indigo-300"
             {...(external
               ? { target: "_blank", rel: "noopener noreferrer" }
               : {})}
@@ -68,7 +68,7 @@ function renderInline(
             type="button"
             onClick={() => onCitationClick?.(node.sid)}
             aria-label={t("synthesis.openCitation", { sid: node.sid })}
-            className="mx-0.5 inline-flex items-center rounded-full border border-sky-300 bg-sky-50 px-1.5 text-[0.75em] font-medium text-sky-800 align-baseline hover:bg-sky-100 focus:outline-none focus:ring-2 focus:ring-sky-400"
+            className="mx-0.5 inline-flex items-center rounded-full bg-gradient-to-r from-indigo-500/20 to-fuchsia-500/20 px-1.5 align-baseline text-[0.75em] font-medium text-indigo-200 ring-1 ring-inset ring-indigo-400/40 transition-all duration-200 hover:from-indigo-500/40 hover:to-fuchsia-500/40 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300"
           >
             {node.sid}
           </button>
@@ -86,7 +86,7 @@ function renderBlock(
   switch (block.t) {
     case "heading": {
       const children = renderInline(block.children, key, onCitationClick);
-      const cls = "font-semibold text-slate-900 mt-4 mb-2";
+      const cls = "font-semibold tracking-tight text-white mt-5 mb-2";
       switch (block.level) {
         case 1:
           return (
@@ -110,22 +110,22 @@ function renderBlock(
     }
     case "para":
       return (
-        <p key={key} className="my-2 leading-relaxed">
+        <p key={key} className="my-2.5 leading-7">
           {renderInline(block.children, key, onCitationClick)}
         </p>
       );
     case "list": {
       const items = block.items.map((item, i) => (
-        <li key={`${key}-li-${i}`}>
+        <li key={`${key}-li-${i}`} className="marker:text-indigo-400/70">
           {renderInline(item, `${key}-li-${i}`, onCitationClick)}
         </li>
       ));
       return block.ordered ? (
-        <ol key={key} className="my-2 list-decimal space-y-1 pl-6">
+        <ol key={key} className="my-2.5 list-decimal space-y-1.5 pl-6">
           {items}
         </ol>
       ) : (
-        <ul key={key} className="my-2 list-disc space-y-1 pl-6">
+        <ul key={key} className="my-2.5 list-disc space-y-1.5 pl-6">
           {items}
         </ul>
       );
@@ -134,7 +134,7 @@ function renderBlock(
       return (
         <pre
           key={key}
-          className="my-2 overflow-x-auto rounded bg-slate-900 p-3 text-xs text-slate-100"
+          className="my-3 overflow-x-auto rounded-xl bg-black/50 p-4 font-mono text-xs leading-relaxed text-emerald-200/90 ring-1 ring-inset ring-white/10"
         >
           <code>{block.text}</code>
         </pre>
@@ -143,25 +143,30 @@ function renderBlock(
       return (
         <blockquote
           key={key}
-          className="my-2 border-l-4 border-slate-300 pl-3 text-slate-600"
+          className="my-3 border-l-2 border-fuchsia-400/50 pl-4 italic text-slate-400"
         >
           {renderInline(block.children, key, onCitationClick)}
         </blockquote>
       );
     case "hr":
-      return <hr key={key} className="my-4 border-slate-200" />;
+      return (
+        <hr
+          key={key}
+          className="my-5 border-0 border-t border-white/10"
+        />
+      );
   }
 }
 
 /**
  * Safe markdown renderer: parses to an AST and emits React elements only.
  * Raw HTML in the source is stripped by the parser; no
- * dangerouslySetInnerHTML is used.
+ * dangerouslySetInnerHTML is used. Hand-rolled dark "prose" styling.
  */
 export function Markdown({ source, citations, onCitationClick }: MarkdownProps) {
   const blocks = parseMarkdown(source, { citations });
   return (
-    <div className="text-sm text-slate-800">
+    <div className="text-sm text-slate-300">
       {blocks.map((b, i) => renderBlock(b, i, onCitationClick))}
     </div>
   );

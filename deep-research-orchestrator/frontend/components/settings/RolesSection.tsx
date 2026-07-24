@@ -46,15 +46,15 @@ export function RolesSection() {
   return (
     <section
       aria-label={t("settings.roles.title")}
-      className="rounded-lg border border-slate-200 bg-white p-4"
+      className="rounded-2xl bg-slate-900/80 p-5 shadow-xl shadow-black/20 ring-1 ring-white/10 backdrop-blur"
     >
-      <h2 className="mb-1 text-base font-semibold text-slate-900">
+      <h2 className="mb-1 text-base font-semibold text-white">
         {t("settings.roles.title")}
       </h2>
       <p className="mb-3 text-xs text-slate-500">{t("settings.roles.help")}</p>
 
       {roles.error && (
-        <p role="alert" className="text-sm text-rose-700">
+        <p role="alert" className="text-sm text-rose-300">
           {t("settings.roles.loadFailed")}: {roles.error}
         </p>
       )}
@@ -68,13 +68,13 @@ export function RolesSection() {
             <div key={role}>
               <label
                 htmlFor={`role-${role}`}
-                className="mb-1 block text-xs font-medium text-slate-600"
+                className="mb-1 block text-xs font-medium text-slate-400"
               >
                 {t(labelKey)}
               </label>
               <select
                 id={`role-${role}`}
-                className="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
+                className="w-full rounded-lg border border-white/15 bg-slate-950/60 px-2 py-1.5 text-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
                 value={assignments[role] ?? ""}
                 onChange={(e) =>
                   setAssignments((prev) => ({
@@ -100,17 +100,17 @@ export function RolesSection() {
           type="button"
           onClick={handleSave}
           disabled={busy || !roles.data}
-          className="rounded bg-sky-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-sky-800 focus:outline-none focus:ring-2 focus:ring-sky-500 disabled:opacity-50"
+          className="rounded-lg bg-gradient-to-r from-indigo-500 via-violet-500 to-fuchsia-500 shadow-lg shadow-indigo-500/25 px-3 py-1.5 text-sm font-medium text-white hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-indigo-400 disabled:opacity-50"
         >
           {t("common.save")}
         </button>
         {message && (
-          <p role="status" className="text-sm text-emerald-700">
+          <p role="status" className="text-sm text-emerald-300">
             {message}
           </p>
         )}
         {errorMsg && (
-          <p role="alert" className="text-sm text-rose-700">
+          <p role="alert" className="text-sm text-rose-300">
             {errorMsg}
           </p>
         )}

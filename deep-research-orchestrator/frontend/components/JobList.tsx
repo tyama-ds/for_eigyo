@@ -2,6 +2,7 @@
 
 import type { JobView } from "@/lib/api-types";
 import { formatDateTime } from "@/lib/format";
+import { EngineAvatar } from "@/lib/engine-meta";
 import { t } from "@/lib/i18n";
 import { StatusBadge } from "./StatusBadge";
 
@@ -17,22 +18,22 @@ export function JobList({ jobs, error, loading, onOpen, onRefresh }: JobListProp
   return (
     <section
       aria-label={t("jobs.recentTitle")}
-      className="rounded-lg border border-slate-200 bg-white p-4"
+      className="rounded-2xl bg-slate-900/80 p-5 shadow-xl shadow-black/20 ring-1 ring-white/10 backdrop-blur"
     >
-      <div className="mb-2 flex items-center justify-between">
-        <h2 className="text-base font-semibold text-slate-900">
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="text-base font-semibold tracking-tight text-white">
           {t("jobs.recentTitle")}
         </h2>
         <button
           type="button"
           onClick={onRefresh}
-          className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-sky-500"
+          className="rounded-xl bg-white/5 px-3 py-1.5 text-xs text-slate-200 ring-1 ring-inset ring-white/15 transition-all duration-200 hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
         >
           {t("common.refresh")}
         </button>
       </div>
       {error && (
-        <p role="alert" className="text-sm text-rose-700">
+        <p role="alert" className="text-sm text-rose-300">
           {t("jobs.loadFailed")}: {error}
         </p>
       )}
@@ -44,44 +45,64 @@ export function JobList({ jobs, error, loading, onOpen, onRefresh }: JobListProp
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
             <thead>
-              <tr className="border-b border-slate-200 text-xs text-slate-500">
-                <th scope="col" className="py-1.5 pr-3 font-medium">
+              <tr className="border-b border-white/10 text-xs text-slate-500">
+                <th scope="col" className="py-2 pr-3 font-medium">
                   {t("jobs.topic")}
                 </th>
-                <th scope="col" className="py-1.5 pr-3 font-medium">
+                <th scope="col" className="py-2 pr-3 font-medium">
                   {t("jobs.status")}
                 </th>
-                <th scope="col" className="py-1.5 pr-3 font-medium">
+                <th scope="col" className="py-2 pr-3 font-medium">
                   {t("jobs.engines")}
                 </th>
-                <th scope="col" className="py-1.5 pr-3 font-medium">
+                <th scope="col" className="py-2 pr-3 font-medium">
                   {t("jobs.createdAt")}
                 </th>
-                <th scope="col" className="py-1.5 font-medium">
+                <th scope="col" className="py-2 font-medium">
                   <span className="sr-only">{t("jobs.open")}</span>
                 </th>
               </tr>
             </thead>
             <tbody>
               {jobs.map((job) => (
-                <tr key={job.id} className="border-b border-slate-100">
-                  <td className="max-w-[26rem] truncate py-2 pr-3" title={job.topic}>
+                <tr
+                  key={job.id}
+                  className="border-b border-white/5 transition-colors duration-200 hover:bg-white/[0.03]"
+                >
+                  <td
+                    className="max-w-[26rem] truncate py-2.5 pr-3 text-slate-100"
+                    title={job.topic}
+                  >
                     {job.topic}
                   </td>
-                  <td className="py-2 pr-3">
+                  <td className="py-2.5 pr-3">
                     <StatusBadge status={job.status} />
                   </td>
-                  <td className="py-2 pr-3 text-xs text-slate-600">
-                    {job.runs.map((r) => r.engine_id).join(", ")}
+                  <td className="py-2.5 pr-3">
+                    <span className="flex items-center -space-x-1.5">
+                      {job.runs.slice(0, 6).map((r) => (
+                        <span key={r.id} title={r.engine_id}>
+                          <EngineAvatar
+                            engineId={r.engine_id}
+                            size="h-6 w-6"
+                          />
+                        </span>
+                      ))}
+                      {job.runs.length > 6 && (
+                        <span className="pl-3 text-xs text-slate-500">
+                          +{job.runs.length - 6}
+                        </span>
+                      )}
+                    </span>
                   </td>
-                  <td className="py-2 pr-3 text-xs text-slate-600">
+                  <td className="py-2.5 pr-3 text-xs text-slate-400">
                     {formatDateTime(job.created_at) ?? t("common.unknown")}
                   </td>
-                  <td className="py-2">
+                  <td className="py-2.5">
                     <button
                       type="button"
                       onClick={() => onOpen(job.id)}
-                      className="rounded border border-sky-300 px-2 py-1 text-xs text-sky-800 hover:bg-sky-50 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                      className="rounded-xl bg-indigo-500/10 px-3 py-1.5 text-xs text-indigo-300 ring-1 ring-inset ring-indigo-400/30 transition-all duration-200 hover:bg-indigo-500/20 hover:text-indigo-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
                     >
                       {t("jobs.open")}
                     </button>

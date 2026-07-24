@@ -22,9 +22,9 @@ export function ConflictList({ conflicts }: { conflicts: CompareFinding[] }) {
           <section
             key={i}
             aria-label={findingText(conflict)}
-            className="rounded border border-rose-200"
+            className="rounded-lg border border-rose-400/30"
           >
-            <h4 className="border-b border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-900">
+            <h4 className="border-b border-rose-400/30 bg-rose-500/10 px-3 py-2 text-sm font-medium text-rose-200">
               {findingText(conflict)}
             </h4>
             {entries.length === 0 ? (
@@ -32,24 +32,24 @@ export function ConflictList({ conflicts }: { conflicts: CompareFinding[] }) {
                 {t("common.empty")}
               </p>
             ) : (
-              <div className="grid grid-cols-1 gap-px bg-slate-200 sm:grid-cols-2 lg:grid-cols-3">
+              <div className="grid grid-cols-1 gap-px bg-white/10 sm:grid-cols-2 lg:grid-cols-3">
                 {entries.map((entry, j) => (
-                  <div key={j} className="bg-white p-3">
+                  <div key={j} className="bg-slate-950/60 p-3">
                     <p className="mb-1 text-xs font-semibold text-slate-500">
                       {t("conflicts.engine")}:{" "}
-                      <span className="text-slate-800">
+                      <span className="text-slate-200">
                         {entry.engine_id ?? entry.run_id ?? t("common.unknown")}
                       </span>
                     </p>
                     {(entry.claim ?? entry.text) && (
-                      <p className="mb-1 text-sm text-slate-800">
+                      <p className="mb-1 text-sm text-slate-200">
                         <span className="text-xs text-slate-500">
                           {t("conflicts.claim")}:{" "}
                         </span>
                         {entry.claim ?? entry.text}
                       </p>
                     )}
-                    <p className="text-sm font-medium text-slate-900">
+                    <p className="text-sm font-medium text-white">
                       <span className="text-xs font-normal text-slate-500">
                         {t("conflicts.value")}:{" "}
                       </span>
@@ -75,14 +75,14 @@ export function ConflictsTab({ jobId }: { jobId: string }) {
   if (loading) return <p className="text-sm text-slate-500">{t("common.loading")}</p>;
   if (error) {
     return (
-      <div role="alert" className="text-sm text-rose-700">
+      <div role="alert" className="text-sm text-rose-300">
         <p>
           {t("compare.loadFailed")}: {error}
         </p>
         <button
           type="button"
           onClick={reload}
-          className="mt-2 rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50"
+          className="mt-2 rounded-lg border border-white/15 px-2 py-1 text-xs text-slate-300 hover:bg-white/5"
         >
           {t("common.reload")}
         </button>
@@ -93,7 +93,7 @@ export function ConflictsTab({ jobId }: { jobId: string }) {
   const conflicts = Array.isArray(data?.conflicts) ? data.conflicts : [];
   return (
     <div>
-      <h3 className="mb-1 text-sm font-semibold text-slate-900">
+      <h3 className="mb-1 text-sm font-semibold text-white">
         {t("conflicts.title")}
       </h3>
       <p className="mb-3 text-xs text-slate-500">{t("conflicts.description")}</p>

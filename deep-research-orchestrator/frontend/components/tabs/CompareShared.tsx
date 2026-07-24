@@ -104,7 +104,7 @@ export function FindingTable({
     <div className="overflow-x-auto">
       <table className="w-full text-left text-sm">
         <thead>
-          <tr className="border-b border-slate-200 text-xs text-slate-500">
+          <tr className="border-b border-white/10 text-xs text-slate-500">
             <th scope="col" className="py-1.5 pr-3 font-medium">
               {t("compare.findingColumn")}
             </th>
@@ -115,9 +115,9 @@ export function FindingTable({
         </thead>
         <tbody>
           {items.map((item, i) => (
-            <tr key={i} className="border-b border-slate-100 align-top">
+            <tr key={i} className="border-b border-white/5 align-top">
               <td className="py-2 pr-3">{findingText(item)}</td>
-              <td className="py-2 text-xs text-slate-600">
+              <td className="py-2 text-xs text-slate-400">
                 {findingEngines(item).join(", ") || t("common.unknown")}
               </td>
             </tr>

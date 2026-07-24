@@ -8,7 +8,9 @@ import { AllowlistSection } from "@/components/settings/AllowlistSection";
 export default function SettingsPage() {
   return (
     <div className="space-y-4">
-      <h1 className="text-lg font-bold text-slate-900">{t("settings.title")}</h1>
+      <h1 className="bg-gradient-to-r from-indigo-300 via-violet-300 to-fuchsia-300 bg-clip-text text-lg font-semibold tracking-tight text-transparent">
+        {t("settings.title")}
+      </h1>
       <ProfilesSection />
       <RolesSection />
       <ProxySection />

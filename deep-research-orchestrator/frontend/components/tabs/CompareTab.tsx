@@ -14,14 +14,14 @@ export function CompareTab({ jobId }: { jobId: string }) {
   if (loading) return <p className="text-sm text-slate-500">{t("common.loading")}</p>;
   if (error) {
     return (
-      <div role="alert" className="text-sm text-rose-700">
+      <div role="alert" className="text-sm text-rose-300">
         <p>
           {t("compare.loadFailed")}: {error}
         </p>
         <button
           type="button"
           onClick={reload}
-          className="mt-2 rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50"
+          className="mt-2 rounded-lg border border-white/15 px-2 py-1 text-xs text-slate-300 hover:bg-white/5"
         >
           {t("common.reload")}
         </button>
@@ -38,7 +38,7 @@ export function CompareTab({ jobId }: { jobId: string }) {
   return (
     <div className="space-y-6">
       <section aria-label={t("compare.agreements")}>
-        <h3 className="mb-2 text-sm font-semibold text-slate-900">
+        <h3 className="mb-2 text-sm font-semibold text-white">
           {t("compare.agreements")}
         </h3>
         <FindingTable
@@ -48,7 +48,7 @@ export function CompareTab({ jobId }: { jobId: string }) {
       </section>
 
       <section aria-label={t("compare.partialFindings")}>
-        <h3 className="mb-2 text-sm font-semibold text-slate-900">
+        <h3 className="mb-2 text-sm font-semibold text-white">
           {t("compare.partialFindings")}
         </h3>
         <FindingTable
@@ -58,7 +58,7 @@ export function CompareTab({ jobId }: { jobId: string }) {
       </section>
 
       <section aria-label={t("compare.conflicts")}>
-        <h3 className="mb-2 text-sm font-semibold text-slate-900">
+        <h3 className="mb-2 text-sm font-semibold text-white">
           {t("compare.conflicts")}
         </h3>
         <FindingTable
@@ -68,7 +68,7 @@ export function CompareTab({ jobId }: { jobId: string }) {
       </section>
 
       <section aria-label={t("compare.unsupportedClaims")}>
-        <h3 className="mb-2 text-sm font-semibold text-slate-900">
+        <h3 className="mb-2 text-sm font-semibold text-white">
           {t("compare.unsupportedClaims")}
         </h3>
         <FindingTable
@@ -78,7 +78,7 @@ export function CompareTab({ jobId }: { jobId: string }) {
       </section>
 
       <section aria-label={t("compare.coverage")}>
-        <h3 className="mb-2 text-sm font-semibold text-slate-900">
+        <h3 className="mb-2 text-sm font-semibold text-white">
           {t("compare.coverage")}
         </h3>
         {!coverage ||
@@ -93,8 +93,8 @@ export function CompareTab({ jobId }: { jobId: string }) {
           <dl className="space-y-1 text-sm">
             {Object.entries(coverage).map(([key, value]) => (
               <div key={key} className="flex gap-2">
-                <dt className="font-medium text-slate-700">{key}:</dt>
-                <dd className="text-slate-600">{findingText(value)}</dd>
+                <dt className="font-medium text-slate-300">{key}:</dt>
+                <dd className="text-slate-400">{findingText(value)}</dd>
               </div>
             ))}
           </dl>
@@ -102,7 +102,7 @@ export function CompareTab({ jobId }: { jobId: string }) {
       </section>
 
       <section aria-label={t("compare.openQuestions")}>
-        <h3 className="mb-2 text-sm font-semibold text-slate-900">
+        <h3 className="mb-2 text-sm font-semibold text-white">
           {t("compare.openQuestions")}
         </h3>
         {openQuestions.length === 0 ? (

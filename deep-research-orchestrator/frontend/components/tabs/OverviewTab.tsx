@@ -10,6 +10,7 @@ import {
 } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { StatusBadge } from "../StatusBadge";
+import { EngineAvatar } from "@/lib/engine-meta";
 
 export function OverviewTab({
   state,
@@ -25,7 +26,7 @@ export function OverviewTab({
   return (
     <div className="space-y-6">
       <section aria-label={t("overview.jobSummary")}>
-        <h3 className="mb-2 text-sm font-semibold text-slate-900">
+        <h3 className="mb-2 text-sm font-semibold text-white">
           {t("overview.jobSummary")}
         </h3>
         {!job ? (
@@ -34,7 +35,7 @@ export function OverviewTab({
           <dl className="grid grid-cols-1 gap-x-8 gap-y-1 text-sm sm:grid-cols-2">
             <div className="flex gap-2">
               <dt className="shrink-0 text-slate-500">{t("jobs.topic")}:</dt>
-              <dd className="text-slate-800">{job.topic}</dd>
+              <dd className="text-slate-200">{job.topic}</dd>
             </div>
             <div className="flex gap-2">
               <dt className="shrink-0 text-slate-500">{t("jobs.status")}:</dt>
@@ -47,7 +48,7 @@ export function OverviewTab({
                 <dt className="shrink-0 text-slate-500">
                   {t("job.objective")}:
                 </dt>
-                <dd className="text-slate-800">{job.objective}</dd>
+                <dd className="text-slate-200">{job.objective}</dd>
               </div>
             )}
             {job.instructions && (
@@ -55,29 +56,29 @@ export function OverviewTab({
                 <dt className="shrink-0 text-slate-500">
                   {t("job.instructions")}:
                 </dt>
-                <dd className="text-slate-800">{job.instructions}</dd>
+                <dd className="text-slate-200">{job.instructions}</dd>
               </div>
             )}
             <div className="flex gap-2">
               <dt className="shrink-0 text-slate-500">{t("job.language")}:</dt>
-              <dd className="text-slate-800">{job.language}</dd>
+              <dd className="text-slate-200">{job.language}</dd>
             </div>
             <div className="flex gap-2">
               <dt className="shrink-0 text-slate-500">{t("jobs.createdAt")}:</dt>
-              <dd className="text-slate-800">
+              <dd className="text-slate-200">
                 {formatDateTime(job.created_at) ?? unknown}
               </dd>
             </div>
             <div className="flex gap-2">
               <dt className="shrink-0 text-slate-500">{t("job.finishedAt")}:</dt>
-              <dd className="text-slate-800">
+              <dd className="text-slate-200">
                 {formatDateTime(job.finished_at) ?? unknown}
               </dd>
             </div>
             {job.error && (
               <div className="flex gap-2 sm:col-span-2">
                 <dt className="shrink-0 text-slate-500">{t("job.error")}:</dt>
-                <dd className="text-rose-700">{job.error}</dd>
+                <dd className="text-rose-300">{job.error}</dd>
               </div>
             )}
           </dl>
@@ -85,13 +86,13 @@ export function OverviewTab({
       </section>
 
       <section aria-label={t("overview.engineOutcomes")}>
-        <h3 className="mb-2 text-sm font-semibold text-slate-900">
+        <h3 className="mb-2 text-sm font-semibold text-white">
           {t("overview.engineOutcomes")}
         </h3>
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
             <thead>
-              <tr className="border-b border-slate-200 text-xs text-slate-500">
+              <tr className="border-b border-white/10 text-xs text-slate-500">
                 <th scope="col" className="py-1.5 pr-3 font-medium">
                   {t("overview.engine")}
                 </th>
@@ -123,9 +124,14 @@ export function OverviewTab({
             </thead>
             <tbody>
               {runs.map((run) => (
-                <tr key={run.runId} className="border-b border-slate-100">
+                <tr key={run.runId} className="border-b border-white/5">
                   <td className="py-2 pr-3 font-medium">
-                    {engineNames[run.engineId] ?? run.engineId}
+                    <span className="flex items-center gap-2">
+                      <EngineAvatar engineId={run.engineId} size="h-6 w-6" />
+                      <span className="text-slate-100">
+                        {engineNames[run.engineId] ?? run.engineId}
+                      </span>
+                    </span>
                   </td>
                   <td className="py-2 pr-3">
                     <StatusBadge status={run.status} />
@@ -165,7 +171,7 @@ export function OverviewTab({
                       unknown
                     )}
                   </td>
-                  <td className="py-2 text-xs text-rose-700">
+                  <td className="py-2 text-xs text-rose-300">
                     {run.error ?? ""}
                   </td>
                 </tr>
