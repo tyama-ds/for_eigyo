@@ -323,11 +323,7 @@ def test_proxy(
         "internal_bypassed": None,
         "error": None,
     }
-    try:
-        validate_url(body.external_url, origin="untrusted")
-    except SsrfBlockedError as e:
-        raise HTTPException(status_code=400, detail=f"external_urlが不正です: {e}") from e
-
+    # 経路判定はDNS不要。実フェッチ時はbuild_clientのSSRFガードが毎request検証する。
     ext_proxy = policy.proxy_for_url(body.external_url)
     result["external"] = {
         "url": body.external_url,

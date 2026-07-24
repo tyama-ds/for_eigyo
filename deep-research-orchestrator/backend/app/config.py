@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     api_host: str = "0.0.0.0"
     api_port: int = 8800
     cors_origins: list[str] = []
+    api_rate_limit_per_minute: int = 240
 
     # --- orchestration ---
     global_max_concurrent_runs: int = 8

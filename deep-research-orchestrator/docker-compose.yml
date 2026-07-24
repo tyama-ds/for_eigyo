@@ -1,0 +1,180 @@
+# Deep Research Orchestrator — self-hosted構成 (managed cloud service不要)
+#
+# baseline:      docker compose up -d          (PostgreSQL/Redis/API/worker/frontend/SearXNG/Mock)
+# 実エンジン込み: docker compose --profile real up -d
+#
+# GitHub非依存: すべてのイメージはcontainer registry、依存はPyPI/npm (mirror切替は
+# PIP_INDEX_URL / NPM_CONFIG_REGISTRY) から取得する。
+
+services:
+  postgres:
+    image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dro}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme-in-production}
+      POSTGRES_DB: ${POSTGRES_DB:-dro}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
+    command: ["redis-server", "--appendonly", "no", "--save", ""]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  searxng:
+    image: searxng/searxng@sha256:854f239d5c181db9c4282cd0ffc1737a61232dd6ad0ea964028b96df17d7758a
+    environment:
+      SEARXNG_BASE_URL: http://searxng:8080/
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-generate-with-openssl-rand}
+    volumes:
+      - ./searxng:/etc/searxng:ro
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ./backend
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+    environment: &backend_env
+      DRO_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-dro}:${POSTGRES_PASSWORD:-changeme-in-production}@postgres:5432/${POSTGRES_DB:-dro}
+      DRO_REDIS_URL: redis://redis:6379/0
+      DRO_DATA_DIR: /data
+      DRO_MASTER_KEY_FILE: /run/secrets/dro_master_key
+      DRO_RUNNER_MOCK_URL: http://runner-mock:9001
+      DRO_RUNNER_GPTR_URL: ${DRO_RUNNER_GPTR_URL:-}
+      DRO_RUNNER_ODR_URL: ${DRO_RUNNER_ODR_URL:-}
+      DRO_LLM_PROVIDER: ${LLM_PROVIDER:-local}
+      DRO_LOCAL_LLM_API: ${LOCAL_LLM_API:-openai-compatible}
+      DRO_LOCAL_LLM_ENDPOINT: ${LOCAL_LLM_ENDPOINT:-}
+      DRO_LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY:-}
+      DRO_LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-}
+      DRO_OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      DRO_OPENAI_MODEL: ${OPENAI_MODEL:-}
+      DRO_ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      DRO_ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-}
+      DRO_SEARCH_PROVIDER: ${SEARCH_PROVIDER:-searxng}
+      DRO_SEARXNG_ENDPOINT: ${SEARXNG_ENDPOINT:-http://searxng:8080}
+      DRO_PROXY_MODE: ${PROXY_MODE:-off}
+      DRO_PROXY_CA_BUNDLE: ${PROXY_CA_BUNDLE:-}
+      DRO_RUNNER_SHARED_TOKEN: ${RUNNER_SHARED_TOKEN:-}
+      DRO_CORS_ORIGINS: '["http://localhost:3800"]'
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      ALL_PROXY: ${ALL_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-}
+    volumes:
+      - ${DATA_DIR:-./data}:/data
+    secrets:
+      - dro_master_key
+    ports:
+      - "8800:8800"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      sh -c "python -m alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8800"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://127.0.0.1:8800/readyz')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ./backend
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+    environment: *backend_env
+    volumes:
+      - ${DATA_DIR:-./data}:/data
+    secrets:
+      - dro_master_key
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      celery -A app.orchestrator.celery_app worker
+      --loglevel INFO --concurrency 8 --pool threads -B
+    restart: unless-stopped
+
+  runner-mock:
+    build:
+      context: ./runners
+      dockerfile: mock/Dockerfile
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+    environment:
+      RUNNER_SHARED_TOKEN: ${RUNNER_SHARED_TOKEN:-}
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NPM_CONFIG_REGISTRY: ${NPM_CONFIG_REGISTRY:-https://registry.npmjs.org/}
+        NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-http://localhost:8800}
+    ports:
+      - "3800:3000"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  # ---------- 実エンジンRunner (--profile real) ----------
+  runner-gptr:
+    profiles: ["real"]
+    build:
+      context: ./runners
+      dockerfile: gpt_researcher/Dockerfile
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+    environment:
+      RUNNER_SHARED_TOKEN: ${RUNNER_SHARED_TOKEN:-}
+    # Runner隔離: 非root (Dockerfile) + read-only root FS + リソース上限
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m
+      - /home/runner:size=64m
+    mem_limit: 2g
+    pids_limit: 256
+    restart: unless-stopped
+
+  runner-odr:
+    profiles: ["real"]
+    build:
+      context: ./runners
+      dockerfile: open_deep_research/Dockerfile
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+    environment:
+      RUNNER_SHARED_TOKEN: ${RUNNER_SHARED_TOKEN:-}
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m
+      - /home/runner:size=64m
+    mem_limit: 2g
+    pids_limit: 256
+    restart: unless-stopped
+
+secrets:
+  dro_master_key:
+    file: ${DRO_MASTER_KEY_FILE:-./secrets/dro_master_key}
+
+volumes:
+  pgdata:

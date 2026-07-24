@@ -136,6 +136,7 @@ class _MockBase(Engine):
     display_name = "Mock Base"
     steps = 4
     step_seconds = 0.5
+    emit_usage = True  # Falseならtoken/costを一切報告しない (欠損値の検証用)
 
     def capabilities(self) -> EngineCapabilities:
         return EngineCapabilities(
@@ -191,21 +192,32 @@ class _MockBase(Engine):
                 for s in sources:
                     ctx.emit("source_found", {"url": s.url, "title": s.title})
         claims = _base_claims(topic, self.engine_id, seed, sources)
-        prompt_tokens = 900 + _det_int(seed, self.engine_id, "pt", mod=200)
-        completion_tokens = 400 + _det_int(seed, self.engine_id, "ct", mod=100)
-        ctx.emit("token_usage", {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens})
-        metrics = RunMetrics(
-            searches=searches,
-            sources=len(sources),
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=prompt_tokens + completion_tokens,
-            llm_cost_usd=round((prompt_tokens + completion_tokens) / 1_000_000 * 3.0, 6),
-            llm_cost_is_estimate=True,
-            search_api_cost_usd=0.0,
-            infra_cost="not_measured",
-        )
-        ctx.emit("cost", {"llm_cost_usd": metrics.llm_cost_usd, "search_api_cost_usd": 0.0})
+        if self.emit_usage:
+            prompt_tokens = 900 + _det_int(seed, self.engine_id, "pt", mod=200)
+            completion_tokens = 400 + _det_int(seed, self.engine_id, "ct", mod=100)
+            ctx.emit(
+                "token_usage",
+                {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens},
+            )
+            metrics = RunMetrics(
+                searches=searches,
+                sources=len(sources),
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=prompt_tokens + completion_tokens,
+                llm_cost_usd=round((prompt_tokens + completion_tokens) / 1_000_000 * 3.0, 6),
+                llm_cost_is_estimate=True,
+                search_api_cost_usd=0.0,
+                infra_cost="not_measured",
+            )
+            ctx.emit("cost", {"llm_cost_usd": metrics.llm_cost_usd, "search_api_cost_usd": 0.0})
+        else:
+            metrics = RunMetrics(
+                searches=searches,
+                sources=len(sources),
+                search_api_cost_usd=0.0,
+                infra_cost="not_measured",
+            )
         return RunResult(
             output_kind="report",
             summary=f"{topic}に関する{self.display_name}の調査結果。",
@@ -246,14 +258,11 @@ class MockPartial(_MockBase):
     engine_id = "mock-partial"
     display_name = "Mock Partial"
     step_seconds = 0.4
+    emit_usage = False  # token/costを報告しないエンジンの再現
 
     async def run(self, ctx: RunContext) -> RunResult:
         result = await super().run(ctx)
         # metrics欠損とwarning、引用のないclaimを混ぜる (捏造禁止の検証用)
-        result.metrics.prompt_tokens = None
-        result.metrics.completion_tokens = None
-        result.metrics.total_tokens = None
-        result.metrics.llm_cost_usd = None
         result.warnings.append("token使用量はこのエンジンから取得できません (値はnull)")
         result.claims.append(
             ClaimRecord(

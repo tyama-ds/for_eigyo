@@ -66,7 +66,7 @@ def create_app() -> FastAPI:
 
     # --- 簡易rate limit (per-instance, per-client-IP token bucket) ---
     buckets: dict[str, deque[float]] = defaultdict(deque)
-    RATE_LIMIT = 120  # requests / 60s
+    RATE_LIMIT = settings.api_rate_limit_per_minute  # requests / 60s
     WINDOW = 60.0
 
     @app.middleware("http")
