@@ -196,7 +196,11 @@ export const ja = {
 
   // Conflicts tab
   "conflicts.title": "エンジン間の不一致",
-  "conflicts.description": "各エンジンの主張と値を並べて表示します",
+  "conflicts.description": "行=不一致項目、列=エンジン。各セルにそのエンジンの値と主張を表示します",
+  "conflicts.itemColumn": "不一致項目",
+  "conflicts.conflictBadge": "{count}通りの値",
+  "conflicts.evidenceCount": "根拠 {count}件",
+  "conflicts.notReported": "このエンジンからの報告なし",
   "conflicts.engine": "エンジン",
   "conflicts.claim": "主張",
   "conflicts.value": "値",

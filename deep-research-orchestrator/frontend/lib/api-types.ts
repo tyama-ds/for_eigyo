@@ -149,6 +149,7 @@ export interface CompareEntry {
   claim?: string;
   text?: string;
   value?: unknown;
+  evidence_count?: number;
   [key: string]: unknown;
 }
 

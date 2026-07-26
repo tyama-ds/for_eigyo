@@ -53,6 +53,8 @@ export function conflictEntries(f: CompareFinding | unknown): CompareEntry[] {
       run_id: typeof c.run_id === "string" ? c.run_id : undefined,
       claim: typeof c.text === "string" ? c.text : undefined,
       value: c.value,
+      evidence_count:
+        typeof c.evidence_count === "number" ? c.evidence_count : undefined,
     }));
   }
   if (Array.isArray(obj.entries)) return obj.entries;
