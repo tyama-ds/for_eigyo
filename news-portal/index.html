@@ -409,6 +409,24 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
 
 /* ============================================================ 横断検索 */
 .search-modal{width:min(860px,95vw); max-height:88vh}
+/* リサーチ: 左=検索/選択、右=AI会話。各ペインが独立スクロール */
+.research-modal{width:min(1060px,96vw); height:min(760px,90vh); max-height:90vh}
+.rs{flex:1; min-height:0; display:grid; grid-template-columns:minmax(340px,46%) 1fr}
+.rs__search{display:flex; flex-direction:column; min-height:0; border-right:1px solid var(--line); padding:14px 16px; gap:9px}
+.rs__bar{display:flex; align-items:center; gap:8px}
+.rs__count{font-size:12px; color:var(--text-3)}
+.rs__list{flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain; display:flex; flex-direction:column; gap:2px}
+.rrow{display:flex; gap:9px; align-items:flex-start; padding:8px 9px; border-radius:10px; cursor:pointer; border:1px solid transparent}
+.rrow:hover{background:var(--surface-2)}
+.rrow.on{background:color-mix(in srgb,var(--accent) 9%,transparent)}
+.rrow input{margin-top:3px; accent-color:var(--accent); flex:0 0 auto}
+.rrow__c{flex:1; min-width:0}
+.rrow__t{font-size:13px; font-weight:600; line-height:1.4; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden}
+.rrow__m{font-size:11px; color:var(--text-3); display:flex; gap:7px; margin-top:2px}
+.rrow__m .c{font-weight:700}
+.rs__chat{display:flex; flex-direction:column; min-height:0}
+.rs__hint{padding:8px 16px 0; font-size:11.5px; color:var(--text-3)}
+@media (max-width:840px){ .rs{grid-template-columns:1fr; grid-template-rows:45% 1fr} .rs__search{border-right:none; border-bottom:1px solid var(--line)} }
 .search-modal .modal__head h2{flex:0 0 auto}
 .gsub{font-size:12px; color:var(--text-3)}
 .gsearch{position:relative; display:flex; align-items:center}
@@ -447,6 +465,12 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
 
 /* ============================================================ AI パネル */
 .drawer.wide{width:min(600px,96vw)}
+/* パネル本体は #aiBody で指定する。クラス .ai だと assistant バブル
+   （class="bubble ai"）にも当たってバブルが flex 圧縮される事故になるため。
+   drawer(flex縦) の子は height:100% でなく flex:1 + min-height:0 で収める */
+#aiBody{flex:1; min-height:0}
+.ai__log{min-height:0; overscroll-behavior:contain}
+.ai__log>*{flex-shrink:0}   /* 縦flex内でバブルが圧縮されて文字があふれるのを防ぐ */
 /* 推論系LLMの<think>過程は折りたたみで格納（既定は閉＝最終解答だけ見える） */
 .think-box{margin:0 0 8px; font-size:12px; color:var(--text-3)}
 .think-box summary{cursor:pointer; user-select:none; font-weight:600; padding:3px 0; list-style-position:inside}
@@ -454,7 +478,7 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
 .think-box .think-body{margin-top:6px; padding:9px 11px; border-left:3px solid var(--line-2);
   background:color-mix(in srgb,var(--surface-2) 60%,transparent); border-radius:0 9px 9px 0;
   max-height:260px; overflow:auto; white-space:pre-wrap; word-break:break-word; line-height:1.6}
-.ai{display:flex; flex-direction:column; height:100%}
+#aiBody{display:flex; flex-direction:column}
 .ai__ctx{display:flex; align-items:center; gap:8px; padding:10px 16px; border-bottom:1px solid var(--line);
   font-size:12.5px; color:var(--text-2); background:var(--surface-2)}
 .ai__ctx b{color:var(--text); font-weight:700}
@@ -573,6 +597,9 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
       </button>
       <button class="iconbtn" id="srcViewBtn" title="ソース別に表示 (V)" aria-label="ソース別">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="4" rx="1"/><rect x="3" y="11" width="18" height="4" rx="1"/><rect x="3" y="18" width="12" height="3" rx="1"/></svg>
+      </button>
+      <button class="iconbtn" id="researchBtn" title="リサーチ（現在＋過去ログを検索してAIに質問）" aria-label="リサーチ">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5.5" rx="8" ry="2.5"/><path d="M4 5.5v6c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5v-6"/><path d="M4 11.5v6c0 1.4 3.6 2.5 8 2.5 1.2 0 2.4-.08 3.4-.23"/><path d="M18.5 15.5l2.5 2.5-2.5 2.5M21 18h-5"/></svg>
       </button>
       <button class="iconbtn pill" id="autoBtn" title="自動更新の間隔を切り替え">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2" stroke-linecap="round"/></svg>
@@ -729,6 +756,40 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
     <div class="gscope" id="gscope"></div>
     <div class="gsum" id="gsum"></div>
     <div class="gresults" id="gresults"></div>
+  </div>
+</div>
+
+<!-- リサーチ（現在＋過去ログを横断検索してローカルLLMに渡す作業ウィンドウ） -->
+<div class="modal research-modal" id="researchModal" role="dialog" aria-modal="true" aria-label="リサーチ" aria-hidden="true">
+  <div class="modal__head">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5.5" rx="8" ry="2.5"/><path d="M4 5.5v6c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5v-6"/><path d="M4 11.5v6c0 1.4 3.6 2.5 8 2.5 1.2 0 2.4-.08 3.4-.23"/><path d="M18.5 15.5l2.5 2.5-2.5 2.5M21 18h-5"/></svg>
+    <h2>リサーチ</h2>
+    <span class="gsub" id="rsStats">現在＋過去ログを横断検索し、選んだ記事をAIに渡して作業</span>
+    <button class="iconbtn" data-close aria-label="閉じる" style="margin-left:auto"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+  </div>
+  <div class="rs">
+    <div class="rs__search">
+      <div class="gsearch">
+        <svg class="gsearch__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3" stroke-linecap="round"/></svg>
+        <input id="rsQ" type="search" placeholder="キーワードで検索（空なら新着順・スペース区切りでAND）…" autocomplete="off" spellcheck="false" aria-label="リサーチ検索">
+      </div>
+      <div class="rs__bar">
+        <span class="rs__count" id="rsCount"></span>
+        <span style="flex:1"></span>
+        <button class="btn ghost sm" type="button" id="rsSelAll">全選択</button>
+        <button class="btn ghost sm" type="button" id="rsSelNone">解除</button>
+      </div>
+      <div class="rs__list" id="rsList"></div>
+    </div>
+    <div class="rs__chat">
+      <div class="ai__log" id="rsLog"></div>
+      <div class="ai__input">
+        <textarea id="rsInput" aria-label="AIへの依頼" placeholder="選択した記事について依頼…（例: 鉄鋼関連の動きを時系列で要約して）" rows="1"></textarea>
+        <button class="ai__send" id="rsSend" title="送信" aria-label="送信">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4z"/></svg>
+        </button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -1608,6 +1669,19 @@ function renderAiPanel(){
   setTimeout(()=>{ try{ ta.focus(); }catch(e){} }, 90);
 }
 
+function bubbleEl(m){   // AIパネル/リサーチ共通のメッセージバブル（textContent描画・XSS安全）
+  const cls = m.role==="user" ? "me" : m.role==="error" ? "err" : "ai";
+  const b=el("div",{class:"bubble "+cls});
+  if(m.reasoning){   // 推論系LLMの思考過程は折りたたみ（既定は閉）で本文の上に
+    const det=el("details",{class:"think-box"});
+    det.append(el("summary",{text:"推論過程を表示"}),
+               el("div",{class:"think-body", text:m.reasoning}));
+    b.append(det);
+  }
+  b.append(document.createTextNode(m.text));
+  return b;
+}
+
 function renderAiMessages(){
   const log=$("#aiLog"); if(!log) return; log.innerHTML="";
   if(!AI.msgs.length){
@@ -1616,18 +1690,7 @@ function renderAiMessages(){
     h.append(el("div",{text: AI.ctx.kind==="article" ? "この記事について質問できます。" : "表示中の記事について質問できます。"}));
     log.append(h);
   }
-  AI.msgs.forEach(m=>{
-    const cls = m.role==="user" ? "me" : m.role==="error" ? "err" : "ai";
-    const b=el("div",{class:"bubble "+cls});
-    if(m.reasoning){   // 推論系LLMの思考過程は折りたたみ（既定は閉）で本文の上に
-      const det=el("details",{class:"think-box"});
-      det.append(el("summary",{text:"推論過程を表示"}),
-                 el("div",{class:"think-body", text:m.reasoning}));   // textContent（XSS安全）
-      b.append(det);
-    }
-    b.append(document.createTextNode(m.text));   // textContent（XSS安全）
-    log.append(b);
-  });
+  AI.msgs.forEach(m=>log.append(bubbleEl(m)));
   if(AI.busy) log.append(el("div",{class:"bubble think", html:'<span class="dots"><span></span><span></span><span></span></span>'}));
   const sb=$("#aiSend"); if(sb) sb.disabled=AI.busy;   // 送信中は無効化
   log.scrollTop=log.scrollHeight;
@@ -1731,6 +1794,87 @@ $("#proxyTestBtn").onclick=async()=>{
   }catch(err){ out.className="hint err"; out.textContent="✗ テスト実行に失敗: "+(err.server?err.message:"通信エラー"); }
   finally{ btn.disabled=false; }
 };
+
+// ============================================================ リサーチ（過去ログ×AI）
+const RS={results:[], sel:new Set(), msgs:[], busy:false, stats:null};
+function openResearch(){
+  openOverlay($("#researchModal"));
+  if(!RS.results.length) researchSearch();
+  renderRsLog();
+  setTimeout(()=>{ try{ $("#rsQ").focus(); }catch(e){} }, 90);
+}
+async function researchSearch(){
+  const q=($("#rsQ").value||"").trim();
+  try{
+    const d=await api("/api/archive/search?q="+encodeURIComponent(q)+"&limit=80");
+    RS.results=d.articles||[]; RS.stats=d.stats||null;
+    RS.sel=new Set(RS.results.slice(0,20).map(a=>a.id));   // 上位20件を既定で選択
+    renderRsList();
+  }catch(e){ $("#rsCount").textContent="検索に失敗しました"; }
+}
+function syncRsCount(){
+  $("#rsCount").textContent = RS.results.length+"件ヒット / "+RS.sel.size+"件選択（AIに渡すのは上から最大30件）";
+}
+function renderRsList(){
+  const box=$("#rsList"); box.innerHTML="";
+  if(RS.stats) $("#rsStats").textContent="過去ログ "+RS.stats.count+"件＋現在表示分を横断検索";
+  syncRsCount();
+  if(!RS.results.length){ box.append(el("div",{class:"gempty",text:"該当する記事がありません（記事を取得すると過去ログに自動保存されます）"})); return; }
+  RS.results.forEach(a=>{
+    const row=el("label",{class:"rrow"+(RS.sel.has(a.id)?" on":"")});
+    const cb=el("input",{type:"checkbox"}); cb.checked=RS.sel.has(a.id);
+    cb.onchange=()=>{ if(cb.checked) RS.sel.add(a.id); else RS.sel.delete(a.id);
+                      row.classList.toggle("on",cb.checked); syncRsCount(); };
+    const c=el("div",{class:"rrow__c"});
+    c.append(el("div",{class:"rrow__t",text:a.title||""}));
+    const m=el("div",{class:"rrow__m"});
+    const cc=el("span",{class:"c",text:a.category||""}); cc.style.color=catColor(a.category);
+    m.append(cc, el("span",{text:a.source||""}));
+    const d=String(a.published||"").slice(0,10); if(d) m.append(el("span",{text:d}));
+    c.append(m); row.append(cb,c); box.append(row);
+  });
+}
+function renderRsLog(){
+  const log=$("#rsLog"); if(!log) return; log.innerHTML="";
+  if(!RS.msgs.length){
+    const h=el("div",{class:"ai__hello"});
+    h.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5.5" rx="8" ry="2.5"/><path d="M4 5.5v6c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5v-6"/><path d="M4 11.5v6c0 1.4 3.6 2.5 8 2.5 1.2 0 2.4-.08 3.4-.23"/></svg>';
+    h.append(el("div",{text:"左で記事を検索・選択して、要約・比較・時系列整理などを依頼できます。"}));
+    log.append(h);
+  }
+  RS.msgs.forEach(m=>log.append(bubbleEl(m)));
+  if(RS.busy) log.append(el("div",{class:"bubble think", html:'<span class="dots"><span></span><span></span><span></span></span>'}));
+  const sb=$("#rsSend"); if(sb) sb.disabled=RS.busy;
+  log.scrollTop=log.scrollHeight;
+}
+async function sendRs(text){
+  text=(text||"").trim(); if(!text||RS.busy) return;
+  if(!aiReady()){ RS.msgs.push({role:"error",text:"⚠ 生成AIが未設定です。設定（トップバーの設定ボタン）から登録してください。"}); renderRsLog(); return; }
+  const items=RS.results.filter(a=>RS.sel.has(a.id)).slice(0,30)
+    .map(a=>({title:a.title, source:a.source, category:a.category, published:a.published, summary:a.summary}));
+  if(!items.length){ toast("記事を1件以上選択してください","err"); return; }
+  const ta=$("#rsInput"); if(ta){ ta.value=""; ta.style.height="auto"; }
+  const ua=RS.msgs.filter(m=>m.role==="user"||m.role==="assistant");
+  let end=ua.length; while(end>0 && ua[end-1].role==="user") end--;
+  const history=ua.slice(0,end).map(m=>({role:m.role, content:m.text}));
+  RS.msgs.push({role:"user", text}); RS.busy=true; renderRsLog();
+  let res;
+  try{
+    const d=await api("/api/ai/chat",{method:"POST", headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({question:text, history, context:{kind:"research", items}})});
+    res = d.ok ? {role:"assistant", text:d.answer, reasoning:(d.reasoning||"")}
+               : {role:"error", text:"⚠ "+(d.error||"エラーが発生しました")};
+  }catch(e){ res={role:"error", text:"⚠ "+(e.server?e.message:"通信に失敗しました")}; }
+  RS.busy=false; RS.msgs.push(res); renderRsLog();
+}
+$("#researchBtn").onclick=openResearch;
+let rsT=null;
+$("#rsQ").addEventListener("input",()=>{ clearTimeout(rsT); rsT=setTimeout(researchSearch,250); });
+$("#rsSelAll").onclick=()=>{ RS.results.forEach(a=>RS.sel.add(a.id)); renderRsList(); };
+$("#rsSelNone").onclick=()=>{ RS.sel.clear(); renderRsList(); };
+$("#rsInput").addEventListener("keydown",(e)=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); sendRs($("#rsInput").value); } });
+$("#rsInput").addEventListener("input",()=>{ const t=$("#rsInput"); t.style.height="auto"; t.style.height=Math.min(t.scrollHeight,120)+"px"; });
+$("#rsSend").onclick=()=>sendRs($("#rsInput").value);
 
 // search (debounced) — インライン絞り込み。Enter で横断検索へ展開
 let sT=null;

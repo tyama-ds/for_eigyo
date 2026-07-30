@@ -43,6 +43,7 @@ import xml.etree.ElementTree as ET
 BASE = Path(__file__).resolve().parent
 FEEDS_FILE = BASE / "feeds.json"
 UI_FILE = BASE / "index.html"
+ARCHIVE_FILE = BASE / "archive.jsonl"   # 過去記事の自動保存先（1行1記事のJSON）
 
 DEFAULT_PORT = 8780
 HOST = "127.0.0.1"
@@ -63,6 +64,9 @@ AI_TIMEOUT = 60           # 生成AI呼び出しのタイムアウト（秒・�
 AI_TIMEOUT_LOCAL = 300    # ローカルLLMは推論(思考)モデルが長考するため長め（秒）
 AI_MAX_TOKENS = 1500      # AI応答の最大トークン
 MAX_PAGE_TEXT = 6000      # 記事ページを本文コンテキストに含める最大文字数
+MAX_PAGE_TEXT_LOCAL = 3500  # ローカルLLMは文脈窓が小さく、長い本文で出力が
+                            # 思考の途中に切れて漏れやすいため短めにする
+ARCHIVE_MAX = 20000       # 過去ログ(archive.jsonl)の最大保持件数
 AI_PROVIDERS = ("anthropic", "openai", "local")  # openai/local = OpenAI互換（base_url指定）
 # local = ローカルLLM（Ollama / LM Studio / llama.cpp 等）。APIキー任意・プロキシ非経由
 LOCAL_DEFAULT_BASE = "http://localhost:11434/v1"  # Ollama 既定
@@ -135,6 +139,8 @@ _cache_lock = threading.Lock()      # _cache の読み書きを保護
 _refresh_lock = threading.Lock()    # 取得(refresh)を直列化しスタンピードを防ぐ
 _sources_lock = threading.Lock()    # feeds.json の read-modify-write を保護
 _settings_lock = threading.Lock()   # settings.json の read-modify-write を保護
+_archive_lock = threading.Lock()    # archive.jsonl とメモリ索引を保護
+_archive: dict | None = None        # id → 記事 のメモリ索引（遅延ロード）
 _cache: dict = {"articles": [], "errors": {}, "offline": None, "updated": None, "ts": 0.0}
 DEMO = False                        # --demo 起動時 True（常にデモ記事を返す）
 
@@ -684,6 +690,105 @@ def _merge_articles(articles: list[dict]) -> list[dict]:
     return keep
 
 
+# ------------------------------------------------------------------ 過去ログ（自動アーカイブ）
+
+def _archive_load_locked() -> dict:
+    """archive.jsonl をメモリ索引(id→記事)へ遅延ロードする。_archive_lock 内で呼ぶこと。"""
+    global _archive
+    if _archive is None:
+        m: dict[str, dict] = {}
+        try:
+            with open(ARCHIVE_FILE, encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        a = json.loads(line)
+                    except ValueError:
+                        continue   # 壊れた行は読み飛ばす（クラッシュ耐性）
+                    if isinstance(a, dict) and a.get("id"):
+                        m[a["id"]] = a
+        except OSError:
+            pass
+        _archive = m
+    return _archive
+
+
+def _archive_key(a: dict) -> float:
+    """新着順ソート用キー。日付が無い記事は保存時刻で代用する。"""
+    return a.get("published_ts") or a.get("archived_at") or 0.0
+
+
+def archive_add(articles: list[dict]) -> int:
+    """取得した記事を過去ログへ自動保存する。id で重複排除し、通常は追記のみ。
+    上限 ARCHIVE_MAX 超過時は新しい順に間引いて全書き直し。デモ記事は保存しない。"""
+    now = time.time()
+    fresh = [a for a in articles if a.get("id") and a.get("source_id") != "demo"]
+    if not fresh:
+        return 0
+    with _archive_lock:
+        m = _archive_load_locked()
+        new: list[dict] = []
+        for a in fresh:
+            if a["id"] in m:
+                continue
+            rec = {k: a.get(k) for k in ("id", "source", "source_id", "category",
+                                         "title", "link", "summary",
+                                         "published", "published_ts")}
+            rec["archived_at"] = now
+            m[a["id"]] = rec
+            new.append(rec)
+        if not new:
+            return 0
+        if len(m) > ARCHIVE_MAX:
+            keep = sorted(m.values(), key=_archive_key, reverse=True)[:ARCHIVE_MAX]
+            m.clear()
+            m.update({r["id"]: r for r in keep})
+            tmp = ARCHIVE_FILE.with_name(ARCHIVE_FILE.name + ".tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
+                for r in m.values():
+                    f.write(json.dumps(r, ensure_ascii=False) + "\n")
+            os.replace(tmp, ARCHIVE_FILE)
+        else:
+            with open(ARCHIVE_FILE, "a", encoding="utf-8") as f:
+                for r in new:
+                    f.write(json.dumps(r, ensure_ascii=False) + "\n")
+        return len(new)
+
+
+def archive_stats() -> dict:
+    with _archive_lock:
+        m = _archive_load_locked()
+        ts = [t for t in (_archive_key(a) for a in m.values()) if t]
+    return {"count": len(m),
+            "oldest": min(ts) if ts else None,
+            "newest": max(ts) if ts else None}
+
+
+def archive_search(q: str, limit: int = 60) -> list[dict]:
+    """現在表示中のキャッシュ＋過去ログを横断検索する。
+    空白区切りの語をすべて含む記事（タイトル/要約/情報源、AND・大小無視）を新着順で返す。
+    q が空なら新着順の一覧（ブラウズ用途）。"""
+    terms = [t.lower() for t in (q or "").split() if t.strip()]
+    with _archive_lock:
+        m = dict(_archive_load_locked())
+    with _cache_lock:
+        cur = list(_cache["articles"]) if _cache["ts"] else []
+    for a in cur:   # 直近取得分はアーカイブ書き込み前でも検索対象に含める
+        if a.get("id") and a.get("source_id") != "demo":
+            m[a["id"]] = a
+    out = []
+    for a in m.values():
+        hay = ((a.get("title") or "") + " " + (a.get("summary") or "")
+               + " " + (a.get("source") or "")).lower()
+        if all(t in hay for t in terms):
+            out.append(a)
+    out.sort(key=_archive_key, reverse=True)
+    try:
+        n = max(1, min(int(limit), 200))
+    except (TypeError, ValueError):
+        n = 60
+    return out[:n]
+
+
 def refresh(sources: list[dict]) -> dict:
     enabled = [s for s in sources if s.get("enabled", True)]
     articles: list[dict] = []
@@ -694,6 +799,14 @@ def refresh(sources: list[dict]) -> dict:
                 if err:
                     errors[sid] = err
                 articles.extend(arts)
+    # 過去ログへ自動保存（表示上限 MAX_TOTAL とは独立に、取得できた全記事を対象）
+    try:
+        seen_ids: set[str] = set()
+        all_uniq = [a for a in articles
+                    if a.get("id") and not (a["id"] in seen_ids or seen_ids.add(a["id"]))]
+        archive_add(all_uniq)
+    except Exception:
+        pass   # アーカイブ失敗で表示を壊さない
     uniq = _merge_articles(articles)
 
     offline = len(uniq) == 0
@@ -923,8 +1036,9 @@ _TRUNCATED_NOTE = ("（モデルが思考の途中で応答を終えたため、
 # モデル向けのヒューリスティック（見出しの後ろが解答、前が思考）
 _SCAFFOLD_RE = re.compile(
     r"(?im)^[ \t]*(?:#{1,3}[ \t]*)?(?:\*{1,2}|_{1,2})?"
-    r"(?:Output Generation|Final (?:Answer|Response|Output)|最終(?:解答|回答|出力))"
-    r"(?:\*{1,2}|_{1,2})?[ \t]*(?:\(.*?\))?[ \t]*[::]?[ \t]*$")
+    r"(?:(?:Output Generation|Final (?:Answer|Response|Output)|最終(?:解答|回答|出力))"
+    r"(?:\*{1,2}|_{1,2})?[ \t]*(?:\(.*?\))?[ \t]*[::]?"
+    r"|(?:Answer|Response|回答|解答)(?:\*{1,2}|_{1,2})?[ \t]*[::])[ \t]*$")
 
 
 def _split_reasoning(text: str) -> tuple[str, str]:
@@ -1050,6 +1164,13 @@ def ai_chat(payload: dict) -> dict:
         for i, a in enumerate((ctx.get("items") or [])[:25], 1):
             parts.append(f"{i}. [{a.get('category','')}] {a.get('title','')}（{a.get('source','')}）"
                          + (f" — {a.get('summary','')}" if a.get("summary") else ""))
+    elif ctx.get("kind") == "research":   # リサーチ画面: 検索でヒットした記事群
+        parts.append("【検索でヒットした記事（現在＋過去ログ）】")
+        for i, a in enumerate((ctx.get("items") or [])[:30], 1):
+            d = str(a.get("published") or "")[:10]
+            parts.append(f"{i}. [{a.get('category','')}] {a.get('title','')}"
+                         f"（{a.get('source','')}{' ' + d if d else ''}）"
+                         + (f" — {a.get('summary','')}" if a.get("summary") else ""))
     else:
         parts.append("【対象の記事】")
         for f in ("title", "source", "category", "published", "summary", "link"):
@@ -1059,9 +1180,16 @@ def ai_chat(payload: dict) -> dict:
         if payload.get("fetch_page") and safe_url(ctx.get("link")):
             page = fetch_page_text(ctx.get("link"))
             if page:
+                if cfg["provider"] == "local":
+                    # 小さな文脈窓で出力が思考の途中に切れて漏れるのを防ぐ
+                    page = page[:MAX_PAGE_TEXT_LOCAL]
                 parts.append("\n【記事ページ本文（抜粋）】\n" + page)
     context_block = "\n".join(str(p) for p in parts if p)
     user_content = (context_block + "\n\n" if context_block else "") + "質問: " + question
+    if cfg["provider"] == "local" and context_block:
+        # 長い資料の直後は指示が薄まりやすいので、末尾でも出力規律を念押しする
+        user_content += ("\n\n（注意: 上の資料の分析過程・思考・下書きは出力せず、"
+                         "質問への最終回答のみを日本語で書いてください）")
 
     try:
         answer, reasoning = _split_reasoning(call_ai(cfg, system, user_content, history))
@@ -1237,6 +1365,17 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": False, "error": "unknown source"}, 404)
                 return
             self._json({"ok": True, "diag": diagnose_source(src)})
+            return
+
+        if u.path == "/api/archive/search":   # 現在＋過去ログの横断検索
+            q = parse_qs(u.query)
+            arts = archive_search((q.get("q") or [""])[0], (q.get("limit") or ["60"])[0])
+            self._json({"ok": True, "count": len(arts), "articles": arts,
+                        "stats": archive_stats()})
+            return
+
+        if u.path == "/api/archive/stats":
+            self._json({"ok": True, **archive_stats()})
             return
 
         if u.path == "/api/settings":
