@@ -43,6 +43,7 @@ import xml.etree.ElementTree as ET
 BASE = Path(__file__).resolve().parent
 FEEDS_FILE = BASE / "feeds.json"
 UI_FILE = BASE / "index.html"
+ARCHIVE_FILE = BASE / "archive.jsonl"   # 過去記事の自動保存先（1行1記事のJSON）
 
 DEFAULT_PORT = 8780
 HOST = "127.0.0.1"
@@ -59,9 +60,13 @@ MAX_FEED_BYTES = 6 * 1024 * 1024  # 1フィードの取得上限（バイト）
 USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
 
-AI_TIMEOUT = 60           # 生成AI呼び出しのタイムアウト（秒）
+AI_TIMEOUT = 60           # 生成AI呼び出しのタイムアウト（秒・クラウド）
+AI_TIMEOUT_LOCAL = 300    # ローカルLLMは推論(思考)モデルが長考するため長め（秒）
 AI_MAX_TOKENS = 1500      # AI応答の最大トークン
 MAX_PAGE_TEXT = 6000      # 記事ページを本文コンテキストに含める最大文字数
+MAX_PAGE_TEXT_LOCAL = 3500  # ローカルLLMは文脈窓が小さく、長い本文で出力が
+                            # 思考の途中に切れて漏れやすいため短めにする
+ARCHIVE_MAX = 20000       # 過去ログ(archive.jsonl)の最大保持件数
 AI_PROVIDERS = ("anthropic", "openai", "local")  # openai/local = OpenAI互換（base_url指定）
 # local = ローカルLLM（Ollama / LM Studio / llama.cpp 等）。APIキー任意・プロキシ非経由
 LOCAL_DEFAULT_BASE = "http://localhost:11434/v1"  # Ollama 既定
@@ -134,6 +139,8 @@ _cache_lock = threading.Lock()      # _cache の読み書きを保護
 _refresh_lock = threading.Lock()    # 取得(refresh)を直列化しスタンピードを防ぐ
 _sources_lock = threading.Lock()    # feeds.json の read-modify-write を保護
 _settings_lock = threading.Lock()   # settings.json の read-modify-write を保護
+_archive_lock = threading.Lock()    # archive.jsonl とメモリ索引を保護
+_archive: dict | None = None        # id → 記事 のメモリ索引（遅延ロード）
 _cache: dict = {"articles": [], "errors": {}, "offline": None, "updated": None, "ts": 0.0}
 DEMO = False                        # --demo 起動時 True（常にデモ記事を返す）
 
@@ -363,6 +370,18 @@ def parse_feed(raw: bytes, src: dict) -> list[dict]:
     for it in items:
         title = strip_html(_text(_find_local(it, ("title",))))
         link = safe_url(_extract_link(it))
+        # J-STAGE WebAPI 互換: 標準の title/link ではなく
+        # <article_title><ja>…</ja></article_title> / <article_link> を使う
+        if not title:
+            at = _find_local(it, ("article_title",))
+            if at is not None:
+                title = strip_html(_text(_find_local(at, ("ja", "en")))
+                                   or "".join(at.itertext()).strip())
+        if not link:
+            al = _find_local(it, ("article_link",))
+            if al is not None:
+                link = safe_url(_text(_find_local(al, ("ja", "en")))
+                                or "".join(al.itertext()).strip())
         if not title or not link:
             continue
         raw_summary = _text(_find_local(
@@ -483,19 +502,63 @@ def _fetch_and_parse(url: str, src: dict):
     return arts[:MAX_PER_SOURCE], None
 
 
+def _fallback_urls(url: str) -> list[str]:
+    """主URLで取得できない/0件のときに順に試す代替URL（最大2つ）。
+
+    - Google⇄Bing ニュース検索は相互フォールバック（従来どおり）。
+      Google が対象ドメインを索引していない「正常だが0件」も Bing で救う。
+    - arXiv (rss.arxiv.org) → 公式の export.arxiv.org API（Atom・別ホスト）。
+    - Hacker News (hnrss.org) → 本家 news.ycombinator.com/rss。
+    - その他の直接フィード → Google ニュース site:ドメイン 検索 → Bing 同検索。
+      社内プロキシが配信元ドメインを遮断していても news.google.com が通れば
+      同じ媒体の記事を取得できる（プロキシ環境での主要な救済経路）。
+    - IPアドレス直指定やドットなしホスト（イントラ/テスト）は対象外。
+    """
+    try:
+        p = urlparse(url)
+        host = (p.hostname or "").lower()
+        if not host or "." not in host:
+            return []
+        try:
+            ipaddress.ip_address(host)
+            return []                        # IP直指定はフォールバックしない
+        except ValueError:
+            pass
+        alt = _alt_aggregator(url)           # Google⇄Bing のニュース検索URL
+        if alt:
+            return [alt]
+        if host == "rss.arxiv.org" and p.path.startswith("/rss/"):
+            cat = p.path[len("/rss/"):]
+            return ["https://export.arxiv.org/api/query?search_query=cat:" + quote(cat)
+                    + "&sortBy=submittedDate&sortOrder=descending&max_results=30"]
+        if host == "hnrss.org":
+            return ["https://news.ycombinator.com/rss"]
+        if host.endswith("google.com") or host.endswith("bing.com"):
+            return []                        # 検索URL以外の google/bing は対象外
+        domain = host[4:] if host.startswith("www.") else host
+        q = quote("site:" + domain)
+        return ["https://news.google.com/rss/search?q=" + q + "&hl=ja&gl=JP&ceid=JP:ja",
+                "https://www.bing.com/news/search?q=" + q + "&format=RSS&setlang=ja"]
+    except (ValueError, UnicodeError):
+        return []
+
+
 def fetch_source(src: dict) -> tuple[str, list[dict], str | None]:
     sid, url = src.get("id", ""), src.get("url", "")
     arts, err = _fetch_and_parse(url, src)
     if arts:
         return sid, arts, None
-    # 取得失敗/非フィード/0件 → 代替アグリゲータ(Google⇄Bing)があれば試す
-    alt = _alt_aggregator(url)
-    if alt and err is not None:   # err=None は「正常なフィードだが0件」なので代替不要
+    # 取得失敗/非フィード/0件 → 代替URLを順に試す（0件でも試す:
+    # Google が索引していないドメインを Bing が持っているケース等があるため）
+    primary_ok_but_empty = err is None
+    for alt in _fallback_urls(url)[:2]:
         alt_arts, alt_err = _fetch_and_parse(alt, src)
         if alt_arts:
             return sid, alt_arts, None
-        if alt_err:
-            err = f"{err} / 代替も失敗: {alt_err}"
+        host = urlparse(alt).hostname or "?"
+        err = f"{err or '記事0件'} / 代替({host}): {alt_err or '0件'}"
+    if primary_ok_but_empty and err is not None and not _fallback_urls(url):
+        err = None   # 正常な空フィードで代替も無い場合はエラー扱いにしない
     return sid, [], err
 
 
@@ -534,8 +597,9 @@ def diagnose_source(src: dict) -> dict:
     out = {"id": src.get("id", ""), "name": src.get("name", ""), "url": url,
            "proxy_mode": mode, "ca_bundle": ca or "(未設定/システム既定)",
            "primary": probe(url)}
-    alt = _alt_aggregator(url)
-    out["alternative"] = probe(alt) if alt else None
+    alts = [probe(u) for u in _fallback_urls(url)[:2]]
+    out["alternatives"] = alts
+    out["alternative"] = alts[0] if alts else None   # 旧フィールド互換
     return out
 
 
@@ -626,6 +690,105 @@ def _merge_articles(articles: list[dict]) -> list[dict]:
     return keep
 
 
+# ------------------------------------------------------------------ 過去ログ（自動アーカイブ）
+
+def _archive_load_locked() -> dict:
+    """archive.jsonl をメモリ索引(id→記事)へ遅延ロードする。_archive_lock 内で呼ぶこと。"""
+    global _archive
+    if _archive is None:
+        m: dict[str, dict] = {}
+        try:
+            with open(ARCHIVE_FILE, encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        a = json.loads(line)
+                    except ValueError:
+                        continue   # 壊れた行は読み飛ばす（クラッシュ耐性）
+                    if isinstance(a, dict) and a.get("id"):
+                        m[a["id"]] = a
+        except OSError:
+            pass
+        _archive = m
+    return _archive
+
+
+def _archive_key(a: dict) -> float:
+    """新着順ソート用キー。日付が無い記事は保存時刻で代用する。"""
+    return a.get("published_ts") or a.get("archived_at") or 0.0
+
+
+def archive_add(articles: list[dict]) -> int:
+    """取得した記事を過去ログへ自動保存する。id で重複排除し、通常は追記のみ。
+    上限 ARCHIVE_MAX 超過時は新しい順に間引いて全書き直し。デモ記事は保存しない。"""
+    now = time.time()
+    fresh = [a for a in articles if a.get("id") and a.get("source_id") != "demo"]
+    if not fresh:
+        return 0
+    with _archive_lock:
+        m = _archive_load_locked()
+        new: list[dict] = []
+        for a in fresh:
+            if a["id"] in m:
+                continue
+            rec = {k: a.get(k) for k in ("id", "source", "source_id", "category",
+                                         "title", "link", "summary",
+                                         "published", "published_ts")}
+            rec["archived_at"] = now
+            m[a["id"]] = rec
+            new.append(rec)
+        if not new:
+            return 0
+        if len(m) > ARCHIVE_MAX:
+            keep = sorted(m.values(), key=_archive_key, reverse=True)[:ARCHIVE_MAX]
+            m.clear()
+            m.update({r["id"]: r for r in keep})
+            tmp = ARCHIVE_FILE.with_name(ARCHIVE_FILE.name + ".tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
+                for r in m.values():
+                    f.write(json.dumps(r, ensure_ascii=False) + "\n")
+            os.replace(tmp, ARCHIVE_FILE)
+        else:
+            with open(ARCHIVE_FILE, "a", encoding="utf-8") as f:
+                for r in new:
+                    f.write(json.dumps(r, ensure_ascii=False) + "\n")
+        return len(new)
+
+
+def archive_stats() -> dict:
+    with _archive_lock:
+        m = _archive_load_locked()
+        ts = [t for t in (_archive_key(a) for a in m.values()) if t]
+    return {"count": len(m),
+            "oldest": min(ts) if ts else None,
+            "newest": max(ts) if ts else None}
+
+
+def archive_search(q: str, limit: int = 60) -> list[dict]:
+    """現在表示中のキャッシュ＋過去ログを横断検索する。
+    空白区切りの語をすべて含む記事（タイトル/要約/情報源、AND・大小無視）を新着順で返す。
+    q が空なら新着順の一覧（ブラウズ用途）。"""
+    terms = [t.lower() for t in (q or "").split() if t.strip()]
+    with _archive_lock:
+        m = dict(_archive_load_locked())
+    with _cache_lock:
+        cur = list(_cache["articles"]) if _cache["ts"] else []
+    for a in cur:   # 直近取得分はアーカイブ書き込み前でも検索対象に含める
+        if a.get("id") and a.get("source_id") != "demo":
+            m[a["id"]] = a
+    out = []
+    for a in m.values():
+        hay = ((a.get("title") or "") + " " + (a.get("summary") or "")
+               + " " + (a.get("source") or "")).lower()
+        if all(t in hay for t in terms):
+            out.append(a)
+    out.sort(key=_archive_key, reverse=True)
+    try:
+        n = max(1, min(int(limit), 200))
+    except (TypeError, ValueError):
+        n = 60
+    return out[:n]
+
+
 def refresh(sources: list[dict]) -> dict:
     enabled = [s for s in sources if s.get("enabled", True)]
     articles: list[dict] = []
@@ -636,6 +799,14 @@ def refresh(sources: list[dict]) -> dict:
                 if err:
                     errors[sid] = err
                 articles.extend(arts)
+    # 過去ログへ自動保存（表示上限 MAX_TOTAL とは独立に、取得できた全記事を対象）
+    try:
+        seen_ids: set[str] = set()
+        all_uniq = [a for a in articles
+                    if a.get("id") and not (a["id"] in seen_ids or seen_ids.add(a["id"]))]
+        archive_add(all_uniq)
+    except Exception:
+        pass   # アーカイブ失敗で表示を壊さない
     uniq = _merge_articles(articles)
 
     offline = len(uniq) == 0
@@ -828,7 +999,8 @@ def fetch_page_text(url: str) -> str:
         return ""
 
 
-def _http_json(url: str, body: dict, headers: dict, no_proxy: bool = False) -> dict:
+def _http_json(url: str, body: dict, headers: dict, no_proxy: bool = False,
+               timeout: float = AI_TIMEOUT) -> dict:
     """JSON を POST して JSON を返す（proxy・CA は urllib が処理）。
 
     no_proxy=True のときはプロキシを経由しない（ローカルLLM向け）。
@@ -837,7 +1009,7 @@ def _http_json(url: str, body: dict, headers: dict, no_proxy: bool = False) -> d
     req = urllib.request.Request(url, data=data, method="POST",
                                  headers={**headers, "Content-Type": "application/json"})
     try:
-        with _opener(force_direct=no_proxy).open(req, timeout=AI_TIMEOUT) as r:
+        with _opener(force_direct=no_proxy).open(req, timeout=timeout) as r:
             resp = r.read(4 * 1024 * 1024)
         return json.loads(resp.decode("utf-8", "replace"))
     except urllib.error.HTTPError as e:
@@ -847,31 +1019,65 @@ def _http_json(url: str, body: dict, headers: dict, no_proxy: bool = False) -> d
         raise RuntimeError(f"接続エラー: {e}")
 
 
-_THINK_PAIR_RE = re.compile(r"<think(?:ing)?>(.*?)</think(?:ing)?>\s*",
-                            re.DOTALL | re.IGNORECASE)
-_THINK_CLOSE_RE = re.compile(r"</think(?:ing)?>\s*", re.IGNORECASE)
+# 推論マーカー: <think>/<thinking>（DeepSeek-R1, QwQ, Qwen3系）、[THINK]（Magistral等）、
+# <|begin_of_thought|>（OpenThinker系）
+_THINK_PAIR_RE = re.compile(
+    r"(?:<think(?:ing)?>(.*?)</think(?:ing)?>"
+    r"|\[THINK\](.*?)\[/THINK\]"
+    r"|<\|begin_of_thought\|>(.*?)<\|end_of_thought\|>)\s*",
+    re.DOTALL | re.IGNORECASE)
+_THINK_OPEN_RE = re.compile(r"<think(?:ing)?>|\[THINK\]|<\|begin_of_thought\|>",
+                            re.IGNORECASE)
+_THINK_CLOSE_RE = re.compile(r"(?:</think(?:ing)?>|\[/THINK\]|<\|end_of_thought\|>)\s*",
+                             re.IGNORECASE)
+_TRUNCATED_NOTE = ("（モデルが思考の途中で応答を終えたため、最終解答がありません。"
+                   "下の「推論過程を表示」で途中経過を確認するか、もう一度質問してください）")
+# タグを使わず「*Output Generation*」「Final Answer」等の見出し行で最終解答を区切る
+# モデル向けのヒューリスティック（見出しの後ろが解答、前が思考）
+_SCAFFOLD_RE = re.compile(
+    r"(?im)^[ \t]*(?:#{1,3}[ \t]*)?(?:\*{1,2}|_{1,2})?"
+    r"(?:(?:Output Generation|Final (?:Answer|Response|Output)|最終(?:解答|回答|出力))"
+    r"(?:\*{1,2}|_{1,2})?[ \t]*(?:\(.*?\))?[ \t]*[::]?"
+    r"|(?:Answer|Response|回答|解答)(?:\*{1,2}|_{1,2})?[ \t]*[::])[ \t]*$")
 
 
 def _split_reasoning(text: str) -> tuple[str, str]:
-    """推論系ローカルLLM（DeepSeek-R1 / QwQ 等）が本文に混ぜて出力する
-    <think>…</think> の推論過程を分離する。開きタグ無しで </think> だけ来る
-    ケース（テンプレート側で <think> が消される LM Studio 等）にも対応。
-    戻り値は (最終解答, 推論過程)。全部が推論だった場合は推論を解答として返す。"""
-    if not text or "</think" not in text.lower():
+    """推論系ローカルLLM（DeepSeek-R1 / QwQ / Qwen3 等）が本文に混ぜて出力する
+    <think>…</think> 等の推論過程を分離する。対応ケース:
+    - 通常の開閉ペア（複数ブロック・本文混在も可）
+    - 開きタグ無しで閉じタグだけ（テンプレートが開きタグを食う LM Studio 等）
+    - 閉じタグ無しで開きタグだけ（トークン上限で思考が打ち切られた Qwen3 の長考等）
+    戻り値は (最終解答, 推論過程)。解答が無い場合は案内文を解答として返し、
+    推論はそのまま折りたたみ側に渡す（生の思考を解答欄に出さない）。"""
+    if not text:
+        return text, ""
+    if not (_THINK_OPEN_RE.search(text) or _THINK_CLOSE_RE.search(text)):
+        # タグ無しで見出し形式の思考を書くモデル（*Output Generation* 等）:
+        # 最後の見出し行より後ろを解答、前を思考として分離する
+        ms = list(_SCAFFOLD_RE.finditer(text))
+        if ms:
+            after = text[ms[-1].end():].strip()
+            before = text[:ms[-1].start()].strip()
+            if after and before:
+                return after, before
         return text, ""
     chunks: list[str] = []
     def _grab(m):
-        chunks.append(m.group(1).strip())
+        chunks.append(next(g for g in m.groups() if g is not None).strip())
         return ""
     stripped = _THINK_PAIR_RE.sub(_grab, text)
-    if "</think" in stripped.lower():   # 開きタグの無い残骸: 先頭〜</think> が推論
+    if _THINK_CLOSE_RE.search(stripped):   # 開きタグの無い残骸: 先頭〜閉じタグ が推論
         parts = _THINK_CLOSE_RE.split(stripped, maxsplit=1)
         chunks.insert(0, parts[0].strip())
         stripped = parts[1] if len(parts) > 1 else ""
+    m = _THINK_OPEN_RE.search(stripped)    # 閉じられずに終わった思考（打ち切り）
+    if m:
+        chunks.append(stripped[m.end():].strip())
+        stripped = stripped[:m.start()]
     answer = stripped.strip()
     reasoning = "\n\n".join(c for c in chunks if c)
     if not answer:
-        return (reasoning or text.strip()), ""
+        return (_TRUNCATED_NOTE if reasoning else text.strip()), reasoning
     return answer, reasoning
 
 
@@ -906,9 +1112,16 @@ def call_ai(cfg: dict, system: str, user_content: str, history: list[dict]) -> s
         url = (base or "https://api.openai.com/v1") + "/chat/completions"
         default_model, no_proxy = "gpt-4o-mini", False
     full = ([{"role": "system", "content": system}] if system else []) + msgs
-    body = {"model": model or default_model, "messages": full, "max_tokens": AI_MAX_TOKENS}
+    body = {"model": model or default_model, "messages": full}
+    if provider == "local":
+        # 推論(思考)モデルは max_tokens=1500 だと </think> の前に打ち切られて
+        # 生の思考が漏れるため、上限を課さない（サーバー既定=EOSまで）。時間も長めに
+        timeout = AI_TIMEOUT_LOCAL
+    else:
+        body["max_tokens"] = AI_MAX_TOKENS
+        timeout = AI_TIMEOUT
     headers = {"Authorization": "Bearer " + key} if key else {}   # ローカルはキー任意
-    data = _http_json(url, body, headers, no_proxy=no_proxy)
+    data = _http_json(url, body, headers, no_proxy=no_proxy, timeout=timeout)
     choices = data.get("choices") or [{}]
     msg = choices[0].get("message") or {}
     content = (msg.get("content") or "").strip()
@@ -937,12 +1150,26 @@ def ai_chat(payload: dict) -> dict:
     system = ("あなたはニュース閲覧を助けるアシスタントです。以下に与えられた記事情報や"
               "本文に基づいて、日本語で簡潔かつ正確に答えてください。推測が必要な場合は"
               "その旨を明示し、与えられた情報に無い事実を断定しないでください。")
+    if cfg["provider"] == "local":
+        # 推論系ローカルLLM（Qwen3 等）が思考・下書き・*見出し* 付きの検討を
+        # 本文に垂れ流すのを抑止し、出す場合はタグで機械可読にさせる
+        system += ("\n出力規律: 思考過程・分析・下書き・途中の検討（*Analysis* や "
+                   "*Output Generation* のような見出しを含む）は出力せず、最終的な"
+                   "回答本文だけを書いてください。思考過程を書く必要がある場合は、"
+                   "必ず <think> と </think> で囲み、その後に回答本文を書いてください。")
 
     parts = []
     if ctx.get("kind") == "list":
         parts.append("【現在表示中の記事一覧】")
         for i, a in enumerate((ctx.get("items") or [])[:25], 1):
             parts.append(f"{i}. [{a.get('category','')}] {a.get('title','')}（{a.get('source','')}）"
+                         + (f" — {a.get('summary','')}" if a.get("summary") else ""))
+    elif ctx.get("kind") == "research":   # リサーチ画面: 検索でヒットした記事群
+        parts.append("【検索でヒットした記事（現在＋過去ログ）】")
+        for i, a in enumerate((ctx.get("items") or [])[:30], 1):
+            d = str(a.get("published") or "")[:10]
+            parts.append(f"{i}. [{a.get('category','')}] {a.get('title','')}"
+                         f"（{a.get('source','')}{' ' + d if d else ''}）"
                          + (f" — {a.get('summary','')}" if a.get("summary") else ""))
     else:
         parts.append("【対象の記事】")
@@ -953,9 +1180,16 @@ def ai_chat(payload: dict) -> dict:
         if payload.get("fetch_page") and safe_url(ctx.get("link")):
             page = fetch_page_text(ctx.get("link"))
             if page:
+                if cfg["provider"] == "local":
+                    # 小さな文脈窓で出力が思考の途中に切れて漏れるのを防ぐ
+                    page = page[:MAX_PAGE_TEXT_LOCAL]
                 parts.append("\n【記事ページ本文（抜粋）】\n" + page)
     context_block = "\n".join(str(p) for p in parts if p)
     user_content = (context_block + "\n\n" if context_block else "") + "質問: " + question
+    if cfg["provider"] == "local" and context_block:
+        # 長い資料の直後は指示が薄まりやすいので、末尾でも出力規律を念押しする
+        user_content += ("\n\n（注意: 上の資料の分析過程・思考・下書きは出力せず、"
+                         "質問への最終回答のみを日本語で書いてください）")
 
     try:
         answer, reasoning = _split_reasoning(call_ai(cfg, system, user_content, history))
@@ -1131,6 +1365,17 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": False, "error": "unknown source"}, 404)
                 return
             self._json({"ok": True, "diag": diagnose_source(src)})
+            return
+
+        if u.path == "/api/archive/search":   # 現在＋過去ログの横断検索
+            q = parse_qs(u.query)
+            arts = archive_search((q.get("q") or [""])[0], (q.get("limit") or ["60"])[0])
+            self._json({"ok": True, "count": len(arts), "articles": arts,
+                        "stats": archive_stats()})
+            return
+
+        if u.path == "/api/archive/stats":
+            self._json({"ok": True, **archive_stats()})
             return
 
         if u.path == "/api/settings":
