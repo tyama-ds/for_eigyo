@@ -279,3 +279,20 @@ def test_rebuild_single_file_no_duplicate_row(tmp_path):
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
+
+
+def test_single_then_folder_promotes_membership_row(tmp_path):
+    """単独追加→同フォルダ取り込みで、None所在行がコレクション行へ昇格する
+    （同一所在の行を重複させない・タグは統合）。"""
+    _inject()
+    from llmlab.indexmanager import IndexManager
+
+    fd = tmp_path / "D"
+    q = _write(fd, "x.txt", V1)
+    im = IndexManager(storage_dir=tmp_path / "index")
+    im.add_document(q, tags=["手動"])
+    r = im.add_folder(fd)
+    rows = im._memberships()[im.documents()[0]["doc_id"]]
+    assert len(rows) == 1, "同一所在の行は1行に統合される"
+    assert rows[0]["collection_id"] == r["collection_id"], "コレクション行へ昇格"
+    assert {"手動", "D"} <= set(rows[0]["tags"]), "タグは統合される"

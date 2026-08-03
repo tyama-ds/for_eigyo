@@ -733,6 +733,14 @@ class IndexManager:
             # collection_id=None の「偽の単独 membership」を増やさない。
             target = next((r for r in rows
                            if r.get("source_path") == source_path), None)
+        elif target is None and collection_id is not None and source_path:
+            # 逆方向: 先に単独追加（collection_id=None）済みの所在を、フォルダ
+            # 取り込みでコレクション所属へ昇格する（同一所在の行を重複させない）
+            target = next((r for r in rows
+                           if r.get("collection_id") is None
+                           and r.get("source_path") == source_path), None)
+            if target is not None:
+                target["collection_id"] = collection_id
         if target is not None:
             _update(target)
         else:

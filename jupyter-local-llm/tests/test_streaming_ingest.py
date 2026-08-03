@@ -195,3 +195,51 @@ def test_pdf_pages_yielded_one_by_one(monkeypatch, tmp_path):
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
+
+
+def _minimal_pdf(texts) -> bytes:
+    """テキスト入りの最小構造 PDF を手書きで生成する（外部ライブラリ不要）。"""
+    objs = []
+    kids = " ".join(f"{4 + i * 2} 0 R" for i in range(len(texts)))
+    objs.append("1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj")
+    objs.append(f"2 0 obj << /Type /Pages /Kids [{kids}] /Count {len(texts)} >> endobj")
+    objs.append("3 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj")
+    for i, t in enumerate(texts):
+        stream = f"BT /F1 12 Tf 72 720 Td ({t}) Tj ET"
+        objs.append(f"{4 + i * 2} 0 obj << /Type /Page /Parent 2 0 R "
+                    "/MediaBox [0 0 612 792] "
+                    f"/Resources << /Font << /F1 3 0 R >> >> "
+                    f"/Contents {5 + i * 2} 0 R >> endobj")
+        objs.append(f"{5 + i * 2} 0 obj << /Length {len(stream)} >> stream\n"
+                    f"{stream}\nendstream endobj")
+    body = "%PDF-1.4\n"
+    offsets = []
+    for o in objs:
+        offsets.append(len(body.encode("latin-1")))
+        body += o + "\n"
+    xref_pos = len(body.encode("latin-1"))
+    n = len(objs) + 1
+    body += f"xref\n0 {n}\n0000000000 65535 f \n"
+    for off in offsets:
+        body += f"{off:010d} 00000 n \n"
+    body += f"trailer << /Size {n} /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF"
+    return body.encode("latin-1")
+
+
+def test_real_pdf_ingest_end_to_end(tmp_path):
+    """実PDF（手書きの最小構造・5ページ）を pypdf 経由で取り込み、
+    page_label 保持とトークン検索まで通しで検証する（疑似Readerではない）。"""
+    _inject()
+    from llmlab.indexmanager import IndexManager
+
+    pdf = tmp_path / "manual.pdf"
+    pdf.write_bytes(_minimal_pdf([f"Page {i} body with CODE-{i}77"
+                                  for i in range(1, 6)]))
+    im = IndexManager(storage_dir=tmp_path / "index", ingest_batch_size=2)
+    meta = im.add_document(pdf, title="実PDF")
+    assert meta["status"] == "ready" and meta["chunk_count"] >= 1
+    doc = im._paged.document(meta["doc_id"])
+    pages = {c["page"] for c in doc["chunks"]}
+    assert {"1", "5"} <= pages, "全ページが page_label つきでチャンク化される"
+    hits = im.search("CODE-377", doc_ids=[meta["doc_id"]])
+    assert "CODE-377" in hits[0].chunks[0]["text"], "実PDF本文をトークン検索で発見"
