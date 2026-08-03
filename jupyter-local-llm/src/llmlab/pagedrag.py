@@ -37,6 +37,8 @@ DEFAULT_STORAGE = "./storage/books"
 DEFAULT_CHUNK_SIZE = 1024
 DEFAULT_CHUNK_OVERLAP = 128
 DEFAULT_TOP_K = 5
+# 取り込み時に一度に埋め込み・挿入するチャンク数（巨大文書のメモリ/タイムアウト対策）
+DEFAULT_INGEST_BATCH = 32
 
 # 文書IDを載せる node metadata のキー。LlamaIndex では "doc_id" が予約語扱いで
 # MetadataFilter が効かない（ref_doc_id にマップされ 0 件になる）ため、専用キーを使う。
@@ -121,11 +123,14 @@ class PagedRAG:
         chunk_overlap: int = DEFAULT_CHUNK_OVERLAP,
         top_k: int = DEFAULT_TOP_K,
         documents_dir: str | Path | None = None,
+        ingest_batch_size: int = DEFAULT_INGEST_BATCH,
     ):
         self.storage_dir = Path(storage_dir)
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
         self.top_k = top_k
+        # 取り込み時の埋め込み・ベクトル挿入のバッチ件数（巨大文書のメモリ対策）
+        self.ingest_batch_size = int(ingest_batch_size)
         self._index = None  # 遅延ロード
         self._catalog_path = self.storage_dir / "books.json"
         # 文書ごとの JSON（中身の個別確認用）。既定は storage_dir/documents。
@@ -134,7 +139,9 @@ class PagedRAG:
     # ---- 取り込み ----------------------------------------------------------
 
     def add_book(self, path: str | Path, *, title: str | None = None,
-                 force: bool = False, doc_id: str | None = None) -> str:
+                 force: bool = False, doc_id: str | None = None,
+                 replace_same_path: bool = True,
+                 ingest_batch_size: int | None = None) -> str:
         """1冊の本（PDF/txt/md/docx など）を取り込み、インデックスへ追加する。
 
         同じ文書（= 同じ内容ハッシュの doc_id）が取り込み済みの場合は重複追加を防ぐため
@@ -143,8 +150,15 @@ class PagedRAG:
 
         doc_id を明示指定すると、その ID で登録する（IndexManager が内容ハッシュ ID を
         共有するため）。省略時は make_doc_id(path) で内容ハッシュから導出する。
+
+        replace_same_path=False にすると「同じファイルパスの別 doc_id」を置き換えない。
+        IndexManager のように上位で所在（membership）を管理し、同一内容が複数フォルダで
+        共有される場合に旧文書の索引を残す必要があるときに使う（単体利用では既定 True）。
+
+        ingest_batch_size で埋め込み・ベクトル挿入のバッチ件数を上書きできる
+        （既定はコンストラクタの値=32）。数十MBの文書でも全チャンクを一括で
+        埋め込まず、バッチ単位で逐次処理する（メモリ・タイムアウト対策）。
         """
-        from llama_index.core import SimpleDirectoryReader
         from llama_index.core.node_parser import SentenceSplitter
 
         from .rag import apply_llama_settings
@@ -163,13 +177,15 @@ class PagedRAG:
         #       これを怠ると追記型ストアに新旧が併存し検索が二重になる。
         books = self.books()
         by_id = next((b for b in books if b.get("doc_id") == doc_id), None)
-        by_path = next(
-            (b for b in books
-             if b is not by_id and (
-                 (b.get("path") and b.get("path") == resolved) or
-                 (b.get("doc_id") is None and b.get("source") == path.name))),
-            None,
-        )
+        by_path = None
+        if replace_same_path:
+            by_path = next(
+                (b for b in books
+                 if b is not by_id and (
+                     (b.get("path") and b.get("path") == resolved) or
+                     (b.get("doc_id") is None and b.get("source") == path.name))),
+                None,
+            )
         if by_id and not force:
             print(f"[PagedRAG] {path.name} は取り込み済みのためスキップします"
                   "（重複防止。再取り込みは force=True、全消去は reset()）")
@@ -178,26 +194,23 @@ class PagedRAG:
 
         apply_llama_settings()
         book_title = title or path.stem
+        bs = max(1, int(ingest_batch_size or self.ingest_batch_size))
 
-        # ページ単位のメタデータ（PDF なら page_label）を保持して読み込む。
-        documents = SimpleDirectoryReader(input_files=[str(path)]).load_data()
-        for d in documents:
-            d.metadata[_DOC_ID_KEY] = doc_id
-            d.metadata["title"] = book_title
-            d.metadata["source"] = path.name
-            d.metadata["path"] = str(path.resolve())  # 出典リンク用の絶対パス
-            # 文書ID / 絶対パスは LLM のコンテキストに混ぜない（回答が汚れる/冗長化する）
-            excluded = set(d.excluded_llm_metadata_keys or [])
-            d.excluded_llm_metadata_keys = list(excluded | {"path", _DOC_ID_KEY})
+        # ページ/セグメント単位で読み込む（巨大テキストを1つの Document にしない）
+        documents = self._load_source_documents(path)
+        size_mb = path.stat().st_size / (1024 * 1024)
+        total_chars = sum(len(d.text or "") for d in documents)
+        est_chunks = max(len(documents),
+                         total_chars // max(1, self.chunk_size - self.chunk_overlap))
+        from . import bookindex as bx
 
-        splitter = SentenceSplitter(
-            chunk_size=self.chunk_size, chunk_overlap=self.chunk_overlap
-        )
-        nodes = splitter.get_nodes_from_documents(documents)
-        for n in nodes:  # チャンク側にも文書ID を確実に持たせる
-            n.metadata.setdefault(_DOC_ID_KEY, doc_id)
+        bx.log(f"取り込み開始: {path.name}（{size_mb:.1f}MB / "
+               f"ページ・セグメント {len(documents)} / 推定チャンク 約{est_chunks} / "
+               f"{bs}件ずつ埋め込み）")
 
         index = self._get_or_create_index()
+        # 前回の中途失敗で挿入だけされたチャンクが残っていれば掃除する（二重登録防止）
+        self._cleanup_partial_ingest(index, doc_id)
         if existing:
             # 追記型ストアなので、削除せず insert すると同じチャンクが二重に入り、
             # その文書が top-k を独占して多様化が壊れる。再取り込み前に旧チャンクを消す。
@@ -212,13 +225,126 @@ class PagedRAG:
                 if jp.exists():
                     jp.unlink()
                 self._drop_catalog_entry(old_id)
-        index.insert_nodes(nodes)
+
+        splitter = SentenceSplitter(
+            chunk_size=self.chunk_size, chunk_overlap=self.chunk_overlap
+        )
+        resolved_path = str(path.resolve())
+
+        def _node_batches():
+            """ページ/セグメント→チャンク→バッチ を逐次生成する。
+            全ノードを1つの巨大な list として保持しない（保持するのは
+            テキスト行のみで、埋め込み済みノードはバッチ分だけ）。"""
+            batch = []
+            for d in documents:
+                d.metadata[_DOC_ID_KEY] = doc_id
+                d.metadata["title"] = book_title
+                d.metadata["source"] = path.name
+                d.metadata["path"] = resolved_path  # 出典リンク用の絶対パス
+                # 文書ID/絶対パスは LLM のコンテキストに混ぜない
+                excluded = set(d.excluded_llm_metadata_keys or [])
+                d.excluded_llm_metadata_keys = list(excluded | {"path", _DOC_ID_KEY})
+                for n in splitter.get_nodes_from_documents([d]):
+                    n.metadata.setdefault(_DOC_ID_KEY, doc_id)
+                    batch.append(n)
+                    if len(batch) >= bs:
+                        yield batch
+                        batch = []
+            if batch:
+                yield batch
+
+        partial = self._partial_ingest_path(doc_id)
+        self.documents_dir.mkdir(parents=True, exist_ok=True)
+        rows: list[dict] = []       # 最終JSON用のテキスト行（ノード/ベクトルは持たない）
+        n_chunks = 0
+        est_batches = max(1, -(-est_chunks // bs))  # ceil
+        try:
+            with open(partial, "w", encoding="utf-8") as pf:
+                for batch in bx.progress(_node_batches(), total=est_batches,
+                                         desc="埋め込み+索引挿入"):
+                    index.insert_nodes(batch)   # 埋め込みはこの単位で計算される
+                    for n in batch:
+                        row = self._chunk_row(doc_id, n)
+                        pf.write(json.dumps({"chunk_id": row["chunk_id"]},
+                                            ensure_ascii=False) + "\n")
+                        rows.append(row)
+                    pf.flush()
+                    n_chunks += len(batch)
+        except Exception:
+            # 途中失敗: 挿入済みチャンクの記録（partial）を残す。次回実行時に
+            # _cleanup_partial_ingest が同チャンクを索引から外すため二重登録しない。
+            raise
         index.storage_context.persist(persist_dir=str(self.storage_dir))
-        self._register_book(book_title, path.name, len(nodes), doc_id,
-                            path=str(path.resolve()))
+        self._register_book(book_title, path.name, n_chunks, doc_id,
+                            path=resolved_path)
         self._write_document_json(doc_id, book_title, path.name,
-                                  str(path.resolve()), nodes)
+                                  resolved_path, rows)
+        partial.unlink(missing_ok=True)   # 完走したので中途記録は不要
         return book_title
+
+    @staticmethod
+    def _chunk_row(doc_id: str, n) -> dict:
+        """最終JSON用のチャンク行（埋め込みは含めない）。"""
+        meta = dict(n.metadata)
+        chunk_meta = {k: meta.get(k) for k in ("title", "source", "page_label", "path")
+                      if meta.get(k) is not None}
+        chunk_meta["doc_id"] = doc_id
+        return {"chunk_id": n.node_id, "text": n.get_content(),
+                "page": meta.get("page_label"), "metadata": chunk_meta}
+
+    def _partial_ingest_path(self, doc_id: str) -> Path:
+        return self.documents_dir / f"{doc_id}.ingest.jsonl"
+
+    def _cleanup_partial_ingest(self, index, doc_id: str) -> None:
+        """前回の取り込みが途中で失敗していた場合、その時点までに索引へ挿入
+        されたチャンクを削除する（再実行での二重登録防止）。"""
+        partial = self._partial_ingest_path(doc_id)
+        if not partial.exists():
+            return
+        ids = []
+        try:
+            for line in partial.read_text(encoding="utf-8").splitlines():
+                if line.strip():
+                    cid = json.loads(line).get("chunk_id")
+                    if cid:
+                        ids.append(cid)
+        except (json.JSONDecodeError, OSError):
+            pass
+        if ids:
+            print(f"[PagedRAG] 前回の中途失敗の取り込み（{len(ids)}チャンク）を"
+                  "掃除してから再取り込みします")
+            try:
+                index.delete_nodes(ids, delete_from_docstore=True)
+            except Exception as e:  # noqa: BLE001
+                print(f"[PagedRAG] 中途チャンクの削除に失敗（続行）: {e}")
+        partial.unlink(missing_ok=True)
+
+    def _load_source_documents(self, path: Path) -> list:
+        """ファイルを Document 群として読み込む。
+
+        - PDF などは SimpleDirectoryReader（ページ単位の Document）。
+        - txt/md はセグメント（約20万字）単位に分割して読み込み、数十MBの
+          テキストを1つの巨大 Document として splitter に渡さない。
+        """
+        from llama_index.core import Document, SimpleDirectoryReader
+
+        if path.suffix.lower() in {".txt", ".md", ".markdown"}:
+            text = path.read_text(encoding="utf-8", errors="replace")
+            seg = 200_000
+            if len(text) <= seg:
+                return [Document(text=text)]
+            docs, pos = [], 0
+            while pos < len(text):
+                end = min(len(text), pos + seg)
+                cut = end
+                if end < len(text):
+                    nl = text.rfind("\n", pos + int(seg * 0.8), end)
+                    if nl > pos:
+                        cut = nl + 1
+                docs.append(Document(text=text[pos:cut]))
+                pos = cut
+            return docs
+        return SimpleDirectoryReader(input_files=[str(path)]).load_data()
 
     def _delete_doc_nodes(self, index, doc_id: str) -> None:
         """再取り込み(force=True)前に、その文書の既存チャンクを索引から削除する。
@@ -553,28 +679,16 @@ class PagedRAG:
         )
 
     def _write_document_json(self, doc_id: str, title: str, source: str,
-                             path: str, nodes, summary: str = "") -> None:
+                             path: str, chunks: list[dict], summary: str = "") -> None:
         """文書ごとの JSON（中身の個別確認用）を保存する。
 
         構造: {doc_id, title, source, path, summary, chunks:[{chunk_id, text, page,
-        metadata}]}。埋め込みベクトルは含めない（検索は vector index を使う）。
-        既存 JSON があれば summary は保持する。
+        metadata}]}。chunks は _chunk_row() で作った dict の列（埋め込みベクトルは
+        含めない。検索は vector index を使う）。既存 JSON があれば summary は保持する。
         """
         existing = self.document(doc_id)
         if existing and not summary:
             summary = existing.get("summary", "")
-        chunks = []
-        for n in nodes:
-            meta = dict(n.metadata)
-            chunk_meta = {k: meta.get(k) for k in ("title", "source", "page_label", "path")
-                          if meta.get(k) is not None}
-            chunk_meta["doc_id"] = doc_id  # 予約語回避のため node では別キーに載せている
-            chunks.append({
-                "chunk_id": n.node_id,
-                "text": n.get_content(),
-                "page": meta.get("page_label"),
-                "metadata": chunk_meta,
-            })
         payload = {
             "doc_id": doc_id, "title": title, "source": source, "path": path,
             "summary": summary, "chunks": chunks,

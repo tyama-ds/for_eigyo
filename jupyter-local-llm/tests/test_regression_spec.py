@@ -447,13 +447,18 @@ def test_13_doc_compare_uses_map_reduce_not_giant_prompt(tmp_path, monkeypatch):
     im, ids = _make_docs(tmp_path, 13)
     r = im.ask("全文書を比較してください", doc_ids=ids)
 
-    assert len(prompts) == 14, "13件の部分回答 + 1件の統合（巨大単発ではない）"
-    for p in prompts[:13]:
+    # 13件の部分回答 + 階層 Reduce（中間統合→最終統合。巨大単発ではない）
+    map_prompts = [p for p in prompts if "### 文書「" in p]
+    assert len(map_prompts) == 13, "13文書すべてが Map される"
+    for p in map_prompts:
         assert p.count("### 文書「") == 1, "Map は1文書ずつ処理する"
+    for p in prompts:
         assert len(p) <= CONTEXT_CHAR_BUDGET * 2, "プロンプトは予算内に収まる"
-    reduce_p = prompts[13]
+    reduce_prompts = [p for p in prompts if p not in map_prompts]
+    assert reduce_prompts, "統合段がある"
     for i in range(1, 14):
-        assert f"文書{i:02d}" in reduce_p, "統合プロンプトが全文書に言及する"
+        assert any(f"文書{i:02d}" in p for p in reduce_prompts), \
+            "全文書がいずれかの統合プロンプトに入る（黙って落とさない）"
     assert len(r.per_doc or []) == 13
 
 

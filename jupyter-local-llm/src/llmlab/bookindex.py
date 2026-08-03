@@ -904,7 +904,7 @@ def build_graph(bi: BookIndex, node_ids: list[int], *, gradient_g: float = 0.6,
                 er_top_k: int = 10, max_workers: int = 2, min_chars: int = 40,
                 max_nodes: int = 300, er_use_llm: bool = False, reranker=None,
                 all_nodes: bool = False, checkpoint_path: str | None = None,
-                checkpoint_batch: int = 15) -> None:
+                checkpoint_batch: int = 15) -> dict:
     """各ノードからエンティティ/関係を抽出し、Gradient-based ER で KG を構築する。
 
     抽出はバッチ（checkpoint_batch ノード毎）で進み、checkpoint_path 指定時は
@@ -917,6 +917,12 @@ def build_graph(bi: BookIndex, node_ids: list[int], *, gradient_g: float = 0.6,
     - er_use_llm=False（既定）なら曖昧マージで LLM を呼ばず、最有力候補を採用（高速）。
     - reranker 指定時は Algorithm 1 の Rerank model R として名寄せ候補を再スコアする。
     - Table ノードは論文 4.3.1 に従い v_table エンティティ + ヘッダを ContainedIn で構造化。
+
+    戻り値: カバレッジ統計。安全モードで一部ノードだけを処理した場合でも
+    「完全なグラフ」に見えないよう、利用者へ提示するための情報。
+      {eligible_nodes, sampled_nodes, processed_nodes, graph_coverage_ratio,
+       graph_is_complete, graph_max_nodes_used, resumed_from_checkpoint,
+       extract_ok, extract_empty, extract_badjson, extract_error}
     """
     from concurrent.futures import ThreadPoolExecutor
 
@@ -925,11 +931,17 @@ def build_graph(bi: BookIndex, node_ids: list[int], *, gradient_g: float = 0.6,
         if bi.nodes[nid].type != "Section"
         and len(bi.nodes[nid].content.strip()) >= min_chars
     ]
+    eligible = len(targets)
     if not targets:
         # 空文書/スキャンPDF等。従来はここで黙って戻り「読めていない」ことに気づけなかった。
         log("警告: 抽出対象の本文ノードが 0 件です。文書からテキストを取得できていない可能性が"
             "あります（スキャンPDF・空文書・全ノードが min_chars 未満）。")
-        return
+        return {"eligible_nodes": 0, "sampled_nodes": 0, "processed_nodes": 0,
+                "graph_coverage_ratio": 0.0, "graph_is_complete": False,
+                "graph_max_nodes_used": max_nodes,
+                "resumed_from_checkpoint": False,
+                "extract_ok": 0, "extract_empty": 0,
+                "extract_badjson": 0, "extract_error": 0}
     if not all_nodes and len(targets) > 150 and max_nodes > 100:
         # 自動セーフモード: 大きすぎる文書はローカルLLMで完走しにくい
         log(f"自動セーフモード: 対象 {len(targets)} ノードは多いため 100 ノードへ"
@@ -1085,6 +1097,24 @@ def build_graph(bi: BookIndex, node_ids: list[int], *, gradient_g: float = 0.6,
             Path(checkpoint_path).unlink(missing_ok=True)
         except OSError as e:
             log(f"チェックポイント削除に失敗（無害）: {e}")
+
+    # カバレッジ統計（部分グラフを「完全なグラフ」に見せない）
+    processed = len(results)
+    coverage = (processed / eligible) if eligible else 0.0
+    complete = processed >= eligible
+    if not complete:
+        log(f"部分グラフ: 対象 {eligible} ノード中 {processed} ノードだけを抽出しました"
+            f"（カバレッジ {coverage:.0%}。全ノード処理は all_nodes=True / "
+            "max_nodes を増やす）")
+    return {"eligible_nodes": eligible, "sampled_nodes": len(targets),
+            "processed_nodes": processed,
+            "graph_coverage_ratio": round(coverage, 4),
+            "graph_is_complete": complete,
+            "graph_max_nodes_used": max_nodes,
+            "resumed_from_checkpoint": bool(done_ok),
+            "extract_ok": stat.get("ok", 0), "extract_empty": stat.get("empty", 0),
+            "extract_badjson": stat.get("badjson", 0),
+            "extract_error": stat.get("error", 0)}
 
 
 def _augment_table_entities(bi: BookIndex, node: TreeNode, local_name_to_eid: dict,
