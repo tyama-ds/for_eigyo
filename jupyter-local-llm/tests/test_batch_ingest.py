@@ -114,11 +114,14 @@ def test_large_text_is_segmented(tmp_path):
     from llmlab.pagedrag import PagedRAG
 
     p = tmp_path / "huge.txt"
-    p.write_text("あ" * 950_000, encoding="utf-8")   # ~1MB 弱
+    p.write_text("あ" * 950_000, encoding="utf-8")   # 改行なしの長い1行 ~1MB 弱
     rag = PagedRAG(storage_dir=tmp_path / "store")
-    docs = rag._load_source_documents(p)
-    assert len(docs) >= 4, "巨大テキストは1つの Document にしない"
-    assert sum(len(d.text) for d in docs) == 950_000, "分割で本文を失わない"
+    total, n = 0, 0
+    for d in rag._load_source_documents(p):   # generator（全量 list 化しない）
+        total += len(d.text)
+        n += 1
+    assert n >= 4, "巨大テキストは1つの Document にしない（長い1行でも分割）"
+    assert total == 950_000, "分割で本文を失わない・重複しない"
 
 
 def test_partial_failure_cleanup_no_duplicates(tmp_path, monkeypatch):

@@ -103,10 +103,13 @@ class BookRAG:
         max_evidence: int = DEFAULT_MAX_EVIDENCE,
         chunk_chars: int = 1500,    # 本文チャンクの目安サイズ（大きいほどノード=LLM呼出が減る）
         max_nodes: int = 300,       # 取り込み対象ノードの上限（超過は打ち切り）
-        max_workers: int = 2,       # 抽出フェーズの並列数（ローカルLLM 安全既定。高速化は自己責任で増やす）
+        # 抽出フェーズの並列数（ローカルLLM 安全既定。高速化は自己責任で増やす）
+        max_workers: int = 2,
         er_use_llm: bool = False,   # 名寄せで LLM を使うか（既定 False=高速）
-        reranker=None,              # 再ランク: None/"cosine"/"local"/"endpoint"/dict（Text_Reasoning と ER の両方に使用）
-        vlm: bool = False,          # True で PDF の図を VLM が読解し Image ノード化（画像対応モデルが必要）
+        # 再ランク: None/"cosine"/"local"/"endpoint"/dict（Text_Reasoning と ER の両方に使用）
+        reranker=None,
+        # True で PDF の図を VLM が読解し Image ノード化（画像対応モデルが必要）
+        vlm: bool = False,
         vlm_model: str | None = None,  # vlm=True 時の画像対応モデル名（省略時は接続設定の model）
     ):
         from .rerank import make_reranker
@@ -186,10 +189,12 @@ class BookRAG:
                    "IndexManager を使用）。")
 
         n_steps = 5 if build_graph else 4
-        bx.log(f"[1/{n_steps}] 解析（レイアウト{'+OCR' if ocr else ''}{'+VLM' if use_vlm else ''}）: {path.name}")
+        bx.log(f"[1/{n_steps}] 解析（レイアウト{'+OCR' if ocr else ''}{'+VLM' if use_vlm else ''}）"
+               f": {path.name}")
         blocks = bx.parse_blocks(path, ocr=ocr, layout=layout,      # 4.2.1 Layout Parsing
                                  vlm=use_vlm, vlm_model=self.vlm_model)
-        bx.log(f"[2/{n_steps}] 見出し判定{'（LLM）' if use_llm_sections else '（ヒューリスティック）'}"
+        mode_label = '（LLM）' if use_llm_sections else '（ヒューリスティック）'
+        bx.log(f"[2/{n_steps}] 見出し判定{mode_label}"
                f": ブロック {len(blocks)} 個")
         blocks = bx.section_filter(blocks, use_llm=use_llm_sections)  # 4.2.2 Section Filtering
         bx.log(f"[3/{n_steps}] 木（BookIndex Tree）を構築中…")
@@ -209,7 +214,8 @@ class BookRAG:
             bx.log(f"[4/{n_steps}] 知識グラフ構築（抽出→名寄せ）: ノード {len(new_nodes)} 個")
             ckpt = (str(self.storage_dir / "graph_progress.json")
                     if graph_checkpoint else None)
-            stats = bx.build_graph(bi, new_nodes, gradient_g=self.gradient_g,  # 4.3 KG + Gradient ER
+            # 4.3 KG + Gradient ER
+            stats = bx.build_graph(bi, new_nodes, gradient_g=self.gradient_g,
                                    er_top_k=self.er_top_k, max_workers=self.max_workers,
                                    max_nodes=max_nodes or self.max_nodes,
                                    er_use_llm=self.er_use_llm,
@@ -381,7 +387,8 @@ class BookRAG:
         total = len(ns)
         evidence = self._to_evidence(bi, ns, {}, {}, limit=min(total, 100))
         operation = str(spec.get("operation", "ANALYZE") or "ANALYZE")
-        operation = f"{operation}（フィルタ後の該当ノード総数: {total} 件。件数を問われたらこの総数を使う）"
+        operation = (f"{operation}（フィルタ後の該当ノード総数: {total} 件。"
+                     "件数を問われたらこの総数を使う）")
 
         # 論文 5.3: Map が各ブロックを分析→Reduce が統合。件数が多いときはバッチ Map を
         # 並列実行して部分所見を作り、Reduce に渡す（少数なら直接 Reduce で十分）。
@@ -411,7 +418,8 @@ class BookRAG:
             prompt = (
                 "以下は文書から取り出した断片の一部です。質問に関係する事実・数値・項目を"
                 "漏れなく抽出し、箇条書きで簡潔に列挙してください（このバッチ分のみ）。\n\n"
-                f"質問: {question}\n集計操作: {operation}\n\n断片（バッチ {bi_idx+1}/{len(batches)}）:\n{ctx}"
+                f"質問: {question}\n集計操作: {operation}\n\n断片（バッチ {bi_idx+1}/{len(batches)}"
+                f"）:\n{ctx}"
             )
             try:
                 return bx.llm_text(prompt).strip()
@@ -486,7 +494,8 @@ class BookRAG:
             cand_sections = sections
         listing = [{"id": nid, "title": t} for nid, t in cand_sections]
         result = bx.llm_json(
-            _P_SELECT_SECTION + f"\n\nQuery: {query}\nSections: {json.dumps(listing, ensure_ascii=False)}"
+            _P_SELECT_SECTION + f"\n\nQuery: {query}\nSections: "
+                                f"{json.dumps(listing, ensure_ascii=False)}"
         )
         chosen = result.get("section_ids", []) if isinstance(result, dict) else []
         if not isinstance(chosen, list):
@@ -523,8 +532,10 @@ class BookRAG:
         return [n for n in ns
                 if isinstance(bi.nodes[n].page, int) and lo <= bi.nodes[n].page <= hi]
 
-    def _op_graph_reasoning(self, bi: BookIndex, ns: list[int], start_entities: list[int]) -> dict[int, float]:
-        """Reasoner/Graph_Reasoning（式(6)(7)）: 部分グラフ上の PageRank を GT-Link でノードへ写像。"""
+    def _op_graph_reasoning(self, bi: BookIndex, ns: list[int],
+                            start_entities: list[int]) -> dict[int, float]:
+        """Reasoner/Graph_Reasoning（式(6)(7)）: 部分グラフ上の PageRank を
+        GT-Link でノードへ写像する。"""
         rev = bi.node_to_entities()
         sub_entities = [e for e in {e for n in ns for e in rev.get(n, [])}]
         if not sub_entities:
@@ -604,7 +615,8 @@ class BookRAG:
         result = bx.llm_json(_P_FILTER + f"\n\nQuery: {query}")
         return result if isinstance(result, dict) else {"filters": [], "operation": "ANALYZE"}
 
-    def _op_reduce(self, question: str, evidence: list[Evidence], *, partials=None, operation=None) -> str:
+    def _op_reduce(self, question: str, evidence: list[Evidence], *, partials=None,
+                   operation=None) -> str:
         """Synthesizer/Reduce: 根拠と部分回答を統合して最終回答を生成（式(15)）。"""
         ctx = []
         for i, e in enumerate(evidence, 1):
@@ -622,7 +634,8 @@ class BookRAG:
 
     def _classify(self, question: str) -> str:
         result = bx.llm_json(_P_CLASSIFY + f"\n\nUser Query: {question}")
-        cat = (result or {}).get("category", "single-hop") if isinstance(result, dict) else "single-hop"
+        cat = (result or {}).get("category", "single-hop") if isinstance(result,
+                                                                         dict) else "single-hop"
         cat = str(cat).lower()
         if cat in ("simple", "single", "single-hop"):
             return "single-hop"
@@ -665,7 +678,8 @@ class BookRAG:
         return self._bi
 
 
-def _personalized_pagerank(node_ids, edges, *, personalization=None, alpha=0.85, iters=100, tol=1e-8):
+def _personalized_pagerank(node_ids, edges, *, personalization=None, alpha=0.85, iters=100,
+                           tol=1e-8):
     """有向部分グラフ上の（Personalized）PageRank。power iteration の自前実装。
 
     networkx.pagerank は scipy を要するため、依存を増やさないよう numpy だけで実装する。
@@ -721,14 +735,17 @@ _P_CLASSIFY = """You are an expert query analyzer. Classify the user's question 
 "single-hop", "multi-hop", or "global".
 - single-hop: answerable from a SINGLE contiguous location (one paragraph/table/figure), even if it
   requires light reasoning, as long as all needed data is in that one place.
-- multi-hop: requires decomposition into multiple sub-questions, each answered by a separate retrieval.
+- multi-hop: requires decomposition into multiple sub-questions, each answered by a separate
+retrieval.
 - global: requires aggregation (count/list/summarize) over items identified by a structural filter.
 Return ONLY JSON: {"category": "single-hop|multi-hop|global"}."""
 
-_P_EXTRACT = """Identify the key entities mentioned in the query (concepts, names, sections, objects).
+_P_EXTRACT = """Identify the key entities mentioned in the query (concepts, names, sections,
+objects).
 Return ONLY JSON: {"entities": [str, ...]}."""
 
-_P_SELECT_SECTION = """Given a query and the list of document sections (id, title), choose the section ids
+_P_SELECT_SECTION = """Given a query and the list of document sections (id, title), choose the
+section ids
 most likely to contain the answer. Return ONLY JSON: {"section_ids": [int, ...]}."""
 
 _P_DECOMPOSE = """You are a query decomposition expert. Break the complex question into independent,
@@ -739,8 +756,11 @@ depend on each other's answers. Return ONLY JSON:
 _P_FILTER = """Analyze a global query and return the filtering steps and final aggregation.
 filter_type ∈ ["section","image","table","page"]; for image/table, filter_value MUST be null;
 operation ∈ ["COUNT","LIST","SUMMARIZE","ANALYZE"].
-Return ONLY JSON: {"filters": [{"filter_type": str, "filter_value": str|null}, ...], "operation": str}."""
+Return ONLY JSON: {"filters": [{"filter_type": str, "filter_value": str|null}, ...],
+                   "operation": str}."""
 
-_P_REDUCE = """You are a careful assistant. Using ONLY the provided evidence (and sub-answers if any),
-answer the question concisely and accurately. If an aggregation operation is given, perform it. Cite the
+_P_REDUCE = """You are a careful assistant. Using ONLY the provided evidence (and sub-answers
+if any),
+answer the question concisely and accurately. If an aggregation operation is given, perform it.
+Cite the
 evidence indices like [1], [2] where relevant. Answer in the question's language."""

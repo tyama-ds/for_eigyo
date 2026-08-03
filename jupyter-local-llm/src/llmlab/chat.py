@@ -82,7 +82,8 @@ class Chat:
 
     def reset(self) -> None:
         """先頭の system メッセージだけ残して履歴を消す。"""
-        self.history = self.history[:1] if self.history and self.history[0]["role"] == "system" else []
+        keep_system = self.history and self.history[0]["role"] == "system"
+        self.history = self.history[:1] if keep_system else []
 
 
 def load_ipython_extension(ipython) -> None:
@@ -150,7 +151,8 @@ def chat_panel(system: str | None = DEFAULT_SYSTEM):
         log.value = "".join(history_html)
 
     def _escape(t: str) -> str:
-        return t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
+        return t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n",
+                                                                                         "<br>")
 
     def _submit(_=None):
         text = box.value.strip()

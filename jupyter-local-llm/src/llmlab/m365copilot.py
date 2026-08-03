@@ -25,8 +25,8 @@ from __future__ import annotations
 import json
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable
 
 # 章プロンプト → 回答。emit で進捗、ask_bridge で人手ブリッジ（bridge コネクタのみ使用）。
 EmitFn = Callable[[dict], None]
@@ -141,18 +141,21 @@ class DemoConnector(BaseConnector):
         wants_cite = any(k in prompt for k in ("出典", "根拠", "引用")) or "source" in low
         wants_num = any(k in prompt for k in ("数値", "定量", "データ", "統計")) or "quantif" in low
         wants_cmp = any(k in prompt for k in ("比較", "対比", "メリット", "デメリット", "trade"))
-        wants_recent = any(k in prompt for k in ("最新", "近年", "トレンド", "2024", "2025", "2026"))
+        wants_recent = any(k in prompt for k in ("最新", "近年", "トレンド", "2024", "2025",
+                                                 "2026"))
 
         parts = [f"【{chapter}】{topic} に関する調査結果（デモ）。",
                  f"{chapter} の基本的な論点と全体像を整理した。"]
         cites: list[str] = []
         if wants_num:
-            parts.append("主要指標: 市場規模は前年比 +12.4%、導入企業は 3 年で約 2.1 倍に拡大（推計）。")
+            parts.append("主要指標: 市場規模は前年比 +12.4%、導入企業は 3 年で約 2.1 倍に拡大（推計"
+                         "）。")
         if wants_cmp:
             parts.append("比較: 方式A（低コスト・拡張性中）と方式B（高精度・運用負荷高）の"
                          "トレードオフを 4 観点で対照。用途別には A→小規模、B→基幹が優位。")
         if wants_recent:
-            parts.append("最新動向: 直近では規制対応と社内データ連携（RAG）の実装が主戦場になりつつある。")
+            parts.append("最新動向: 直近では規制対応と社内データ連携（RAG）の実装が主戦場になりつつ"
+                         "ある。")
         if wants_cite:
             parts.append("結論は下記の出典に基づく。")
             cites = [f"https://example.com/{meta.get('idx', 0)}/whitepaper",
@@ -320,7 +323,8 @@ class GraphConnector(BaseConnector):
         import os
 
         return str(self.options.get("token")
-                   or os.environ.get(self.options.get("token_env", "M365_COPILOT_TOKEN"), "")).strip()
+                   or os.environ.get(self.options.get("token_env", "M365_COPILOT_TOKEN"),
+                                     "")).strip()
 
     def test(self) -> tuple[bool, str]:
         if not self.options.get("endpoint"):
@@ -373,7 +377,8 @@ class GraphConnector(BaseConnector):
         if not isinstance(text, str):
             text = json.dumps(text, ensure_ascii=False)
         return ChapterResult(text=text.strip(), citations=extract_citations(text),
-                             connector=self.kind, latency_sec=time.time() - t0, ok=bool(text.strip()))
+                             connector=self.kind, latency_sec=time.time() - t0,
+                             ok=bool(text.strip()))
 
 
 # ---------------------------------------------------------------------------

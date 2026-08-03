@@ -134,7 +134,8 @@ class PagedRAG:
         self._index = None  # 遅延ロード
         self._catalog_path = self.storage_dir / "books.json"
         # 文書ごとの JSON（中身の個別確認用）。既定は storage_dir/documents。
-        self.documents_dir = Path(documents_dir) if documents_dir else self.storage_dir / "documents"
+        self.documents_dir = (Path(documents_dir) if documents_dir
+                              else self.storage_dir / "documents")
 
     # ---- 取り込み ----------------------------------------------------------
 
@@ -196,16 +197,14 @@ class PagedRAG:
         book_title = title or path.stem
         bs = max(1, int(ingest_batch_size or self.ingest_batch_size))
 
-        # ページ/セグメント単位で読み込む（巨大テキストを1つの Document にしない）
+        # ページ/セグメント単位の **generator**（全量をメモリへ読み込まない）
         documents = self._load_source_documents(path)
         size_mb = path.stat().st_size / (1024 * 1024)
-        total_chars = sum(len(d.text or "") for d in documents)
-        est_chunks = max(len(documents),
-                         total_chars // max(1, self.chunk_size - self.chunk_overlap))
+        units, est_chunks = self._estimate_source(path)
         from . import bookindex as bx
 
         bx.log(f"取り込み開始: {path.name}（{size_mb:.1f}MB / "
-               f"ページ・セグメント {len(documents)} / 推定チャンク 約{est_chunks} / "
+               f"ページ・セグメント 約{units} / 推定チャンク 約{est_chunks} / "
                f"{bs}件ずつ埋め込み）")
 
         index = self._get_or_create_index()
@@ -255,7 +254,6 @@ class PagedRAG:
 
         partial = self._partial_ingest_path(doc_id)
         self.documents_dir.mkdir(parents=True, exist_ok=True)
-        rows: list[dict] = []       # 最終JSON用のテキスト行（ノード/ベクトルは持たない）
         n_chunks = 0
         est_batches = max(1, -(-est_chunks // bs))  # ceil
         try:
@@ -264,22 +262,26 @@ class PagedRAG:
                                          desc="埋め込み+索引挿入"):
                     index.insert_nodes(batch)   # 埋め込みはこの単位で計算される
                     for n in batch:
-                        row = self._chunk_row(doc_id, n)
-                        pf.write(json.dumps({"chunk_id": row["chunk_id"]},
+                        # チャンク本文は一時 JSONL へ逐次保存（メモリに全量を
+                        # 持たない）。1行 = 最終 JSON の chunks[] の1要素
+                        pf.write(json.dumps(self._chunk_row(doc_id, n),
                                             ensure_ascii=False) + "\n")
-                        rows.append(row)
                     pf.flush()
                     n_chunks += len(batch)
         except Exception:
-            # 途中失敗: 挿入済みチャンクの記録（partial）を残す。次回実行時に
-            # _cleanup_partial_ingest が同チャンクを索引から外すため二重登録しない。
+            # 途中失敗:
+            # - 挿入済みチャンクの記録（partial）は残す → 次回実行時に
+            #   _cleanup_partial_ingest が索引から外すため二重登録しない
+            # - force 再構築ではメモリ上の索引から旧ノードを削除済みのため、
+            #   次回検索で永続済みの旧索引を読み直す（既存の完成済み文書 JSON も
+            #   上書きしない）
+            self._index = None
             raise
         index.storage_context.persist(persist_dir=str(self.storage_dir))
         self._register_book(book_title, path.name, n_chunks, doc_id,
                             path=resolved_path)
-        self._write_document_json(doc_id, book_title, path.name,
-                                  resolved_path, rows)
-        partial.unlink(missing_ok=True)   # 完走したので中途記録は不要
+        self._finalize_document_json(doc_id, book_title, path.name,
+                                     resolved_path, partial)
         return book_title
 
     @staticmethod
@@ -295,19 +297,63 @@ class PagedRAG:
     def _partial_ingest_path(self, doc_id: str) -> Path:
         return self.documents_dir / f"{doc_id}.ingest.jsonl"
 
+    def _finalize_document_json(self, doc_id: str, title: str, source: str,
+                                path: str, partial: Path) -> None:
+        """一時 JSONL を1行ずつ読み、最終文書 JSON を **ストリーム生成** する。
+
+        - `{doc_id}.json.tmp` へ書き、完了後に os.replace で atomic に置き換える
+          （途中失敗では既存の完成済み文書 JSON を上書きしない）
+        - 完了時に一時 JSONL を削除する
+        - チャンク全量を list として保持しない
+        """
+        import os
+
+        summary = ""
+        final = self.documents_dir / f"{doc_id}.json"
+        if final.exists():
+            try:  # 既存 JSON の summary は保持（巨大でも読むのは旧版1回だけ）
+                summary = json.loads(final.read_text(encoding="utf-8")) \
+                    .get("summary", "")
+            except (OSError, json.JSONDecodeError):
+                summary = ""
+        head = {"doc_id": doc_id, "title": title, "source": source,
+                "path": path, "summary": summary}
+        tmp = self.documents_dir / f"{doc_id}.json.tmp"
+        with open(tmp, "w", encoding="utf-8") as out, \
+                open(partial, encoding="utf-8") as inp:
+            out.write(json.dumps(head, ensure_ascii=False)[:-1])  # 末尾 } を外す
+            out.write(', "chunks": [')
+            first = True
+            for line in inp:
+                line = line.strip()
+                if not line:
+                    continue
+                if not first:
+                    out.write(",")
+                out.write(line)
+                first = False
+            out.write("]}")
+        os.replace(tmp, final)
+        partial.unlink(missing_ok=True)   # 完走したので中途記録は不要
+
     def _cleanup_partial_ingest(self, index, doc_id: str) -> None:
         """前回の取り込みが途中で失敗していた場合、その時点までに索引へ挿入
-        されたチャンクを削除する（再実行での二重登録防止）。"""
+        されたチャンクを削除する（再実行での二重登録防止）。
+
+        JSONL は行単位で読む（read_text() の全量読込をしない）。
+        """
         partial = self._partial_ingest_path(doc_id)
         if not partial.exists():
             return
         ids = []
         try:
-            for line in partial.read_text(encoding="utf-8").splitlines():
-                if line.strip():
-                    cid = json.loads(line).get("chunk_id")
-                    if cid:
-                        ids.append(cid)
+            with open(partial, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        cid = json.loads(line).get("chunk_id")
+                        if cid:
+                            ids.append(cid)
         except (json.JSONDecodeError, OSError):
             pass
         if ids:
@@ -319,32 +365,95 @@ class PagedRAG:
                 print(f"[PagedRAG] 中途チャンクの削除に失敗（続行）: {e}")
         partial.unlink(missing_ok=True)
 
-    def _load_source_documents(self, path: Path) -> list:
-        """ファイルを Document 群として読み込む。
+    def _load_source_documents(self, path: Path):
+        """ファイルを Document の **iterable** として返す（取り込みのフック）。
 
-        - PDF などは SimpleDirectoryReader（ページ単位の Document）。
-        - txt/md はセグメント（約20万字）単位に分割して読み込み、数十MBの
-          テキストを1つの巨大 Document として splitter に渡さない。
+        - txt/md: 64KB ずつ逐次読み、約20万字のセグメントを yield する generator
+          （`Path.read_text()` の全量読込をしない。長い1行は強制分割）
+        - PDF: pypdf で1ページずつ yield（全ページ本文の list 化をしない。
+          ページ番号は page_label に保持）
+        - その他の形式: SimpleDirectoryReader（従来どおり list）
         """
-        from llama_index.core import Document, SimpleDirectoryReader
+        suffix = path.suffix.lower()
+        if suffix in {".txt", ".md", ".markdown"}:
+            return self._iter_text_documents(path)
+        if suffix == ".pdf":
+            return self._iter_pdf_pages(path)
+        from llama_index.core import SimpleDirectoryReader
 
-        if path.suffix.lower() in {".txt", ".md", ".markdown"}:
-            text = path.read_text(encoding="utf-8", errors="replace")
-            seg = 200_000
-            if len(text) <= seg:
-                return [Document(text=text)]
-            docs, pos = [], 0
-            while pos < len(text):
-                end = min(len(text), pos + seg)
-                cut = end
-                if end < len(text):
-                    nl = text.rfind("\n", pos + int(seg * 0.8), end)
-                    if nl > pos:
-                        cut = nl + 1
-                docs.append(Document(text=text[pos:cut]))
-                pos = cut
-            return docs
         return SimpleDirectoryReader(input_files=[str(path)]).load_data()
+
+    @staticmethod
+    def _iter_text_segments(path: Path, *, seg_chars: int = 200_000,
+                            block_chars: int = 64 * 1024):
+        """テキストをブロック読みし、約 seg_chars のセグメントを yield する。
+
+        - できるだけ行境界（改行）で切る。改行の無い長い1行は seg_chars で強制分割
+        - 連結すれば元の本文と一致する（欠落・重複なし）
+        """
+        buf: list[str] = []
+        size = 0
+        with open(path, encoding="utf-8", errors="replace") as f:
+            while True:
+                block = f.read(block_chars)
+                if not block:
+                    break
+                buf.append(block)
+                size += len(block)
+                while size >= seg_chars:
+                    joined = "".join(buf)
+                    cut = joined.rfind("\n", int(seg_chars * 0.8), seg_chars)
+                    cut = cut + 1 if cut > 0 else seg_chars  # 長い1行: 強制分割
+                    yield joined[:cut]
+                    joined = joined[cut:]
+                    buf = [joined]
+                    size = len(joined)
+        if size:
+            yield "".join(buf)
+
+    def _iter_text_documents(self, path: Path):
+        from llama_index.core import Document
+
+        for seg in self._iter_text_segments(path):
+            yield Document(text=seg)
+
+    @staticmethod
+    def _iter_pdf_pages(path: Path):
+        """PDF を1ページずつ Document へ（page_label 保持・全ページ list 化なし）。"""
+        from llama_index.core import Document
+        from pypdf import PdfReader
+
+        reader = PdfReader(str(path))
+        for i in range(len(reader.pages)):
+            try:
+                text = reader.pages[i].extract_text() or ""
+            except Exception as e:  # noqa: BLE001  1ページの失敗で全体を止めない
+                print(f"[PagedRAG] {path.name} p.{i + 1} の抽出に失敗（続行）: {e}")
+                text = ""
+            yield Document(text=text,
+                           metadata={"page_label": str(i + 1),
+                                     "file_name": path.name})
+
+    def _estimate_source(self, path: Path) -> tuple[int, int]:
+        """処理開始時の表示用の（ページ/セグメント数, 推定チャンク数）を軽量に見積る。
+
+        本文は読み込まない（txt/md はバイト数から、PDF はページ数だけ取得）。
+        """
+        size = path.stat().st_size
+        est_chars = max(1, size // 2)   # UTF-8 日本語 ≈ 3byte/字、英数 1byte の折衷
+        est_chunks = max(1, est_chars // max(1, self.chunk_size - self.chunk_overlap))
+        suffix = path.suffix.lower()
+        if suffix in {".txt", ".md", ".markdown"}:
+            return max(1, est_chars // 200_000), est_chunks
+        if suffix == ".pdf":
+            try:
+                from pypdf import PdfReader
+
+                pages = len(PdfReader(str(path)).pages)
+                return pages, max(pages, est_chunks)
+            except Exception:  # noqa: BLE001
+                return 1, est_chunks
+        return 1, est_chunks
 
     def _delete_doc_nodes(self, index, doc_id: str) -> None:
         """再取り込み(force=True)前に、その文書の既存チャンクを索引から削除する。

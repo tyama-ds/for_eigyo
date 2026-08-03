@@ -461,7 +461,7 @@ class MultiRAG:
         return discover(root)
 
     @classmethod
-    def pinned(cls, **kwargs) -> "MultiRAG":
+    def pinned(cls, **kwargs) -> MultiRAG:
         """ピン留め済みの索引だけで MultiRAG を作る（消えたピンはスキップして通知）。"""
         infos = pinned_indexes()
         missing = [i.path for i in infos if i.kind == "missing"]

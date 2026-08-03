@@ -190,7 +190,8 @@ class MultiPaperRAG:
 
     def _make_summary(self, title: str) -> str:
         try:
-            summ = self._rag.query("この論文の主題・手法・主要な結果を2文で要約して", title=title).text.strip()
+            summ = self._rag.query("この論文の主題・手法・主要な結果を2文で要約して",
+                                   title=title).text.strip()
         except Exception:  # noqa: BLE001
             summ = ""
         self._manifest_set(title, {"summary": summ})
@@ -217,12 +218,14 @@ class MultiPaperRAG:
             if len(all_papers) >= 2:
                 use = all_papers[: max(self.max_papers, 2)]
                 print(f"[MultiPaperRAG] 横断検索で特定できた論文が {len(cands)} 件のため、"
-                      f"全論文 {len(use)} 件を対象にします（明示指定は compare(..., papers=[...])）")
+                      f"全論文 {len(use)} 件を対象にします"
+                      "（明示指定は compare(..., papers=[...])）")
                 cands = use
             elif not cands:
                 cands = all_papers
         if not cands:
-            raise RuntimeError("論文が取り込まれていません。add_paper()/add_papers() を実行してください。")
+            raise RuntimeError("論文が取り込まれていません。add_paper()/add_papers() を実行してくだ"
+                               "さい。")
         from .bookindex import progress
 
         per_paper: dict[str, str] = {}
@@ -281,7 +284,8 @@ class MultiPaperRAG:
         from .bookrag import BookRAG
 
         book = BookRAG(storage_dir=str(self.storage_dir / "books" / self._safe(title)),
-                       **self.book_kwargs)  # 高速化ノブ等を継承（chunk_chars/max_nodes/er_use_llm…）
+                       # 高速化ノブ等を継承（chunk_chars/max_nodes/er_use_llm…）
+                       **self.book_kwargs)
         info = self._manifest().get(title, {})
         if book.info().get("nodes", 0) == 0:
             src = info.get("path")
@@ -318,7 +322,8 @@ class MultiPaperRAG:
         blocks = "\n\n".join(f"[{t}]\n{v}" for t, v in per_paper.items())
         prompt = (
             f"以下は各論文から抽出した「{metric}」の数値です。論文を行、指標/条件を列にした"
-            " **Markdown 比較表** を作り、続けて要点を一言述べてください。値が無い論文は空欄に。\n\n"
+            " **Markdown 比較表** を作り、続けて要点を一言述べてください。値が無い論文は空欄に。\n"
+            "\n"
             + blocks
         )
         return complete(prompt).strip()
@@ -352,7 +357,8 @@ class MultiPaperRAG:
         try:
             import pdfplumber
         except ImportError:
-            print("[MultiPaperRAG] PDF 表抽出には pdfplumber が必要: pip install pdfplumber（スキップ）")
+            print("[MultiPaperRAG] PDF 表抽出には pdfplumber が必要: pip install pdfplumber（スキッ"
+                  "プ）")
             return None
         tables = []
         try:
@@ -370,7 +376,8 @@ class MultiPaperRAG:
         try:
             from docx import Document
         except ImportError:
-            print("[MultiPaperRAG] Word 表抽出には python-docx が必要: pip install python-docx（スキップ）")
+            print("[MultiPaperRAG] Word 表抽出には python-docx が必要: pip install python-docx（ス"
+                  "キップ）")
             return None
         tables = []
         try:
@@ -388,12 +395,13 @@ class MultiPaperRAG:
         try:
             from openpyxl import load_workbook
         except ImportError:
-            print("[MultiPaperRAG] Excel 表抽出には openpyxl が必要: pip install openpyxl（スキップ）")
+            print("[MultiPaperRAG] Excel 表抽出には openpyxl が必要: pip install openpyxl（スキップ"
+                  "）")
             return None
         tables = []
         try:
             wb = load_workbook(str(path), read_only=True, data_only=True)
-            for si, ws in enumerate(wb.worksheets, start=1):
+            for _si, ws in enumerate(wb.worksheets, start=1):
                 # datetime 等の非 JSON 型セルは文字列化する（json.dumps でのクラッシュ防止）
                 rows = [
                     [("" if c is None else c if isinstance(c, (str, int, float, bool)) else str(c))
@@ -429,7 +437,8 @@ class MultiPaperRAG:
         try:
             import fitz  # PyMuPDF
         except ImportError:
-            print("[MultiPaperRAG] pics=True には pymupdf が必要: pip install pymupdf（図理解をスキップ）")
+            print("[MultiPaperRAG] pics=True には pymupdf が必要: pip install pymupdf（図理解をスキ"
+                  "ップ）")
             return
         figs = []
         try:
@@ -484,7 +493,8 @@ class MultiPaperRAG:
         m = self._manifest()
         m.setdefault(title, {}).update(fields)
         self.storage_dir.mkdir(parents=True, exist_ok=True)
-        self._manifest_path.write_text(json.dumps(m, ensure_ascii=False, indent=2), encoding="utf-8")
+        self._manifest_path.write_text(json.dumps(m, ensure_ascii=False, indent=2),
+                                       encoding="utf-8")
 
     @staticmethod
     def _safe(title: str) -> str:

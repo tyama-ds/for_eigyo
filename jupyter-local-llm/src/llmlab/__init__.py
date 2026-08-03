@@ -10,9 +10,17 @@
 
 from __future__ import annotations
 
+from .app import launch_app
 from .bookrag import BookAnswer, BookRAG, Evidence
 from .chat import Chat, chat_panel
-from .client import get_client
+
+# 重要: この import は complete.py（補完モジュール）の import より後に置くこと。
+# サブモジュール import はパッケージ属性 `complete` をモジュールで上書きするため、
+# 先に置くと llmlab.complete が関数ではなくモジュールになる（'module' is not callable）。
+from .client import (
+    complete,  # noqa: E402
+    get_client,
+)
 from .complete import code_complete, completion_panel, inline_complete
 from .config import (
     Settings,
@@ -23,12 +31,14 @@ from .config import (
     is_configured,
     settings_form,
 )
-from .pagedrag import Answer, DocRank, DocRAG, PagedRAG, Source, content_hash, make_doc_id
-from .indexmanager import DocAnswer, IndexManager, SearchHit
-from .multipaper import Comparison, MultiPaperRAG
-from .tableqa import TableAnswer, TableQA
+from .copilotresearch import launch_copilot_research
 from .docqa import DocQA, DocResult
+from .indexmanager import DocAnswer, IndexManager, SearchHit
+from .loopsys import launch_loop
+from .multipaper import Comparison, MultiPaperRAG
+from .pagedrag import Answer, DocRAG, DocRank, PagedRAG, Source, content_hash, make_doc_id
 from .rag import build_rag
+from .tableqa import TableAnswer, TableQA
 from .workspace import (
     ExtractResult,
     IndexInfo,
@@ -39,14 +49,6 @@ from .workspace import (
     pinned_indexes,
     unpin_index,
 )
-from .app import launch_app
-from .loopsys import launch_loop
-from .copilotresearch import launch_copilot_research
-
-# 重要: この import は complete.py（補完モジュール）の import より後に置くこと。
-# サブモジュール import はパッケージ属性 `complete` をモジュールで上書きするため、
-# 先に置くと llmlab.complete が関数ではなくモジュールになる（'module' is not callable）。
-from .client import complete  # noqa: E402
 
 __all__ = [
     "configure",
@@ -109,4 +111,5 @@ __all__ = [
     "build_index",
 ]
 
-__version__ = "0.9.0"  # llmlab.__version__ で更新確認できる（copilotresearch.APP_VERSION と合わせる）
+# llmlab.__version__ で更新確認できる（copilotresearch.APP_VERSION と合わせる）
+__version__ = "0.9.1"

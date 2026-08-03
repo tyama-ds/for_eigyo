@@ -539,7 +539,8 @@ class _Handler(BaseHTTPRequestHandler):
         from .config import is_configured
 
         if not is_configured():
-            self._json({"error": "接続設定が未入力です（取り込み・検索には埋め込みAPIが必要）"}, 400)
+            self._json({"error": "接続設定が未入力です（取り込み・検索には埋め込みAPIが必要）"},
+                       400)
             return
         payload = self._read_json()
         payload["op"] = op  # ルート一致で保証済み（add / rebuild / search / graph）

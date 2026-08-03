@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "llmlab"
-version = "0.9.0"
+version = "0.9.1"
 description = "JupyterLab で OpenAI 互換エンドポイント（ローカルLLM）を使う AI コーディング支援ツールキット（チャット / 補完 / RAG）"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -55,3 +55,9 @@ llmlab = ["*.html"]
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+
+[tool.ruff.lint]
+# 明示的なルールセット。新しい ruff の既定（E4/E7/E9/F）にも、旧 ruff の
+# 既定（E 全部 + F。E501 行長を含む）にも含まれる指摘をすべてカバーし、
+# さらに W/I/UP/B を追加する（ルールを弱めて既存エラーを隠す設定はしない）
+select = ["E", "F", "W", "I", "UP", "B"]

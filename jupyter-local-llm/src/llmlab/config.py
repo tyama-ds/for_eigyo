@@ -199,7 +199,7 @@ def doctor() -> None:
         print("     llmlab.configure(base_url=..., api_key=..., model=...)")
 
 
-def _settings_form_text() -> "Settings":
+def _settings_form_text() -> Settings:
     """ウィジェットが使えない環境向けのテキスト入力フォールバック。"""
     import getpass
 
@@ -302,7 +302,8 @@ def settings_form(text: bool = False):
                 proxy = (s.proxy_url or "環境変数") if s.use_proxy else "なし（直結）"
                 embed = ("ローカル:" + s.embed_local_model) if s.embed_provider == "local" \
                     else (s.embed_base_url or "Base URL 流用")
-                print(f"✅ 設定しました: {s.base_url}  model={s.model}  proxy={proxy}  embed={embed}")
+                print(f"✅ 設定しました: {s.base_url}  model={s.model}  proxy={proxy}  embed="
+                      f"{embed}")
             except Exception as e:  # noqa: BLE001
                 print(f"❌ {e}")
 

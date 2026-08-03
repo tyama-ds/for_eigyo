@@ -144,11 +144,11 @@ def build_rag(
     既存インデックスがあれば再利用し、`rebuild=True` で作り直す。
     """
     from llama_index.core import (
+        SimpleDirectoryReader,
         StorageContext,
         VectorStoreIndex,
         load_index_from_storage,
     )
-    from llama_index.core import SimpleDirectoryReader
 
     apply_llama_settings()
     storage_path = Path(storage_dir)

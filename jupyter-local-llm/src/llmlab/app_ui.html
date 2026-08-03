@@ -1376,7 +1376,7 @@ window.docsDetail = async m=>{
   window.scrollTo({top:document.body.scrollHeight, behavior:"smooth"});
   try{
     const d = await api("/api/docs/detail?root="+encodeURIComponent($("#root").value)+"&doc_id="+encodeURIComponent(did));
-    DETAIL = {m, d}; GD = null; GSEL = null;
+    DETAIL = {m, d}; GD = null; GSEL = null; GSTATE = {...GSTATE_DEFAULT};
     const bi = d.bookindex;
     const secList = bi && bi.sections && bi.sections.length
       ? `<div style="font-size:.78rem;margin:6px 0">セクション（${bi.section_count}）: ${bi.sections.slice(0,30).map(esc).join(" / ")}</div>` : "";
@@ -1433,18 +1433,27 @@ const gtypeColor = t=>{
   return GTYPE_COLORS[(i >= 0 ? i : types.length) % GTYPE_COLORS.length];
 };
 
+// グラフ表示の操作状態（再読込・再描画をまたいで維持する）
+const GSTATE_DEFAULT = {name:"", type:"", hops:"1", limit:"100", center:true};
+let GSTATE = {...GSTATE_DEFAULT};
+
+function gdReadControls(){
+  if($("#g_name")){
+    GSTATE = {name:$("#g_name").value.trim(), type:$("#g_type").value,
+              hops:$("#g_hops").value, limit:$("#g_limit").value,
+              center:$("#g_center").checked};
+  }
+}
+
 async function gdFetch(){
   const did = DETAIL.m.doc_id;
+  gdReadControls();
   const p = new URLSearchParams({root: $("#root").value, doc_id: did});
-  const lim = $("#g_limit") ? $("#g_limit").value : "100";
-  p.set("limit", lim);
-  p.set("hops", $("#g_hops") ? $("#g_hops").value : "1");
-  const name = $("#g_name") ? $("#g_name").value.trim() : "";
-  if(name) p.set("name", name);
-  const ty = $("#g_type") ? $("#g_type").value : "";
-  if(ty) p.set("type", ty);
-  if(GSEL != null && $("#g_center") && $("#g_center").checked)
-    p.set("center_entity_id", GSEL);
+  p.set("limit", GSTATE.limit);
+  p.set("hops", GSTATE.hops);
+  if(GSTATE.name) p.set("name", GSTATE.name);
+  if(GSTATE.type) p.set("type", GSTATE.type);
+  if(GSEL != null && GSTATE.center) p.set("center_entity_id", GSEL);
   GD = await api("/api/docs/graph-data?"+p.toString());
   return GD;
 }
@@ -1455,7 +1464,10 @@ async function gdEnsure(tab){
     try{ await gdFetch(); }
     catch(e){ $("#dt_"+tab).innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
   }
-  renderEntitiesTab(); renderRelationsTab(); renderGraphTab(tab === "graph");
+  // 選択されたタブだけを描画する（開いていないタブまで毎回レイアウトしない）
+  if(tab === "entities") renderEntitiesTab();
+  else if(tab === "relations") renderRelationsTab();
+  else if(tab === "graph") renderGraphTab();
 }
 
 function gdStatusBox(){
@@ -1523,19 +1535,24 @@ function wireGBuild(box){
   if(b) b.onclick = ()=>docsGraph(DETAIL.m);
 }
 
-function renderGraphTab(visible){
+function renderGraphTab(){
   const box = $("#dt_graph");
   if(!GD.stats.built){ box.innerHTML = gdStatusBox(); wireGBuild(box); return; }
   const types = GD.types || [];
+  // ツールバーは GSTATE から復元する（再読込しても 名前検索/種別/hops/limit/
+  // 選択ノード中心 の状態を失わない）
   box.innerHTML = `
     <div class="row" style="flex-wrap:wrap;gap:8px;margin-bottom:6px">
-      <input type="text" id="g_name" placeholder="エンティティ名で検索" style="width:180px">
+      <input type="text" id="g_name" placeholder="エンティティ名で検索" style="width:180px" value="${esc(GSTATE.name)}">
       <select id="g_type" style="width:auto"><option value="">全種別</option>
-        ${types.map(t=>`<option value="${esc(t)}">${esc(t)}</option>`).join("")}</select>
-      <select id="g_hops" style="width:auto"><option value="1">1ホップ</option><option value="2">2ホップ</option></select>
-      <select id="g_limit" style="width:auto"><option>50</option><option selected>100</option><option>200</option></select>
+        ${types.map(t=>`<option value="${esc(t)}"${t===GSTATE.type?" selected":""}>${esc(t)}</option>`).join("")}</select>
+      <select id="g_hops" style="width:auto">
+        <option value="1"${GSTATE.hops==="1"?" selected":""}>1ホップ</option>
+        <option value="2"${GSTATE.hops==="2"?" selected":""}>2ホップ</option></select>
+      <select id="g_limit" style="width:auto">
+        ${["50","100","200"].map(v=>`<option${v===GSTATE.limit?" selected":""}>${v}</option>`).join("")}</select>
       <label style="font-size:.72rem;color:var(--ink-2);display:flex;align-items:center;gap:4px">
-        <input type="checkbox" id="g_center" checked style="accent-color:var(--accent-a)">選択ノード中心</label>
+        <input type="checkbox" id="g_center"${GSTATE.center?" checked":""} style="accent-color:var(--accent-a)">選択ノード中心</label>
       <button class="btn sm ghost" id="g_reload">再読込</button>
     </div>
     ${gdStatusBox()}
@@ -1547,10 +1564,11 @@ function renderGraphTab(visible){
       <div id="gdPanel"><div style="color:var(--ink-mute)">ノードを選択すると、名前・種類・説明・関連エンティティ・根拠（セクション/ページ/本文抜粋/元ファイル）を表示します。</div></div>
     </div>`;
   $("#g_reload").onclick = async ()=>{
-    try{ await gdFetch(); renderEntitiesTab(); renderRelationsTab(); renderGraphTab(true); }
+    try{ await gdFetch(); renderGraphTab(); }
     catch(e){ $("#gsvgbox").innerHTML = `<div class="err" style="padding:10px">${esc(e.message)}</div>`; }
   };
   drawGraphSvg();
+  if(GSEL != null && GD.nodes.some(n=>n.id===GSEL)) gdSelect(GSEL);
 }
 
 function layoutGraph(nodes, edges, W, H){
@@ -1633,10 +1651,14 @@ function drawGraphSvg(){
     t.setAttribute("text-anchor","middle");
     t.textContent = (n.label||"").slice(0,14);   // textContent で XSS 安全
     grp.appendChild(t);
-    grp.addEventListener("click", ev=>{ ev.stopPropagation(); gdSelect(n.id); });
+    // 選択は SVG 側の pointerdown/up（capture対応）で処理する（click は
+    // pointer capture 中にノードへ届かないため使わない）
     g.appendChild(grp);
   });
-  // ズーム/パン（viewBox 操作。外部ライブラリなし）
+  // ズーム/パン（viewBox 操作。外部ライブラリなし）。
+  // ハンドラは **破棄される SVG 要素自身** に登録し、pointer capture で
+  // 要素外へのドラッグを追跡する。旧実装の window.addEventListener は
+  // 再描画のたびに蓄積してリークしていた（windowリスナーは使わない）。
   let vb = {x:0,y:0,w:W,h:H}, panning=null;
   const apply = ()=>svg.setAttribute("viewBox",`${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
   svg.addEventListener("wheel", ev=>{
@@ -1647,15 +1669,34 @@ function drawGraphSvg(){
     vb = {x: mx-(mx-vb.x)*k, y: my-(my-vb.y)*k, w: vb.w*k, h: vb.h*k};
     apply();
   }, {passive:false});
-  svg.addEventListener("mousedown", ev=>{ panning={x:ev.clientX,y:ev.clientY,vb:{...vb}}; });
-  window.addEventListener("mousemove", ev=>{
+  svg.addEventListener("pointerdown", ev=>{
+    // pointer capture 中は click がノードへ届かないため、押下時のノードを
+    // 覚えておき、ほぼ動かずに離した場合は選択として扱う
+    const nodeEl = ev.target && ev.target.closest
+      ? ev.target.closest(".gnode") : null;
+    panning = {x:ev.clientX, y:ev.clientY, vb:{...vb}, moved:false, node:nodeEl};
+    try{ svg.setPointerCapture(ev.pointerId); }catch(_e){}
+  });
+  svg.addEventListener("pointermove", ev=>{
     if(!panning) return;
+    if(!panning.moved &&
+       Math.abs(ev.clientX-panning.x)+Math.abs(ev.clientY-panning.y) <= 4) return;
+    panning.moved = true;
     const sx = vb.w/boxEl.clientWidth, sy = vb.h/boxEl.clientHeight;
     vb.x = panning.vb.x - (ev.clientX-panning.x)*sx;
     vb.y = panning.vb.y - (ev.clientY-panning.y)*sy;
     apply();
   });
-  window.addEventListener("mouseup", ()=>{ panning=null; });
+  const endPan = ev=>{
+    if(panning && !panning.moved && panning.node){
+      const eid = +panning.node.dataset.eid;
+      if(!Number.isNaN(eid)) gdSelect(eid);   // クリック（ドラッグでない）= 選択
+    }
+    panning = null;
+    try{ svg.releasePointerCapture(ev.pointerId); }catch(_e){}
+  };
+  svg.addEventListener("pointerup", endPan);
+  svg.addEventListener("pointercancel", endPan);
   boxEl.innerHTML = "";
   boxEl.appendChild(svg);
 }

@@ -629,7 +629,8 @@ def test_select_by_section_embed_failure_falls_back():
 
     old_embed, old_json = bx.embed, bx.llm_json
     bx.embed = broken_embed
-    bx.llm_json = lambda prompt: {"section_ids": []}  # LLM も未選択 → cosine フォールバックは embed 死で不可
+    # LLM も未選択 → cosine フォールバックは embed 死で不可
+    bx.llm_json = lambda prompt: {"section_ids": []}
     try:
         rag = BookRAG.__new__(BookRAG)
         try:
@@ -654,7 +655,7 @@ def test_even_sample_preserves_document_order():
     for s in range(4):
         sec = bi.add_node(type="Section", content=f"S{s}", book="doc", level=1,
                           title=f"S{s}", parent=root.id)
-        for t in range(10):
+        for _t in range(10):
             n = bi.add_node(type="Text", content="x" * 50, book="doc", parent=sec.id)
             targets.append(n.id)
     chosen = _even_sample(bi, targets, 8)

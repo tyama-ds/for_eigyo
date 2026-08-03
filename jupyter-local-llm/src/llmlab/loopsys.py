@@ -137,9 +137,11 @@ _runs_lock = threading.Lock()
 
 _TOOL_SPECS = {
     "rag_search": '- rag_search: {"tool":"rag_search","args":{"question":"..."}}\n'
-                  "    選択済みの索引（MultiRAG）を横断検索して出典つきで答える。文書・規程・論文の内容が要るとき。",
+                  "    選択済みの索引（MultiRAG）を横断検索して出典つきで答える。文書・規程・論文の"
+                  "内容が要るとき。",
     "table_calc": '- table_calc: {"tool":"table_calc","args":{"question":"..."}}\n'
-                  "    指定済みの Excel/CSV に対し集計・計算・条件抽出（TableQA / text-to-pandas）。数値の集計が要るとき。",
+                  "    指定済みの Excel/CSV に対し集計・計算・条件抽出（TableQA / text-to-pandas）"
+                  "。数値の集計が要るとき。",
     "llm": '- llm: {"tool":"llm","args":{"prompt":"..."}}\n'
            "    汎用の文章生成・推敲・変換。検索や計算が不要な思考はこれ。",
     "memory_write": '- memory_write: {"tool":"memory_write","args":{"key":"...","value":"..."}}\n'
@@ -187,7 +189,8 @@ def _plan(state: dict, available: list[str]) -> dict:
     from .client import complete
 
     tools = "\n".join(_TOOL_SPECS[name] for name in available if name in _TOOL_SPECS)
-    obs = "\n".join(f"[{o['tool']}] {o['summary'][:600]}" for o in state["observations"]) or "（まだ無し）"
+    obs = "\n".join(f"[{o['tool']}] {o['summary'][:600]}"
+                    for o in state["observations"]) or "（まだ無し）"
     fb = "\n".join(state["feedback"]) or "（無し）"
     prompt = (f"目標:\n{state['goal']}\n\n観測履歴（ツール実行の結果）:\n{obs}\n\n"
               f"検証器からの差し戻し:\n{fb}\n\n次の 1 手を JSON で。")
@@ -259,15 +262,18 @@ def _execute(plan: dict, payload: dict, state: dict, run: _Run) -> dict:
 _RAG_MAX_ROUNDS = 3  # 検索ラウンド（書き換え→検索→グレード）の上限
 
 _RAG_REWRITE_SYSTEM = """\
-あなたは RAG ループの「クエリ書き換え器」です。目標を、索引検索に効く具体的な検索クエリへ変換します。
+あなたは RAG ループの「クエリ書き換え器」です。目標を、索引検索に効く具体的な検索クエリへ変換します
+。
 出力は JSON のみ: {"queries": ["クエリ1", "クエリ2"], "note": "一行の狙い"}
 規則: クエリは 1〜3 個。固有名詞・年度・条番号など検索に効く語を残す。
 「不足している情報」が示されていれば、それを埋めるクエリを優先する。既出クエリの言い換えだけは避ける。"""
 
 _RAG_GRADE_SYSTEM = """\
 あなたは RAG ループの「関連性グレーダ」です。根拠候補が目標に答えるのに十分か判定します。
-出力は JSON のみ: {"sufficient": true/false, "keep": [採用する候補の番号], "missing": "不足している情報（一行）"}
-判定基準: keep には目標に関係する候補だけを残す。目標の全ての問いに根拠が揃っていれば sufficient=true。"""
+出力は JSON のみ: {"sufficient": true/false, "keep": [採用する候補の番号], "missing":
+"不足している情報（一行）"}
+判定基準: keep には目標に関係する候補だけを残す。
+目標の全ての問いに根拠が揃っていれば sufficient=true。"""
 
 _RAG_GENERATE_SYSTEM = """\
 あなたは RAG ループの「回答生成器」です。与えられた根拠だけを使って目標に答えます。
@@ -365,7 +371,8 @@ def _execute_rag(plan: dict, payload: dict, state: dict, run: _Run) -> dict:
                                   "query": q})
             added += 1
         r["graded"] = False
-        return {"summary": f"クエリ『{q}』で根拠候補 {added} 件を取得（累計 {len(r['evidence'])} 件）",
+        return {"summary": f"クエリ『{q}』で根拠候補 {added} 件を取得"
+                           f"（累計 {len(r['evidence'])} 件）",
                 "detail": {"query": q, "added": added},
                 "external": f"索引ストレージ×{len(payload.get('indexes') or [])}"}
 
@@ -374,8 +381,10 @@ def _execute_rag(plan: dict, payload: dict, state: dict, run: _Run) -> dict:
         if not r["evidence"]:
             r["sufficient"] = False
             r["missing"] = "根拠がひとつも見つかっていません"
-            return {"summary": "根拠候補 0 件 — 不足", "detail": {"sufficient": False}, "external": ""}
-        prompt = (f"目標:\n{state['goal']}\n\n根拠候補:\n{_rag_numbered(r['evidence'])}\n\nJSON で。")
+            return {"summary": "根拠候補 0 件 — 不足", "detail": {"sufficient": False},
+                    "external": ""}
+        prompt = (f"目標:\n{state['goal']}\n\n根拠候補:\n{_rag_numbered(r['evidence'])}\n\nJSON で"
+                  f"。")
         try:
             data = _extract_json(complete(prompt, system=_RAG_GRADE_SYSTEM, temperature=0.0))
             keep = {int(k) for k in data.get("keep", [])}
@@ -393,8 +402,10 @@ def _execute_rag(plan: dict, payload: dict, state: dict, run: _Run) -> dict:
 
     # rag_generate
     fb = "\n".join(state["feedback"][-2:]) or "なし"
-    note = "" if r["sufficient"] else "\n注意: 根拠は不十分と判定済み。答えられない部分は「根拠なし」と明記する。"
-    prompt = (f"目標:\n{state['goal']}\n\n根拠:\n{_rag_numbered(r['evidence'], 800) or '（なし）'}\n\n"
+    note = "" if r["sufficient"] else \
+        "\n注意: 根拠は不十分と判定済み。答えられない部分は「根拠なし」と明記する。"
+    prompt = (f"目標:\n{state['goal']}\n\n"
+              f"根拠:\n{_rag_numbered(r['evidence'], 800) or '（なし）'}\n\n"
               f"差し戻しコメント:\n{fb}{note}\n\n回答を書いてください。")
     text = complete(prompt, system=_RAG_GENERATE_SYSTEM, temperature=0.2)
     r["draft"] = text
@@ -410,13 +421,15 @@ def _verify_rag(answer: str, state: dict, payload: dict, *, demo: bool = False) 
     has_cite = (re.search(r"\[\d+\]", answer)
                 or re.search(r"^\s*(出典|参考文献|参照|References?)\s*[:：]", answer, re.MULTILINE))
     if not has_cite:
-        return False, "出典の引用（[番号] または 出典: の一覧）がありません — 根拠を明示してください"
+        return False, ("出典の引用（[番号] または 出典: の一覧）がありません — "
+                       "根拠を明示してください")
     if demo or payload.get("verify_mode") == "guard":
         return True, "ガードレール + 出典チェック合格"
     from .client import complete
 
     ev = _rag_numbered(state.get("rag", {}).get("evidence", []), 500) or "（なし）"
-    raw = complete(f"目標:\n{state['goal']}\n\n根拠:\n{ev}\n\n回答:\n{answer[:6000]}\n\n判定を JSON で。",
+    raw = complete(f"目標:\n{state['goal']}\n\n根拠:\n{ev}\n\n"
+                   f"回答:\n{answer[:6000]}\n\n判定を JSON で。",
                    system=_RAG_FAITH_SYSTEM, temperature=0.0)
     try:
         v = _extract_json(raw)
@@ -432,21 +445,26 @@ def _demo_execute_rag(plan: dict, state: dict, payload: dict) -> dict:
     r = _rag_state(state, payload)
     tool = plan["tool"]
     if tool == "rag_rewrite":
-        q = (f"{state['goal'][:48]} 数値根拠 新旧比較" if r["missing"] else f"{state['goal'][:48]} 概要 改定点")
+        q = (f"{state['goal'][:48]} 数値根拠 新旧比較" if r["missing"] else f"{state['goal'][:48]} "
+                                                                    f"概要 改定点")
         r["queries"] = [q]
         r["rounds"] += 1
         r["missing"] = ""
-        return {"summary": f"検索クエリ（ラウンド{r['rounds']}）: {q}", "detail": {"queries": [q]}, "external": ""}
+        return {"summary": f"検索クエリ（ラウンド{r['rounds']}）: {q}", "detail": {"queries": [q]},
+                "external": ""}
     if tool == "rag_search":
         q = r["queries"].pop(0)
         r["tried"].append(q)
-        canned = ([{"text": "（デモ）規程 第12条: 高所作業の定義が 2m→1.5m に改定…", "source": "demo_kitei.pdf p.8"}]
+        canned = ([{"text": "（デモ）規程 第12条: 高所作業の定義が 2m→1.5m に改定…",
+                    "source": "demo_kitei.pdf p.8"}]
                   if r["rounds"] <= 1 else
-                  [{"text": "（デモ）新旧対照表: 改定は3項目。教育時間 4h→6h、点検周期 年1→半期…", "source": "demo_taisho.xlsx 表2"}])
+                  [{"text": "（デモ）新旧対照表: 改定は3項目。教育時間 4h→6h、点検周期 年1→半期…",
+                    "source": "demo_taisho.xlsx 表2"}])
         for c in canned:
             r["evidence"].append({"n": len(r["evidence"]) + 1, "query": q, **c})
         r["graded"] = False
-        return {"summary": f"クエリ『{q}』で根拠候補 {len(canned)} 件を取得（累計 {len(r['evidence'])} 件）",
+        return {"summary": f"クエリ『{q}』で根拠候補 {len(canned)} 件を取得"
+                           f"（累計 {len(r['evidence'])} 件）",
                 "detail": {"query": q, "added": len(canned)}, "external": "索引ストレージ（デモ）"}
     if tool == "rag_grade":
         r["graded"] = True
@@ -462,7 +480,8 @@ def _demo_execute_rag(plan: dict, state: dict, payload: dict) -> dict:
     if tool == "rag_generate":
         r["gen_n"] += 1
         if r["gen_n"] == 1:  # わざと出典なし → 検証器の出典チェックで差し戻しになる
-            text = f"【回答・初稿】{state['goal']} — 定義の引き下げ・教育時間の増、などが改定点です。"
+            text = (f"【回答・初稿】{state['goal']} — "
+                    "定義の引き下げ・教育時間の増、などが改定点です。")
         else:
             text = (f"【回答】{state['goal']}\n\n"
                     "1. 高所作業の定義を 2m → 1.5m に引き下げ [1]\n"
@@ -696,7 +715,8 @@ def _demo_plan(state: dict, it: int) -> dict:
 def _demo_execute(plan: dict) -> dict:
     time.sleep(0.6)
     if plan["tool"] == "rag_search":
-        return {"summary": "（デモ）索引 2 件から関連断片を取得: 『…要点A…』(p.3) / 『…要点B…』(p.12)",
+        return {"summary": "（デモ）索引 2 件から関連断片を取得: "
+                           "『…要点A…』(p.3) / 『…要点B…』(p.12)",
                 "detail": {"sources": ["demo.pdf p.3", "demo.pdf p.12"]},
                 "external": "索引ストレージ（デモ）"}
     return {"summary": plan["args"].get("answer", ""), "detail": {}, "external": ""}
@@ -876,7 +896,8 @@ class _Handler(BaseHTTPRequestHandler):
 
         payload = self._read_json()
         if not payload.get("demo") and not is_configured():
-            self._json({"error": "接続設定が未入力です（CONNECT から設定するか、デモ実行を使ってください）"}, 400)
+            self._json({"error": "接続設定が未入力です（CONNECT から設定するか、デモ実行を使ってく"
+                                 "ださい）"}, 400)
             return
         payload.setdefault("trigger", "user")
         run_id = _start_run(payload, self.root_dir)

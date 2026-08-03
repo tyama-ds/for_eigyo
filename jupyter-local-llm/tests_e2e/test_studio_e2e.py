@@ -2,9 +2,9 @@
 
 実行方法（要 `pip install playwright` + Chromium）::
 
-    python tests_e2e/test_studio_e2e.py
+    python tests_e2e/test_studio_e2e.py     # 終了コード: 0=OK / 1=失敗 / 2=skip
     # または
-    pytest -q tests_e2e/test_studio_e2e.py
+    pytest -q tests_e2e/test_studio_e2e.py  # Chromium 不在なら pytest.skip
 
 確認項目（仕様の GUI 必須確認項目）:
  1. 単一ファイルの明示タグが一覧に表示される
@@ -12,11 +12,14 @@
  3. フォルダ取り込み中に ETA（残り時間/計算中）が表示される
  4. グラフ未構築・構築済み・部分グラフ・失敗 の4状態を表示できる
  5. グラフのノードを選択すると根拠（セクション/ページ/抜粋/元ファイル）が出る
- 6. 100ノード程度でも描画・操作できる
- 7. 外部ネットワーク要求が発生しない（127.0.0.1 のみ）
- 8. コンソール/ページエラーがない
+ 6. 100ノード程度でも描画・操作できる（再読込で検索/種別/hops/limit を維持）
+ 7. グラフ再描画で window リスナーが蓄積しない（pointer capture 方式）
+ 8. 外部ネットワーク要求が発生しない（テストサーバのみ）
+ 9. コンソール/ページエラーがない
 
-外部 LLM サーバ・外部 CDN は使わない。
+サーバは OS が割り当てる動的ポート（port 0）で起動し、成功・失敗・skip の
+全経路で shutdown する。Chromium を起動できない場合は「E2E ALL OK」とせず
+skip として報告する。外部 LLM サーバ・外部 CDN は使わない。
 """
 
 from __future__ import annotations
@@ -30,7 +33,6 @@ _SRC = Path(__file__).resolve().parents[1] / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-PORT = 8931
 FAILED: list[str] = []
 
 
@@ -138,7 +140,18 @@ def _setup_env(tmp: Path):
     return root, docs
 
 
-def run() -> int:
+def run() -> str:
+    """E2E を実行して "ok" / "fail" / "skip" を返す。
+
+    - サーバは動的ポート（port 0）で起動し、全経路で shutdown する
+    - Chromium を起動できない場合は skip（「E2E ALL OK」とは報告しない）
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        print("E2E SKIPPED: playwright が未導入です（pip install playwright）")
+        return "skip"
+
     import tempfile
 
     tmp = Path(tempfile.mkdtemp(prefix="studio_e2e_"))
@@ -149,21 +162,41 @@ def run() -> int:
     import llmlab.app as appmod
 
     handler = type("H", (appmod._Handler,), {"root_dir": str(root)})
-    httpd = ThreadingHTTPServer(("127.0.0.1", PORT), handler)
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)   # 動的ポート
+    port = httpd.server_address[1]
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    url = f"http://127.0.0.1:{PORT}"
+    url = f"http://127.0.0.1:{port}"
+    try:
+        return _run_checks(sync_playwright, url, root, docs)
+    finally:
+        httpd.shutdown()   # 成功・失敗・skip の全経路で停止
 
-    from playwright.sync_api import sync_playwright
 
+def _run_checks(sync_playwright, url, root, docs) -> str:
     exe = "/opt/pw-browsers/chromium"
     with sync_playwright() as pw:
         try:
             b = pw.chromium.launch(executable_path=exe) if Path(exe).exists() \
                 else pw.chromium.launch()
         except Exception as e:  # noqa: BLE001
-            print(f"SKIP: Chromium を起動できません（{e}）")
-            return 0
+            print(f"E2E SKIPPED: Chromium を起動できません（{e}）")
+            return "skip"
         pg = b.new_page(viewport={"width": 1480, "height": 980})
+        # window リスナー蓄積の計測（グラフ再描画のリーク回帰テスト）。
+        # Playwright 自身のクリック計測（HitTargetInterceptor）も window へ
+        # リスナーを足すため、スタックにページ由来（127.0.0.1）の フレームが
+        # あるものだけを数える
+        pg.add_init_script("""
+          window.__winDragListeners = 0;
+          const __orig = window.addEventListener.bind(window);
+          window.addEventListener = (t, ...a) => {
+            if (["mousemove","mouseup","pointermove","pointerup"].includes(t)) {
+              const stack = (new Error().stack || "");
+              if (stack.includes("127.0.0.1")) window.__winDragListeners++;
+            }
+            return __orig(t, ...a);
+          };
+        """)
         errors: list[str] = []
         ext_requests: list[str] = []
         pg.on("pageerror", lambda e: errors.append(f"pageerror: {e}"))
@@ -291,23 +324,51 @@ def run() -> int:
         pg.mouse.wheel(0, -240)
         pg.wait_for_timeout(200)
 
-        # --- 7/8. 外部リクエストなし・コンソールエラーなし -------------------
+        # --- 6b. 再読込で 検索/種別/hops/limit/中心チェック を維持 -----------
+        pg.fill("#g_name", "要素0")
+        pg.select_option("#g_hops", "2")
+        pg.select_option("#g_limit", "50")
+        pg.click("#g_reload")
+        pg.wait_for_selector("#gsvgbox svg", timeout=20000)
+        pg.wait_for_timeout(200)
+        check("再読込で検索語を維持", pg.input_value("#g_name") == "要素0")
+        check("再読込で hops/limit を維持",
+              pg.input_value("#g_hops") == "2" and pg.input_value("#g_limit") == "50")
+        check("再読込でフィルタが効く",
+              0 < pg.locator("#gsvgbox .gnode").count() <= 50)
+
+        # --- 7. グラフ再描画で window リスナーが蓄積しない --------------------
+        for _ in range(3):
+            pg.click("#g_reload")
+            pg.wait_for_selector("#gsvgbox svg", timeout=20000)
+            pg.wait_for_timeout(150)
+        n_listeners = pg.evaluate("window.__winDragListeners")
+        check("windowリスナー非蓄積（pointer capture 方式）", n_listeners == 0,
+              f"window drag listeners={n_listeners}")
+
+        # --- 8/9. 外部リクエストなし・コンソールエラーなし -------------------
         check("外部ネットワーク要求なし", not ext_requests, str(ext_requests[:3]))
         real = [e for e in errors if "favicon" not in e]
         check("コンソール/ページエラーなし", not real, str(real[:3]))
         b.close()
-    httpd.shutdown()
     print("\n" + ("E2E ALL OK" if not FAILED else f"E2E FAILED: {FAILED}"))
-    return 1 if FAILED else 0
+    return "fail" if FAILED else "ok"
 
 
 def test_studio_gui_e2e():
-    """pytest から呼ぶ場合のエントリポイント（playwright が無ければ skip）。"""
+    """pytest から呼ぶ場合のエントリポイント。
+
+    playwright 未導入・Chromium 不在は **skip**（偽の成功にしない）。
+    """
     import pytest
 
     pytest.importorskip("playwright")
-    assert run() == 0, f"E2E 失敗: {FAILED}"
+    result = run()
+    if result == "skip":
+        pytest.skip("Chromium を起動できないため GUI E2E を skip")
+    assert result == "ok", f"E2E 失敗: {FAILED}"
 
 
 if __name__ == "__main__":
-    sys.exit(run())
+    _r = run()
+    sys.exit(0 if _r == "ok" else (2 if _r == "skip" else 1))

@@ -68,7 +68,8 @@ class TableQA:
     def __init__(self, source=None, *, sheet=None):
         self.tables: dict = self._load(source, sheet)
         if not self.tables:
-            raise ValueError("表データが空です。ファイルパス / DataFrame / {名前:DataFrame} を渡してください。")
+            raise ValueError("表データが空です。ファイルパス / DataFrame / {名前:DataFrame} を渡し"
+                             "てください。")
 
     # ---- 読み込み ----
     def _load(self, source, sheet) -> dict:
