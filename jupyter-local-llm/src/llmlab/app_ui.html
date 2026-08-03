@@ -1253,7 +1253,7 @@ function runTask(url, body, {bar, stage, prog, onResult, onDone}){
         let eta = "";
         if(e.total > 1 && "eta_sec" in e){
           eta = e.eta_sec === null ? " ・残り時間を計算中…"
-            : ` ・残り ~${fmtSec(e.eta_sec)}／予測合計 ~${fmtSec(e.estimated_total_sec)}`;
+            : ` ・残り ~${fmtSec(e.eta_sec)}／予測合計 ~${fmtSec(e.estimated_total_sec)}（概算）`;
         }
         const cnt = e.total > 1 ? ` ${e.current}/${e.total}` : "";
         const det = (e.detail && e.detail !== e.stage) ? ` ${e.detail}` : "";

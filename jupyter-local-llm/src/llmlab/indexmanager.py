@@ -610,11 +610,14 @@ class IndexManager:
                                 recursive=recursive)
         base_tags = list(dict.fromkeys([docs_dir.name] + (tags or [])))
 
-        def emit(stage, cur, detail=""):
+        def emit(cur, detail=""):
+            # ETA のリセット判定は固定の phase_id で行う（stage/detail に
+            # ファイル名を入れても計測が切れない）。単位は「文書」。
             if progress:
                 try:
-                    progress({"stage": stage, "current": cur, "total": len(files),
-                              "detail": detail})
+                    progress({"phase_id": "folder_ingest", "stage": "文書を取り込み",
+                              "current": cur, "total": len(files),
+                              "detail": detail, "unit": "documents"})
                 except Exception:  # noqa: BLE001
                     pass
 
@@ -624,15 +627,16 @@ class IndexManager:
             eff_mode = index_mode
             if index_mode != "fast" and f.suffix.lower() not in BOOK_EXTS:
                 eff_mode = "fast"
-                emit(f"[{i + 1}/{len(files)}] {f.name}", i,
-                     f"{f.suffix} は木/KG 非対応のため fast で取り込み")
+                emit(i, f"[{i + 1}/{len(files)}] {f.name}: "
+                        f"{f.suffix} は木/KG 非対応のため fast で取り込み")
 
             # ファイル内の進捗（チャンク化・抽出フェーズ等）は detail に流し、
             # バーはフォルダ全体（i/total）で進める
             def _inner(evt, _i=i, _name=f.name):
-                emit(f"[{_i + 1}/{len(files)}] {_name}", _i, str(evt.get("stage", "")))
+                emit(_i, f"[{_i + 1}/{len(files)}] {_name}: "
+                         f"{evt.get('stage', '')}")
 
-            emit(f"[{i + 1}/{len(files)}] {f.name}", i, f"取り込み中（{eff_mode}）")
+            emit(i, f"[{i + 1}/{len(files)}] {f.name}: 取り込み中（{eff_mode}）")
             rel = str(f.relative_to(docs_dir))
             # 自動タグ: フォルダ名 + （recursive時）サブフォルダ名
             ftags = base_tags + [p for p in Path(rel).parts[:-1] if p]
@@ -651,8 +655,7 @@ class IndexManager:
                 failed += 1
                 errors.append({"file": f.name, "error": f"{type(e).__name__}: {e}"})
                 print(f"[IndexManager] {f.name} の取り込みに失敗（続行）: {e}")
-        emit("完了", len(files),
-             f"追加 {added} / 変更なし {skipped} / 失敗 {failed}")
+        emit(len(files), f"追加 {added} / 変更なし {skipped} / 失敗 {failed}")
         return {"results": results, "added": added, "skipped": skipped,
                 "failed": failed, "errors": errors, "collection_id": collection_id}
 
@@ -1193,10 +1196,13 @@ class IndexManager:
 
         budget = int(context_budget or CONTEXT_CHAR_BUDGET)
 
-        def emit(stage, cur, total):
+        def emit(stage, cur, total, *, phase_id=None, detail="", unit=""):
+            # ETA のリセット判定は phase_id（省略時は stage）。文書名は detail へ。
             if progress:
                 try:
-                    progress({"stage": stage, "current": cur, "total": total, "detail": ""})
+                    progress({"phase_id": phase_id or stage, "stage": stage,
+                              "current": cur, "total": total,
+                              "detail": detail, "unit": unit})
                 except Exception:  # noqa: BLE001
                     pass
 
@@ -1233,7 +1239,8 @@ class IndexManager:
             per_doc: list[dict] = []
             total = len(hits)
             for i, h in enumerate(hits):
-                emit(f"文書別に回答: {h.title}", i, total)
+                emit("文書別に回答", i, total, phase_id="map_answer",
+                     detail=h.title, unit="documents")
                 try:
                     p = bx.llm_text(
                         f"依頼: {question}\n\n{_doc_block(h, budget)}\n\n"
@@ -1248,7 +1255,8 @@ class IndexManager:
                 partials.append({"label": h.title, "text": p})
                 per_doc.append({"doc_id": h.doc_id, "title": h.title,
                                 "text": p, "status": status})
-            emit("文書別に回答: 完了", total, total)
+            emit("文書別に回答", total, total, phase_id="map_answer",
+                 detail="完了", unit="documents")
             text, trace = self._hierarchical_reduce(
                 f"依頼: {question}", partials, sys_prompt=sys_prompt, emit=emit)
             for gi, g in enumerate(trace.get("level0_groups", [])):
@@ -1268,7 +1276,7 @@ class IndexManager:
 
     def _hierarchical_reduce(self, task_prompt: str, partials: list[dict], *,
                              sys_prompt: str | None = None,
-                             emit=lambda *a: None) -> tuple[str, dict]:
+                             emit=lambda *a, **k: None) -> tuple[str, dict]:
         """部分結果（{"label","text"} の列）を **予算内で階層的に** 統合する。
 
         - 1回の Reduce 入力は REDUCE_GROUP_SIZE 件・CONTEXT_CHAR_BUDGET 文字以内。
@@ -1310,17 +1318,20 @@ class IndexManager:
             if level == 0 and len(groups) > 1:
                 level0_groups = groups
             if len(groups) == 1:
-                emit("統合回答を生成", 0, 1)
+                emit("統合回答を生成", 0, 1, phase_id="reduce_final")
                 text = bx.llm_text(
                     f"{task_prompt}\n\n以下は文書（またはグループ）ごとの部分結果"
                     "です。突き合わせて依頼に答えてください。すべての項目に言及して"
                     "ください。\n\n" + _blocks([items[i] for i in groups[0]]),
                     system=sys_prompt, max_tokens=REDUCE_MAX_TOKENS).strip()
-                emit("統合回答を生成: 完了", 1, 1)
+                emit("統合回答を生成", 1, 1, phase_id="reduce_final", detail="完了")
                 return text, {"levels": level + 1, "level0_groups": level0_groups}
             nxt: list[dict] = []
             for gi, g in enumerate(groups):
-                emit(f"中間統合（{level + 1}段目）", gi, len(groups))
+                emit("中間統合", gi, len(groups),
+                     phase_id=f"reduce_l{level + 1}",
+                     detail=f"{level + 1}段目 グループ{gi + 1}/{len(groups)}",
+                     unit="groups")
                 members = [items[i] for i in g]
                 try:
                     t = bx.llm_text(
@@ -1363,17 +1374,20 @@ class IndexManager:
         if not metas:
             return DocAnswer(text="対象の文書がありません。先に文書を追加してください。")
 
-        def emit(stage, cur, total):
+        def emit(stage, cur, total, *, phase_id=None, detail="", unit=""):
             if progress:
                 try:
-                    progress({"stage": stage, "current": cur, "total": total, "detail": ""})
+                    progress({"phase_id": phase_id or stage, "stage": stage,
+                              "current": cur, "total": total,
+                              "detail": detail, "unit": unit})
                 except Exception:  # noqa: BLE001
                     pass
 
         per_doc: list[dict] = []
         total = len(metas) + 1
         for i, m in enumerate(metas):
-            emit(f"文書を要約: {m['title']}", i, total)
+            emit("文書を要約", i, total, phase_id="map_summarize",
+                 detail=m["title"], unit="documents")
             doc = self._paged.document(m["doc_id"]) or {}
             chunks = doc.get("chunks", [])
             # 文書全体をカバーするよう均等に間引く（先頭だけ読まない）
@@ -1486,9 +1500,12 @@ class IndexManager:
                 pass
 
         def _fwd_prog(desc, current, total):
+            # desc はフェーズ内で固定（"埋め込み+索引挿入" 等）なので、
+            # そのまま ETA のリセット判定キー（phase_id）に使える
             try:
-                progress({"stage": str(desc), "current": int(current),
-                          "total": int(total or 0), "detail": ""})
+                progress({"phase_id": str(desc), "stage": str(desc),
+                          "current": int(current), "total": int(total or 0),
+                          "detail": ""})
             except Exception:  # noqa: BLE001
                 pass
 

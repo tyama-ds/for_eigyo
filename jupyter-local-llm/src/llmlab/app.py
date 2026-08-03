@@ -66,11 +66,14 @@ def _history_append(entry: dict) -> None:
 class EtaTracker:
     """フェーズごとの実測レートから残り時間・予測総時間を推定する（タスク毎に1個）。
 
-    - stage（フェーズ名）が変わったら計測をリセットする
+    - リセット判定は **固定の phase_id**（無ければ stage で後方互換）。
+      フォルダ取り込みや Map 処理のようにファイル名・文書名が変わる処理でも、
+      名前は detail に入るため計測が切れず、最後まで ETA が出る
     - フェーズ内の最初の1件が完了するまでは eta_sec=None
       （UI は「残り時間を計算中…」を表示する）
     - current/total の無いイベントやログ行（total<=1）はそのまま素通しする
-    - 状態はタスクスコープ（スレッド間で共有しない）
+    - 状態はタスクスコープ（スレッド間・タスク間で共有しない）
+    - ETA は「フェーズ内のレートが一定」という仮定の概算（GUI にもその旨を表示）
     """
 
     def __init__(self, clock=None):
@@ -86,7 +89,7 @@ class EtaTracker:
         if not isinstance(cur, (int, float)) or isinstance(cur, bool) or \
                 not isinstance(tot, (int, float)) or isinstance(tot, bool) or tot <= 1:
             return evt  # 計測点ではない（ログ行は total=1 で流れてくる）
-        stage = str(evt.get("stage") or "")
+        stage = str(evt.get("phase_id") or evt.get("stage") or "")
         now = self._clock()
         if stage != self._phase:
             self._phase, self._t0, self._c0 = stage, now, int(cur)
