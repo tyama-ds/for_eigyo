@@ -172,7 +172,8 @@ class IndexManager:
                  graph_max_workers: int | None = None,
                  graph_max_nodes: int | None = None,
                  graph_chunk_chars: int | None = None,
-                 er_use_llm: bool | None = None):
+                 er_use_llm: bool | None = None,
+                 ingest_batch_size: int | None = None):
         self.root = Path(storage_dir)
         self.docs_dir = self.root / "docs"
         self.chunks_dir = self.root / "chunks"
@@ -189,8 +190,11 @@ class IndexManager:
             if v is not None:
                 self.graph_settings[k] = v
         # fast/hierarchy 用の共有ベクトル索引。チャンクJSONは chunks/ に書き出す。
+        paged_kw = {}
+        if ingest_batch_size is not None:
+            paged_kw["ingest_batch_size"] = int(ingest_batch_size)
         self._paged = PagedRAG(storage_dir=str(self.root / "vectors"),
-                               documents_dir=str(self.chunks_dir))
+                               documents_dir=str(self.chunks_dir), **paged_kw)
 
     # ---- 取り込み ----------------------------------------------------------
 
