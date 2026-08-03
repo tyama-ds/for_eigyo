@@ -103,7 +103,7 @@ class BookRAG:
         max_evidence: int = DEFAULT_MAX_EVIDENCE,
         chunk_chars: int = 1500,    # 本文チャンクの目安サイズ（大きいほどノード=LLM呼出が減る）
         max_nodes: int = 300,       # 取り込み対象ノードの上限（超過は打ち切り）
-        max_workers: int = 8,       # 抽出フェーズの並列数
+        max_workers: int = 2,       # 抽出フェーズの並列数（ローカルLLM 安全既定。高速化は自己責任で増やす）
         er_use_llm: bool = False,   # 名寄せで LLM を使うか（既定 False=高速）
         reranker=None,              # 再ランク: None/"cosine"/"local"/"endpoint"/dict（Text_Reasoning と ER の両方に使用）
         vlm: bool = False,          # True で PDF の図を VLM が読解し Image ノード化（画像対応モデルが必要）
@@ -131,7 +131,7 @@ class BookRAG:
                  chunk_chars: int | None = None, ocr=False, layout=False,
                  vlm: bool | None = None, force: bool = False,
                  build_graph: bool = True, doc_id: str | None = None,
-                 all_nodes: bool = False) -> str:
+                 all_nodes: bool = False, graph_checkpoint: bool = False) -> str:
         """文書を取り込み、BookIndex（Tree [+ KG + GT-Link]）へ統合する。
 
         build_graph:
@@ -140,6 +140,8 @@ class BookRAG:
             スキップ（ローカルLLMでも軽い）。graph 未構築でも検索は動く。
         doc_id: 明示指定時はその ID で登録（IndexManager が内容ハッシュ ID を共有）。
         all_nodes=True で max_nodes 打ち切りをせず全ノードを抽出対象にする。
+        graph_checkpoint=True で Entity 抽出をバッチ単位で graph_progress.json に
+        途中保存し、失敗後の再実行では完了済みノードを再抽出しない。
 
         PDF の版面解析・OCR（要 `pip install -e ".[ocr]"` + Tesseract）:
         - layout="auto": pymupdf のフォントサイズで見出し階層を判定（pypdf より高精度）
@@ -205,10 +207,13 @@ class BookRAG:
                    "構造が薄い文書なら PagedRAG の方が適している場合もあります。")
         if build_graph:
             bx.log(f"[4/{n_steps}] 知識グラフ構築（抽出→名寄せ）: ノード {len(new_nodes)} 個")
+            ckpt = (str(self.storage_dir / "graph_progress.json")
+                    if graph_checkpoint else None)
             bx.build_graph(bi, new_nodes, gradient_g=self.gradient_g,  # 4.3 KG + Gradient ER
                            er_top_k=self.er_top_k, max_workers=self.max_workers,
                            max_nodes=max_nodes or self.max_nodes, er_use_llm=self.er_use_llm,
-                           reranker=self._reranker, all_nodes=all_nodes)
+                           reranker=self._reranker, all_nodes=all_nodes,
+                           checkpoint_path=ckpt)
         else:
             bx.log("[4/4] hierarchy モード: Entity/Relation 抽出はスキップ（木のみ）")
         bx.log(f"[{n_steps}/{n_steps}] 保存中…")

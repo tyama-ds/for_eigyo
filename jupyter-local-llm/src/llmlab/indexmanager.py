@@ -35,6 +35,8 @@ index_mode:
 
 from __future__ import annotations
 
+import hashlib
+import re
 import shutil
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -52,9 +54,62 @@ FOLDER_EXTS = {".pdf", ".txt", ".md", ".docx", ".doc", ".pptx",
 # hierarchy/graph（BookRAG の木/KG）を作れる形式。それ以外は fast に自動降格
 BOOK_EXTS = {".pdf", ".docx", ".md", ".txt", ".pptx", ".xlsx"}
 
+# ---- 検索パイプラインの既定値 ------------------------------------------------
+# document_top_n は「doc_ids 未指定時の自動文書選定」にだけ効く（明示選択は全件）。
+DEFAULT_DOC_TOP_N = 8
+# 文書内: 広めに候補を取り（>= この値）、リランキング後に chunk_top_k 件を採用する
+DEFAULT_CHUNK_CANDIDATES = 8
+# ask() の最終コンテキストに入れる抜粋合計の文字予算（無制限投入を防ぐ）
+CONTEXT_CHAR_BUDGET = 12000
+# ask() で対象文書がこれ以上なら Map-Reduce（文書ごとに部分回答→統合）へ切替
+MAP_REDUCE_DOC_THRESHOLD = 6
+
+# ---- graph（Entity/Relation 抽出）のローカルLLM向け安全既定 -------------------
+SAFE_GRAPH_DEFAULTS = {
+    "graph_max_workers": 1,    # ローカルLLMは並列に弱い（GPU/KVキャッシュ/JSON崩れ）
+    "graph_max_nodes": 100,    # セクション均等サンプリングの上限
+    "graph_chunk_chars": 2000, # チャンクを大きめに＝LLM呼び出し回数を減らす
+    "er_use_llm": False,
+}
+
 
 def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
+
+
+_TERM_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9\-_.]{1,}|[0-9０-９]+(?:\.[0-9０-９]+)*")
+
+
+def _keyword_terms(question: str) -> list[str]:
+    """キーワード検索用の語（英数字・型番・数値・規程番号など）を抽出する。"""
+    return [t.lower() for t in _TERM_RE.findall(question or "") if len(t) >= 2]
+
+
+def _keyword_bonus(terms: list[str], text: str) -> float:
+    """ベクトルスコアに足すキーワード一致ボーナス（0〜0.2）。
+
+    埋め込みが苦手な数値・製品型番・規程番号の完全一致を拾う軽量ハイブリッド。
+    """
+    if not terms:
+        return 0.0
+    lower = (text or "").lower()
+    hit = sum(1 for t in terms if t in lower)
+    return 0.2 * hit / len(terms)
+
+
+_HEADING_RE = re.compile(
+    r"^(?:#{1,4}\s+.+|第\s*[0-9０-９一二三四五六七八九十]+\s*[章節条部].*|"
+    r"[0-9０-９]+(?:\.[0-9０-９]+)*\s+\S.*)$")
+
+
+def make_section_id(heading_path: str) -> str:
+    """見出しパスから **再現可能な安定 section_id** を作る（再構築で変わらない）。"""
+    return "s" + hashlib.md5((heading_path or "(本文)").encode("utf-8")).hexdigest()[:8]
+
+
+def make_collection_id(folder: str | Path) -> str:
+    """フォルダ取り込み単位の安定 ID（フォルダ絶対パスから決定的に導出）。"""
+    return "c" + hashlib.md5(str(Path(folder).resolve()).encode("utf-8")).hexdigest()[:10]
 
 
 @dataclass
@@ -67,7 +122,8 @@ class SearchHit:
     source_path: str | None = None
     used_graph: bool = False
     fallback_reason: str | None = None   # graph 要求だが未構築→通常RAG等
-    chunks: list[dict] = field(default_factory=list)  # {text, page, score, source}
+    # chunks: {text, page, score, source, section_id, section(見出しパス), chunk_id}
+    chunks: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -105,12 +161,26 @@ class DocAnswer:
 class IndexManager:
     """doc_id 中心・index_mode 切替の文書間 RAG マネージャ。"""
 
-    def __init__(self, storage_dir: str | Path = DEFAULT_STORAGE):
+    def __init__(self, storage_dir: str | Path = DEFAULT_STORAGE, *,
+                 graph_max_workers: int | None = None,
+                 graph_max_nodes: int | None = None,
+                 graph_chunk_chars: int | None = None,
+                 er_use_llm: bool | None = None):
         self.root = Path(storage_dir)
         self.docs_dir = self.root / "docs"
         self.chunks_dir = self.root / "chunks"
         self.status_dir = self.root / "status"
         self.bookindex_dir = self.root / "bookindex"
+        self.collections_dir = self.root / "collections"
+        self._memberships_path = self.root / "memberships.json"
+        # graph（Entity/Relation 抽出）の設定。ローカルLLM向け安全値が既定
+        self.graph_settings = dict(SAFE_GRAPH_DEFAULTS)
+        for k, v in [("graph_max_workers", graph_max_workers),
+                     ("graph_max_nodes", graph_max_nodes),
+                     ("graph_chunk_chars", graph_chunk_chars),
+                     ("er_use_llm", er_use_llm)]:
+            if v is not None:
+                self.graph_settings[k] = v
         # fast/hierarchy 用の共有ベクトル索引。チャンクJSONは chunks/ に書き出す。
         self._paged = PagedRAG(storage_dir=str(self.root / "vectors"),
                                documents_dir=str(self.chunks_dir))
@@ -119,13 +189,23 @@ class IndexManager:
 
     def add_document(self, path: str | Path, *, title: str | None = None,
                      index_mode: str = "fast", force: bool = False,
-                     layout=False, ocr=False, progress=None) -> dict:
+                     layout=False, ocr=False, progress=None,
+                     collection_id: str | None = None,
+                     relative_path: str | None = None,
+                     tags: list[str] | None = None,
+                     graph_settings: dict | None = None) -> dict:
         """文書を index_mode で取り込む。既定は fast（高速・通常RAG）。
 
         - graph 未指定なら Entity/Relation 抽出は走らない（重い処理は明示時だけ）。
         - 同じ doc_id かつ同じ content_hash が ready なら、force でない限り再抽出せず
           skipped で返す（キャッシュ/差分更新）。
-        - 失敗は status=failed + error に記録し、例外は握りつぶさず再送出する。
+        - **状態は工程別**（vector_status / hierarchy_status / graph_status）。
+          graph だけ失敗しても vector/hierarchy 検索は使える（status は ready のまま、
+          graph_status=failed + graph_error に記録）。
+        - collection_id / relative_path / tags でフォルダ取り込みとの所属を記録する
+          （既存の索引に無くても後方互換で動く）。
+        - graph_settings: {"graph_max_workers","graph_max_nodes","graph_chunk_chars",
+          "er_use_llm"} の上書き（省略時はコンストラクタ設定＝安全既定）。
         """
         if index_mode not in INDEX_MODES:
             raise ValueError(f"index_mode は {INDEX_MODES} のいずれか: {index_mode!r}")
@@ -141,6 +221,11 @@ class IndexManager:
         prev = self._read(self.docs_dir, doc_id)
         if prev and prev.get("content_hash") == chash and prev.get("status") == "ready" \
                 and prev.get("index_mode") == index_mode and not force:
+            # 変更なしキャッシュ。ただし collection 所属は新規なら追記する
+            #（同一内容が複数フォルダにあるケースで所属を失わない）
+            if collection_id:
+                self._add_membership(doc_id, collection_id, relative_path, tags)
+                prev = self._read(self.docs_dir, doc_id) or prev
             self._set_status(doc_id, "skipped", index_mode, note="変更なし（キャッシュ利用）")
             prev["status"] = "skipped"  # 呼び出し元への通知のみ（永続の status は ready のまま）
             return prev
@@ -156,12 +241,15 @@ class IndexManager:
 
         # 同じ元ファイルの旧版（別 doc_id）が登録済みなら置き換える。
         # 内容ハッシュIDのため、ファイル編集後の再登録は新IDになる — 旧版を残すと
-        # 一覧に新旧が並び、検索が古い本文を混ぜて返す。
+        # 一覧に新旧が並び、検索が古い本文を混ぜて返す。所属情報は新IDへ引き継ぐ。
+        inherited = {"collection_ids": [], "tags": []}
         for old in self.documents():
             if old.get("source_path") == resolved and old["doc_id"] != doc_id:
                 _log(f"旧版 {old['doc_id']} を置き換えます（内容が変更されたため）")
                 print(f"[IndexManager] {path.name}: 旧版（doc_id={old['doc_id']}）を"
                       "削除して新しい内容で登録します")
+                inherited["collection_ids"] += old.get("collection_ids", [])
+                inherited["tags"] += old.get("tags", [])
                 self.delete(old["doc_id"])
 
         self._set_status(doc_id, "running", index_mode)
@@ -170,6 +258,14 @@ class IndexManager:
             "content_hash": chash, "index_mode": index_mode, "status": "running",
             "chunk_count": 0, "created_at": created, "updated_at": _now(),
             "graph_index": False, "layout": bool(layout), "error": None,
+            # 工程別ステータス（graph だけの失敗で文書全体を failed にしない）
+            "vector_status": "pending", "hierarchy_status": "skipped",
+            "graph_status": "skipped", "graph_error": None,
+            # collection / タグ（後方互換: 旧メタには無くてもよい）
+            "collection_ids": list(dict.fromkeys(
+                (prev or {}).get("collection_ids", []) + inherited["collection_ids"])),
+            "relative_path": relative_path or (prev or {}).get("relative_path"),
+            "tags": list(dict.fromkeys((prev or {}).get("tags", []) + inherited["tags"])),
         }
         self._write(self.docs_dir, doc_id, meta)
         try:
@@ -180,65 +276,214 @@ class IndexManager:
             have_chunks = (self.chunks_dir / f"{doc_id}.json").exists()
             same_mode_force = force and prev is not None \
                 and prev.get("index_mode") == index_mode
+            meta["vector_status"] = "running"
             if (not same_content) or (not have_chunks) or same_mode_force:
                 _log("チャンク化＋埋め込み")
                 with self._forward_logs(progress):
                     self._paged.add_book(path, title=title, doc_id=doc_id, force=True)
             else:
                 _log("チャンク/埋め込みは変更なしのため再利用")
+            self._assign_sections(doc_id)   # 安定 section_id / 見出しパスを付与
             chunks = self._paged.document(doc_id) or {}
             meta["chunk_count"] = len(chunks.get("chunks", []))
+            meta["vector_status"] = "ready"
 
             # 2) hierarchy / graph: 文書ごとの BookRAG 索引。
             #    fast では作らず、既存の木/KG が残っていれば消す（詳細表示との矛盾防止）。
             book_dir = self.bookindex_dir / doc_id
             if index_mode in ("hierarchy", "graph"):
-                from .bookrag import BookRAG
-
-                if book_dir.exists():
-                    shutil.rmtree(book_dir)
-                book = BookRAG(storage_dir=str(book_dir))
+                gs = {**self.graph_settings, **(graph_settings or {})}
                 build_graph = index_mode == "graph"
+                meta["hierarchy_status"] = "running"
+                if build_graph:
+                    meta["graph_status"] = "running"
+                self._write(self.docs_dir, doc_id, meta)
                 _log("セクション木を構築" + ("＋Entity/Relation抽出（graph・低速）"
                                           if build_graph else "（hierarchy）"))
-                with self._forward_logs(progress):
-                    book.add_book(path, title=title, doc_id=doc_id, force=True,
-                                  build_graph=build_graph, layout=layout, ocr=ocr)
-                meta["graph_index"] = build_graph and book.has_graph()
+                try:
+                    self._build_book_layer(path, doc_id, title, build_graph,
+                                           layout, ocr, gs, progress,
+                                           fresh=not (force and build_graph
+                                                      and (book_dir / "graph_progress.json").exists()))
+                    meta["hierarchy_status"] = "ready"
+                    if build_graph:
+                        from .bookrag import BookRAG
+
+                        meta["graph_index"] = BookRAG(storage_dir=str(book_dir)).has_graph()
+                        meta["graph_status"] = "ready" if meta["graph_index"] else "failed"
+                        if not meta["graph_index"]:
+                            meta["graph_error"] = ("エンティティを1件も抽出できませんでした"
+                                                   "（モデルのJSON応答/思考出力を確認）")
+                except Exception as ge:  # noqa: BLE001
+                    # graph/hierarchy の失敗で文書全体を失敗にしない。
+                    # ベクトル索引は完成しているので通常検索は利用可能。
+                    err = f"{type(ge).__name__}: {ge}"
+                    if meta["hierarchy_status"] == "running":
+                        meta["hierarchy_status"] = "failed"
+                    if build_graph:
+                        meta["graph_status"] = "failed"
+                    meta["graph_error"] = err
+                    print(f"[IndexManager] {path.name}: 木/グラフ構築に失敗"
+                          f"（通常検索は利用可能）: {err}")
             else:
                 shutil.rmtree(book_dir, ignore_errors=True)
 
+            if collection_id:
+                meta["collection_ids"] = list(dict.fromkeys(
+                    meta["collection_ids"] + [collection_id]))
+                if tags:
+                    meta["tags"] = list(dict.fromkeys(meta["tags"] + list(tags)))
             meta.update(status="ready", updated_at=_now())
             self._write(self.docs_dir, doc_id, meta)
-            self._set_status(doc_id, "ready", index_mode)
+            if collection_id:
+                self._add_membership(doc_id, collection_id, relative_path, tags)
+            self._set_status(doc_id, "ready", index_mode,
+                             error=meta.get("graph_error"),
+                             note=("グラフのみ失敗" if meta.get("graph_status") == "failed"
+                                   else None))
             return meta
-        except Exception as e:  # noqa: BLE001  握りつぶさず記録して再送出
-            meta.update(status="failed", error=f"{type(e).__name__}: {e}", updated_at=_now())
+        except Exception as e:  # noqa: BLE001  vector 失敗＝文書失敗。記録して再送出
+            meta.update(status="failed", vector_status="failed",
+                        error=f"{type(e).__name__}: {e}", updated_at=_now())
             self._write(self.docs_dir, doc_id, meta)
             self._set_status(doc_id, "failed", index_mode, error=meta["error"])
             raise
 
+    def _build_book_layer(self, path, doc_id, title, build_graph, layout, ocr,
+                          gs: dict, progress, *, fresh: bool = True) -> None:
+        """hierarchy/graph 層（BookRAG）を安全設定で構築する。
+
+        fresh=False なら既存の graph_progress.json（チェックポイント）だけを残して
+        木を作り直す。パースは決定的なのでノード署名が一致すれば抽出済み結果が
+        そのまま再利用される（署名が変わっていればチェックポイントは安全に破棄）。
+        fresh=True はチェックポイントごと作り直し。
+        """
+        from .bookrag import BookRAG
+
+        book_dir = self.bookindex_dir / doc_id
+        if book_dir.exists():
+            if fresh:
+                shutil.rmtree(book_dir)
+            else:
+                # 旧い木が残ったまま add_book すると木が重複するため、
+                # チェックポイント以外を消してから作り直す。
+                for p in book_dir.iterdir():
+                    if p.name == "graph_progress.json":
+                        continue
+                    if p.is_dir():
+                        shutil.rmtree(p)
+                    else:
+                        p.unlink()
+        book = BookRAG(storage_dir=str(book_dir),
+                       max_workers=int(gs.get("graph_max_workers", 1)),
+                       max_nodes=int(gs.get("graph_max_nodes", 100)),
+                       chunk_chars=int(gs.get("graph_chunk_chars", 2000)),
+                       er_use_llm=bool(gs.get("er_use_llm", False)))
+        with self._forward_logs(progress):
+            book.add_book(path, title=title, doc_id=doc_id, force=True,
+                          build_graph=build_graph, layout=layout, ocr=ocr,
+                          graph_checkpoint=True)
+
+    def build_graph_only(self, doc_id: str, *, resume: bool = True,
+                         graph_settings: dict | None = None, progress=None) -> dict:
+        """graph 層だけを（再）構築する。resume=True でチェックポイントから再開。
+
+        vector/hierarchy はそのまま。graph の失敗も文書全体を failed にしない。
+        """
+        meta = self._read(self.docs_dir, doc_id)
+        if not meta:
+            raise KeyError(f"未登録の doc_id: {doc_id}")
+        src = meta.get("source_path")
+        if not src or not Path(src).exists():
+            raise FileNotFoundError(f"元ファイルが見つかりません: {src}")
+        gs = {**self.graph_settings, **(graph_settings or {})}
+        book_dir = self.bookindex_dir / doc_id
+        has_ckpt = (book_dir / "graph_progress.json").exists()
+        meta.update(graph_status="running", graph_error=None, updated_at=_now())
+        self._write(self.docs_dir, doc_id, meta)
+        try:
+            self._build_book_layer(Path(src), doc_id, meta.get("title"),
+                                   True, meta.get("layout", False), False,
+                                   gs, progress, fresh=not (resume and has_ckpt))
+            from .bookrag import BookRAG
+
+            ok = BookRAG(storage_dir=str(book_dir)).has_graph()
+            meta.update(index_mode="graph", graph_index=ok,
+                        hierarchy_status="ready",
+                        graph_status="ready" if ok else "failed",
+                        graph_error=None if ok else "エンティティ0件", updated_at=_now())
+            self._write(self.docs_dir, doc_id, meta)
+            return meta
+        except Exception as e:  # noqa: BLE001
+            meta.update(graph_status="failed",
+                        graph_error=f"{type(e).__name__}: {e}", updated_at=_now())
+            self._write(self.docs_dir, doc_id, meta)
+            raise
+
+    def _assign_sections(self, doc_id: str) -> None:
+        """チャンクJSONに安定 section_id と見出しパスを付与する（fast 層）。
+
+        見出し（Markdown #、第N章/節/条、番号見出し）をチャンク本文から検出し、
+        直近の見出しを引き継ぐ。section_id は見出しパスのハッシュなので
+        再構築しても変わらない。見出しの無い文書は "(本文)" 1セクション。
+        """
+        doc = self._paged.document(doc_id)
+        if not doc:
+            return
+        current = "(本文)"
+        changed = False
+        for c in doc.get("chunks", []):
+            for line in (c.get("text") or "").splitlines():
+                s = line.strip()
+                if s and len(s) <= 80 and _HEADING_RE.match(s):
+                    current = s.lstrip("#").strip()
+                    break  # チャンク先頭側の見出しを採用
+            if c.get("section") != current:
+                changed = True
+            c["section"] = current
+            c["section_id"] = make_section_id(current)
+        if changed or doc.get("chunks"):
+            self._write(self.chunks_dir, doc_id, doc)
+
     def add_folder(self, docs_dir: str | Path, *, index_mode: str = "fast",
                    force: bool = False, layout=False, ocr=False,
-                   progress=None) -> dict:
+                   progress=None, recursive: bool = False,
+                   collection_name: str | None = None,
+                   tags: list[str] | None = None,
+                   graph_settings: dict | None = None) -> dict:
         """フォルダ内の対応文書を **1ファイル=1文書** として順に取り込む。
 
-        - 各ファイルは個別の doc_id を持つ独立文書になる（検索は従来どおり
-          文書ごとに chunk top-k を取り doc_id 単位で集約・多様化する）。
+        - フォルダ全体を1つの文書に結合しない。各ファイルは個別の doc_id を持つ
+          独立文書になる（検索は文書ごとに chunk top-k → doc_id 単位で集約）。
+        - フォルダは **collection** として登録される（collection_id は絶対パス由来の
+          安定ID）。各文書に collection_id / relative_path / 自動タグ（フォルダ名、
+          recursive 時はサブフォルダ名も）を関連付ける。
+        - 同一内容のファイルが複数フォルダにあっても doc_id は重複登録せず、
+          両方の collection への所属関係を記録する。
+        - recursive=False（既定）はフォルダ直下のみ。True でサブフォルダも走査。
         - hierarchy/graph 指定時、木/KG を作れない形式（csv/html 等）は
           そのファイルだけ fast に自動降格して取り込む（スキップしない）。
         - 1ファイルの失敗で全体を止めない（status=failed に記録して続行）。
-        - 返り値: {"results": [meta...], "added", "skipped", "failed", "errors"}
+        - 返り値: {"results": [meta...], "added", "skipped", "failed", "errors",
+          "collection_id"}
         """
         docs_dir = Path(docs_dir)
         if not docs_dir.is_dir():
             raise NotADirectoryError(f"フォルダではありません: {docs_dir}")
-        files = sorted(f for f in docs_dir.iterdir()
+        it = docs_dir.rglob("*") if recursive else docs_dir.iterdir()
+        files = sorted(f for f in it
                        if f.is_file() and f.suffix.lower() in FOLDER_EXTS)
         if not files:
             raise FileNotFoundError(
                 f"{docs_dir} に対応文書がありません"
                 f"（対応: {', '.join(sorted(FOLDER_EXTS))}）")
+
+        # collection を登録（既存なら updated_at 更新・名前/タグはマージ）
+        collection_id = make_collection_id(docs_dir)
+        self._upsert_collection(collection_id, collection_name or docs_dir.name,
+                                str(docs_dir.resolve()), tags or [],
+                                recursive=recursive)
+        base_tags = list(dict.fromkeys([docs_dir.name] + (tags or [])))
 
         def emit(stage, cur, detail=""):
             if progress:
@@ -263,9 +508,15 @@ class IndexManager:
                 emit(f"[{_i + 1}/{len(files)}] {_name}", _i, str(evt.get("stage", "")))
 
             emit(f"[{i + 1}/{len(files)}] {f.name}", i, f"取り込み中（{eff_mode}）")
+            rel = str(f.relative_to(docs_dir))
+            # 自動タグ: フォルダ名 + （recursive時）サブフォルダ名
+            ftags = base_tags + [p for p in Path(rel).parts[:-1] if p]
             try:
                 meta = self.add_document(f, index_mode=eff_mode, force=force,
-                                         layout=layout, ocr=ocr, progress=_inner)
+                                         layout=layout, ocr=ocr, progress=_inner,
+                                         collection_id=collection_id,
+                                         relative_path=rel, tags=ftags,
+                                         graph_settings=graph_settings)
                 results.append(meta)
                 if meta.get("status") == "skipped":
                     skipped += 1
@@ -278,7 +529,109 @@ class IndexManager:
         emit("完了", len(files),
              f"追加 {added} / 変更なし {skipped} / 失敗 {failed}")
         return {"results": results, "added": added, "skipped": skipped,
-                "failed": failed, "errors": errors}
+                "failed": failed, "errors": errors, "collection_id": collection_id}
+
+    # ---- collection / タグ --------------------------------------------------
+
+    def _upsert_collection(self, cid: str, name: str, folder: str,
+                           tags: list[str], *, recursive: bool = False) -> None:
+        cur = self._read(self.collections_dir, cid) or {}
+        self._write(self.collections_dir, cid, {
+            "collection_id": cid,
+            "collection_name": name or cur.get("collection_name"),
+            "folder": folder,
+            "tags": list(dict.fromkeys(cur.get("tags", []) + (tags or []))),
+            "recursive": bool(recursive),
+            "created_at": cur.get("created_at") or _now(),
+            "updated_at": _now(),
+        })
+
+    def _memberships(self) -> dict:
+        """memberships.json: {doc_id: [{collection_id, relative_path}]}"""
+        from .workspace import _read_json_file
+
+        m = _read_json_file(self._memberships_path, {})
+        return m if isinstance(m, dict) else {}
+
+    def _add_membership(self, doc_id: str, collection_id: str,
+                        relative_path: str | None, tags: list[str] | None) -> None:
+        """文書と collection の所属関係を追記する（doc メタ側にも反映）。"""
+        m = self._memberships()
+        rows = m.setdefault(doc_id, [])
+        if not any(r.get("collection_id") == collection_id for r in rows):
+            rows.append({"collection_id": collection_id,
+                         "relative_path": relative_path})
+        from .workspace import _write_json_file
+
+        _write_json_file(self._memberships_path, m)
+        meta = self._read(self.docs_dir, doc_id)
+        if meta is not None:
+            meta["collection_ids"] = list(dict.fromkeys(
+                meta.get("collection_ids", []) + [collection_id]))
+            if tags:
+                meta["tags"] = list(dict.fromkeys(meta.get("tags", []) + list(tags)))
+            self._write(self.docs_dir, doc_id, meta)
+
+    def collections(self) -> list[dict]:
+        """登録済み collection の一覧（文書数つき・更新日時の新しい順）。"""
+        out = []
+        if self.collections_dir.exists():
+            counts: dict[str, int] = {}
+            for _did, rows in self._memberships().items():
+                for r in rows:
+                    cid = r.get("collection_id")
+                    counts[cid] = counts.get(cid, 0) + 1
+            for p in self.collections_dir.glob("*.json"):
+                c = self._read_path(p)
+                if c:
+                    c["doc_count"] = counts.get(c.get("collection_id"), 0)
+                    out.append(c)
+        out.sort(key=lambda c: c.get("updated_at", ""), reverse=True)
+        return out
+
+    def all_tags(self) -> list[str]:
+        """全文書のタグ一覧（重複除去・出現順）。"""
+        seen = {}
+        for m in self.documents():
+            for t in m.get("tags", []) or []:
+                seen.setdefault(t, None)
+        return list(seen)
+
+    def set_tags(self, doc_id: str, tags: list[str]) -> dict:
+        """文書のタグを置き換える（GUI の手動タグ編集用）。"""
+        meta = self._read(self.docs_dir, doc_id)
+        if not meta:
+            raise KeyError(f"未登録の doc_id: {doc_id}")
+        meta["tags"] = list(dict.fromkeys(str(t).strip() for t in tags if str(t).strip()))
+        meta["updated_at"] = _now()
+        self._write(self.docs_dir, doc_id, meta)
+        return meta
+
+    def _scope_doc_ids(self, collection_ids=None, tags=None) -> set[str] | None:
+        """collection / タグによる検索範囲（doc_id 集合）。None = 制限なし。
+
+        範囲は **候補文書選定の前** に適用する（global top-k 後のフィルタではない）。
+        collection 情報の無い旧索引では memberships が空 → collection_ids 指定時は
+        空集合（該当なし）になるが、未指定なら全文書が対象（後方互換）。
+        """
+        if not collection_ids and not tags:
+            return None
+        allowed: set[str] | None = None
+        if collection_ids:
+            want = set(collection_ids)
+            hit = {did for did, rows in self._memberships().items()
+                   if any(r.get("collection_id") in want for r in rows)}
+            # メタ側の collection_ids も見る（memberships 消失時の保険）
+            for m in self.documents():
+                if want & set(m.get("collection_ids", []) or []):
+                    hit.add(m["doc_id"])
+            allowed = hit
+        if tags:
+            want_t = set(tags)
+            hit_t = {m["doc_id"] for m in self.documents()
+                     if want_t & set(m.get("tags", []) or [])}
+            allowed = hit_t if allowed is None else (allowed & hit_t)
+        return allowed
 
     def rebuild(self, doc_id: str, *, index_mode: str | None = None,
                 progress=None) -> dict:
@@ -309,6 +662,12 @@ class IndexManager:
             p = d / f"{doc_id}.json"
             if p.exists():
                 p.unlink()
+        m = self._memberships()
+        if doc_id in m:  # 所属関係も掃除
+            from .workspace import _write_json_file
+
+            m.pop(doc_id)
+            _write_json_file(self._memberships_path, m)
         return existed
 
     # ---- 一覧・詳細 --------------------------------------------------------
@@ -362,42 +721,49 @@ class IndexManager:
     def status(self, doc_id: str) -> dict:
         return self._read(self.status_dir, doc_id) or {"doc_id": doc_id, "status": "unknown"}
 
-    # ---- 検索（2段階: 文書 top-N → 文書内 chunk top-k） --------------------
+    # ---- 検索（範囲限定 → 文書候補選定 → 文書内チャンク → リランク） --------
 
-    def search(self, question: str, *, document_top_n: int = 4,
+    def search(self, question: str, *, document_top_n: int = DEFAULT_DOC_TOP_N,
                chunk_top_k_per_doc: int = 4, max_chunks_per_doc: int | None = None,
-               use_graph: bool = False, doc_ids: list[str] | None = None) -> list[SearchHit]:
-        """文書間検索。まず doc_id 単位で候補文書を選び、各文書内で chunk top-k を取る。
+               use_graph: bool = False, doc_ids: list[str] | None = None,
+               collection_ids: list[str] | None = None,
+               tags: list[str] | None = None) -> list[SearchHit]:
+        """文書間検索。構造:
+        collection/tag で範囲限定 → 文書候補選定 → 文書内チャンク候補 → リランク。
 
-        - いきなり全チャンク global top_k を取らず、doc_id で集約して多様化する。
-        - use_graph=True で graph 索引がある文書は BookRAG 検索を使い、無ければ通常RAG
+        - **doc_ids は利用者が明示選択した検索対象そのもの**。指定時は選択された
+          全文書を対象にし、document_top_n では切り捨てない（順序維持で重複除去）。
+        - document_top_n は doc_ids **未指定時の自動文書選定にだけ** 適用する。
+        - collection_ids / tags は自動選定の**候補範囲**（範囲内で top-N を適用）。
+          範囲フィルタは候補選定の前に効く（global top-k 後のフィルタではない）。
+        - use_graph=True で graph 索引がある文書は BookRAG 検索、無ければ通常RAG
           へフォールバック（落とさない。fallback_reason に理由を記録）。
-        - doc_ids 指定時はその文書だけを対象にする（文書ごとに検索して集約）。
+        - チャンクは広めに候補を取り、ベクトル+キーワードのハイブリッドで
+          リランキングして chunk_top_k_per_doc 件を採用する。
         """
-        cap = max_chunks_per_doc or chunk_top_k_per_doc
-        if doc_ids:
-            # 対象文書が指定されているときは文書ごとに検索してスコア順に並べる
-            from types import SimpleNamespace
+        from types import SimpleNamespace
 
+        cap = max_chunks_per_doc or chunk_top_k_per_doc
+        if doc_ids is not None:
+            # 明示選択: 全文書を対象（重複は順序維持で除去。top_n で切らない）
+            selected_ids = list(dict.fromkeys(str(d) for d in doc_ids if d))
             ranked = []
-            for did in doc_ids:
-                nodes = self._paged.retrieve_in_doc(question, doc_id=did,
-                                                    top_m=chunk_top_k_per_doc)
-                score = max((getattr(n, "score", 0.0) or 0.0 for n in nodes), default=0.0)
+            for did in selected_ids:
+                nodes = self._doc_chunk_candidates(question, did, chunk_top_k_per_doc)
+                score = max((s for _n, s in nodes), default=0.0)
                 meta = self._read(self.docs_dir, did) or {}
                 ranked.append(SimpleNamespace(doc_id=did, score=score,
-                                              title=meta.get("title", did)))
+                                              title=meta.get("title", did),
+                                              _cands=nodes))
             ranked.sort(key=lambda r: r.score, reverse=True)
-            ranked = ranked[:document_top_n]
+            # 明示選択時は document_top_n で切り捨てない（全件が対象）
         else:
-            cand_k = max(document_top_n * chunk_top_k_per_doc * 5, 50)
-            ranked = self._paged.rank_documents(
-                question, candidate_chunk_k=cand_k, top_n=document_top_n,
-                chunks_per_doc=chunk_top_k_per_doc)
+            scope = self._scope_doc_ids(collection_ids, tags)
+            ranked = self._rank_documents_scoped(question, scope, document_top_n,
+                                                 chunk_top_k_per_doc)
 
         hits: list[SearchHit] = []
         for r in ranked:
-            # メタは候補文書（top-N 件）だけ遅延読み込み（全件走査しない）
             meta = self._read(self.docs_dir, r.doc_id) or {}
             title = meta.get("title") or r.title
             hit = SearchHit(doc_id=r.doc_id, title=title, score=round(r.score, 4),
@@ -410,21 +776,80 @@ class IndexManager:
                     hit.fallback_reason = ("graph 索引が未作成のため通常RAGで検索"
                                            if meta else "メタ情報なし→通常RAG")
             if not used_graph:
-                self._normal_chunks(r.doc_id, question, hit, chunk_top_k_per_doc, cap)
+                cands = getattr(r, "_cands", None)
+                self._normal_chunks(r.doc_id, question, hit, chunk_top_k_per_doc,
+                                    cap, candidates=cands)
             hit.used_graph = used_graph
             hits.append(hit)
         return hits
 
+    def _rank_documents_scoped(self, question: str, scope: set[str] | None,
+                               top_n: int, chunk_top_k: int):
+        """自動文書選定（scope=None なら全文書が候補）。
+
+        - 広めのチャンク候補（cand_k）を取り doc_id で集約。cand_k は top_n に
+          比例して増やし、チャンク数の多い1文書が候補を占有しにくくする。
+        - scope 指定時は **候補選定の前に** 範囲外を除外し、範囲内の文書が
+          広域候補に現れなかった場合は個別検索で補完する（少数派文書の脱落防止）。
+        """
+        from types import SimpleNamespace
+
+        cand_k = max(top_n * chunk_top_k * 8, 80)
+        ranked = self._paged.rank_documents(
+            question, candidate_chunk_k=cand_k,
+            top_n=top_n if scope is None else max(top_n, len(scope)),
+            chunks_per_doc=chunk_top_k)
+        if scope is None:
+            return ranked[:top_n]
+        in_scope = [r for r in ranked if r.doc_id in scope]
+        found = {r.doc_id for r in in_scope}
+        # 範囲内なのに広域候補に出てこなかった文書を個別に当たって補完
+        missing = [d for d in scope if d not in found]
+        extras = []
+        for did in missing:
+            nodes = self._doc_chunk_candidates(question, did, chunk_top_k)
+            if nodes:
+                score = max(s for _n, s in nodes)
+                meta = self._read(self.docs_dir, did) or {}
+                extras.append(SimpleNamespace(doc_id=did, score=score,
+                                              title=meta.get("title", did),
+                                              _cands=nodes))
+        merged = sorted(in_scope + extras, key=lambda r: r.score, reverse=True)
+        return merged[:top_n]   # 範囲内で top-N（範囲外は混入しない）
+
+    def _doc_chunk_candidates(self, question: str, doc_id: str,
+                              top_k: int) -> list[tuple]:
+        """1文書内のチャンク候補を広めに取り、ハイブリッドでリランクして返す。
+
+        候補は max(2*top_k, DEFAULT_CHUNK_CANDIDATES) 件取得 → ベクトルスコアに
+        キーワード一致ボーナス（数値・型番・規程番号などの取りこぼし対策）を加えて
+        並べ替える。返り値: [(NodeWithScore, hybrid_score), ...]
+        """
+        n_cand = max(2 * top_k, DEFAULT_CHUNK_CANDIDATES)
+        nodes = self._paged.retrieve_in_doc(question, doc_id=doc_id, top_m=n_cand)
+        terms = _keyword_terms(question)
+        out = []
+        for n in nodes:
+            vec = getattr(n, "score", 0.0) or 0.0
+            text = n.node.get_content()
+            out.append((n, vec + _keyword_bonus(terms, text)))
+        out.sort(key=lambda t: t[1], reverse=True)
+        return out
+
     # ---- 回答生成・要約（検索 + LLM 合成） ----------------------------------
 
-    def ask(self, question: str, *, document_top_n: int = 4,
+    def ask(self, question: str, *, document_top_n: int = DEFAULT_DOC_TOP_N,
             chunk_top_k_per_doc: int = 4, max_chunks_per_doc: int | None = None,
             use_graph: bool = False, doc_ids: list[str] | None = None,
+            collection_ids: list[str] | None = None, tags: list[str] | None = None,
             progress=None) -> DocAnswer:
         """質問に **回答を生成** する（検索 → 文書別の根拠を文脈に LLM で合成）。
 
-        「要約してください」「比較してください」のような依頼文にもそのまま応える。
-        根拠は doc_id 単位で多様化され、回答には文書名を明示させる。
+        - doc_ids 明示選択時は **選択した全文書** が根拠に含まれる（切り捨てない）。
+        - 対象文書が多い（MAP_REDUCE_DOC_THRESHOLD 以上）場合は、全チャンクを
+          単一プロンプトに入れず **文書ごとに部分回答 → 統合** の Map-Reduce で処理
+          する。どの文書も黙って比較対象から消えない。
+        - 単一プロンプト時も CONTEXT_CHAR_BUDGET の予算内で文書ごとに均等配分する。
         """
         from . import bookindex as bx
 
@@ -439,23 +864,60 @@ class IndexManager:
         hits = self.search(question, document_top_n=document_top_n,
                            chunk_top_k_per_doc=chunk_top_k_per_doc,
                            max_chunks_per_doc=max_chunks_per_doc,
-                           use_graph=use_graph, doc_ids=doc_ids)
+                           use_graph=use_graph, doc_ids=doc_ids,
+                           collection_ids=collection_ids, tags=tags)
         if not hits or not any(h.chunks for h in hits):
             return DocAnswer(text="該当する文書が見つかりませんでした。"
                                   "文書が登録済みか、質問の言い換えを確認してください。",
                              hits=hits)
-        ctx = "\n\n".join(
-            f"### 文書「{h.title}」\n" + "\n".join(
-                f"- {('p.' + str(c['page']) + ' ') if c.get('page') else ''}{c['text'][:800]}"
-                for c in h.chunks)
-            for h in hits)
+
+        sys_prompt = ("あなたは文書アシスタントです。以下の抜粋のみに基づいて依頼に日本語で"
+                      "応えてください（回答・要約・比較など依頼の種類に従う）。"
+                      "どの文書の情報かを文書名で明示し、抜粋に無い内容は推測しないでください。")
+
+        def _doc_block(h: SearchHit, budget: int) -> str:
+            per_chunk = max(200, budget // max(1, len(h.chunks)))
+            lines = []
+            for c in h.chunks:
+                loc = "".join([f"§{c['section']} " if c.get("section")
+                               and c["section"] != "(本文)" else "",
+                               f"p.{c['page']} " if c.get("page") else ""])
+                lines.append(f"- {loc}{c['text'][:per_chunk]}")
+            return f"### 文書「{h.title}」\n" + "\n".join(lines)
+
+        # Map-Reduce: 文書数が多いときは文書ごとに部分回答してから統合する
+        if len(hits) >= MAP_REDUCE_DOC_THRESHOLD:
+            partials = []
+            total = len(hits) + 1
+            for i, h in enumerate(hits):
+                emit(f"文書別に回答: {h.title}", i, total)
+                try:
+                    p = bx.llm_text(
+                        f"依頼: {question}\n\n{_doc_block(h, CONTEXT_CHAR_BUDGET)}\n\n"
+                        "この文書の抜粋から依頼に関係する内容だけを簡潔に述べてください。"
+                        "無ければ「該当情報なし」と答えてください。",
+                        system=sys_prompt).strip()
+                except Exception as e:  # noqa: BLE001  1文書の失敗で全体を止めない
+                    p = f"（この文書の処理に失敗: {type(e).__name__}: {e}）"
+                partials.append(f"■ {h.title}\n{p}")
+            emit("統合回答を生成", len(hits), total)
+            text = bx.llm_text(
+                f"依頼: {question}\n\n以下は文書ごとの部分回答です。突き合わせて"
+                f"依頼に答えてください。全文書に言及してください。\n\n"
+                + "\n\n".join(partials),
+                system=sys_prompt).strip()
+            emit("完了", total, total)
+            return DocAnswer(text=text, hits=hits,
+                             per_doc=[{"doc_id": h.doc_id, "title": h.title,
+                                       "text": p.split("\n", 1)[-1]}
+                                      for h, p in zip(hits, partials)])
+
+        # 単一プロンプト: 文書ごとに予算を均等配分（どの文書も落とさない）
+        per_doc_budget = CONTEXT_CHAR_BUDGET // len(hits)
+        ctx = "\n\n".join(_doc_block(h, per_doc_budget) for h in hits)
         emit("回答を生成", 1, 2)
-        text = bx.llm_text(
-            f"依頼: {question}\n\n文書からの抜粋:\n{ctx}",
-            system=("あなたは文書アシスタントです。以下の抜粋のみに基づいて依頼に日本語で"
-                    "応えてください（回答・要約・比較など依頼の種類に従う）。"
-                    "どの文書の情報かを文書名で明示し、抜粋に無い内容は推測しないでください。"),
-        ).strip()
+        text = bx.llm_text(f"依頼: {question}\n\n文書からの抜粋:\n{ctx}",
+                           system=sys_prompt).strip()
         emit("完了", 2, 2)
         return DocAnswer(text=text, hits=hits)
 
@@ -520,15 +982,29 @@ class IndexManager:
         emit("完了", total, total)
         return DocAnswer(text=final, per_doc=per_doc)
 
-    def _normal_chunks(self, doc_id, question, hit, top_k, cap) -> None:
-        nodes = self._paged.retrieve_in_doc(question, doc_id=doc_id, top_m=max(top_k, cap))
-        for n in nodes[:cap]:
+    def _normal_chunks(self, doc_id, question, hit, top_k, cap,
+                       candidates=None) -> None:
+        """文書内チャンクの採用: 候補（広め・ハイブリッド済み）から上位 cap 件。
+
+        section_id / 見出しパスは chunks JSON（_assign_sections で付与）から引く。
+        """
+        cands = candidates if candidates is not None \
+            else self._doc_chunk_candidates(question, doc_id, top_k)
+        sec_by_chunk = {}
+        doc = self._paged.document(doc_id) or {}
+        for c in doc.get("chunks", []):
+            sec_by_chunk[c.get("chunk_id")] = (c.get("section_id"), c.get("section"))
+        for n, score in cands[:min(cap, len(cands))]:
             meta = n.node.metadata
+            sid, sec = sec_by_chunk.get(n.node.node_id, (None, None))
             hit.chunks.append({
                 "text": n.node.get_content().strip(),
                 "page": meta.get("page_label"),
-                "score": round(getattr(n, "score", 0.0) or 0.0, 4),
+                "score": round(score, 4),
                 "source": meta.get("path") or meta.get("source"),
+                "chunk_id": n.node.node_id,
+                "section_id": sid,
+                "section": sec,
             })
 
     def _graph_chunks(self, doc_id, question, hit, cap) -> bool:
