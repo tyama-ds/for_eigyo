@@ -63,14 +63,65 @@ def _history_append(entry: dict) -> None:
         _write_json_file(_history_path(), hist[:_HISTORY_MAX])
 
 
+class EtaTracker:
+    """フェーズごとの実測レートから残り時間・予測総時間を推定する（タスク毎に1個）。
+
+    - stage（フェーズ名）が変わったら計測をリセットする
+    - フェーズ内の最初の1件が完了するまでは eta_sec=None
+      （UI は「残り時間を計算中…」を表示する）
+    - current/total の無いイベントやログ行（total<=1）はそのまま素通しする
+    - 状態はタスクスコープ（スレッド間で共有しない）
+    """
+
+    def __init__(self, clock=None):
+        import time
+
+        self._clock = clock or time.monotonic
+        self._phase: str | None = None
+        self._t0 = 0.0
+        self._c0 = 0
+
+    def annotate(self, evt: dict) -> dict:
+        cur, tot = evt.get("current"), evt.get("total")
+        if not isinstance(cur, (int, float)) or isinstance(cur, bool) or \
+                not isinstance(tot, (int, float)) or isinstance(tot, bool) or tot <= 1:
+            return evt  # 計測点ではない（ログ行は total=1 で流れてくる）
+        stage = str(evt.get("stage") or "")
+        now = self._clock()
+        if stage != self._phase:
+            self._phase, self._t0, self._c0 = stage, now, int(cur)
+        done = int(cur) - self._c0
+        out = dict(evt)
+        out.setdefault("detail", "")
+        if int(cur) >= int(tot):
+            out["eta_sec"] = 0.0
+            out["estimated_total_sec"] = round(now - self._t0, 1)
+        elif done > 0:
+            rate = (now - self._t0) / done  # 秒/件（このフェーズの実測）
+            out["eta_sec"] = round(rate * (int(tot) - int(cur)), 1)
+            out["estimated_total_sec"] = round(rate * int(tot), 1)
+        else:
+            out["eta_sec"] = None            # → UI: 残り時間を計算中…
+            out["estimated_total_sec"] = None
+        return out
+
+
+def _emitter(q: Queue):
+    """タスク用の progress emit（ETA 付与つき）を作る。"""
+    eta = EtaTracker()
+
+    def emit(evt: dict) -> None:
+        q.put({"type": "progress", **eta.annotate(evt)})
+
+    return emit
+
+
 def _run_task(task_id: str, payload: dict) -> None:
     """バックグラウンドスレッドで MultiRAG のアクションを実行し、進捗を Queue へ流す。"""
     from .workspace import MultiRAG
 
     q = _tasks[task_id]
-
-    def emit(evt: dict) -> None:
-        q.put({"type": "progress", **evt})
+    emit = _emitter(q)
 
     try:
         action = payload.get("action", "ask")
@@ -124,9 +175,7 @@ def _run_build(task_id: str, payload: dict, root: str) -> None:
     from .workspace import build_index
 
     q = _tasks[task_id]
-
-    def emit(evt: dict) -> None:
-        q.put({"type": "progress", **evt})
+    emit = _emitter(q)
 
     try:
         name = str(payload.get("name", "")).strip()
@@ -171,23 +220,42 @@ def _index_manager(root: str):
         return im
 
 
+def _graph_settings_from(payload: dict) -> dict | None:
+    """GUI のグラフ安全設定（プリセット）を IndexManager へ渡す形に取り出す。"""
+    gs = payload.get("graph_settings")
+    if not isinstance(gs, dict):
+        return None
+    out: dict = {}
+    for k in ("graph_max_workers", "graph_max_nodes", "graph_chunk_chars"):
+        if gs.get(k) is not None:
+            out[k] = int(gs[k])
+    if gs.get("er_use_llm") is not None:
+        out["er_use_llm"] = bool(gs["er_use_llm"])
+    return out or None
+
+
+def _str_list(v) -> list[str] | None:
+    if not v:
+        return None
+    return [str(x) for x in v if str(x).strip()] or None
+
+
 def _run_docs_task(task_id: str, payload: dict, root: str) -> None:
     """文書の追加/再構築/検索をバックグラウンド実行し、進捗を SSE へ流す。"""
     q = _tasks[task_id]
-
-    def emit(evt: dict) -> None:
-        q.put({"type": "progress", **evt})
+    emit = _emitter(q)
 
     try:
         im = _index_manager(payload.get("root") or root)
         op = payload.get("op", "add")
+        gs = _graph_settings_from(payload)
         if op in ("add", "rebuild"):
             if op == "rebuild":
                 # index_mode 未指定なら None → 現在のモードを維持
                 #（既定 "fast" を渡すと graph/hierarchy 文書が黙って降格してしまう）
                 mode = str(payload["index_mode"]) if payload.get("index_mode") else None
                 meta = im.rebuild(str(payload.get("doc_id", "")), index_mode=mode,
-                                  progress=emit)
+                                  graph_settings=gs, progress=emit)
             else:
                 path = str(payload.get("path", "")).strip()
                 if not path:
@@ -198,7 +266,11 @@ def _run_docs_task(task_id: str, payload: dict, root: str) -> None:
                         path, index_mode=str(payload.get("index_mode", "fast")),
                         force=bool(payload.get("force", False)),
                         layout=bool(payload.get("layout", False)),
-                        ocr=payload.get("ocr", False), progress=emit)
+                        ocr=payload.get("ocr", False),
+                        recursive=bool(payload.get("recursive", False)),
+                        collection_name=(payload.get("collection_name") or None),
+                        tags=_str_list(payload.get("tags")),
+                        graph_settings=gs, progress=emit)
                     q.put({"type": "result", "kind": "docbatch", **batch,
                            "results": [m for m in batch["results"]]})
                     return
@@ -207,19 +279,29 @@ def _run_docs_task(task_id: str, payload: dict, root: str) -> None:
                     index_mode=str(payload.get("index_mode", "fast")),
                     force=bool(payload.get("force", False)),
                     layout=bool(payload.get("layout", False)),
-                    ocr=payload.get("ocr", False), progress=emit)
+                    ocr=payload.get("ocr", False),
+                    tags=_str_list(payload.get("tags")),
+                    graph_settings=gs, progress=emit)
+            q.put({"type": "result", "kind": "docmeta", "meta": meta})
+        elif op == "graph":
+            # graph 層のみ（再）構築。resume=True でチェックポイントから再開
+            meta = im.build_graph_only(str(payload.get("doc_id", "")),
+                                       resume=bool(payload.get("resume", True)),
+                                       graph_settings=gs, progress=emit)
             q.put({"type": "result", "kind": "docmeta", "meta": meta})
         elif op == "search":
             action = str(payload.get("action", "search"))
             question = str(payload.get("question", ""))
             doc_ids = payload.get("doc_ids") or None
+            collection_ids = _str_list(payload.get("collection_ids"))
+            tags = _str_list(payload.get("tags"))
             kw = dict(
-                document_top_n=int(payload.get("document_top_n", 4) or 4),
+                document_top_n=int(payload.get("document_top_n", 8) or 8),
                 chunk_top_k_per_doc=int(payload.get("chunk_top_k_per_doc", 4) or 4),
                 max_chunks_per_doc=(int(payload["max_chunks_per_doc"])
                                     if payload.get("max_chunks_per_doc") else None),
                 use_graph=bool(payload.get("use_graph", False)),
-                doc_ids=doc_ids,
+                doc_ids=doc_ids, collection_ids=collection_ids, tags=tags,
             )
             if action == "answer":       # 回答生成（要約・比較などの依頼文もOK）
                 if not question.strip():
@@ -228,6 +310,7 @@ def _run_docs_task(task_id: str, payload: dict, root: str) -> None:
                 q.put({"type": "result", "kind": "docanswer", **r.to_dict()})
             elif action == "summarize":  # 文書ごと要約 → 統合要約
                 r = im.summarize(question.strip() or None, doc_ids=doc_ids,
+                                 collection_ids=collection_ids, tags=tags,
                                  progress=emit)
                 q.put({"type": "result", "kind": "docanswer", **r.to_dict()})
             else:                        # チャンク検索（従来）
@@ -308,6 +391,12 @@ class _Handler(BaseHTTPRequestHandler):
             doc_id = (qs.get("doc_id") or [""])[0]
             detail = _index_manager(root).document(doc_id)
             self._json(detail or {"error": "not found"}, 200 if detail else 404)
+        elif url.path == "/api/collections":
+            qs = parse_qs(url.query)
+            root = (qs.get("root") or [self.root_dir])[0]
+            im = _index_manager(root)
+            self._json({"root": root, "collections": im.collections(),
+                        "tags": im.all_tags()})
         else:
             self._json({"error": "not found"}, 404)
 
@@ -327,13 +416,24 @@ class _Handler(BaseHTTPRequestHandler):
             with _history_lock:
                 _write_json_file(_history_path(), [])
             self._json({"ok": True})
-        elif url.path in ("/api/docs/add", "/api/docs/rebuild", "/api/docs/search"):
+        elif url.path in ("/api/docs/add", "/api/docs/rebuild", "/api/docs/search",
+                          "/api/docs/graph"):
             self._api_docs_task(url.path.rsplit("/", 1)[-1])
         elif url.path == "/api/docs/delete":
             p = self._read_json()
             root = p.get("root") or self.root_dir
             existed = _index_manager(root).delete(str(p.get("doc_id", "")))
             self._json({"ok": True, "existed": existed})
+        elif url.path == "/api/docs/tags":
+            p = self._read_json()
+            root = p.get("root") or self.root_dir
+            try:
+                meta = _index_manager(root).set_tags(
+                    str(p.get("doc_id", "")),
+                    [str(t) for t in (p.get("tags") or [])])
+                self._json({"ok": True, "meta": meta})
+            except KeyError as e:
+                self._json({"ok": False, "error": str(e)}, 404)
         else:
             self._json({"error": "not found"}, 404)
 
@@ -408,7 +508,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._json({"error": "接続設定が未入力です（取り込み・検索には埋め込みAPIが必要）"}, 400)
             return
         payload = self._read_json()
-        payload["op"] = op  # ルート一致で保証済み（add / rebuild / search）
+        payload["op"] = op  # ルート一致で保証済み（add / rebuild / search / graph）
         task_id = uuid.uuid4().hex[:12]
         with _tasks_lock:
             _tasks[task_id] = Queue()

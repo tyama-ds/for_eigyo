@@ -150,7 +150,17 @@ def progress(iterable, *, total: int | None = None, desc: str = ""):
     """tqdm があればプログレスバー、無ければ定期 print で進捗を返すイテレータ。
 
     JupyterLab では tqdm.auto がセル内にバーを描画する（現在のフェーズ=desc 付き）。
+    progress_to() のコンテキスト内では (desc, current, total) を逐次コールバックへ
+    転送する（Studio が ETA を計算するための計測点）。
     """
+    if total is None:
+        try:
+            total = len(iterable)
+        except TypeError:
+            total = None
+    cb = getattr(_progress_local, "cb", None)
+    if cb is not None:
+        iterable = _forward_progress(iterable, cb, desc, total)
     try:
         from tqdm.auto import tqdm
 
@@ -168,10 +178,56 @@ def progress(iterable, *, total: int | None = None, desc: str = ""):
         return _gen()
 
 
+def _forward_progress(iterable, cb, desc: str, total: int | None):
+    """progress() の各要素完了を cb(desc, current, total) として通知するラッパ。
+
+    フェーズ開始時に (desc, 0, total) を必ず送る（受信側は最初の1件が終わるまで
+    「残り時間を計算中」を表示できる）。転送失敗で本処理は止めない。
+    """
+    def _gen():
+        try:
+            cb(desc, 0, total)
+        except Exception:  # noqa: BLE001
+            pass
+        n = 0
+        for x in iterable:
+            yield x
+            n += 1
+            try:
+                cb(desc, n, total)
+            except Exception:  # noqa: BLE001
+                pass
+    return _gen()
+
+
 # ログ転送はスレッドローカル。以前は呼び出し側が bx.log をグローバルに差し替えて
 # いたが、Studio はタスクごとに別スレッドで動くため、並行実行で転送先が混線し
 # 復元順によっては死んだタスクの Queue を永久に指す事故が起きる。log_to() を使う。
 _log_local = __import__("threading").local()
+# progress() の進捗転送先（log_to と同じ理由でスレッドローカル）
+_progress_local = __import__("threading").local()
+
+
+def progress_to(callback):
+    """このスレッドの progress() の進捗を callback(desc, current, total) へ転送する
+    コンテキストマネージャ。log_to() と同様にスレッドローカルでネスト可。
+
+    使い方::
+        with bx.progress_to(lambda d, c, t: emit({"stage": d, "current": c, "total": t})):
+            book.add_book(...)
+    """
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _cm():
+        prev = getattr(_progress_local, "cb", None)
+        _progress_local.cb = callback
+        try:
+            yield
+        finally:
+            _progress_local.cb = prev
+
+    return _cm()
 
 
 def log_to(callback):
@@ -845,16 +901,19 @@ def _even_sample(bi: "BookIndex", targets: list[int], budget: int) -> list[int]:
 
 
 def build_graph(bi: BookIndex, node_ids: list[int], *, gradient_g: float = 0.6,
-                er_top_k: int = 10, max_workers: int = 8, min_chars: int = 40,
+                er_top_k: int = 10, max_workers: int = 2, min_chars: int = 40,
                 max_nodes: int = 300, er_use_llm: bool = False, reranker=None,
-                all_nodes: bool = False) -> None:
+                all_nodes: bool = False, checkpoint_path: str | None = None,
+                checkpoint_batch: int = 15) -> None:
     """各ノードからエンティティ/関係を抽出し、Gradient-based ER で KG を構築する。
 
-    速度のため、抽出（LLM 呼び出し + 埋め込み）はノード単位で **並列化** し、
-    Gradient ER とグラフ構築（順序依存・BookIndex を変更する）は **逐次** で行う。
+    抽出はバッチ（checkpoint_batch ノード毎）で進み、checkpoint_path 指定時は
+    バッチ完了ごとに graph_progress.json へ途中保存する（中断・タイムアウト後に
+    完了済みノードを再抽出せず再開できる）。
     - 短すぎるノード（min_chars 未満）は抽出をスキップ。
     - all_nodes=True なら全ノードを処理。False（既定）で max_nodes を超える場合は
       **セクションごとに均等サンプリング**（先頭打ち切りにせず文書全体をカバー）。
+    - 並列数はノード数に応じて自動で絞る（自動セーフモード。既定の最大は 2 並列）。
     - er_use_llm=False（既定）なら曖昧マージで LLM を呼ばず、最有力候補を採用（高速）。
     - reranker 指定時は Algorithm 1 の Rerank model R として名寄せ候補を再スコアする。
     - Table ノードは論文 4.3.1 に従い v_table エンティティ + ヘッダを ContainedIn で構造化。
@@ -871,10 +930,32 @@ def build_graph(bi: BookIndex, node_ids: list[int], *, gradient_g: float = 0.6,
         log("警告: 抽出対象の本文ノードが 0 件です。文書からテキストを取得できていない可能性が"
             "あります（スキャンPDF・空文書・全ノードが min_chars 未満）。")
         return
+    if not all_nodes and len(targets) > 150 and max_nodes > 100:
+        # 自動セーフモード: 大きすぎる文書はローカルLLMで完走しにくい
+        log(f"自動セーフモード: 対象 {len(targets)} ノードは多いため 100 ノードへ"
+            "圧縮します（増やすには max_nodes/all_nodes を明示指定）")
+        max_nodes = 100
     if not all_nodes and len(targets) > max_nodes:
         print(f"[BookRAG] 対象ノード {len(targets)} 件を max_nodes={max_nodes} 件へ"
               "**セクション均等サンプリング**で圧縮します（全件は all_nodes=True）")
         targets = _even_sample(bi, targets, max_nodes)
+
+    # 自動セーフモード: ノード数に応じて並列数を絞る（ローカルLLMの過負荷防止）。
+    # 50ノード以下: 最大2並列 / それ超: 1並列。明示的に 1 を指定していれば従う。
+    workers = max_workers
+    if workers > 1:
+        workers = min(workers, 2) if len(targets) <= 50 else 1
+        if workers != max_workers:
+            log(f"自動セーフモード: 並列数を {max_workers}→{workers} に絞ります"
+                f"（対象 {len(targets)} ノード）")
+
+    # チェックポイント: 完了済みノードを読み込み、未処理だけ抽出する（中断再開可能）
+    ckpt = _load_checkpoint(checkpoint_path, bi) if checkpoint_path else {}
+    done_ok = {int(k) for k, v in ckpt.get("nodes", {}).items()
+               if v.get("status") in ("ok", "empty")}
+    todo = [nid for nid in targets if nid not in done_ok]
+    if done_ok:
+        log(f"チェックポイントから再開: 完了済み {len(done_ok)} / 残り {len(todo)} ノード")
 
     def _work(nid: int, fail_fast: bool = True):
         # 抽出フェーズは BookIndex を読むだけ（スレッド安全）。失敗しても全体を止めず、
@@ -883,37 +964,56 @@ def build_graph(bi: BookIndex, node_ids: list[int], *, gradient_g: float = 0.6,
             node = bi.nodes[nid]
             data = _extract_graph(node, fail_fast=fail_fast)   # entities + relations を1回で
             if data is None:
-                return nid, [], [], None, "badjson"            # モデルが JSON を返さない
+                return nid, [], [], "badjson"                  # モデルが JSON を返さない
             ents = data["entities"]
             if not ents:
-                return nid, [], [], None, "empty"
-            names = [f"{e['name']} ({e.get('type','')}): {e.get('description','')}" for e in ents]
-            return nid, ents, data["relations"], embed(names), "ok"
+                return nid, [], [], "empty"
+            return nid, ents, data["relations"], "ok"
         except Exception as e:  # noqa: BLE001
-            return nid, [], [], None, f"error:{type(e).__name__}"
+            return nid, [], [], f"error:{type(e).__name__}"
 
+    # 10〜20ノード単位のバッチで抽出し、バッチ完了ごとにチェックポイント保存
+    total = len(todo)
+    batches = [todo[i:i + checkpoint_batch] for i in range(0, total, checkpoint_batch)]
+    done_count = 0
+    for batch in progress(batches, total=len(batches),
+                          desc=f"抽出: エンティティ/関係 ({workers}並列・"
+                               f"{checkpoint_batch}ノード毎に保存)"):
+        if workers > 1:
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                batch_res = list(ex.map(_work, batch))
+        else:
+            batch_res = [_work(nid) for nid in batch]
+        # 失敗（通信エラー/JSON不正）はバッチ内で逐次1回だけ再試行
+        for j, r in enumerate(batch_res):
+            if r[3].startswith("error") or r[3] == "badjson":
+                batch_res[j] = _work(r[0], fail_fast=False)
+        for nid, ents, rels, st in batch_res:
+            ckpt.setdefault("nodes", {})[str(nid)] = {
+                "status": ("error" if st.startswith("error") else st),
+                "entities": ents, "relations": rels,
+                "error": (st.split(":", 1)[1] if st.startswith("error") else None),
+            }
+        done_count += len(batch)
+        if checkpoint_path:
+            _save_checkpoint(checkpoint_path, ckpt, bi)
+
+    # チェックポイント（過去分含む）から全ノードの結果を組み立てる
     results = []
-    total = len(targets)
-    with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        for res in progress(ex.map(_work, targets), total=total,
-                            desc=f"抽出: エンティティ/関係 ({max_workers}並列)"):
-            results.append(res)
-
-    # 失敗ノード（通信エラー/JSON不正）を逐次(1並列)で1回だけ再試行する。
-    # ローカルLLMサーバが並列リクエストを捌けずタイムアウトする構成の救済。
-    retry_idx = [i for i, r in enumerate(results)
-                 if r[4].startswith("error") or r[4] == "badjson"]
-    if retry_idx:
-        log(f"{len(retry_idx)}/{len(results)} ノードの抽出が失敗。サーバ過負荷の可能性があるため"
-            "逐次(1並列)で再試行します…")
-        for i in progress(retry_idx, total=len(retry_idx), desc="失敗ノードの再試行 (1並列)"):
-            results[i] = _work(results[i][0], fail_fast=False)
+    for nid in targets:
+        rec = ckpt.get("nodes", {}).get(str(nid))
+        if rec is None:
+            continue
+        st = rec["status"] if rec["status"] != "error" \
+            else f"error:{rec.get('error') or 'unknown'}"
+        results.append((nid, rec.get("entities") or [],
+                        rec.get("relations") or [], st))
 
     # 状態を集計して報告（従来は失敗が黙殺され「エンティティ0」の原因が見えなかった）。
     from collections import Counter
 
-    stat = Counter(("error" if r[4].startswith("error") else r[4]) for r in results)
-    errors = Counter(r[4].split(":", 1)[1] for r in results if r[4].startswith("error"))
+    stat = Counter(("error" if r[3].startswith("error") else r[3]) for r in results)
+    errors = Counter(r[3].split(":", 1)[1] for r in results if r[3].startswith("error"))
     found = sum(len(r[1]) for r in results)
     log(f"抽出結果: 成功 {stat.get('ok', 0)} / エンティティ0 {stat.get('empty', 0)} / "
         f"JSON不正 {stat.get('badjson', 0)} / 通信エラー {stat.get('error', 0)}"
@@ -935,10 +1035,24 @@ def build_graph(bi: BookIndex, node_ids: list[int], *, gradient_g: float = 0.6,
     if found == 0:
         log("警告: エンティティが1件も抽出できませんでした（上記の内訳を参照）。")
 
+    # 抽出結果のエンティティ埋め込みをまとめて計算（チェックポイントには
+    # ベクトルを保存しないため、ER 直前にバッチで再計算する）
+    vec_by_node: dict[int, object] = {}
+    ok_nodes = [(nid, ents) for nid, ents, _r, st in results if st == "ok" and ents]
+    if ok_nodes:
+        flat_names = [f"{e['name']} ({e.get('type','')}): {e.get('description','')}"
+                      for _nid, ents in ok_nodes for e in ents]
+        flat_vecs = embed(flat_names)
+        pos = 0
+        for nid, ents in ok_nodes:
+            vec_by_node[nid] = flat_vecs[pos:pos + len(ents)]
+            pos += len(ents)
+
     # Gradient ER + グラフ構築は順序依存のため逐次（入力ノード順）。進捗も表示。
-    for nid, ents, rels, vecs, _st in progress(results, total=len(results),
-                                               desc="名寄せ/グラフ構築 (KG)"):
+    for nid, ents, rels, _st in progress(results, total=len(results),
+                                         desc="名寄せ/グラフ構築 (KG)"):
         node = bi.nodes[nid]
+        vecs = vec_by_node.get(nid, [])
         local_name_to_eid: dict[str, int] = {}
         if ents:
             for e, vec in zip(ents, vecs):
@@ -964,6 +1078,13 @@ def build_graph(bi: BookIndex, node_ids: list[int], *, gradient_g: float = 0.6,
                 )
             except Exception as e:  # noqa: BLE001
                 log(f"表エンティティの構造化に失敗（スキップ）: {e}")
+
+    # 完走したらチェックポイントは不要（次回ビルドで古い結果を再利用しないよう削除）
+    if checkpoint_path:
+        try:
+            Path(checkpoint_path).unlink(missing_ok=True)
+        except OSError as e:
+            log(f"チェックポイント削除に失敗（無害）: {e}")
 
 
 def _augment_table_entities(bi: BookIndex, node: TreeNode, local_name_to_eid: dict,
@@ -1073,31 +1194,82 @@ def _rerank_candidates(bi: BookIndex, name: str, etype: str, desc: str,
         return candidates
 
 
+MAX_ENTITIES_PER_NODE = 10   # プロンプトの「最大10エンティティ」と揃える
+MAX_RELATIONS_PER_NODE = 15  # 関係の暴走出力を切る上限
+
+
 def _extract_graph(node: TreeNode, *, fail_fast: bool = False) -> dict | None:
     """1 回の LLM 呼び出しでノードからエンティティと関係をまとめて抽出する。
 
     fail_fast=True で SDK リトライ無効（並列パスで使用。失敗は上位の逐次再試行に回す）。
     モデルが JSON を返さなかった場合は None（「エンティティ0」と区別するため）。
+    出力上限: 最大10エンティティの JSON に 2,000+ トークンは過大なため 800 を基準に、
+    逐次レスキュー時のみ 1,000（思考過程を出すモデルの JSON 切れの猶予）。
     """
     result = llm_json(
         _PROMPT_GRAPH_EXTRACT + f"\n\nNode type: {node.type}\nContent:\n{node.content[:2500]}",
         max_retries=0 if fail_fast else None,
-        # 長時間生成→タイムアウトを防ぐ上限。思考過程を出すモデルは思考にも消費するため
-        # 並列パス2000 / 逐次レスキュー4000（思考でトークンを使い切り空 JSON になる対策）
-        max_tokens=2000 if fail_fast else 4000,
+        max_tokens=800 if fail_fast else 1000,
     )
     if result is None:
-        return None  # JSON 解釈不能（指示無視）
+        return None  # JSON 解釈不能（指示無視 / 思考でトークン切れ）
     ents: list[dict] = []
     rels: list[dict] = []
     if isinstance(result, dict):
         raw_e = result.get("entities", [])
         if isinstance(raw_e, list):
-            ents = [e for e in raw_e if isinstance(e, dict) and e.get("name")]
+            ents = [e for e in raw_e
+                    if isinstance(e, dict) and e.get("name")][:MAX_ENTITIES_PER_NODE]
         raw_r = result.get("relations", [])
         if isinstance(raw_r, list):
-            rels = [r for r in raw_r if isinstance(r, dict) and r.get("source") and r.get("target")]
+            rels = [r for r in raw_r
+                    if isinstance(r, dict) and r.get("source")
+                    and r.get("target")][:MAX_RELATIONS_PER_NODE]
     return {"entities": ents, "relations": rels}
+
+
+# ---- graph チェックポイント（graph_progress.json） -------------------------
+
+
+def _graph_signature(bi: "BookIndex") -> str:
+    """チェックポイントの有効性ガード。木が変わったら（内容が変わったら）無効化。"""
+    import hashlib
+
+    h = hashlib.md5()
+    for nid in sorted(bi.nodes):
+        n = bi.nodes[nid]
+        h.update(f"{nid}:{n.type}:{len(n.content)}".encode())
+    return h.hexdigest()[:12]
+
+
+def _load_checkpoint(path, bi: "BookIndex") -> dict:
+    from pathlib import Path as _P
+
+    p = _P(path)
+    if not p.exists():
+        return {"signature": _graph_signature(bi), "nodes": {}}
+    try:
+        ck = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"signature": _graph_signature(bi), "nodes": {}}
+    if ck.get("signature") != _graph_signature(bi):
+        log("チェックポイントは旧い木のもののため破棄します（文書内容が変更された）")
+        return {"signature": _graph_signature(bi), "nodes": {}}
+    return ck
+
+
+def _save_checkpoint(path, ckpt: dict, bi: "BookIndex") -> None:
+    """一時ファイル + atomic replace で保存（中断時の索引破損を防ぐ）。"""
+    import os
+    from pathlib import Path as _P
+
+    p = _P(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    ckpt["signature"] = ckpt.get("signature") or _graph_signature(bi)
+    ckpt["updated_at"] = __import__("datetime").datetime.now().isoformat(timespec="seconds")
+    tmp = p.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(ckpt, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, p)
 
 
 def _llm_select_entity(bi: BookIndex, name: str, etype: str, desc: str,

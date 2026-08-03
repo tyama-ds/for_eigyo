@@ -459,7 +459,13 @@ python -m llmlab.app --port 9000 --root ./storage
   の3アクション（`対象文書数`/`文書内チャンク`/`最大チャンク`/`BookRAG(graph)を使う`）。
   「要約してください」のような依頼文にも応え、一覧の ✓ で対象文書を絞れる。
   graph 未作成の文書に BookRAG 検索を要求しても落とさず通常RAGにフォールバックし、
-  その旨を各文書に表示する。
+  その旨を各文書に表示する。**コレクション/タグのチップ**で検索範囲を絞り込み
+  （フォルダ取り込みでコレクション+自動タグが付く。サブフォルダ再帰も選択可）、
+  グラフ構築は**負荷プリセット（安全/標準/高速）**と**層別ステータス**
+  （検索/構造/グラフ）表示つき。グラフだけ失敗した文書は「文書は利用可能
+  （グラフのみ失敗）」と表示され、**「グラフ再開」**でチェックポイントから
+  続きだけ再実行できる。進捗には**残り時間の予測**（フェーズごとの実測レート）
+  が出る。
 
 ### ⑬ IndexManager — index_mode で速度と精度を選ぶ文書間RAG（ローカルLLM実用重視）
 
@@ -477,15 +483,21 @@ python -m llmlab.app --port 9000 --root ./storage
 im = llmlab.IndexManager()                       # 既定 ./storage/index
 im.add_document("./docs/2024規程.pdf")            # fast（既定・高速）
 im.add_document("./docs/規程.pdf", index_mode="graph")   # 明示時だけ重い抽出
-im.add_folder("./docs/2024")                      # フォルダ一括（1ファイル=1文書、失敗は続行）
+r = im.add_folder("./docs/2024")                  # フォルダ一括（1ファイル=1文書、失敗は続行）
+im.add_folder("./docs/2024", recursive=True,      # サブフォルダも（フォルダ名は自動タグ）
+              collection_name="2024規程集", tags=["規程"])
+im.collections(); im.all_tags()                   # コレクション/タグの一覧
 im.documents()                                    # doc_id 単位の一覧（title/status/mode…）
 im.document(doc_id)                               # メタ + status + チャンク + 木の要約
-res = im.search("退職金は？", document_top_n=4, chunk_top_k_per_doc=4, use_graph=False)
+res = im.search("退職金は？", document_top_n=8, chunk_top_k_per_doc=4)
+res = im.search("退職金は？", collection_ids=[r["collection_id"]])  # 範囲を限定
+res = im.search("退職金は？", doc_ids=[id1, id2, id3])  # 明示選択＝全件対象（切り捨てない）
 for h in res: print(h.title, h.doc_id, h.score, len(h.chunks))
 print(im.ask("退職金の計算方法は？"))              # 回答を生成（要約・比較などの依頼文もOK）
 print(im.summarize())                              # 文書ごとに要約 → 統合要約
-print(im.summarize("リスク面を中心に", doc_ids=[doc_id]))  # 観点・対象文書の指定
+print(im.summarize("リスク面を中心に", tags=["規程"]))  # 観点・対象の指定
 im.rebuild(doc_id, index_mode="hierarchy")        # 作り直し（force 相当）
+im.build_graph_only(doc_id)                       # graph 層だけ再構築（チェックポイント再開）
 im.delete(doc_id)
 ```
 
@@ -496,10 +508,22 @@ im.delete(doc_id)
   `skipped`。作り直しは `force=True`（GUI では「再構築」）。
 - **status**: `pending`/`running`/`ready`/`failed`/`skipped`。失敗は握りつぶさず
   `status/{doc_id}.json` の `error` と GUI に表示。
-- **検索は2段階**: まず doc_id 単位で候補文書 top-N → 各文書内で chunk top-k。全チャンク
-  global top_k を避け、1文書に偏らない（`document_top_n`/`chunk_top_k_per_doc`/
-  `max_chunks_per_doc`）。`use_graph=True` は graph 索引がある文書のみ BookRAG 検索、
-  無ければ通常RAGへフォールバック。
+- **検索の構造**: 範囲限定（collection/タグ）→ 文書候補選定（top-N）→ 各文書内で
+  チャンク候補を広めに取得 → **ベクトル+キーワードのハイブリッド再ランク** →
+  文書ごとの根拠に採用。全チャンク global top_k を避け、1文書に偏らない
+  （`document_top_n`/`chunk_top_k_per_doc`/`max_chunks_per_doc`）。
+  `use_graph=True` は graph 索引がある文書のみ BookRAG 検索、無ければ通常RAGへ
+  フォールバック。
+- **doc_ids は明示選択**: 指定した文書は `document_top_n` に関係なく**全件**が対象
+  （重複だけ除去）。top-N は未指定時の自動選定にのみ効く。チャンクには安定
+  `section_id`（見出しパスのハッシュ）と `chunk_id` が付き出典を追跡できる。
+- **回答生成の予算管理**: 対象文書が多いときは文書ごとに部分回答してから統合する
+  Map-Reduce（どの文書も黙って落とさない）。単一プロンプト時も文字数予算を
+  文書ごとに均等配分。
+- **グラフ構築の安全化**: 既定は 1並列・100ノード上限・抽出出力 800〜1000 トークン。
+  Entity 抽出は 15 ノードごとに `graph_progress.json` へ途中保存され（atomic replace）、
+  失敗後の再実行では完了済みノードを再抽出しない（`build_graph_only(doc_id)`）。
+  グラフの失敗は `graph_status`/`graph_error` に分離記録され、文書の検索は生き続ける。
 
 ### ⑪ llmlab Loop — 自律ループシステム（既存機能と協調するエージェントループ）
 
@@ -680,7 +704,8 @@ jupyter-local-llm/
 
 | バージョン | 内容 |
 |-----------|------|
-| **0.7.3** | selenium を**ユーザースクリプト原文の直接実行**方式へ（`m365_user_script.py` を同梱。セレクタ変更はファイル直編集・失敗時はブラウザを開いたままにして目視デバッグ可能・same_chat モードは撤去） |
+| **0.8.0** | RAG 大型改善 — doc_ids 明示選択の切り捨て廃止（選択全件が対象）・コレクション/タグ（フォルダ=コレクション・自動タグ・再帰取り込み・検索スコープ）・検索を「範囲限定→文書候補→文書内候補→ハイブリッド再ランク→予算付き文脈」へ再設計（安定 section_id・Map-Reduce 回答）・グラフ構築の安全化（1並列既定・ノード上限・チェックポイント再開・層別ステータスで失敗分離）・進捗に残り時間予測（ETA）・Studio GUI 対応（チップ/プリセット/グラフ再開/ETA） |
+| 0.7.3 | selenium を**ユーザースクリプト原文の直接実行**方式へ（`m365_user_script.py` を同梱。セレクタ変更はファイル直編集・失敗時はブラウザを開いたままにして目視デバッグ可能・same_chat モードは撤去） |
 | 0.7.2 | selenium に `session_mode` を追加 — **same_chat（既定）: 同一チャットで章を継続**（文脈維持・ログインは初回のみ・増えた最後のコピーを押す・「長い」が出た時だけ go ahead）/ per_chapter: 原文どおり使い切り |
 | 0.7.1 | selenium コネクタを**ユーザー実証済みスクリプトの忠実移植**へ全面差し替え（Edge 固定・章ごとにブラウザ使い切り・セッション管理/独自待機ロジックを全廃。追加はクリップボード読取・エラー結果化・改行1行化のみ） |
 | 0.7.0 | Copilot Research の selenium コネクタを **参照スクリプト完全準拠**に再実装（Edge 素起動・find_element 直呼び・send_keys 一発送信・停止ボタンの出現→消滅で完了検知・応答コピー→クリップボード取得）。多エージェント監査で確認された 11 件を修正（セッション死亡復帰・失敗を再試行・キャンセル即応・章の一意ID化 など）。GUI にバージョン表示を追加 |
