@@ -150,7 +150,17 @@ def progress(iterable, *, total: int | None = None, desc: str = ""):
     """tqdm があればプログレスバー、無ければ定期 print で進捗を返すイテレータ。
 
     JupyterLab では tqdm.auto がセル内にバーを描画する（現在のフェーズ=desc 付き）。
+    progress_to() のコンテキスト内では (desc, current, total) を逐次コールバックへ
+    転送する（Studio が ETA を計算するための計測点）。
     """
+    if total is None:
+        try:
+            total = len(iterable)
+        except TypeError:
+            total = None
+    cb = getattr(_progress_local, "cb", None)
+    if cb is not None:
+        iterable = _forward_progress(iterable, cb, desc, total)
     try:
         from tqdm.auto import tqdm
 
@@ -168,10 +178,56 @@ def progress(iterable, *, total: int | None = None, desc: str = ""):
         return _gen()
 
 
+def _forward_progress(iterable, cb, desc: str, total: int | None):
+    """progress() の各要素完了を cb(desc, current, total) として通知するラッパ。
+
+    フェーズ開始時に (desc, 0, total) を必ず送る（受信側は最初の1件が終わるまで
+    「残り時間を計算中」を表示できる）。転送失敗で本処理は止めない。
+    """
+    def _gen():
+        try:
+            cb(desc, 0, total)
+        except Exception:  # noqa: BLE001
+            pass
+        n = 0
+        for x in iterable:
+            yield x
+            n += 1
+            try:
+                cb(desc, n, total)
+            except Exception:  # noqa: BLE001
+                pass
+    return _gen()
+
+
 # ログ転送はスレッドローカル。以前は呼び出し側が bx.log をグローバルに差し替えて
 # いたが、Studio はタスクごとに別スレッドで動くため、並行実行で転送先が混線し
 # 復元順によっては死んだタスクの Queue を永久に指す事故が起きる。log_to() を使う。
 _log_local = __import__("threading").local()
+# progress() の進捗転送先（log_to と同じ理由でスレッドローカル）
+_progress_local = __import__("threading").local()
+
+
+def progress_to(callback):
+    """このスレッドの progress() の進捗を callback(desc, current, total) へ転送する
+    コンテキストマネージャ。log_to() と同様にスレッドローカルでネスト可。
+
+    使い方::
+        with bx.progress_to(lambda d, c, t: emit({"stage": d, "current": c, "total": t})):
+            book.add_book(...)
+    """
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _cm():
+        prev = getattr(_progress_local, "cb", None)
+        _progress_local.cb = callback
+        try:
+            yield
+        finally:
+            _progress_local.cb = prev
+
+    return _cm()
 
 
 def log_to(callback):

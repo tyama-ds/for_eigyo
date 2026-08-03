@@ -63,14 +63,65 @@ def _history_append(entry: dict) -> None:
         _write_json_file(_history_path(), hist[:_HISTORY_MAX])
 
 
+class EtaTracker:
+    """フェーズごとの実測レートから残り時間・予測総時間を推定する（タスク毎に1個）。
+
+    - stage（フェーズ名）が変わったら計測をリセットする
+    - フェーズ内の最初の1件が完了するまでは eta_sec=None
+      （UI は「残り時間を計算中…」を表示する）
+    - current/total の無いイベントやログ行（total<=1）はそのまま素通しする
+    - 状態はタスクスコープ（スレッド間で共有しない）
+    """
+
+    def __init__(self, clock=None):
+        import time
+
+        self._clock = clock or time.monotonic
+        self._phase: str | None = None
+        self._t0 = 0.0
+        self._c0 = 0
+
+    def annotate(self, evt: dict) -> dict:
+        cur, tot = evt.get("current"), evt.get("total")
+        if not isinstance(cur, (int, float)) or isinstance(cur, bool) or \
+                not isinstance(tot, (int, float)) or isinstance(tot, bool) or tot <= 1:
+            return evt  # 計測点ではない（ログ行は total=1 で流れてくる）
+        stage = str(evt.get("stage") or "")
+        now = self._clock()
+        if stage != self._phase:
+            self._phase, self._t0, self._c0 = stage, now, int(cur)
+        done = int(cur) - self._c0
+        out = dict(evt)
+        out.setdefault("detail", "")
+        if int(cur) >= int(tot):
+            out["eta_sec"] = 0.0
+            out["estimated_total_sec"] = round(now - self._t0, 1)
+        elif done > 0:
+            rate = (now - self._t0) / done  # 秒/件（このフェーズの実測）
+            out["eta_sec"] = round(rate * (int(tot) - int(cur)), 1)
+            out["estimated_total_sec"] = round(rate * int(tot), 1)
+        else:
+            out["eta_sec"] = None            # → UI: 残り時間を計算中…
+            out["estimated_total_sec"] = None
+        return out
+
+
+def _emitter(q: Queue):
+    """タスク用の progress emit（ETA 付与つき）を作る。"""
+    eta = EtaTracker()
+
+    def emit(evt: dict) -> None:
+        q.put({"type": "progress", **eta.annotate(evt)})
+
+    return emit
+
+
 def _run_task(task_id: str, payload: dict) -> None:
     """バックグラウンドスレッドで MultiRAG のアクションを実行し、進捗を Queue へ流す。"""
     from .workspace import MultiRAG
 
     q = _tasks[task_id]
-
-    def emit(evt: dict) -> None:
-        q.put({"type": "progress", **evt})
+    emit = _emitter(q)
 
     try:
         action = payload.get("action", "ask")
@@ -124,9 +175,7 @@ def _run_build(task_id: str, payload: dict, root: str) -> None:
     from .workspace import build_index
 
     q = _tasks[task_id]
-
-    def emit(evt: dict) -> None:
-        q.put({"type": "progress", **evt})
+    emit = _emitter(q)
 
     try:
         name = str(payload.get("name", "")).strip()
@@ -174,9 +223,7 @@ def _index_manager(root: str):
 def _run_docs_task(task_id: str, payload: dict, root: str) -> None:
     """文書の追加/再構築/検索をバックグラウンド実行し、進捗を SSE へ流す。"""
     q = _tasks[task_id]
-
-    def emit(evt: dict) -> None:
-        q.put({"type": "progress", **evt})
+    emit = _emitter(q)
 
     try:
         im = _index_manager(payload.get("root") or root)

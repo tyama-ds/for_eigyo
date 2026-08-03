@@ -1033,8 +1033,10 @@ class IndexManager:
 
         bx.log_to はスレッドローカルのため、Studio で複数タスクが並行しても
         転送先が混線しない（旧実装のグローバル差し替えは並行実行で競合していた）。
+        あわせて bx.progress_to で progress() の (desc, current, total) も転送し、
+        受信側（Studio）がフェーズごとの ETA を計算できるようにする。
         """
-        from contextlib import nullcontext
+        from contextlib import ExitStack, nullcontext
 
         from . import bookindex as bx
 
@@ -1047,7 +1049,17 @@ class IndexManager:
             except Exception:  # noqa: BLE001
                 pass
 
-        return bx.log_to(_fwd)
+        def _fwd_prog(desc, current, total):
+            try:
+                progress({"stage": str(desc), "current": int(current),
+                          "total": int(total or 0), "detail": str(desc)})
+            except Exception:  # noqa: BLE001
+                pass
+
+        stack = ExitStack()
+        stack.enter_context(bx.log_to(_fwd))
+        stack.enter_context(bx.progress_to(_fwd_prog))
+        return stack
 
     def _set_status(self, doc_id, status, index_mode, *, error=None, note=None) -> None:
         self._write(self.status_dir, doc_id, {
