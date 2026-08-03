@@ -107,17 +107,26 @@ EXACT_MATCH_BONUS = 0.5          # 強一致（英数トークン完全一致 / 
                                  # ベクトル候補外(0.6を持たない)でも 0.4+0.5=0.9 で上位に入る
 
 
+def _ascii_tokens(text: str) -> set[str]:
+    """テキスト側の英数トークン集合（**トークン単位の完全一致** 判定用）。
+
+    部分文字列一致（`term in text`）だと `REG-4711` が `XREG-47110Z` にも
+    一致してしまうため、_TERM_RE でトークン化して集合一致で判定する。
+    末尾の `.-_`（文末ピリオド等）は正規化して比較する。
+    """
+    return {t.lower().rstrip(".-_") for t in _TERM_RE.findall(text or "")}
+
+
 def _lexical_terms(question: str) -> tuple[list[str], list[list[str]]]:
     """字句検索用の語を抽出する。
 
-    - 英数トークン（型番・金額・規程番号など。_TERM_RE）
+    - 英数トークン（型番・金額・規程番号など。_TERM_RE。トークン完全一致で判定）
     - 日本語は形態素解析に依存せず **文字2-gram**（1文字語はそのまま）
       → 外部サービス・追加辞書なしで日本語語句に対応する。
       2-gram は語（連続する日本語文字列）ごとの **順序つき列** で返す
       （連続一致の長さ＝固有語のヒット判定に使う）。
     """
-    ascii_terms = [t.lower() for t in _TERM_RE.findall(question or "")
-                   if len(t) >= 2]
+    ascii_terms = [t for t in _ascii_tokens(question) if len(t) >= 2]
     gram_seqs: list[list[str]] = []
     for w in _JA_RE.findall(question or ""):
         if len(w) == 1:
@@ -140,11 +149,13 @@ def _lexical_score(text: str, ascii_terms: list[str],
     """
     if not text:
         return 0.0, False
-    lower = text.lower()
     s = 0.0
-    exact = any(term in lower for term in ascii_terms)
-    if exact:
-        s += 2.0 * sum(1 for term in ascii_terms if term in lower)
+    # トークン単位の完全一致（部分文字列一致にしない: REG-4711 は
+    # XREG-47110Z に一致してはならない）
+    tokens = _ascii_tokens(text)
+    hit_terms = [t for t in ascii_terms if t in tokens]
+    exact = bool(hit_terms)
+    s += 2.0 * len(hit_terms)
     ratio = 0.0
     max_run = 0
     grams_flat = {g for seq in gram_seqs for g in seq}
@@ -1234,20 +1245,25 @@ class IndexManager:
         return scored[:max(0, int(k))]
 
     def _docs_with_exact_terms(self, ascii_terms: list[str],
-                               limit: int = 200) -> set[str]:
+                               limit: int | None = None) -> set[str]:
         """英数トークン（規程番号・型番・金額）に完全一致する文書の集合。
 
         自動文書選定でベクトル候補に出てこなかった文書の救済に使う。
-        文書数 limit 件までの全チャンク走査（ローカル前提の線形スキャン）。
+        - 判定は _lexical_score と同じ **トークン単位の完全一致**
+        - 既定は **全文書** を走査する（サイレント打ち切りしない）。
+          速度優先の上限が必要な場合のみ呼び出し側が limit を明示する。
         """
         if not ascii_terms:
             return set()
+        want = set(ascii_terms)
+        docs = self.documents()
+        if limit is not None:
+            docs = docs[:int(limit)]
         hits: set[str] = set()
-        for m in self.documents()[:limit]:
+        for m in docs:
             doc = self._paged.document(m["doc_id"]) or {}
             for c in doc.get("chunks", []):
-                low = (c.get("text") or "").lower()
-                if any(t in low for t in ascii_terms):
+                if want & _ascii_tokens(c.get("text") or ""):
                     hits.add(m["doc_id"])
                     break
         return hits

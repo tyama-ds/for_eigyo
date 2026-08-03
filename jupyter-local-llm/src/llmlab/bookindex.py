@@ -124,6 +124,21 @@ def vlm_describe(png_bytes: bytes, *, model: str | None = None) -> str:
     return "" if "図なし" in out else out.strip()
 
 
+# Entity 埋め込みの1回あたり最大件数（全ノード処理時にローカル埋め込みサーバが
+# メモリ不足・タイムアウトにならないように分割する）
+GRAPH_EMBED_BATCH_SIZE = 128
+
+
+def embed_batched(texts: list[str],
+                  batch_size: int = GRAPH_EMBED_BATCH_SIZE) -> np.ndarray:
+    """embed() を最大 batch_size 件ずつ呼ぶ（入力順を維持して連結）。"""
+    if not texts:
+        return np.zeros((0, 1), dtype=np.float32)
+    parts = [embed(texts[i:i + batch_size])
+             for i in range(0, len(texts), batch_size)]
+    return parts[0] if len(parts) == 1 else np.vstack(parts)
+
+
 def embed(texts: list[str]) -> np.ndarray:
     """テキスト群を L2 正規化済みの埋め込み行列に変換する（embed_base_url を尊重）。"""
     from .client import get_embed_client
@@ -1054,7 +1069,8 @@ def build_graph(bi: BookIndex, node_ids: list[int], *, gradient_g: float = 0.6,
     if ok_nodes:
         flat_names = [f"{e['name']} ({e.get('type','')}): {e.get('description','')}"
                       for _nid, ents in ok_nodes for e in ents]
-        flat_vecs = embed(flat_names)
+        # 1回の embed() は最大 GRAPH_EMBED_BATCH_SIZE 件（順序・node対応は維持）
+        flat_vecs = embed_batched(flat_names)
         pos = 0
         for nid, ents in ok_nodes:
             vec_by_node[nid] = flat_vecs[pos:pos + len(ents)]
