@@ -63,6 +63,14 @@ DEFAULT_CHUNK_CANDIDATES = 8
 CONTEXT_CHAR_BUDGET = 12000
 # ask() で対象文書がこれ以上なら Map-Reduce（文書ごとに部分回答→統合）へ切替
 MAP_REDUCE_DOC_THRESHOLD = 6
+# Map段（文書別の部分回答/要約）の LLM 出力上限トークン
+MAP_MAX_TOKENS = 700
+# Reduce段（中間統合・最終統合）の LLM 出力上限トークン
+REDUCE_MAX_TOKENS = 900
+# 部分回答1件を Reduce 入力へ入れる際の文字上限（Map出力が長くても予算内に収める）
+PARTIAL_CHAR_CAP = 1600
+# 1回の Reduce で統合する部分結果の件数（超えたらグループ分けして階層統合）
+REDUCE_GROUP_SIZE = 6
 
 # ---- graph（Entity/Relation 抽出）のローカルLLM向け安全既定 -------------------
 SAFE_GRAPH_DEFAULTS = {
@@ -150,15 +158,22 @@ class SearchHit:
 
 @dataclass
 class DocAnswer:
-    """ask() / summarize() の結果。text が回答/要約本文（Markdown 可）。"""
+    """ask() / summarize() の結果。text が回答/要約本文（Markdown 可）。
+
+    per_doc の各行: {doc_id, title, text, status, group?}
+      status: "answered"（回答あり）/ "no_info"（該当情報なし）/ "failed"（処理失敗）
+      group : 階層 Reduce の 0段目グループ番号（最終回答→文書別結果の追跡用）
+    reduce_info: {"levels": 統合段数, "level0_groups": [[per_docのidx,...],...]}
+    """
 
     text: str
     hits: list[SearchHit] = field(default_factory=list)   # 根拠（ask）
-    per_doc: list[dict] = field(default_factory=list)     # 文書別の部分要約（summarize）
+    per_doc: list[dict] = field(default_factory=list)     # 文書別の部分回答/要約
+    reduce_info: dict = field(default_factory=dict)       # 階層Reduceの追跡情報
 
     def to_dict(self) -> dict:
         return {"text": self.text, "hits": [h.to_dict() for h in self.hits],
-                "per_doc": self.per_doc}
+                "per_doc": self.per_doc, "reduce_info": self.reduce_info}
 
     def __str__(self) -> str:
         out = [self.text]
@@ -1055,10 +1070,11 @@ class IndexManager:
                 lines.append(f"- {loc}{c['text'][:per_chunk]}")
             return f"### 文書「{h.title}」\n" + "\n".join(lines)
 
-        # Map-Reduce: 文書数が多いときは文書ごとに部分回答してから統合する
+        # Map-Reduce: 文書数が多いときは文書ごとに部分回答してから **階層的に** 統合する
         if len(hits) >= MAP_REDUCE_DOC_THRESHOLD:
-            partials = []
-            total = len(hits) + 1
+            partials: list[dict] = []
+            per_doc: list[dict] = []
+            total = len(hits)
             for i, h in enumerate(hits):
                 emit(f"文書別に回答: {h.title}", i, total)
                 try:
@@ -1066,21 +1082,23 @@ class IndexManager:
                         f"依頼: {question}\n\n{_doc_block(h, CONTEXT_CHAR_BUDGET)}\n\n"
                         "この文書の抜粋から依頼に関係する内容だけを簡潔に述べてください。"
                         "無ければ「該当情報なし」と答えてください。",
-                        system=sys_prompt).strip()
+                        system=sys_prompt, max_tokens=MAP_MAX_TOKENS).strip()
+                    status = "no_info" if (not p or "該当情報なし" in p[:60]) \
+                        else "answered"
                 except Exception as e:  # noqa: BLE001  1文書の失敗で全体を止めない
                     p = f"（この文書の処理に失敗: {type(e).__name__}: {e}）"
-                partials.append(f"■ {h.title}\n{p}")
-            emit("統合回答を生成", len(hits), total)
-            text = bx.llm_text(
-                f"依頼: {question}\n\n以下は文書ごとの部分回答です。突き合わせて"
-                f"依頼に答えてください。全文書に言及してください。\n\n"
-                + "\n\n".join(partials),
-                system=sys_prompt).strip()
-            emit("完了", total, total)
-            return DocAnswer(text=text, hits=hits,
-                             per_doc=[{"doc_id": h.doc_id, "title": h.title,
-                                       "text": p.split("\n", 1)[-1]}
-                                      for h, p in zip(hits, partials)])
+                    status = "failed"
+                partials.append({"label": h.title, "text": p})
+                per_doc.append({"doc_id": h.doc_id, "title": h.title,
+                                "text": p, "status": status})
+            emit("文書別に回答: 完了", total, total)
+            text, trace = self._hierarchical_reduce(
+                f"依頼: {question}", partials, sys_prompt=sys_prompt, emit=emit)
+            for gi, g in enumerate(trace.get("level0_groups", [])):
+                for idx in g:
+                    per_doc[idx]["group"] = gi
+            return DocAnswer(text=text, hits=hits, per_doc=per_doc,
+                             reduce_info=trace)
 
         # 単一プロンプト: 文書ごとに予算を均等配分（どの文書も落とさない）
         per_doc_budget = CONTEXT_CHAR_BUDGET // len(hits)
@@ -1090,6 +1108,78 @@ class IndexManager:
                            system=sys_prompt).strip()
         emit("完了", 2, 2)
         return DocAnswer(text=text, hits=hits)
+
+    def _hierarchical_reduce(self, task_prompt: str, partials: list[dict], *,
+                             sys_prompt: str | None = None,
+                             emit=lambda *a: None) -> tuple[str, dict]:
+        """部分結果（{"label","text"} の列）を **予算内で階層的に** 統合する。
+
+        - 1回の Reduce 入力は REDUCE_GROUP_SIZE 件・CONTEXT_CHAR_BUDGET 文字以内。
+          部分結果1件も PARTIAL_CHAR_CAP 文字に丸めてから入れる。
+        - 収まらない場合はグループごとに中間統合し、その結果をさらに統合する
+          （13件でも50件でも100件でも単一の巨大プロンプトを作らない）。
+        - 中間統合が失敗してもグループの部分結果を黙って落とさない
+          （その場合は原文の抜粋を持ち上げる）。
+        戻り値: (最終テキスト, {"levels": 統合段数,
+                               "level0_groups": [[入力partialsのidx,...],...]})
+        """
+        from . import bookindex as bx
+
+        def _cap(p: dict) -> str:
+            return p["text"][:PARTIAL_CHAR_CAP]
+
+        def _blocks(items: list[dict]) -> str:
+            return "\n\n".join(f"■ {p['label']}\n{_cap(p)}" for p in items)
+
+        def _split(items: list[dict]) -> list[list[int]]:
+            groups, cur, size = [], [], 0
+            for idx, p in enumerate(items):
+                t = min(len(p["text"]), PARTIAL_CHAR_CAP) + len(p["label"]) + 8
+                if cur and (len(cur) >= REDUCE_GROUP_SIZE
+                            or size + t > CONTEXT_CHAR_BUDGET):
+                    groups.append(cur)
+                    cur, size = [], 0
+                cur.append(idx)
+                size += t
+            if cur:
+                groups.append(cur)
+            return groups
+
+        items = list(partials)
+        level0_groups: list[list[int]] = [list(range(len(items)))]
+        level = 0
+        while True:
+            groups = _split(items)
+            if level == 0 and len(groups) > 1:
+                level0_groups = groups
+            if len(groups) == 1:
+                emit("統合回答を生成", 0, 1)
+                text = bx.llm_text(
+                    f"{task_prompt}\n\n以下は文書（またはグループ）ごとの部分結果"
+                    "です。突き合わせて依頼に答えてください。すべての項目に言及して"
+                    "ください。\n\n" + _blocks([items[i] for i in groups[0]]),
+                    system=sys_prompt, max_tokens=REDUCE_MAX_TOKENS).strip()
+                emit("統合回答を生成: 完了", 1, 1)
+                return text, {"levels": level + 1, "level0_groups": level0_groups}
+            nxt: list[dict] = []
+            for gi, g in enumerate(groups):
+                emit(f"中間統合（{level + 1}段目）", gi, len(groups))
+                members = [items[i] for i in g]
+                try:
+                    t = bx.llm_text(
+                        f"{task_prompt}\n\nこれは全体の一部（グループ {gi + 1}/"
+                        f"{len(groups)}）の部分結果です。グループ内の情報を、"
+                        "文書名を残したまま統合して簡潔にまとめてください。\n\n"
+                        + _blocks(members),
+                        system=sys_prompt, max_tokens=REDUCE_MAX_TOKENS).strip()
+                except Exception as e:  # noqa: BLE001  グループ丸ごと落とさない
+                    t = f"（中間統合に失敗: {type(e).__name__}。原文を抜粋）\n" + \
+                        "\n".join(f"■ {m['label']}\n{_cap(m)[:400]}" for m in members)
+                label = members[0]["label"] + (
+                    f" ほか{len(members) - 1}件" if len(members) > 1 else "")
+                nxt.append({"label": label, "text": t})
+            items = nxt
+            level += 1
 
     def summarize(self, instruction: str | None = None, *,
                   doc_ids: list[str] | None = None,
@@ -1135,29 +1225,38 @@ class IndexManager:
             body = "\n".join(f"- {c.get('text', '')[:800]}" for c in picked)
             if not body.strip():
                 per_doc.append({"doc_id": m["doc_id"], "title": m["title"],
-                                "text": "（本文を取得できませんでした）"})
+                                "text": "（本文を取得できませんでした）",
+                                "status": "no_info"})
                 continue
             focus = f"特に次の観点を重視: {instruction}\n" if instruction else ""
             try:
                 summ = bx.llm_text(
                     f"次の文書抜粋を、重要な数値・固有名詞を落とさず簡潔に要約してください。\n"
-                    f"{focus}\n文書「{m['title']}」の抜粋:\n{body}").strip()
+                    f"{focus}\n文書「{m['title']}」の抜粋:\n{body}",
+                    max_tokens=MAP_MAX_TOKENS).strip()
+                status = "answered"
             except Exception as e:  # noqa: BLE001  1文書の失敗で全体を止めない
                 summ = f"（要約に失敗: {type(e).__name__}: {e}）"
-            per_doc.append({"doc_id": m["doc_id"], "title": m["title"], "text": summ})
+                status = "failed"
+            per_doc.append({"doc_id": m["doc_id"], "title": m["title"],
+                            "text": summ, "status": status})
 
         emit("統合要約を生成", len(metas), total)
+        reduce_info: dict = {}
         if len(per_doc) == 1:
             final = per_doc[0]["text"]
         else:
-            blocks = "\n\n".join(f"■ {p['title']}\n{p['text']}" for p in per_doc)
             focus = f"特に次の観点を重視: {instruction}\n" if instruction else ""
-            final = bx.llm_text(
-                "以下は文書ごとの要約です。全体を貫く共通点・相違点が分かるように、"
-                f"文書名を明示しながら日本語で統合要約を書いてください。\n{focus}\n{blocks}"
-            ).strip()
+            final, reduce_info = self._hierarchical_reduce(
+                "以下の部分結果は文書ごとの要約です。全体を貫く共通点・相違点が"
+                f"分かるように、文書名を明示しながら日本語で統合要約を書いてください。\n{focus}",
+                [{"label": p["title"], "text": p["text"]} for p in per_doc],
+                emit=emit)
+            for gi, g in enumerate(reduce_info.get("level0_groups", [])):
+                for idx in g:
+                    per_doc[idx]["group"] = gi
         emit("完了", total, total)
-        return DocAnswer(text=final, per_doc=per_doc)
+        return DocAnswer(text=final, per_doc=per_doc, reduce_info=reduce_info)
 
     def _normal_chunks(self, doc_id, question, hit, top_k, cap,
                        candidates=None) -> None:
