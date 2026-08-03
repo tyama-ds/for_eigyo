@@ -302,11 +302,20 @@ def _run_docs_task(task_id: str, payload: dict, root: str) -> None:
                                     if payload.get("max_chunks_per_doc") else None),
                 use_graph=bool(payload.get("use_graph", False)),
                 doc_ids=doc_ids, collection_ids=collection_ids, tags=tags,
+                vector_candidate_k_per_doc=(
+                    int(payload["vector_candidate_k_per_doc"])
+                    if payload.get("vector_candidate_k_per_doc") else None),
+                lexical_candidate_k_per_doc=(
+                    int(payload["lexical_candidate_k_per_doc"])
+                    if payload.get("lexical_candidate_k_per_doc") else None),
             )
             if action == "answer":       # 回答生成（要約・比較などの依頼文もOK）
                 if not question.strip():
                     raise ValueError("質問・依頼を入力してください")
-                r = im.ask(question, progress=emit, **kw)
+                r = im.ask(question, progress=emit,
+                           context_budget=(int(payload["context_budget"])
+                                           if payload.get("context_budget")
+                                           else None), **kw)
                 q.put({"type": "result", "kind": "docanswer", **r.to_dict()})
             elif action == "summarize":  # 文書ごと要約 → 統合要約
                 r = im.summarize(question.strip() or None, doc_ids=doc_ids,

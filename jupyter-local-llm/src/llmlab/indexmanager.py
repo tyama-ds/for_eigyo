@@ -94,23 +94,80 @@ def _now() -> str:
 
 
 _TERM_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9\-_.]{1,}|[0-9０-９]+(?:\.[0-9０-９]+)*")
+_JA_RE = re.compile(r"[ぁ-んァ-ヶ一-龠々〆ー]+")
+
+# ---- ハイブリッド検索（ベクトル候補 ∪ 独立字句候補 → 正規化再ランク）の設定 ----
+DEFAULT_VECTOR_CANDIDATES = 8    # 文書内のベクトル候補件数（vector_candidate_k_per_doc）
+DEFAULT_LEXICAL_CANDIDATES = 6   # 文書内の字句候補件数（lexical_candidate_k_per_doc）
+HYBRID_VECTOR_WEIGHT = 0.6       # 統合スコア = 0.6*正規化ベクトル + 0.4*正規化字句 + 強一致補正
+EXACT_MATCH_BONUS = 0.5          # 強一致（英数トークン完全一致 / 日本語2-gram高一致）の補正。
+                                 # ベクトル候補外(0.6を持たない)でも 0.4+0.5=0.9 で上位に入る
 
 
-def _keyword_terms(question: str) -> list[str]:
-    """キーワード検索用の語（英数字・型番・数値・規程番号など）を抽出する。"""
-    return [t.lower() for t in _TERM_RE.findall(question or "") if len(t) >= 2]
+def _lexical_terms(question: str) -> tuple[list[str], list[list[str]]]:
+    """字句検索用の語を抽出する。
 
-
-def _keyword_bonus(terms: list[str], text: str) -> float:
-    """ベクトルスコアに足すキーワード一致ボーナス（0〜0.2）。
-
-    埋め込みが苦手な数値・製品型番・規程番号の完全一致を拾う軽量ハイブリッド。
+    - 英数トークン（型番・金額・規程番号など。_TERM_RE）
+    - 日本語は形態素解析に依存せず **文字2-gram**（1文字語はそのまま）
+      → 外部サービス・追加辞書なしで日本語語句に対応する。
+      2-gram は語（連続する日本語文字列）ごとの **順序つき列** で返す
+      （連続一致の長さ＝固有語のヒット判定に使う）。
     """
-    if not terms:
-        return 0.0
-    lower = (text or "").lower()
-    hit = sum(1 for t in terms if t in lower)
-    return 0.2 * hit / len(terms)
+    ascii_terms = [t.lower() for t in _TERM_RE.findall(question or "")
+                   if len(t) >= 2]
+    gram_seqs: list[list[str]] = []
+    for w in _JA_RE.findall(question or ""):
+        if len(w) == 1:
+            gram_seqs.append([w])
+        else:
+            gram_seqs.append([w[i:i + 2] for i in range(len(w) - 1)])
+    return ascii_terms, gram_seqs
+
+
+def _lexical_score(text: str, ascii_terms: list[str],
+                   gram_seqs: list[list[str]]) -> tuple[float, bool]:
+    """チャンク1件の字句スコアと「強一致」判定（ベクトルと独立）。
+
+    - 英数トークンの完全一致は1件 2.0（埋め込みが苦手な数値・型番の救済）
+    - 日本語2-gram は一致率 0〜1.0
+    - 強一致 = 英数トークン完全一致 / 2-gram 一致率 0.75 以上 /
+      連続 4-gram 以上の一致（=5文字以上の固有語がそのまま含まれる。
+      「〜について」等の助詞連結でも誤発火しない長さ）。
+      強一致はベクトル候補外でも最終結果に入るよう再ランクで補正される。
+    """
+    if not text:
+        return 0.0, False
+    lower = text.lower()
+    s = 0.0
+    exact = any(term in lower for term in ascii_terms)
+    if exact:
+        s += 2.0 * sum(1 for term in ascii_terms if term in lower)
+    ratio = 0.0
+    max_run = 0
+    grams_flat = {g for seq in gram_seqs for g in seq}
+    if grams_flat:
+        ratio = sum(1 for g in grams_flat if g in text) / len(grams_flat)
+        s += ratio
+        for seq in gram_seqs:
+            run = 0
+            for g in seq:
+                run = run + 1 if g in text else 0
+                max_run = max(max_run, run)
+    return s, (exact or ratio >= 0.75 or max_run >= 4)
+
+
+def _chunk_shim(chunk: dict):
+    """chunks JSON の行を、ベクトル候補（NodeWithScore）と同じ形で扱うための殻。
+
+    字句検索だけがヒットした（ベクトル候補外の）チャンクを union するのに使う。
+    """
+    from types import SimpleNamespace
+
+    text = chunk.get("text", "")
+    node = SimpleNamespace(node_id=chunk.get("chunk_id"),
+                           metadata=chunk.get("metadata") or {},
+                           get_content=lambda: text)
+    return SimpleNamespace(node=node, score=None)
 
 
 _HEADING_RE = re.compile(
@@ -912,9 +969,13 @@ class IndexManager:
                chunk_top_k_per_doc: int = 4, max_chunks_per_doc: int | None = None,
                use_graph: bool = False, doc_ids: list[str] | None = None,
                collection_ids: list[str] | None = None,
-               tags: list[str] | None = None) -> list[SearchHit]:
+               tags: list[str] | None = None,
+               vector_candidate_k_per_doc: int | None = None,
+               lexical_candidate_k_per_doc: int | None = None) -> list[SearchHit]:
         """文書間検索。構造:
-        collection/tag で範囲限定 → 文書候補選定 → 文書内チャンク候補 → リランク。
+        ①collection/tag/doc_id で範囲確定 → ②文書候補選定 →
+        ③文書内ベクトル候補 → ④文書内の独立字句候補 → ⑤union →
+        ⑥正規化スコアで再ランク → ⑦文書ごとの上限 → ⑧全体のコンテキスト予算。
 
         - **doc_ids は利用者が明示選択した検索対象そのもの**。指定時は選択された
           全文書を対象にし、document_top_n では切り捨てない（順序維持で重複除去）。
@@ -923,8 +984,9 @@ class IndexManager:
           範囲フィルタは候補選定の前に効く（global top-k 後のフィルタではない）。
         - use_graph=True で graph 索引がある文書は BookRAG 検索、無ければ通常RAG
           へフォールバック（落とさない。fallback_reason に理由を記録）。
-        - チャンクは広めに候補を取り、ベクトル+キーワードのハイブリッドで
-          リランキングして chunk_top_k_per_doc 件を採用する。
+        - vector_candidate_k_per_doc / lexical_candidate_k_per_doc で候補系統ごとの
+          件数を調整できる（既定 8 / 6）。字句候補は日本語2-gram + 英数トークンの
+          完全一致で、ベクトル上位候補の外にある規程番号・金額・型番を救済する。
         """
         from types import SimpleNamespace
 
@@ -934,7 +996,10 @@ class IndexManager:
             selected_ids = list(dict.fromkeys(str(d) for d in doc_ids if d))
             ranked = []
             for did in selected_ids:
-                nodes = self._doc_chunk_candidates(question, did, chunk_top_k_per_doc)
+                nodes = self._doc_chunk_candidates(
+                    question, did, chunk_top_k_per_doc,
+                    vector_k=vector_candidate_k_per_doc,
+                    lexical_k=lexical_candidate_k_per_doc)
                 score = max((s for _n, s in nodes), default=0.0)
                 meta = self._read(self.docs_dir, did) or {}
                 ranked.append(SimpleNamespace(doc_id=did, score=score,
@@ -944,8 +1009,10 @@ class IndexManager:
             # 明示選択時は document_top_n で切り捨てない（全件が対象）
         else:
             scope = self._scope_doc_ids(collection_ids, tags)
-            ranked = self._rank_documents_scoped(question, scope, document_top_n,
-                                                 chunk_top_k_per_doc)
+            ranked = self._rank_documents_scoped(
+                question, scope, document_top_n, chunk_top_k_per_doc,
+                vector_k=vector_candidate_k_per_doc,
+                lexical_k=lexical_candidate_k_per_doc)
 
         hits: list[SearchHit] = []
         for r in ranked:
@@ -969,13 +1036,17 @@ class IndexManager:
         return hits
 
     def _rank_documents_scoped(self, question: str, scope: set[str] | None,
-                               top_n: int, chunk_top_k: int):
+                               top_n: int, chunk_top_k: int, *,
+                               vector_k: int | None = None,
+                               lexical_k: int | None = None):
         """自動文書選定（scope=None なら全文書が候補）。
 
         - 広めのチャンク候補（cand_k）を取り doc_id で集約。cand_k は top_n に
           比例して増やし、チャンク数の多い1文書が候補を占有しにくくする。
         - scope 指定時は **候補選定の前に** 範囲外を除外し、範囲内の文書が
           広域候補に現れなかった場合は個別検索で補完する（少数派文書の脱落防止）。
+        - 質問に英数トークン（規程番号・型番・金額）がある場合は、完全一致を含む
+          文書もベクトル候補に出てこなければ補完する（字句系統の文書選定救済）。
         """
         from types import SimpleNamespace
 
@@ -984,42 +1055,120 @@ class IndexManager:
             question, candidate_chunk_k=cand_k,
             top_n=top_n if scope is None else max(top_n, len(scope)),
             chunks_per_doc=chunk_top_k)
-        if scope is None:
-            return ranked[:top_n]
-        in_scope = [r for r in ranked if r.doc_id in scope]
+        in_scope = ranked if scope is None \
+            else [r for r in ranked if r.doc_id in scope]
         found = {r.doc_id for r in in_scope}
-        # 範囲内なのに広域候補に出てこなかった文書を個別に当たって補完
-        missing = [d for d in scope if d not in found]
+
+        # 補完対象: 範囲内なのに広域候補に出なかった文書 + 英数トークン完全一致文書
+        missing: list[str] = []
+        if scope is not None:
+            missing += [d for d in scope if d not in found]
+        ascii_terms, _ = _lexical_terms(question)
+        if ascii_terms:
+            lex_docs = self._docs_with_exact_terms(ascii_terms)
+            missing += [d for d in lex_docs
+                        if d not in found and d not in missing
+                        and (scope is None or d in scope)]
         extras = []
         for did in missing:
-            nodes = self._doc_chunk_candidates(question, did, chunk_top_k)
+            nodes = self._doc_chunk_candidates(question, did, chunk_top_k,
+                                               vector_k=vector_k,
+                                               lexical_k=lexical_k)
             if nodes:
                 score = max(s for _n, s in nodes)
                 meta = self._read(self.docs_dir, did) or {}
                 extras.append(SimpleNamespace(doc_id=did, score=score,
                                               title=meta.get("title", did),
                                               _cands=nodes))
-        merged = sorted(in_scope + extras, key=lambda r: r.score, reverse=True)
+        merged = sorted(list(in_scope) + extras,
+                        key=lambda r: r.score, reverse=True)
         return merged[:top_n]   # 範囲内で top-N（範囲外は混入しない）
 
-    def _doc_chunk_candidates(self, question: str, doc_id: str,
-                              top_k: int) -> list[tuple]:
-        """1文書内のチャンク候補を広めに取り、ハイブリッドでリランクして返す。
+    def _doc_chunk_candidates(self, question: str, doc_id: str, top_k: int, *,
+                              vector_k: int | None = None,
+                              lexical_k: int | None = None) -> list[tuple]:
+        """1文書内のハイブリッド候補: ベクトル候補 ∪ 独立字句候補 → 正規化再ランク。
 
-        候補は max(2*top_k, DEFAULT_CHUNK_CANDIDATES) 件取得 → ベクトルスコアに
-        キーワード一致ボーナス（数値・型番・規程番号などの取りこぼし対策）を加えて
-        並べ替える。返り値: [(NodeWithScore, hybrid_score), ...]
+        従来の「ベクトル上位の再ソート」ではなく、字句検索を **独立の候補系統**
+        として取得して union する。完全一致の規程番号・金額・型番がベクトル上位
+        候補の外にあっても救済される。
+        統合スコア = HYBRID_VECTOR_WEIGHT * 正規化ベクトル
+                   + (1-HYBRID_VECTOR_WEIGHT) * 正規化字句
+                   + EXACT_MATCH_BONUS（英数トークン完全一致時）
+        返り値: [(NodeWithScore | shim, hybrid_score), ...] 降順
         """
-        n_cand = max(2 * top_k, DEFAULT_CHUNK_CANDIDATES)
-        nodes = self._paged.retrieve_in_doc(question, doc_id=doc_id, top_m=n_cand)
-        terms = _keyword_terms(question)
+        n_vec = int(vector_k or max(2 * top_k, DEFAULT_VECTOR_CANDIDATES))
+        n_lex = int(lexical_k or DEFAULT_LEXICAL_CANDIDATES)
+        vec_nodes = self._paged.retrieve_in_doc(question, doc_id=doc_id,
+                                                top_m=n_vec)
+        lex = self._lexical_candidates(question, doc_id, n_lex)
+
+        vscore = {n.node.node_id: float(getattr(n, "score", 0.0) or 0.0)
+                  for n in vec_nodes}
+        lscore = {c["chunk_id"]: s for c, s, _strong in lex}
+
+        def _norm(d: dict) -> dict:
+            if not d:
+                return {}
+            lo, hi = min(d.values()), max(d.values())
+            if hi <= lo:
+                return {k: 1.0 for k in d}
+            return {k: (v - lo) / (hi - lo) for k, v in d.items()}
+
+        vn, ln = _norm(vscore), _norm(lscore)
+        by_id = {n.node.node_id: n for n in vec_nodes}
+        strong_ids = {c["chunk_id"] for c, _s, strong in lex if strong}
+        for c, _s, _strong in lex:
+            if c["chunk_id"] not in by_id:
+                by_id[c["chunk_id"]] = _chunk_shim(c)   # ベクトル候補外の救済
+
         out = []
-        for n in nodes:
-            vec = getattr(n, "score", 0.0) or 0.0
-            text = n.node.get_content()
-            out.append((n, vec + _keyword_bonus(terms, text)))
+        for cid, n in by_id.items():
+            score = HYBRID_VECTOR_WEIGHT * vn.get(cid, 0.0) \
+                + (1 - HYBRID_VECTOR_WEIGHT) * ln.get(cid, 0.0) \
+                + (EXACT_MATCH_BONUS if cid in strong_ids else 0.0)
+            out.append((n, score))
         out.sort(key=lambda t: t[1], reverse=True)
         return out
+
+    def _lexical_candidates(self, question: str, doc_id: str,
+                            k: int) -> list[tuple[dict, float, bool]]:
+        """文書内の **独立した字句検索**（ベクトルと別系統の候補集合）。
+
+        chunks JSON を走査し、英数トークン完全一致 + 日本語2-gram 一致率で
+        スコアする。外部サービス・転置索引サーバは使わない（ローカル完結）。
+        返り値: [(chunk行, 字句スコア, 強一致), ...] 上位 k 件（スコア0は除外）。
+        """
+        ascii_terms, grams = _lexical_terms(question)
+        if not ascii_terms and not grams:
+            return []
+        doc = self._paged.document(doc_id) or {}
+        scored = []
+        for c in doc.get("chunks", []):
+            s, strong = _lexical_score(c.get("text", ""), ascii_terms, grams)
+            if s > 0:
+                scored.append((c, s, strong))
+        scored.sort(key=lambda t: t[1], reverse=True)
+        return scored[:max(0, int(k))]
+
+    def _docs_with_exact_terms(self, ascii_terms: list[str],
+                               limit: int = 200) -> set[str]:
+        """英数トークン（規程番号・型番・金額）に完全一致する文書の集合。
+
+        自動文書選定でベクトル候補に出てこなかった文書の救済に使う。
+        文書数 limit 件までの全チャンク走査（ローカル前提の線形スキャン）。
+        """
+        if not ascii_terms:
+            return set()
+        hits: set[str] = set()
+        for m in self.documents()[:limit]:
+            doc = self._paged.document(m["doc_id"]) or {}
+            for c in doc.get("chunks", []):
+                low = (c.get("text") or "").lower()
+                if any(t in low for t in ascii_terms):
+                    hits.add(m["doc_id"])
+                    break
+        return hits
 
     # ---- 回答生成・要約（検索 + LLM 合成） ----------------------------------
 
@@ -1027,16 +1176,22 @@ class IndexManager:
             chunk_top_k_per_doc: int = 4, max_chunks_per_doc: int | None = None,
             use_graph: bool = False, doc_ids: list[str] | None = None,
             collection_ids: list[str] | None = None, tags: list[str] | None = None,
+            vector_candidate_k_per_doc: int | None = None,
+            lexical_candidate_k_per_doc: int | None = None,
+            context_budget: int | None = None,
             progress=None) -> DocAnswer:
         """質問に **回答を生成** する（検索 → 文書別の根拠を文脈に LLM で合成）。
 
         - doc_ids 明示選択時は **選択した全文書** が根拠に含まれる（切り捨てない）。
         - 対象文書が多い（MAP_REDUCE_DOC_THRESHOLD 以上）場合は、全チャンクを
-          単一プロンプトに入れず **文書ごとに部分回答 → 統合** の Map-Reduce で処理
-          する。どの文書も黙って比較対象から消えない。
-        - 単一プロンプト時も CONTEXT_CHAR_BUDGET の予算内で文書ごとに均等配分する。
+          単一プロンプトに入れず **文書ごとに部分回答 → 階層統合** の Map-Reduce
+          で処理する。どの文書も黙って比較対象から消えない。
+        - context_budget（既定 CONTEXT_CHAR_BUDGET）で最終コンテキストの文字予算を
+          調整できる。単一プロンプト時は文書ごとに均等配分する。
         """
         from . import bookindex as bx
+
+        budget = int(context_budget or CONTEXT_CHAR_BUDGET)
 
         def emit(stage, cur, total):
             if progress:
@@ -1050,7 +1205,9 @@ class IndexManager:
                            chunk_top_k_per_doc=chunk_top_k_per_doc,
                            max_chunks_per_doc=max_chunks_per_doc,
                            use_graph=use_graph, doc_ids=doc_ids,
-                           collection_ids=collection_ids, tags=tags)
+                           collection_ids=collection_ids, tags=tags,
+                           vector_candidate_k_per_doc=vector_candidate_k_per_doc,
+                           lexical_candidate_k_per_doc=lexical_candidate_k_per_doc)
         if not hits or not any(h.chunks for h in hits):
             return DocAnswer(text="該当する文書が見つかりませんでした。"
                                   "文書が登録済みか、質問の言い換えを確認してください。",
@@ -1079,7 +1236,7 @@ class IndexManager:
                 emit(f"文書別に回答: {h.title}", i, total)
                 try:
                     p = bx.llm_text(
-                        f"依頼: {question}\n\n{_doc_block(h, CONTEXT_CHAR_BUDGET)}\n\n"
+                        f"依頼: {question}\n\n{_doc_block(h, budget)}\n\n"
                         "この文書の抜粋から依頼に関係する内容だけを簡潔に述べてください。"
                         "無ければ「該当情報なし」と答えてください。",
                         system=sys_prompt, max_tokens=MAP_MAX_TOKENS).strip()
@@ -1101,7 +1258,7 @@ class IndexManager:
                              reduce_info=trace)
 
         # 単一プロンプト: 文書ごとに予算を均等配分（どの文書も落とさない）
-        per_doc_budget = CONTEXT_CHAR_BUDGET // len(hits)
+        per_doc_budget = budget // len(hits)
         ctx = "\n\n".join(_doc_block(h, per_doc_budget) for h in hits)
         emit("回答を生成", 1, 2)
         text = bx.llm_text(f"依頼: {question}\n\n文書からの抜粋:\n{ctx}",
