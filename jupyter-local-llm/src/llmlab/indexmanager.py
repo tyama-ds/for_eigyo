@@ -258,9 +258,10 @@ class IndexManager:
             "content_hash": chash, "index_mode": index_mode, "status": "running",
             "chunk_count": 0, "created_at": created, "updated_at": _now(),
             "graph_index": False, "layout": bool(layout), "error": None,
-            # 工程別ステータス（graph だけの失敗で文書全体を failed にしない）
-            "vector_status": "pending", "hierarchy_status": "skipped",
-            "graph_status": "skipped", "graph_error": None,
+            # 工程別ステータス（graph だけの失敗で文書全体を failed にしない）。
+            # "none" = そのモードでは対象外（GUI は非表示にする）
+            "vector_status": "pending", "hierarchy_status": "none",
+            "graph_status": "none", "graph_error": None,
             # collection / タグ（後方互換: 旧メタには無くてもよい）
             "collection_ids": list(dict.fromkeys(
                 (prev or {}).get("collection_ids", []) + inherited["collection_ids"])),
@@ -634,10 +635,11 @@ class IndexManager:
         return allowed
 
     def rebuild(self, doc_id: str, *, index_mode: str | None = None,
-                progress=None) -> dict:
+                graph_settings: dict | None = None, progress=None) -> dict:
         """文書を（必要なら別モードで）作り直す（force=True 相当）。
 
         index_mode 省略時は **現在のモードを維持** する（fast に降格しない）。
+        graph_settings（並列数・ノード上限など）は GUI のプリセットから渡される。
         """
         meta = self._read(self.docs_dir, doc_id)
         if not meta:
@@ -648,7 +650,8 @@ class IndexManager:
         return self.add_document(src, title=meta.get("title"),
                                  index_mode=index_mode or meta.get("index_mode", "fast"),
                                  layout=meta.get("layout", False),  # 見出し判定設定を維持
-                                 force=True, progress=progress)
+                                 force=True, graph_settings=graph_settings,
+                                 progress=progress)
 
     def delete(self, doc_id: str) -> bool:
         """文書を全ストア（索引・チャンク・木/KG・メタ・status）から削除する。"""
@@ -922,20 +925,27 @@ class IndexManager:
         return DocAnswer(text=text, hits=hits)
 
     def summarize(self, instruction: str | None = None, *,
-                  doc_ids: list[str] | None = None, chunks_per_doc: int = 6,
+                  doc_ids: list[str] | None = None,
+                  collection_ids: list[str] | None = None,
+                  tags: list[str] | None = None, chunks_per_doc: int = 6,
                   progress=None) -> DocAnswer:
         """登録文書を **要約** する（文書ごとに部分要約 → 統合要約の Map-Reduce）。
 
         - doc_ids 省略時は登録済みの全文書が対象（文書ごとに1回 LLM を呼ぶため、
           ローカルLLMでは文書数に比例して時間がかかる）。
+        - collection_ids / tags で対象を絞れる（doc_ids 未指定時のスコープ）。
         - instruction で観点を指定できる（例: 「リスク面を中心に」）。
         - 検索ベースではなく各文書のチャンクを頭から均等に読むため、
           「全体を要約」のような特定トピックの無い依頼に強い。
         """
         from . import bookindex as bx
 
+        scope = None
+        if doc_ids is None and (collection_ids or tags):
+            scope = self._scope_doc_ids(collection_ids, tags)
         metas = [m for m in self.documents()
-                 if (not doc_ids) or m["doc_id"] in set(doc_ids)]
+                 if ((not doc_ids) or m["doc_id"] in set(doc_ids))
+                 and (scope is None or m["doc_id"] in scope)]
         if not metas:
             return DocAnswer(text="対象の文書がありません。先に文書を追加してください。")
 
@@ -1052,7 +1062,7 @@ class IndexManager:
         def _fwd_prog(desc, current, total):
             try:
                 progress({"stage": str(desc), "current": int(current),
-                          "total": int(total or 0), "detail": str(desc)})
+                          "total": int(total or 0), "detail": ""})
             except Exception:  # noqa: BLE001
                 pass
 

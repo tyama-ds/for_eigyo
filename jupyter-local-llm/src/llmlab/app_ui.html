@@ -253,6 +253,19 @@
   .docgrp .ck{border-top:1px dashed var(--line);padding:6px 0;font-size:.82rem}
   .docgrp .ck .sc{color:var(--accent-a);font-variant-numeric:tabular-nums;font-size:.72rem}
   .fbnote{color:var(--warn);font-size:.75rem}
+  /* コレクション/タグの絞り込みチップ（クリックで ON/OFF） */
+  .scopechip{font-size:.72rem;font-weight:700;border-radius:999px;padding:2px 10px;
+    border:1px solid var(--line-strong);color:var(--ink-2);cursor:pointer;user-select:none;
+    background:rgba(255,255,255,.02);transition:all .15s}
+  .scopechip:hover{border-color:var(--accent-a)}
+  .scopechip.on{color:#0b0f17;background:var(--accent-a);border-color:var(--accent-a)}
+  .scopechip.tag.on{background:#c4b5fd;border-color:#c4b5fd}
+  .doctag{font-size:.66rem;border:1px solid var(--line-strong);border-radius:999px;
+    padding:0 6px;color:var(--ink-mute);margin-right:3px;white-space:nowrap}
+  .lyr{font-size:.66rem;border-radius:5px;padding:0 5px;margin-right:2px;white-space:nowrap}
+  .lyr.ok{color:#0ca30c;border:1px solid rgba(12,163,12,.4)}
+  .lyr.ng{color:var(--err);border:1px solid rgba(230,103,103,.4)}
+  .lyr.na{color:var(--ink-mute);border:1px solid var(--line)}
   pre.json{background:#0d1119;border:1px solid var(--line);border-radius:10px;padding:12px;
     overflow:auto;max-height:340px;font-size:.74rem;font-family:ui-monospace,Consolas,monospace}
   .warnrow{font-size:.78rem;color:var(--warn);margin-top:6px;min-height:1em}
@@ -380,7 +393,26 @@
         <option value="graph">高精度だが低速 — Entity/Relation 抽出（BookRAG Full）</option>
       </select>
       <div class="warnrow" id="d_modewarn"></div>
+      <div id="d_gbox" style="display:none;border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin:6px 0">
+        <label class="f" style="margin-top:0">グラフ構築の負荷設定（graph モード時）</label>
+        <select id="d_gpreset">
+          <option value="safe">安全（推奨） — 1並列・80ノード上限（ローカルLLM向け）</option>
+          <option value="std">標準 — 最大2並列・100ノード上限</option>
+          <option value="fastg">高速 — 4並列・150ノード上限（強いサーバ向け・失敗しやすい）</option>
+        </select>
+        <div style="font-size:.7rem;color:var(--ink-mute);margin-top:4px">
+          途中で失敗しても抽出結果はチェックポイント保存され、続きから再開できます。
+        </div>
+      </div>
+      <label class="f">タグ（任意・カンマ区切り。フォルダ取り込みはフォルダ名が自動タグ）</label>
+      <input type="text" id="d_tags" placeholder="規程, 2024, 人事">
+      <label class="f">コレクション名（任意・フォルダ取り込み時。省略時はフォルダ名）</label>
+      <input type="text" id="d_colname" placeholder="2024年度規程集">
       <div class="switch" style="margin:8px 0 2px">
+        <input type="checkbox" id="d_recursive" style="accent-color:var(--accent-a)">
+        <label for="d_recursive" style="font-size:.8rem">サブフォルダも含める（フォルダ取り込み時。サブフォルダ名は自動でタグ化）</label>
+      </div>
+      <div class="switch" style="margin:2px 0 2px">
         <input type="checkbox" id="d_layout" style="accent-color:var(--accent-a)">
         <label for="d_layout" style="font-size:.8rem">見出し判定を強化（PDFの構造化に。要 pip install -e ".[ocr]"）</label>
       </div>
@@ -405,6 +437,7 @@
       <h2>文書一覧
         <button class="btn sm ghost" id="btnDocScan" style="margin-left:auto">再読込</button>
       </h2>
+      <div id="scopeChips" style="display:flex;gap:6px;flex-wrap:wrap;margin:4px 0 6px"></div>
       <div style="overflow-x:auto">
         <table class="doctbl"><thead><tr>
           <th title="検索・回答・要約の対象に含める">✓</th>
@@ -413,7 +446,8 @@
         </tr></thead><tbody id="docRows"></tbody></table>
       </div>
       <div style="font-size:.72rem;color:var(--ink-mute);margin-top:4px">
-        ✓ を付けるとその文書だけが対象になります（未選択なら全文書から自動選定）
+        ✓ を付けるとその文書<b>すべて</b>が対象になります（件数上限で切り捨てません）。
+        未選択ならコレクション/タグの絞り込み内から自動選定します。
       </div>
 
       <h2 style="margin-top:18px">検索・質問・要約</h2>
@@ -426,8 +460,8 @@
       </div>
       <textarea id="s_q" rows="2" placeholder="質問・依頼（例: 退職金の計算方法は？ / 各文書の要点を要約してください）"></textarea>
       <div class="row" style="margin-top:8px;flex-wrap:wrap;gap:10px">
-        <label style="font-size:.75rem;color:var(--ink-2)">対象文書数
-          <input type="number" id="s_topn" value="4" style="width:64px"></label>
+        <label style="font-size:.75rem;color:var(--ink-2)" title="文書を✓選択していないときだけ有効（自動選定の上限）">対象文書数（✓未選択時のみ）
+          <input type="number" id="s_topn" value="8" style="width:64px"></label>
         <label style="font-size:.75rem;color:var(--ink-2)">文書内チャンク
           <input type="number" id="s_k" value="4" style="width:64px"></label>
         <label style="font-size:.75rem;color:var(--ink-2)">最大チャンク/文書
@@ -951,7 +985,7 @@ window.drawChart = function(){
   if(!rows.length){ area.innerHTML=""; return; }
   const items = [...new Set(rows.map(r=>r.item))];
   const series = [...new Set(rows.map(r=>r.index))];
-  const val = {}; rows.forEach(r=>{ val[r.index+" "+r.item]=r.value; });
+  const val = {}; rows.forEach(r=>{ val[r.index+"\u0000"+r.item]=r.value; });
   const type = ($("#chType")||{}).value || "bar";
 
   const W=760, H=380, L=64, R=20, T=18, B=76;
@@ -978,7 +1012,7 @@ window.drawChart = function(){
     items.forEach((it,ii)=>{
       const gx = L + slot*ii + slot/2 - (series.length*(bw+2)-2)/2;
       series.forEach((sn,si)=>{
-        const v = val[sn+" "+it]; if(v===undefined) return;
+        const v = val[sn+"\u0000"+it]; if(v===undefined) return;
         const x = gx + si*(bw+2);           /* 2px の隙間 */
         const y0=y(Math.max(0,v)), y1=y(Math.min(0,v));
         const h = Math.max(1, y1-y0), rr = Math.min(4, bw/2, h);
@@ -994,7 +1028,7 @@ window.drawChart = function(){
     const xi = i => L + pw*(items.length===1 ? .5 : i/(items.length-1));
     series.forEach((sn,si)=>{
       const c = SERIES[si%SERIES.length];
-      const pts = items.map((it,ii)=>({x:xi(ii), v:val[sn+" "+it], it}))
+      const pts = items.map((it,ii)=>({x:xi(ii), v:val[sn+"\u0000"+it], it}))
                        .filter(p=>p.v!==undefined);
       if(pts.length>1)
         marks.push(`<polyline fill="none" stroke="${c}" stroke-width="2" `+
@@ -1062,17 +1096,85 @@ const D_MODEWARN = {
   hierarchy: "見出し/セクション構造を作ります（Entity/Relation 抽出はしません）。",
   graph: "⚠ Entity/Relation 抽出を行うため時間がかかります（ローカルLLMでは数十分/文書のことも）。明示選択時のみ実行されます。",
 };
-$("#d_mode").onchange = ()=>{ $("#d_modewarn").textContent = D_MODEWARN[$("#d_mode").value] || ""; };
+$("#d_mode").onchange = ()=>{
+  $("#d_modewarn").textContent = D_MODEWARN[$("#d_mode").value] || "";
+  $("#d_gbox").style.display = $("#d_mode").value === "graph" ? "block" : "none";
+};
+
+// グラフ構築の負荷プリセット（決して多並列を既定にしない。高速は明示選択のみ）
+const G_PRESETS = {
+  safe:  {graph_max_workers:1, graph_max_nodes:80,  graph_chunk_chars:2000, er_use_llm:false},
+  std:   {graph_max_workers:2, graph_max_nodes:100, graph_chunk_chars:2000, er_use_llm:false},
+  fastg: {graph_max_workers:4, graph_max_nodes:150, graph_chunk_chars:1600, er_use_llm:false},
+};
+const currentGraphSettings = ()=> G_PRESETS[$("#d_gpreset").value] || G_PRESETS.safe;
 
 const ST_JA = {ready:"準備OK", running:"処理中", failed:"失敗", skipped:"変更なし",
                pending:"待機", unknown:"不明"};
+// 層別ステータス（vector/hierarchy/graph）。グラフだけ失敗しても文書は利用可能。
+function layerBadges(m){
+  const lyr = (name, st)=>{
+    if(!st || st === "none") return "";
+    const cls = st === "ready" ? "ok" : (st === "failed" ? "ng" : "na");
+    return `<span class="lyr ${cls}">${name}:${ST_JA[st]||st}</span>`;
+  };
+  let out = lyr("検索", m.vector_status) + lyr("構造", m.hierarchy_status)
+          + lyr("グラフ", m.graph_status);
+  if(m.vector_status === "ready" && m.graph_status === "failed"){
+    out += `<span class="lyr na" title="${esc(m.graph_error||"")}">文書は利用可能（グラフのみ失敗）</span>`;
+  }
+  return out;
+}
 let DOCS = [];   // 直近の文書一覧（ボタンは data-i でここを参照。文字列をJSに埋め込まない）
+let COLS = [], ALLTAGS = [];
+const selCols = new Set(), selTags = new Set();  // 選択中のスコープ（chips）
+function renderScopeChips(){
+  const box = $("#scopeChips");
+  if(!COLS.length && !ALLTAGS.length){ box.innerHTML = ""; return; }
+  box.innerHTML =
+    COLS.map((c,i)=>`<span class="scopechip col ${selCols.has(c.collection_id)?"on":""}"
+        data-cid="${esc(c.collection_id)}" title="${esc(c.folder||"")}">📁 ${esc(c.collection_name||c.collection_id)}
+        <span style="opacity:.7">(${c.doc_count||0})</span></span>`).join("")
+    + ALLTAGS.map(t=>`<span class="scopechip tag ${selTags.has(t)?"on":""}"
+        data-tag="${esc(t)}">🏷 ${esc(t)}</span>`).join("");
+}
+$("#scopeChips").addEventListener("click", e=>{
+  const chip = e.target.closest(".scopechip"); if(!chip) return;
+  if(chip.dataset.cid !== undefined){
+    selCols.has(chip.dataset.cid) ? selCols.delete(chip.dataset.cid) : selCols.add(chip.dataset.cid);
+  }else if(chip.dataset.tag !== undefined){
+    selTags.has(chip.dataset.tag) ? selTags.delete(chip.dataset.tag) : selTags.add(chip.dataset.tag);
+  }
+  renderScopeChips(); updateScopeHint();
+});
+// スコープに入る文書数（クライアント側の見積り。確定はサーバ側で同じ規則）
+function scopeDocs(){
+  return DOCS.filter(m=>{
+    if(selCols.size && !(m.collection_ids||[]).some(c=>selCols.has(c))) return false;
+    if(selTags.size && ![...selTags].every(t=>(m.tags||[]).includes(t))) return false;
+    return true;
+  });
+}
+function updateScopeHint(){
+  const n = (selCols.size || selTags.size) ? scopeDocs().length : DOCS.length;
+  $("#s_hint").textContent = (selCols.size || selTags.size)
+    ? `絞り込み中: ${n} 文書が対象（✓選択があればそちらを優先）`
+    : (S_HINTS[$("#s_act").value] || "");
+}
 async function docsScan(){
   const tb = $("#docRows");
   tb.innerHTML = '<tr><td colspan="10" style="color:var(--ink-mute)">読込中…</td></tr>';
   try{
     const j = await api("/api/docs?root="+encodeURIComponent($("#root").value));
     DOCS = j.documents;
+    try{
+      const c = await api("/api/collections?root="+encodeURIComponent($("#root").value));
+      COLS = c.collections || []; ALLTAGS = c.tags || [];
+      // 消えたコレクション/タグの選択を掃除
+      [...selCols].forEach(id=>{ if(!COLS.some(x=>x.collection_id===id)) selCols.delete(id); });
+      [...selTags].forEach(t=>{ if(!ALLTAGS.includes(t)) selTags.delete(t); });
+      renderScopeChips(); updateScopeHint();
+    }catch(_e){ /* 旧サーバ互換: コレクションAPIが無くても一覧は出す */ }
     if(!DOCS.length){
       tb.innerHTML = '<tr><td colspan="10" style="color:var(--ink-mute)">文書がありません。左の「文書を追加」から登録してください。</td></tr>';
       return;
@@ -1080,20 +1182,26 @@ async function docsScan(){
     tb.innerHTML = DOCS.map((m,i)=>{
       const st = m.status||"unknown";
       const err = m.error ? ` title="${esc(m.error)}"` : "";
+      const tags = (m.tags||[]).slice(0,4).map(t=>`<span class="doctag">${esc(t)}</span>`).join("");
+      const gcell = m.graph_status === "failed"
+        ? `<span class="st failed" title="${esc(m.graph_error||"")}">✗</span>`
+        : (m.graph_index ? "✓" : "—");
       return `<tr>
         <td><input type="checkbox" class="dsel" data-i="${i}"
              style="accent-color:var(--accent-a)"></td>
-        <td>${esc(m.title||"")}</td>
+        <td>${esc(m.title||"")}${tags?`<div style="margin-top:2px">${tags}</div>`:""}</td>
         <td class="mono">${esc(m.doc_id||"")}</td>
         <td class="mono">${esc((m.source_path||"").split(/[\\/]/).pop())}</td>
         <td><span class="modechip ${esc(m.index_mode)}">${esc(m.index_mode||"")}</span></td>
-        <td><span class="st ${st}"${err}>${ST_JA[st]||st}</span></td>
+        <td><span class="st ${st}"${err}>${ST_JA[st]||st}</span><div style="margin-top:2px">${layerBadges(m)}</div></td>
         <td>${m.chunk_count||0}</td>
-        <td>${m.graph_index?"✓":"—"}</td>
+        <td>${gcell}</td>
         <td class="mono">${esc((m.updated_at||"").replace("T"," "))}</td>
         <td>
           <button class="btn sm ghost" data-act="detail" data-i="${i}">詳細</button>
           <button class="btn sm ghost" data-act="rebuild" data-i="${i}">再構築</button>
+          ${m.graph_status==="failed"
+            ? `<button class="btn sm ghost" data-act="graph" data-i="${i}" title="チェックポイントから続きだけ実行">グラフ再開</button>` : ""}
           <button class="btn sm ghost" data-act="delete" data-i="${i}">削除</button>
         </td></tr>`;
     }).join("");
@@ -1109,10 +1217,21 @@ $("#docRows").addEventListener("click", e=>{
   if(!m) return;
   if(b.dataset.act === "detail") docsDetail(m);
   else if(b.dataset.act === "rebuild") docsRebuild(m);
+  else if(b.dataset.act === "graph") docsGraph(m);
   else if(b.dataset.act === "delete") docsDelete(m);
 });
 
-/* SSE 実行の共通ヘルパ（進捗バー + 完了/エラー） */
+/* 秒 → 「~1分30秒」形式（ETA 表示用） */
+function fmtSec(s){
+  if(s == null || !isFinite(s)) return "?";
+  s = Math.max(0, Math.round(s));
+  if(s < 60) return `${s}秒`;
+  const m = Math.floor(s/60), r = s%60;
+  if(m < 60) return r ? `${m}分${r}秒` : `${m}分`;
+  return `${Math.floor(m/60)}時間${m%60}分`;
+}
+
+/* SSE 実行の共通ヘルパ（進捗バー + 完了/エラー + ETA） */
 function runTask(url, body, {bar, stage, prog, onResult, onDone}){
   prog.style.display = "block";
   bar.style.width = "3%";
@@ -1130,7 +1249,15 @@ function runTask(url, body, {bar, stage, prog, onResult, onDone}){
       const e = JSON.parse(ev.data);
       if(e.type==="progress"){
         bar.style.width = Math.max(3,Math.min(97,Math.round(100*e.current/(e.total||1))))+"%";
-        stage.dataset.msg = `⟳ ${e.stage||""} ${e.detail||""}`;
+        // ETA: フェーズ内の最初の1件が終わるまでは「計算中」、以降は実測レート
+        let eta = "";
+        if(e.total > 1 && "eta_sec" in e){
+          eta = e.eta_sec === null ? " ・残り時間を計算中…"
+            : ` ・残り ~${fmtSec(e.eta_sec)}／予測合計 ~${fmtSec(e.estimated_total_sec)}`;
+        }
+        const cnt = e.total > 1 ? ` ${e.current}/${e.total}` : "";
+        const det = (e.detail && e.detail !== e.stage) ? ` ${e.detail}` : "";
+        stage.dataset.msg = `⟳ ${e.stage||""}${det}${cnt}${eta}`;
         stage.textContent = `${stage.dataset.msg}  ⏱${Math.round((Date.now()-t0)/1000)}s`;
       }else if(e.type==="result"){ bar.style.width="100%"; stop();
         stage.textContent=`✓ 完了（${Math.round((Date.now()-t0)/1000)}s）`; onResult&&onResult(e); }
@@ -1145,9 +1272,14 @@ function runTask(url, body, {bar, stage, prog, onResult, onDone}){
 
 $("#btnDocAdd").onclick = ()=>{
   const m = $("#dMsg"); m.className="msg"; m.textContent="";
+  const tags = $("#d_tags").value.split(",").map(t=>t.trim()).filter(Boolean);
   runTask("/api/docs/add", {
     path:$("#d_path").value, title:$("#d_title").value, index_mode:$("#d_mode").value,
     force:$("#d_force").checked, layout:$("#d_layout").checked, root:$("#root").value,
+    recursive:$("#d_recursive").checked,
+    collection_name:$("#d_colname").value.trim() || null,
+    tags: tags.length ? tags : null,
+    graph_settings: $("#d_mode").value === "graph" ? currentGraphSettings() : null,
   }, {bar:$("#dbar"), stage:$("#dstage"), prog:$("#dProg"),
     onResult:e=>{ if(e.type==="error"){ m.className="msg ng"; m.textContent="✗ "+e.message; }
       else if(e.kind === "docbatch"){   // フォルダ一括の集計
@@ -1173,11 +1305,28 @@ window.docsRebuild = m=>{
     return;
   }
   const msg = $("#dMsg"); msg.className="msg"; msg.textContent=`再構築中…（${mode}）`;
-  runTask("/api/docs/rebuild", {doc_id:m.doc_id, index_mode:mode, root:$("#root").value},
+  runTask("/api/docs/rebuild", {doc_id:m.doc_id, index_mode:mode, root:$("#root").value,
+      graph_settings: mode === "graph" ? currentGraphSettings() : null},
     {bar:$("#dbar"), stage:$("#dstage"), prog:$("#dProg"),
      onResult:e=>{ if(e.type==="error"){ msg.className="msg ng"; msg.textContent="✗ "+e.message; }
        else { msg.className="msg ok";
          msg.textContent=`✓ 再構築完了: ${e.meta.title}（${e.meta.index_mode}）`; } },
+     onDone:docsScan});
+};
+// graph 層のみ再構築（vector/hierarchy はそのまま。チェックポイントがあれば続きから）
+window.docsGraph = m=>{
+  if(!confirm(`「${m.title}」のグラフ層のみ再実行します。\n`+
+              `途中保存（チェックポイント）があれば完了済みノードをスキップして再開します。\n`+
+              `※ 検索用の索引はそのまま使えます`)) return;
+  const msg = $("#dMsg"); msg.className="msg"; msg.textContent="グラフ層を再構築中…";
+  runTask("/api/docs/graph", {doc_id:m.doc_id, resume:true, root:$("#root").value,
+      graph_settings: currentGraphSettings()},
+    {bar:$("#dbar"), stage:$("#dstage"), prog:$("#dProg"),
+     onResult:e=>{ if(e.type==="error"){ msg.className="msg ng"; msg.textContent="✗ "+e.message; }
+       else { msg.className = e.meta.graph_status === "ready" ? "msg ok" : "msg ng";
+         msg.textContent = e.meta.graph_status === "ready"
+           ? `✓ グラフ構築完了: ${e.meta.title}`
+           : `⚠ グラフ構築が完了しませんでした（${e.meta.graph_error||"原因不明"}）。文書は検索に利用できます`; } },
      onDone:docsScan});
 };
 window.docsDelete = async m=>{
@@ -1200,6 +1349,9 @@ window.docsDetail = async m=>{
       <div style="font-size:.8rem;color:var(--ink-2)">
         モード: <b>${esc(d.meta.index_mode)}</b> / 状態: <b>${esc(d.meta.status)}</b>
         / chunks: ${d.meta.chunk_count} / graph索引: ${d.meta.graph_index?"あり":"なし"}
+        <div style="margin-top:4px">${layerBadges(d.meta)}</div>
+        ${(d.meta.tags||[]).length?`<div style="margin-top:4px">${d.meta.tags.map(t=>`<span class="doctag">${esc(t)}</span>`).join("")}</div>`:""}
+        ${d.meta.graph_error?`<div class="fbnote" style="margin-top:6px">グラフ層: ${esc(d.meta.graph_error)}（「グラフ再開」で続きから再実行できます。検索は利用可能）</div>`:""}
         ${d.meta.error?`<div class="err" style="margin-top:6px">${esc(d.meta.error)}</div>`:""}
       </div>
       ${bi?`<div style="font-size:.8rem;margin-top:8px">BookRAG索引: ノード ${bi.node_count} / セクション ${bi.section_count} / エンティティ ${bi.entity_count} / 関係 ${bi.relation_count}</div>${secList}`
@@ -1223,18 +1375,26 @@ const S_HINTS = {
   summarize: "文書ごとに要約→統合します。空欄なら全体要約、入力すると観点指定",
   search: "該当チャンクを表示するだけ（LLM を呼ばず高速）",
 };
-$("#s_act").onchange = ()=>{ $("#s_hint").textContent = S_HINTS[$("#s_act").value]; };
+$("#s_act").onchange = ()=>{ updateScopeHint(); };
 $("#s_hint").textContent = S_HINTS.answer;
 
 $("#btnDocSearch").onclick = ()=>{
   const res = $("#docSearchRes"); res.innerHTML="";
   const act = $("#s_act").value;
   const ids = selectedDocIds();
-  if(act === "summarize" && !ids && DOCS.length > 5 &&
-     !confirm(`全 ${DOCS.length} 文書を要約します（文書ごとにLLMを呼ぶため時間がかかります）。`+
-              `続けますか？\n※一覧の ✓ で対象を絞れます`)) return;
+  const cids = selCols.size ? [...selCols] : null;
+  const stags = selTags.size ? [...selTags] : null;
+  // 大量文書の一括処理は確認してから（文書ごとにLLMを呼ぶため時間がかかる）
+  const nTarget = ids ? ids.length : ((cids||stags) ? scopeDocs().length : DOCS.length);
+  if(act === "summarize" && nTarget > 5 &&
+     !confirm(`${ids?"選択した":""}${nTarget} 文書を要約します（文書ごとにLLMを呼ぶため時間がかかります）。`+
+              `続けますか？\n※一覧の ✓ やコレクション/タグで対象を絞れます`)) return;
+  if(act === "answer" && ids && ids.length > 8 &&
+     !confirm(`選択した ${ids.length} 文書すべてを根拠に回答します（切り捨てません）。\n`+
+              `文書ごとに部分回答を作ってから統合するため時間がかかります。続けますか？`)) return;
   runTask("/api/docs/search", {
     action: act, question:$("#s_q").value, doc_ids: ids,
+    collection_ids: cids, tags: stags,
     document_top_n:$("#s_topn").value,
     chunk_top_k_per_doc:$("#s_k").value, max_chunks_per_doc:$("#s_max").value,
     use_graph:$("#s_graph").checked, root:$("#root").value,
@@ -1273,7 +1433,9 @@ function renderDocSearch(hits, box){
     const gtag = h.used_graph ? '<span class="modechip graph">BookRAG</span>' : '<span class="modechip fast">通常RAG</span>';
     const fb = h.fallback_reason ? `<div class="fbnote">⚠ ${esc(h.fallback_reason)}</div>` : "";
     const chunks = (h.chunks||[]).map(c=>`
-      <div class="ck"><span class="sc">score ${c.score}${c.page?` ・ p.${esc(String(c.page))}`:""}</span><br>
+      <div class="ck"><span class="sc">score ${c.score}${c.page?` ・ p.${esc(String(c.page))}`:""}${
+        c.section?` ・ §${esc(c.section)}`:""}${
+        c.chunk_id!=null?` ・ #${esc(String(c.chunk_id))}`:""}</span><br>
         ${esc((c.text||"").slice(0,400))}
         ${c.source?`<div class="did">↳ ${esc(c.source)}</div>`:""}</div>`).join("");
     return `<div class="docgrp">
