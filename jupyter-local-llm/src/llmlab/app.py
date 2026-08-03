@@ -409,6 +409,11 @@ class _Handler(BaseHTTPRequestHandler):
             im = _index_manager(root)
             self._json({"root": root, "collections": im.collections(),
                         "tags": im.all_tags()})
+        elif url.path == "/favicon.ico":
+            # ブラウザ自動要求。無いことで 404 のコンソールエラーを出さない
+            self.send_response(204)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
         elif url.path == "/api/docs/graph-data":
             qs = parse_qs(url.query)
             root = (qs.get("root") or [self.root_dir])[0]
