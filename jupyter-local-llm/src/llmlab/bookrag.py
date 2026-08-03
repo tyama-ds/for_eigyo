@@ -209,11 +209,13 @@ class BookRAG:
             bx.log(f"[4/{n_steps}] 知識グラフ構築（抽出→名寄せ）: ノード {len(new_nodes)} 個")
             ckpt = (str(self.storage_dir / "graph_progress.json")
                     if graph_checkpoint else None)
-            bx.build_graph(bi, new_nodes, gradient_g=self.gradient_g,  # 4.3 KG + Gradient ER
-                           er_top_k=self.er_top_k, max_workers=self.max_workers,
-                           max_nodes=max_nodes or self.max_nodes, er_use_llm=self.er_use_llm,
-                           reranker=self._reranker, all_nodes=all_nodes,
-                           checkpoint_path=ckpt)
+            stats = bx.build_graph(bi, new_nodes, gradient_g=self.gradient_g,  # 4.3 KG + Gradient ER
+                                   er_top_k=self.er_top_k, max_workers=self.max_workers,
+                                   max_nodes=max_nodes or self.max_nodes,
+                                   er_use_llm=self.er_use_llm,
+                                   reranker=self._reranker, all_nodes=all_nodes,
+                                   checkpoint_path=ckpt)
+            self._write_graph_stats(stats)
         else:
             bx.log("[4/4] hierarchy モード: Entity/Relation 抽出はスキップ（木のみ）")
         bx.log(f"[{n_steps}/{n_steps}] 保存中…")
@@ -226,6 +228,30 @@ class BookRAG:
         """このインデックスに Entity/Relation（graph）が構築済みか。"""
         bi = self._index(create=False)
         return bool(bi and bi.entities)
+
+    def _write_graph_stats(self, stats: dict | None) -> None:
+        """グラフ構築のカバレッジ統計を storage_dir/graph_stats.json へ保存する。
+
+        安全モードのサンプリングで一部ノードしか抽出していない場合に、
+        IndexManager / GUI が「部分グラフ」であることを表示するための記録。
+        """
+        if not stats:
+            return
+        try:
+            (self.storage_dir / "graph_stats.json").write_text(
+                json.dumps(stats, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError as e:
+            bx.log(f"graph_stats.json の保存に失敗（無害）: {e}")
+
+    def graph_stats(self) -> dict | None:
+        """保存済みのグラフ構築カバレッジ統計（無ければ None＝旧索引）。"""
+        p = self.storage_dir / "graph_stats.json"
+        if not p.exists():
+            return None
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
 
     def tree(self, *, max_chars: int = 42, show_entities: bool = False,
              do_print: bool = True) -> str:

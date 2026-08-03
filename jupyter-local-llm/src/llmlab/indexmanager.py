@@ -70,7 +70,15 @@ SAFE_GRAPH_DEFAULTS = {
     "graph_max_nodes": 100,    # セクション均等サンプリングの上限
     "graph_chunk_chars": 2000, # チャンクを大きめに＝LLM呼び出し回数を減らす
     "er_use_llm": False,
+    "graph_all_nodes": False,  # True で max_nodes 打ち切りなし（チェックポイント併用で完走）
 }
+
+# graph 構築のカバレッジ統計（graph_stats.json → doc メタへ転記するキー）
+GRAPH_STAT_KEYS = ("eligible_nodes", "sampled_nodes", "processed_nodes",
+                   "graph_coverage_ratio", "graph_is_complete",
+                   "graph_max_nodes_used", "resumed_from_checkpoint",
+                   "extract_ok", "extract_empty", "extract_badjson",
+                   "extract_error")
 
 
 def _now() -> str:
@@ -343,6 +351,7 @@ class IndexManager:
                         if not meta["graph_index"]:
                             meta["graph_error"] = ("エンティティを1件も抽出できませんでした"
                                                    "（モデルのJSON応答/思考出力を確認）")
+                        self._merge_graph_stats(meta, book_dir)
                 except Exception as ge:  # noqa: BLE001
                     # graph/hierarchy の失敗で文書全体を失敗にしない。
                     # ベクトル索引は完成しているので通常検索は利用可能。
@@ -413,7 +422,19 @@ class IndexManager:
         with self._forward_logs(progress):
             book.add_book(path, title=title, doc_id=doc_id, force=True,
                           build_graph=build_graph, layout=layout, ocr=ocr,
+                          all_nodes=bool(gs.get("graph_all_nodes", False)),
                           graph_checkpoint=True)
+
+    def _merge_graph_stats(self, meta: dict, book_dir: Path) -> None:
+        """graph_stats.json（構築カバレッジ）を doc メタへ転記する。
+
+        安全モードのサンプリングで一部ノードしか処理していない場合、
+        graph_status=ready でも「部分グラフ」であることを GUI が表示できる。
+        旧索引には無い（キーは欠けたまま＝null 扱い）。
+        """
+        st = self._read_path(book_dir / "graph_stats.json")
+        if st:
+            meta.update({k: st.get(k) for k in GRAPH_STAT_KEYS})
 
     def build_graph_only(self, doc_id: str, *, resume: bool = True,
                          graph_settings: dict | None = None, progress=None) -> dict:
@@ -443,6 +464,7 @@ class IndexManager:
                         hierarchy_status="ready",
                         graph_status="ready" if ok else "failed",
                         graph_error=None if ok else "エンティティ0件", updated_at=_now())
+            self._merge_graph_stats(meta, book_dir)
             self._write(self.docs_dir, doc_id, meta)
             return meta
         except Exception as e:  # noqa: BLE001
