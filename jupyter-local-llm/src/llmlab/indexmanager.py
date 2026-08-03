@@ -81,6 +81,9 @@ SAFE_GRAPH_DEFAULTS = {
     "graph_all_nodes": False,  # True で max_nodes 打ち切りなし（チェックポイント併用で完走）
 }
 
+# グラフ可視化 API が一度に返すノード数のサーバ側上限
+GRAPH_DATA_MAX_LIMIT = 500
+
 # graph 構築のカバレッジ統計（graph_stats.json → doc メタへ転記するキー）
 GRAPH_STAT_KEYS = ("eligible_nodes", "sampled_nodes", "processed_nodes",
                    "graph_coverage_ratio", "graph_is_complete",
@@ -203,13 +206,17 @@ class SearchHit:
     used_graph: bool = False
     fallback_reason: str | None = None   # graph 要求だが未構築→通常RAG等
     # chunks: {text, page, score, source, section_id, section(見出しパス), chunk_id}
+    # graph 検索時は加えて {doc_id, book_node_id, entity_ids, kind:"graph_evidence"}
     chunks: list[dict] = field(default_factory=list)
+    # BookRAG が生成した回答文（根拠チャンクとは分離。チャンク数に数えない）
+    graph_answer: str | None = None
 
     def to_dict(self) -> dict:
         return {
             "doc_id": self.doc_id, "title": self.title, "score": self.score,
             "source_path": self.source_path, "used_graph": self.used_graph,
             "fallback_reason": self.fallback_reason, "chunks": self.chunks,
+            "graph_answer": self.graph_answer,
         }
 
 
@@ -1458,22 +1465,181 @@ class IndexManager:
             })
 
     def _graph_chunks(self, doc_id, question, hit, cap) -> bool:
+        """BookRAG（graph）検索。根拠には追跡ID一式を付け、生成回答は分離する。
+
+        - 根拠チャンク: doc_id / book_node_id / 安定 chunk_id（g:{doc_id}:{node_id}）/
+          section_id / section（見出しパス）/ page / source / entity_ids /
+          kind="graph_evidence"。max_chunks_per_doc（cap）は **根拠だけ** に適用。
+        - BookRAG の生成回答はチャンクに混ぜず hit.graph_answer に入れる
+          （kind の異なる生成物を根拠として数えない）。
+        """
         try:
             from .bookrag import BookRAG
 
             book = BookRAG(storage_dir=str(self.bookindex_dir / doc_id))
+            bi = book._index(create=False)
+            rev = bi.node_to_entities() if bi else {}
+            doc_src = (self._read(self.docs_dir, doc_id) or {}).get("source_path")
             ans = book.query(question)
             for e in ans.evidence[:cap]:
+                path = self._heading_path(bi, e.node_id) if bi else None
+                node = bi.nodes.get(e.node_id) if bi else None
                 hit.chunks.append({
-                    "text": e.snippet, "page": e.page,
-                    "score": round(e.s_text, 4), "source": e.source,
+                    "kind": "graph_evidence",
+                    "doc_id": doc_id,
+                    "book_node_id": e.node_id,
+                    "chunk_id": f"g:{doc_id}:{e.node_id}",
+                    "section_id": make_section_id(path) if path else None,
+                    "section": path,
+                    "text": e.snippet,
+                    "page": e.page if e.page is not None
+                            else (node.page if node else None),
+                    "score": round(e.s_text, 4),
+                    "source": e.source or (node.source if node else None) or doc_src,
+                    "entity_ids": list(rev.get(e.node_id, [])),
                 })
-            hit.chunks.insert(0, {"text": f"[BookRAG回答] {ans.text}", "page": None,
-                                  "score": 1.0, "source": None})
+            hit.graph_answer = ans.text   # 生成回答は根拠と分離（kind が異なる）
             return True
         except Exception as e:  # noqa: BLE001  graph 検索失敗→通常RAGへ
             hit.fallback_reason = f"graph 検索に失敗→通常RAG（{type(e).__name__}）"
             return False
+
+    @staticmethod
+    def _heading_path(bi, node_id: int) -> str | None:
+        """BookIndex の木を親方向に辿って見出しパスを作る（ルート=書名は除く）。"""
+        if bi is None:
+            return None
+        parts: list[str] = []
+        cur = bi.nodes.get(node_id)
+        seen: set[int] = set()
+        while cur is not None and cur.parent is not None and cur.parent not in seen:
+            seen.add(cur.parent)
+            parent = bi.nodes.get(cur.parent)
+            if parent is None:
+                break
+            if parent.type == "Section" and parent.parent is not None and parent.title:
+                parts.append(parent.title)
+            cur = parent
+        return " / ".join(reversed(parts)) or None
+
+    # ---- グラフ可視化用データ（表示専用・構築はしない） ----------------------
+
+    def graph_data(self, doc_id: str, *, limit: int = 100, hops: int = 1,
+                   center_entity_id: int | None = None,
+                   name_filter: str | None = None,
+                   type_filter: str | None = None,
+                   origins_per_entity: int = 3) -> dict:
+        """ナレッジグラフの表示用データを返す（GET /api/docs/graph-data の実体）。
+
+        - dangling edge は返さない（両端が選択ノードに含まれる関係のみ）。
+        - limit は必ず適用し、サーバ側上限 GRAPH_DATA_MAX_LIMIT で制限する。
+        - center_entity_id 指定時はそこから hops（1〜2）ホップの近傍を返す。
+        - name_filter（部分一致）/ type_filter（一致）で絞り込み。
+        - origin_nodes から根拠（ページ・セクション・本文抜粋・元ファイル）を解決。
+          旧インデックスで情報が無い項目は null。
+        - doc_id は検証する（任意ファイル読み取りにつなげない）。
+        """
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", str(doc_id or "")):
+            raise ValueError("不正な doc_id です")
+        meta = self._read(self.docs_dir, doc_id)
+        if not meta:
+            raise KeyError(f"未登録の doc_id: {doc_id}")
+        limit = max(1, min(int(limit), GRAPH_DATA_MAX_LIMIT))
+        hops = 2 if int(hops) >= 2 else 1
+
+        from .bookrag import BookRAG
+
+        book = BookRAG(storage_dir=str(self.bookindex_dir / doc_id))
+        bi = book._index(create=False)
+        gs = book.graph_stats() or {}
+        base_stats = {
+            "coverage_ratio": gs.get("graph_coverage_ratio",
+                                     meta.get("graph_coverage_ratio")),
+            "graph_is_complete": gs.get("graph_is_complete",
+                                        meta.get("graph_is_complete")),
+            "eligible_nodes": gs.get("eligible_nodes"),
+            "processed_nodes": gs.get("processed_nodes"),
+            "extract_ok": gs.get("extract_ok"),
+            "extract_empty": gs.get("extract_empty"),
+            "extract_badjson": gs.get("extract_badjson"),
+            "extract_error": gs.get("extract_error"),
+        }
+        if bi is None or not bi.entities:
+            return {"doc_id": doc_id, "nodes": [], "edges": [], "types": [],
+                    "stats": {"total_nodes": 0, "total_edges": 0,
+                              "returned_nodes": 0, "returned_edges": 0,
+                              "truncated": False, "built": False, **base_stats}}
+
+        ents = bi.entities
+        rels = bi.relations
+        adj: dict[int, set[int]] = {}
+        for s, t, _l in rels:
+            adj.setdefault(s, set()).add(t)
+            adj.setdefault(t, set()).add(s)
+        deg = {eid: len(adj.get(eid, ())) for eid in ents}
+
+        nf = (name_filter or "").strip().lower()
+        tf = (type_filter or "").strip().lower()
+
+        def _match(e) -> bool:
+            if nf and nf not in (e.name or "").lower():
+                return False
+            if tf and tf != (e.type or "").lower():
+                return False
+            return True
+
+        if center_entity_id is not None and int(center_entity_id) in ents:
+            cid = int(center_entity_id)
+            sel = {cid}
+            frontier = {cid}
+            for _ in range(hops):
+                nxt: set[int] = set()
+                for x in frontier:
+                    nxt |= adj.get(x, set())
+                nxt -= sel
+                sel |= nxt
+                frontier = nxt
+            cand = [eid for eid in sel if eid == cid or _match(ents[eid])]
+            cand.sort(key=lambda i: (i != cid, -deg.get(i, 0), i))
+        else:
+            cand = [eid for eid in ents if _match(ents[eid])]
+            cand.sort(key=lambda i: (-deg.get(i, 0), i))
+        selected = cand[:limit]
+        ssel = set(selected)
+        edges = [{"source": s, "target": t, "label": lbl}
+                 for s, t, lbl in rels if s in ssel and t in ssel]
+
+        doc_src = meta.get("source_path")
+        nodes_out = []
+        for eid in selected:
+            e = ents[eid]
+            origins = []
+            for nid in (e.origin_nodes or [])[:max(0, int(origins_per_entity))]:
+                n = bi.nodes.get(nid)
+                if n is None:
+                    continue
+                path = self._heading_path(bi, nid)
+                origins.append({
+                    "book_node_id": nid,
+                    "chunk_id": f"g:{doc_id}:{nid}",
+                    "section_id": make_section_id(path) if path else None,
+                    "section": path,
+                    "page": n.page,
+                    "snippet": (n.content or "")[:200],
+                    "source": n.source or doc_src,
+                })
+            nodes_out.append({"id": eid, "label": e.name, "type": e.type or None,
+                              "description": e.description or None,
+                              "origin_count": len(e.origin_nodes or []),
+                              "origins": origins})
+        types = sorted({(e.type or "") for e in ents.values() if e.type})
+        return {"doc_id": doc_id, "nodes": nodes_out, "edges": edges,
+                "types": types,
+                "stats": {"total_nodes": len(ents), "total_edges": len(rels),
+                          "returned_nodes": len(nodes_out),
+                          "returned_edges": len(edges),
+                          "truncated": len(cand) > limit, "built": True,
+                          **base_stats}}
 
     # ---- 内部: JSON I/O ----------------------------------------------------
 

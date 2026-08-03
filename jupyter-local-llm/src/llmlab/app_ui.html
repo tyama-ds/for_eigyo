@@ -266,6 +266,28 @@
   .lyr.ok{color:#0ca30c;border:1px solid rgba(12,163,12,.4)}
   .lyr.ng{color:var(--err);border:1px solid rgba(230,103,103,.4)}
   .lyr.na{color:var(--ink-mute);border:1px solid var(--line)}
+  /* 文書詳細のタブ + ナレッジグラフ表示 */
+  .dtabs{display:flex;gap:6px;margin:10px 0}
+  .dtab{background:none;border:1px solid var(--line-strong);border-radius:8px 8px 0 0;
+    color:var(--ink-2);padding:5px 14px;font-size:.8rem;cursor:pointer}
+  .dtab.on{color:var(--accent-a);border-color:var(--accent-a);font-weight:700}
+  .gwrap{display:grid;grid-template-columns:1fr 320px;gap:12px}
+  #gsvgbox{border:1px solid var(--line);border-radius:12px;background:#0d1119;
+    overflow:hidden;height:480px;position:relative;cursor:grab}
+  #gsvgbox:active{cursor:grabbing}
+  #gdPanel{border:1px solid var(--line);border-radius:12px;padding:10px 12px;
+    font-size:.8rem;max-height:480px;overflow-y:auto}
+  .gnode{cursor:pointer}
+  .gnode circle{stroke:rgba(255,255,255,.25);stroke-width:1}
+  .gnode.sel circle{stroke:#fff;stroke-width:2.5}
+  .gnode text{fill:#cbd5e1;font-size:11px;pointer-events:none}
+  .gedge{stroke:rgba(148,163,184,.35);stroke-width:1;marker-end:url(#garrow)}
+  .gelabel{fill:#7c8ba1;font-size:9px;pointer-events:none}
+  .gtbl{width:100%;border-collapse:collapse;font-size:.78rem}
+  .gtbl th,.gtbl td{border-bottom:1px solid var(--line);padding:5px 6px;text-align:left}
+  .gtbl th{color:var(--ink-2);font-size:.7rem}
+  .covwarn{font-size:.78rem;color:var(--warn);border:1px solid rgba(250,178,25,.35);
+    background:rgba(250,178,25,.07);border-radius:8px;padding:6px 10px;margin:6px 0}
   pre.json{background:#0d1119;border:1px solid var(--line);border-radius:10px;padding:12px;
     overflow:auto;max-height:340px;font-size:.74rem;font-family:ui-monospace,Consolas,monospace}
   .warnrow{font-size:.78rem;color:var(--warn);margin-top:6px;min-height:1em}
@@ -1334,6 +1356,19 @@ window.docsDelete = async m=>{
   try{ await api("/api/docs/delete", {doc_id:m.doc_id, root:$("#root").value}); docsScan(); }
   catch(e){ alert("削除に失敗: "+e.message); }
 };
+let DETAIL = null;   // 現在の詳細対象 {m, d}
+let GD = null;       // 現在の graph-data レスポンス
+let GSEL = null;     // 選択中エンティティ id
+
+function covWarn(meta){
+  if(meta.graph_status !== "ready" || meta.graph_is_complete !== false) return "";
+  const pct = meta.graph_coverage_ratio != null
+    ? Math.round(meta.graph_coverage_ratio * 100) + "%" : "不明";
+  return `<div class="covwarn">⚠ 部分グラフ: 対象 ${meta.eligible_nodes ?? "?"} ノード中 `
+    + `${meta.processed_nodes ?? "?"} ノードだけを抽出しています（カバレッジ ${pct}）。`
+    + `全ノード処理は再構築時に「全ノードを処理」を選択してください。</div>`;
+}
+
 window.docsDetail = async m=>{
   const did = m.doc_id;
   const box = $("#docDetail"); box.style.display="block";
@@ -1341,28 +1376,319 @@ window.docsDetail = async m=>{
   window.scrollTo({top:document.body.scrollHeight, behavior:"smooth"});
   try{
     const d = await api("/api/docs/detail?root="+encodeURIComponent($("#root").value)+"&doc_id="+encodeURIComponent(did));
+    DETAIL = {m, d}; GD = null; GSEL = null;
     const bi = d.bookindex;
     const secList = bi && bi.sections && bi.sections.length
       ? `<div style="font-size:.78rem;margin:6px 0">セクション（${bi.section_count}）: ${bi.sections.slice(0,30).map(esc).join(" / ")}</div>` : "";
     box.innerHTML = `
       <h2>文書詳細 — ${esc(d.meta.title)} <span class="did" style="color:var(--ink-mute);font-size:.72rem">${esc(did)}</span></h2>
-      <div style="font-size:.8rem;color:var(--ink-2)">
-        モード: <b>${esc(d.meta.index_mode)}</b> / 状態: <b>${esc(d.meta.status)}</b>
-        / chunks: ${d.meta.chunk_count} / graph索引: ${d.meta.graph_index?"あり":"なし"}
-        <div style="margin-top:4px">${layerBadges(d.meta)}</div>
-        ${(d.meta.tags||[]).length?`<div style="margin-top:4px">${d.meta.tags.map(t=>`<span class="doctag">${esc(t)}</span>`).join("")}</div>`:""}
-        ${d.meta.graph_error?`<div class="fbnote" style="margin-top:6px">グラフ層: ${esc(d.meta.graph_error)}（「グラフ再開」で続きから再実行できます。検索は利用可能）</div>`:""}
-        ${d.meta.error?`<div class="err" style="margin-top:6px">${esc(d.meta.error)}</div>`:""}
+      <div class="dtabs">
+        <button class="dtab on" data-t="overview">概要</button>
+        <button class="dtab" data-t="entities">エンティティ一覧</button>
+        <button class="dtab" data-t="relations">関係一覧</button>
+        <button class="dtab" data-t="graph">グラフ表示</button>
       </div>
-      ${bi?`<div style="font-size:.8rem;margin-top:8px">BookRAG索引: ノード ${bi.node_count} / セクション ${bi.section_count} / エンティティ ${bi.entity_count} / 関係 ${bi.relation_count}</div>${secList}`
-          :`<div style="font-size:.78rem;color:var(--ink-mute);margin-top:8px">BookRAG索引なし（fast モード。構造/グラフが必要なら hierarchy/graph で再構築）</div>`}
-      <h3 style="margin-top:12px;font-size:.85rem;color:var(--ink-2)">docs/${esc(did)}.json</h3>
-      <pre class="json">${esc(JSON.stringify(d.meta,null,2))}</pre>
-      <h3 style="font-size:.85rem;color:var(--ink-2)">チャンク一覧（${d.chunks.length}）</h3>
-      <pre class="json">${esc(d.chunks.slice(0,50).map(c=>`[${c.chunk_id}] p.${c.page||"?"} ${(c.text||"").slice(0,160)}`).join("\n\n"))}</pre>
-      <button class="btn sm ghost" onclick="$('#docDetail').style.display='none'">閉じる</button>`;
+      <div id="dt_overview">
+        <div style="font-size:.8rem;color:var(--ink-2)">
+          モード: <b>${esc(d.meta.index_mode)}</b> / 状態: <b>${esc(d.meta.status)}</b>
+          / chunks: ${d.meta.chunk_count} / graph索引: ${d.meta.graph_index?"あり":"なし"}
+          <div style="margin-top:4px">${layerBadges(d.meta)}</div>
+          ${(d.meta.tags||[]).length?`<div style="margin-top:4px">${d.meta.tags.map(t=>`<span class="doctag">${esc(t)}</span>`).join("")}</div>`:""}
+          ${covWarn(d.meta)}
+          ${d.meta.graph_error?`<div class="fbnote" style="margin-top:6px">グラフ層: ${esc(d.meta.graph_error)}（「グラフ再開」で続きから再実行できます。検索は利用可能）</div>`:""}
+          ${d.meta.error?`<div class="err" style="margin-top:6px">${esc(d.meta.error)}</div>`:""}
+        </div>
+        ${bi?`<div style="font-size:.8rem;margin-top:8px">BookRAG索引: ノード ${bi.node_count} / セクション ${bi.section_count} / エンティティ ${bi.entity_count} / 関係 ${bi.relation_count}</div>${secList}`
+            :`<div style="font-size:.78rem;color:var(--ink-mute);margin-top:8px">BookRAG索引なし（fast モード。構造/グラフが必要なら hierarchy/graph で再構築）</div>`}
+        <h3 style="margin-top:12px;font-size:.85rem;color:var(--ink-2)">docs/${esc(did)}.json</h3>
+        <pre class="json">${esc(JSON.stringify(d.meta,null,2))}</pre>
+        <h3 style="font-size:.85rem;color:var(--ink-2)">チャンク一覧（${d.chunks.length}）</h3>
+        <pre class="json">${esc(d.chunks.slice(0,50).map(c=>`[${c.chunk_id}] p.${c.page||"?"} ${(c.text||"").slice(0,160)}`).join("\n\n"))}</pre>
+      </div>
+      <div id="dt_entities" style="display:none"></div>
+      <div id="dt_relations" style="display:none"></div>
+      <div id="dt_graph" style="display:none"></div>
+      <button class="btn sm ghost" style="margin-top:10px" id="dtClose">閉じる</button>`;
+    $("#dtClose").onclick = ()=>{ $("#docDetail").style.display="none"; };
+    box.querySelectorAll(".dtab").forEach(b=>{
+      b.onclick = ()=>{
+        box.querySelectorAll(".dtab").forEach(x=>x.classList.remove("on"));
+        b.classList.add("on");
+        ["overview","entities","relations","graph"].forEach(t=>{
+          $("#dt_"+t).style.display = (t===b.dataset.t) ? "block" : "none";
+        });
+        if(b.dataset.t !== "overview") gdEnsure(b.dataset.t);
+      };
+    });
   }catch(e){ box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
 };
+
+/* ---- ナレッジグラフ表示（外部ライブラリ・CDN 不使用の SVG 実装） ---- */
+
+const GTYPE_COLORS = ["#22d3ee","#c4b5fd","#5eead4","#fbbf24","#f472b6",
+                      "#93c5fd","#a3e635","#fda4af","#67e8f9","#fcd34d"];
+const gtypeColor = t=>{
+  const types = (GD && GD.types) || [];
+  const i = types.indexOf(t);
+  return GTYPE_COLORS[(i >= 0 ? i : types.length) % GTYPE_COLORS.length];
+};
+
+async function gdFetch(){
+  const did = DETAIL.m.doc_id;
+  const p = new URLSearchParams({root: $("#root").value, doc_id: did});
+  const lim = $("#g_limit") ? $("#g_limit").value : "100";
+  p.set("limit", lim);
+  p.set("hops", $("#g_hops") ? $("#g_hops").value : "1");
+  const name = $("#g_name") ? $("#g_name").value.trim() : "";
+  if(name) p.set("name", name);
+  const ty = $("#g_type") ? $("#g_type").value : "";
+  if(ty) p.set("type", ty);
+  if(GSEL != null && $("#g_center") && $("#g_center").checked)
+    p.set("center_entity_id", GSEL);
+  GD = await api("/api/docs/graph-data?"+p.toString());
+  return GD;
+}
+
+async function gdEnsure(tab){
+  if(!GD){
+    $("#dt_"+tab).innerHTML = '<div style="color:var(--ink-mute)">グラフデータを読込中…</div>';
+    try{ await gdFetch(); }
+    catch(e){ $("#dt_"+tab).innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
+  }
+  renderEntitiesTab(); renderRelationsTab(); renderGraphTab(tab === "graph");
+}
+
+function gdStatusBox(){
+  const meta = DETAIL.d.meta, st = GD.stats;
+  if(!st.built){
+    if(meta.graph_status === "failed")
+      return `<div class="fbnote">グラフ構築は失敗しています（${esc(meta.graph_error||"原因不明")}）。
+        通常RAG検索はそのまま利用できます。</div>
+        <button class="btn sm" id="gBuildBtn">グラフ再開（チェックポイントから）</button>`;
+    return `<div style="font-size:.8rem;color:var(--ink-mute)">この文書にはまだナレッジグラフがありません
+      （index_mode: ${esc(meta.index_mode||"fast")}）。</div>
+      <button class="btn sm" id="gBuildBtn">グラフを構築</button>`;
+  }
+  let out = "";
+  if(st.graph_is_complete === false){
+    const pct = st.coverage_ratio != null ? Math.round(st.coverage_ratio*100)+"%" : "不明";
+    out += `<div class="covwarn">⚠ 部分グラフ（カバレッジ ${pct}: 対象 ${st.eligible_nodes ?? "?"} 中
+      ${st.processed_nodes ?? "?"} ノードを抽出）。graph_status=ready でも全ノードは処理していません。</div>`;
+  }
+  const bad = (st.extract_badjson||0) + (st.extract_error||0) + (st.extract_empty||0);
+  if(bad > 0){
+    out += `<div style="font-size:.74rem;color:var(--ink-mute)">抽出内訳: 成功 ${st.extract_ok ?? "?"} /
+      空 ${st.extract_empty||0} / JSON不正 ${st.extract_badjson||0} / エラー ${st.extract_error||0}</div>`;
+  }
+  if(st.truncated) out += `<div style="font-size:.74rem;color:var(--ink-mute)">表示上限により
+    ${st.returned_nodes}/${st.total_nodes} ノードを表示中（検索・種別・上限で絞り込めます）</div>`;
+  return out;
+}
+
+function renderEntitiesTab(){
+  const box = $("#dt_entities");
+  if(!GD.stats.built){ box.innerHTML = gdStatusBox(); wireGBuild(box); return; }
+  const rows = GD.nodes.map(n=>`
+    <tr><td><span style="color:${gtypeColor(n.type)}">●</span> ${esc(n.label)}</td>
+      <td>${esc(n.type||"—")}</td><td>${n.origin_count}</td>
+      <td>${esc((n.description||"").slice(0,80))}</td>
+      <td>${n.origins.map(o=>`<details style="display:inline-block;margin-right:6px">
+          <summary style="cursor:pointer;font-size:.72rem">§${esc(o.section||"(本文)")}${o.page?` p.${esc(String(o.page))}`:""}</summary>
+          <div style="font-size:.74rem;color:var(--ink-2);max-width:420px">${esc(o.snippet||"")}
+          ${o.source?`<div class="did">↳ ${esc(o.source)}</div>`:""}</div></details>`).join("")}</td></tr>`).join("");
+  box.innerHTML = gdStatusBox() + `
+    <div style="font-size:.76rem;color:var(--ink-mute);margin:6px 0">
+      エンティティ ${GD.stats.returned_nodes} / ${GD.stats.total_nodes} 件（グラフ操作が難しい場合はこの一覧で確認できます）</div>
+    <div style="overflow-x:auto"><table class="gtbl"><thead>
+      <tr><th>名前</th><th>種類</th><th>出現</th><th>説明</th><th>根拠（セクション/ページ/抜粋）</th></tr>
+    </thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function renderRelationsTab(){
+  const box = $("#dt_relations");
+  if(!GD.stats.built){ box.innerHTML = gdStatusBox(); wireGBuild(box); return; }
+  const byId = {}; GD.nodes.forEach(n=>byId[n.id]=n);
+  const rows = GD.edges.map(e=>`
+    <tr><td>${esc(byId[e.source]?.label ?? String(e.source))}</td>
+      <td style="color:var(--accent-a)">${esc(e.label||"related_to")} →</td>
+      <td>${esc(byId[e.target]?.label ?? String(e.target))}</td></tr>`).join("");
+  box.innerHTML = gdStatusBox() + `
+    <div style="font-size:.76rem;color:var(--ink-mute);margin:6px 0">関係 ${GD.stats.returned_edges} / ${GD.stats.total_edges} 件（表示ノード間のみ。宙に浮いた関係は返しません）</div>
+    <div style="overflow-x:auto"><table class="gtbl"><thead>
+      <tr><th>主語</th><th>関係</th><th>目的語</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function wireGBuild(box){
+  const b = box.querySelector("#gBuildBtn");
+  if(b) b.onclick = ()=>docsGraph(DETAIL.m);
+}
+
+function renderGraphTab(visible){
+  const box = $("#dt_graph");
+  if(!GD.stats.built){ box.innerHTML = gdStatusBox(); wireGBuild(box); return; }
+  const types = GD.types || [];
+  box.innerHTML = `
+    <div class="row" style="flex-wrap:wrap;gap:8px;margin-bottom:6px">
+      <input type="text" id="g_name" placeholder="エンティティ名で検索" style="width:180px">
+      <select id="g_type" style="width:auto"><option value="">全種別</option>
+        ${types.map(t=>`<option value="${esc(t)}">${esc(t)}</option>`).join("")}</select>
+      <select id="g_hops" style="width:auto"><option value="1">1ホップ</option><option value="2">2ホップ</option></select>
+      <select id="g_limit" style="width:auto"><option>50</option><option selected>100</option><option>200</option></select>
+      <label style="font-size:.72rem;color:var(--ink-2);display:flex;align-items:center;gap:4px">
+        <input type="checkbox" id="g_center" checked style="accent-color:var(--accent-a)">選択ノード中心</label>
+      <button class="btn sm ghost" id="g_reload">再読込</button>
+    </div>
+    ${gdStatusBox()}
+    <div style="font-size:.72rem;color:var(--ink-mute);margin-bottom:4px">
+      凡例: ${types.map(t=>`<span style="color:${gtypeColor(t)}">●</span> ${esc(t)}`).join("　")}
+      ・ドラッグでパン / ホイールでズーム / ノードクリックで詳細</div>
+    <div class="gwrap">
+      <div id="gsvgbox"></div>
+      <div id="gdPanel"><div style="color:var(--ink-mute)">ノードを選択すると、名前・種類・説明・関連エンティティ・根拠（セクション/ページ/本文抜粋/元ファイル）を表示します。</div></div>
+    </div>`;
+  $("#g_reload").onclick = async ()=>{
+    try{ await gdFetch(); renderEntitiesTab(); renderRelationsTab(); renderGraphTab(true); }
+    catch(e){ $("#gsvgbox").innerHTML = `<div class="err" style="padding:10px">${esc(e.message)}</div>`; }
+  };
+  drawGraphSvg();
+}
+
+function layoutGraph(nodes, edges, W, H){
+  // 依存なしの簡易力学レイアウト（反発 + ばね + 中心引力を固定回数）
+  const N = nodes.length, pos = {};
+  nodes.forEach((n,i)=>{
+    const a = 2*Math.PI*i/Math.max(1,N), r = Math.min(W,H)*0.35;
+    pos[n.id] = {x: W/2 + r*Math.cos(a), y: H/2 + r*Math.sin(a)};
+  });
+  const K = 60, iters = Math.min(150, 4000/Math.max(1,N));
+  for(let it=0; it<iters; it++){
+    const disp = {}; nodes.forEach(n=>disp[n.id]={x:0,y:0});
+    for(let i=0;i<N;i++) for(let j=i+1;j<N;j++){
+      const a=nodes[i].id, b=nodes[j].id;
+      let dx=pos[a].x-pos[b].x, dy=pos[a].y-pos[b].y;
+      let d2=dx*dx+dy*dy || 0.01, d=Math.sqrt(d2);
+      const f = K*K/d/d;   // 反発
+      dx/=d; dy/=d;
+      disp[a].x+=dx*f; disp[a].y+=dy*f; disp[b].x-=dx*f; disp[b].y-=dy*f;
+    }
+    edges.forEach(e=>{
+      const a=e.source, b=e.target;
+      if(!pos[a]||!pos[b]) return;
+      let dx=pos[a].x-pos[b].x, dy=pos[a].y-pos[b].y;
+      const d=Math.sqrt(dx*dx+dy*dy)||0.1, f=(d*d)/K/8;  // ばね
+      dx/=d; dy/=d;
+      disp[a].x-=dx*f; disp[a].y-=dy*f; disp[b].x+=dx*f; disp[b].y+=dy*f;
+    });
+    const t = 12*(1-it/iters)+1;
+    nodes.forEach(n=>{
+      const dp=disp[n.id], dl=Math.sqrt(dp.x*dp.x+dp.y*dp.y)||0.1;
+      pos[n.id].x += dp.x/dl*Math.min(dl,t) + (W/2-pos[n.id].x)*0.002;
+      pos[n.id].y += dp.y/dl*Math.min(dl,t) + (H/2-pos[n.id].y)*0.002;
+    });
+  }
+  return pos;
+}
+
+function drawGraphSvg(){
+  const boxEl = $("#gsvgbox");
+  const W = boxEl.clientWidth || 720, H = 480;
+  const pos = layoutGraph(GD.nodes, GD.edges, W, H);
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("width","100%"); svg.setAttribute("height","100%");
+  svg.setAttribute("viewBox",`0 0 ${W} ${H}`);
+  const defs = document.createElementNS(NS,"defs");
+  defs.innerHTML = '<marker id="garrow" viewBox="0 0 10 10" refX="18" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(148,163,184,.5)"/></marker>';
+  svg.appendChild(defs);
+  const g = document.createElementNS(NS,"g");
+  svg.appendChild(g);
+  // エッジ（方向つき + ラベル）
+  GD.edges.forEach(e=>{
+    const a=pos[e.source], b=pos[e.target]; if(!a||!b) return;
+    const ln = document.createElementNS(NS,"line");
+    ln.setAttribute("x1",a.x); ln.setAttribute("y1",a.y);
+    ln.setAttribute("x2",b.x); ln.setAttribute("y2",b.y);
+    ln.setAttribute("class","gedge");
+    g.appendChild(ln);
+    const tx = document.createElementNS(NS,"text");
+    tx.setAttribute("x",(a.x+b.x)/2); tx.setAttribute("y",(a.y+b.y)/2-3);
+    tx.setAttribute("class","gelabel"); tx.setAttribute("text-anchor","middle");
+    tx.textContent = e.label || "";
+    g.appendChild(tx);
+  });
+  // ノード（種別で色分け・クリックで選択）
+  GD.nodes.forEach(n=>{
+    const p = pos[n.id];
+    const grp = document.createElementNS(NS,"g");
+    grp.setAttribute("class","gnode"+(GSEL===n.id?" sel":""));
+    grp.setAttribute("transform",`translate(${p.x},${p.y})`);
+    grp.dataset.eid = n.id;
+    const c = document.createElementNS(NS,"circle");
+    c.setAttribute("r", Math.min(16, 6 + Math.sqrt(n.origin_count||1)*2));
+    c.setAttribute("fill", gtypeColor(n.type));
+    c.setAttribute("fill-opacity","0.85");
+    grp.appendChild(c);
+    const t = document.createElementNS(NS,"text");
+    t.setAttribute("x", 0); t.setAttribute("y", -12);
+    t.setAttribute("text-anchor","middle");
+    t.textContent = (n.label||"").slice(0,14);   // textContent で XSS 安全
+    grp.appendChild(t);
+    grp.addEventListener("click", ev=>{ ev.stopPropagation(); gdSelect(n.id); });
+    g.appendChild(grp);
+  });
+  // ズーム/パン（viewBox 操作。外部ライブラリなし）
+  let vb = {x:0,y:0,w:W,h:H}, panning=null;
+  const apply = ()=>svg.setAttribute("viewBox",`${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
+  svg.addEventListener("wheel", ev=>{
+    ev.preventDefault();
+    const k = ev.deltaY > 0 ? 1.15 : 1/1.15;
+    const mx = vb.x + (ev.offsetX/boxEl.clientWidth)*vb.w;
+    const my = vb.y + (ev.offsetY/boxEl.clientHeight)*vb.h;
+    vb = {x: mx-(mx-vb.x)*k, y: my-(my-vb.y)*k, w: vb.w*k, h: vb.h*k};
+    apply();
+  }, {passive:false});
+  svg.addEventListener("mousedown", ev=>{ panning={x:ev.clientX,y:ev.clientY,vb:{...vb}}; });
+  window.addEventListener("mousemove", ev=>{
+    if(!panning) return;
+    const sx = vb.w/boxEl.clientWidth, sy = vb.h/boxEl.clientHeight;
+    vb.x = panning.vb.x - (ev.clientX-panning.x)*sx;
+    vb.y = panning.vb.y - (ev.clientY-panning.y)*sy;
+    apply();
+  });
+  window.addEventListener("mouseup", ()=>{ panning=null; });
+  boxEl.innerHTML = "";
+  boxEl.appendChild(svg);
+}
+
+function gdSelect(eid){
+  GSEL = eid;
+  document.querySelectorAll("#gsvgbox .gnode").forEach(el=>{
+    el.classList.toggle("sel", +el.dataset.eid === eid);
+  });
+  const n = GD.nodes.find(x=>x.id===eid);
+  const panel = $("#gdPanel");
+  if(!n){ panel.innerHTML = ""; return; }
+  const byId = {}; GD.nodes.forEach(x=>byId[x.id]=x);
+  const rel = GD.edges.filter(e=>e.source===eid||e.target===eid).map(e=>{
+    const other = e.source===eid ? e.target : e.source;
+    const dir = e.source===eid ? "→" : "←";
+    return `<li>${esc(e.label||"related_to")} ${dir} ${esc(byId[other]?.label ?? String(other))}</li>`;
+  }).join("");
+  const origins = n.origins.map(o=>`
+    <div style="border-top:1px dashed var(--line);padding:6px 0">
+      <div style="font-size:.72rem;color:var(--accent-a)">§${esc(o.section||"(本文)")}${o.page?` ・ p.${esc(String(o.page))}`:""}
+        <span class="did">${esc(o.chunk_id||"")}</span></div>
+      <div>${esc(o.snippet||"")}</div>
+      ${o.source?`<div class="did">↳ ${esc(o.source)}</div>`:""}
+    </div>`).join("");
+  panel.innerHTML = `
+    <div style="font-size:.95rem;font-weight:700">
+      <span style="color:${gtypeColor(n.type)}">●</span> ${esc(n.label)}</div>
+    <div style="color:var(--ink-mute);font-size:.74rem">種類: ${esc(n.type||"—")} / 出現 ${n.origin_count} ノード</div>
+    ${n.description?`<div style="margin:6px 0">${esc(n.description)}</div>`:""}
+    ${rel?`<div style="font-size:.76rem;margin-top:6px;color:var(--ink-2)">関連エンティティ:</div><ul style="margin:4px 0 6px 18px;font-size:.78rem">${rel}</ul>`:""}
+    <div style="font-size:.76rem;color:var(--ink-2)">根拠:</div>${origins || '<div style="color:var(--ink-mute)">（根拠情報なし・旧索引）</div>'}`;
+}
 
 // 対象チェック（✓列）で選択された doc_id（未選択なら null = 全文書から自動選定）
 const selectedDocIds = ()=>{
@@ -1432,6 +1758,9 @@ function renderDocSearch(hits, box){
     ${hits.length} 文書に多様化（1文書に偏らない）</div>` + hits.map(h=>{
     const gtag = h.used_graph ? '<span class="modechip graph">BookRAG</span>' : '<span class="modechip fast">通常RAG</span>';
     const fb = h.fallback_reason ? `<div class="fbnote">⚠ ${esc(h.fallback_reason)}</div>` : "";
+    // BookRAG の生成回答は根拠チャンクと分離して表示（根拠件数に数えない）
+    const ga = h.graph_answer ? `<div class="ck" style="border-left:3px solid var(--accent-a);padding-left:8px">
+      <span class="sc">🧠 BookRAG回答（生成文・根拠ではありません）</span><br>${esc(h.graph_answer)}</div>` : "";
     const chunks = (h.chunks||[]).map(c=>`
       <div class="ck"><span class="sc">score ${c.score}${c.page?` ・ p.${esc(String(c.page))}`:""}${
         c.section?` ・ §${esc(c.section)}`:""}${
@@ -1441,7 +1770,7 @@ function renderDocSearch(hits, box){
     return `<div class="docgrp">
       <h4>${gtag} ${esc(h.title)} <span class="sc" style="color:var(--accent-a)">score ${h.score}</span>
         <span class="did">${esc(h.doc_id)}</span></h4>
-      ${fb}${chunks || '<div class="ck" style="color:var(--ink-mute)">チャンクなし</div>'}</div>`;
+      ${fb}${ga}${chunks || '<div class="ck" style="color:var(--ink-mute)">チャンクなし</div>'}</div>`;
   }).join("");
 }
 

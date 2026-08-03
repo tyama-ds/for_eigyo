@@ -409,6 +409,23 @@ class _Handler(BaseHTTPRequestHandler):
             im = _index_manager(root)
             self._json({"root": root, "collections": im.collections(),
                         "tags": im.all_tags()})
+        elif url.path == "/api/docs/graph-data":
+            qs = parse_qs(url.query)
+            root = (qs.get("root") or [self.root_dir])[0]
+            try:
+                data = _index_manager(root).graph_data(
+                    (qs.get("doc_id") or [""])[0],
+                    limit=int((qs.get("limit") or ["100"])[0]),
+                    hops=int((qs.get("hops") or ["1"])[0]),
+                    center_entity_id=(int(qs["center_entity_id"][0])
+                                      if qs.get("center_entity_id") else None),
+                    name_filter=(qs.get("name") or [None])[0],
+                    type_filter=(qs.get("type") or [None])[0])
+                self._json(data)
+            except KeyError as e:
+                self._json({"error": str(e)}, 404)
+            except ValueError as e:
+                self._json({"error": str(e)}, 400)
         else:
             self._json({"error": "not found"}, 404)
 
