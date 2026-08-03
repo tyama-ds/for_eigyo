@@ -20,7 +20,6 @@ from llama_index.core.schema import NodeWithScore, TextNode  # noqa: E402
 
 from llmlab.pagedrag import _DOC_ID_KEY, PagedRAG, make_doc_id  # noqa: E402
 
-
 # --------------------------------------------------------------------------
 # ヘルパ: 合成チャンク（NodeWithScore）
 # --------------------------------------------------------------------------

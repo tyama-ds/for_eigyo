@@ -134,7 +134,8 @@ class PagedRAG:
         self._index = None  # 遅延ロード
         self._catalog_path = self.storage_dir / "books.json"
         # 文書ごとの JSON（中身の個別確認用）。既定は storage_dir/documents。
-        self.documents_dir = Path(documents_dir) if documents_dir else self.storage_dir / "documents"
+        self.documents_dir = (Path(documents_dir) if documents_dir
+                              else self.storage_dir / "documents")
 
     # ---- 取り込み ----------------------------------------------------------
 
@@ -319,7 +320,7 @@ class PagedRAG:
                 "path": path, "summary": summary}
         tmp = self.documents_dir / f"{doc_id}.json.tmp"
         with open(tmp, "w", encoding="utf-8") as out, \
-                open(partial, "r", encoding="utf-8") as inp:
+                open(partial, encoding="utf-8") as inp:
             out.write(json.dumps(head, ensure_ascii=False)[:-1])  # 末尾 } を外す
             out.write(', "chunks": [')
             first = True
@@ -346,7 +347,7 @@ class PagedRAG:
             return
         ids = []
         try:
-            with open(partial, "r", encoding="utf-8") as f:
+            with open(partial, encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if line:
@@ -392,7 +393,7 @@ class PagedRAG:
         """
         buf: list[str] = []
         size = 0
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
+        with open(path, encoding="utf-8", errors="replace") as f:
             while True:
                 block = f.read(block_chars)
                 if not block:

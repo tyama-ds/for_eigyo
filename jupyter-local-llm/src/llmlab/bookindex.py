@@ -443,7 +443,7 @@ class BookIndex:
         os.replace(tmp_npy, d / "entity_vecs.npy")
 
     @classmethod
-    def load(cls, storage_dir: str | Path) -> "BookIndex":
+    def load(cls, storage_dir: str | Path) -> BookIndex:
         d = Path(storage_dir)
         payload = json.loads((d / "bookindex.json").read_text(encoding="utf-8"))
         bi = cls()
@@ -468,7 +468,7 @@ def _normalize(v: np.ndarray) -> np.ndarray:
     return v / n if n else v
 
 
-def render_tree(bi: "BookIndex", *, max_chars: int = 42, show_entities: bool = False) -> str:
+def render_tree(bi: BookIndex, *, max_chars: int = 42, show_entities: bool = False) -> str:
     """BookIndex の木を ASCII アートで可視化する（構築結果の確認用）。
 
     例::
@@ -600,9 +600,11 @@ def _parse_docx(path: Path) -> list[dict]:
         if style.lower().startswith("heading"):
             m = re.search(r"(\d+)", style)
             level = int(m.group(1)) if m else 1
-            blocks.append({"content": text, "type": "Title", "page": None, "font": None, "level": level})
+            blocks.append({"content": text, "type": "Title", "page": None, "font": None,
+                           "level": level})
         else:
-            blocks.append({"content": text, "type": "Text", "page": None, "font": None, "level": None})
+            blocks.append({"content": text, "type": "Text", "page": None, "font": None,
+                           "level": None})
     for tb in doc.tables:
         rows = [" | ".join(c.text for c in row.cells) for row in tb.rows]
         rows = [r for r in rows if r.strip()]
@@ -639,7 +641,8 @@ def _parse_pptx(path: Path) -> list[dict]:
                 continue
             txt = shape.text_frame.text.strip()
             if txt and txt != title:
-                blocks.append({"content": txt, "type": "Text", "page": i, "font": None, "level": None})
+                blocks.append({"content": txt, "type": "Text", "page": i, "font": None,
+                               "level": None})
     return blocks
 
 
@@ -701,7 +704,8 @@ def _parse_markdown(text: str) -> list[dict]:
         if m:
             flush()
             blocks.append({"content": m.group(2).strip(), "type": "Title",
-                           "page": None, "font": float(7 - len(m.group(1))), "level": len(m.group(1))})
+                           "page": None, "font": float(7 - len(m.group(1))),
+                           "level": len(m.group(1))})
         else:
             buf.append(line)
     flush()
@@ -879,7 +883,7 @@ def build_tree(bi: BookIndex, blocks: list[dict], book: str, *, chunk_chars: int
 # --------------------------------------------------------------------------
 
 
-def _section_ancestor_id(bi: "BookIndex", nid: int) -> int:
+def _section_ancestor_id(bi: BookIndex, nid: int) -> int:
     """ノードが属する最も近い Section 祖先（無ければ自分）の id。"""
     cur = nid
     seen = 0
@@ -889,7 +893,7 @@ def _section_ancestor_id(bi: "BookIndex", nid: int) -> int:
     return cur
 
 
-def _even_sample(bi: "BookIndex", targets: list[int], budget: int) -> list[int]:
+def _even_sample(bi: BookIndex, targets: list[int], budget: int) -> list[int]:
     """max_nodes を超える場合、セクションごとに均等（round-robin）にサンプリングする。
 
     従来は先頭から budget 件だけ採用していたため、後半セクションが丸ごと無視され
@@ -901,7 +905,7 @@ def _even_sample(bi: "BookIndex", targets: list[int], budget: int) -> list[int]:
 
     if budget >= len(targets):
         return list(targets)
-    buckets: "OrderedDict[int, list[int]]" = OrderedDict()
+    buckets: OrderedDict[int, list[int]] = OrderedDict()
     for nid in targets:  # 入力順（=文書順）を保ったままセクション別に束ねる
         buckets.setdefault(_section_ancestor_id(bi, nid), []).append(nid)
     # ラウンドロビンで各セクションから均等に採用（O(total)）
@@ -1083,7 +1087,7 @@ def build_graph(bi: BookIndex, node_ids: list[int], *, gradient_g: float = 0.6,
         vecs = vec_by_node.get(nid, [])
         local_name_to_eid: dict[str, int] = {}
         if ents:
-            for e, vec in zip(ents, vecs):
+            for e, vec in zip(ents, vecs, strict=False):
                 eid = gradient_entity_resolution(
                     bi, e["name"], e.get("type", ""), e.get("description", ""),
                     nid, vec, gradient_g=gradient_g, er_top_k=er_top_k, use_llm=er_use_llm,
@@ -1153,7 +1157,7 @@ def _augment_table_entities(bi: BookIndex, node: TreeNode, local_name_to_eid: di
         bi, table_name, "Table", node.content[:160], node.id, vecs[0],
         gradient_g=gradient_g, er_top_k=er_top_k, use_llm=use_llm, reranker=reranker,
     )
-    for nm, vec in zip(headers, vecs[1:]):
+    for nm, vec in zip(headers, vecs[1:], strict=False):
         eid = gradient_entity_resolution(
             bi, nm, "TableHeader", f"{table_name} のヘッダ", node.id, vec,
             gradient_g=gradient_g, er_top_k=er_top_k, use_llm=use_llm, reranker=reranker,
@@ -1226,7 +1230,8 @@ def _rerank_candidates(bi: BookIndex, name: str, etype: str, desc: str,
     try:
         query = f"{name} ({etype}): {desc[:160]}"
         docs = [
-            f"{bi.entities[eid].name} ({bi.entities[eid].type}): {bi.entities[eid].description[:160]}"
+            f"{bi.entities[eid].name} ({bi.entities[eid].type}): "
+            f"{bi.entities[eid].description[:160]}"
             for eid, _ in candidates
         ]
         scores = reranker.rerank(query, docs)
@@ -1234,7 +1239,8 @@ def _rerank_candidates(bi: BookIndex, name: str, etype: str, desc: str,
             import math
 
             scores = [1.0 / (1.0 + math.exp(-s)) for s in scores]
-        return sorted(zip((eid for eid, _ in candidates), scores), key=lambda x: -x[1])
+        return sorted(zip((eid for eid, _ in candidates), scores,
+                          strict=False), key=lambda x: -x[1])
     except Exception as e:  # noqa: BLE001
         log(f"ER rerank に失敗（コサインで続行）: {e}")
         return candidates
@@ -1277,7 +1283,7 @@ def _extract_graph(node: TreeNode, *, fail_fast: bool = False) -> dict | None:
 # ---- graph チェックポイント（graph_progress.json） -------------------------
 
 
-def _graph_signature(bi: "BookIndex") -> str:
+def _graph_signature(bi: BookIndex) -> str:
     """チェックポイントの有効性ガード。木が変わったら（内容が変わったら）無効化。"""
     import hashlib
 
@@ -1288,7 +1294,7 @@ def _graph_signature(bi: "BookIndex") -> str:
     return h.hexdigest()[:12]
 
 
-def _load_checkpoint(path, bi: "BookIndex") -> dict:
+def _load_checkpoint(path, bi: BookIndex) -> dict:
     from pathlib import Path as _P
 
     p = _P(path)
@@ -1304,7 +1310,7 @@ def _load_checkpoint(path, bi: "BookIndex") -> dict:
     return ck
 
 
-def _save_checkpoint(path, ckpt: dict, bi: "BookIndex") -> None:
+def _save_checkpoint(path, ckpt: dict, bi: BookIndex) -> None:
     """一時ファイル + atomic replace で保存（中断時の索引破損を防ぐ）。"""
     import os
     from pathlib import Path as _P
@@ -1328,7 +1334,9 @@ def _llm_select_entity(bi: BookIndex, name: str, etype: str, desc: str,
     ]
     result = llm_json(
         _PROMPT_ENTITY_RESOLUTION
-        + f"\n\nNew Entity: {json.dumps({'name': name, 'type': etype, 'description': desc[:160]}, ensure_ascii=False)}"
+        + "\n\nNew Entity: "
+        + json.dumps({'name': name, 'type': etype, 'description': desc[:160]},
+                     ensure_ascii=False)
         + f"\nCandidate Entities: {json.dumps(cands, ensure_ascii=False)}"
     )
     if isinstance(result, dict):
@@ -1358,8 +1366,11 @@ Return ONLY JSON (no explanations, no markdown fences):
 {"entities":[{"name": str, "type": str, "description": str}, ...],
  "relations":[{"source": str, "target": str, "relation": str}, ...]}."""
 
-_PROMPT_ENTITY_RESOLUTION = """You are an Entity Resolution Adjudicator. Decide if the New Entity refers to
-the EXACT same real-world concept as one of the Candidate Entities. Be strict and conservative; when in
-doubt output -1. Names must be extremely similar, a direct abbreviation, or a well-known alias. Distinct
+_PROMPT_ENTITY_RESOLUTION = """You are an Entity Resolution Adjudicator. Decide if the New Entity
+refers to
+the EXACT same real-world concept as one of the Candidate Entities. Be strict and conservative;
+when in
+doubt output -1. Names must be extremely similar, a direct abbreviation, or a well-known alias.
+Distinct
 parallel concepts are NOT a match even if descriptions look similar.
 Return ONLY JSON: {"select_id": <candidate id or -1>, "explanation": str}."""

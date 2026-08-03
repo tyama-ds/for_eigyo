@@ -157,7 +157,10 @@ def test_exact_term_rescue_beyond_200_docs(tmp_path):
 
     found = im._docs_with_exact_terms(["reg-99999"])
     assert needle_id in found, "201件目以降も既定で走査する（打ち切りなし）"
-    assert im._docs_with_exact_terms(["reg-99999"], limit=10) == set(), \
+    # limit は呼び出し側が明示した場合だけ適用される（0件なら何も走査しない）。
+    # ※ 文書一覧の並びは updated_at（秒精度）でタイになり得るため、
+    #   「needle が先頭10件に入らない」ような順序依存の検証はしない
+    assert im._docs_with_exact_terms(["reg-99999"], limit=0) == set(), \
         "limit は呼び出し側が明示した場合だけ適用"
 
     hits = im.search("REG-99999 の規定は？", document_top_n=3)

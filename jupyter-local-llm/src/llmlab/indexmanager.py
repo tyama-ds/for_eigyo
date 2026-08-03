@@ -417,8 +417,10 @@ class IndexManager:
                 try:
                     self._build_book_layer(path, doc_id, title, build_graph,
                                            layout, ocr, gs, progress,
-                                           fresh=not (force and build_graph
-                                                      and (book_dir / "graph_progress.json").exists()))
+                                           fresh=not (
+                                               force and build_graph
+                                               and (book_dir
+                                                    / "graph_progress.json").exists()))
                     meta["hierarchy_status"] = "ready"
                     if build_graph:
                         from .bookrag import BookRAG

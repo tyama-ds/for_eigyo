@@ -13,19 +13,18 @@
 
 from __future__ import annotations
 
+import time
+
 ##################################################################
 #####################modules and constants########################
 ##################################################################
-
 from selenium import webdriver
-from selenium.webdriver.support.ui import WebDriverWait
+from selenium.common.exceptions import StaleElementReferenceException
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.service import Service
-from selenium.common.exceptions import StaleElementReferenceException
-
-import time
+from selenium.webdriver.support.ui import WebDriverWait
 
 ###value###
 DRIVER_PATH = r"C:\Driver\edgedriver_win32\msedgedriver.exe"
@@ -156,7 +155,8 @@ def run_research(research_prompt, driver_path=None, total_timeout_sec=None):
     btn.click()
 
     time.sleep(10)
-    driver.find_element(By.ID, "m365-chat-editor-target-element").send_keys(RESEARCH_PROMPT,Keys.ENTER)
+    driver.find_element(By.ID, "m365-chat-editor-target-element").send_keys(RESEARCH_PROMPT,
+                                                                            Keys.ENTER)
     #active = test.switch_to.active_element
     #active.send_keys("テスト文字") #レポートの長い方を選ぶ。下へ移動してクリック。
     elem = WebDriverWait(driver, 50).until(
@@ -165,7 +165,9 @@ def run_research(research_prompt, driver_path=None, total_timeout_sec=None):
     driver.execute_script("arguments[0].scrollIntoView();", elem)
     time.sleep(5)
     elem = WebDriverWait(driver, 50).until(
-        EC.element_to_be_clickable((By.CSS_SELECTOR, "button[aria-label='長い, 5 ページ以上']"))#よくわからないけど、ここで再定義必要みたい。
+        # よくわからないけど、ここで再定義必要みたい。
+        EC.element_to_be_clickable(
+            (By.CSS_SELECTOR, "button[aria-label='長い, 5 ページ以上']"))
     )
     elem.click()#
     elem = driver.find_element(By.ID, "m365-chat-editor-target-element")

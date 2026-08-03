@@ -34,7 +34,7 @@ def _inject():
 
 
 def _big_text(n=40) -> str:
-    return "\n\n".join("# 第%d節\n" % i + f"第{i}節の本文が続く。" * 40
+    return "\n\n".join(f"# 第{i}節\n" + f"第{i}節の本文が続く。" * 40
                        for i in range(1, n + 1))
 
 

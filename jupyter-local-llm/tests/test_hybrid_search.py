@@ -35,7 +35,7 @@ def _inject():
     ragmod.apply_llama_settings = lambda: None
 
 
-FILLERS = ["# 第%d節\n" % i + f"休暇の一般的な説明パラグラフその{i}。制度の背景説明。" * 30
+FILLERS = [f"# 第{i}節\n" + f"休暇の一般的な説明パラグラフその{i}。制度の背景説明。" * 30
            for i in range(1, 12)]
 
 

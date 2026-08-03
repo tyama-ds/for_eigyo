@@ -1,0 +1,36 @@
+# jupyter-local-llm のテスト（ユニット + 静的検査 + Playwright GUI E2E）。
+# 外部 LLM サーバは使わない（モックLLM/埋め込みのみ）。
+name: jupyter-local-llm tests
+
+on:
+  push:
+    paths: ["jupyter-local-llm/**", ".github/workflows/jupyter-local-llm.yml"]
+  pull_request:
+    paths: ["jupyter-local-llm/**", ".github/workflows/jupyter-local-llm.yml"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: jupyter-local-llm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install
+        run: |
+          pip install -e ".[dev]" playwright pytest
+      - name: Ruff
+        run: ruff check src/llmlab tests tests_e2e
+      - name: Compileall
+        run: python -m compileall -q src/llmlab
+      - name: Unit tests
+        run: pytest -q tests
+      - name: Install Chromium
+        run: playwright install --with-deps chromium
+      - name: GUI E2E (Playwright)
+        run: pytest -q tests_e2e/test_studio_e2e.py

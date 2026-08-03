@@ -43,6 +43,7 @@ def safe_exec(code: str, namespace: dict, forbidden: tuple, *, result_var: str =
 
 def _run_restricted(code: str, namespace: dict, result_var: str):
     import operator
+    import warnings
 
     from RestrictedPython import compile_restricted
     from RestrictedPython.Guards import (
@@ -53,15 +54,14 @@ def _run_restricted(code: str, namespace: dict, result_var: str):
     )
     from RestrictedPython.PrintCollector import PrintCollector
 
-    import warnings
-
     try:
         with warnings.catch_warnings():
             # print() 使用時に出る「never reads 'printed'」は本実装では無害（即時出力する）
             warnings.simplefilter("ignore", SyntaxWarning)
             byte_code = compile_restricted(code, filename="<tableqa>", mode="exec")
     except SyntaxError as e:
-        raise ValueError(f"サンドボックスがコードを拒否しました（制限構文）: {e}\nコード:\n{code}") from e
+        raise ValueError(f"サンドボックスがコードを拒否しました（制限構文）: {e}\nコード:\n"
+                         f"{code}") from e
 
     # RestrictedPython は `x += 1` / `a, b = ...` / `print(...)` を補助関数呼び出しに
     # 変換するため、対応するガードを揃える（無いと正常コードが NameError で落ちる）。

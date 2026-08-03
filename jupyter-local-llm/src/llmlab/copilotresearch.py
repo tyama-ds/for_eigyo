@@ -48,7 +48,8 @@ from urllib.parse import parse_qs, urlparse
 from . import m365copilot
 
 APP_NAME = "Copilot Research"
-APP_VERSION = "0.9.0"  # llmlab.__version__ と合わせて更新する。/api/status と GUI ヘッダに表示される
+# llmlab.__version__ と合わせて更新する。/api/status と GUI ヘッダに表示される
+APP_VERSION = "0.9.1"
 
 DEFAULT_PORT = 8767
 _UI_PATH = Path(__file__).parent / "copilot_ui.html"
@@ -87,20 +88,23 @@ def _runs_append(entry: dict) -> None:
 
 _OUTLINE_SYSTEM = """\
 あなたはリサーチの構成設計者です。調査依頼を、体系的で重複の無い「目次（章立て）」へ分解します。
-出力は JSON のみ: {"title":"レポートの題名","chapters":[{"title":"章タイトル","goal":"この章で明らかにすること(一行)"}, ...]}
+出力は JSON のみ: {"title":"レポートの題名","chapters":[{"title":"章タイトル","goal":"この章で明らか
+にすること(一行)"}, ...]}
 規則: 章は 3〜6 個。MECE を意識し、概要→各論→比較→示唆 の流れ。各章は独立に調査できる粒度にする。"""
 
 _JUDGE_SYSTEM = """\
 あなたはリサーチ品質の審査員です。ある章の調査結果を評価します。
 出力は JSON のみ:
 {"coverage":0..1,"specificity":0..1,"evidence":0..1,"relevance":0..1,"score":0..1,"feedback":"改善のための一行"}
-基準: coverage=章ゴールの網羅 / specificity=具体・数値・事例 / evidence=出典・根拠の明示 / relevance=依頼との適合。
+基準: coverage=章ゴールの網羅 / specificity=具体・数値・事例 / evidence=出典・根拠の明示 /
+relevance=依頼との適合。
 score は 4 項目の総合（厳しめに）。feedback は次に直すべき点を 1 つだけ。"""
 
 _REFLECT_SYSTEM = """\
 あなたは GEPA の「内省プロンプト進化器」です。各章に共通で付ける『リサーチ指示文』を、
 実行トレース（調査結果の抜粋）と審査フィードバックから改良します。
-出力は JSON のみ: {"instruction":"改良後の指示文（そのまま各章プロンプトへ差し込む本文）","rationale":"何を直したか一行"}
+出力は JSON のみ: {"instruction":"改良後の指示文（そのまま各章プロンプトへ差し込む本文）","rationale
+":"何を直したか一行"}
 規則:
 - 弱かった観点（出典不足・具体性不足・依頼との乖離 等）を潰す具体的な文言を足す。
 - 全章に効く汎用の指示にする（特定の章名・固有名詞は入れない）。
@@ -158,7 +162,8 @@ def propose_outline(request: str, *, demo: bool = False) -> dict:
         }
     from .client import complete
 
-    raw = complete(f"調査依頼:\n{request}\n\n目次を JSON で。", system=_OUTLINE_SYSTEM, temperature=0.3)
+    raw = complete(f"調査依頼:\n{request}\n\n目次を JSON で。", system=_OUTLINE_SYSTEM,
+                   temperature=0.3)
     data = _extract_json(raw)
     chapters = []
     for c in data.get("chapters", []):
@@ -167,7 +172,8 @@ def propose_outline(request: str, *, demo: bool = False) -> dict:
             chapters.append({"title": t, "goal": str(c.get("goal", "")).strip()})
     if not chapters:
         raise ValueError("目次を生成できませんでした（章が空）")
-    return {"title": str(data.get("title") or f"{request[:40]} — 調査レポート"), "chapters": chapters}
+    return {"title": str(data.get("title") or f"{request[:40]} — 調査レポート"),
+            "chapters": chapters}
 
 
 def _chapter_prompt(request: str, title: str, chapter: dict, instruction: str) -> str:
@@ -206,13 +212,15 @@ def _demo_judge(chapter: dict, result: m365copilot.ChapterResult) -> tuple[float
     return score, d
 
 
-def _llm_judge(request: str, chapter: dict, result: m365copilot.ChapterResult) -> tuple[float, dict]:
+def _llm_judge(request: str, chapter: dict, result: m365copilot.ChapterResult) -> tuple[float,
+                                                                                        dict]:
     from .client import complete
 
     if not result.ok or not (result.text or "").strip():
         return 0.0, {"score": 0.0, "coverage": 0, "specificity": 0, "evidence": 0,
                      "relevance": 0, "feedback": result.error or "回答が空"}
-    prompt = (f"調査依頼:\n{request}\n\n章:\n{chapter['title']} / 目的: {chapter.get('goal', '')}\n\n"
+    prompt = (f"調査依頼:\n{request}\n\n章:\n{chapter['title']} / "
+              f"目的: {chapter.get('goal', '')}\n\n"
               f"章の調査結果:\n{result.text[:5000]}\n\n判定を JSON で。")
     try:
         d = _extract_json(complete(prompt, system=_JUDGE_SYSTEM, temperature=0.0))
@@ -233,8 +241,10 @@ def _demo_reflect(instruction: str, born_iter: int, worst_fb: str) -> tuple[str,
     """デモ用の決定的な指示進化（反復ごとに要求を強めていく）。"""
     additions = [
         ("結論の各要点には必ず【出典】を URL か資料名で明示してください。", "出典の明示を追加"),
-        ("重要な主張は数値で定量化し、選択肢は比較（トレードオフ）で示してください。", "定量化と比較を追加"),
-        ("直近1〜2年の最新動向と、依頼への実務的な示唆を必ず含めてください。", "最新動向と実務示唆を追加"),
+        ("重要な主張は数値で定量化し、選択肢は比較（トレードオフ）で示してください。",
+         "定量化と比較を追加"),
+        ("直近1〜2年の最新動向と、依頼への実務的な示唆を必ず含めてください。",
+         "最新動向と実務示唆を追加"),
     ]
     add, why = additions[min(born_iter, len(additions) - 1)]
     if add.split("。")[0] in instruction:  # 既に入っていれば次の要求へ
@@ -242,7 +252,7 @@ def _demo_reflect(instruction: str, born_iter: int, worst_fb: str) -> tuple[str,
     return (instruction.rstrip() + "\n" + add), why
 
 
-def _llm_reflect(request: str, cand: "Candidate", minibatch: list[dict]) -> tuple[str, str]:
+def _llm_reflect(request: str, cand: Candidate, minibatch: list[dict]) -> tuple[str, str]:
     from .client import complete
 
     # 弱かった章のトレースとフィードバックを最大 2 件まとめて内省させる
@@ -264,7 +274,8 @@ def _llm_reflect(request: str, cand: "Candidate", minibatch: list[dict]) -> tupl
         return instr, str(d.get("rationale", "")).strip() or "指示を改良"
     except (ValueError, json.JSONDecodeError):
         # 失敗時は最弱章の指摘を末尾に足すフォールバック
-        fb = cand.details.get(worst[0]["title"], {}).get("feedback", "具体性を上げる") if worst else "具体性を上げる"
+        fb = (cand.details.get(worst[0]["title"], {}).get("feedback", "具体性を上げる")
+              if worst else "具体性を上げる")
         return cand.instruction.rstrip() + f"\n{fb}を必ず満たしてください。", "フォールバック改良"
 
 
@@ -273,7 +284,8 @@ def integrate_report(request: str, outline: dict, results: dict, *, demo: bool =
     chapters = outline["chapters"]
     if demo:
         lines = [f"# {outline['title']}", "", "## エグゼクティブサマリ",
-                 f"本レポートは「{request}」について {len(chapters)} 章立てで調査した統合結果（デモ）。",
+                 f"本レポートは「{request}」について {len(chapters)} 章立てで調査した統合結果（デモ"
+                 f"）。",
                  "擬似GEPA により出典・定量・比較を段階的に強化した指示で各章を調査した。", ""]
         all_cites: list[str] = []
         for i, ch in enumerate(chapters, 1):
@@ -294,7 +306,8 @@ def integrate_report(request: str, outline: dict, results: dict, *, demo: bool =
     for i, ch in enumerate(chapters, 1):
         r = results.get(ch.get("cid", i - 1), {})
         body.append(f"## 第{i}章 {ch['title']}（目的: {ch.get('goal', '')}）\n"
-                    f"{r.get('text', '（結果なし）')}\n出典候補: {', '.join(r.get('citations', []) or ['なし'])}")
+                    f"{r.get('text', '（結果なし）')}\n出典候補: "
+                    f"{', '.join(r.get('citations', []) or ['なし'])}")
     prompt = (f"調査依頼:\n{request}\n\nレポート題目: {outline['title']}\n\n"
               f"章ごとの調査結果:\n\n" + "\n\n".join(body) +
               "\n\n以上を 1 本の統合レポート（Markdown）にしてください。")
@@ -410,7 +423,8 @@ def _orchestrate(run: _Run) -> None:  # noqa: C901  本流は一本で読める�
     request = str(p.get("request", "")).strip()
     connector_kind = "demo" if demo else str(p.get("connector", "demo"))
     connector = m365copilot.make_connector(connector_kind, p.get("connector_options") or {})
-    budget, mb_size = 0, 2  # 既定（数値パースは try 内。finally でも budget を参照するため先に定義）
+    # 既定（数値パースは try 内。finally でも budget を参照するため先に定義）
+    budget, mb_size = 0, 2
     status, report, best = "failed", "", None
     cache: dict[tuple, m365copilot.ChapterResult] = {}
     seq = [0]  # run ローカルの候補採番（並行実行しても衝突しない）
@@ -447,8 +461,8 @@ def _orchestrate(run: _Run) -> None:  # noqa: C901  本流は一本で読める�
         try:  # 数値パースは try 内で（不正でも finally が回り error/done を配信する）
             budget = max(0, min(8, int(p.get("gepa_budget", 3) or 0)))
             mb_size = max(1, min(6, int(p.get("minibatch", 2) or 2)))
-        except (TypeError, ValueError):
-            raise ValueError("gepa_budget / minibatch は数値で指定してください")
+        except (TypeError, ValueError) as e:
+            raise ValueError("gepa_budget / minibatch は数値で指定してください") from e
         if not demo and connector_kind == "graph":
             ok, msg = connector.test()
             if not ok:
@@ -472,7 +486,8 @@ def _orchestrate(run: _Run) -> None:  # noqa: C901  本流は一本で読める�
         step = max(1, n // mb_size)
         minibatch = chapters[::step][:mb_size] or chapters[:1]
         keys = [c["cid"] for c in minibatch]
-        emit({"type": "log", "text": f"目次 {n} 章 / GEPA minibatch {len(minibatch)} 章 / 予算 {budget} 反復"})
+        emit({"type": "log",
+              "text": f"目次 {n} 章 / GEPA minibatch {len(minibatch)} 章 / 予算 {budget} 反復"})
 
         # --- 2) 擬似GEPA: 指示を反復改良 ---------------------------------------
         pool: list[Candidate] = []
@@ -501,7 +516,8 @@ def _orchestrate(run: _Run) -> None:  # noqa: C901  本流は一本で読める�
             emit({"type": "gepa_candidate", "iter": it, **d})
 
         stage("gepa")
-        seed = new_candidate(_SEED_INSTRUCTION, parent=None, born_iter=0, rationale="初期指示（シード）")
+        seed = new_candidate(_SEED_INSTRUCTION, parent=None, born_iter=0,
+                             rationale="初期指示（シード）")
         pool.append(seed)
         evaluate(seed, 0)
 
@@ -722,7 +738,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._json({"ok": False, "error": "調査依頼を入力してください"}, 400)
             return
         if not demo and not is_configured():
-            self._json({"ok": False, "error": "LocalLLM が未接続です（CONNECT から設定するかデモ実行を使ってください）"}, 400)
+            self._json({"ok": False, "error": "LocalLLM が未接続です（CONNECT から設定するかデモ実"
+                                              "行を使ってください）"}, 400)
             return
         try:
             outline = propose_outline(request, demo=demo)
@@ -735,7 +752,8 @@ class _Handler(BaseHTTPRequestHandler):
 
         p = self._read_json()
         if not p.get("demo") and not is_configured():
-            self._json({"error": "LocalLLM が未接続です（CONNECT から設定するかデモ実行を使ってください）"}, 400)
+            self._json({"error": "LocalLLM が未接続です（CONNECT から設定するかデモ実行を使ってくだ"
+                                 "さい）"}, 400)
             return
         if not str(p.get("request", "")).strip():
             self._json({"error": "調査依頼を入力してください"}, 400)

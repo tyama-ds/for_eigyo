@@ -65,7 +65,8 @@ class DocQA:
                 print(f"[DocQA] 本文の索引化に失敗（表のみで続行）: {e}")
                 self._rag = None
 
-        print(f"[DocQA] {self.title}: 表 {len(self.tables)} 個 / 本文RAG {'あり' if self._rag else 'なし'}")
+        print(f"[DocQA] {self.title}: 表 {len(self.tables)} 個 / 本文RAG "
+              f"{'あり' if self._rag else 'なし'}")
 
     # ---- 問い合わせ ----
     def ask(self, question: str, *, route: str = "auto") -> DocResult:
@@ -163,7 +164,8 @@ def _dfs_from_excel(path: Path) -> dict:
         # read_excel は openpyxl を遅延 import するため、ここも try 内に置く
         data = pd.read_excel(path, sheet_name=None)
     except ImportError:
-        print("[DocQA] Excel には pandas/openpyxl が必要: pip install openpyxl pandas（表なしで続行）")
+        print("[DocQA] Excel には pandas/openpyxl が必要: pip install openpyxl pandas（表なしで続行"
+              "）")
         return {}
     except Exception as e:  # noqa: BLE001
         print(f"[DocQA] Excel の読み込みに失敗（表なしで続行）: {e}")
@@ -200,7 +202,8 @@ def _dfs_from_docx(path: Path) -> dict:
     try:
         from docx import Document
     except ImportError:
-        print("[DocQA] Word の表抽出には python-docx が必要: pip install python-docx（表なしで続行）")
+        print("[DocQA] Word の表抽出には python-docx が必要: pip install python-docx（表なしで続行"
+              "）")
         return {}
     out = {}
     try:
