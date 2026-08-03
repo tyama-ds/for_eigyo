@@ -134,7 +134,8 @@ class PagedRAG:
     # ---- 取り込み ----------------------------------------------------------
 
     def add_book(self, path: str | Path, *, title: str | None = None,
-                 force: bool = False, doc_id: str | None = None) -> str:
+                 force: bool = False, doc_id: str | None = None,
+                 replace_same_path: bool = True) -> str:
         """1冊の本（PDF/txt/md/docx など）を取り込み、インデックスへ追加する。
 
         同じ文書（= 同じ内容ハッシュの doc_id）が取り込み済みの場合は重複追加を防ぐため
@@ -143,6 +144,10 @@ class PagedRAG:
 
         doc_id を明示指定すると、その ID で登録する（IndexManager が内容ハッシュ ID を
         共有するため）。省略時は make_doc_id(path) で内容ハッシュから導出する。
+
+        replace_same_path=False にすると「同じファイルパスの別 doc_id」を置き換えない。
+        IndexManager のように上位で所在（membership）を管理し、同一内容が複数フォルダで
+        共有される場合に旧文書の索引を残す必要があるときに使う（単体利用では既定 True）。
         """
         from llama_index.core import SimpleDirectoryReader
         from llama_index.core.node_parser import SentenceSplitter
@@ -163,13 +168,15 @@ class PagedRAG:
         #       これを怠ると追記型ストアに新旧が併存し検索が二重になる。
         books = self.books()
         by_id = next((b for b in books if b.get("doc_id") == doc_id), None)
-        by_path = next(
-            (b for b in books
-             if b is not by_id and (
-                 (b.get("path") and b.get("path") == resolved) or
-                 (b.get("doc_id") is None and b.get("source") == path.name))),
-            None,
-        )
+        by_path = None
+        if replace_same_path:
+            by_path = next(
+                (b for b in books
+                 if b is not by_id and (
+                     (b.get("path") and b.get("path") == resolved) or
+                     (b.get("doc_id") is None and b.get("source") == path.name))),
+                None,
+            )
         if by_id and not force:
             print(f"[PagedRAG] {path.name} は取り込み済みのためスキップします"
                   "（重複防止。再取り込みは force=True、全消去は reset()）")

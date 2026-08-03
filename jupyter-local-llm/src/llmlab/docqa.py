@@ -17,7 +17,6 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .client import complete
 from .pagedrag import PagedRAG
 from .tableqa import TableQA
 

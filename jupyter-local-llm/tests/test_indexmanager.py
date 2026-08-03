@@ -228,7 +228,8 @@ def test_select_by_section_can_pick_beyond_200():
             if f"見出し{target}" in t or "クエリ" in t:
                 out.append(np.array([1.0] + [0.0] * 7))       # クエリと正解だけ同じ向き
             else:
-                v = rng.standard_normal(8); v[0] = 0.0
+                v = rng.standard_normal(8)
+                v[0] = 0.0
                 out.append(v / (np.linalg.norm(v) + 1e-9))
         return np.array(out)
 
@@ -238,7 +239,6 @@ def test_select_by_section_can_pick_beyond_200():
         # LLM に渡された候補（listing）に target セクションが含まれることを確認して選ぶ
         captured["has_target"] = f"見出し{target}" in prompt
         # プロンプトから target セクションの id を拾う
-        import re
         for nid, node in bi.nodes.items():
             if node.title == f"見出し{target}" and f'"id": {nid}' in prompt:
                 return {"section_ids": [nid]}
@@ -395,7 +395,7 @@ def test_add_folder_continues_on_failure_and_downgrades():
     src = work / "docs"
     _write(src, "ok.txt", "正常な文書。" * 30)
     _write(src, "data.csv", "a,b\n1,2\n")     # BOOK 非対応 → graph 指定でも fast 降格
-    bad = _write(src, "broken.txt", "壊れる文書。" * 30)
+    _write(src, "broken.txt", "壊れる文書。" * 30)
     im = IndexManager(storage_dir=str(work / "index"))
 
     orig = im.add_document
@@ -583,7 +583,10 @@ def test_log_to_thread_local_no_clobber():
 
     ta = threading.Thread(target=worker, args=(got_a, "A"))
     tb = threading.Thread(target=worker, args=(got_b, "B"))
-    ta.start(); tb.start(); ta.join(); tb.join()
+    ta.start()
+    tb.start()
+    ta.join()
+    tb.join()
     check("log_to: A に B が混ざらない", set(got_a) == {"A"} and len(got_a) == 50)
     check("log_to: B に A が混ざらない", set(got_b) == {"B"} and len(got_b) == 50)
     check("log_to: 終了後は転送されない",
@@ -670,7 +673,6 @@ def test_delete_document_reports_nothing_removed():
 
 def test_bookrag_source_dedup_blocks_edited_duplicate():
     """BookRAG: 同じファイルの版違い再取り込みを警告してスキップ（二重木を防ぐ）。"""
-    import llmlab.bookindex as bx
     from llmlab.bookrag import BookRAG
 
     _inject_mock_settings()

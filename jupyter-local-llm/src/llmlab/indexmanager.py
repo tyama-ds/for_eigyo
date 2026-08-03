@@ -112,6 +112,13 @@ def make_collection_id(folder: str | Path) -> str:
     return "c" + hashlib.md5(str(Path(folder).resolve()).encode("utf-8")).hexdigest()[:10]
 
 
+def normalize_tags(tags) -> list[str]:
+    """タグの正規化: 前後空白を除去し、空文字を捨て、順序維持で重複除去する。"""
+    if not tags:
+        return []
+    return list(dict.fromkeys(t for t in (str(x).strip() for x in tags) if t))
+
+
 @dataclass
 class SearchHit:
     """検索結果1件（1文書分。チャンクは文書内に束ねる）。"""
@@ -221,11 +228,11 @@ class IndexManager:
         prev = self._read(self.docs_dir, doc_id)
         if prev and prev.get("content_hash") == chash and prev.get("status") == "ready" \
                 and prev.get("index_mode") == index_mode and not force:
-            # 変更なしキャッシュ。ただし collection 所属は新規なら追記する
+            # 変更なしキャッシュ。ただし所在（collection/ファイル）は新規なら追記する
             #（同一内容が複数フォルダにあるケースで所属を失わない）
-            if collection_id:
-                self._add_membership(doc_id, collection_id, relative_path, tags)
-                prev = self._read(self.docs_dir, doc_id) or prev
+            self._add_membership(doc_id, collection_id, relative_path, tags,
+                                 source_path=resolved)
+            prev = self._read(self.docs_dir, doc_id) or prev
             self._set_status(doc_id, "skipped", index_mode, note="変更なし（キャッシュ利用）")
             prev["status"] = "skipped"  # 呼び出し元への通知のみ（永続の status は ready のまま）
             return prev
@@ -239,18 +246,31 @@ class IndexManager:
                 except Exception:  # noqa: BLE001
                     pass
 
-        # 同じ元ファイルの旧版（別 doc_id）が登録済みなら置き換える。
-        # 内容ハッシュIDのため、ファイル編集後の再登録は新IDになる — 旧版を残すと
-        # 一覧に新旧が並び、検索が古い本文を混ぜて返す。所属情報は新IDへ引き継ぐ。
+        # 同じ元ファイルの旧版（別 doc_id）が登録済みなら「このファイルの分だけ」
+        # 置き換える。内容は複数フォルダで共有され得る（同一内容=同一 doc_id）ため、
+        # 旧 doc_id をグローバル削除すると別フォルダに残っている旧文書まで消える。
+        # → このファイル（source_path）を指す membership 行だけを旧 doc_id から外し、
+        #   他の所在が残っていれば旧文書の索引・チャンク・メタは保持する。
+        #   所在が0件になった場合のみ旧文書を削除する。
         inherited = {"collection_ids": [], "tags": []}
         for old in self.documents():
-            if old.get("source_path") == resolved and old["doc_id"] != doc_id:
+            if old["doc_id"] == doc_id:
+                continue
+            moved = self._detach_location(old, resolved)
+            if moved is None:
+                continue
+            inherited["collection_ids"] += moved["collection_ids"]
+            inherited["tags"] += moved["tags"]
+            if moved["orphaned"]:
                 _log(f"旧版 {old['doc_id']} を置き換えます（内容が変更されたため）")
                 print(f"[IndexManager] {path.name}: 旧版（doc_id={old['doc_id']}）を"
                       "削除して新しい内容で登録します")
-                inherited["collection_ids"] += old.get("collection_ids", [])
-                inherited["tags"] += old.get("tags", [])
                 self.delete(old["doc_id"])
+            else:
+                _log(f"旧版 {old['doc_id']} は他のフォルダに所在が残るため保持し、"
+                     f"このファイルの所属だけを新しい内容へ移します")
+                print(f"[IndexManager] {path.name}: 旧版（doc_id={old['doc_id']}）は"
+                      "他の所在から参照されているため索引を保持します")
 
         self._set_status(doc_id, "running", index_mode)
         meta = {
@@ -266,7 +286,8 @@ class IndexManager:
             "collection_ids": list(dict.fromkeys(
                 (prev or {}).get("collection_ids", []) + inherited["collection_ids"])),
             "relative_path": relative_path or (prev or {}).get("relative_path"),
-            "tags": list(dict.fromkeys((prev or {}).get("tags", []) + inherited["tags"])),
+            "tags": normalize_tags((prev or {}).get("tags", []) + list(tags or [])
+                                   + inherited["tags"]),
         }
         self._write(self.docs_dir, doc_id, meta)
         try:
@@ -281,7 +302,10 @@ class IndexManager:
             if (not same_content) or (not have_chunks) or same_mode_force:
                 _log("チャンク化＋埋め込み")
                 with self._forward_logs(progress):
-                    self._paged.add_book(path, title=title, doc_id=doc_id, force=True)
+                    # 所在（membership）はこちらで管理するため、同一パスの旧 doc_id を
+                    # PagedRAG 側で消させない（共有内容の旧版が別フォルダに残り得る）
+                    self._paged.add_book(path, title=title, doc_id=doc_id, force=True,
+                                         replace_same_path=False)
             else:
                 _log("チャンク/埋め込みは変更なしのため再利用")
             self._assign_sections(doc_id)   # 安定 section_id / 見出しパスを付与
@@ -332,12 +356,14 @@ class IndexManager:
             if collection_id:
                 meta["collection_ids"] = list(dict.fromkeys(
                     meta["collection_ids"] + [collection_id]))
-                if tags:
-                    meta["tags"] = list(dict.fromkeys(meta["tags"] + list(tags)))
+            # 明示タグは collection の有無に関係なく保存する（単一ファイル追加でも
+            # GUI のタグが消えない）。既存タグには追記し、正規化して重複を除く。
+            if tags:
+                meta["tags"] = normalize_tags(meta["tags"] + list(tags))
             meta.update(status="ready", updated_at=_now())
             self._write(self.docs_dir, doc_id, meta)
-            if collection_id:
-                self._add_membership(doc_id, collection_id, relative_path, tags)
+            self._add_membership(doc_id, collection_id, relative_path, tags,
+                                 source_path=resolved)
             self._set_status(doc_id, "ready", index_mode,
                              error=meta.get("graph_error"),
                              note=("グラフのみ失敗" if meta.get("graph_status") == "failed"
@@ -554,24 +580,111 @@ class IndexManager:
         m = _read_json_file(self._memberships_path, {})
         return m if isinstance(m, dict) else {}
 
-    def _add_membership(self, doc_id: str, collection_id: str,
-                        relative_path: str | None, tags: list[str] | None) -> None:
-        """文書と collection の所属関係を追記する（doc メタ側にも反映）。"""
+    def _add_membership(self, doc_id: str, collection_id: str | None,
+                        relative_path: str | None, tags: list[str] | None,
+                        source_path: str | None = None) -> None:
+        """文書の「所在」を1行追記する（doc メタ側にも反映）。
+
+        行は {collection_id, relative_path, source_path, tags}。
+        - collection_id=None は単独登録（フォルダ外）の所在記録。
+        - 同じ collection × 同じ所在の行は追記せず更新する
+          （source_path の無い旧形式行はここで補完される）。
+        文書内容（doc_id）とファイルの所在を分離して持つことで、
+        共有内容の一方のファイルだけが改訂されたとき、その所在だけを
+        新しい doc_id へ移せる。
+        """
+        tags = normalize_tags(tags)
         m = self._memberships()
         rows = m.setdefault(doc_id, [])
-        if not any(r.get("collection_id") == collection_id for r in rows):
+        for r in rows:
+            if r.get("collection_id") != collection_id:
+                continue
+            same_loc = (source_path and r.get("source_path") == source_path) \
+                or (not r.get("source_path")
+                    and r.get("relative_path") == relative_path)
+            if same_loc:
+                if source_path:
+                    r["source_path"] = source_path   # 旧形式行の補完
+                if relative_path:
+                    r["relative_path"] = relative_path
+                if tags:
+                    r["tags"] = normalize_tags((r.get("tags") or []) + tags)
+                break
+        else:
             rows.append({"collection_id": collection_id,
-                         "relative_path": relative_path})
+                         "relative_path": relative_path,
+                         "source_path": source_path,
+                         "tags": tags})
         from .workspace import _write_json_file
 
         _write_json_file(self._memberships_path, m)
         meta = self._read(self.docs_dir, doc_id)
         if meta is not None:
-            meta["collection_ids"] = list(dict.fromkeys(
-                meta.get("collection_ids", []) + [collection_id]))
+            if collection_id:
+                meta["collection_ids"] = list(dict.fromkeys(
+                    meta.get("collection_ids", []) + [collection_id]))
             if tags:
-                meta["tags"] = list(dict.fromkeys(meta.get("tags", []) + list(tags)))
+                meta["tags"] = normalize_tags(meta.get("tags", []) + tags)
             self._write(self.docs_dir, doc_id, meta)
+
+    def _detach_location(self, old_meta: dict, resolved: str) -> dict | None:
+        """旧文書 old_meta から「resolved にあるファイルの所在」だけを外す。
+
+        戻り値: None = この文書は resolved と無関係。
+        dict = {"collection_ids": 移った所属, "tags": 移ったタグ,
+                "orphaned": 所在が0件になった（=削除してよい）}
+        所在が残る場合は旧文書の索引・チャンク・メタを保持し、メタの
+        collection_ids / source_path を残存所在から再計算する。
+        """
+        old_id = old_meta["doc_id"]
+        m = self._memberships()
+        rows = m.get(old_id, [])
+        matching = [r for r in rows if r.get("source_path") == resolved]
+        legacy = [r for r in rows if not r.get("source_path")]   # 旧形式（所在不明）
+        others = [r for r in rows
+                  if r.get("source_path") and r.get("source_path") != resolved]
+
+        if not matching and old_meta.get("source_path") != resolved:
+            return None
+        if not others and not matching:
+            # 旧形式のみ（または行なし）: 所在を切り分けられないため従来どおり全置換
+            matching, legacy = legacy, []
+        remaining = others + legacy
+        orphaned = not remaining
+
+        moved_cids = [r.get("collection_id") for r in matching
+                      if r.get("collection_id")]
+        moved_tags: list[str] = []
+        for r in matching:
+            moved_tags += r.get("tags") or []
+        if orphaned:
+            # 完全置換なら doc レベルの所属・タグも従来どおり全部引き継ぐ
+            moved_cids += old_meta.get("collection_ids", [])
+            moved_tags += old_meta.get("tags", []) or []
+
+        from .workspace import _write_json_file
+
+        if orphaned:
+            m.pop(old_id, None)
+        else:
+            m[old_id] = remaining
+        _write_json_file(self._memberships_path, m)
+
+        if not orphaned:
+            # 残存所在からメタを再計算（改訂されたファイルを指したままにしない）
+            meta = self._read(self.docs_dir, old_id)
+            if meta is not None:
+                meta["collection_ids"] = list(dict.fromkeys(
+                    r.get("collection_id") for r in remaining
+                    if r.get("collection_id")))
+                alive = [r.get("source_path") for r in remaining
+                         if r.get("source_path")]
+                if meta.get("source_path") == resolved and alive:
+                    meta["source_path"] = alive[0]
+                meta["updated_at"] = _now()
+                self._write(self.docs_dir, old_id, meta)
+        return {"collection_ids": moved_cids,
+                "tags": normalize_tags(moved_tags), "orphaned": orphaned}
 
     def collections(self) -> list[dict]:
         """登録済み collection の一覧（文書数つき・更新日時の新しい順）。"""
@@ -603,13 +716,18 @@ class IndexManager:
         meta = self._read(self.docs_dir, doc_id)
         if not meta:
             raise KeyError(f"未登録の doc_id: {doc_id}")
-        meta["tags"] = list(dict.fromkeys(str(t).strip() for t in tags if str(t).strip()))
+        meta["tags"] = normalize_tags(tags)
         meta["updated_at"] = _now()
         self._write(self.docs_dir, doc_id, meta)
         return meta
 
     def _scope_doc_ids(self, collection_ids=None, tags=None) -> set[str] | None:
         """collection / タグによる検索範囲（doc_id 集合）。None = 制限なし。
+
+        条件の意味（GUI の件数表示と同一仕様に統一）:
+        - 複数 collection: **OR**（いずれかに所属していれば対象）
+        - 複数タグ: **AND**（選択したタグをすべて持つ文書だけが対象）
+        - collection 条件とタグ条件の組み合わせ: **AND**
 
         範囲は **候補文書選定の前** に適用する（global top-k 後のフィルタではない）。
         collection 情報の無い旧索引では memberships が空 → collection_ids 指定時は
@@ -630,7 +748,7 @@ class IndexManager:
         if tags:
             want_t = set(tags)
             hit_t = {m["doc_id"] for m in self.documents()
-                     if want_t & set(m.get("tags", []) or [])}
+                     if want_t <= set(m.get("tags", []) or [])}   # AND: 全タグを持つ
             allowed = hit_t if allowed is None else (allowed & hit_t)
         return allowed
 
@@ -644,17 +762,40 @@ class IndexManager:
         meta = self._read(self.docs_dir, doc_id)
         if not meta:
             raise KeyError(f"未登録の doc_id: {doc_id}")
-        src = meta.get("source_path")
-        if not src or not Path(src).exists():
-            raise FileNotFoundError(f"元ファイルが見つかりません: {src}")
+        src = self._pick_source_path(doc_id, meta)
+        if not src:
+            raise FileNotFoundError(
+                f"元ファイルが見つかりません: {meta.get('source_path')}"
+                "（membership の所在にも存在するファイルがありません）")
         return self.add_document(src, title=meta.get("title"),
                                  index_mode=index_mode or meta.get("index_mode", "fast"),
                                  layout=meta.get("layout", False),  # 見出し判定設定を維持
                                  force=True, graph_settings=graph_settings,
                                  progress=progress)
 
-    def delete(self, doc_id: str) -> bool:
-        """文書を全ストア（索引・チャンク・木/KG・メタ・status）から削除する。"""
+    def _pick_source_path(self, doc_id: str, meta: dict) -> str | None:
+        """再構築に使える元ファイルを選ぶ。
+
+        meta.source_path が消えていても、membership に残る所在（別フォルダの
+        同一内容ファイル）から存在するものを選択する。見つからなければ None。
+        """
+        candidates = [meta.get("source_path")]
+        candidates += [r.get("source_path")
+                       for r in self._memberships().get(doc_id, [])]
+        for c in candidates:
+            if c and Path(c).exists():
+                return c
+        return None
+
+    def delete(self, doc_id: str, *, only_if_orphan: bool = False) -> bool:
+        """文書を全ストア（索引・チャンク・木/KG・メタ・status）から削除する。
+
+        only_if_orphan=True なら、所在（membership）が残っている文書は削除しない
+        （不要データ＝どのフォルダ/ファイルからも参照されない文書だけを掃除する用途）。
+        既定の delete は利用者の明示操作なので所在ごと削除する。
+        """
+        if only_if_orphan and self._memberships().get(doc_id):
+            return False
         existed = bool(self._read(self.docs_dir, doc_id))
         try:
             self._paged.delete_document(doc_id)
@@ -1011,7 +1152,10 @@ class IndexManager:
                 "text": n.node.get_content().strip(),
                 "page": meta.get("page_label"),
                 "score": round(score, 4),
-                "source": meta.get("path") or meta.get("source"),
+                # 出典は文書メタの現在の所在を優先する。チャンク metadata の path は
+                # 取り込み時のもので、共有内容の一方が改訂されると旧文書のチャンクが
+                # 「改訂後のファイル」を指してしまう（membership 分離の整合）。
+                "source": hit.source_path or meta.get("path") or meta.get("source"),
                 "chunk_id": n.node.node_id,
                 "section_id": sid,
                 "section": sec,
