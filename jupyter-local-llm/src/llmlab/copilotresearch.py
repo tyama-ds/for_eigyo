@@ -49,7 +49,7 @@ from . import m365copilot
 
 APP_NAME = "Copilot Research"
 # llmlab.__version__ と合わせて更新する。/api/status と GUI ヘッダに表示される
-APP_VERSION = "0.9.1"
+APP_VERSION = "0.9.2"
 
 DEFAULT_PORT = 8767
 _UI_PATH = Path(__file__).parent / "copilot_ui.html"

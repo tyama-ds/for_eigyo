@@ -112,4 +112,4 @@ __all__ = [
 ]
 
 # llmlab.__version__ で更新確認できる（copilotresearch.APP_VERSION と合わせる）
-__version__ = "0.9.1"
+__version__ = "0.9.2"

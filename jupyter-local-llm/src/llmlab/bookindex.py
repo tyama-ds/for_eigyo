@@ -919,8 +919,26 @@ def _even_sample(bi: BookIndex, targets: list[int], budget: int) -> list[int]:
     return [nid for nid in targets if nid in picked]  # 文書順を復元
 
 
+def resolve_workers(max_workers: int | None, n_targets: int) -> int:
+    """抽出フェーズの実効並列数を決める。
+
+    - max_workers=None（既定）: 自動セーフモード
+      （対象 50 ノード以下: 最大 2 並列 / それ超: 1 並列）
+    - 明示指定（int）: その値をそのまま尊重する。3 以上のときは
+      ローカルLLMサーバの同時処理耐性への注意ログを 1 回出す。
+    """
+    if max_workers is None:
+        return 2 if n_targets <= 50 else 1
+    workers = max(1, int(max_workers))
+    if workers >= 3:
+        log(f"並列数 {workers} を明示指定で使用します。ローカルLLMサーバの"
+            "同時処理耐性（GPU/KVキャッシュ）に注意してください。")
+    return workers
+
+
 def build_graph(bi: BookIndex, node_ids: list[int], *, gradient_g: float = 0.6,
-                er_top_k: int = 10, max_workers: int = 2, min_chars: int = 40,
+                er_top_k: int = 10, max_workers: int | None = None,
+                min_chars: int = 40,
                 max_nodes: int = 300, er_use_llm: bool = False, reranker=None,
                 all_nodes: bool = False, checkpoint_path: str | None = None,
                 checkpoint_batch: int = 15) -> dict:
@@ -932,7 +950,9 @@ def build_graph(bi: BookIndex, node_ids: list[int], *, gradient_g: float = 0.6,
     - 短すぎるノード（min_chars 未満）は抽出をスキップ。
     - all_nodes=True なら全ノードを処理。False（既定）で max_nodes を超える場合は
       **セクションごとに均等サンプリング**（先頭打ち切りにせず文書全体をカバー）。
-    - 並列数はノード数に応じて自動で絞る（自動セーフモード。既定の最大は 2 並列）。
+    - max_workers=None（既定）はノード数に応じた自動セーフモード
+      （50 ノード以下: 最大 2 並列 / 超: 1 並列）。**明示指定した int は
+      そのまま尊重される**（resolve_workers 参照。50 ノード超でも直列化しない）。
     - er_use_llm=False（既定）なら曖昧マージで LLM を呼ばず、最有力候補を採用（高速）。
     - reranker 指定時は Algorithm 1 の Rerank model R として名寄せ候補を再スコアする。
     - Table ノードは論文 4.3.1 に従い v_table エンティティ + ヘッダを ContainedIn で構造化。
@@ -971,14 +991,12 @@ def build_graph(bi: BookIndex, node_ids: list[int], *, gradient_g: float = 0.6,
               "**セクション均等サンプリング**で圧縮します（全件は all_nodes=True）")
         targets = _even_sample(bi, targets, max_nodes)
 
-    # 自動セーフモード: ノード数に応じて並列数を絞る（ローカルLLMの過負荷防止）。
-    # 50ノード以下: 最大2並列 / それ超: 1並列。明示的に 1 を指定していれば従う。
-    workers = max_workers
-    if workers > 1:
-        workers = min(workers, 2) if len(targets) <= 50 else 1
-        if workers != max_workers:
-            log(f"自動セーフモード: 並列数を {max_workers}→{workers} に絞ります"
-                f"（対象 {len(targets)} ノード）")
+    # 並列数: None は自動セーフモード、明示 int はそのまま尊重（旧実装は 50 ノード超で
+    # 明示指定でも 1 並列へ強制し、max_workers=8 が実質無効だった）
+    workers = resolve_workers(max_workers, len(targets))
+    if max_workers is None and workers != 2:
+        log(f"自動セーフモード: 並列数を {workers} にします（対象 {len(targets)} ノード。"
+            "増やす場合は max_workers を明示指定）")
 
     # チェックポイント: 完了済みノードを読み込み、未処理だけ抽出する（中断再開可能）
     ckpt = _load_checkpoint(checkpoint_path, bi) if checkpoint_path else {}
@@ -1060,9 +1078,9 @@ def build_graph(bi: BookIndex, node_ids: list[int], *, gradient_g: float = 0.6,
             "途中で切れている可能性があります。サーバ側で思考の無効化"
             "（enable_thinking=false や /no_think）を推奨します（速度も改善）。")
     if stat.get("empty", 0) >= max(1, len(results) // 2):
-        log("半数以上のノードで抽出結果が空でした。思考過程を出力するモデルは思考で"
-            "トークン上限に達し空の JSON を返しがちです。サーバ側で思考の無効化を"
-            "推奨します。改善しない場合は指示追従の強いモデルの利用を検討してください。")
+        log("半数以上のノードで抽出結果が空（エンティティ0の応答）でした。"
+            "固有名詞・数値の薄い文書では正常です。内容がある文書でこうなる場合は"
+            "指示追従の強いモデルの利用を検討してください。")
     if found == 0:
         log("警告: エンティティが1件も抽出できませんでした（上記の内訳を参照）。")
 
@@ -1255,28 +1273,37 @@ def _extract_graph(node: TreeNode, *, fail_fast: bool = False) -> dict | None:
 
     fail_fast=True で SDK リトライ無効（並列パスで使用。失敗は上位の逐次再試行に回す）。
     モデルが JSON を返さなかった場合は None（「エンティティ0」と区別するため）。
-    出力上限: 最大10エンティティの JSON に 2,000+ トークンは過大なため 800 を基準に、
-    逐次レスキュー時のみ 1,000（思考過程を出すモデルの JSON 切れの猶予）。
+    出力上限: 満額出力（最大10エンティティ + 最大15関係を **文書の言語=日本語** で
+    記述）は概算 900〜1300 トークンに達するため、余裕を持って 1,600 を基準に、
+    逐次レスキュー時は 2,200（思考過程を出すモデルの JSON 切れの猶予）。
+    ※ 旧値 800/1,000 は英語出力前提の過小見積もりで、JSON が途中で切れ、
+    parse_json_answer が内側のエンティティ dict だけを拾って empty に誤分類されていた。
     """
     result = llm_json(
         _PROMPT_GRAPH_EXTRACT + f"\n\nNode type: {node.type}\nContent:\n{node.content[:2500]}",
         max_retries=0 if fail_fast else None,
-        max_tokens=800 if fail_fast else 1000,
+        max_tokens=1600 if fail_fast else 2200,
     )
     if result is None:
         return None  # JSON 解釈不能（指示無視 / 思考でトークン切れ）
+    if not isinstance(result, dict) or "entities" not in result:
+        # 切り詰め等のスキーマ逸脱（例: 途中で切れた JSON から内側のエンティティ
+        # dict だけが拾われた / トップレベルが配列）。empty と区別して None を返し、
+        # 上位（build_graph）の badjson 再試行に回す。
+        # {"entities": [], ...} のような「正当にエンティティ0」はキーがあるので
+        # 従来どおり empty 扱いになる。
+        return None
     ents: list[dict] = []
     rels: list[dict] = []
-    if isinstance(result, dict):
-        raw_e = result.get("entities", [])
-        if isinstance(raw_e, list):
-            ents = [e for e in raw_e
-                    if isinstance(e, dict) and e.get("name")][:MAX_ENTITIES_PER_NODE]
-        raw_r = result.get("relations", [])
-        if isinstance(raw_r, list):
-            rels = [r for r in raw_r
-                    if isinstance(r, dict) and r.get("source")
-                    and r.get("target")][:MAX_RELATIONS_PER_NODE]
+    raw_e = result.get("entities", [])
+    if isinstance(raw_e, list):
+        ents = [e for e in raw_e
+                if isinstance(e, dict) and e.get("name")][:MAX_ENTITIES_PER_NODE]
+    raw_r = result.get("relations", [])
+    if isinstance(raw_r, list):
+        rels = [r for r in raw_r
+                if isinstance(r, dict) and r.get("source")
+                and r.get("target")][:MAX_RELATIONS_PER_NODE]
     return {"entities": ents, "relations": rels}
 
 

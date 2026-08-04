@@ -262,6 +262,10 @@ book.tree(show_entities=True)   # ノードごとの紐づきエンティティ�
 - 精度を上げたいとき: `BookRAG(er_use_llm=True)` / `add_book(use_llm_sections=True, max_nodes=...)`
 
 ```python
+book = llmlab.BookRAG(chunk_chars=1500, max_nodes=300, er_use_llm=False)
+# max_workers は既定 None = 自動セーフモード（対象50ノード以下: 最大2並列 / 超: 1並列）。
+# int を明示すると **その値がそのまま使われる**（旧版は50ノード超で1並列へ強制していた）。
+# 3以上はローカルLLMサーバの同時処理耐性に注意（例: 強いサーバなら max_workers=8）。
 book = llmlab.BookRAG(chunk_chars=1500, max_nodes=300, max_workers=8, er_use_llm=False)
 ```
 
@@ -535,7 +539,7 @@ im.delete(doc_id)
 - **回答生成の予算管理**: 対象文書が多いときは文書ごとに部分回答してから統合する
   Map-Reduce（どの文書も黙って落とさない）。単一プロンプト時も文字数予算を
   文書ごとに均等配分。
-- **グラフ構築の安全化**: 既定は 1並列・100ノード上限・抽出出力 800〜1000 トークン。
+- **グラフ構築の安全化**: 既定は自動セーフモード並列・100ノード上限・抽出出力 1600〜2200 トークン。
   Entity 抽出は 15 ノードごとに `graph_progress.json` へ途中保存され（atomic replace）、
   失敗後の再実行では完了済みノードを再抽出しない（`build_graph_only(doc_id)`）。
   グラフの失敗は `graph_status`/`graph_error` に分離記録され、文書の検索は生き続ける。
@@ -669,6 +673,12 @@ llmlab.doctor()      # 環境を診断（カーネル種別・依存・原因と
   またはコードで `llmlab.configure(base_url=..., api_key=..., model=...)`。
 - 補完・チャットは `%%complete` / `%%llm` / `code_complete()` / `complete()` のように
   **ウィジェット無しでも全機能が使える**。
+
+### BookRAG のグラフで大半のノードが「空」になっていた（v0.9.1 以前で構築）
+
+v0.9.2 で「抽出出力の切り詰めが空と誤分類される」問題を修正した。旧バージョンで
+構築した索引は「空」がチェックポイントに完了として記録され再抽出されないため、
+保存先の `storage/bookindex` と `graph_progress.json` を削除してから作り直すこと。
 
 ---
 

@@ -282,11 +282,13 @@ def test_default_graph_settings_are_safe(tmp_path):
     assert im.graph_settings["graph_max_nodes"] <= 100
     assert im.graph_settings["er_use_llm"] is False
     assert SAFE_GRAPH_DEFAULTS["graph_max_workers"] == 1
-    assert BookRAG.__init__.__defaults__ is not None  # 位置デフォルト無しでもOK
     import inspect
 
     sig = inspect.signature(BookRAG.__init__)
-    assert sig.parameters["max_workers"].default <= 2, "BookRAG 単体の既定も安全側"
+    # 既定 None = 自動セーフモード（50ノード以下:2並列/超:1並列）。
+    # 明示 int はそのまま尊重される（resolve_workers）
+    assert sig.parameters["max_workers"].default is None, \
+        "BookRAG 単体の既定は None（自動セーフモード）"
 
 
 # --------------------------------------------------------------------------
@@ -398,14 +400,18 @@ def test_checkpoint_signature_guard_discards_stale(tmp_path):
 
 
 def test_extraction_caps_are_bounded():
-    """抽出上限が仕様の安全レンジ内（出力 600〜1000 トークン・件数上限あり）。"""
+    """抽出上限が仕様レンジ内（件数上限 + 日本語満額出力を収める max_tokens）。
+
+    満額出力（10エンティティ+15関係を日本語で）は概算 900〜1300 トークンのため、
+    旧値 800/1000 では JSON が途中で切れて empty に誤分類されていた（修正済み）。
+    """
     import llmlab.bookindex as bx
 
     assert 1 <= bx.MAX_ENTITIES_PER_NODE <= 20
     assert 1 <= bx.MAX_RELATIONS_PER_NODE <= 30
     src = Path(bx.__file__).read_text(encoding="utf-8")
-    assert "max_tokens=800 if fail_fast else 1000" in src, \
-        "抽出の max_tokens は 600〜1000 に制限（2000〜4000 にしない）"
+    assert "max_tokens=1600 if fail_fast else 2200" in src, \
+        "抽出の max_tokens は満額の日本語出力（~1300tok）を収める 1600/2200"
 
 
 # --------------------------------------------------------------------------

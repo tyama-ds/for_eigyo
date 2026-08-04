@@ -180,6 +180,10 @@
   details.part{border:1px solid var(--line);border-radius:10px;margin:8px 0;padding:8px 12px}
   details.part summary{cursor:pointer;color:var(--ink-2);font-weight:600;font-size:.88rem}
   details.part .src{font-size:.78rem;color:var(--ink-mute)}
+  details.think{border:1px dashed var(--line);border-radius:10px;margin:8px 0;padding:6px 12px}
+  details.think summary{cursor:pointer;color:var(--ink-mute);font-size:.78rem}
+  details.think pre{white-space:pre-wrap;word-break:break-word;font-size:.78rem;
+    color:var(--ink-mute);margin:6px 0 2px}
   .refs{border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin-top:14px;
     background:rgba(34,211,238,.03)}
   .refs h3{margin:0 0 8px;font-size:.8rem;letter-spacing:.15em;color:var(--accent-a)}
@@ -347,7 +351,13 @@
         <input type="checkbox" id="b_pin" checked style="accent-color:var(--accent-a)">
         <label for="b_pin" style="font-size:.8rem">作成後にピン留めする</label>
       </div>
-      <button class="btn sm" id="btnBuild">⚒ 作成開始</button>
+      <label class="f">並列数（BOOK 時の抽出。空欄 = 1）</label>
+      <div class="row" style="gap:8px;align-items:center">
+        <input type="number" id="b_workers" min="1" max="8" placeholder="空欄 = 1"
+               style="width:90px">
+        <span style="font-size:.7rem;color:var(--warn)">3以上はローカルLLMサーバの同時処理耐性に注意</span>
+      </div>
+      <button class="btn sm" id="btnBuild" style="margin-top:8px">⚒ 作成開始</button>
       <div id="bProg">
         <div class="bar"><i id="bbarFill"></i></div>
         <div id="bstage"></div>
@@ -419,9 +429,15 @@
         <label class="f" style="margin-top:0">グラフ構築の負荷設定（graph モード時）</label>
         <select id="d_gpreset">
           <option value="safe">安全（推奨） — 1並列・80ノード上限（ローカルLLM向け）</option>
-          <option value="std">標準 — 最大2並列・100ノード上限</option>
+          <option value="std">標準 — 2並列・100ノード上限</option>
           <option value="fastg">高速 — 4並列・150ノード上限（強いサーバ向け・失敗しやすい）</option>
         </select>
+        <label class="f">並列数の上書き（任意）</label>
+        <div class="row" style="gap:8px;align-items:center">
+          <input type="number" id="d_gworkers" min="1" max="8"
+                 placeholder="空欄 = プリセット値" style="width:130px">
+          <span style="font-size:.7rem;color:var(--warn)">3以上はローカルLLMサーバの同時処理耐性に注意</span>
+        </div>
         <div style="font-size:.7rem;color:var(--ink-mute);margin-top:4px">
           途中で失敗しても抽出結果はチェックポイント保存され、続きから再開できます。
         </div>
@@ -556,6 +572,45 @@ async function api(path, body){
   if(!r.ok) throw new Error(j.error || r.statusText);
   return j;
 }
+/* 推論系モデルの <think>…</think> 等を本文から分離する純関数。
+   認識タグは THINK_TAGS で一元管理する（client.strip_think のタグ拡張はしない方針。
+   GUI 側は削除ではなく折りたたみ表示で対応する）。返り値は {think, answer}。
+   入出力例:
+     (a) "<think>推論</think>回答"  → {think:"推論", answer:"回答"}（ペアは複数可・大文字小文字無視）
+     (b) "推論の続き</think>回答"   → {think:"推論の続き", answer:"回答"}（開始タグ欠落: 最後の閉じタグまで）
+     (c) "<think>途切れた推論"      → {think:"途切れた推論",
+                                       answer:"（本文なし: 推論途中で出力が終了した可能性）"}
+     (d) "タグなしの回答"           → {think:"", answer:"タグなしの回答"}（そのまま） */
+const THINK_TAGS = ["think", "thinking", "reasoning"];
+function splitThink(text){
+  const names = THINK_TAGS.join("|");
+  const thinks = [];
+  // (a) 完結したペア（複数可）を先に回収
+  let rest = String(text ?? "").replace(
+    new RegExp(`<(${names})>([\\s\\S]*?)</\\1>`, "gi"),
+    (_, _tag, body) => { thinks.push(body.trim()); return ""; });
+  // (b) 閉じタグだけが残った場合: 最後の閉じタグまでを推論とみなす
+  const closeRe = new RegExp(`</(?:${names})>`, "gi");
+  let lastClose = -1, m;
+  while((m = closeRe.exec(rest)) !== null) lastClose = m.index + m[0].length;
+  if(lastClose >= 0){
+    thinks.push(rest.slice(0, lastClose).replace(closeRe, "").trim());
+    rest = rest.slice(lastClose);
+  }
+  // (c) 閉じられていない開始タグ: タグ以降すべてを推論とみなす
+  const om = rest.match(new RegExp(`<(?:${names})>`, "i"));
+  if(om){
+    thinks.push(rest.slice(om.index + om[0].length).trim());
+    rest = rest.slice(0, om.index);
+  }
+  const think = thinks.filter(Boolean).join("\n\n");
+  let answer = rest.trim();
+  if(think && !answer) answer = "（本文なし: 推論途中で出力が終了した可能性）";
+  return {think, answer};
+}
+const thinkHtml = think => think
+  ? `<details class="think"><summary>▶ 推論過程（クリックで表示）</summary><pre>${esc(think)}</pre></details>`
+  : "";
 /* 最小 Markdown レンダラ（見出し/強調/コード/リスト/表） */
 function md(src){
   const lines = esc(src).split("\n");
@@ -735,9 +790,12 @@ $("#btnBuild").onclick = async ()=>{
   }, 1000);
   const finish = ()=>{ clearInterval(tick); $("#btnBuild").disabled=false; };
   try{
+    // 並列数: 空欄 = 1（従来既定）。1〜8 の整数へ丸め、不正入力は 1 へ
+    const bw = parseInt($("#b_workers").value, 10);
     const {task_id} = await api("/api/build", {
       docs_path: $("#b_docs").value, name: $("#b_name").value, kind,
       layout: $("#b_layout").checked, pin: $("#b_pin").checked,
+      max_workers: Number.isFinite(bw) ? Math.min(8, Math.max(1, bw)) : 1,
       root: $("#root").value,
     });
     const es = new EventSource("/api/events?id="+task_id);
@@ -929,17 +987,22 @@ window.copyRef = (btn, path)=>{
   setTimeout(()=>btn.textContent=t, 1400);
 };
 function partialsHtml(partials){
-  return (partials||[]).map(p=>`
+  return (partials||[]).map(p=>{
+    const st = splitThink(p.text);
+    return `
     <details class="part"><summary>索引「${esc(p.index)}」の調査結果（${p.kind}）</summary>
-      <div class="md" style="font-size:.88rem">${md(p.text)}</div>
+      ${thinkHtml(st.think)}
+      <div class="md" style="font-size:.88rem">${md(st.answer)}</div>
       ${(p.sources||[]).length?
         `<div class="src">${p.sources.map(s=>esc(s)).join("<br>")}</div>`:""}
-    </details>`).join("");
+    </details>`;
+  }).join("");
 }
 function showResult(e){
   const res = $("#result"); res.style.display="block";
   if(e.kind==="text"){
-    res.innerHTML = `<div class="md">${md(e.text)}</div>
+    const st = splitThink(e.text);
+    res.innerHTML = `${thinkHtml(st.think)}<div class="md">${md(st.answer)}</div>
       ${refsHtml(e.partials)}
       <div class="row" style="margin-top:10px">
         <button class="btn sm ghost" onclick="copyText(this)">📋 コピー</button>
@@ -947,7 +1010,7 @@ function showResult(e){
       </div>
       <h3 style="color:var(--ink-2);font-size:.85rem;margin-top:16px">索引ごとの内訳</h3>
       ${partialsHtml(e.partials)}`;
-    res.dataset.raw = e.text;
+    res.dataset.raw = st.answer;  // コピー/保存は本文のみ（推論過程を含めない）
   }else if(e.kind==="extract"){
     LAST_ROWS = e.rows||[];
     res.innerHTML = `
@@ -1129,7 +1192,14 @@ const G_PRESETS = {
   std:   {graph_max_workers:2, graph_max_nodes:100, graph_chunk_chars:2000, er_use_llm:false},
   fastg: {graph_max_workers:4, graph_max_nodes:150, graph_chunk_chars:1600, er_use_llm:false},
 };
-const currentGraphSettings = ()=> G_PRESETS[$("#d_gpreset").value] || G_PRESETS.safe;
+const currentGraphSettings = ()=>{
+  // プリセット値をベースに、並列数の明示入力があれば graph_max_workers のみ上書き。
+  // 1〜8 の整数へ丸め、不正入力（NaN 等）はプリセット値へフォールバック
+  const base = {...(G_PRESETS[$("#d_gpreset").value] || G_PRESETS.safe)};
+  const w = parseInt($("#d_gworkers") ? $("#d_gworkers").value : "", 10);
+  if(Number.isFinite(w)) base.graph_max_workers = Math.min(8, Math.max(1, w));
+  return base;
+};
 
 const ST_JA = {ready:"準備OK", running:"処理中", failed:"失敗", skipped:"変更なし",
                pending:"待機", unknown:"不明"};
@@ -1774,22 +1844,27 @@ $("#btnDocSearch").onclick = ()=>{
 };
 
 function renderDocAnswer(e, box){
-  const perDoc = (e.per_doc||[]).map(p=>`
+  const main = splitThink(e.text);
+  const perDoc = (e.per_doc||[]).map(p=>{
+    const st = splitThink(p.text);
+    return `
     <details class="part"><summary>文書「${esc(p.title)}」の要約
       <span style="font-size:.7rem;color:var(--ink-mute);font-family:ui-monospace,monospace">${esc(p.doc_id)}</span></summary>
-      <div class="md" style="font-size:.88rem">${md(p.text)}</div>
-    </details>`).join("");
+      ${thinkHtml(st.think)}
+      <div class="md" style="font-size:.88rem">${md(st.answer)}</div>
+    </details>`;
+  }).join("");
   const hitsBox = (e.hits && e.hits.length)
     ? '<h3 style="color:var(--ink-2);font-size:.85rem;margin-top:14px">根拠（文書別）</h3><div id="daHits"></div>'
     : "";
-  box.innerHTML = `<div class="md" style="border:1px solid var(--line);border-radius:12px;
-      padding:14px 16px;background:rgba(34,211,238,.03)">${md(e.text||"")}</div>
+  box.innerHTML = `${thinkHtml(main.think)}<div class="md" style="border:1px solid var(--line);border-radius:12px;
+      padding:14px 16px;background:rgba(34,211,238,.03)">${md(main.answer)}</div>
     <div class="row" style="margin-top:8px">
       <button class="btn sm ghost" id="daCopy">📋 コピー</button>
     </div>
     ${perDoc ? '<h3 style="color:var(--ink-2);font-size:.85rem;margin-top:14px">文書別の要約</h3>'+perDoc : ""}
     ${hitsBox}`;
-  $("#daCopy").onclick = ev=>{ navigator.clipboard.writeText(e.text||"");
+  $("#daCopy").onclick = ev=>{ navigator.clipboard.writeText(main.answer);
     ev.target.textContent="✓ コピーしました"; setTimeout(()=>ev.target.textContent="📋 コピー",1500); };
   if(e.hits && e.hits.length) renderDocSearch(e.hits, $("#daHits"));
 }
@@ -1800,8 +1875,10 @@ function renderDocSearch(hits, box){
     const gtag = h.used_graph ? '<span class="modechip graph">BookRAG</span>' : '<span class="modechip fast">通常RAG</span>';
     const fb = h.fallback_reason ? `<div class="fbnote">⚠ ${esc(h.fallback_reason)}</div>` : "";
     // BookRAG の生成回答は根拠チャンクと分離して表示（根拠件数に数えない）
-    const ga = h.graph_answer ? `<div class="ck" style="border-left:3px solid var(--accent-a);padding-left:8px">
-      <span class="sc">🧠 BookRAG回答（生成文・根拠ではありません）</span><br>${esc(h.graph_answer)}</div>` : "";
+    const gaSt = h.graph_answer ? splitThink(h.graph_answer) : null;
+    const ga = gaSt ? `<div class="ck" style="border-left:3px solid var(--accent-a);padding-left:8px">
+      <span class="sc">🧠 BookRAG回答（生成文・根拠ではありません）</span><br>${esc(gaSt.answer)}
+      ${thinkHtml(gaSt.think)}</div>` : "";
     const chunks = (h.chunks||[]).map(c=>`
       <div class="ck"><span class="sc">score ${c.score}${c.page?` ・ p.${esc(String(c.page))}`:""}${
         c.section?` ・ §${esc(c.section)}`:""}${

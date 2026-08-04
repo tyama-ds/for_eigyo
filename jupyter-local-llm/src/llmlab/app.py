@@ -121,6 +121,7 @@ def _emitter(q: Queue):
 
 def _run_task(task_id: str, payload: dict) -> None:
     """バックグラウンドスレッドで MultiRAG のアクションを実行し、進捗を Queue へ流す。"""
+    from .client import strip_think
     from .workspace import MultiRAG
 
     q = _tasks[task_id]
@@ -155,7 +156,8 @@ def _run_task(task_id: str, payload: dict) -> None:
                 if not question:
                     raise ValueError("質問を入力してください")
                 r = ws.ask(question)
-            preview = r.text.replace("\n", " ")[:200]
+            # 推論系モデルの <think> が履歴プレビューを埋めないよう本文だけを切り出す
+            preview = strip_think(r.text).replace("\n", " ")[:200]
             q.put({"type": "result", "kind": "text", "text": r.text,
                    "partials": _partials(r)})
         # 質問履歴に記録（同じ調査を後からワンクリックで再現できるように）

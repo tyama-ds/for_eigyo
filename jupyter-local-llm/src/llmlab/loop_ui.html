@@ -228,6 +228,10 @@
   ::-webkit-scrollbar{width:9px;height:9px}
   ::-webkit-scrollbar-thumb{background:rgba(255,255,255,.14);border-radius:6px}
   ::-webkit-scrollbar-track{background:transparent}
+  details.think{border:1px dashed var(--line);border-radius:10px;margin:8px 0;padding:6px 12px}
+  details.think summary{cursor:pointer;color:var(--ink-mute);font-size:.78rem}
+  details.think pre{white-space:pre-wrap;word-break:break-word;font-size:.78rem;
+    color:var(--ink-mute);margin:6px 0 2px}
 </style>
 </head>
 <body>
@@ -590,6 +594,43 @@ function tlAdd(cls, html){
   const d = document.createElement("div"); d.className = "tl " + cls; d.innerHTML = html;
   tl.appendChild(d); tl.scrollTop = tl.scrollHeight;
 }
+/* 推論系モデルの <think>…</think> 等を本文から分離する純関数。
+   app_ui.html の splitThink と同一実装（各 UI は自己完結のため意図的に複製）。 */
+const THINK_TAGS = ["think", "thinking", "reasoning"];
+function splitThink(text){
+  const names = THINK_TAGS.join("|");
+  const thinks = [];
+  let rest = String(text ?? "").replace(
+    new RegExp(`<(${names})>([\\s\\S]*?)</\\1>`, "gi"),
+    (_, _tag, body) => { thinks.push(body.trim()); return ""; });
+  const closeRe = new RegExp(`</(?:${names})>`, "gi");
+  let lastClose = -1, m;
+  while((m = closeRe.exec(rest)) !== null) lastClose = m.index + m[0].length;
+  if(lastClose >= 0){
+    thinks.push(rest.slice(0, lastClose).replace(closeRe, "").trim());
+    rest = rest.slice(lastClose);
+  }
+  const om = rest.match(new RegExp(`<(?:${names})>`, "i"));
+  if(om){
+    thinks.push(rest.slice(om.index + om[0].length).trim());
+    rest = rest.slice(0, om.index);
+  }
+  const think = thinks.filter(Boolean).join("\n\n");
+  let answer = rest.trim();
+  if(think && !answer) answer = "（本文なし: 推論途中で出力が終了した可能性）";
+  return {think, answer};
+}
+const thinkHtml = think => think
+  ? `<details class="think"><summary>▶ 推論過程（クリックで表示）</summary><pre>${esc(think)}</pre></details>`
+  : "";
+/* textContent 表示の要素に「折りたたみ+本文のみ」を適用する（再実行時は差し替え） */
+function setAnswerWithThink(el, text){
+  const st = splitThink(text);
+  el.textContent = st.answer;
+  const prev = el.previousElementSibling;
+  if(prev && prev.matches && prev.matches("details.think")) prev.remove();
+  if(st.think) el.insertAdjacentHTML("beforebegin", thinkHtml(st.think));
+}
 function card(hd, body){ return `<div class="card"><div class="hd">${hd}</div>${body}</div>`; }
 
 function collectPayload(){
@@ -707,7 +748,7 @@ function handleEvent(e){
       break;
     case "final":
       $("finalPanel").className = "panel show";
-      $("finalText").textContent = e.answer;
+      setAnswerWithThink($("finalText"), e.answer);
       break;
     case "error":
       tlAdd("err", card(`<span class="chip err">エラー</span>`, `<div>${esc(e.message)}</div>`));
@@ -729,7 +770,7 @@ function showHuman(e){
   $("humanBox").className = "human-box show";
   $("humanTitle").textContent = e.mode === "approve" ? "人間承認（HITL）— 成果物を確認してください" : "エスカレーション — 指示をください";
   $("humanReason").textContent = e.reason || "";
-  $("humanAnswer").textContent = e.answer || "";
+  setAnswerWithThink($("humanAnswer"), e.answer || "");
   $("btnApprove").style.display = e.mode === "approve" ? "" : "none";
   $("btnRejectH").textContent = e.mode === "approve" ? "↩ 差し戻して再試行" : "➤ 指示を送って再試行";
   $("humanMsg").value = "";
