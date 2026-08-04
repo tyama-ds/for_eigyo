@@ -16,21 +16,47 @@ import time
 import urllib.error
 import urllib.request
 
-_THINK_RE = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL | re.IGNORECASE)
+_THINK_BLOCK_RE = re.compile(r"<think(?:ing)?>(.*?)</think(?:ing)?>",
+                             re.DOTALL | re.IGNORECASE)
+_THINK_OPEN_RE = re.compile(r"<think(?:ing)?>", re.IGNORECASE)
 
 
-def strip_think(text: str) -> str:
-    """<think>…</think> を除去。閉じタグだけ残るモデル（Qwen3/R1系）にも対応。"""
+def split_think(text: str) -> tuple[str, str]:
+    """応答を (回答, 推論過程) に分離する。
+
+    Qwen3 / DeepSeek-R1 系の思考トークンの出方すべてに対応する:
+    - 閉じた <think>…</think> ブロック（複数可）
+    - チャットテンプレートが開始タグを消費し **閉じタグだけ残る** 場合
+    - max_tokens 到達などで **閉じタグが出ないまま切れた** 場合（従来は回答に漏れていた）
+    """
     if not text:
-        return text
-    out = _THINK_RE.sub("", text)
+        return "", ""
+    thinks: list[str] = []
+
+    def _collect(m: re.Match) -> str:
+        thinks.append(m.group(1).strip())
+        return ""
+
+    out = _THINK_BLOCK_RE.sub(_collect, text)
+    # 閉じタグだけが残る場合: 最後の閉じタグまでを思考として扱う
     low = out.lower()
     for tag in ("</think>", "</thinking>"):
         idx = low.rfind(tag)
         if idx != -1:
+            thinks.append(out[:idx].strip())
             out = out[idx + len(tag):]
             break
-    return out.strip()
+    # 未閉じの開始タグ（トークン切れ）: それ以降すべてを思考として扱う
+    m = _THINK_OPEN_RE.search(out)
+    if m:
+        thinks.append(out[m.end():].strip())
+        out = out[:m.start()]
+    return out.strip(), "\n\n".join(t for t in thinks if t)
+
+
+def strip_think(text: str) -> str:
+    """<think>…</think>（未閉じ含む）を除去した回答テキストを返す。"""
+    return split_think(text)[0]
 
 
 class LLMError(RuntimeError):
@@ -92,7 +118,13 @@ class LLMClient:
 
     # ------------------------------------------------------------ chat
     def chat(self, prompt: str, *, system: str = "", max_tokens: int | None = None,
-             temperature: float = 0.0) -> str:
+             temperature: float = 0.0, want_think: bool = False):
+        """回答文字列を返す。``want_think=True`` なら (回答, 推論過程) のタプル。
+
+        推論過程は content 中の <think>…</think>（未閉じ含む）に加えて、
+        reasoning parser 付きサーバ（vLLM / SGLang / LM Studio 等）が返す
+        message.reasoning_content / message.reasoning フィールドも回収する。
+        """
         cfg = self.cfg
         if not (cfg.get("base_url") and cfg.get("model")):
             raise LLMError("LLM が未設定です（設定タブから Base URL / Model を登録してください）")
@@ -107,13 +139,16 @@ class LLMClient:
         }
         data = self._post_json(f"{base}/chat/completions", payload, cfg.get("api_key", ""))
         choices = data.get("choices") or []
-        text = (choices[0].get("message") or {}).get("content", "") if choices else ""
-        text = strip_think(text or "")
+        msg = (choices[0].get("message") or {}) if choices else {}
+        text, think = split_think(msg.get("content") or "")
+        reasoning = str(msg.get("reasoning_content") or msg.get("reasoning") or "").strip()
+        if reasoning:
+            think = f"{reasoning}\n\n{think}" if think else reasoning
         with self._lock:
             self.stats["chat_calls"] += 1
             self.stats["chat_prompt_chars"] += len(prompt) + len(system)
             self.stats["chat_completion_chars"] += len(text)
-        return text
+        return (text, think) if want_think else text
 
     # ------------------------------------------------------------ embeddings
     def embed(self, texts: list[str]) -> list[list[float]]:

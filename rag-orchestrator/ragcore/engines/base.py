@@ -107,8 +107,8 @@ ANSWER_SYSTEM = (
 
 
 def generate_answer(ctx: EngineContext, question: str, passages: list[dict],
-                    *, task_tag: str = "answer") -> str:
-    """取得パッセージから回答を生成する。[S1] 形式の出典参照を促す。"""
+                    *, task_tag: str = "answer") -> tuple[str, str]:
+    """取得パッセージから回答を生成し (回答, 推論過程) を返す。[S1] 形式の出典参照を促す。"""
     blocks = []
     for i, chunk in enumerate(passages):
         blocks.append(f"[S{i + 1}] （{chunk['doc_title']}）\n{chunk['text']}")
@@ -119,7 +119,7 @@ def generate_answer(ctx: EngineContext, question: str, passages: list[dict],
         "根拠にした資料は文末に [S1] のように番号で示してください。\n\n"
         f"# 資料\n{context}\n\n# 質問\n{question}\n\n# 回答"
     )
-    return ctx.llm.chat(prompt, system=ANSWER_SYSTEM)
+    return ctx.llm.chat(prompt, system=ANSWER_SYSTEM, want_think=True)
 
 
 def extractive_answer(question: str, passages: list[dict]) -> str:

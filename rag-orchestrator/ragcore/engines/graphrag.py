@@ -385,12 +385,13 @@ class GraphRAGEngine(Engine):
         used = {p["community"] for p in points}
 
         ctx.progress(0.8, "global reduce")
+        think = ""
         if points:
             point_lines = "\n".join(
                 f"- [{p['community']}] （重要度{p['score']}）{p['text']}" for p in points)
-            answer = ctx.llm.chat(
+            answer, think = ctx.llm.chat(
                 GLOBAL_REDUCE_PROMPT.format(points=point_lines, question=question),
-                system=ANSWER_SYSTEM, temperature=0.0)
+                system=ANSWER_SYSTEM, temperature=0.0, want_think=True)
         else:
             answer = ("コミュニティ要約からは質問に関係する情報が見つかりませんでした。"
                       "個別の事柄への質問であれば local モードを試してください。")
@@ -399,7 +400,7 @@ class GraphRAGEngine(Engine):
              "snippet": c["summary"][:200]}
             for c in communities if c["id"] in used
         ]
-        return {"answer": answer, "mode": "global", "citations": citations,
+        return {"answer": answer, "think": think, "mode": "global", "citations": citations,
                 "stats": {"mapped_communities": len(communities), "points": len(points)}}
 
     def _query_local(self, index: dict, question: str, ctx: EngineContext) -> dict:
@@ -471,11 +472,11 @@ class GraphRAGEngine(Engine):
         chunk_lines = "\n\n".join(
             f"[S{i + 1}] （{c['doc_title']}）\n{c['text'][:1500]}"
             for i, c in enumerate(top_chunks)) or "（なし）"
-        answer = ctx.llm.chat(
+        answer, think = ctx.llm.chat(
             LOCAL_ANSWER_PROMPT.format(entities=ent_lines[:4000], relations=rel_lines[:3000],
                                        communities=com_lines[:2500],
                                        chunks=chunk_lines[:8000], question=question),
-            system=ANSWER_SYSTEM, temperature=0.0)
+            system=ANSWER_SYSTEM, temperature=0.0, want_think=True)
 
         citations = (
             [{"type": "entity", "ref": e["key"], "title": e["name"],
@@ -485,7 +486,7 @@ class GraphRAGEngine(Engine):
             + [{"type": "chunk", "ref": c["id"], "title": c["doc_title"],
                 "snippet": c["text"][:200]} for c in top_chunks]
         )
-        return {"answer": answer, "mode": "local", "citations": citations,
+        return {"answer": answer, "think": think, "mode": "local", "citations": citations,
                 "stats": {"entities": len(top_entities), "relations": len(rel_hits),
                           "chunks": len(top_chunks)}}
 

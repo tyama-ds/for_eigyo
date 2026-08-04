@@ -130,9 +130,13 @@ class FakeLLMClient:
                       "chat_completion_chars": 0, "embed_calls": 0,
                       "embed_texts": 0, "llm_seconds": 0.0}
 
-    def chat(self, prompt, *, system="", max_tokens=None, temperature=0.0):
+    def chat(self, prompt, *, system="", max_tokens=None, temperature=0.0,
+             want_think=False):
         self.stats["chat_calls"] += 1
-        return mock_chat_response(prompt)
+        text = mock_chat_response(prompt)
+        if want_think:
+            return text, "（テスト用の思考過程）"
+        return text
 
     def embed(self, texts):
         if not self.with_embeddings:

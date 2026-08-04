@@ -250,12 +250,13 @@ class Orchestrator:
                 name = engine.name if engine else eid
                 blocks.append(f"## {name}\n{answer[:4000]}")
             llm = LLMClient(cfg)
-            text = llm.chat(
+            text, think = llm.chat(
                 SYNTHESIS_PROMPT.format(question=job.question,
                                         answers="\n\n".join(blocks)),
-                system=SYNTHESIS_SYSTEM, temperature=0.0)
+                system=SYNTHESIS_SYSTEM, temperature=0.0, want_think=True)
             with job.lock:
-                job.synthesis = {"status": "done", "text": text, "error": ""}
+                job.synthesis = {"status": "done", "text": text, "think": think,
+                                 "error": ""}
         except Exception as e:  # noqa: BLE001
             with job.lock:
                 job.synthesis = {"status": "error", "text": "",

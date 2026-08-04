@@ -141,6 +141,10 @@ class TestAPIFlow(unittest.TestCase):
             entry = job["engines"][eid]
             self.assertEqual(entry["status"], "done", entry.get("error"))
             self.assertTrue(entry["result"]["answer"])
+            # モックLLMは <think>考え中…</think> を前置する → 回答から分離され
+            # think フィールドとして返る（UI で折りたたみ表示）
+            self.assertNotIn("考え中", entry["result"]["answer"])
+            self.assertIn("考え中", entry["result"].get("think", ""))
         self.assertEqual(job["engines"]["hybrid"]["status"], "error")
         self.assertIn("インデックス未構築", job["engines"]["hybrid"]["error"])
         # 既知エンティティを含む質問なので GraphRAG は local に自動ルーティング
@@ -148,6 +152,7 @@ class TestAPIFlow(unittest.TestCase):
         # 成功エンジンが2つ以上 → 統合レポートが生成される
         self.assertEqual(job["synthesis"]["status"], "done", job["synthesis"])
         self.assertIn("統合回答", job["synthesis"]["text"])
+        self.assertIn("考え中", job["synthesis"].get("think", ""))
 
     def test_06_query_global(self):
         r = self.api("/api/query", {

@@ -45,12 +45,13 @@ class BM25Engine(Engine):
         hits = bm25.top_k(question, k=TOP_K)
         passages = [index["chunks"][i] for i, _ in hits]
         ctx.progress(0.6, "回答生成")
+        think = ""
         if ctx.chat_ok:
-            answer = generate_answer(ctx, question, passages, task_tag="bm25_answer")
+            answer, think = generate_answer(ctx, question, passages, task_tag="bm25_answer")
             mode_used = "bm25"
         else:
             answer = extractive_answer(question, passages)
             mode_used = "bm25(抽出)"
         citations = [chunk_citation(index["chunks"][i], s) for i, s in hits]
-        return {"answer": answer, "mode": mode_used, "citations": citations,
-                "stats": {"retrieved": len(passages)}}
+        return {"answer": answer, "think": think, "mode": mode_used,
+                "citations": citations, "stats": {"retrieved": len(passages)}}

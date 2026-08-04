@@ -290,6 +290,13 @@ function renderIngestJob(job) {
     <div class="result-grid">${cards}</div></div>`;
 }
 
+/* 推論過程（Qwen3 等の thinking）を折りたたみで表示。デフォルトは閉じている */
+function thinkHtml(think) {
+  if (!think) return "";
+  return `<details class="think"><summary>推論過程（クリックで展開）</summary>` +
+    `<div class="think-body">${esc(think)}</div></details>`;
+}
+
 function citeHtml(c) {
   const cls = c.type === "entity" ? "entity" : (c.type === "community" ? "community" : "");
   const label = c.type === "entity" ? `👤 ${c.title}`
@@ -305,6 +312,7 @@ function renderQueryJob(job) {
     cards.push(`<div class="result-card synthesis">
       <div class="result-head"><span class="result-title">🧭 統合レポート</span>
       <span class="result-meta">各エンジンの回答の一致点・相違点</span></div>
+      ${thinkHtml(syn.think)}
       <div class="answer">${renderText(syn.text)}</div></div>`);
   } else if (syn.status === "running") {
     cards.push('<div class="result-card synthesis"><div class="result-title">🧭 統合レポート生成中…</div></div>');
@@ -326,6 +334,7 @@ function renderQueryJob(job) {
           <span class="result-meta">mode=${esc(e.result.mode || "")} ・ ${fmtSec(e.elapsed)}
             ${llmStatsText(e.llm_stats) ? "・" + llmStatsText(e.llm_stats) : ""}</span>
         </div>
+        ${thinkHtml(e.result.think)}
         <div class="answer">${renderText(e.result.answer || "")}</div>
         ${cites ? `<div class="citations">${cites}</div>` : ""}
       </div>`);
