@@ -7,8 +7,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from ragcore.textutil import (BM25, cosine, extract_json, rrf_fuse,  # noqa: E402
-                              split_chunks, tokenize, top_k_cosine)
+from ragcore.textutil import (BM25, cosine, extract_json, parse_score,  # noqa: E402
+                              rrf_fuse, split_chunks, tokenize, top_k_cosine)
 
 
 class TestSplitChunks(unittest.TestCase):
@@ -104,6 +104,33 @@ class TestExtractJson(unittest.TestCase):
         self.assertIsNone(extract_json("JSONはありません"))
         self.assertIsNone(extract_json(""))
         self.assertIsNone(extract_json('{"未閉じ": [1, 2'))
+
+    def test_fullwidth_json_repair(self):
+        # 日本語ローカルLLMが出しがちな全角クォート・全角コロンの「JSONもどき」
+        self.assertEqual(extract_json('{”name”： ”青嶺”}'), {"name": "青嶺"})
+        self.assertEqual(extract_json('｛”a”： [1, 2]｝'), {"a": [1, 2]})
+
+
+class TestParseScore(unittest.TestCase):
+    def test_numbers(self):
+        self.assertEqual(parse_score(7), 7)
+        self.assertEqual(parse_score(7.8), 7)
+        self.assertEqual(parse_score("8"), 8)
+        self.assertEqual(parse_score("8/10"), 8)
+        self.assertEqual(parse_score("１０"), 10)   # 全角
+        self.assertEqual(parse_score(15), 10)        # クランプ
+        self.assertEqual(parse_score(-3), 0)
+
+    def test_words(self):
+        self.assertEqual(parse_score("高"), 7)
+        self.assertEqual(parse_score("medium"), 5)
+        self.assertEqual(parse_score("弱い"), 3)
+
+    def test_unparsable(self):
+        self.assertEqual(parse_score("不明"), 0)
+        self.assertEqual(parse_score(None, default=5), 5)
+        self.assertEqual(parse_score(True, default=5), 5)
+        self.assertEqual(parse_score("たぶん", default=5, lo=1, hi=10), 5)
 
 
 if __name__ == "__main__":

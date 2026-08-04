@@ -146,6 +146,8 @@ function renderEngineList() {
     const stats = eng.index && eng.index.built && eng.index.stats
       ? `構築済み: ${esc(Object.entries(eng.index.stats)
           .map(([k, v]) => `${k}=${v}`).join(", "))}` : "";
+    const warns = (eng.index && eng.index.warnings || [])
+      .map((w) => `<div class="engine-warn">⚠ ${esc(w)}</div>`).join("");
     const checked = eng.available && eng.kind === "builtin" ? "checked" : "";
     const disabled = eng.available ? "" : "disabled";
     return `<div class="engine-row">
@@ -156,6 +158,7 @@ function renderEngineList() {
         ${avail}${exp}${indexBadge(eng)}
         <div class="engine-desc">${esc(eng.description)}　<span class="muted">必要: ${req}</span></div>
         ${stats ? `<div class="engine-stats">${stats}</div>` : ""}
+        ${warns}
       </div>
     </div>`;
   });
@@ -279,6 +282,8 @@ function renderEngineProgress(eid, e) {
     ${e.status === "done" && e.result && e.result.stats
       ? `<div class="engine-stats">${esc(Object.entries(e.result.stats)
           .map(([k, v]) => `${k}=${v}`).join(", "))} ${llmStatsText(e.llm_stats) ? "・" + llmStatsText(e.llm_stats) : ""}</div>` : ""}
+    ${e.status === "done" && e.result && e.result.warnings
+      ? e.result.warnings.map((w) => `<div class="engine-warn">⚠ ${esc(w)}</div>`).join("") : ""}
   </div>`;
 }
 

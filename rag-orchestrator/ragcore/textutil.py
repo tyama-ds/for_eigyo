@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import unicodedata
 from collections import Counter
 
 # ---------------------------------------------------------------- チャンク分割
@@ -142,14 +143,17 @@ def rrf_fuse(rankings: list[list[int]], *, k: int = 60) -> list[int]:
 
 # ---------------------------------------------------------------- LLM 出力の JSON 抽出
 
-def extract_json(text: str):
-    """LLM 応答から最初の JSON オブジェクト/配列を取り出して parse する。
+# 日本語ローカルLLMが出しがちな全角記号 → ASCII（「JSONもどき」の修復用）
+_FULLWIDTH_JSON = str.maketrans({
+    "”": '"', "“": '"', "〝": '"', "〟": '"', "″": '"',
+    "’": "'", "‘": "'",
+    "：": ":", "，": ",",
+    "｛": "{", "｝": "}", "［": "[", "］": "]",
+})
 
-    コードフェンス・前後の説明文・末尾カンマに耐える。失敗時は None。
-    """
-    if not text:
-        return None
-    text = re.sub(r"```(?:json)?", "", text)
+
+def _scan_json(text: str):
+    """最初のバランスした JSON オブジェクト/配列を探して parse する。失敗時 None。"""
     start = None
     for i, ch in enumerate(text):
         if ch in "[{":
@@ -187,3 +191,46 @@ def extract_json(text: str):
                 return None
     # 閉じ括弧が欠けた場合は諦める（部分 JSON の復元はしない）
     return None
+
+
+def extract_json(text: str):
+    """LLM 応答から最初の JSON オブジェクト/配列を取り出して parse する。
+
+    コードフェンス・前後の説明文・末尾カンマ・全角記号（”／：等）に耐える。失敗時は None。
+    """
+    if not text:
+        return None
+    text = re.sub(r"```(?:json)?", "", text)
+    translated = text.translate(_FULLWIDTH_JSON)
+    # 全角の開き括弧が先に現れる（＝外側の構造が全角で書かれている）なら変換版を先に試す
+    first = next((i for i, ch in enumerate(text) if ch in "[{"), len(text))
+    first_t = next((i for i, ch in enumerate(translated) if ch in "[{"), len(translated))
+    order = (translated, text) if first_t < first else (text, translated)
+    for candidate in order:
+        result = _scan_json(candidate)
+        if result is not None:
+            return result
+    return None
+
+
+def parse_score(value, *, default: int = 0, lo: int = 0, hi: int = 10) -> int:
+    """LLM が返すスコア/強度を寛容に整数化する。
+
+    7 / "7" / "8/10" / "１０"（全角）/ "高" などを受け付け、範囲にクランプする。
+    解釈できなければ default。
+    """
+    if isinstance(value, bool) or value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return max(lo, min(hi, int(value)))
+    if isinstance(value, str):
+        s = unicodedata.normalize("NFKC", value).casefold()
+        m = re.search(r"-?\d+", s)
+        if m:
+            return max(lo, min(hi, int(m.group())))
+        for words, mapped in ((("高", "強", "high", "strong"), 7),
+                              (("中", "medium", "moderate"), 5),
+                              (("低", "弱", "low", "weak"), 3)):
+            if any(w in s for w in words):
+                return max(lo, min(hi, mapped))
+    return default

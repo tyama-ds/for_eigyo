@@ -58,8 +58,14 @@ def api_config_test() -> dict:
     llm = LLMClient(cfg)
     out: dict = {}
     try:
-        text = llm.chat("「接続OK」とだけ返答してください。", max_tokens=64)
-        out["chat"] = {"ok": True, "message": (text or "(空応答)")[:100]}
+        # 推論モデルは思考にトークンを使うため、余裕を持たせる
+        text = llm.chat("「接続OK」とだけ返答してください。", max_tokens=512)
+        if text:
+            out["chat"] = {"ok": True, "message": text[:100]}
+        else:
+            out["chat"] = {"ok": False,
+                           "message": "応答が空でした。思考トークンで max_tokens を使い切った"
+                                      "可能性があります（Max Tokens を増やしてください）"}
     except LLMError as e:
         out["chat"] = {"ok": False, "message": str(e)}
     try:

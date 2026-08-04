@@ -151,7 +151,9 @@ class Orchestrator:
             with job.lock:
                 entry["status"] = "done"
                 entry["progress"] = 1.0
-                entry["result"] = {"stats": index.get("stats") or {}, "logs": ctx.logs}
+                entry["result"] = {"stats": index.get("stats") or {},
+                                   "warnings": index.get("warnings") or [],
+                                   "logs": ctx.logs}
                 entry["llm_stats"] = ctx.llm.stats
         except Exception as e:  # noqa: BLE001  部分失敗を許容し UI へ表示する
             with job.lock:

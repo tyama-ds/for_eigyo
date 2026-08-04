@@ -142,9 +142,11 @@
         </div>
         <div>
           <label class="field-label">Max Tokens</label>
-          <input type="number" id="s-max_tokens" value="1600">
+          <input type="number" id="s-max_tokens" value="4096">
         </div>
       </div>
+      <p class="hint">推論モデル（Qwen3 等）は思考にトークンを使うため Max Tokens は 4096 以上を推奨。
+        小さいとエンティティ抽出の JSON が出力される前に切れます。</p>
       <label class="check"><input type="checkbox" id="s-use_proxy"> プロキシを使う（OFF なら環境変数も無視して直結）</label>
       <label class="field-label">Proxy URL（空なら環境変数 HTTP(S)_PROXY を使用）</label>
       <input type="text" id="s-proxy_url" placeholder="http://proxy.example:8080">

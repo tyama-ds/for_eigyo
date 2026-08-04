@@ -120,6 +120,7 @@ input:focus, textarea:focus, select:focus { outline: 1px solid var(--accent); }
 .badge.warn { color: var(--warn); border-color: var(--warn); }
 .badge.exp { color: var(--external); border-color: var(--external); }
 .engine-stats { font-size: 12px; color: var(--muted); margin-top: 4px; }
+.engine-warn { font-size: 12px; color: var(--warn); margin-top: 4px; }
 
 /* ---------------- corpus ---------------- */
 .doc-row {
