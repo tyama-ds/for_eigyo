@@ -171,6 +171,7 @@ def test_badjson_checkpoint_entries_are_retried(tmp_path, monkeypatch):
     bi, ids = _mini_bi(4)
     ck = tmp_path / "graph_progress.json"
     ck.write_text(json.dumps({
+        "version": bx._CHECKPOINT_VERSION,
         "signature": bx._graph_signature(bi),
         "nodes": {str(i): {"status": "badjson", "entities": [],
                            "relations": [], "error": None} for i in ids},
@@ -187,6 +188,40 @@ def test_badjson_checkpoint_entries_are_retried(tmp_path, monkeypatch):
                            checkpoint_path=ck)
     assert sorted(set(calls)) == sorted(ids), "badjson の4ノードすべて再抽出"
     assert stats["extract_ok"] == 4
+
+
+def test_versionless_old_checkpoint_is_discarded(tmp_path, monkeypatch):
+    """version の無い旧チェックポイントは破棄され、全ノードが再抽出される。
+
+    旧版（v0.9.1 以前）は切り詰め応答を「空=完了」と誤記録しており、
+    再開時にスキップされ続けるため、形式バージョンで一括無効化する。
+    """
+    _inject()
+    import llmlab.bookindex as bx
+
+    _mock_embed(monkeypatch)
+    bi, ids = _mini_bi(4)
+    ck = tmp_path / "graph_progress.json"
+    ck.write_text(json.dumps({  # 旧形式: version キーが無い + 全ノード「空=完了」
+        "signature": bx._graph_signature(bi),
+        "nodes": {str(i): {"status": "empty", "entities": [],
+                           "relations": [], "error": None} for i in ids},
+    }), encoding="utf-8")
+    calls: list[int] = []
+
+    def extract(node, fail_fast=True):
+        calls.append(node.id)
+        return {"entities": [{"name": f"E{node.id}", "type": "T",
+                              "description": "d"}], "relations": []}
+
+    monkeypatch.setattr(bx, "_extract_graph", extract)
+    msgs: list[str] = []
+    with bx.log_to(msgs.append):
+        stats = bx.build_graph(bi, ids, max_workers=1, all_nodes=True,
+                               checkpoint_path=ck)
+    assert sorted(set(calls)) == sorted(ids), "旧形式は破棄され全ノード再抽出"
+    assert stats["extract_ok"] == 4
+    assert any("旧形式" in m for m in msgs)
 
 
 # ---- 2. 並列数の決定ロジック（resolve_workers） ----------------------------

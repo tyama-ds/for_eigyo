@@ -1309,6 +1309,10 @@ def _extract_graph(node: TreeNode, *, fail_fast: bool = False) -> dict | None:
 
 # ---- graph チェックポイント（graph_progress.json） -------------------------
 
+# チェックポイント形式のバージョン。v2: 切り詰め応答を empty と誤記録しない
+# （v0.9.2）。version の無い旧ファイルは「空」誤記録を含み得るため破棄する。
+_CHECKPOINT_VERSION = 2
+
 
 def _graph_signature(bi: BookIndex) -> str:
     """チェックポイントの有効性ガード。木が変わったら（内容が変わったら）無効化。"""
@@ -1321,19 +1325,28 @@ def _graph_signature(bi: BookIndex) -> str:
     return h.hexdigest()[:12]
 
 
+def _fresh_checkpoint(bi: BookIndex) -> dict:
+    return {"version": _CHECKPOINT_VERSION,
+            "signature": _graph_signature(bi), "nodes": {}}
+
+
 def _load_checkpoint(path, bi: BookIndex) -> dict:
     from pathlib import Path as _P
 
     p = _P(path)
     if not p.exists():
-        return {"signature": _graph_signature(bi), "nodes": {}}
+        return _fresh_checkpoint(bi)
     try:
         ck = json.loads(p.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return {"signature": _graph_signature(bi), "nodes": {}}
+        return _fresh_checkpoint(bi)
+    if ck.get("version") != _CHECKPOINT_VERSION:
+        log("チェックポイントは旧形式のため破棄します"
+            "（旧版は切り詰め応答を「空=完了」と誤記録していた可能性がある）")
+        return _fresh_checkpoint(bi)
     if ck.get("signature") != _graph_signature(bi):
         log("チェックポイントは旧い木のもののため破棄します（文書内容が変更された）")
-        return {"signature": _graph_signature(bi), "nodes": {}}
+        return _fresh_checkpoint(bi)
     return ck
 
 
@@ -1344,6 +1357,7 @@ def _save_checkpoint(path, ckpt: dict, bi: BookIndex) -> None:
 
     p = _P(path)
     p.parent.mkdir(parents=True, exist_ok=True)
+    ckpt["version"] = _CHECKPOINT_VERSION
     ckpt["signature"] = ckpt.get("signature") or _graph_signature(bi)
     ckpt["updated_at"] = __import__("datetime").datetime.now().isoformat(timespec="seconds")
     tmp = p.with_suffix(".json.tmp")
