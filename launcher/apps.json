@@ -137,6 +137,21 @@
       "wait_port": 8802
     },
     {
+      "id": "rag-orchestrator",
+      "name": "RAG Orchestrator",
+      "description": "同一コーパス・同一質問を複数のRAG実装（GraphRAG/Vector/BM25/Hybrid + nano-graphrag/LightRAG）へ並列実行し、回答・出典・実行時間を比較して統合レポートを生成。ナレッジグラフ可視化つき。ローカルLLM（OpenAI互換）対応、BM25はLLMなしでも動作",
+      "icon": "research",
+      "cwd": "../rag-orchestrator",
+      "command": [
+        "{python}",
+        "server.py",
+        "--port",
+        "8750"
+      ],
+      "url": "http://127.0.0.1:8750",
+      "wait_port": 8750
+    },
+    {
       "id": "fermiscope",
       "name": "FermiScope",
       "description": "証拠に基づくフェルミ推定。問いを分解→Web検索で各パラメータの出典を収集・採点→敵対的検証→モンテカルロで弱気/基準/強気と感度分析。数値はローカルPythonで決定論計算。HTML/PDF/Word/Excel/PowerPointを取得し、出典・仮定・監査ログつきで表示",

@@ -1,0 +1,25 @@
+# rag-orchestrator のテスト（標準ライブラリのみ・モックLLMで実LLM不要）。
+name: rag-orchestrator tests
+
+on:
+  push:
+    paths: ["rag-orchestrator/**", ".github/workflows/rag-orchestrator.yml"]
+  pull_request:
+    paths: ["rag-orchestrator/**", ".github/workflows/rag-orchestrator.yml"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: rag-orchestrator
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compileall
+        run: python -m compileall -q ragcore server.py tests
+      - name: Unit + API tests
+        run: python -m unittest discover -s tests -v

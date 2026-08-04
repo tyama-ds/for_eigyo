@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+data/
+rag_orchestrator.config.json
