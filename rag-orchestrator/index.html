@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RAG Orchestrator</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='9' cy='9' r='5' fill='%23a78bfa'/%3E%3Ccircle cx='23' cy='12' r='4' fill='%235aa2ff'/%3E%3Ccircle cx='14' cy='24' r='4.5' fill='%2334d399'/%3E%3Cpath d='M9 9L23 12L14 24Z' fill='none' stroke='%238b98b8' stroke-width='1.5'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark">◇</span>
+    <span class="brand-name">RAG Orchestrator</span>
+    <span class="brand-sub">同一コーパス・同一質問を複数の RAG 実装で比較する</span>
+  </div>
+  <div class="conn" id="conn-status">接続状態を確認中…</div>
+</header>
+
+<nav class="tabs" id="tabs">
+  <button class="tab active" data-tab="query">質問・比較</button>
+  <button class="tab" data-tab="corpus">コーパス</button>
+  <button class="tab" data-tab="engines">エンジン</button>
+  <button class="tab" data-tab="graph">グラフ</button>
+  <button class="tab" data-tab="settings">設定</button>
+</nav>
+
+<main>
+  <!-- ============================ 質問・比較 ============================ -->
+  <section class="panel" id="tab-query">
+    <div class="card">
+      <label class="field-label">質問</label>
+      <textarea id="q-question" rows="2"
+        placeholder="例: この会社の主力事業とリスクは？ / SkyEdge S-2 はどんな製品？"></textarea>
+      <div class="row wrap gap">
+        <div class="mode-select">
+          <label class="field-label">検索モード（GraphRAG 系）</label>
+          <select id="q-mode">
+            <option value="auto">auto（質問から自動判定）</option>
+            <option value="global">global（コーパス全体への質問）</option>
+            <option value="local">local（特定の事柄への質問）</option>
+          </select>
+        </div>
+        <div class="grow">
+          <label class="field-label">実行するエンジン</label>
+          <div class="engine-checks" id="q-engines"></div>
+        </div>
+        <button class="btn primary big" id="q-run">実行</button>
+      </div>
+      <div class="hint" id="q-hint"></div>
+    </div>
+
+    <div id="q-results"></div>
+  </section>
+
+  <!-- ============================ コーパス ============================ -->
+  <section class="panel hidden" id="tab-corpus">
+    <div class="card">
+      <div class="row space-between">
+        <h2>文書一覧 <span class="muted" id="c-rev"></span></h2>
+        <button class="btn" id="c-sample">サンプル文書を読み込む</button>
+      </div>
+      <p class="hint">コーパスを変更したら「エンジン」タブでインデックスを再構築してください。</p>
+      <div id="c-docs"></div>
+    </div>
+    <div class="card">
+      <h2>文書を追加</h2>
+      <input type="text" id="c-title" placeholder="タイトル（省略時は先頭行）">
+      <textarea id="c-text" rows="8" placeholder="本文を貼り付け（テキスト / Markdown）"></textarea>
+      <div class="row">
+        <button class="btn primary" id="c-add">追加</button>
+        <span class="hint" id="c-msg"></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ エンジン ============================ -->
+  <section class="panel hidden" id="tab-engines">
+    <div class="card">
+      <div class="row space-between">
+        <h2>エンジンとインデックス</h2>
+        <button class="btn primary" id="e-ingest">選択したエンジンのインデックスを構築</button>
+      </div>
+      <p class="hint">
+        インデックス構築は「コーパス → 各エンジンの検索用データ」の変換。GraphRAG はここで
+        エンティティ抽出とコミュニティ要約を行うため LLM を多く呼ぶ（コーパスが大きいほど時間がかかる）。
+      </p>
+      <div id="e-list"></div>
+    </div>
+    <div id="e-job"></div>
+  </section>
+
+  <!-- ============================ グラフ ============================ -->
+  <section class="panel hidden" id="tab-graph">
+    <div class="card">
+      <div class="row space-between">
+        <h2>ナレッジグラフ（GraphRAG）</h2>
+        <button class="btn" id="g-reload">再読み込み</button>
+      </div>
+      <p class="hint" id="g-hint">ノード=エンティティ、色=コミュニティ、太さ=関係の強さ。ドラッグで移動、ホバーで詳細。</p>
+      <canvas id="g-canvas" width="1200" height="640"></canvas>
+      <div id="g-tooltip" class="tooltip hidden"></div>
+    </div>
+    <div class="card">
+      <h2>コミュニティ要約</h2>
+      <div id="g-communities"></div>
+    </div>
+  </section>
+
+  <!-- ============================ 設定 ============================ -->
+  <section class="panel hidden" id="tab-settings">
+    <div class="card narrow">
+      <h2>ローカルLLM 接続設定（OpenAI 互換）</h2>
+      <p class="hint">
+        Ollama: <code>http://127.0.0.1:11434/v1</code> / LM Studio: <code>http://127.0.0.1:1234/v1</code> /
+        vLLM・llama.cpp server: <code>http://127.0.0.1:8000/v1</code>
+      </p>
+      <label class="field-label">Base URL</label>
+      <input type="text" id="s-base_url" placeholder="http://127.0.0.1:11434/v1">
+      <label class="field-label">API Key（不要なサーバでは空のまま）</label>
+      <input type="password" id="s-api_key" placeholder="（設定済みの場合は空のままで変更なし）">
+      <label class="field-label">Model</label>
+      <input type="text" id="s-model" placeholder="例: qwen3:14b">
+
+      <h3>埋め込み（Vector / Hybrid / GraphRAG の意味検索に使用）</h3>
+      <label class="field-label">Embed Model（空なら Model を流用）</label>
+      <input type="text" id="s-embed_model" placeholder="例: nomic-embed-text / multilingual-e5-small">
+      <label class="field-label">Embed Base URL（空なら Base URL を流用。別サーバなら指定）</label>
+      <input type="text" id="s-embed_base_url" placeholder="">
+      <label class="field-label">Embed API Key（空なら API Key を流用）</label>
+      <input type="password" id="s-embed_api_key" placeholder="">
+
+      <h3>詳細</h3>
+      <div class="row gap">
+        <div>
+          <label class="field-label">Context Window</label>
+          <input type="number" id="s-context_window" value="8192">
+        </div>
+        <div>
+          <label class="field-label">Timeout（秒）</label>
+          <input type="number" id="s-request_timeout" value="180">
+        </div>
+        <div>
+          <label class="field-label">Max Tokens</label>
+          <input type="number" id="s-max_tokens" value="1600">
+        </div>
+      </div>
+      <label class="check"><input type="checkbox" id="s-use_proxy"> プロキシを使う（OFF なら環境変数も無視して直結）</label>
+      <label class="field-label">Proxy URL（空なら環境変数 HTTP(S)_PROXY を使用）</label>
+      <input type="text" id="s-proxy_url" placeholder="http://proxy.example:8080">
+
+      <div class="row gap top-space">
+        <button class="btn primary" id="s-save">保存</button>
+        <button class="btn" id="s-test">接続テスト</button>
+      </div>
+      <div id="s-msg" class="hint"></div>
+    </div>
+  </section>
+</main>
+
+<script src="/app.js"></script>
+</body>
+</html>
