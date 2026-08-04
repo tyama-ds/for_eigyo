@@ -919,6 +919,18 @@ def _even_sample(bi: BookIndex, targets: list[int], budget: int) -> list[int]:
     return [nid for nid in targets if nid in picked]  # 文書順を復元
 
 
+def _rel_name_key(name) -> str:
+    """関係(source/target)とエンティティ名を突き合わせるキー。
+
+    NFKC 正規化 + 空白全除去 + 小文字化。LLM が entities と relations で
+    微妙に違う表記（全角/半角・空白の有無など）を返しても同一ノード内で
+    マッチできるようにする。曖昧一致（fuzzy）はしない。
+    """
+    import unicodedata
+
+    return "".join(unicodedata.normalize("NFKC", str(name)).split()).lower()
+
+
 def resolve_workers(max_workers: int | None, n_targets: int) -> int:
     """抽出フェーズの実効並列数を決める。
 
@@ -1111,10 +1123,10 @@ def build_graph(bi: BookIndex, node_ids: list[int], *, gradient_g: float = 0.6,
                     nid, vec, gradient_g=gradient_g, er_top_k=er_top_k, use_llm=er_use_llm,
                     reranker=reranker,
                 )
-                local_name_to_eid[e["name"].strip().lower()] = eid
+                local_name_to_eid[_rel_name_key(e["name"])] = eid
             for rel in rels:
-                s = local_name_to_eid.get(str(rel.get("source", "")).strip().lower())
-                t = local_name_to_eid.get(str(rel.get("target", "")).strip().lower())
+                s = local_name_to_eid.get(_rel_name_key(rel.get("source", "")))
+                t = local_name_to_eid.get(_rel_name_key(rel.get("target", "")))
                 if s is not None and t is not None and s != t:
                     bi.relations.append((s, t, str(rel.get("relation", "related_to"))))
         # 論文 4.3.1: Table ノードは v_table エンティティ + ヘッダ(ContainedIn) を構造化。

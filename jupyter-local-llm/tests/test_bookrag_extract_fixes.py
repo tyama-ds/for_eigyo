@@ -224,6 +224,37 @@ def test_versionless_old_checkpoint_is_discarded(tmp_path, monkeypatch):
     assert any("旧形式" in m for m in msgs)
 
 
+def test_relation_names_match_after_nfkc(tmp_path, monkeypatch):
+    """entities と relations の表記ゆらぎ（全角/半角・空白）でも関係が張れる。
+
+    旧実装は strip().lower() の完全一致のみで、「日本 製鉄」vs「日本製鉄」や
+    「ＡＢＣ株式会社」vs「ABC株式会社」の組は黙って捨てられていた。
+    """
+    _inject()
+    import llmlab.bookindex as bx
+
+    # エンティティごとに直交ベクトルを返す（ER で誤って名寄せされないように）
+    seen: dict[str, int] = {}
+
+    def orth_embed(texts):
+        out = np.zeros((len(texts), 16), dtype=np.float32)
+        for i, t in enumerate(texts):
+            out[i, seen.setdefault(t, len(seen) % 16)] = 1.0
+        return out
+
+    monkeypatch.setattr(bx, "embed", orth_embed)
+    monkeypatch.setattr(bx, "_extract_graph", lambda node, fail_fast=True: {
+        "entities": [{"name": "日本製鉄", "type": "Org", "description": "d"},
+                     {"name": "ＡＢＣ 株式会社", "type": "Org", "description": "d"}],
+        "relations": [{"source": "日本 製鉄", "target": "ABC株式会社",
+                       "relation": "PartnerOf"}],
+    })
+    bi, ids = _mini_bi(1)
+    bx.build_graph(bi, ids, max_workers=1, all_nodes=True)
+    assert any(r[2] == "PartnerOf" for r in bi.relations), \
+        "NFKC 正規化 + 空白除去で source/target がエンティティにマッチする"
+
+
 # ---- 2. 並列数の決定ロジック（resolve_workers） ----------------------------
 
 
