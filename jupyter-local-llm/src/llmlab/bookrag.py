@@ -103,8 +103,10 @@ class BookRAG:
         max_evidence: int = DEFAULT_MAX_EVIDENCE,
         chunk_chars: int = 1500,    # 本文チャンクの目安サイズ（大きいほどノード=LLM呼出が減る）
         max_nodes: int = 300,       # 取り込み対象ノードの上限（超過は打ち切り）
-        # 抽出フェーズの並列数（ローカルLLM 安全既定。高速化は自己責任で増やす）
-        max_workers: int = 2,
+        # 抽出フェーズの並列数。None（既定）= 自動セーフモード（50ノード以下: 最大2並列 /
+        # 超: 1並列）。int を明示すると **その値がそのまま使われる**（3以上は
+        # ローカルLLMサーバの同時処理耐性に注意。注意ログが1回出る）
+        max_workers: int | None = None,
         er_use_llm: bool = False,   # 名寄せで LLM を使うか（既定 False=高速）
         # 再ランク: None/"cosine"/"local"/"endpoint"/dict（Text_Reasoning と ER の両方に使用）
         reranker=None,

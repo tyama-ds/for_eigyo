@@ -142,6 +142,10 @@
     transition:opacity .2s;z-index:60;pointer-events:none}
   .toast.show{opacity:1}
   svg.curve{width:100%;height:64px;display:block}
+  details.think{border:1px dashed var(--line);border-radius:10px;margin:8px 0;padding:6px 12px}
+  details.think summary{cursor:pointer;color:var(--ink-mute);font-size:.78rem}
+  details.think pre{white-space:pre-wrap;word-break:break-word;font-size:.78rem;
+    color:var(--ink-mute);margin:6px 0 2px}
 </style>
 </head>
 <body>
@@ -550,9 +554,10 @@ function onChapter(e){
 }
 
 function onFinal(e){
-  lastReport=e.report; lastTitle=e.title||"report";
+  const st=splitThink(e.report);
+  lastReport=st.answer; lastTitle=e.title||"report";  // コピー/保存は本文のみ
   $("reportPanel").style.display="block";
-  $("report").innerHTML=mdToHtml(e.report);
+  $("report").innerHTML=thinkHtml(st.think)+mdToHtml(st.answer);
   $("bestInfo").innerHTML=`勝ち指示 agg <span class="mono">${(e.best_agg||0).toFixed(3)}</span> ／ 候補 ${e.candidates} 件`;
   refreshRuns();
 }
@@ -589,6 +594,35 @@ function drawCurve(){
 }
 
 /* ================= レポート md ================= */
+/* 推論系モデルの <think>…</think> 等を本文から分離する純関数。
+   app_ui.html の splitThink と同一実装（各 UI は自己完結のため意図的に複製）。 */
+const THINK_TAGS = ["think", "thinking", "reasoning"];
+function splitThink(text){
+  const names = THINK_TAGS.join("|");
+  const thinks = [];
+  let rest = String(text ?? "").replace(
+    new RegExp(`<(${names})>([\\s\\S]*?)</\\1>`, "gi"),
+    (_, _tag, body) => { thinks.push(body.trim()); return ""; });
+  const closeRe = new RegExp(`</(?:${names})>`, "gi");
+  let lastClose = -1, m;
+  while((m = closeRe.exec(rest)) !== null) lastClose = m.index + m[0].length;
+  if(lastClose >= 0){
+    thinks.push(rest.slice(0, lastClose).replace(closeRe, "").trim());
+    rest = rest.slice(lastClose);
+  }
+  const om = rest.match(new RegExp(`<(?:${names})>`, "i"));
+  if(om){
+    thinks.push(rest.slice(om.index + om[0].length).trim());
+    rest = rest.slice(0, om.index);
+  }
+  const think = thinks.filter(Boolean).join("\n\n");
+  let answer = rest.trim();
+  if(think && !answer) answer = "（本文なし: 推論途中で出力が終了した可能性）";
+  return {think, answer};
+}
+const thinkHtml = think => think
+  ? `<details class="think"><summary>▶ 推論過程（クリックで表示）</summary><pre>${esc(think)}</pre></details>`
+  : "";
 function mdToHtml(md){
   const lines=String(md).split("\n"); let html="",inList=false,inCode=false;
   const inl=(t)=>esc(t).replace(/`([^`]+)`/g,"<code>$1</code>")
@@ -644,8 +678,10 @@ async function refreshRuns(){
 async function openRun(id){
   const r=await api("/api/run?id="+encodeURIComponent(id));
   if(r.error){toast("読み込めません");return;}
-  lastReport=r.report||""; lastTitle=r.title||"report";
-  $("reportPanel").style.display="block"; $("report").innerHTML=mdToHtml(r.report||"（レポートなし）");
+  const st=splitThink(r.report||"");
+  lastReport=st.answer; lastTitle=r.title||"report";
+  $("reportPanel").style.display="block";
+  $("report").innerHTML=thinkHtml(st.think)+mdToHtml(st.answer||"（レポートなし）");
   $("bestInfo").innerHTML=`履歴 ${esc(r.ts)} ／ agg <span class="mono">${(r.gepa&&r.gepa.best_agg||0).toFixed(3)}</span>`;
   $("reportPanel").scrollIntoView({behavior:"smooth"});
 }

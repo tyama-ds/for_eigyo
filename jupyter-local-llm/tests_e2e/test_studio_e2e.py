@@ -346,6 +346,31 @@ def _run_checks(sync_playwright, url, root, docs) -> str:
         check("windowリスナー非蓄積（pointer capture 方式）", n_listeners == 0,
               f"window drag listeners={n_listeners}")
 
+        # --- 7b. splitThink（推論過程の分離）の4ケースを実ブラウザで検証 -------
+        st = pg.evaluate("""() => ({
+          pair:    splitThink("<think>推論A</think>回答A"),
+          closed:  splitThink("推論B</think>回答B"),
+          open:    splitThink("<think>途切れた推論C"),
+          plain:   splitThink("タグなしの回答D"),
+          multi:   splitThink("<THINKING>x</THINKING>本文<think>y</think>末尾"),
+        })""")
+        check("splitThink: 完結ペア",
+              st["pair"] == {"think": "推論A", "answer": "回答A"}, str(st["pair"]))
+        check("splitThink: 閉じタグのみ（開始タグ欠落）",
+              st["closed"] == {"think": "推論B", "answer": "回答B"}, str(st["closed"]))
+        check("splitThink: 未閉鎖の開始タグ",
+              st["open"]["think"] == "途切れた推論C" and
+              st["open"]["answer"].startswith("（本文なし"), str(st["open"]))
+        check("splitThink: タグなしは不変",
+              st["plain"] == {"think": "", "answer": "タグなしの回答D"}, str(st["plain"]))
+        check("splitThink: 複数ペア・大文字小文字",
+              st["multi"] == {"think": "x\n\ny", "answer": "本文末尾"}, str(st["multi"]))
+
+        # --- 7c. 並列数の明示入力欄が両フォームにある -------------------------
+        check("並列数入力欄（索引の作成 / 詳細）",
+              pg.locator("#b_workers").count() == 1 and
+              pg.locator("#d_gworkers").count() == 1)
+
         # --- 8/9. 外部リクエストなし・コンソールエラーなし -------------------
         check("外部ネットワーク要求なし", not ext_requests, str(ext_requests[:3]))
         real = [e for e in errors if "favicon" not in e]
