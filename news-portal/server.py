@@ -66,6 +66,9 @@ AI_MAX_TOKENS = 1500      # AI応答の最大トークン
 MAX_PAGE_TEXT = 6000      # 記事ページを本文コンテキストに含める最大文字数
 MAX_PAGE_TEXT_LOCAL = 3500  # ローカルLLMは文脈窓が小さく、長い本文で出力が
                             # 思考の途中に切れて漏れやすいため短めにする
+MIN_PAGE_TEXT = 200       # これ未満しか取れなければ「本文取得できず」とみなす
+                          # （JS描画のSPAやブロックページは平文化するとほぼ空になる）
+SELENIUM_TIMEOUT = 25     # ヘッドレスブラウザでのページ読込タイムアウト（秒）
 ARCHIVE_MAX = 20000       # 過去ログ(archive.jsonl)の最大保持件数
 AI_PROVIDERS = ("anthropic", "openai", "local")  # openai/local = OpenAI互換（base_url指定）
 # local = ローカルLLM（Ollama / LM Studio / llama.cpp 等）。APIキー任意・プロキシ非経由
@@ -972,31 +975,130 @@ def ai_status() -> dict:
     }
 
 
-def fetch_page_text(url: str) -> str:
-    """記事ページ本文をプレーンテキストで取得（失敗時は空文字）。proxy設定に従う。
-
-    記事リンクはフィード提供者（=第三者）由来のため、内部アドレスへの取得は
-    SSRF 対策として拒否し、リダイレクトも内部アドレスを追わない。
-    """
-    u = safe_url(url)
-    if not u or _host_is_internal(u):
-        return ""
+def _fetch_page_urllib(u: str) -> tuple[str, str]:
+    """urllib での本文取得。戻り値 (text, error)。error が空でなければ失敗/不十分。"""
     try:
         req = urllib.request.Request(u, headers={
             "User-Agent": USER_AGENT, "Accept": "text/html,*/*;q=0.8",
-            "Accept-Encoding": "gzip, identity",
+            "Accept-Encoding": "gzip, identity", "Accept-Language": "ja,en;q=0.8",
         })
         with _opener(block_internal=True).open(req, timeout=FETCH_TIMEOUT) as r:
             raw = r.read(MAX_FEED_BYTES + 1)
             enc = (r.headers.get("Content-Encoding") or "").lower()
         if len(raw) > MAX_FEED_BYTES:
-            return ""
+            return "", "ページが大きすぎる"
         if enc == "gzip" or raw[:2] == b"\x1f\x8b":
             raw = _gunzip_capped(raw, MAX_FEED_BYTES)
-        text = strip_html(raw.decode("utf-8", "replace"))
-        return text[:MAX_PAGE_TEXT]
-    except Exception:
-        return ""
+        text = strip_html(raw.decode("utf-8", "replace"))[:MAX_PAGE_TEXT]
+        if len(text) < MIN_PAGE_TEXT:
+            return text, "本文テキストがほぼ空（JS描画/ブロックページの可能性）"
+        return text, ""
+    except Exception as e:
+        return "", f"{type(e).__name__}: {str(e)[:120]}"
+
+
+def _fetch_page_selenium(url: str) -> tuple[str, str]:
+    """Selenium（ヘッドレスブラウザ）での本文取得。戻り値 (text, error)。
+
+    実ブラウザはシステムのプロキシ設定（PAC/自動構成・SSO認証）をそのまま使える
+    ため、urllib が社内プロキシで遮断・JS描画で空になるページの代替経路になる。
+    selenium 未インストール環境では理由を返してスキップ（依存は任意のまま）。
+    PRISM_BROWSER_BINARY / PRISM_CHROMEDRIVER でバイナリを明示指定できる。
+    """
+    try:
+        from selenium import webdriver
+        from selenium.webdriver.chrome.service import Service as ChromeService
+    except ImportError:
+        return "", "selenium未インストール（pip install selenium で有効化できます）"
+    cfg = proxy_config()
+
+    def _opts(cls):
+        o = cls()
+        o.add_argument("--headless=new")
+        o.add_argument("--disable-gpu")
+        o.add_argument("--no-sandbox")
+        o.add_argument("--window-size=1280,900")
+        o.page_load_strategy = "eager"   # DOMContentLoaded まで（本文抽出には十分で速い）
+        binp = os.environ.get("PRISM_BROWSER_BINARY")
+        if binp:
+            o.binary_location = binp
+        if not cfg["use_proxy"]:
+            o.add_argument("--no-proxy-server")
+        elif cfg["proxy_url"]:
+            o.add_argument("--proxy-server=" + cfg["proxy_url"])
+        # use_proxy=True + URL空 → ブラウザ既定（システム設定/PAC/SSO）に任せる
+        return o
+
+    drv = None
+    try:
+        drvpath = os.environ.get("PRISM_CHROMEDRIVER")
+        try:
+            if drvpath:
+                drv = webdriver.Chrome(options=_opts(webdriver.ChromeOptions),
+                                       service=ChromeService(executable_path=drvpath))
+            else:
+                drv = webdriver.Chrome(options=_opts(webdriver.ChromeOptions))
+        except Exception as e:
+            chrome_err = f"Chrome: {type(e).__name__}"
+            try:
+                drv = webdriver.Edge(options=_opts(webdriver.EdgeOptions))
+            except Exception as e2:
+                return "", f"ブラウザ起動失敗（{chrome_err} / Edge: {type(e2).__name__}）"
+        drv.set_page_load_timeout(SELENIUM_TIMEOUT)
+        drv.get(url)
+        final = drv.current_url or url
+        if _host_is_internal(final):   # SSRF: 内部へのリダイレクトは破棄
+            return "", "内部アドレスへのリダイレクトのため破棄"
+        # ブラウザのエラーページ/証明書警告を本文として採用しない
+        # （chrome-error:// への遷移、Chromium の neterror/ssl インタースティシャルDOM）
+        is_err_page = final.startswith("chrome-error://") or bool(drv.execute_script(
+            "return !!(document.querySelector('#main-frame-error')"
+            "||document.querySelector('#interstitial-wrapper')"
+            "||(document.body&&/\\b(ssl|neterror|interstitial)\\b/.test(document.body.className))"
+            "||(document.querySelector('#main-message')&&document.querySelector('#error-code')))"))
+        if is_err_page:
+            return "", "ブラウザがエラーページを表示（接続不可/ブロック/証明書エラー等）"
+        text = (drv.execute_script(
+            "return document.body ? document.body.innerText : ''") or "").strip()
+        text = re.sub(r"[ \t]+\n", "\n", re.sub(r"\n{3,}", "\n\n", text))
+        if len(text) < MIN_PAGE_TEXT:
+            return text, "ブラウザでも本文テキストがほぼ空"
+        return text[:MAX_PAGE_TEXT], ""
+    except Exception as e:
+        return "", f"{type(e).__name__}: {str(e)[:120]}"
+    finally:
+        if drv is not None:
+            try:
+                drv.quit()
+            except Exception:
+                pass
+
+
+def fetch_page_text(url: str) -> dict:
+    """記事ページ本文をプレーンテキストで取得する。proxy設定に従う。
+
+    1) urllib で取得 → 2) 失敗/ほぼ空なら Selenium（ヘッドレスブラウザ）へ
+    フォールダウン → 3) どちらも駄目なら text="" と失敗理由を返す
+    （呼び出し側が「取れなかった」ことをUIに明示できる）。
+    記事リンクはフィード提供者（=第三者）由来のため、内部アドレスへの取得は
+    SSRF 対策として拒否し、リダイレクトも内部アドレスを追わない。
+    戻り値: {"text": 本文, "via": "urllib"|"selenium"|"", "error": 失敗理由}
+    """
+    u = safe_url(url)
+    if not u or _host_is_internal(u):
+        return {"text": "", "via": "", "error": "URLが不正か内部アドレス"}
+    text, err = _fetch_page_urllib(u)
+    if text and not err:
+        return {"text": text, "via": "urllib", "error": ""}
+    s_text, s_err = _fetch_page_selenium(u)
+    if s_text and not s_err:
+        return {"text": s_text, "via": "selenium", "error": ""}
+    best = s_text or text   # 断片でも無いよりまし（ただし「不十分」だったことは伝える）
+    if best:
+        return {"text": best, "via": ("selenium" if s_text else "urllib"),
+                "error": f"本文が不完全な可能性（直接取得: {err or 'OK'} / ブラウザ: {s_err or 'OK'}）"}
+    return {"text": "", "via": "",
+            "error": f"直接取得: {err} / ブラウザ: {s_err}"}
 
 
 def _http_json(url: str, body: dict, headers: dict, no_proxy: bool = False,
@@ -1159,6 +1261,7 @@ def ai_chat(payload: dict) -> dict:
                    "必ず <think> と </think> で囲み、その後に回答本文を書いてください。")
 
     parts = []
+    page_note = ""   # 本文取得の状態（selenium経由/失敗）をUIへ伝える注記
     if ctx.get("kind") == "list":
         parts.append("【現在表示中の記事一覧】")
         for i, a in enumerate((ctx.get("items") or [])[:25], 1):
@@ -1177,13 +1280,25 @@ def ai_chat(payload: dict) -> dict:
             if ctx.get(f):
                 parts.append(f"{f}: {ctx.get(f)}")
         # 本文取得（記事の実URLがあり、要求されていれば）
+        # urllib → Selenium(ヘッドレスブラウザ) の順に試し、両方失敗なら
+        # 「取れなかった」ことを注記としてLLMと画面の両方へ明示する
         if payload.get("fetch_page") and safe_url(ctx.get("link")):
-            page = fetch_page_text(ctx.get("link"))
-            if page:
+            pg = fetch_page_text(ctx.get("link"))
+            if pg["text"]:
+                page = pg["text"]
                 if cfg["provider"] == "local":
                     # 小さな文脈窓で出力が思考の途中に切れて漏れるのを防ぐ
                     page = page[:MAX_PAGE_TEXT_LOCAL]
                 parts.append("\n【記事ページ本文（抜粋）】\n" + page)
+                if pg["via"] == "selenium":
+                    page_note = "本文はヘッドレスブラウザ（selenium）経由で取得しました"
+                if pg["error"]:
+                    page_note = "⚠ " + pg["error"]
+            else:
+                parts.append("\n【注記】記事ページ本文は取得できなかった（"
+                             + pg["error"] + "）。上の要約のみに基づいて回答すること。")
+                page_note = ("⚠ 記事本文を取得できませんでした（" + pg["error"]
+                             + "）。要約のみに基づく回答です")
     context_block = "\n".join(str(p) for p in parts if p)
     user_content = (context_block + "\n\n" if context_block else "") + "質問: " + question
     if cfg["provider"] == "local" and context_block:
@@ -1193,7 +1308,8 @@ def ai_chat(payload: dict) -> dict:
 
     try:
         answer, reasoning = _split_reasoning(call_ai(cfg, system, user_content, history))
-        return {"ok": True, "answer": answer, "reasoning": reasoning}
+        return {"ok": True, "answer": answer, "reasoning": reasoning,
+                "page_note": page_note}
     except RuntimeError as e:
         return {"ok": False, "error": str(e)}
     except Exception as e:   # 想定外も UI に見せる
