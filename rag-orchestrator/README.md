@@ -99,6 +99,11 @@ query:   global … コミュニティ要約への map-reduce（「全体とし�
 | [nano-graphrag](https://github.com/gusye1234/nano-graphrag) | 本家の要点を約1,000行に凝縮。ハックしやすい | アダプタ同梱（実験的） |
 | [LightRAG](https://github.com/HKUDS/LightRAG) | グラフ+ベクトルの二層インデックス。増分更新可・インデックス費用がほぼ埋め込み並み。2026年時点で新規プロジェクトの定番 | アダプタ同梱（実験的） |
 | [fast-graphrag](https://github.com/circlemind-ai/fast-graphrag) | PageRank ベースの探索で軽量・高速化 | 未対応（候補） |
+| [HippoRAG 2](https://github.com/OSU-NLP-Group/HippoRAG) | 海馬の記憶モデル着想。KG + Personalized PageRank でマルチホップ推論が 10〜30 倍安価。インデックス費用も GraphRAG/LightRAG より軽い | 未対応（アダプタ有力候補。pip 可・vLLM/OpenAI互換対応） |
+| [MiniRAG](https://github.com/HKUDS/MiniRAG) | LightRAG と同じ HKUDS 製（ACL2026）。**小型ローカルLLM向け**に設計された異種グラフ + 軽量トポロジ検索 | 未対応（アダプタ有力候補。ローカル小型モデル環境に最適） |
+| [RAG-Anything](https://github.com/HKUDS/RAG-Anything) | LightRAG 基盤のマルチモーダル RAG（PDF・画像・表・数式）。note 記事の MMGraphRAG 方向の実用実装 | 未対応（候補） |
+| [KAG](https://github.com/OpenSPG/KAG) | Ant Group 製。ドメイン知識のスキーマ/論理推論を重視 | OpenSPG サーバ前提のため対象外 |
+| PathRAG / OG-RAG | 研究実装。フローベースの文脈剪定（-44%）/ オントロジー接地（幻覚 -40%） | 論文コード（候補） |
 
 ### フレームワーク系（Vector/Hybrid RAG の実装基盤）
 
@@ -111,6 +116,31 @@ query:   global … コミュニティ要約への map-reduce（「全体とし�
 | [txtai](https://github.com/neuml/txtai) | 単一パッケージの軽量組み込み RAG | 未対応（候補） |
 | [kotaemon](https://github.com/Cinnamon/kotaemon) | ローカル文書QAのGUIアプリ。GraphRAG も内蔵 | アプリ型のため対象外 |
 | [R2R](https://github.com/SciPhi-AI/R2R) | RAG をREST API サーバとして提供。マルチモーダル対応 | 未対応 |
+| [FlashRAG](https://github.com/RUC-NLPIR/FlashRAG) | 研究ツールキット。Self-RAG / RAPTOR / HyDE 等の主要手法を再現実装で多数収録 | 未対応（手法比較の参照実装として有用） |
+| [RAGatouille](https://github.com/AnswerDotAI/RAGatouille) | ColBERT（late interaction）検索を簡単に使う | 未対応（候補: 検索方式の比較軸） |
+| [AutoRAG](https://github.com/Marker-Inc-Korea/AutoRAG) | RAG パイプライン構成を評価データで自動最適化 | 未対応 |
+| [PaperQA2](https://github.com/Future-House/paper-qa) | 科学文献特化のエージェント型 RAG（出典検証つき） | 未対応 |
+
+### ローカル完結の RAG アプリ（オーケストレーターに包むよりも併用先）
+
+自前 UI・文書管理を持つ完成品アプリ。エンジンとして呼ぶ API を持たないか重いため
+アダプタ対象外だが、用途が合えばこれ単体で足りることもある。
+
+- [AnythingLLM](https://github.com/Mintplex-Labs/anything-llm) — デスクトップ完結の
+  文書QA決定版（Ollama 同梱、引用付き回答）。2026年時点で GitHub 62k スター
+- [Open WebUI](https://github.com/open-webui/open-webui) — Ollama 定番 UI。
+  ナレッジ（RAG）機能内蔵で軽量
+- [PrivateGPT](https://github.com/zylon-ai/private-gpt) — 完全オフライン設計・低レイテンシ
+- [Onyx（旧 Danswer）](https://github.com/onyx-dot-app/onyx) — 社内コネクタ多数の
+  エンタープライズ検索型
+- [Dify](https://github.com/langgenius/dify) / [Flowise](https://github.com/FlowiseAI/Flowise) —
+  ワークフロービルダー型（RAG はその一部品）
+
+### エージェント記憶・時系列 KG 系（RAG の隣接領域）
+
+- [mem0](https://github.com/mem0ai/mem0) / [cognee](https://github.com/topoteretes/cognee) /
+  [Graphiti (Zep)](https://github.com/getzep/graphiti) — 会話やイベントを KG/メモリとして
+  蓄積し検索する。文書コーパスの QA というより「エージェントの長期記憶」向け
 
 ### 手法（エンジンではなく検索の工夫として取り込み得るもの）
 
