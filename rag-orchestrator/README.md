@@ -37,6 +37,9 @@ python rag-orchestrator/server.py --port 9500 --open
 | **Hybrid RAG** | 組み込み | 埋め込みAPI | ベクトル + BM25 を RRF（Reciprocal Rank Fusion）で融合 |
 | **nano-graphrag** | 外部・実験的 | `pip install nano-graphrag` ※Python 3.10〜3.12（graspologic→gensim 依存のため 3.13 不可） | [gusye1234/nano-graphrag](https://github.com/gusye1234/nano-graphrag)。約1,000行の GraphRAG 実装。グラフタブ表示対応 |
 | **LightRAG** | 外部・実験的 | `pip install lightrag-hku openai` | [HKUDS/LightRAG](https://github.com/HKUDS/LightRAG)。グラフ+ベクトル二層・増分更新。導入が軽い（gensim 不要）。グラフタブ表示対応 |
+| **MiniRAG** | 外部・実験的 | `pip install minirag-hku openai` | [HKUDS/MiniRAG](https://github.com/HKUDS/MiniRAG)（ACL2026）。小型ローカルLLM向け設計の異種グラフ RAG。mini / light / naive 検索。グラフタブ表示対応 |
+| **HippoRAG 2** | 外部・実験的 | `pip install hipporag` ※**依存が重い**（torch 2.5.1 / vllm 0.6.6 を固定ピン。専用 venv + GPU 推奨） | [OSU-NLP/HippoRAG](https://github.com/OSU-NLP-Group/HippoRAG)。KG + Personalized PageRank でマルチホップ検索。埋め込みモデル名が `text-embedding〜` 以外だと HF ローカルロードを試みる点に注意 |
+| **RAG-Anything** | 外部・実験的 | `pip install raganything openai` | [HKUDS/RAG-Anything](https://github.com/HKUDS/RAG-Anything)。LightRAG 基盤のマルチモーダル RAG。本アプリからはテキストコーパスを投入（PDF/画像/表の解析は MinerU の別途設定が必要）。グラフタブ表示対応 |
 
 日本語はチャンク分割（段落・句点境界）と CJK バイグラムのトークン化で形態素解析なしに扱う。
 
@@ -99,9 +102,9 @@ query:   global … コミュニティ要約への map-reduce（「全体とし�
 | [nano-graphrag](https://github.com/gusye1234/nano-graphrag) | 本家の要点を約1,000行に凝縮。ハックしやすい | アダプタ同梱（実験的） |
 | [LightRAG](https://github.com/HKUDS/LightRAG) | グラフ+ベクトルの二層インデックス。増分更新可・インデックス費用がほぼ埋め込み並み。2026年時点で新規プロジェクトの定番 | アダプタ同梱（実験的） |
 | [fast-graphrag](https://github.com/circlemind-ai/fast-graphrag) | PageRank ベースの探索で軽量・高速化 | 未対応（候補） |
-| [HippoRAG 2](https://github.com/OSU-NLP-Group/HippoRAG) | 海馬の記憶モデル着想。KG + Personalized PageRank でマルチホップ推論が 10〜30 倍安価。インデックス費用も GraphRAG/LightRAG より軽い | 未対応（アダプタ有力候補。pip 可・vLLM/OpenAI互換対応） |
-| [MiniRAG](https://github.com/HKUDS/MiniRAG) | LightRAG と同じ HKUDS 製（ACL2026）。**小型ローカルLLM向け**に設計された異種グラフ + 軽量トポロジ検索 | 未対応（アダプタ有力候補。ローカル小型モデル環境に最適） |
-| [RAG-Anything](https://github.com/HKUDS/RAG-Anything) | LightRAG 基盤のマルチモーダル RAG（PDF・画像・表・数式）。note 記事の MMGraphRAG 方向の実用実装 | 未対応（候補） |
+| [HippoRAG 2](https://github.com/OSU-NLP-Group/HippoRAG) | 海馬の記憶モデル着想。KG + Personalized PageRank でマルチホップ推論が 10〜30 倍安価。インデックス費用も GraphRAG/LightRAG より軽い | アダプタ同梱（実験的。依存が重い点に注意） |
+| [MiniRAG](https://github.com/HKUDS/MiniRAG) | LightRAG と同じ HKUDS 製（ACL2026）。**小型ローカルLLM向け**に設計された異種グラフ + 軽量トポロジ検索 | アダプタ同梱（実験的） |
+| [RAG-Anything](https://github.com/HKUDS/RAG-Anything) | LightRAG 基盤のマルチモーダル RAG（PDF・画像・表・数式）。note 記事の MMGraphRAG 方向の実用実装 | アダプタ同梱（実験的。テキスト投入のみ） |
 | [KAG](https://github.com/OpenSPG/KAG) | Ant Group 製。ドメイン知識のスキーマ/論理推論を重視 | OpenSPG サーバ前提のため対象外 |
 | PathRAG / OG-RAG | 研究実装。フローベースの文脈剪定（-44%）/ オントロジー接地（幻覚 -40%） | 論文コード（候補） |
 

@@ -4,7 +4,8 @@
 const $ = (sel) => document.querySelector(sel);
 const ENGINE_COLORS = {
   graphrag: "#a78bfa", vector: "#5aa2ff", bm25: "#34d399", hybrid: "#f59e0b",
-  "nano-graphrag": "#f472b6", lightrag: "#f472b6",
+  "nano-graphrag": "#f472b6", lightrag: "#f472b6", minirag: "#fb7185",
+  hipporag: "#22d3ee", "rag-anything": "#c084fc",
 };
 const state = {
   engines: [],

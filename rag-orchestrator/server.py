@@ -110,7 +110,8 @@ def api_corpus_sample() -> dict:
 
 
 # GraphML（NetworkX ストレージ）を出力する外部エンジン
-GRAPHML_ENGINES = ("lightrag", "nano-graphrag")
+# （HippoRAG は igraph/parquet 保存のため GraphML 表示は非対応）
+GRAPHML_ENGINES = ("lightrag", "nano-graphrag", "minirag", "rag-anything")
 
 
 def api_graph(engine_id: str) -> dict:

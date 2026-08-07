@@ -82,10 +82,14 @@ class TestAPIFlow(unittest.TestCase):
         engines = self.api("/api/engines")["engines"]
         ids = {e["id"] for e in engines}
         self.assertLessEqual({"graphrag", "vector", "bm25", "hybrid"}, ids)
-        # 外部エンジンは未導入の理由が表示される
-        ext = next(e for e in engines if e["id"] == "nano-graphrag")
-        self.assertFalse(ext["available"])
-        self.assertIn("未導入", ext["reason"])
+        # 外部エンジンは未導入の理由（導入コマンド）が表示される
+        for ext_id in ("nano-graphrag", "lightrag", "minirag", "hipporag",
+                       "rag-anything"):
+            ext = next(e for e in engines if e["id"] == ext_id)
+            self.assertEqual(ext["kind"], "external")
+            self.assertTrue(ext["experimental"])
+            self.assertFalse(ext["available"], ext_id)
+            self.assertIn("未導入", ext["reason"])
 
     def test_01_config(self):
         cfg = self.api("/api/config", {
