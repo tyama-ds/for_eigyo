@@ -20,8 +20,10 @@ APP_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(APP_DIR))
 
 import ragcore.config as config  # noqa: E402
+import ragcore.engines.external as external  # noqa: E402
 import ragcore.store as store  # noqa: E402
 from mock_llm import start_mock_llm  # noqa: E402
+from test_graphio import FIXTURE as GRAPHML_FIXTURE  # noqa: E402
 
 _opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
@@ -35,6 +37,7 @@ class TestAPIFlow(unittest.TestCase):
         config.CONFIG_FILE = tmp_path / "config.json"
         store.DATA_DIR = tmp_path / "data"
         store.CORPUS_FILE = store.DATA_DIR / "corpus.json"
+        external.DATA_DIR = tmp_path / "data" / "external"
 
         cls.mock_server, cls.mock_base = start_mock_llm()
 
@@ -129,6 +132,21 @@ class TestAPIFlow(unittest.TestCase):
         self.assertIn("青嶺製作所", names)
         # 未構築エンジンはエラー
         self.assertIn("error", self.api("/api/graph?engine=hybrid"))
+
+    def test_04b_graph_api_lightrag_graphml(self):
+        # LightRAG の作業ディレクトリに GraphML があれば GUI 用グラフを返す
+        self.assertIn("error", self.api("/api/graph?engine=lightrag"))  # 構築前
+        lr_dir = external.DATA_DIR / "lightrag"
+        lr_dir.mkdir(parents=True, exist_ok=True)
+        (lr_dir / "graph_chunk_entity_relation.graphml").write_text(
+            GRAPHML_FIXTURE, encoding="utf-8")
+        data = self.api("/api/graph?engine=lightrag")
+        self.assertNotIn("error", data)
+        self.assertEqual(len(data["nodes"]), 4)
+        self.assertEqual(len(data["edges"]), 2)
+        names = {n["name"] for n in data["nodes"]}
+        self.assertIn("SkyEdge", names)          # 引用符剥がし + entity_id 優先
+        self.assertTrue(data["communities"])
 
     def test_05_query_local_with_partial_failure(self):
         # hybrid は ingest していない → 部分失敗、他は成功

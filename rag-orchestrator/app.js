@@ -362,7 +362,11 @@ function renderQueryJob(job) {
 const graph = { nodes: [], edges: [], dragging: null, hover: null, raf: null };
 
 async function loadGraph() {
-  const data = await api("/api/graph?engine=graphrag");
+  const engine = $("#g-engine").value;
+  // 組み込み GraphRAG は LLM 要約つきコミュニティ、外部は自動グループ
+  $("#g-com-title").textContent = engine === "graphrag"
+    ? "コミュニティ要約" : "コミュニティ（ラベル伝播による自動グループ）";
+  const data = await api(`/api/graph?engine=${encodeURIComponent(engine)}`);
   if (data.error) {
     $("#g-hint").textContent = data.error;
     $("#g-communities").innerHTML = "";
@@ -452,7 +456,7 @@ function drawGraph() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   if (!graph.nodes.length) {
     ctx.fillStyle = "#8b98b8"; ctx.font = "14px sans-serif";
-    ctx.fillText("GraphRAG のインデックスを構築するとナレッジグラフが表示されます", 30, 40);
+    ctx.fillText("選択したエンジンのインデックスを構築するとナレッジグラフが表示されます", 30, 40);
     return;
   }
   for (const e of graph.edges) {
@@ -518,6 +522,7 @@ $("#g-canvas").addEventListener("mousemove", (ev) => {
   drawGraph();
 });
 $("#g-reload").addEventListener("click", loadGraph);
+$("#g-engine").addEventListener("change", loadGraph);
 
 // ---------------------------------------------------------------- init
 

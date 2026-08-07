@@ -94,15 +94,22 @@
   <section class="panel hidden" id="tab-graph">
     <div class="card">
       <div class="row space-between">
-        <h2>ナレッジグラフ（GraphRAG）</h2>
-        <button class="btn" id="g-reload">再読み込み</button>
+        <h2>ナレッジグラフ</h2>
+        <div class="row">
+          <select id="g-engine" class="inline-select">
+            <option value="graphrag">GraphRAG（組み込み）</option>
+            <option value="lightrag">LightRAG（外部）</option>
+            <option value="nano-graphrag">nano-graphrag（外部）</option>
+          </select>
+          <button class="btn" id="g-reload">再読み込み</button>
+        </div>
       </div>
       <p class="hint" id="g-hint">ノード=エンティティ、色=コミュニティ、太さ=関係の強さ。ドラッグで移動、ホバーで詳細。</p>
       <canvas id="g-canvas" width="1200" height="640"></canvas>
       <div id="g-tooltip" class="tooltip hidden"></div>
     </div>
     <div class="card">
-      <h2>コミュニティ要約</h2>
+      <h2 id="g-com-title">コミュニティ要約</h2>
       <div id="g-communities"></div>
     </div>
   </section>

@@ -22,7 +22,10 @@ python rag-orchestrator/server.py --port 9500 --open
 3. **エンジン** — 比較したいエンジンを選んで「インデックス構築」
 4. **質問・比較** — 質問を投げると全エンジンが並列実行され、回答・出典・統計が
    カードで並ぶ。成功エンジンが2つ以上あれば **統合レポート**（一致点・相違点）を生成
-5. **グラフ** — GraphRAG が構築したナレッジグラフ（エンティティ・関係・コミュニティ）を可視化
+5. **グラフ** — ナレッジグラフ（エンティティ・関係・コミュニティ）を可視化。
+   エンジン切替で **組み込み GraphRAG / LightRAG / nano-graphrag** のグラフを表示できる
+   （外部エンジンは作業ディレクトリの GraphML を読み込み。コミュニティ要約の代わりに
+   ラベル伝播による自動グループで色分け）
 
 ## エンジン一覧
 
@@ -32,8 +35,8 @@ python rag-orchestrator/server.py --port 9500 --open
 | **Vector RAG** | 組み込み | 埋め込みAPI | チャンク→埋め込み→コサイン top-k→生成（Naive RAG のベースライン） |
 | **BM25 RAG** | 組み込み | なし | 字句一致（BM25）→top-k→生成。LLM 未設定なら抜粋を返す |
 | **Hybrid RAG** | 組み込み | 埋め込みAPI | ベクトル + BM25 を RRF（Reciprocal Rank Fusion）で融合 |
-| **nano-graphrag** | 外部・実験的 | `pip install nano-graphrag` | [gusye1234/nano-graphrag](https://github.com/gusye1234/nano-graphrag)。約1,000行の GraphRAG 実装 |
-| **LightRAG** | 外部・実験的 | `pip install lightrag-hku` | [HKUDS/LightRAG](https://github.com/HKUDS/LightRAG)。グラフ+ベクトル二層・増分更新 |
+| **nano-graphrag** | 外部・実験的 | `pip install nano-graphrag` ※Python 3.10〜3.12（graspologic→gensim 依存のため 3.13 不可） | [gusye1234/nano-graphrag](https://github.com/gusye1234/nano-graphrag)。約1,000行の GraphRAG 実装。グラフタブ表示対応 |
+| **LightRAG** | 外部・実験的 | `pip install lightrag-hku openai` | [HKUDS/LightRAG](https://github.com/HKUDS/LightRAG)。グラフ+ベクトル二層・増分更新。導入が軽い（gensim 不要）。グラフタブ表示対応 |
 
 日本語はチャンク分割（段落・句点境界）と CJK バイグラムのトークン化で形態素解析なしに扱う。
 
@@ -159,6 +162,7 @@ ragcore/
   llm.py                OpenAI 互換クライアント（chat / embeddings、統計、think除去）
   textutil.py           チャンク分割・トークン化・BM25・RRF・LLM出力のJSON抽出
   store.py              コーパス / インデックスの永続化（data/、corpus_rev で鮮度管理）
+  graphio.py            LightRAG / nano-graphrag の GraphML 読み込み（グラフタブ表示用）
   orchestrator.py       並列実行ジョブ・部分失敗許容・統合レポート
   engines/
     graphrag.py         組み込み GraphRAG（本体）

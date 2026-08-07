@@ -27,7 +27,8 @@ sys.path.insert(0, str(BASE))
 from ragcore import __version__  # noqa: E402
 from ragcore import store  # noqa: E402
 from ragcore.config import load_config, public_config, save_config  # noqa: E402
-from ragcore.engines import all_engines, get_engine  # noqa: E402
+from ragcore.engines import all_engines, external, get_engine  # noqa: E402
+from ragcore.graphio import GRAPHML_FILENAME, graphml_graph_payload  # noqa: E402
 from ragcore.llm import LLMClient, LLMError  # noqa: E402
 from ragcore.orchestrator import Orchestrator  # noqa: E402
 
@@ -108,8 +109,20 @@ def api_corpus_sample() -> dict:
     return api_corpus_add({"docs": docs})
 
 
+# GraphML（NetworkX ストレージ）を出力する外部エンジン
+GRAPHML_ENGINES = ("lightrag", "nano-graphrag")
+
+
 def api_graph(engine_id: str) -> dict:
-    """グラフ可視化用データ（GraphRAG 系の組み込みインデックスから生成）。"""
+    """グラフ可視化用データ。
+
+    - graphrag（組み込み）: インデックス JSON から生成
+    - lightrag / nano-graphrag（外部）: 作業ディレクトリの GraphML から生成
+    """
+    if engine_id in GRAPHML_ENGINES:
+        # external.DATA_DIR を呼び出し時に参照する（テストで差し替え可能にするため）
+        path = external.DATA_DIR / engine_id / GRAPHML_FILENAME
+        return graphml_graph_payload(path, max_nodes=MAX_GRAPH_NODES)
     index = store.load_index(engine_id)
     if index is None:
         return {"error": "インデックス未構築です"}
