@@ -884,6 +884,28 @@ def proxy_config() -> dict:
             "ca_bundle": (p.get("ca_bundle") or "").strip()}   # 社内プロキシのCA証明書(任意)
 
 
+def browser_config() -> dict:
+    """本文取得のヘッドレスブラウザ設定（設定画面から入力・いずれも任意）。
+
+    - binary: ブラウザ実行ファイルのパス（空=インストール済み Chrome/Edge を自動検出）
+    - driver: WebDriver（chromedriver / msedgedriver）のパス
+      （空= Selenium Manager が自動解決）
+    環境変数 PRISM_BROWSER_BINARY / PRISM_CHROMEDRIVER は設定が空のときの
+    フォールバックとして機能する。
+    """
+    raw = browser_settings_raw()
+    return {"binary": raw["binary"] or (os.environ.get("PRISM_BROWSER_BINARY") or "").strip(),
+            "driver": raw["driver"] or (os.environ.get("PRISM_CHROMEDRIVER") or "").strip()}
+
+
+def browser_settings_raw() -> dict:
+    """settings.json に保存されたままのブラウザ設定（設定画面のフォーム表示用）。"""
+    x = load_settings().get("browser")
+    b = x if isinstance(x, dict) else {}
+    return {"binary": (b.get("binary") or "").strip(),
+            "driver": (b.get("driver") or "").strip()}
+
+
 def _host_is_internal(url: str) -> bool:
     """URL のホストがループバック/リンクローカル/プライベート等に解決されるか（SSRF対策）。"""
     try:
@@ -1008,20 +1030,25 @@ def _fetch_page_selenium(url: str) -> tuple[str, str]:
     try:
         from selenium import webdriver
         from selenium.webdriver.chrome.service import Service as ChromeService
+        from selenium.webdriver.edge.service import Service as EdgeService
     except ImportError:
         return "", "selenium未インストール（pip install selenium で有効化できます）"
     cfg = proxy_config()
+    bcfg = browser_config()   # 設定画面のパス（空なら環境変数→自動検出）
+    if bcfg["driver"] and not os.path.exists(bcfg["driver"]):
+        return "", f"設定のWebDriverが見つかりません: {bcfg['driver']}"
+    if bcfg["binary"] and not os.path.exists(bcfg["binary"]):
+        return "", f"設定のブラウザ実行ファイルが見つかりません: {bcfg['binary']}"
 
-    def _opts(cls):
+    def _opts(cls, with_binary: bool):
         o = cls()
         o.add_argument("--headless=new")
         o.add_argument("--disable-gpu")
         o.add_argument("--no-sandbox")
         o.add_argument("--window-size=1280,900")
         o.page_load_strategy = "eager"   # DOMContentLoaded まで（本文抽出には十分で速い）
-        binp = os.environ.get("PRISM_BROWSER_BINARY")
-        if binp:
-            o.binary_location = binp
+        if with_binary and bcfg["binary"]:
+            o.binary_location = bcfg["binary"]
         if not cfg["use_proxy"]:
             o.add_argument("--no-proxy-server")
         elif cfg["proxy_url"]:
@@ -1031,17 +1058,23 @@ def _fetch_page_selenium(url: str) -> tuple[str, str]:
 
     drv = None
     try:
-        drvpath = os.environ.get("PRISM_CHROMEDRIVER")
+        drvpath = bcfg["driver"]
         try:
             if drvpath:
-                drv = webdriver.Chrome(options=_opts(webdriver.ChromeOptions),
+                drv = webdriver.Chrome(options=_opts(webdriver.ChromeOptions, True),
                                        service=ChromeService(executable_path=drvpath))
             else:
-                drv = webdriver.Chrome(options=_opts(webdriver.ChromeOptions))
+                drv = webdriver.Chrome(options=_opts(webdriver.ChromeOptions, True))
         except Exception as e:
             chrome_err = f"Chrome: {type(e).__name__}"
+            # Edge にフォールバック。binary_location はChrome用パスの可能性が
+            # あるため付けない。driver指定があれば msedgedriver として試す
             try:
-                drv = webdriver.Edge(options=_opts(webdriver.EdgeOptions))
+                if drvpath:
+                    drv = webdriver.Edge(options=_opts(webdriver.EdgeOptions, False),
+                                         service=EdgeService(executable_path=drvpath))
+                else:
+                    drv = webdriver.Edge(options=_opts(webdriver.EdgeOptions, False))
             except Exception as e2:
                 return "", f"ブラウザ起動失敗（{chrome_err} / Edge: {type(e2).__name__}）"
         drv.set_page_load_timeout(SELENIUM_TIMEOUT)
@@ -1495,7 +1528,8 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if u.path == "/api/settings":
-            self._json({"ai": ai_status(), "proxy": proxy_config()})
+            self._json({"ai": ai_status(), "proxy": proxy_config(),
+                        "browser": browser_settings_raw()})
             return
 
         self._json({"error": "not found"}, 404)
@@ -1588,8 +1622,12 @@ class Handler(BaseHTTPRequestHandler):
             settings = load_settings()
             settings["ai"] = ai
             settings["proxy"] = {"use_proxy": use_proxy, "proxy_url": purl, "ca_bundle": ca_bundle}
+            # 本文取得のヘッドレスブラウザ設定（いずれも任意・空=自動検出）
+            settings["browser"] = {"binary": (body.get("browser_binary") or "").strip(),
+                                   "driver": (body.get("driver_path") or "").strip()}
             save_settings(settings)
-            self._json({"ok": True, "ai": ai_status(), "proxy": proxy_config()})
+            self._json({"ok": True, "ai": ai_status(), "proxy": proxy_config(),
+                        "browser": browser_settings_raw()})
             return
 
         if u.path == "/api/proxy/test":  # 接続テスト（フォーム値で試すだけ・保存しない）

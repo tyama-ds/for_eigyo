@@ -148,8 +148,12 @@ AI アシスタントは**サーバー側から生成AI APIを呼び出す**。�
      selenium 経由で取得した場合もその旨を注記する
   - Selenium は**任意依存**: `pip install selenium` で有効化（未導入なら自動スキップし、
     その旨を注記に表示）。PC にインストール済みの Chrome / Edge をヘッドレスで起動し、
-    ドライバは Selenium Manager が自動解決する。`PRISM_BROWSER_BINARY` /
-    `PRISM_CHROMEDRIVER` 環境変数でバイナリを明示指定も可能
+    ドライバは Selenium Manager が自動解決する
+  - **ブラウザ実行ファイル／WebDriver のパスは設定画面（GUI）から指定できる**
+    （「本文取得のヘッドレスブラウザ」欄・いずれも任意）。ドライバの自動ダウンロードが
+    プロキシで失敗する環境では、手動配置した chromedriver / msedgedriver のパスを
+    ここに入力する。指定パスが存在しない場合は注記で明示。環境変数
+    `PRISM_BROWSER_BINARY` / `PRISM_CHROMEDRIVER` は設定が空のときのフォールバック
 
 ## 初期登録フィード
 
