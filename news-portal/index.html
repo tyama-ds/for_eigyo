@@ -475,6 +475,9 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
 .think-box{margin:0 0 8px; font-size:12px; color:var(--text-3)}
 .think-box summary{cursor:pointer; user-select:none; font-weight:600; padding:3px 0; list-style-position:inside}
 .think-box summary:hover{color:var(--text-2)}
+.bubble-note{font-size:11.5px; color:var(--text-3); margin:0 0 7px; padding-bottom:6px;
+  border-bottom:1px dashed var(--line-2)}
+.bubble-note.warn{color:var(--cat-世界); font-weight:600}
 .think-box .think-body{margin-top:6px; padding:9px 11px; border-left:3px solid var(--line-2);
   background:color-mix(in srgb,var(--surface-2) 60%,transparent); border-radius:0 9px 9px 0;
   max-height:260px; overflow:auto; white-space:pre-wrap; word-break:break-word; line-height:1.6}
@@ -858,6 +861,18 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
           <span class="hint" id="proxyTestOut" style="flex:1; min-width:200px" aria-live="polite"></span>
         </div>
         <span class="hint">上のフォームの値（保存前でも可）で arXiv への取得を試し、失敗理由（407認証/403遮断/TLS/未到達）を判定します。</span>
+      </div>
+      <div class="sethead">本文取得のヘッドレスブラウザ（任意）</div>
+      <div class="setrow">
+        <label for="brBinary">ブラウザ実行ファイルのパス</label>
+        <input id="brBinary" type="text" autocomplete="off" spellcheck="false"
+               placeholder="例: C:\Program Files\Google\Chrome\Application\chrome.exe（空=自動検出）">
+      </div>
+      <div class="setrow">
+        <label for="brDriver">WebDriver（chromedriver / msedgedriver）のパス</label>
+        <input id="brDriver" type="text" autocomplete="off" spellcheck="false"
+               placeholder="例: C:\tools\chromedriver.exe（空=Selenium Managerが自動解決）">
+        <span class="hint">urllib で本文が取れないとき、ヘッドレスブラウザで再取得します（<code>pip install selenium</code> が必要）。通常は両方とも<b>空でOK</b>（インストール済みの Chrome/Edge とドライバ自動解決を使用）。ドライバの自動ダウンロードがプロキシで失敗する環境では、手動配置した WebDriver のパスをここに指定してください。</span>
       </div>
       <div class="setnote">AI 呼び出しと RSS 取得はいずれも<b>サーバー側の <code>urllib</code></b>で行われ、上のプロキシ設定に従います（他のアプリ／llmlab と同じ流儀）。取得できない情報源は「情報源」画面の各行の<b>診断ボタン</b>（脈波アイコン）で原因を切り分けられます。APIキーはこの端末の <code>settings.json</code> にのみ保存され、画面には再表示されません。</div>
       <div class="mrow" style="display:flex; gap:9px; justify-content:flex-end">
@@ -1606,7 +1621,7 @@ const PROVIDER_DEFAULTS = {
     modelHint:"ローカルにあるモデル名。例: llama3.1 / qwen2.5 / gpt-oss" },
 };
 
-async function loadAiSettings(){ try{ const d=await api("/api/settings"); AI.config=d.ai; AI.proxy=d.proxy; }catch(e){ AI.config=null; } }
+async function loadAiSettings(){ try{ const d=await api("/api/settings"); AI.config=d.ai; AI.proxy=d.proxy; AI.browser=d.browser; }catch(e){ AI.config=null; } }
 function aiReady(){ return !!(AI.config && (AI.config.has_key || AI.config.provider==="local")); }
 
 function setAiContext(a){
@@ -1672,6 +1687,9 @@ function renderAiPanel(){
 function bubbleEl(m){   // AIパネル/リサーチ共通のメッセージバブル（textContent描画・XSS安全）
   const cls = m.role==="user" ? "me" : m.role==="error" ? "err" : "ai";
   const b=el("div",{class:"bubble "+cls});
+  if(m.note){   // 本文取得の状態（selenium経由/取得失敗）の注記
+    b.append(el("div",{class:"bubble-note"+(m.note.startsWith("⚠")?" warn":""), text:m.note}));
+  }
   if(m.reasoning){   // 推論系LLMの思考過程は折りたたみ（既定は閉）で本文の上に
     const det=el("details",{class:"think-box"});
     det.append(el("summary",{text:"推論過程を表示"}),
@@ -1715,12 +1733,12 @@ async function sendAi(text){
     const d=await api("/api/ai/chat",{method:"POST", headers:{"Content-Type":"application/json"},
       body:JSON.stringify({ question:text, history, context:ctxPayload,
                             fetch_page: ctxAtSend.kind==="article" && AI.fetchPage })});
-    res = d.ok ? {role:"assistant", text:d.answer, reasoning:(d.reasoning||"")}
+    res = d.ok ? {role:"assistant", text:d.answer, reasoning:(d.reasoning||""), note:(d.page_note||"")}
                : {role:"error", text:"⚠ "+(d.error||"エラーが発生しました"), need_setup:d.need_setup};
   }catch(e){ res = {role:"error", text:"⚠ "+(e.server?e.message:"通信に失敗しました")}; }
   AI.busy=false;
   if(AI.ctx!==ctxAtSend){ return; }   // 送信中にコンテキストが変わったら結果は破棄（孤立バブル防止）
-  AI.msgs.push({role:res.role, text:res.text, reasoning:res.reasoning||""});
+  AI.msgs.push({role:res.role, text:res.text, reasoning:res.reasoning||"", note:res.note||""});
   if(res.need_setup) setTimeout(openAiSettings,500);
   renderAiMessages();
 }
@@ -1742,9 +1760,12 @@ function fillAiForm(){
   const p=AI.proxy||{use_proxy:true, proxy_url:"", ca_bundle:""};
   $("#aiUseProxy").checked = p.use_proxy!==false; $("#aiProxyUrl").value = p.proxy_url||"";
   $("#aiCaBundle").value = p.ca_bundle||"";
+  const br=AI.browser||{binary:"", driver:""};
+  $("#brBinary").value = br.binary||""; $("#brDriver").value = br.driver||"";
   toggleProxyUrl(); applyProviderHints();
 }
-function proxyPayload(){ const on=$("#aiUseProxy").checked; return { use_proxy:on, proxy_url: on ? $("#aiProxyUrl").value.trim() : "", ca_bundle: $("#aiCaBundle").value.trim() }; }
+function proxyPayload(){ const on=$("#aiUseProxy").checked; return { use_proxy:on, proxy_url: on ? $("#aiProxyUrl").value.trim() : "", ca_bundle: $("#aiCaBundle").value.trim(),
+  browser_binary: $("#brBinary").value.trim(), driver_path: $("#brDriver").value.trim() }; }
 function openAiSettings(){ fillAiForm(); openOverlay($("#aiSettings")); }
 $("#aiProvider").addEventListener("change", applyProviderHints);
 $("#aiUseProxy").addEventListener("change", toggleProxyUrl);
@@ -1755,7 +1776,7 @@ $("#aiForm").addEventListener("submit", async (e)=>{
   const key=$("#aiKey").value.trim(); if(key) payload.api_key=key;
   try{
     const d=await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
-    if(d.ok){ AI.config=d.ai; AI.proxy=d.proxy; toast("AI・プロキシ設定を保存しました"); closeOverlays(); openAI(); }
+    if(d.ok){ AI.config=d.ai; AI.proxy=d.proxy; AI.browser=d.browser; toast("AI・プロキシ設定を保存しました"); closeOverlays(); openAI(); }
     else toast(d.error||"保存に失敗しました","err");
   }catch(e){ toast(e.server ? e.message : "保存に失敗しました","err"); }
 });
@@ -1764,7 +1785,7 @@ $("#aiClearKey").onclick=async ()=>{
     const d=await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({ provider:$("#aiProvider").value, base_url:$("#aiBase").value.trim(),
                             model:$("#aiModel").value.trim(), clear_key:true, ...proxyPayload() })});
-    if(d.ok){ AI.config=d.ai; AI.proxy=d.proxy; $("#aiKey").value=""; $("#aiKeyStatus").textContent=""; toast("APIキーを削除しました"); }
+    if(d.ok){ AI.config=d.ai; AI.proxy=d.proxy; AI.browser=d.browser; $("#aiKey").value=""; $("#aiKeyStatus").textContent=""; toast("APIキーを削除しました"); }
   }catch(e){ toast(e.server ? e.message : "削除に失敗しました","err"); }
 };
 $("#aiBtn").onclick=()=>{ setAiContext(null); openAI(); };
