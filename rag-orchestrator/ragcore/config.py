@@ -23,10 +23,11 @@ DEFAULT_CONFIG: dict = {
     "embed_model": "",
     "embed_base_url": "",
     "embed_api_key": "",
-    # 生成パラメータ
+    # 生成パラメータ。max_tokens は推論モデル（Qwen3 等）が思考にトークンを
+    # 使うことを見込んだ既定値（小さいと JSON 抽出が出力前に切れる）
     "context_window": 8192,
     "request_timeout": 180.0,
-    "max_tokens": 1600,
+    "max_tokens": 4096,
     # プロキシ。use_proxy=False なら環境変数のプロキシも無視して直結する。
     # use_proxy=True で proxy_url 空なら環境変数（HTTP(S)_PROXY）を使う。
     "use_proxy": False,

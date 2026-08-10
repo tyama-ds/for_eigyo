@@ -4,7 +4,8 @@
 const $ = (sel) => document.querySelector(sel);
 const ENGINE_COLORS = {
   graphrag: "#a78bfa", vector: "#5aa2ff", bm25: "#34d399", hybrid: "#f59e0b",
-  "nano-graphrag": "#f472b6", lightrag: "#f472b6",
+  "nano-graphrag": "#f472b6", lightrag: "#f472b6", minirag: "#fb7185",
+  hipporag: "#22d3ee", "rag-anything": "#c084fc",
 };
 const state = {
   engines: [],
@@ -146,6 +147,8 @@ function renderEngineList() {
     const stats = eng.index && eng.index.built && eng.index.stats
       ? `構築済み: ${esc(Object.entries(eng.index.stats)
           .map(([k, v]) => `${k}=${v}`).join(", "))}` : "";
+    const warns = (eng.index && eng.index.warnings || [])
+      .map((w) => `<div class="engine-warn">⚠ ${esc(w)}</div>`).join("");
     const checked = eng.available && eng.kind === "builtin" ? "checked" : "";
     const disabled = eng.available ? "" : "disabled";
     return `<div class="engine-row">
@@ -156,6 +159,7 @@ function renderEngineList() {
         ${avail}${exp}${indexBadge(eng)}
         <div class="engine-desc">${esc(eng.description)}　<span class="muted">必要: ${req}</span></div>
         ${stats ? `<div class="engine-stats">${stats}</div>` : ""}
+        ${warns}
       </div>
     </div>`;
   });
@@ -279,6 +283,8 @@ function renderEngineProgress(eid, e) {
     ${e.status === "done" && e.result && e.result.stats
       ? `<div class="engine-stats">${esc(Object.entries(e.result.stats)
           .map(([k, v]) => `${k}=${v}`).join(", "))} ${llmStatsText(e.llm_stats) ? "・" + llmStatsText(e.llm_stats) : ""}</div>` : ""}
+    ${e.status === "done" && e.result && e.result.warnings
+      ? e.result.warnings.map((w) => `<div class="engine-warn">⚠ ${esc(w)}</div>`).join("") : ""}
   </div>`;
 }
 
@@ -288,6 +294,13 @@ function renderIngestJob(job) {
   $("#e-job").innerHTML = `<div class="card">
     <h2>インデックス構築 <span class="muted">${job.status === "running" ? "実行中…" : "完了"}</span></h2>
     <div class="result-grid">${cards}</div></div>`;
+}
+
+/* 推論過程（Qwen3 等の thinking）を折りたたみで表示。デフォルトは閉じている */
+function thinkHtml(think) {
+  if (!think) return "";
+  return `<details class="think"><summary>推論過程（クリックで展開）</summary>` +
+    `<div class="think-body">${esc(think)}</div></details>`;
 }
 
 function citeHtml(c) {
@@ -305,6 +318,7 @@ function renderQueryJob(job) {
     cards.push(`<div class="result-card synthesis">
       <div class="result-head"><span class="result-title">🧭 統合レポート</span>
       <span class="result-meta">各エンジンの回答の一致点・相違点</span></div>
+      ${thinkHtml(syn.think)}
       <div class="answer">${renderText(syn.text)}</div></div>`);
   } else if (syn.status === "running") {
     cards.push('<div class="result-card synthesis"><div class="result-title">🧭 統合レポート生成中…</div></div>');
@@ -326,6 +340,7 @@ function renderQueryJob(job) {
           <span class="result-meta">mode=${esc(e.result.mode || "")} ・ ${fmtSec(e.elapsed)}
             ${llmStatsText(e.llm_stats) ? "・" + llmStatsText(e.llm_stats) : ""}</span>
         </div>
+        ${thinkHtml(e.result.think)}
         <div class="answer">${renderText(e.result.answer || "")}</div>
         ${cites ? `<div class="citations">${cites}</div>` : ""}
       </div>`);
@@ -348,7 +363,11 @@ function renderQueryJob(job) {
 const graph = { nodes: [], edges: [], dragging: null, hover: null, raf: null };
 
 async function loadGraph() {
-  const data = await api("/api/graph?engine=graphrag");
+  const engine = $("#g-engine").value;
+  // 組み込み GraphRAG は LLM 要約つきコミュニティ、外部は自動グループ
+  $("#g-com-title").textContent = engine === "graphrag"
+    ? "コミュニティ要約" : "コミュニティ（ラベル伝播による自動グループ）";
+  const data = await api(`/api/graph?engine=${encodeURIComponent(engine)}`);
   if (data.error) {
     $("#g-hint").textContent = data.error;
     $("#g-communities").innerHTML = "";
@@ -438,7 +457,7 @@ function drawGraph() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   if (!graph.nodes.length) {
     ctx.fillStyle = "#8b98b8"; ctx.font = "14px sans-serif";
-    ctx.fillText("GraphRAG のインデックスを構築するとナレッジグラフが表示されます", 30, 40);
+    ctx.fillText("選択したエンジンのインデックスを構築するとナレッジグラフが表示されます", 30, 40);
     return;
   }
   for (const e of graph.edges) {
@@ -504,6 +523,7 @@ $("#g-canvas").addEventListener("mousemove", (ev) => {
   drawGraph();
 });
 $("#g-reload").addEventListener("click", loadGraph);
+$("#g-engine").addEventListener("change", loadGraph);
 
 // ---------------------------------------------------------------- init
 

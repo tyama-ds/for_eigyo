@@ -109,4 +109,5 @@ def index_status(engine_id: str, corpus_rev: int) -> dict:
         "corpus_rev": index.get("corpus_rev"),
         "stale": index.get("corpus_rev") != corpus_rev,
         "stats": index.get("stats") or {},
+        "warnings": index.get("warnings") or [],
     }

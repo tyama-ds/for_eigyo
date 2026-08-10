@@ -20,8 +20,10 @@ APP_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(APP_DIR))
 
 import ragcore.config as config  # noqa: E402
+import ragcore.engines.external as external  # noqa: E402
 import ragcore.store as store  # noqa: E402
 from mock_llm import start_mock_llm  # noqa: E402
+from test_graphio import FIXTURE as GRAPHML_FIXTURE  # noqa: E402
 
 _opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
@@ -35,6 +37,7 @@ class TestAPIFlow(unittest.TestCase):
         config.CONFIG_FILE = tmp_path / "config.json"
         store.DATA_DIR = tmp_path / "data"
         store.CORPUS_FILE = store.DATA_DIR / "corpus.json"
+        external.DATA_DIR = tmp_path / "data" / "external"
 
         cls.mock_server, cls.mock_base = start_mock_llm()
 
@@ -79,10 +82,14 @@ class TestAPIFlow(unittest.TestCase):
         engines = self.api("/api/engines")["engines"]
         ids = {e["id"] for e in engines}
         self.assertLessEqual({"graphrag", "vector", "bm25", "hybrid"}, ids)
-        # 外部エンジンは未導入の理由が表示される
-        ext = next(e for e in engines if e["id"] == "nano-graphrag")
-        self.assertFalse(ext["available"])
-        self.assertIn("未導入", ext["reason"])
+        # 外部エンジンは未導入の理由（導入コマンド）が表示される
+        for ext_id in ("nano-graphrag", "lightrag", "minirag", "hipporag",
+                       "rag-anything"):
+            ext = next(e for e in engines if e["id"] == ext_id)
+            self.assertEqual(ext["kind"], "external")
+            self.assertTrue(ext["experimental"])
+            self.assertFalse(ext["available"], ext_id)
+            self.assertIn("未導入", ext["reason"])
 
     def test_01_config(self):
         cfg = self.api("/api/config", {
@@ -130,6 +137,21 @@ class TestAPIFlow(unittest.TestCase):
         # 未構築エンジンはエラー
         self.assertIn("error", self.api("/api/graph?engine=hybrid"))
 
+    def test_04b_graph_api_lightrag_graphml(self):
+        # LightRAG の作業ディレクトリに GraphML があれば GUI 用グラフを返す
+        self.assertIn("error", self.api("/api/graph?engine=lightrag"))  # 構築前
+        lr_dir = external.DATA_DIR / "lightrag"
+        lr_dir.mkdir(parents=True, exist_ok=True)
+        (lr_dir / "graph_chunk_entity_relation.graphml").write_text(
+            GRAPHML_FIXTURE, encoding="utf-8")
+        data = self.api("/api/graph?engine=lightrag")
+        self.assertNotIn("error", data)
+        self.assertEqual(len(data["nodes"]), 4)
+        self.assertEqual(len(data["edges"]), 2)
+        names = {n["name"] for n in data["nodes"]}
+        self.assertIn("SkyEdge", names)          # 引用符剥がし + entity_id 優先
+        self.assertTrue(data["communities"])
+
     def test_05_query_local_with_partial_failure(self):
         # hybrid は ingest していない → 部分失敗、他は成功
         r = self.api("/api/query", {
@@ -141,6 +163,10 @@ class TestAPIFlow(unittest.TestCase):
             entry = job["engines"][eid]
             self.assertEqual(entry["status"], "done", entry.get("error"))
             self.assertTrue(entry["result"]["answer"])
+            # モックLLMは <think>考え中…</think> を前置する → 回答から分離され
+            # think フィールドとして返る（UI で折りたたみ表示）
+            self.assertNotIn("考え中", entry["result"]["answer"])
+            self.assertIn("考え中", entry["result"].get("think", ""))
         self.assertEqual(job["engines"]["hybrid"]["status"], "error")
         self.assertIn("インデックス未構築", job["engines"]["hybrid"]["error"])
         # 既知エンティティを含む質問なので GraphRAG は local に自動ルーティング
@@ -148,6 +174,7 @@ class TestAPIFlow(unittest.TestCase):
         # 成功エンジンが2つ以上 → 統合レポートが生成される
         self.assertEqual(job["synthesis"]["status"], "done", job["synthesis"])
         self.assertIn("統合回答", job["synthesis"]["text"])
+        self.assertIn("考え中", job["synthesis"].get("think", ""))
 
     def test_06_query_global(self):
         r = self.api("/api/query", {

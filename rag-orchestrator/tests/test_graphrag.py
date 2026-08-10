@@ -1,15 +1,17 @@
 """GraphRAG エンジンのユニットテスト（フェイク LLM・HTTP なし）。"""
 from __future__ import annotations
 
+import json
 import sys
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from mock_llm import FakeLLMClient  # noqa: E402
+from mock_llm import FakeLLMClient, mock_chat_response  # noqa: E402
 from ragcore.engines.base import EngineContext  # noqa: E402
-from ragcore.engines.graphrag import GraphRAGEngine, label_propagation  # noqa: E402
+from ragcore.engines.graphrag import (GraphRAGEngine, _norm_key,  # noqa: E402
+                                      label_propagation)
 
 CORPUS = [
     {"id": "d1", "title": "アルファ社について",
@@ -100,6 +102,123 @@ class TestGraphRAGIngestNoEmbeddings(unittest.TestCase):
         result = engine.query(index, "アルファ社について教えて", "local", ctx)
         self.assertTrue(result["answer"])
         self.assertEqual(result["mode"], "local")
+
+
+class TransformLLM(FakeLLMClient):
+    """モック応答を劣化・加工して現実のLLMの振る舞いを再現するフェイク。"""
+
+    def __init__(self, transform, **kw):
+        super().__init__(**kw)
+        self._transform = transform
+
+    def chat(self, prompt, *, system="", max_tokens=None, temperature=0.0,
+             want_think=False):
+        self.stats["chat_calls"] += 1
+        text = self._transform(prompt, mock_chat_response(prompt))
+        return (text, "（テスト思考）") if want_think else text
+
+
+class TestNormKey(unittest.TestCase):
+    def test_corporate_forms_merged(self):
+        self.assertEqual(_norm_key("株式会社青嶺製作所"), _norm_key("青嶺製作所"))
+        self.assertEqual(_norm_key("青嶺製作所 株式会社"), _norm_key("青嶺製作所"))
+        self.assertEqual(_norm_key("㈱青嶺製作所"), _norm_key("青嶺製作所"))
+        self.assertEqual(_norm_key("Aomine Inc."), _norm_key("aomine"))
+
+    def test_nfkc_and_whitespace(self):
+        self.assertEqual(_norm_key("ＳｋｙＥｄｇｅ"), _norm_key("SkyEdge"))
+        self.assertEqual(_norm_key("Sky Edge"), _norm_key("SkyEdge"))
+
+    def test_pure_corporate_name_survives(self):
+        self.assertTrue(_norm_key("株式会社"))   # 全部剥がれても空にならない
+
+
+class TestAuditRegressions(unittest.TestCase):
+    """監査で確認した「情報がみつからない」への各経路の回帰テスト。"""
+
+    def test_ingest_raises_when_no_entities(self):
+        # 抽出が全チャンクで JSON にならない（think でトークン切れ等）→ 沈黙せずエラー
+        llm = TransformLLM(lambda p, clean: "エンティティを整理すると…（JSONなし）"
+                           if "[TASK:graph_extract]" in p else clean)
+        ctx = EngineContext(llm=llm, cfg=CFG)
+        with self.assertRaises(ValueError) as cm:
+            GraphRAGEngine().ingest(CORPUS, ctx)
+        self.assertIn("エンティティが1件も抽出できませんでした", str(cm.exception))
+        self.assertIn("Max Tokens", str(cm.exception))
+
+    def test_extract_retry_recovers(self):
+        # 1回目は JSON 崩れ、再出力要求で正しい JSON → 構築成功 + retries 記録
+        def transform(prompt, clean):
+            if "[TASK:graph_extract]" in prompt and "【再出力】" not in prompt:
+                return "すみません、JSONを出し忘れました。"
+            return clean
+        ctx = EngineContext(llm=TransformLLM(transform), cfg=CFG)
+        index = GraphRAGEngine().ingest(CORPUS, ctx)
+        self.assertGreater(index["stats"]["entities"], 0)
+        self.assertEqual(index["stats"]["extract_parse_failures"], 0)
+        self.assertEqual(index["stats"]["extract_retries"], index["stats"]["chunks"])
+
+    def test_corporate_prefix_relations_survive(self):
+        # 関係の端点だけ「株式会社」付き（表記ゆれ）でも正規化でグラフが繋がる
+        def transform(prompt, clean):
+            if "[TASK:graph_extract]" in prompt:
+                data = json.loads(clean)
+                for r in data.get("relations", []):
+                    r["source"] = "株式会社" + r["source"]
+                    r["target"] = "株式会社" + r["target"]
+                return json.dumps(data, ensure_ascii=False)
+            return clean
+        ctx = EngineContext(llm=TransformLLM(transform), cfg=CFG)
+        index = GraphRAGEngine().ingest(CORPUS, ctx)
+        self.assertGreater(index["stats"]["relations"], 0)
+        self.assertGreaterEqual(index["stats"]["summarized_communities"], 1)
+        self.assertEqual(index["warnings"], [])
+
+    def test_singleton_summaries_and_warning_when_no_relations(self):
+        # 関係が全滅しても、単独コミュニティに要約が付き global が答えられる + 警告
+        def transform(prompt, clean):
+            if "[TASK:graph_extract]" in prompt:
+                data = json.loads(clean)
+                data["relations"] = []
+                return json.dumps(data, ensure_ascii=False)
+            return clean
+        engine = GraphRAGEngine()
+        ctx = EngineContext(llm=TransformLLM(transform), cfg=CFG)
+        index = engine.ingest(CORPUS, ctx)
+        self.assertTrue(any("関係が1件も" in w for w in index["warnings"]))
+        self.assertTrue(all(c["summary"] for c in index["communities"]))
+        result = engine.query(index, "全体を要約して", "global", ctx)
+        self.assertNotIn("見つかりませんでした", result["answer"])
+
+    def test_global_fallback_when_map_returns_prose(self):
+        # インデックスは健全でも map が散文を返す → チャンク直接回答へフォールバック
+        engine = GraphRAGEngine()
+        ctx = EngineContext(llm=FakeLLMClient(), cfg=CFG)
+        index = engine.ingest(CORPUS, ctx)
+        broken_map = TransformLLM(lambda p, clean: "重要度は高いと思います。"
+                                  if "[TASK:global_map]" in p else clean)
+        qctx = EngineContext(llm=broken_map, cfg=CFG)
+        result = engine.query(index, "全体を要約して", "global", qctx)
+        self.assertNotIn("見つかりませんでした", result["answer"])
+        self.assertEqual(result["mode"], "global(チャンク直接)")
+        self.assertTrue(result["stats"].get("fallback"))
+        self.assertTrue(any(c["type"] == "chunk" for c in result["citations"]))
+
+    def test_global_lenient_score_parsing(self):
+        # map の score が "高" のような文字列でもポイントとして拾える
+        engine = GraphRAGEngine()
+        ctx = EngineContext(llm=FakeLLMClient(), cfg=CFG)
+        index = engine.ingest(CORPUS, ctx)
+
+        def transform(prompt, clean):
+            if "[TASK:global_map]" in prompt:
+                return json.dumps({"points": [{"text": "ポイント", "score": "高"}]},
+                                  ensure_ascii=False)
+            return clean
+        qctx = EngineContext(llm=TransformLLM(transform), cfg=CFG)
+        result = engine.query(index, "全体を要約して", "global", qctx)
+        self.assertEqual(result["mode"], "global")   # フォールバックせず通常経路
+        self.assertGreater(result["stats"]["points"], 0)
 
 
 class TestGraphRAGQuery(unittest.TestCase):

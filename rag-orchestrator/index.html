@@ -94,15 +94,24 @@
   <section class="panel hidden" id="tab-graph">
     <div class="card">
       <div class="row space-between">
-        <h2>ナレッジグラフ（GraphRAG）</h2>
-        <button class="btn" id="g-reload">再読み込み</button>
+        <h2>ナレッジグラフ</h2>
+        <div class="row">
+          <select id="g-engine" class="inline-select">
+            <option value="graphrag">GraphRAG（組み込み）</option>
+            <option value="lightrag">LightRAG（外部）</option>
+            <option value="minirag">MiniRAG（外部）</option>
+            <option value="rag-anything">RAG-Anything（外部）</option>
+            <option value="nano-graphrag">nano-graphrag（外部）</option>
+          </select>
+          <button class="btn" id="g-reload">再読み込み</button>
+        </div>
       </div>
       <p class="hint" id="g-hint">ノード=エンティティ、色=コミュニティ、太さ=関係の強さ。ドラッグで移動、ホバーで詳細。</p>
       <canvas id="g-canvas" width="1200" height="640"></canvas>
       <div id="g-tooltip" class="tooltip hidden"></div>
     </div>
     <div class="card">
-      <h2>コミュニティ要約</h2>
+      <h2 id="g-com-title">コミュニティ要約</h2>
       <div id="g-communities"></div>
     </div>
   </section>
@@ -142,9 +151,11 @@
         </div>
         <div>
           <label class="field-label">Max Tokens</label>
-          <input type="number" id="s-max_tokens" value="1600">
+          <input type="number" id="s-max_tokens" value="4096">
         </div>
       </div>
+      <p class="hint">推論モデル（Qwen3 等）は思考にトークンを使うため Max Tokens は 4096 以上を推奨。
+        小さいとエンティティ抽出の JSON が出力される前に切れます。</p>
       <label class="check"><input type="checkbox" id="s-use_proxy"> プロキシを使う（OFF なら環境変数も無視して直結）</label>
       <label class="field-label">Proxy URL（空なら環境変数 HTTP(S)_PROXY を使用）</label>
       <input type="text" id="s-proxy_url" placeholder="http://proxy.example:8080">

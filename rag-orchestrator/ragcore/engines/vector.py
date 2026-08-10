@@ -42,12 +42,13 @@ class VectorEngine(Engine):
         hits = [(i, s) for i, s in top_k_cosine(qvec, index["chunk_vecs"], k=TOP_K) if s > 0]
         passages = [index["chunks"][i] for i, _ in hits]
         ctx.progress(0.6, "回答生成")
+        think = ""
         if ctx.chat_ok:
-            answer = generate_answer(ctx, question, passages, task_tag="vector_answer")
+            answer, think = generate_answer(ctx, question, passages, task_tag="vector_answer")
             mode_used = "vector"
         else:
             answer = extractive_answer(question, passages)
             mode_used = "vector(抽出)"
         citations = [chunk_citation(index["chunks"][i], s) for i, s in hits]
-        return {"answer": answer, "mode": mode_used, "citations": citations,
-                "stats": {"retrieved": len(passages)}}
+        return {"answer": answer, "think": think, "mode": mode_used,
+                "citations": citations, "stats": {"retrieved": len(passages)}}

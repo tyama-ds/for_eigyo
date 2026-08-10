@@ -68,8 +68,7 @@ def mock_chat_response(prompt: str) -> str:
     if task == "global_reduce":
         return "コーパス全体の統合回答です。[C1]"
 
-    if task in ("local_answer", "vector_answer", "bm25_answer", "hybrid_answer",
-                "answer"):
+    if task.endswith("answer"):   # local_answer / vector_answer / global_fallback_answer 等
         return f"{task} による回答: 資料に基づく説明です。[S1]"
 
     if task == "synthesis":
@@ -130,9 +129,13 @@ class FakeLLMClient:
                       "chat_completion_chars": 0, "embed_calls": 0,
                       "embed_texts": 0, "llm_seconds": 0.0}
 
-    def chat(self, prompt, *, system="", max_tokens=None, temperature=0.0):
+    def chat(self, prompt, *, system="", max_tokens=None, temperature=0.0,
+             want_think=False):
         self.stats["chat_calls"] += 1
-        return mock_chat_response(prompt)
+        text = mock_chat_response(prompt)
+        if want_think:
+            return text, "（テスト用の思考過程）"
+        return text
 
     def embed(self, texts):
         if not self.with_embeddings:

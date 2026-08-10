@@ -19,16 +19,22 @@ https://note.com/niti_technology/n/nfa976ab900a8 で紹介されている方式�
 """
 from __future__ import annotations
 
+import re
 import time
+import unicodedata
 from collections import Counter, defaultdict
 
 from ..llm import LLMError
-from ..textutil import BM25, extract_json, top_k_cosine
-from .base import ANSWER_SYSTEM, Engine, EngineContext, build_chunks
+from ..textutil import BM25, extract_json, parse_score, top_k_cosine
+from .base import (ANSWER_SYSTEM, Engine, EngineContext, build_chunks,
+                   chunk_citation, generate_answer)
 
 MAX_SUMMARIZED_COMMUNITIES = 25   # LLM 要約を作るコミュニティ数の上限（大きい順）
 MAX_MAPPED_COMMUNITIES = 20       # global 検索で map するコミュニティ数の上限
 DESC_MERGE_LIMIT = 600            # マージ後のエンティティ説明文の最大長
+JSON_MIN_TOKENS = 3072            # 抽出・要約など JSON 出力系呼び出しの max_tokens 下限。
+                                  # 推論モデル（Qwen3 等）は思考にトークンを使うため、
+                                  # 設定値が小さくても JSON が出力される前に切れないようにする
 
 EXTRACT_SYSTEM = (
     "あなたはナレッジグラフ構築のための情報抽出器です。"
@@ -117,8 +123,22 @@ LOCAL_ANSWER_PROMPT = """[TASK:local_answer]
 """
 
 
+# 法人格などの接頭・接尾辞（表記ゆれでエンティティ/関係が分断されるのを防ぐ）
+_CORP_RE = re.compile(
+    r"^(?:株式会社|有限会社|合同会社|合資会社|\(株\)|㈱|\(有\))"
+    r"|(?:株式会社|有限会社|合同会社|合資会社|\(株\)|㈱|\(有\)"
+    r"|inc\.?|corp\.?|co\.,?\s*ltd\.?|ltd\.?|k\.k\.)$")
+
+
 def _norm_key(name: str) -> str:
-    return " ".join(str(name).split()).casefold()
+    """エンティティ名の照合キー。NFKC 正規化 + 空白除去 + 法人格の接頭接尾を除去。"""
+    base = "".join(unicodedata.normalize("NFKC", str(name)).split()).casefold()
+    s = base
+    prev = None
+    while prev != s:                      # 前後両方に付く場合があるため安定するまで
+        prev = s
+        s = _CORP_RE.sub("", s).strip("・,、。.-　 ")
+    return s or base
 
 
 def label_propagation(nodes: list[str], edges: dict[tuple[str, str], float],
@@ -168,6 +188,28 @@ class GraphRAGEngine(Engine):
     requires_chat = True
     requires_embed = False        # 埋め込みは任意（local 検索の精度が上がる）
 
+    @staticmethod
+    def _json_tokens(ctx: EngineContext) -> int:
+        """JSON 出力系呼び出しの max_tokens（設定値と下限の大きい方）。"""
+        return max(int(ctx.cfg.get("max_tokens") or 0), JSON_MIN_TOKENS)
+
+    def _chat_json(self, ctx: EngineContext, prompt: str):
+        """JSON を期待して chat し、解析失敗なら1回だけ再出力を求める。
+
+        戻り値は (解析結果 or None, 再試行したか)。
+        """
+        tokens = self._json_tokens(ctx)
+        text = ctx.llm.chat(prompt, system=EXTRACT_SYSTEM, temperature=0.0,
+                            max_tokens=tokens)
+        data = extract_json(text)
+        if data is not None:
+            return data, False
+        retry_prompt = (prompt + "\n\n【再出力】前回の出力は JSON として解析できませんでした。"
+                        "指示した JSON のみを、説明文・コードフェンスなしで出力してください。")
+        text = ctx.llm.chat(retry_prompt, system=EXTRACT_SYSTEM, temperature=0.0,
+                            max_tokens=tokens)
+        return extract_json(text), True
+
     # ------------------------------------------------------------ ingest
     def ingest(self, corpus: list[dict], ctx: EngineContext) -> dict:
         chunks = build_chunks(corpus)
@@ -178,17 +220,19 @@ class GraphRAGEngine(Engine):
         raw_entities: list[dict] = []
         raw_relations: list[dict] = []
         parse_failures = 0
+        retries = 0
         for i, chunk in enumerate(chunks):
             ctx.progress(0.05 + 0.55 * i / len(chunks),
                          f"エンティティ抽出 {i + 1}/{len(chunks)}")
-            text = ctx.llm.chat(EXTRACT_PROMPT.format(text=chunk["text"]),
-                                system=EXTRACT_SYSTEM, temperature=0.0)
-            data = extract_json(text)
+            data, retried = self._chat_json(ctx, EXTRACT_PROMPT.format(text=chunk["text"]))
+            retries += int(retried)
             if not isinstance(data, dict):
                 parse_failures += 1
-                ctx.log(f"抽出JSONの解析に失敗（chunk {chunk['id']}）")
+                ctx.log(f"抽出JSONの解析に失敗（chunk {chunk['id']}、再試行込み）")
                 continue
             for ent in data.get("entities") or []:
+                if isinstance(ent, str):              # スキーマ違反（文字列配列）も受ける
+                    ent = {"name": ent}
                 if isinstance(ent, dict) and str(ent.get("name", "")).strip():
                     raw_entities.append({
                         "name": str(ent["name"]).strip(),
@@ -202,19 +246,25 @@ class GraphRAGEngine(Engine):
                 src, tgt = str(rel.get("source", "")).strip(), str(rel.get("target", "")).strip()
                 if not src or not tgt or _norm_key(src) == _norm_key(tgt):
                     continue
-                try:
-                    strength = max(1, min(10, int(rel.get("strength", 5))))
-                except (TypeError, ValueError):
-                    strength = 5
                 raw_relations.append({
                     "source": src, "target": tgt,
                     "description": str(rel.get("description", "")).strip(),
-                    "strength": strength, "chunk": chunk["id"],
+                    "strength": parse_score(rel.get("strength"), default=5, lo=1, hi=10),
+                    "chunk": chunk["id"],
                 })
 
         # 3. エンティティのマージとグラフ構築
         ctx.progress(0.62, "グラフ構築")
         entities = self._merge_entities(raw_entities)
+        if not entities:
+            # 沈黙して空インデックスを作らず、原因のヒント付きでエラーにする
+            raise ValueError(
+                f"エンティティが1件も抽出できませんでした"
+                f"（{len(chunks)}チャンク中 {parse_failures}件で抽出JSONの解析に失敗）。"
+                "典型的な原因: (1) 推論モデル（Qwen3等）が思考でトークンを使い切り"
+                "JSONが出力される前に切れている → 設定タブの Max Tokens を4096以上に、"
+                "(2) モデルがJSON形式の出力を守れていない → 別モデル/温度0を確認。"
+                "設定タブの「接続テスト」も再確認してください")
         entity_keys = set(entities)
         relations, edge_weights = self._merge_relations(raw_relations, entity_keys)
         for rel in relations:
@@ -232,7 +282,9 @@ class GraphRAGEngine(Engine):
             communities.append({"id": f"C{i + 1}", "entity_keys": members,
                                 "size": len(members), "title": "", "summary": ""})
 
-        # 5. コミュニティ要約（サイズ2以上、大きい順に上限まで）
+        # 5. コミュニティ要約
+        #    サイズ2以上は LLM で要約（大きい順に上限まで）。単独コミュニティは
+        #    LLM を使わずエンティティ情報から要約を作る（global 検索の材料を絶やさない）
         targets = [c for c in communities if c["size"] >= 2][:MAX_SUMMARIZED_COMMUNITIES]
         for j, com in enumerate(targets):
             ctx.progress(0.68 + 0.2 * j / max(1, len(targets)),
@@ -246,11 +298,9 @@ class GraphRAGEngine(Engine):
                 f"{r['description']}（強さ{r['strength']}）"
                 for r in relations
                 if r["source"] in member_set and r["target"] in member_set)[:4000]
-            text = ctx.llm.chat(
-                COMMUNITY_PROMPT.format(entities=ent_lines[:4000],
-                                        relations=rel_lines or "（なし）"),
-                system=EXTRACT_SYSTEM, temperature=0.0)
-            data = extract_json(text)
+            data, _ = self._chat_json(
+                ctx, COMMUNITY_PROMPT.format(entities=ent_lines[:4000],
+                                             relations=rel_lines or "（なし）"))
             if isinstance(data, dict):
                 com["title"] = str(data.get("title", "")).strip()[:80]
                 com["summary"] = str(data.get("summary", "")).strip()[:2000]
@@ -259,6 +309,15 @@ class GraphRAGEngine(Engine):
             if not com["summary"]:
                 com["summary"] = " / ".join(
                     entities[k]["description"] for k in com["entity_keys"][:5])[:1000]
+        for com in communities:
+            if com["summary"]:
+                continue
+            ents = [entities[k] for k in com["entity_keys"]]
+            com["title"] = "・".join(e["name"] for e in ents[:3])[:80]
+            com["summary"] = " / ".join(
+                f"{e['name']}（{e['type']}）: {e['description']}" if e["description"]
+                else f"{e['name']}（{e['type']}）"
+                for e in ents[:5])[:1000]
 
         # 6. 埋め込み（任意）
         entity_list = [entities[k] for k in sorted(entity_keys)]
@@ -274,6 +333,17 @@ class GraphRAGEngine(Engine):
                 ctx.log(f"埋め込みをスキップしました: {e}")
                 entity_vecs = chunk_vecs = None
 
+        # 品質警告（構築は成功しても、検索品質が下がる状態を UI に見せる）
+        warnings: list[str] = []
+        if parse_failures:
+            warnings.append(
+                f"{len(chunks)}チャンク中 {parse_failures}件で抽出JSONの解析に失敗"
+                "（再試行込み）。Max Tokens とモデルのJSON出力品質を確認してください")
+        if not relations:
+            warnings.append(
+                "関係が1件も抽出できませんでした。グラフが分断され、"
+                "コミュニティ要約がエンティティ単位になります（global 検索の品質低下）")
+
         ctx.progress(1.0, "完了")
         return {
             "engine": self.id,
@@ -284,6 +354,7 @@ class GraphRAGEngine(Engine):
             "communities": communities,
             "entity_vecs": entity_vecs,
             "chunk_vecs": chunk_vecs,
+            "warnings": warnings,
             "stats": {
                 "chunks": len(chunks),
                 "entities": len(entity_list),
@@ -291,6 +362,7 @@ class GraphRAGEngine(Engine):
                 "communities": len(communities),
                 "summarized_communities": len(targets),
                 "extract_parse_failures": parse_failures,
+                "extract_retries": retries,
                 "has_embeddings": entity_vecs is not None,
             },
         }
@@ -362,21 +434,23 @@ class GraphRAGEngine(Engine):
         communities = [c for c in index["communities"] if c["summary"]]
         communities = communities[:MAX_MAPPED_COMMUNITIES]
         points: list[dict] = []
+        map_parse_failures = 0
         for i, com in enumerate(communities):
             ctx.progress(0.1 + 0.6 * i / max(1, len(communities)),
                          f"global map {i + 1}/{len(communities)}")
             text = ctx.llm.chat(
                 GLOBAL_MAP_PROMPT.format(cid=com["id"], question=question,
                                          summary=f"{com['title']}\n{com['summary']}"),
-                system=EXTRACT_SYSTEM, temperature=0.0)
+                system=EXTRACT_SYSTEM, temperature=0.0,
+                max_tokens=self._json_tokens(ctx))
             data = extract_json(text)
-            for p in (data.get("points") if isinstance(data, dict) else None) or []:
+            if not isinstance(data, dict):
+                map_parse_failures += 1
+                continue
+            for p in data.get("points") or []:
                 if not isinstance(p, dict) or not str(p.get("text", "")).strip():
                     continue
-                try:
-                    score = max(0, min(10, int(p.get("score", 0))))
-                except (TypeError, ValueError):
-                    score = 0
+                score = parse_score(p.get("score"))
                 if score >= 2:
                     points.append({"text": str(p["text"]).strip()[:500],
                                    "score": score, "community": com["id"]})
@@ -384,23 +458,49 @@ class GraphRAGEngine(Engine):
         points = points[:12]
         used = {p["community"] for p in points}
 
+        # ポイントが1つも得られない（要約なし / map の JSON 崩れ / 本当に無関係）場合は
+        # 「見つからない」で終わらせず、チャンク直接の回答へフォールバックする
+        if not points:
+            ctx.log(f"global map からポイントを得られませんでした"
+                    f"（コミュニティ{len(communities)}件、解析失敗{map_parse_failures}件）。"
+                    "チャンク直接回答へフォールバックします")
+            return self._global_fallback(index, question, ctx, map_parse_failures)
+
         ctx.progress(0.8, "global reduce")
-        if points:
-            point_lines = "\n".join(
-                f"- [{p['community']}] （重要度{p['score']}）{p['text']}" for p in points)
-            answer = ctx.llm.chat(
-                GLOBAL_REDUCE_PROMPT.format(points=point_lines, question=question),
-                system=ANSWER_SYSTEM, temperature=0.0)
-        else:
-            answer = ("コミュニティ要約からは質問に関係する情報が見つかりませんでした。"
-                      "個別の事柄への質問であれば local モードを試してください。")
+        point_lines = "\n".join(
+            f"- [{p['community']}] （重要度{p['score']}）{p['text']}" for p in points)
+        answer, think = ctx.llm.chat(
+            GLOBAL_REDUCE_PROMPT.format(points=point_lines, question=question),
+            system=ANSWER_SYSTEM, temperature=0.0, want_think=True)
         citations = [
             {"type": "community", "ref": c["id"], "title": c["title"],
              "snippet": c["summary"][:200]}
             for c in communities if c["id"] in used
         ]
-        return {"answer": answer, "mode": "global", "citations": citations,
-                "stats": {"mapped_communities": len(communities), "points": len(points)}}
+        return {"answer": answer, "think": think, "mode": "global", "citations": citations,
+                "stats": {"mapped_communities": len(communities), "points": len(points),
+                          "map_parse_failures": map_parse_failures}}
+
+    def _global_fallback(self, index: dict, question: str, ctx: EngineContext,
+                         map_parse_failures: int) -> dict:
+        """コミュニティ要約が使えないときの受け皿: 上位チャンクから直接回答する。"""
+        ctx.progress(0.75, "チャンク直接回答（フォールバック）")
+        chunks = index["chunks"]
+        bm25 = BM25([_chunk_tokens(c) for c in chunks])
+        order = [i for i, _ in bm25.top_k(question, k=8)]
+        for i in range(len(chunks)):          # 質問が一般的で字句が当たらない場合は先頭から補完
+            if len(order) >= 6:
+                break
+            if i not in order:
+                order.append(i)
+        passages = [chunks[i] for i in order[:8]]
+        answer, think = generate_answer(ctx, question, passages,
+                                        task_tag="global_fallback_answer")
+        citations = [chunk_citation(c) for c in passages]
+        return {"answer": answer, "think": think, "mode": "global(チャンク直接)",
+                "citations": citations,
+                "stats": {"fallback": True, "retrieved": len(passages),
+                          "map_parse_failures": map_parse_failures}}
 
     def _query_local(self, index: dict, question: str, ctx: EngineContext) -> dict:
         entities = index["entities"]
@@ -471,11 +571,11 @@ class GraphRAGEngine(Engine):
         chunk_lines = "\n\n".join(
             f"[S{i + 1}] （{c['doc_title']}）\n{c['text'][:1500]}"
             for i, c in enumerate(top_chunks)) or "（なし）"
-        answer = ctx.llm.chat(
+        answer, think = ctx.llm.chat(
             LOCAL_ANSWER_PROMPT.format(entities=ent_lines[:4000], relations=rel_lines[:3000],
                                        communities=com_lines[:2500],
                                        chunks=chunk_lines[:8000], question=question),
-            system=ANSWER_SYSTEM, temperature=0.0)
+            system=ANSWER_SYSTEM, temperature=0.0, want_think=True)
 
         citations = (
             [{"type": "entity", "ref": e["key"], "title": e["name"],
@@ -485,7 +585,7 @@ class GraphRAGEngine(Engine):
             + [{"type": "chunk", "ref": c["id"], "title": c["doc_title"],
                 "snippet": c["text"][:200]} for c in top_chunks]
         )
-        return {"answer": answer, "mode": "local", "citations": citations,
+        return {"answer": answer, "think": think, "mode": "local", "citations": citations,
                 "stats": {"entities": len(top_entities), "relations": len(rel_hits),
                           "chunks": len(top_chunks)}}
 

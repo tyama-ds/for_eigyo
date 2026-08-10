@@ -46,13 +46,14 @@ class HybridEngine(Engine):
         fused = rrf_fuse([vec_rank, lex_rank])[:TOP_K]
         passages = [chunks[i] for i in fused]
         ctx.progress(0.6, "回答生成")
+        think = ""
         if ctx.chat_ok:
-            answer = generate_answer(ctx, question, passages, task_tag="hybrid_answer")
+            answer, think = generate_answer(ctx, question, passages, task_tag="hybrid_answer")
             mode_used = "hybrid(RRF)"
         else:
             answer = extractive_answer(question, passages)
             mode_used = "hybrid(抽出)"
         citations = [chunk_citation(chunks[i]) for i in fused]
-        return {"answer": answer, "mode": mode_used, "citations": citations,
+        return {"answer": answer, "think": think, "mode": mode_used, "citations": citations,
                 "stats": {"vector_candidates": len(vec_rank),
                           "bm25_candidates": len(lex_rank), "retrieved": len(passages)}}
