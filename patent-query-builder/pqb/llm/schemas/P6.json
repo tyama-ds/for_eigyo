@@ -1,0 +1,16 @@
+{
+  "type": "object",
+  "required": ["explanations"],
+  "properties": {
+    "explanations": {"type": "array", "items": {
+      "type": "object", "required": ["kind", "value", "text"],
+      "properties": {
+        "kind": {"type": "string", "enum": ["axis", "term", "code", "summary"]},
+        "axis_id": {"type": "string"},
+        "value": {"type": "string"},
+        "text": {"type": "string"}
+      }}},
+    "summary": {"type": "string"},
+    "low_confidence": {"type": "boolean"}
+  }
+}

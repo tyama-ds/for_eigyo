@@ -1,0 +1,21 @@
+{
+  "_comment": "J-PlatPat 論理式（仮）。実際の文法は Q3（公式ヘルプ・操作マニュアル）の確認後に確定する。本ファイルの記法は企画書 付録A の例に合わせた暫定版。",
+  "id": "jplatpat",
+  "label": "J-PlatPat 論理式（仮）",
+  "and": "*",
+  "or": "+",
+  "not": "-",
+  "block_open": "[",
+  "block_close": "]",
+  "group_open": "(",
+  "group_close": ")",
+  "field_sep": "/",
+  "field_position": "suffix",
+  "quote": "",
+  "fields": {"TI": "TI", "AB": "AB", "CL": "CL", "TX": "TX"},
+  "schemes": {"FI": "FI", "FT": "FT", "IPC": "IP"},
+  "code_format": {"FI": "{code}", "FT": "{code}", "IPC": "{code}"},
+  "proximity": null,
+  "truncation": "?",
+  "max_chars": 2000
+}

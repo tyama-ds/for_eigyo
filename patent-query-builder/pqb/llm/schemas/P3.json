@@ -1,0 +1,16 @@
+{
+  "type": "object",
+  "required": ["codes"],
+  "properties": {
+    "codes": {"type": "array", "items": {
+      "type": "object", "required": ["axis_id", "scheme", "code"],
+      "properties": {
+        "axis_id": {"type": "string"},
+        "scheme": {"type": "string", "enum": ["FI", "FT", "IPC"]},
+        "code": {"type": "string", "minLength": 1},
+        "reason": {"type": "string"},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+      }}},
+    "low_confidence": {"type": "boolean"}
+  }
+}

@@ -8,7 +8,7 @@ for_eigyo / claudecode で作ったアプリを、1画面からワンクリッ�
 python launcher/launcher.py        # http://127.0.0.1:8770
 ```
 
-llmlab Studio / llmlab Loop / Copilot Research / JupyterLab / Prism ニュースポータル、
+llmlab Studio / llmlab Loop / Copilot Research / JupyterLab / Prism ニュースポータル / Patent Query Builder、
 および claudecode の Agent Orchestrator / Deep Research Tool を最初から登録済み。
 別フォルダのアプリも UI の「＋ アプリを追加」から登録できる。
 詳細は [launcher/README.md](launcher/README.md)。
@@ -22,4 +22,5 @@ llmlab Studio / llmlab Loop / Copilot Research / JupyterLab / Prism ニュース
 | [kaleido-agents/](kaleido-agents/) | Kaleido Agents — サブエージェントとツールモジュールで依頼を完結させるマルチエージェント・オーケストレータ（標準ライブラリのみ、LLM接続は任意） |
 | [deep-research-orchestrator/](deep-research-orchestrator/) | Deep Research Orchestrator — 複数のDeep Research実装へ同一調査を並列送信し、進捗・引用・コストを比較して根拠付き統合レポートを生成 (FastAPI+Celery+PostgreSQL+Next.js+SearXNG) |
 | [rag-orchestrator/](rag-orchestrator/) | RAG Orchestrator — 同一コーパス・同一質問を複数のRAG実装（組み込みGraphRAG/Vector/BM25/Hybrid + nano-graphrag/LightRAGアダプタ）へ並列実行し比較・統合。ナレッジグラフ可視化つき（標準ライブラリのみ、ローカルLLM対応） |
+| [patent-query-builder/](patent-query-builder/) | Patent Query Builder — 特許検索式自動作成システム（セミオート版／完全自動版）。発明の説明→観点→語×分類候補→3案の検索式を、人がDBで実行したCSVから逆算（RSJ）・LLM採点・変換候補の局所評価・再現率推定で再帰的に改善。根拠レポート/Excel設計シート出力（標準ライブラリのみ、LLMなしでも動作） |
 | [launcher/](launcher/) | App Portal — 上記アプリ群を呼び出す窓口 |

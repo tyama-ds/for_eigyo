@@ -1,0 +1,21 @@
+{
+  "_comment": "テスト用の汎用ブール方言。",
+  "id": "generic",
+  "label": "汎用ブール（テスト用）",
+  "and": " AND ",
+  "or": " OR ",
+  "not": " NOT ",
+  "block_open": "(",
+  "block_close": ")",
+  "group_open": "(",
+  "group_close": ")",
+  "field_sep": "=",
+  "field_position": "prefix",
+  "quote": "\"",
+  "fields": {"TI": "TI", "AB": "AB", "CL": "CL", "TX": "TX"},
+  "schemes": {"FI": "FI", "FT": "FT", "IPC": "IPC"},
+  "code_format": {"FI": "{code}", "FT": "{code}", "IPC": "{code}"},
+  "proximity": null,
+  "truncation": "*",
+  "max_chars": 4000
+}

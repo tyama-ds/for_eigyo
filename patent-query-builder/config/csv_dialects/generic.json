@@ -1,0 +1,18 @@
+{
+  "_comment": "汎用 CSV（英語列名）。商用DB のエクスポートは Q1 の確認後に列名を追加する。",
+  "id": "generic",
+  "columns": {
+    "doc_id": ["doc_id", "id", "publication_number"],
+    "title": ["title"],
+    "abstract": ["abstract"],
+    "claims": ["claims"],
+    "FI": ["FI"],
+    "FT": ["FT", "F-term"],
+    "IPC": ["IPC"],
+    "pub_date": ["pub_date", "publication_date"],
+    "applicant": ["applicant"],
+    "citations": ["citations"]
+  },
+  "multi_value_separators": [";", ",", "|"],
+  "rank_column": "rank"
+}
