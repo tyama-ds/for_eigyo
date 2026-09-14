@@ -70,7 +70,8 @@ class InterpreterSelectionTests(unittest.TestCase):
              patch.object(portal.threading, "Thread"):
             result = portal.launch_app(self.app)
             self.assertTrue(result["ok"])
-            self.assertEqual(spawn.call_args.args[0], [str(executable), "run.py", "--no-browser", "--port", "8778"])
+            # launch_app resolves cwd; Windows temp paths can use 8.3 aliases.
+            self.assertEqual(spawn.call_args.args[0], [str(executable.resolve()), "run.py", "--no-browser", "--port", "8778"])
             self.assertEqual(spawn.call_args.kwargs["cwd"], str(self.cwd.resolve()))
             self.assertIs(portal._procs[self.app["id"]]["proc"], process)
 
