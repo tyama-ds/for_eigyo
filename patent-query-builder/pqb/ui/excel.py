@@ -246,6 +246,8 @@ def design_workbook(bundle: dict) -> bytes:
 
 
 def _target_text(target: dict) -> str:
+    if target.get("label"):
+        return str(target["label"])
     parts = []
     for k in ("axis_id", "text", "scheme", "code", "new_code", "join", "fields", "other_axis_id"):
         if k in target and target[k] not in (None, "", []):

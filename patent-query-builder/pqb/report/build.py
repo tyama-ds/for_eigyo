@@ -174,6 +174,39 @@ def build_markdown(bundle: dict) -> str:
                 lines.append(f"- {lits}（{p['n']} 件中 {p['n_pos']} 件適合）")
             lines.append("")
 
+    # 被覆・引用拡張・探索
+    cov = last.get("coverage") or {}
+    cit = bundle.get("citation") or {}
+    if last:
+        lines.append("### 被覆と引用・同族による拡張（§10.9）")
+        lines.append("")
+        lines.append(f"- プール {cov.get('pool', '—')} 件のうち母集団 U に含まれない文献: **{cov.get('n_outside', 0)} 件**"
+                     + (f"（{', '.join(cov.get('pool_outside_U', [])[:10])}）" if cov.get("n_outside") else "")
+                     + "。0 件でなければ広め案が取り逃している可能性がある（テキストと独立した証拠）。")
+        if cit.get("log"):
+            lines.append("")
+            lines.append(_table(["反復", "候補", "手元あり", "採点", "プール追加", "未取得", "保留"],
+                                [[e.get("iteration"), e.get("candidates"), e.get("available"), e.get("judged"), e.get("added"), e.get("missing"), e.get("deferred")] for e in cit["log"]]))
+        if cit.get("pending"):
+            lines.append("")
+            lines.append(f"- 未取得の引用・被引用文献（人が DB で確認する作業項目）: {len(cit['pending'])} 件 — " + ", ".join(cit["pending"][:20]) + ("…" if len(cit["pending"]) > 20 else ""))
+        lines.append("")
+        srch = last.get("search") or {}
+        if srch:
+            lines.append("### 目的関数付きの変換探索（複合変換、§10.6）")
+            lines.append("")
+            b0 = srch.get("base") or {}
+            lines.append(f"- 評価 {srch.get('evaluated')} 回、{srch.get('generations')} 世代、変異 {srch.get('n_mutations')} 種、制約を満たす候補 {srch.get('n_feasible')} 件。"
+                         f"基準（標準案・U 内）: 件数 {b0.get('hit_count')}、プール再現率 {_f(b0.get('recall_pool'))}、P@K {_f(b0.get('p_at_k'))}")
+            if srch.get("front"):
+                lines.append("")
+                lines.append(_table(["複合変換（手順）", "予測件数", "予測プール再現率", "予測P@K", "複雑さ"],
+                                    [[" → ".join(f"{st['op']}({_target(st.get('target') or {})})" for st in c["steps"]), c["hit_count"], _f(c["recall_pool"]), _f(c["p_at_k"]), c["complexity"]] for c in srch["front"]]))
+            lines.append("")
+        if bundle.get("db_access"):
+            lines.append(f"- 商用 DB API アクセス回数（この案件）: {bundle['db_access']} 回")
+            lines.append("")
+
     # 変換
     tfs = bundle.get("transforms") or []
     if tfs:
@@ -196,6 +229,14 @@ def build_markdown(bundle: dict) -> str:
     lines.append(_table(["日時", "反復", "ゲート", "決定者", "操作", "内容"],
                         [[d["created_at"], d["iteration"], d["gate"], d["actor"], d["action"], _short(d.get("payload"))] for d in bundle.get("decisions") or []]))
     lines.append("")
+    sdi = bundle.get("sdi_history") or []
+    if sdi:
+        lines.append("## 8b. SDI（定期監視）差分履歴")
+        lines.append("")
+        lines.append(_table(["日時", "案", "取得元", "件数", "既知", "新規", "採点", "新規適合", "未採点"],
+                            [[e.get("at"), VARIANT_JA.get(e.get("variant"), e.get("variant")), e.get("source"), e.get("hit_count"), e.get("n_known"),
+                              e.get("n_new"), e.get("n_judged"), e.get("n_new_relevant"), e.get("n_unjudged")] for e in sdi]))
+        lines.append("")
     lines.append("## 9. 注記（限界）")
     lines.append("")
     lines.append("- RSJ 統計・推定再現率は母集団 U（広め案の結果）の内側で計算した値であり、U の外側の取り逃しは測れない。広め案の再現率は既知文献と引用拡張で担保する。")
@@ -207,7 +248,33 @@ def build_markdown(bundle: dict) -> str:
     return "\n".join(lines)
 
 
+def build_sdi_markdown(case: dict, entry: dict, judged_rows: list[dict], unjudged_ids: list[str]) -> str:
+    """SDI 1 回分の差分報告。"""
+    lines = [f"# SDI 差分報告 — {case.get('name') or case['case_id']}", "",
+             _table(["項目", "内容"], [["案件ID", case["case_id"]], ["実行日時", entry.get("at")], ["案", VARIANT_JA.get(entry.get("variant"), entry.get("variant"))],
+                                     ["取得元", entry.get("source")], ["件数", entry.get("hit_count")], ["取得文献", entry.get("n_docs")],
+                                     ["既知（前回までに見た文献・プール・判定済み）", entry.get("n_known")], ["新規", entry.get("n_new")],
+                                     ["採点した新規", entry.get("n_judged")], ["新規のうち適合", entry.get("n_new_relevant")], ["未採点（上限超過）", entry.get("n_unjudged")]]), ""]
+    rel = [r for r in judged_rows if r["relevant"]]
+    other = [r for r in judged_rows if not r["relevant"]]
+    if rel:
+        lines += ["## 新規の適合文献（プールに追加）", "",
+                  _table(["文献", "名称", "公知日", "総合", "要確認", "根拠"], [[r["doc_id"], r["title"], r.get("pub_date", ""), r["overall"], "要" if r.get("needs_review") else "", r.get("rationale", "")] for r in rel]), ""]
+    if other:
+        lines += ["## 新規だが非適合と採点された文献", "",
+                  _table(["文献", "名称", "総合", "根拠"], [[r["doc_id"], r["title"], r["overall"], r.get("rationale", "")] for r in other]), ""]
+    if unjudged_ids:
+        lines += ["## 未採点の新規文献（採点上限超過。人が確認）", "", ", ".join(unjudged_ids[:100]) + ("…" if len(unjudged_ids) > 100 else ""), ""]
+    if not judged_rows and not unjudged_ids:
+        lines += ["新規文献はありません。", ""]
+    lines += ["## 注記", "", "- 「既知」は当案件のこれまでの実行結果・プール・判定済み文献の和集合。差分は文献番号の比較で、内容の更新は検知しない。",
+              "- 採点は LLM（P4）の一次判定。要確認の文献は人が見る。", ""]
+    return "\n".join(lines)
+
+
 def _target(t: dict) -> str:
+    if t.get("label"):
+        return str(t["label"])
     parts = []
     for k in ("axis_id", "text", "scheme", "code", "new_code", "join", "fields", "other_axis_id"):
         if k in t and t[k] not in (None, "", []):

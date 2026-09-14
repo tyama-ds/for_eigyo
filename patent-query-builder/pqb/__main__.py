@@ -102,6 +102,14 @@ def main(argv=None) -> None:
     sp.add_argument("--judgments", help="[{doc_id,overall,per_axis}] の JSON")
     sp.add_argument("--confirm", action="store_true")
     sp = sub.add_parser("auto", help="Policy 決定者で回す（案A）"); sp.add_argument("case"); sp.add_argument("--max-iterations", type=int)
+    sp = sub.add_parser("citations", help="引用・被引用による拡張（§10.9）"); sp.add_argument("case")
+    sp.add_argument("--max", type=int); sp.add_argument("--confirm", action="store_true")
+    sp = sub.add_parser("sdi", help="確定済みの式を再実行して差分を報告（SDI）"); sp.add_argument("case")
+    sp.add_argument("--variant", default="standard", choices=["broad", "standard", "narrow"])
+    grp = sp.add_mutually_exclusive_group(required=True)
+    grp.add_argument("--csv", help="DB で再実行した結果 CSV"); grp.add_argument("--local", action="store_true", help="local_index で再実行")
+    grp.add_argument("--api", action="store_true", help="商用DB API で再実行")
+    sp.add_argument("--hits", type=int); sp.add_argument("--confirm", action="store_true"); sp.add_argument("-o", "--out", help="差分報告の出力先（.md）")
     sp = sub.add_parser("report", help="根拠レポート"); sp.add_argument("case")
     sp.add_argument("--format", default="md", choices=["md", "html"]); sp.add_argument("-o", "--out")
     sp = sub.add_parser("excel", help="Excel 設計シートを書き出す"); sp.add_argument("case"); sp.add_argument("-o", "--out", required=True)
@@ -193,6 +201,24 @@ def main(argv=None) -> None:
         _print(_run(lambda: orc.decide_g4(args.case, jd, tf, args.action, confirmed=args.confirm)))
     elif args.cmd == "auto":
         _print(_run(lambda: orc.run_auto(args.case, max_iterations=args.max_iterations)))
+    elif args.cmd == "citations":
+        _print(_run(lambda: orc.expand_citations(args.case, confirmed=args.confirm, actor="human", max_docs=args.max)))
+    elif args.cmd == "sdi":
+        def go_sdi():
+            if args.local:
+                return orc.sdi_run(args.case, variant=args.variant, source="local_index", confirmed=args.confirm)
+            if args.api:
+                return orc.sdi_run(args.case, variant=args.variant, source="api", confirmed=args.confirm)
+            return orc.sdi_run(args.case, variant=args.variant, data=Path(args.csv).read_bytes(), hit_count=args.hits,
+                               filename=args.csv, confirmed=args.confirm)
+        res = _run(go_sdi)
+        report = res.pop("report", "")
+        _print({k: v for k, v in res.items() if k != "new_docs"})
+        if args.out:
+            Path(args.out).write_text(report, encoding="utf-8")
+            print(f"差分報告: {args.out}")
+        else:
+            print(report)
     elif args.cmd == "report":
         from .report.build import build_html, build_markdown
         b = _run(lambda: orc.case_bundle(args.case))

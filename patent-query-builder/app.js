@@ -209,6 +209,7 @@ function renderOverview(b) {
     ${["broad", "standard", "narrow"].filter((v) => lm.variants[v]).map((v) => `<h4 style="margin:.6rem 0 .3rem">${VARIANT_JA[v]}案 <span class="dim" style="font-size:.75rem">${esc(lm.variants[v].source)}</span></h4>${metricsKpis(lm.variants[v])}`).join("")}
     <div class="note">停止判定: <b>${stop?.should_stop ? "停止条件を満たす" : "継続"}</b> — ${esc((stop?.reasons || []).join("、"))}。目標レンジ ${esc((stop?.population_range || []).join("〜"))} 件（調査種別: ${esc(b.purpose.label)}）</div>
   </div>` : ""}
+  ${c.status === "finalized" ? sdiCard(b) : ""}
   <div class="card"><h3>成果物</h3>
     <div class="actions">
       <a class="btn" href="/api/cases/${encodeURIComponent(c.case_id)}/report?format=html&download=1">📄 根拠レポート（HTML）</a>
@@ -217,6 +218,25 @@ function renderOverview(b) {
       <label class="btn" style="cursor:pointer">📥 設計シートを読み戻す<input type="file" id="excel-upload" accept=".xlsx" hidden></label>
     </div>
     <p class="dim">設計シートの「採否」「理由コード」「人の総合」「変換候補の採否」列を編集して読み戻すと、判断として取り込みます（ゲートの確定は画面で行います）。</p>
+  </div>`;
+}
+
+function sdiCard(b) {
+  const hist = b.sdi_history || [];
+  const dbApi = b.config?.offline === false && state.config?.db?.mode === "api";
+  return `<div class="card"><h3>SDI（定期監視）差分チェック <span class="chip">Phase 4</span></h3>
+    <p class="dim">確定した検索式を DB で再実行し、前回までに見ていない文献だけを採点して報告します。DB で実行した結果 CSV を取り込むか、オフライン母集団${dbApi ? "・商用DB API" : ""}で再実行します。定期実行は OS のタスクスケジューラから <code>python -m pqb sdi CASE --csv …</code> を呼びます。</p>
+    <div class="inline">
+      <select id="sdi-variant" class="tiny">${["standard", "broad", "narrow"].map((v) => `<option value="${v}">${VARIANT_JA[v]}案</option>`).join("")}</select>
+      <label class="btn small" style="cursor:pointer">CSV を選択<input type="file" id="sdi-csv" accept=".csv,.tsv,.txt" hidden></label><span id="sdi-csvname" class="dim" style="font-size:.72rem"></span>
+      <input type="number" class="tiny" id="sdi-hits" placeholder="件数" min="0">
+      <button class="btn small primary" id="sdi-run-csv">CSV で差分</button>
+      ${b.local_index_size ? `<button class="btn small" id="sdi-run-local">オフライン母集団で差分</button>` : ""}
+      ${dbApi ? `<button class="btn small" id="sdi-run-api">API で差分</button>` : ""}
+    </div>
+    ${hist.length ? `<div class="table-wrap" style="max-height:220px;margin-top:.6rem"><table><thead><tr><th>日時</th><th>案</th><th>取得元</th><th class="num">件数</th><th class="num">既知</th><th class="num">新規</th><th class="num">新規適合</th><th class="num">未採点</th></tr></thead><tbody>
+      ${hist.slice().reverse().map((e) => `<tr><td class="dim">${esc(e.at)}</td><td>${VARIANT_JA[e.variant] || esc(e.variant)}</td><td>${esc(e.source)}</td><td class="num">${e.hit_count}</td><td class="num">${e.n_known}</td><td class="num">${e.n_new}</td><td class="num"><b>${e.n_new_relevant}</b></td><td class="num">${e.n_unjudged}</td></tr>`).join("")}</tbody></table></div>` : `<p class="dim" style="font-size:.78rem">まだ実行していません。</p>`}
+    <div id="sdi-report"></div>
   </div>`;
 }
 
@@ -347,6 +367,7 @@ function renderG3(b) {
     ${b.local_index_size ? `<div class="actions"><button class="btn" id="btn-run-local">⚡ オフライン母集団（local_index ${b.local_index_size} 件）で 3 案を実行</button><span class="dim">テスト・デモ・自前索引用。局所照合（部分一致・階層一致）で DB 照合と差があります。</span></div>` : ""}
   </div>
   ${qs.length ? `<div class="grid3">${["broad", "standard", "narrow"].map((v) => { const q = qs.find((x) => x.variant === v); if (!q) return ""; return variantCard(q, runs.filter((r) => r.variant === v), lm?.variants?.[v], b); }).join("")}</div>` : `<div class="card dim">検索式がまだありません。G2 を確定すると 3 案が組まれます。</div>`}
+  ${citationCard(b, hasPop)}
   <div class="card"><h3>採点と分析 <span class="sp"></span>
       <button class="btn" id="btn-score" ${hasPop ? "" : "disabled"}>🧮 採点（P4: 上位 K=${b.config.top_k} 件＋無作為標本）</button>
       <button class="btn primary" id="btn-analyze" ${hasPop ? "" : "disabled"}>📈 分析（RSJ 逆算・変換候補・推定再現率）→ G4</button></h3>
@@ -354,6 +375,16 @@ function renderG3(b) {
     ${hasJudg ? `<div class="okbox">この反復の採点あり（判定 ${b.judgment_table.filter((j) => j.iteration === it && j.llm_overall !== null).length} 件）。採点は追加実行できます。</div>` : ""}
   </div>`;
 }
+function citationCard(b, hasPop) {
+  const log = (b.citation?.log || []).slice(-1)[0];
+  const pending = b.citation?.pending || [];
+  return `<div class="card"><h3>引用・同族による拡張（§10.9） <span class="sp"></span><button class="btn small" id="btn-citations" ${hasPop ? "" : "disabled"}>🔗 引用拡張を実行</button></h3>
+    <p class="dim">プール文献の引用文献・被引用文献を候補にし、手元にあるものを P4 で採点してプールに加えます（採点は「採点」実行時にも自動で行われます）。取り込んだ文献の分類は RSJ の入力に加わり、母集団 U に含まれないプール文献は「広め案の穴」として分析に現れます。</p>
+    ${log ? `<div class="kpis"><div class="kpi"><div class="k">候補</div><div class="v">${log.candidates}</div></div><div class="kpi"><div class="k">手元あり</div><div class="v">${log.available}</div></div><div class="kpi"><div class="k">採点</div><div class="v">${log.judged}</div></div><div class="kpi ok"><div class="k">プール追加</div><div class="v">${log.added}</div></div><div class="kpi ${log.missing ? "warn" : ""}"><div class="k">未取得</div><div class="v">${log.missing}</div></div></div>` : `<p class="dim" style="font-size:.78rem">まだ実行していません（反復 v${b.case.iteration}）。</p>`}
+    ${pending.length ? `<details style="margin-top:.4rem"><summary>未取得の引用・被引用文献 ${pending.length} 件（人が DB で確認し、CSV として取り込むか local_index に追加）</summary><p class="mono" style="font-size:.74rem">${pending.slice(0, 60).map(esc).join(", ")}${pending.length > 60 ? " …" : ""}</p><button class="btn small copy" data-text="${esc(pending.join("\n"))}">📋 番号をコピー</button></details>` : ""}
+  </div>`;
+}
+
 function variantCard(q, runs, m, b) {
   const v = q.variant;
   const rends = q.renderings; const dialects = [...new Set(rends.map((r) => r.dialect))];
@@ -403,6 +434,7 @@ function renderG4(b) {
   <div class="card"><h3>G4 確定／再反復（分析は反復 v${lm.iteration}）${lm.pareto?.recommended ? `<span class="chip ok">推奨: ${VARIANT_JA[lm.pareto.recommended]}案</span>` : ""}</h3>
     ${["broad", "standard", "narrow"].filter((v) => lm.variants[v]).map((v) => `<h4 style="margin:.6rem 0 .3rem">${VARIANT_JA[v]}案 <span class="dim" style="font-size:.75rem">${esc(lm.variants[v].source)} ・ 複雑さ ${lm.variants[v].complexity}${lm.variants[v].seeds_missing?.length ? ` ・ <span class="chip bad">既知文献 取り逃し: ${esc(lm.variants[v].seeds_missing.join(", "))}</span>` : ""}</span></h4>${metricsKpis(lm.variants[v])}
       ${est[v] ? `<div class="dim" style="font-size:.78rem;margin-top:.3rem">推定再現率（U 基準、標本 m=${est[v].m}, 適合 s=${est[v].s}, 式内 t=${est[v].t}）: <b>${pct(est[v].recall_hat)}</b> [${pct(est[v].ci_low)}, ${pct(est[v].ci_high)}] ${est[v].low_confidence ? `<span class="chip warn">低信頼（s &lt; ${b.config.sample.s_min}）</span>` : ""} ・ U 内の適合総数推定 ${fmt(est[v].est_relevant_total, 1)} / ${est[v].population_size}</div>` : ""}`).join("")}
+    ${lm.coverage ? `<div class="note" style="margin-top:.6rem">被覆: プール ${lm.coverage.pool} 件のうち母集団 U に含まれない文献 <b>${lm.coverage.n_outside}</b> 件${lm.coverage.n_outside ? ` <span class="chip warn">広め案の穴の可能性</span> <span class="mono" style="font-size:.72rem">${(lm.coverage.pool_outside_U || []).slice(0, 8).map(esc).join(", ")}</span>` : ""}${lm.coverage.citation_pending ? ` ・ 未取得の引用文献 ${lm.coverage.citation_pending} 件` : ""}${lm.db_access ? ` ・ DB API アクセス ${lm.db_access} 回` : ""}</div>` : ""}
     <div class="note" style="margin-top:.6rem">停止判定: <b>${stop.should_stop ? "停止条件を満たす" : "継続"}</b> — ${esc((stop.reasons || []).join("、"))}<br>
       採点済み N=${lm.judged.N}（適合 R=${lm.judged.R}）、プール ${lm.judged.pool} 件、標本 m=${lm.judged.sample_m}（適合 s=${lm.judged.sample_s}）、要確認 ${lm.judged.needs_review} 件${lm.retention !== null ? ` ・ 初回上位適合の保持率 ${pct(lm.retention)}${lm.retention_warning ? ` <span class="chip warn">ドリフト警告</span>` : ""}` : ""}${lm.llm_agreement_with_stats !== null && lm.llm_agreement_with_stats !== undefined ? ` ・ LLM 提案と統計候補の一致率 ${pct(lm.llm_agreement_with_stats)}` : ""}
     </div>
@@ -410,6 +442,10 @@ function renderG4(b) {
   <div class="card"><h3>採点（適合度 0〜3）<span class="dim" style="font-size:.75rem">LLM の採点を確認し、人の総合を上書きできます（集計では人の判定を優先）</span><span class="sp"></span><label class="check"><input type="checkbox" id="j-review">要確認のみ</label></h3>
     <div class="table-wrap"><table id="judg-table"><thead><tr><th>文献</th><th>名称／根拠</th><th>抽出</th><th class="num">LLM総合</th><th>観点別</th><th class="num">フリップ</th><th>人の総合</th><th>コメント</th></tr></thead><tbody>${jt.map(jrow).join("") || `<tr><td colspan="8" class="dim">採点がありません</td></tr>`}</tbody></table></div>
   </div>
+  ${lm.search && lm.search.evaluated ? `<div class="card"><h3>目的関数付きの変換探索（複合変換・GEPA 接続）</h3>
+    <p class="dim">狭める変換の合成を、母集団 U の内側で パレート軸（件数↓・P@K↑・複雑さ↓）と制約（既知文献再現率 1.0・プール再現率 ≥ τ）で探索。P5 を反省的変異として使います。評価 ${lm.search.evaluated} 回、${lm.search.generations} 世代、変異 ${lm.search.n_mutations} 種、制約充足 ${lm.search.n_feasible} 件。基準: 件数 ${lm.search.base?.hit_count}、P@K ${pct(lm.search.base?.p_at_k)}。</p>
+    ${(lm.search.front || []).length ? `<div class="table-wrap" style="max-height:220px"><table><thead><tr><th>複合変換（手順）</th><th class="num">予測件数</th><th class="num">予測プール再現率</th><th class="num">予測P@K</th><th class="num">複雑さ</th></tr></thead><tbody>${lm.search.front.map((c) => `<tr><td>${c.steps.map((st) => `<span class="chip">${esc(st.op)} ${esc(targetText(st.target))}</span>`).join(" → ")}</td><td class="num">${c.hit_count}</td><td class="num">${pct(c.recall_pool)}</td><td class="num">${pct(c.p_at_k)}</td><td class="num">${c.complexity}</td></tr>`).join("")}</tbody></table></div><p class="dim" style="font-size:.76rem">複合変換は下の変換候補表に COMPOSITE として並びます（採用すると手順を順に反映）。</p>` : `<p class="dim">基準をパレート改善する複合変換は見つかりませんでした。</p>`}
+  </div>` : ""}
   <div class="card"><h3>変換候補（RSJ 逆算・決定木・LLM 提案を同じ評価器で比較）</h3>
     <p class="dim">狭める方向は母集団 U の手元データで局所評価済み（DB 実行不要）。広げる方向は次反復で DB 実行が必要（1 反復あたり ${b.config.budget.db_runs_per_iteration} 件まで）。プールの文献を落とす変換は退行として棄却されます。</p>
     <div class="table-wrap"><table><thead><tr><th>採用</th><th>操作・対象</th><th>発生源</th><th class="num">予測件数</th><th class="num">予測プール再現率</th><th class="num">予測P@K</th><th>評価</th><th>理由</th></tr></thead><tbody>${tfs.map(trow).join("") || `<tr><td colspan="8" class="dim">候補がありません</td></tr>`}</tbody></table></div>
@@ -435,7 +471,7 @@ function renderG4(b) {
     <p class="dim">確定・再反復のどちらでも、人の採点上書きと変換候補の採否を記録します。再反復では G1 の観点は変更しません。</p>
   </div>`;
 }
-function targetText(t) { return Object.entries(t || {}).filter(([k, v]) => !["assigned", "origin"].includes(k) && v !== "" && v !== null && !(Array.isArray(v) && !v.length)).map(([k, v]) => `${k}=${Array.isArray(v) ? (typeof v[0] === "object" ? v.length + "件" : v.join(",")) : v}`).join(" "); }
+function targetText(t) { if (t && t.label) return t.label; return Object.entries(t || {}).filter(([k, v]) => !["assigned", "origin"].includes(k) && v !== "" && v !== null && !(Array.isArray(v) && !v.length)).map(([k, v]) => `${k}=${Array.isArray(v) ? (typeof v[0] === "object" ? v.length + "件" : v.join(",")) : v}`).join(" "); }
 function collectG4() {
   const judgments = [];
   $$("select.human").forEach((s) => { if (s.value !== "") judgments.push({ doc_id: s.dataset.doc, overall: Number(s.value), comment: ($(`input.comment[data-doc="${s.dataset.doc}"]`) || {}).value || "" }); });
@@ -472,6 +508,17 @@ function bindTab(tab, b) {
   const up = $("#excel-upload");
   if (up) up.addEventListener("change", async () => { const f = up.files[0]; if (!f) return; const b64 = await readFileB64(f); try { await act("設計シートを読み込み", () => api(`/api/cases/${cid}/excel`, { xlsx_base64: b64 }), async (r) => { toast(`取り込み: 採否 ${r.decisions} 件、判定 ${r.judgments} 件、変換 ${r.transforms} 件`, "ok"); await refresh(); }); } catch {} });
 
+  if (tab === "overview" && b.case.status === "finalized") {
+    const csv = $("#sdi-csv"); csv?.addEventListener("change", () => { $("#sdi-csvname").textContent = csv.files[0]?.name || ""; });
+    const runSdi = async (source) => {
+      const body = { variant: $("#sdi-variant").value, source };
+      if (source === "csv") { const f = csv?.files[0]; if (!f) return toast("CSV を選択してください", "error"); body.csv_base64 = await readFileB64(f); body.filename = f.name; const h = $("#sdi-hits").value; if (h !== "") body.hit_count = Number(h); }
+      try { await act("差分をチェック中…", (c) => api(`/api/cases/${cid}/sdi`, { ...body, confirmed: c }), async (r) => { await refresh("overview"); const box = $("#sdi-report"); if (box) box.innerHTML = `<details open style="margin-top:.5rem"><summary>差分報告（${esc(r.at)}）新規 ${r.n_new} 件、うち適合 ${r.n_new_relevant} 件</summary><pre class="query" style="max-height:360px">${esc(r.report)}</pre></details>`; toast(`SDI: 新規 ${r.n_new} 件、適合 ${r.n_new_relevant} 件`, r.n_new_relevant ? "ok" : ""); }); } catch {}
+    };
+    $("#sdi-run-csv")?.addEventListener("click", () => runSdi("csv"));
+    $("#sdi-run-local")?.addEventListener("click", () => runSdi("local_index"));
+    $("#sdi-run-api")?.addEventListener("click", () => runSdi("api"));
+  }
   if (tab === "g1") {
     $("#btn-structure")?.addEventListener("click", () => act("P1 で構造化…", (c) => api(`/api/cases/${cid}/structure`, { confirmed: c }), async () => { await refresh("g1"); toast("観点を提案しました。確認・修正して確定してください", "ok"); }));
     $("#btn-add-axis")?.addEventListener("click", () => { const used = collectAxes().map((a) => a.axis_id); let id = "A"; while (used.includes(id)) id = String.fromCharCode(id.charCodeAt(0) + 1); $("#axes-editor").insertAdjacentHTML("beforeend", axisRow({ axis_id: id, name: "", kind: "auxiliary", definition: "", evidence: "", terms: [] }, false)); bindTab("g1", b); });
@@ -502,6 +549,7 @@ function bindTab(tab, b) {
         try { await act("実行結果を取り込み", () => api(`/api/cases/${cid}/runs`, body), async (r) => { await refresh("g3"); toast(`${VARIANT_JA[v]}案: ${r.hit_count} 件（文献 ${r.n_docs}）既知文献再現率 ${pct(r.recall_seed)}${r.info?.missing?.length ? " ・ 未検出列: " + r.info.missing.join(",") : ""}`, r.seeds_missing?.length ? "error" : "ok"); }); } catch {}
       });
     });
+    $("#btn-citations")?.addEventListener("click", () => act("引用・被引用を採点中…", (c) => api(`/api/cases/${cid}/citations`, { confirmed: c }), async (r) => { await refresh("g3"); toast(`引用拡張: 候補 ${r.candidates}、採点 ${r.judged}、プール追加 ${r.added}、未取得 ${r.missing}`, "ok"); }));
     $("#btn-score")?.addEventListener("click", () => act("P4 で採点中…（文献数に応じて時間がかかります）", (c) => api(`/api/cases/${cid}/score`, { confirmed: c }), async (r) => { await refresh("g3"); toast(`採点 ${r.judged} 件（要確認 ${r.needs_review}、標本 +${r.sample_added}、プール ${r.pool}）`, "ok"); }));
     $("#btn-analyze")?.addEventListener("click", () => act("分析中…", (c) => api(`/api/cases/${cid}/analyze`, { confirmed: c }), async () => { await refresh("g4"); toast("分析しました。G4 で確認してください", "ok"); }));
   }
@@ -575,8 +623,24 @@ function renderSettings() {
       <label class="check"><input type="checkbox" name="production" ${c.production ? "checked" : ""}>production（browser 禁止・外部送信前の人の確認ゲート）</label>
       <label class="check"><input type="checkbox" name="exclusions_enabled" ${c.exclusions_enabled ? "checked" : ""}>NOT（除外条件）を許可する（既定: 無効）</label>
       <label>DB モード ${sel("db.mode", db.mode, [["csv", "csv（人が実行して CSV を取り込む・既定）"], ["local_index", "local_index（オフライン母集団）"], ["api", "api（商用DB の API・契約後）"]])}</label>
-      <label>DB API Base URL<input name="db.api_base_url" value="${esc(db.api_base_url)}"></label>
-      <label>DB アクセス上限（回）<input name="db.access_limit" type="number" value="${db.access_limit}"></label>
+    </div></fieldset>
+    <fieldset><legend>商用 DB API（契約: docs/db_api_contract.md）</legend><div class="settings-grid">
+      <label>Base URL<input name="db.api_base_url" value="${esc(db.api_base_url)}" placeholder="https://gateway.example/patents"></label>
+      <label>API キー（${db.has_api_key ? "設定済み" : "未設定"}）<input name="db.api_key" type="password" placeholder="••••••"></label>
+      <label>アクセス上限（回／案件）<input name="db.access_limit" type="number" value="${db.access_limit}"></label>
+      <label>タイムアウト（秒）<input name="db.request_timeout" type="number" value="${db.request_timeout}"></label>
+      <label>ページ件数 / 最大ページ<div class="inline"><input class="tiny" name="db.page_size" type="number" value="${db.page_size}"><input class="tiny" name="db.max_pages" type="number" value="${db.max_pages}"></div></label>
+      <label class="check"><input type="checkbox" name="db.use_proxy" ${db.use_proxy ? "checked" : ""}>プロキシを使う</label>
+      <label>プロキシ URL<input name="db.proxy_url" value="${esc(db.proxy_url || "")}"></label>
+      <label>CA 証明書バンドル<input name="db.ca_bundle" value="${esc(db.ca_bundle || "")}"></label>
+    </div></fieldset>
+    <fieldset><legend>引用拡張・変換探索・SDI</legend><div class="settings-grid">
+      <label class="check"><input type="checkbox" name="citation.enabled" ${c.citation?.enabled ? "checked" : ""}>採点時に引用・被引用を自動で拡張する</label>
+      <label>引用拡張の採点上限（件／反復）<input name="citation.max_per_iteration" type="number" value="${c.citation?.max_per_iteration ?? 30}"></label>
+      <label class="check"><input type="checkbox" name="citation.fetch_via_api" ${c.citation?.fetch_via_api ? "checked" : ""}>手元に無い文献を DB API から取得する</label>
+      <label class="check"><input type="checkbox" name="search.enabled" ${c.search?.enabled ? "checked" : ""}>複合変換の探索（GEPA 接続）を行う</label>
+      <label>探索: 世代 / ビーム / 評価上限<div class="inline"><input class="tiny" name="search.generations" type="number" value="${c.search?.generations ?? 3}"><input class="tiny" name="search.beam" type="number" value="${c.search?.beam ?? 6}"><input class="tiny" name="search.max_evals" type="number" value="${c.search?.max_evals ?? 120}"></div></label>
+      <label>SDI: 新規文献の採点上限<input name="sdi.max_judge" type="number" value="${c.sdi?.max_judge ?? 50}"></label>
     </div></fieldset>
     <fieldset><legend>閾値（初期値（仮）。後方テストで調整）</legend><div class="settings-grid">
       <label>適合ラベル閾値（総合 ≥）<input name="relevance_threshold" type="number" min="1" max="3" value="${c.relevance_threshold}"></label>
@@ -603,7 +667,7 @@ function renderSettings() {
     e.preventDefault();
     const fd = new FormData(e.target); const body = {};
     const setPath = (path, val) => { const ks = path.split("."); let o = body; ks.slice(0, -1).forEach((k) => { o[k] = o[k] || {}; o = o[k]; }); o[ks.at(-1)] = val; };
-    $$("input, select", e.target).forEach((el) => { if (!el.name) return; if (el.type === "checkbox") setPath(el.name, el.checked); else if (el.type === "number") { if (el.value !== "") setPath(el.name, Number(el.value)); } else if (el.name === "llm.api_key") { if (el.value) setPath(el.name, el.value); } else setPath(el.name, el.value); });
+    $$("input, select", e.target).forEach((el) => { if (!el.name) return; if (el.type === "checkbox") setPath(el.name, el.checked); else if (el.type === "number") { if (el.value !== "") setPath(el.name, Number(el.value)); } else if (el.name === "llm.api_key" || el.name === "db.api_key") { if (el.value) setPath(el.name, el.value); } else setPath(el.name, el.value); });
     try { await api("/api/config", body); toast("保存しました", "ok"); closeModals(); await loadConfig(); if (state.caseId) await openCase(state.caseId); } catch (err) { toast(err.message, "error"); }
   });
   $("#btn-test-llm").addEventListener("click", async () => { $("#test-result").textContent = "…"; try { const r = await api("/api/config/test", {}); $("#test-result").textContent = (r.ok ? "OK: " : "NG: ") + r.message; } catch (e) { $("#test-result").textContent = e.message; } });

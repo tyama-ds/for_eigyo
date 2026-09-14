@@ -49,6 +49,14 @@ CREATE TABLE IF NOT EXISTS doc_codes (doc_id TEXT, scheme TEXT, code TEXT, PRIMA
 
 CREATE TABLE IF NOT EXISTS run_docs (run_id TEXT, doc_id TEXT, rank INTEGER, PRIMARY KEY (run_id, doc_id));
 
+-- 引用エッジ: doc_id が cited_id を引用する（被引用は逆向きに見る）
+CREATE TABLE IF NOT EXISTS doc_citations (doc_id TEXT, cited_id TEXT, PRIMARY KEY (doc_id, cited_id));
+CREATE INDEX IF NOT EXISTS idx_doc_citations_cited ON doc_citations(cited_id);
+
+-- 商用DB API へのアクセス記録（利用規約・上限の遵守）
+CREATE TABLE IF NOT EXISTS db_access (
+  access_id INTEGER PRIMARY KEY AUTOINCREMENT, case_id TEXT, kind TEXT, endpoint TEXT, hit_count INTEGER, created_at TEXT);
+
 CREATE TABLE IF NOT EXISTS local_index (doc_id TEXT PRIMARY KEY, added_at TEXT);
 
 CREATE TABLE IF NOT EXISTS judgments (

@@ -261,13 +261,15 @@ def p5_transform(inputs: dict) -> dict:
                     best, best_len = b.get("axis_id"), ov
         return best or (dsl.get("blocks", [{}])[0].get("axis_id", "A") if dsl.get("blocks") else "A")
 
+    fb = inputs.get("feedback") or {}
+    failed_ops = {tuple(step.split(":", 1)) for f in (fb.get("failures") or []) for step in (f.get("steps") or [])}
     for t in stats.get("terms", [])[:6]:
         if norm_text(t["feature"]) in in_terms:
             continue
         out.append({"op": "ADD_TERM", "target": {"axis_id": axis_for(t["feature"]), "text": t["feature"]},
                     "reason": f"適合側に偏る語（r={t['r']}/R={t['R']}, w={t['w']}）", "expected_effect": "widen"})
     for t in stats.get("negative_terms", [])[:6]:
-        if norm_text(t["feature"]) in in_terms:
+        if norm_text(t["feature"]) in in_terms and not any(op == "DROP_TERM" and t["feature"] in rest for op, rest in failed_ops):
             out.append({"op": "DROP_TERM", "target": {"axis_id": axis_for(t["feature"]), "text": t["feature"]},
                         "reason": f"非適合側に偏る語（n={t['n']}, w={t['w']}）", "expected_effect": "narrow"})
     for c in stats.get("codes", [])[:4]:

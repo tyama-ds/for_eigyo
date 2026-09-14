@@ -66,6 +66,8 @@ class Transform:
 
 
 def direction_of(op: str, target: dict, query: Query | None = None) -> str:
+    if op == "COMPOSITE":
+        return "narrow"
     if op in NARROW_OPS:
         return "narrow"
     if op in WIDEN_OPS:
@@ -114,6 +116,14 @@ def apply_transform(query: Query, t: Transform, iteration: int = 0, exclusions_e
     tg = t.target
     op = t.op
     origin = tg.get("origin") or f"{t.source}:iter{iteration}"
+    if op == "COMPOSITE":
+        steps = tg.get("steps") or []
+        if not steps:
+            raise TransformError("複合変換に手順がありません")
+        for step in steps:
+            q = apply_transform(q, Transform.from_dict(step), iteration, exclusions_enabled)
+        t.direction = t.direction or "narrow"
+        return q
     if op == "ADD_TERM":
         b = _need_block(q, tg["axis_id"])
         text = str(tg["text"]).strip()

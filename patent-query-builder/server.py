@@ -132,6 +132,22 @@ def api_local_index(orc: Orchestrator, body: dict) -> dict:
     return {"local_index_size": n, "imported": len(docs), "info": info}
 
 
+def api_sdi(orc: Orchestrator, case_id: str, body: dict) -> dict:
+    source = str(body.get("source") or "csv")
+    variant = str(body.get("variant") or "standard")
+    confirmed = bool(body.get("confirmed"))
+    if source in ("local_index", "api"):
+        return orc.sdi_run(case_id, variant=variant, source=source, confirmed=confirmed)
+    data = _b64(body, "csv_base64")
+    text = body.get("csv_text")
+    hits = body.get("hit_count")
+    hits = int(hits) if hits not in (None, "") else None
+    if data is None and not text:
+        raise ApiError("CSV を選択してください")
+    return orc.sdi_run(case_id, variant=variant, data=data, text=text, hit_count=hits, filename=body.get("filename") or "",
+                       source="csv", confirmed=confirmed)
+
+
 def api_config_test(orc: Orchestrator) -> dict:
     try:
         return LLMAdapter(orc.cfg, None, "").test_connection()
@@ -287,6 +303,8 @@ class Handler(BaseHTTPRequestHandler):
                 "analyze": lambda: orc.analyze(case_id, confirmed=confirmed),
                 "g4": lambda: orc.decide_g4(case_id, body.get("judgments"), body.get("transforms"), body.get("action") or "finalize", confirmed=confirmed),
                 "auto": lambda: orc.run_auto(case_id, max_iterations=body.get("max_iterations")),
+                "citations": lambda: orc.expand_citations(case_id, confirmed=confirmed, actor="human", max_docs=body.get("max_docs")),
+                "sdi": lambda: api_sdi(orc, case_id, body),
                 "manual": lambda: orc.answer_manual(case_id, str(body.get("call_key") or ""), str(body.get("text") or ""), bool(body.get("apply_all"))),
                 "excel": lambda: orc.apply_excel(case_id, _b64(body, "xlsx_base64") or b""),
                 "delete": lambda: (orc.delete_case(case_id), {"deleted": case_id})[1],

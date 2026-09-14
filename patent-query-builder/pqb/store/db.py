@@ -127,7 +127,7 @@ class Store:
     def delete_case(self, case_id: str) -> None:
         for table in ("axes", "candidates", "queries", "runs", "judgments", "pool", "samples",
                       "transforms", "iterations", "decisions", "llm_calls", "manual_prompts",
-                      "masking", "logs"):
+                      "masking", "logs", "db_access"):
             self.execute(f"DELETE FROM {table} WHERE case_id = ?", (case_id,))
         self.execute("DELETE FROM renderings WHERE query_id NOT IN (SELECT query_id FROM queries)")
         self.execute("DELETE FROM run_docs WHERE run_id NOT IN (SELECT run_id FROM runs)")
@@ -267,6 +267,7 @@ class Store:
                          _j(list(d.citations)), _j(d.to_dict()), now))
             for scheme, code in d.all_codes():
                 code_rows.append((d.doc_id, scheme, code))
+        cite_rows = [(d.doc_id, c) for d in docs for c in d.citations if c and c != d.doc_id]
         with self.lock:
             self.conn.executemany(
                 "INSERT OR REPLACE INTO documents (doc_id, title, abstract, claims, pub_date, applicant, "
@@ -274,7 +275,36 @@ class Store:
             self.conn.executemany("DELETE FROM doc_codes WHERE doc_id = ?", [(d.doc_id,) for d in docs])
             self.conn.executemany("INSERT OR IGNORE INTO doc_codes (doc_id, scheme, code) VALUES (?,?,?)",
                                   code_rows)
+            self.conn.executemany("INSERT OR IGNORE INTO doc_citations (doc_id, cited_id) VALUES (?,?)", cite_rows)
             self.conn.commit()
+
+    def add_citation_edges(self, pairs) -> None:
+        """(引用する文献, 引用される文献) の組を登録する（被引用情報の取り込み用）。"""
+        self.executemany("INSERT OR IGNORE INTO doc_citations (doc_id, cited_id) VALUES (?,?)",
+                         [(a, b) for a, b in pairs if a and b and a != b])
+
+    def cited_ids(self, doc_id: str) -> list[str]:
+        return [r["cited_id"] for r in self.query("SELECT cited_id FROM doc_citations WHERE doc_id = ? ORDER BY cited_id", (doc_id,))]
+
+    def citing_ids(self, doc_id: str) -> list[str]:
+        return [r["doc_id"] for r in self.query("SELECT doc_id FROM doc_citations WHERE cited_id = ? ORDER BY doc_id", (doc_id,))]
+
+    def has_document(self, doc_id: str) -> bool:
+        return self.one("SELECT 1 FROM documents WHERE doc_id = ?", (doc_id,)) is not None
+
+    def all_run_doc_ids(self, case_id: str) -> set[str]:
+        return {r["doc_id"] for r in self.query(
+            "SELECT DISTINCT rd.doc_id AS doc_id FROM run_docs rd JOIN runs r ON r.run_id = rd.run_id WHERE r.case_id = ?", (case_id,))}
+
+    # ------------------------------------------------------------ DB API アクセス記録
+    def record_db_access(self, case_id: str, kind: str, endpoint: str, hit_count: int | None) -> None:
+        self.insert("db_access", {"case_id": case_id, "kind": kind, "endpoint": endpoint, "hit_count": hit_count,
+                                  "created_at": now_iso()})
+
+    def count_db_access(self, case_id: str | None = None) -> int:
+        if case_id:
+            return self.one("SELECT COUNT(*) AS c FROM db_access WHERE case_id = ?", (case_id,))["c"]
+        return self.one("SELECT COUNT(*) AS c FROM db_access")["c"]
 
     def get_documents(self, doc_ids) -> dict[str, Document]:
         ids = list(doc_ids)

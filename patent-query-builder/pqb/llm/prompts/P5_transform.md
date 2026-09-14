@@ -12,6 +12,9 @@
 # 使える変換操作
 [[ops]]
 
+# 反省のためのフィードバック（前世代の探索結果。無ければ「（なし）」）
+[[feedback]]
+
 # 指示
 - 各提案に op、target（axis_id、text／scheme・code など操作に必要な情報）、reason、expected_effect（narrow／widen）を付ける。
 - 統計に現れない語・コードを作らない。観点の定義から外れる語は提案しない。

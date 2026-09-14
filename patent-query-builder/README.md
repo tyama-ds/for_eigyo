@@ -28,8 +28,12 @@ python -m pqb demo --auto                         # Policy 決定者（案A）�
 | 5 実行・評価 | 人が DB で実行して CSV 取り込み、既知文献再現率・プール再現率・上位K適合率、P4 採点 | `pqb.db`, `pqb.eval.metrics`, P4（n=3、フリップ率で要確認） |
 | 6 改良 | RSJ 重みで逆算、決定木 → DNF → 観点 CNF、変換操作の局所評価、パレート選択、CAL、無作為標本による再現率推定（Wilson 区間） | `pqb.stats.rsj`, `pqb.learn.*`, `pqb.eval.sampling` → **G4** 確定／再反復 |
 
-出力: 3 案（DB 別文字列と DSL）、検索観点表、根拠レポート（Markdown／HTML）、評価ログ、版履歴、Excel 設計シート（付録B の 9 シート、編集して読み戻し可）。
-すべての判断・統計・LLM 呼び出しは SQLite（`data/pqb.sqlite`）に記録する。
+| 6' 引用・同族 | プール文献の引用文献・被引用文献を候補にし P4 で採点してプールへ。取り込んだ分類は RSJ の入力に加え、U 外のプール文献は「広め案の穴」として報告（§10.9） | `Orchestrator.expand_citations`（採点時に自動、手動実行も可） |
+| 6'' 変換探索 | 狭める変換の合成をパレート軸（件数↓・P@K↑・複雑さ↓）と制約（既知文献再現率 1.0・プール再現率 ≥ τ）で探索。P5 を反省的変異に使う GEPA 接続（§10.6） | `pqb.learn.search` → 変換候補表に COMPOSITE として提示 |
+| 運用 SDI | 確定済みの式を再実行し、前回までに見ていない文献だけを採点して差分報告（Phase 4） | `Orchestrator.sdi_run`、CLI `sdi`、UI の SDI カード |
+
+出力: 3 案（DB 別文字列と DSL）、検索観点表、根拠レポート（Markdown／HTML）、評価ログ、版履歴、Excel 設計シート（付録B の 9 シート、編集して読み戻し可）、SDI 差分報告。
+すべての判断・統計・LLM 呼び出し・DB API アクセスは SQLite（`data/pqb.sqlite`）に記録する。
 
 ## 使い方（案B: セミオート）
 
@@ -48,7 +52,20 @@ CLI でも同じ操作ができる: `python -m pqb --help`（`new / structure / 
 ### 案A: 完全自動
 
 「🤖 自動で回す」または `python -m pqb auto CASE` で、Policy 決定者が G1〜G4 を規則と閾値で判断する
-（`pqb/gates/policy.py`）。DB 実行は local_index か `db.mode=api`（商用DB の API 契約後）。案Bと同じコード・同じ記録形式。
+（`pqb/gates/policy.py`）。DB 実行は local_index か `db.mode=api`（商用DB の API）。案Bと同じコード・同じ記録形式。
+複合変換（探索）があれば、プール再現率を保ち母集団を最も小さくするものを 1 つ採用する。
+
+### 商用 DB API（`db.mode=api`）
+
+汎用 JSON の契約を [docs/db_api_contract.md](docs/db_api_contract.md) に定めた（`POST /search` のページング、`GET /documents/{id}`）。
+契約 DB の仕様（Q1）が分かったら、アダプタの変換部だけを足す。アクセスはすべて SQLite に記録し、案件ごとの上限（`db.access_limit`）で止める。
+`config.offline=true` では呼ばない。テストはモック API サーバ（`tests/mock_db_api.py`）で行う。
+
+### SDI（定期監視）
+
+確定済みの案件で「SDI 差分チェック」（UI）または `python -m pqb sdi CASE --variant standard --csv rerun.csv -o diff.md` を実行すると、
+前回までに見た文献・プール・判定済みの和集合との差分だけを P4 で採点し、新規の適合文献をプールに追加して差分報告を出す。
+定期実行は OS のタスクスケジューラ等から CLI を呼ぶ（`--local` はオフライン母集団、`--api` は商用DB API）。
 
 ## LLM 経路の 3 モード（企画書 §8.3）
 
@@ -74,6 +91,10 @@ P1〜P6 のプロンプトは `pqb/llm/prompts/`、出力スキーマは `pqb/ll
 | `budget` | 反復 10、LLM 300 回、DB 30 回、DB 実行 3 回／反復 |
 | `rsj`, `tree`, `cal` | 提示件数、決定木・CAL のパラメータ |
 | `exclusions_enabled` | NOT（除外条件）は既定で無効 |
+| `db.*` | 商用 DB API: URL・キー・アクセス上限（案件ごと）・タイムアウト・ページ件数・プロキシ・CA |
+| `citation` | 引用拡張: 採点時に自動実行、1 反復あたりの採点上限 30、手元に無い文献の API 取得 |
+| `search` | 複合変換の探索: 3 世代、ビーム 6、評価上限 120、2 手順以上 |
+| `sdi.max_judge` | SDI で新規文献を採点する上限 50 |
 | `purposes.json` | 調査種別ごとの目標母集団レンジと選択方針 |
 | `dialects/*.json` | DB 方言（演算子・括弧・フィールド・文字数上限）。`jplatpat` は**仮**（Q3 で確定） |
 | `csv_dialects/*.json` | CSV の列名マッピング（Q2 で確定） |
@@ -89,7 +110,7 @@ patent-query-builder/
 │   ├── db/         adapter.py csv_import.py
 │   ├── knowledge/  codes.py（分類の正規化・階層・辞書）
 │   ├── stats/      tokenize.py rsj.py stopwords_ja.txt
-│   ├── learn/      transforms.py boolean.py（決定木）cal.py
+│   ├── learn/      transforms.py boolean.py（決定木）cal.py search.py（複合変換の探索）
 │   ├── eval/       metrics.py sampling.py
 │   ├── gates/      base.py human.py policy.py
 │   ├── store/      schema.sql db.py（SQLite）
@@ -97,7 +118,7 @@ patent-query-builder/
 ├── config/       default.json purposes.json dialects/ csv_dialects/
 ├── sample_data/  case_0001/（合成データ 120 件、既知文献、分類表抜粋、記録済み判断）generate_population.py
 ├── tests/        unittest（オフライン・モック LLM のみ）
-└── docs/         企画書、decisions.md（確認して決めた事項）、open_questions.md（未決事項）
+└── docs/         企画書、decisions.md（確認して決めた事項）、open_questions.md（未決事項）、db_api_contract.md（商用DB API の契約）
 ```
 
 ## テスト
@@ -107,7 +128,8 @@ cd patent-query-builder && python -m unittest discover -s tests -v
 ```
 
 DSL 検証・レンダラ／パーサ往復（全方言）・RSJ（手計算例）・階層集約・局所照合・再現率推定（合成データで被覆率 ≥ 90%）・CAL・
-変換操作・Excel 往復・記録済み判断による案Bのエンドツーエンド・Policy による案A・HTTP API・manual モードの返答待ちを網羅する。
+変換操作・Excel 往復・記録済み判断による案Bのエンドツーエンド・Policy による案A・HTTP API・manual モードの返答待ち・
+モック商用DB API（ページング・文献取得・アクセス上限）・引用拡張・複合変換探索・SDI 差分を網羅する。
 
 ## 限界と注記
 

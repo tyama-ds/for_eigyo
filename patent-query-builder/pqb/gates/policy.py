@@ -62,12 +62,22 @@ class PolicyDecider(Decider):
         per_iter = int((self.cfg.get("budget") or {}).get("db_runs_per_iteration") or 3)
         transforms, n_widen = [], 0
         base = context.get("base_metrics") or {}
-        for t in context.get("transforms", []):
-            if t["status"] != "candidate":
-                continue
+        cands = [t for t in context.get("transforms", []) if t["status"] == "candidate"]
+        # 複合変換（探索）があれば、プール再現率を保ち母集団を最も小さくするものを 1 つ採用する
+        composites = [t for t in cands if t["op"] == "COMPOSITE" and not t.get("regression") and t.get("local_eval")
+                      and (t.get("pred_recall_pool") is None or t["pred_recall_pool"] >= (base.get("recall_pool") or 0))
+                      and t.get("pred_hits") is not None and base.get("hit_count") is not None and t["pred_hits"] < base["hit_count"]]
+        chosen_composite = None
+        if composites:
+            chosen_composite = sorted(composites, key=lambda t: (-(t.get("pred_recall_pool") or 0), t["pred_hits"], -(t.get("pred_p_at_k") or 0)))[0]
+        for t in cands:
             ok = False
-            if t.get("regression"):
+            if t["op"] == "COMPOSITE":
+                ok = chosen_composite is not None and t["transform_id"] == chosen_composite["transform_id"]
+            elif t.get("regression"):
                 ok = False
+            elif chosen_composite is not None and t.get("direction") == "narrow":
+                ok = False           # 複合変換に含まれる操作の二重適用を避ける
             elif t.get("local_eval"):
                 # 狭める: プール再現率を保ち、母集団を小さくする（パレート改善）
                 keeps_pool = (t.get("pred_recall_pool") is None) or (t["pred_recall_pool"] >= (base.get("recall_pool") or 0))

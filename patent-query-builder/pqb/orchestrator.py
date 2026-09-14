@@ -27,8 +27,10 @@ from .knowledge import codes as codelib
 from .knowledge.codes import CodeDictionary
 from .learn.boolean import tree_transforms
 from .learn.cal import cal_round
+from .learn.search import composite_transform, pareto_search
 from .learn.transforms import (Transform, dedupe_transforms, direction_of, local_evaluate, propose_from_stats,
                                summarize_query, ALL_OPS)
+from .report.build import build_sdi_markdown
 from .llm.adapter import LLMAdapter, LLMError, Masker, code_support
 from .stats.rsj import rank_candidates
 from .stats.tokenize import load_stopwords
@@ -71,8 +73,8 @@ class Orchestrator:
         return LLMAdapter(self.cfg, self.store, case["case_id"], masker=masker,
                           prompts_dir=self.prompts_dir if self.prompts_dir is not None else cfgmod.data_dir())
 
-    def _db(self) -> DBAdapter:
-        return DBAdapter(self.cfg, self.store)
+    def _db(self, case_id: str = "") -> DBAdapter:
+        return DBAdapter(self.cfg, self.store, case_id)
 
     def _purpose(self, case: dict) -> dict:
         return cfgmod.purpose_settings(case.get("purpose", "prior_art"))
@@ -555,7 +557,7 @@ class Orchestrator:
         if variant not in queries:
             raise OrchestratorError(f"反復 {it} の {variant} 案がありません（先に検索式を組んでください）")
         q = queries[variant]
-        db = self._db()
+        db = self._db(case_id)
         if docs is not None:
             from .db.adapter import RunResult
             result = RunResult(query_id=q.query_id, hit_count=hit_count if hit_count is not None else len(docs),
@@ -585,7 +587,7 @@ class Orchestrator:
         queries = self.store.get_queries(case_id, it)
         if not queries:
             raise OrchestratorError("検索式がありません")
-        db = self._db()
+        db = self._db(case_id)
         out = {}
         for v in variants or VARIANTS:
             if v not in queries:
@@ -665,13 +667,86 @@ class Orchestrator:
             n_judged += 1
             n_review += int(res.needs_review or res.low_confidence)
         pool_size = self._rebuild_pool(case_id, it)
+        citation = {}
+        if (self.cfg.get("citation") or {}).get("enabled", True):
+            citation = self.expand_citations(case_id, confirmed=confirmed, actor=actor)
+            pool_size = len(self.store.pool_ids(case_id))
         if it == 1 and not (case.get("settings") or {}).get("first_top_relevant"):
             eff2 = self.store.effective_judgments(case_id)
             first_top = [d for d in u_ids[:K] if d in eff2 and eff2[d]["overall"] >= thr]
             self._save_settings(case_id, first_top_relevant=first_top)
         self._log(case_id, "G4", "llm", "score", f"judged={n_judged} needs_review={n_review} sample+={len(new_sample)} pool={pool_size}")
         return {"judged": n_judged, "needs_review": n_review, "sample_added": len(new_sample), "pool": pool_size,
+                "citation": citation,
                 "population": {"run_id": run["run_id"] if run else None, "size": len(U), "variant": run["variant"] if run else None}}
+
+    # ================================================================ 引用・同族による拡張（§10.9）
+    def expand_citations(self, case_id: str, confirmed: bool = False, actor: str = "system",
+                         max_docs: int | None = None) -> dict:
+        """プール文献の引用文献・被引用文献を候補にし、手元にあるものを P4 で採点してプールに加える。
+
+        手元に無い文献は「未取得」として記録し（G4 の作業項目）、api モードなら DB から取得を試みる。
+        取り込んだ文献の分類コードは _judged_docs 経由で RSJ の入力に加わる。プール文献が U に含まれて
+        いなければ広め案の穴として analyze() の coverage に現れる。
+        """
+        case = self._case(case_id)
+        it = case["iteration"]
+        ccfg = self.cfg.get("citation") or {}
+        limit = max_docs if max_docs is not None else int(ccfg.get("max_per_iteration", 30))
+        pool_ids = self.store.pool_ids(case_id)
+        eff = self.store.effective_judgments(case_id)
+        candidates: set[str] = set()
+        for pid in pool_ids:
+            candidates.update(self.store.cited_ids(pid))
+            candidates.update(self.store.citing_ids(pid))
+        candidates -= pool_ids
+        candidates -= set(eff)
+        settings = case.get("settings") or {}
+        pending_before = set(settings.get("citation_pending") or [])
+        db = self._db(case_id)
+        available: list[Document] = []
+        missing: list[str] = []
+        for cid in sorted(candidates):
+            doc = self.store.get_document(cid)
+            if doc is None and ccfg.get("fetch_via_api", True) and db.api_available() and (self.cfg.get("db") or {}).get("mode") == "api":
+                try:
+                    doc = db.fetch_document(cid)
+                except DBError as e:
+                    self._log(case_id, "G4", "system", "citation_fetch_error", str(e))
+                    doc = None
+            if doc is not None and (doc.title or doc.abstract):
+                available.append(doc)
+            else:
+                missing.append(cid)
+        axes = self.store.get_axes(case_id)
+        terms_by_axis = self._axis_terms(case_id)
+        axes_for_llm = [{"axis_id": a["axis_id"], "name": a["name"], "kind": a["kind"], "definition": a["definition"],
+                         "terms": terms_by_axis.get(a["axis_id"], [])} for a in axes]
+        llm = self._llm(case)
+        thr = int(self.cfg.get("relevance_threshold", 2))
+        overall_rule = self._purpose(case).get("overall_rule", "min_required")
+        judged = added = 0
+        for d in available[:limit]:
+            res = llm.complete("P4", {"axes": axes_for_llm, "overall_rule": overall_rule,
+                                      "doc": {"doc_id": d.doc_id, "title": d.title, "abstract": d.abstract[:1500], "claims": d.claims[:1500]}},
+                               confirmed=confirmed)
+            m = res.majority
+            overall = int(m.get("overall", 0))
+            self.store.add_judgment(case_id=case_id, doc_id=d.doc_id, iteration=it, selection="citation", judge="llm",
+                                    overall=overall, per_axis=m.get("per_axis") or {}, flip_rate=res.flip_rate,
+                                    needs_review=res.needs_review or res.low_confidence, rationale=str(m.get("rationale", "")))
+            judged += 1
+            added += int(overall >= thr)
+        if added:
+            self._rebuild_pool(case_id, it)
+        pending = sorted((pending_before | set(missing)) - set(eff) - self.store.pool_ids(case_id))
+        log = list(settings.get("citation_log") or [])
+        entry = {"iteration": it, "candidates": len(candidates), "available": len(available), "judged": judged,
+                 "added": added, "missing": len(missing), "deferred": max(0, len(available) - limit), "at": now_iso()}
+        log.append(entry)
+        self._save_settings(case_id, citation_pending=pending[:500], citation_log=log[-20:])
+        self._log(case_id, "G4", "system", "expand_citations", json.dumps(entry, ensure_ascii=False))
+        return dict(entry, pending=pending[:50])
 
     def _rebuild_pool(self, case_id: str, iteration: int) -> int:
         """プール = 既知文献 ∪ 有効判定が適合の文献（人の判定を優先）。"""
@@ -695,11 +770,13 @@ class Orchestrator:
         grades = {d: int(j["overall"] or 0) for d, j in eff.items()}
         u_ids = {d.doc_id for d in U}
         judged = [(d, relevant[d.doc_id]) for d in U if d.doc_id in relevant]
-        for sid in case["seeds"]:                       # 既知文献は常に適合として含める
-            if sid not in u_ids:
-                doc = self.store.get_document(sid)
-                if doc:
-                    judged.append((doc, True))
+        # 既知文献と、引用拡張などで U の外から加わったプール文献は常に適合として含める（§10.9: 分類コードを RSJ の入力に加える）
+        outside = (set(case["seeds"]) | self.store.pool_ids(case["case_id"])) - u_ids
+        if outside:
+            docs = self.store.get_documents(sorted(outside))
+            for did in sorted(outside):
+                if did in docs:
+                    judged.append((docs[did], True))
         return judged, relevant, grades
 
     def _current_stats(self, case: dict) -> dict | None:
@@ -811,6 +888,33 @@ class Orchestrator:
             if t.op == "DROP_TERM" and norm_text(str(t.target.get("text", ""))) in protected and t.status != "invalid":
                 t.status = "rejected"                # ガード: 人が入れた語（input／human 由来）は自動提案で削除しない
                 t.reason = (t.reason + " / " if t.reason else "") + "入力由来の語は削除候補にしない（ガード）"
+        # 目的関数付きの変換探索（複合変換。GEPA 接続 §10.6）
+        search_summary: dict = {}
+        scfg_s = self.cfg.get("search") or {}
+        if scfg_s.get("enabled", True) and pool_ids:
+            mutations = [t for t in transforms if t.direction == "narrow" and t.status == "candidate" and t.op not in ("ADD_EXCLUSION", "COMPOSITE")]
+            reflect = None
+            if mutations:
+                def reflect(ctx: dict) -> list[Transform]:
+                    r = self._llm(case).complete("P5", {"dsl_summary": summarize_query(base),
+                                                        "axes": [{"axis_id": a["axis_id"], "name": a["name"], "kind": a["kind"], "definition": a["definition"]} for a in axes],
+                                                        "stats": {k2: stats[k2][:10] for k2 in ("terms", "codes", "negative_terms", "negative_codes")},
+                                                        "ops": ALL_OPS, "feedback": ctx}, confirmed=confirmed)
+                    out = []
+                    for t in r.majority.get("transforms", []):
+                        if t.get("op") in ALL_OPS:
+                            tr = Transform(t["op"], dict(t.get("target") or {}), source="llm", reason=str(t.get("reason", "")))
+                            tr.direction = direction_of(tr.op, tr.target, base)
+                            if tr.direction == "narrow" and not (tr.op == "DROP_TERM" and norm_text(str(tr.target.get("text", ""))) in protected):
+                                out.append(tr)
+                    return out
+                result = pareto_search(base, U, pool_ids=pool_ids, seed_ids=seeds, relevant=relevant, mutations=mutations,
+                                       tau=tau, k=K, generations=int(scfg_s.get("generations", 3)), beam=int(scfg_s.get("beam", 6)),
+                                       max_evals=int(scfg_s.get("max_evals", 120)), min_steps=int(scfg_s.get("min_steps", 2)),
+                                       exclusions_enabled=bool(self.cfg.get("exclusions_enabled")), reflect=reflect, iteration=it)
+                for cand in result["candidates"]:
+                    transforms.append(composite_transform(cand, result["base"]))
+                search_summary = {k2: result[k2] for k2 in ("base", "front", "evaluated", "generations", "n_feasible", "n_mutations")}
         # LLM 提案と統計候補の一致率（ドリフト監視）
         stat_keys = {t.op + json.dumps(t.target, sort_keys=True, ensure_ascii=False) for t in transforms if t.source in ("rsj", "tree")}
         llm_ts = [t for t in transforms if t.source == "llm"]
@@ -840,6 +944,12 @@ class Orchestrator:
                 cal = {k: v for k, v in cal.items() if k != "scores"} | {"top_scores": sorted(cal["scores"].items(), key=lambda x: -x[1])[:30]}
             except ValueError as e:
                 cal = {"ok": False, "reason": str(e)}
+        # --- 被覆: プール文献が U に含まれていなければ広め案の穴（引用拡張で見つかった文献など）
+        holes = sorted(pool_ids - set(u_ids))
+        coverage = {"pool_outside_U": holes[:50], "n_outside": len(holes), "pool": len(pool_ids),
+                    "citation": ((case.get("settings") or {}).get("citation_log") or [{}])[-1],
+                    "citation_pending": len((case.get("settings") or {}).get("citation_pending") or []),
+                    "note": "プール文献が母集団 U（広め案）に含まれていない場合、広め案が取り逃している可能性がある（テキストと独立した証拠）"}
         # --- ドリフト（初回上位適合文献の保持率）
         first_top = (case.get("settings") or {}).get("first_top_relevant") or []
         retention = None
@@ -867,7 +977,8 @@ class Orchestrator:
                    "variants": variants_m, "estimates": estimates, "judged": judged_summary,
                    "stats": {"N": stats["N"], "R": stats["R"], "terms": stats["terms"][:15], "codes": stats["codes"][:10],
                              "negative_terms": stats["negative_terms"][:10], "negative_codes": stats["negative_codes"][:5], "note": stats.get("note", "")},
-                   "dnf": dnf, "cal": cal, "retention": retention,
+                   "dnf": dnf, "cal": cal, "retention": retention, "search": search_summary, "coverage": coverage,
+                   "db_access": self.store.count_db_access(case_id),
                    "retention_warning": retention is not None and retention < float(self.cfg.get("retention_warn", 0.9)),
                    "llm_agreement_with_stats": None if llm_agree is None else round(llm_agree, 3), "p5": p5_info,
                    "pareto": {"front": [m["variant"] for m in front], "recommended": recommended["variant"] if recommended else None},
@@ -962,6 +1073,11 @@ class Orchestrator:
         axes = {a["axis_id"]: a for a in self.store.get_axes(case_id)}
         case = self._case(case_id)
         settings = dict(case.get("settings") or {})
+        if op == "COMPOSITE":
+            for step in tg.get("steps") or []:
+                self._apply_transform_to_case(case_id, {"op": step["op"], "target": step.get("target") or {},
+                                                        "source": step.get("source") or t.get("source", "search")}, it, actor)
+            return
         if op == "ADD_TERM":
             existing = self.store.find_candidate(case_id, "term", tg.get("axis_id", ""), tg.get("text", ""))
             if existing:
@@ -1114,7 +1230,7 @@ class Orchestrator:
                     if mode == "local_index":
                         self.run_local(case_id, actor=d.actor)
                     elif mode == "api":
-                        db = self._db()
+                        db = self._db(case_id)
                         for v, q in self.store.get_queries(case_id, it).items():
                             rend = self.store.get_renderings(q.query_id)
                             text = next((r["text"] for r in rend if r["dialect"] == case["dialect"]), "")
@@ -1146,6 +1262,74 @@ class Orchestrator:
         from .gates.policy import PolicyDecider
         case = self._case(case_id)
         return self.run_case(case_id, PolicyDecider(self.cfg, self._purpose(case)), max_iterations=max_iterations)
+
+    # ================================================================ SDI 運用（Phase 4: 定期実行・差分報告）
+    def sdi_run(self, case_id: str, *, variant: str = "standard", data: bytes | None = None, text: str | None = None,
+                source: str = "csv", hit_count: int | None = None, filename: str = "", confirmed: bool = False,
+                actor: str = "human", max_judge: int | None = None) -> dict:
+        """確定済みの検索式を再実行し、前回までに見ていない文献を差分として採点・報告する。"""
+        case = self._case(case_id)
+        if case["status"] != "finalized":
+            raise OrchestratorError("SDI 実行は確定済み（finalized）の案件だけです")
+        settings = case.get("settings") or {}
+        it = int(settings.get("final_iteration") or case["iteration"])
+        queries = self.store.get_queries(case_id, it)
+        if variant not in queries:
+            raise OrchestratorError(f"確定版（反復 {it}）に {variant} 案がありません")
+        q = queries[variant]
+        known = self.store.all_run_doc_ids(case_id) | self.store.pool_ids(case_id) | set(self.store.effective_judgments(case_id))
+        db = self._db(case_id)
+        if source == "local_index":
+            result = db.run_local(q, dialect=case["dialect"])
+        elif source == "api":
+            rend = self.store.get_renderings(q.query_id)
+            rendered = next((r["text"] for r in rend if r["dialect"] == case["dialect"]), "")
+            result = db.run_api(q, rendered, case["dialect"])
+        else:
+            payload = data if data is not None else (text or "")
+            if not payload:
+                raise OrchestratorError("CSV が空です")
+            result = db.import_csv(payload, cfgmod.load_csv_dialect(case.get("csv_dialect") or "jplatpat"),
+                                   query_id=q.query_id, hit_count=hit_count, dialect=case["dialect"], csv_path=filename)
+        self._observe_codes(result.documents)
+        run_id = self.store.add_run(case_id=case_id, query_id=q.query_id, iteration=it, variant=variant, dialect=result.dialect,
+                                    source=f"sdi:{result.source}", hit_count=result.hit_count, docs=result.documents,
+                                    csv_path=result.csv_path, info=result.info, actor=actor)
+        new_docs = [d for d in result.documents if d.doc_id not in known]
+        limit = max_judge if max_judge is not None else int((self.cfg.get("sdi") or {}).get("max_judge", 50))
+        axes = self.store.get_axes(case_id)
+        terms_by_axis = self._axis_terms(case_id)
+        axes_for_llm = [{"axis_id": a["axis_id"], "name": a["name"], "kind": a["kind"], "definition": a["definition"],
+                         "terms": terms_by_axis.get(a["axis_id"], [])} for a in axes]
+        llm = self._llm(case)
+        thr = int(self.cfg.get("relevance_threshold", 2))
+        overall_rule = self._purpose(case).get("overall_rule", "min_required")
+        judged_rows = []
+        for d in new_docs[:limit]:
+            res = llm.complete("P4", {"axes": axes_for_llm, "overall_rule": overall_rule,
+                                      "doc": {"doc_id": d.doc_id, "title": d.title, "abstract": d.abstract[:1500], "claims": d.claims[:1500]}},
+                               confirmed=confirmed)
+            m = res.majority
+            overall = int(m.get("overall", 0))
+            self.store.add_judgment(case_id=case_id, doc_id=d.doc_id, iteration=it, selection="sdi", judge="llm", overall=overall,
+                                    per_axis=m.get("per_axis") or {}, flip_rate=res.flip_rate,
+                                    needs_review=res.needs_review or res.low_confidence, rationale=str(m.get("rationale", "")))
+            judged_rows.append({"doc_id": d.doc_id, "title": d.title, "pub_date": d.pub_date, "overall": overall,
+                                "relevant": overall >= thr, "needs_review": res.needs_review or res.low_confidence,
+                                "rationale": str(m.get("rationale", ""))})
+        if any(r["relevant"] for r in judged_rows):
+            self._rebuild_pool(case_id, it)
+        entry = {"at": now_iso(), "run_id": run_id, "variant": variant, "source": result.source, "hit_count": result.hit_count,
+                 "n_docs": len(result.documents), "n_known": len(result.documents) - len(new_docs), "n_new": len(new_docs),
+                 "n_judged": len(judged_rows), "n_new_relevant": sum(1 for r in judged_rows if r["relevant"]),
+                 "n_unjudged": max(0, len(new_docs) - limit), "new_relevant_ids": [r["doc_id"] for r in judged_rows if r["relevant"]][:100],
+                 "new_ids": [d.doc_id for d in new_docs][:300]}
+        history = list(settings.get("sdi_history") or [])
+        history.append(entry)
+        self._save_settings(case_id, sdi_history=history[-50:])
+        self._log(case_id, "SDI", actor, "sdi_run", f"{variant} {result.source} hits={result.hit_count} new={len(new_docs)} new_relevant={entry['n_new_relevant']}")
+        report = build_sdi_markdown(self._case(case_id), entry, judged_rows, [d.doc_id for d in new_docs[limit:]])
+        return dict(entry, new_docs=judged_rows, report=report)
 
     # ================================================================ Excel 設計シート
     def apply_excel(self, case_id: str, data: bytes, actor: str = "human") -> dict:
@@ -1196,7 +1380,8 @@ class Orchestrator:
         last = its[-1]["metrics"] if its else {}
         return {"case_id": case_id, "status": case["status"], "iteration": case["iteration"],
                 "variants": last.get("variants", {}), "stop": last.get("stop", {}), "pareto": last.get("pareto", {}),
-                "pool": len(self.store.pool_ids(case_id)), "llm_calls": self.store.count_llm_calls(case_id)}
+                "pool": len(self.store.pool_ids(case_id)), "llm_calls": self.store.count_llm_calls(case_id),
+                "db_access": self.store.count_db_access(case_id)}
 
     def judgment_table(self, case_id: str) -> list[dict]:
         rows: dict[str, dict] = {}
@@ -1248,9 +1433,13 @@ class Orchestrator:
             "llm_calls": self.store.get_llm_calls(case_id, 100), "pending_prompts": pending,
             "dictionary": self.store.dictionary_summary() | {"degraded": self.dictionary.degraded},
             "purpose": self._purpose(case), "local_index_size": self.store.local_index_size(),
+            "citation": {"log": (case.get("settings") or {}).get("citation_log") or [],
+                         "pending": (case.get("settings") or {}).get("citation_pending") or []},
+            "sdi_history": (case.get("settings") or {}).get("sdi_history") or [],
+            "db_access": self.store.count_db_access(case_id),
             "config": {k: self.cfg.get(k) for k in ("top_k", "relevance_threshold", "tau_pool", "rho_target", "flip_threshold",
                                                     "converge_T", "budget", "sample", "exclusions_enabled", "offline", "production",
-                                                    "reason_codes", "dialects", "default_dialect")}
+                                                    "reason_codes", "dialects", "default_dialect", "citation", "search", "sdi")}
                       | {"llm_mode": (self.cfg.get("llm") or {}).get("mode"), "db_mode": (self.cfg.get("db") or {}).get("mode")},
             "latest_metrics": its[-1]["metrics"] if its else None,
         }
