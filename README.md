@@ -8,10 +8,15 @@ for_eigyo / claudecode で作ったアプリを、1画面からワンクリッ�
 python launcher/launcher.py        # http://127.0.0.1:8770
 ```
 
-llmlab Studio / llmlab Loop / Copilot Research / JupyterLab / Prism ニュースポータル / Tensorium、
+llmlab Studio / llmlab Loop / Copilot Research / JupyterLab / Prism ニュースポータル / Tensorium / Patent Atlas、
 および claudecode の Agent Orchestrator / Deep Research Tool を最初から登録済み。
 別フォルダのアプリも UI の「＋ アプリを追加」から登録できる。
 詳細は [launcher/README.md](launcher/README.md)。
+
+Patent Atlas は初回に専用の仮想環境と依存パッケージを準備すると、ポータルから
+`http://127.0.0.1:8810` で起動できます。手順は [Patent Atlas の README](patent-atlas/README.md)
+と [ポータルの初回セットアップ](launcher/README.md#patent-atlas-の初回セットアップ)を参照してください。
+ローカルで一人が利用するアプリで、インターネット公開用のサービスではありません。
 
 ## サブプロジェクト
 
@@ -24,3 +29,4 @@ llmlab Studio / llmlab Loop / Copilot Research / JupyterLab / Prism ニュース
 | [rag-orchestrator/](rag-orchestrator/) | RAG Orchestrator — 同一コーパス・同一質問を複数のRAG実装（組み込みGraphRAG/Vector/BM25/Hybrid + nano-graphrag/LightRAGアダプタ）へ並列実行し比較・統合。ナレッジグラフ可視化つき（標準ライブラリのみ、ローカルLLM対応） |
 | [tensorium/](tensorium/) | Tensorium — CSV / XLSX を入れて Transformer（BERT ファインチューニング / SentenceBERT + MLP / ゼロから学習 / FT-Transformer）で回帰・分類を行う GUI スタジオ。列型自動判定・学習曲線のライブ表示・混同行列 / 散布図で評価・新データへの一括予測。サーバは標準ライブラリのみ、学習は PyTorch（CPU / GPU）、オフライン・ローカルモデル対応 |
 | [launcher/](launcher/) | App Portal — 上記アプリ群を呼び出す窓口 |
+| [patent-atlas/](patent-atlas/) | Patent Atlas — IPC・Fターム候補の選択、特許CSVの可視化と要不要判定、学習・LLM判定からの検索式更新、探索ラボと統括ワークフロー、収束グラフ（Python + HTML/JS、ローカルLLM対応） |

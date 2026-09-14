@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Patent Atlas — 特許検索を、探索する。</title>
+  <meta name="description" content="分類を選び、特許をマッピングし、判断から検索式を育てるローカル特許探索ワークスペース。">
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/classification.css?v=20260914-rejected-broader">
+  <link rel="stylesheet" href="/static/discovery.css?v=20260914-llm-feedback">
+  <link rel="stylesheet" href="/static/atlas-theme.css">
+  <link rel="stylesheet" href="/static/atlas-maps.css">
+  <link rel="stylesheet" href="/static/atlas-motion.css">
+  <link rel="stylesheet" href="/static/learning-ui.css?v=20260912-learning">
+  <link rel="stylesheet" href="/static/patent-inspector.css?v=20260912-learning">
+  <link rel="stylesheet" href="/static/orchestration-ui.css?v=20260915-workflow-review-filter">
+  <link rel="stylesheet" href="/static/convergence-ui.css?v=20260914-convergence">
+  <script src="/static/query-output.js?v=20260912-learning" defer></script>
+  <script src="/static/classification-layout.js" defer></script>
+  <script src="/static/classification-labels.js" defer></script>
+  <script src="/static/classification-ui.js?v=20260914-rejected-broader" defer></script>
+  <script src="/static/discovery-ui.js?v=20260914-llm-feedback" defer></script>
+  <script src="/static/learning-ui.js?v=20260914-running-mode" defer></script>
+  <script src="/static/refinement-ui.js?v=20260912-learning" defer></script>
+  <script src="/static/patent-inspector.js?v=20260915-classification-bridge" defer></script>
+  <script src="/static/convergence-ui.js?v=20260914-convergence" defer></script>
+  <script src="/static/orchestration-ui.js?v=20260914-convergence" defer></script>
+  <script src="/static/app.js?v=20260914-convergence" defer></script>
+  <script src="/static/atlas-motion.js" defer></script>
+</head>
+<body>
+ <header class="topbar">
+  <a class="brand" href="/" aria-label="Patent Atlas ホーム"><svg viewBox="0 0 40 40" aria-hidden="true"><rect class="atlas-mark-frame" x="1" y="1" width="38" height="38" rx="12"/><path class="atlas-mark-orbit" d="M8 26 20 7l12 19-12 7Z"/><path class="atlas-mark-axis" d="m8 26 12-6 12 6M20 7v26"/><circle cx="20" cy="20" r="3"/></svg><span>PATENT <b>ATLAS</b></span><span class="version">β 01</span></a>
+  <nav class="tabs" aria-label="機能切替"><button class="tab active" data-tab="explore">対話で探索</button><button class="tab" data-tab="discovery">探索ラボ</button><button class="tab" data-tab="agent">判断エージェント</button><button class="tab" data-tab="orchestration">統括ワークフロー</button><button class="tab" data-tab="settings">表示・接続設定</button></nav>
+  <div class="connection"><span class="status-dot"></span><span id="connection-label">ローカルワークスペース</span></div>
+ </header>
+ <main>
+  <div class="workspace-heading">
+   <svg class="atlas-heading-art" viewBox="0 0 480 190" aria-hidden="true"><defs><pattern id="atlas-paper-grid" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M24 0H0V24" fill="none" stroke="currentColor" stroke-width=".5"/></pattern></defs><rect width="480" height="190" fill="url(#atlas-paper-grid)" opacity=".3"/><g fill="none" stroke="currentColor"><ellipse cx="306" cy="93" rx="130" ry="57" transform="rotate(-19 306 93)"/><ellipse cx="306" cy="93" rx="91" ry="39" transform="rotate(-19 306 93)"/><circle cx="306" cy="93" r="22"/><path d="m169 128 83-92 54 57 103-39M252 36l113 112M169 128l196 20 44-94" stroke-dasharray="3 6"/><path d="M296 93h20m-10-10v20M164 128h10m-5-5v10"/></g><g class="atlas-art-nodes"><circle cx="252" cy="36" r="4"/><circle cx="169" cy="128" r="4"/><circle cx="409" cy="54" r="5"/><circle cx="365" cy="148" r="4"/></g></svg>
+   <div class="atlas-heading-copy"><span class="eyebrow">PATENT RESEARCH / 知の地図をつくる</span><h1>特許検索を、探索する。</h1><p class="atlas-heading-note">ひとつの技術から、次の発見へ。</p></div>
+   <div class="heading-actions"><label class="atlas-motion-control"><select id="atlas-motion-mode" aria-label="画面の動き"><option value="system">動き：自動</option><option value="dynamic">動き：あり</option><option value="static">静止表示</option></select></label><button class="button subtle" id="demo-button">サンプルを試す <span>↗</span></button><a class="button subtle atlas-export" href="/api/export" download>プロジェクトを書き出す <span>↓</span></a></div>
+  </div>
+  <div id="job-banner" class="job-banner hidden" role="status" aria-live="polite"><span class="spinner"></span><span id="job-message"></span><progress id="job-progress" max="100" value="0"></progress><button class="button small" id="stop-job">停止</button></div>
+  <section id="explore-tab" class="view active">
+   <nav class="stepper" aria-label="探索ステップ">
+    <button class="step active" data-step="0"><span class="step-number">00</span><span><b>技術の輪郭</b><small>キーワード・分類を選ぶ</small></span><span class="step-arrow">→</span></button>
+    <button class="step" data-step="1"><span class="step-number">01</span><span><b>検索の初案</b><small>検索式をつくる・CSVを渡す</small></span><span class="step-arrow">→</span></button>
+    <button class="step" data-step="2"><span class="step-number">02</span><span><b>特許の地図</b><small>眺める・選ぶ・学習する</small></span><span class="step-arrow">→</span></button>
+    <button class="step" data-step="3"><span class="step-number">03</span><span><b>次の検索へ</b><small>判断から検索式を育てる</small></span></button>
+   </nav>
+   <div id="step-content" class="step-content"></div>
+  </section>
+  <section id="agent-tab" class="view"><div class="agent-layout">
+   <div class="panel agent-config"><div class="panel-heading"><span class="eyebrow">AUTONOMOUS RESEARCH</span><span class="pill">1サイクルずつ</span></div><h2>判断を、エージェントに。</h2><p class="muted">あなたの調査基準から分類を選び、取り込んだ特許を判定し、次の検索式を提案します。</p>
+    <label>探索キーワード<input id="agent-keywords" placeholder="全固体電池 固体電解質 界面抵抗"></label>
+    <label>必要・不要の判断基準<textarea id="agent-criteria" rows="5" placeholder="例：固体電解質と電極の界面抵抗を下げる技術を残す。冷却装置、液系電池、画像検査は不要。高分子系は保留。"></textarea></label>
+    <div class="form-row"><label>1回の上限件数<input id="agent-limit" type="number" value="24" min="1" max="5000"></label><label>判定の信頼度しきい値<select id="agent-threshold"><option value="0.8">0.80</option><option value="0.9">0.90</option><option value="0.7">0.70</option></select></label></div>
+    <p class="caption">信頼度はLLMの自己申告です。精度を保証する値ではありません。低信頼度の判定は保留にします。</p>
+    <label class="check"><input id="agent-train" type="checkbox">エージェントの判定も使って学習する</label>
+    <label>学習方式<select id="agent-mode"><option value="lightweight">軽量学習 · TF-IDF</option><option value="transformer">Transformer本体を微調整</option></select></label>
+    <button class="button primary wide" id="run-agent">1サイクル実行 <span>↗</span></button>
+    <p class="caption">外部LLM使用時はキーワード・判断基準・対象特許のタイトルと要約を送信します。人が確定した判定は優先します。</p>
+   </div>
+   <div class="agent-right"><div class="panel agent-flow"><div class="panel-heading"><h3>判断のループ</h3><span id="agent-count" class="pill">CSV未読込</span></div><div class="flow"><span>分類選択</span><b>→</b><span>初案</span><b>→</b><span>要否判定</span><b>→</b><span>改善案</span></div><div class="notice">検索サイトから取得したCSVを、対話タブのStep 01から渡してください。1サイクルの最後は次のCSV待ちで停止します。</div></div>
+   <div class="panel log-panel"><div class="panel-heading"><h3>判断の記録</h3><button class="button small" id="view-agent-map">特許マップへ ↗</button></div><div id="agent-log" class="agent-log"><div class="empty-state"><div class="empty-orbit">◎</div><h3>基準を決めたら、探索を開始。</h3><p>判定理由と進捗がここに残ります。</p></div></div></div></div>
+  </div></section>
+  <section id="discovery-tab" class="view"><div id="discovery-content"></div></section>
+  <section id="orchestration-tab" class="view"><div id="orchestration-content"></div></section>
+  <section id="settings-tab" class="view"><form id="settings-form" class="settings-grid">
+    <div class="panel display-settings"><div><span class="eyebrow">CONSTELLATION DISPLAY</span><h2>技術の近さを、眺める。</h2><p class="muted">分類のコンステレーションの配置を選べます。</p></div><div><label>分類の配置<select id="classification-layout"><option value="semantic">意味の近さ · 自然な配置</option><option value="grid">整列 · 一覧しやすい配置</option></select></label><p id="layout-description" class="caption"></p><button class="button primary" type="button" id="save-layout">配置を保存</button><p class="caption">次回の起動でも使う配置として保存します。</p></div></div>
+    <div class="panel"><span class="eyebrow">MODEL CONNECTION</span><h2>思考のエンジンを選ぶ。</h2><p class="muted">外部APIとLocal LLMを、同じワークスペースで。</p>
+      <label>接続先<select id="provider"><option value="offline">オフライン · 辞書と軽量学習</option><option value="local">Local LLM · Ollama / LM Studio</option><option value="openai">OpenAI互換API</option></select></label>
+      <label>API Base URL<input id="base-url" placeholder="http://localhost:11434/v1" type="url"></label>
+      <label>モデル名<input id="llm-model" placeholder="qwen3:8b"></label>
+      <label>APIキー<input id="api-key" type="password" autocomplete="new-password" placeholder="必要な接続先のみ"></label><p id="key-status" class="caption"></p>
+      <div class="notice">APIキーとプロキシURLはサーバーのメモリだけに保持します。アプリ再起動後は再入力してください。APIの接続ホストが変わると、以前のキーは消去します。</div>
+      <div class="button-row"><button class="button primary" type="submit">設定を保存</button><button class="button" type="button" id="test-connection">保存して接続テスト</button></div>
+    </div>
+    <div class="settings-right"><div class="panel"><span class="eyebrow">NETWORK</span><h3>プロキシ・証明書</h3><label>HTTP / HTTPSプロキシ<input id="proxy-url" type="password" autocomplete="new-password" placeholder="http://proxy.example.com:8080"></label><p id="proxy-status" class="caption"></p><label>社内CA証明書ファイルのパス<input id="ca-bundle" placeholder="C:\certs\corporate-ca.pem"></label><label class="check"><input id="bypass-local" type="checkbox" checked>localhostはプロキシを経由しない</label><button class="button small" type="button" id="clear-secrets">保存中のキー・プロキシを消去</button><p class="caption">この設定はLLM通信に適用します。モデルのダウンロード・pipには環境変数 HTTPS_PROXY / HTTP_PROXY を設定してください。</p></div>
+    <div class="panel"><span class="eyebrow">PATENT DATA CONNECTION</span><h3>特許の自動取得（任意）</h3><p class="caption">探索ラボのCSV分析には設定不要です。EPO OPSによる再帰検索を使う場合のみ設定してください。</p><label>EPO OPS Consumer key<input id="ops-key" type="password" autocomplete="new-password"></label><label>EPO OPS Consumer secret<input id="ops-secret" type="password" autocomplete="new-password"></label><p id="ops-status" class="caption"></p><button class="button small" type="button" id="save-ops">OPS接続情報を保存</button> <button class="button small subtle" type="button" id="clear-ops">OPS接続情報を消去</button><p class="caption">キーはメモリ内だけに保持し、再起動時に消去します。通信には上のプロキシ・CA証明書設定を使います。接続情報の保存では通信しません。</p><a href="https://www.epo.org/en/searching-for-patents/data/web-services/ops" target="_blank" rel="noopener noreferrer">EPO OPSの利用登録・仕様 ↗</a></div>
+    <div class="panel"><span class="eyebrow">TRANSFORMER TRAINING</span><h3>特許の要否から学習</h3><label>Hugging Faceモデル名 / ローカルフォルダ<input id="transformer-model" placeholder="例：C:\models\multilingual-bert"></label><label class="check"><input id="allow-download" type="checkbox">モデル未保存時にダウンロードを許可</label><p class="caption">必要・不要を各4件以上。タイトルと要約の先頭256トークンを使い、Transformer本体と分類ヘッドを3エポック微調整します。safetensors形式の対応モデルと追加パッケージが必要です。</p><code class="command">pip install -r requirements-transformer.txt</code><p class="caption">軽量学習は追加モデル不要です。必要・不要各2件から動きます。</p></div></div>
+   </form></section>
+ </main>
+ <footer><span>PATENT ATLAS <span class="footer-divider">/</span> ローカルに保存</span><span id="footer-info">探索のはじまり</span><a href="https://www.j-platpat.inpit.go.jp/" target="_blank" rel="noopener noreferrer">J-PlatPat ↗</a></footer>
+ <div id="toast" role="status" aria-live="polite" class="toast"></div>
+ <dialog id="mapping-dialog"><form id="mapping-form"><span class="eyebrow">CSV IMPORT</span><h2>列の意味を教えてください。</h2><p class="muted">このCSVの列名を、特許の項目に割り当てます。</p><div id="mapping-fields"></div><div class="button-row"><button class="button" type="button" id="cancel-mapping">キャンセル</button><button class="button primary" type="submit">この割り当てで読み込む</button></div></form></dialog>
+ <dialog id="classification-dialog"><form id="classification-form"><span class="eyebrow">ADD CLASSIFICATION</span><h2>分類を追加する</h2><label>分類体系<select id="new-class-kind"><option>IPC</option><option>F-term</option><option>CPC</option></select></label><label>コード<input id="new-class-code" required placeholder="H01M10/0562"></label><label>名称<input id="new-class-title" required placeholder="無機固体電解質"></label><p class="caption">辞書にない分類は「未確認」として追加します。公式定義をご確認ください。IPCとCPCは別の体系として保持します。</p><div class="button-row"><button class="button" type="button" id="cancel-classification">キャンセル</button><button class="button primary" type="submit">追加</button></div></form></dialog>
+</body>
+</html>

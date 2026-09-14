@@ -41,6 +41,7 @@ python launcher/launcher.py --port 9200 --open
 | Prism ニュースポータル | for_eigyo | RSS/Atom を束ねるニュース収集（検索・トレンド・AI要約） | 8780 |
 | Agent Orchestrator | claudecode | Codex × Claude Code × ローカルLLM の協調（7戦略） | 8801 |
 | Deep Research Tool | claudecode | Web検索→検証→レポート生成のディープリサーチ | 8802 |
+| Patent Atlas | for_eigyo | 特許検索式・分類候補・CSVマップ・要不要判定と学習・探索の反復と収束表示 | 8810 |
 
 Studio / Loop は標準ライブラリのみで動くため、`PYTHONPATH=src` を通して
 リポジトリのソースから直接起動する（venv や pip install -e は不要）。
@@ -54,6 +55,33 @@ claudecode の2つは、`for_eigyo` と `claudecode` が**同じ親フォルダ�
 - Deep Research Tool の Web UI はポート固定(8765)のため、`run_server(port=8802)` を
   `-c` 経由で呼んで重複を回避している。起動には同ツールの依存
   （`claudecode/deep_research_tool/requirements.txt`）が入った Python が必要
+
+## Patent Atlas の初回セットアップ
+
+Patent Atlas は Python 3.11 以降を使用します。リポジトリのルートから、初回に以下を実行してください。
+ポータルのカードはパッケージを自動インストールしません。
+
+Windows PowerShell:
+
+```powershell
+cd patent-atlas
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+macOS / Linux:
+
+```bash
+cd patent-atlas
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+```
+
+準備後、App Portal の **Patent Atlas** カードから起動すると
+`http://127.0.0.1:8810` を開きます。アプリ専用の `.venv` の Python を利用し、
+llmlab Studio の 8765 番ポートと分けています。設定や読み込んだ特許は利用するPCに保存されます。
+ローカルで一人が利用する構成です。LLM・プロキシ・追加学習機能の設定は
+[Patent Atlas の README](../patent-atlas/README.md)を参照してください。
 
 ## claudecode ディレクトリのアプリを登録する
 
@@ -74,6 +102,9 @@ UI の「＋ アプリを追加」で以下を入力する（`apps.json` 直接�
 
 - `cwd` は `launcher/` フォルダ起点の相対パス（絶対パスも可）
 - `command` の `{python}` はポータルを起動した Python に置き換わる
+- `command` の `{app_python}` はアプリの `cwd` にある `.venv/Scripts/python.exe`
+  （Windows）または `.venv/bin/python`（macOS / Linux）に置き換わる。
+  該当ファイルがない場合はポータルを起動した Python を使うため、その環境に依存パッケージが必要
 - `command` を省略して `url` だけにすると「開くだけのリンクカード」になる
   （既に別の方法で常駐させているアプリや、社内Webページ等に便利）
 - `env` で環境変数を追加できる（例: `{"PYTHONPATH": "src"}`）

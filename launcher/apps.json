@@ -185,6 +185,21 @@
       ],
       "url": "http://127.0.0.1:8740",
       "wait_port": 8740
+    },
+    {
+      "id": "patent-atlas",
+      "name": "Patent Atlas",
+      "description": "特許検索式を分類のコンステレーションと対話で作成。CSVの特許マップ・要不要判定・学習・探索ラボを統括し、検索の反復と収束を可視化。Local LLM・OpenAI互換API対応（初回に依存パッケージの導入が必要）",
+      "icon": "research",
+      "cwd": "../patent-atlas",
+      "command": [
+        "{app_python}",
+        "run.py",
+        "--port",
+        "8810"
+      ],
+      "url": "http://127.0.0.1:8810",
+      "wait_port": 8810
     }
   ]
 }

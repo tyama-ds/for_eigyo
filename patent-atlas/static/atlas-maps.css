@@ -1,0 +1,397 @@
+/* Paper charts and evidence panels. Geometry and interaction stay in the
+   classification/discovery stylesheets; this layer changes their materials. */
+
+/* Classification atlas */
+.classification-explorer .canvas-panel {
+  background: var(--surface);
+  border-color: var(--line);
+}
+.classification-explorer .canvas-header h3 { color: var(--ink); }
+.classification-explorer .canvas-wrap {
+  background-color: #faf8f3;
+  background-image: radial-gradient(#8e86943b .65px, transparent .65px),
+    linear-gradient(90deg, #5754a704 1px, transparent 1px),
+    linear-gradient(#5754a704 1px, transparent 1px);
+  background-size: 23px 23px, 115px 115px, 115px 115px;
+}
+.classification-explorer .canvas-footer {
+  border-color: var(--line);
+  background: var(--surface);
+}
+.classification-explorer .float-hint { color: var(--muted); }
+.classification-explorer .canvas-empty h3 { color: var(--ink); }
+.classification-explorer .empty-orbit { color: var(--cyan); }
+.classification-explorer .source-tabs {
+  background: var(--surface-soft);
+  border-color: var(--line);
+}
+.classification-explorer .source-tabs button { color: var(--muted); }
+.classification-explorer .source-tabs button.active {
+  background: var(--surface);
+  color: var(--cyan);
+  box-shadow: 0 1px 4px #2827420c;
+}
+.classification-explorer .hint-card {
+  background: #f1eff7;
+  border-color: #5754a71f;
+}
+.classification-explorer .hint-card h3 { color: var(--cyan); }
+.classification-explorer .class-scope-note {
+  background: #f2eef8;
+  border-color: #8780bd;
+  color: #625986;
+}
+.classification-explorer .trail-item {
+  background: #ece9f2;
+  color: #5f5682;
+}
+.classification-explorer .trail-item:hover { background: #e0daee; }
+.classification-explorer .class-focus {
+  background: linear-gradient(115deg, #eeebf5, #faf8f3);
+  border-color: #d4cde3;
+  box-shadow: inset 3px 0 0 #8d82b6;
+}
+.classification-explorer .class-focus .eyebrow { color: var(--cyan); }
+.classification-explorer .class-focus b,
+.classification-explorer .class-focus .focus-title { color: var(--ink); }
+.classification-explorer .class-language-control select {
+  background: var(--surface);
+  color: var(--ink);
+  border-color: var(--line);
+}
+.classification-explorer #class-layout-settings {
+  color: var(--cyan);
+  border-color: #c6bfdd;
+  background: #f1edf8;
+}
+.classification-explorer .class-region rect {
+  fill: #5754a707;
+  stroke: #aaa0bc88;
+  stroke-dasharray: 3 6;
+}
+.classification-explorer .class-region text { fill: #605777; }
+.classification-explorer .class-region-count { fill: #75687f; }
+.classification-explorer .class-neighbor { stroke: #a59cad77; }
+.classification-explorer #class-links line { stroke: #afa6bd77; }
+.classification-explorer #class-svg .node-circle {
+  fill: #eae6f3;
+  stroke: #9690bc;
+  filter: none;
+}
+.classification-explorer #class-svg .node.fterm .node-circle {
+  fill: #f2e5d9;
+  stroke: #b88968;
+}
+.classification-explorer #class-svg .node.cpc .node-circle {
+  fill: #e6eaf3;
+  stroke: #8694b6;
+}
+.classification-explorer #class-svg .node.navigation-node .node-circle {
+  fill: #f2efea;
+  stroke: #a198aa;
+}
+.classification-explorer #class-svg .node.selected .node-circle {
+  fill: var(--cyan);
+  stroke: #484584;
+  filter: drop-shadow(0 3px 5px #5754a725);
+}
+.classification-explorer #class-svg .node.fterm.selected .node-circle {
+  fill: var(--amber);
+  stroke: #8c5232;
+  filter: drop-shadow(0 3px 5px #a7654220);
+}
+.classification-explorer #class-svg .node:hover .node-circle,
+.classification-explorer #class-svg .node:focus-visible .node-circle {
+  stroke: var(--ink);
+}
+.classification-explorer #class-svg .node-kind { fill: #655c80; }
+.classification-explorer #class-svg .node.fterm .node-kind { fill: #866244; }
+.classification-explorer #class-svg .node.selected .node-kind,
+.classification-explorer #class-svg .node.selected .selection-mark { fill: #fffdfa; }
+.classification-explorer #class-svg .node-code { fill: var(--ink); }
+.classification-explorer #class-svg .node-title { fill: #645e70; }
+.classification-explorer #class-svg .selection-mark { fill: var(--cyan); }
+.classification-explorer .lasso-path {
+  fill: #5754a718;
+  stroke: var(--cyan);
+}
+.classification-explorer .detail-strip { background: #f4f1f8; }
+.classification-explorer .class-facet-tags span {
+  color: #6c5e81;
+  background: #eee8f3;
+  border-color: #d8d0e0;
+}
+.classification-explorer .class-match-details { color: #645e70; }
+.classification-explorer .class-translation-network { color: var(--muted); }
+.classification-explorer + .selection-bar {
+  background: var(--surface);
+  box-shadow: 0 4px 16px #4d435b05;
+}
+.classification-explorer + .selection-bar .selected-count { color: var(--muted); }
+.classification-explorer + .selection-bar .remove-class {
+  color: var(--cyan);
+  border-color: #d3cce4;
+  background: #f1edf8;
+}
+.classification-explorer + .selection-bar .remove-class:hover { background: #e5dff1; }
+.classification-explorer ~ .list-toggle .class-list button {
+  color: var(--ink);
+  background: var(--surface);
+}
+.classification-explorer ~ .list-toggle .class-list button.active {
+  background: #eeebf7;
+  border-color: var(--cyan);
+}
+.classification-explorer ~ .list-toggle .class-list button:hover { background: #f2eef7; }
+.class-tooltip {
+  color: var(--ink);
+  background: #fffdfaf7;
+  border-color: #bdb2d0;
+  box-shadow: 0 16px 50px #3f315929, 0 2px 8px #3f315909;
+}
+.class-tooltip > strong { color: var(--cyan); }
+.classification-explorer .class-bilingual dt,
+.class-tooltip .class-bilingual dt { color: var(--cyan); }
+.classification-explorer .class-bilingual dt small,
+.class-tooltip .class-bilingual dt small { color: var(--muted); }
+.classification-explorer .class-bilingual dd,
+.class-tooltip .class-bilingual dd { color: var(--ink); }
+.classification-explorer .class-parent-caption,
+.class-tooltip .class-parent-caption {
+  border-color: #cdc3df;
+  color: #756980;
+}
+
+/* Exploration lab: one paper surface, then a separate working chart. */
+#discovery-content .discovery-start {
+  background: radial-gradient(ellipse at 5% 0, #e5dff470, transparent 62%),
+    linear-gradient(120deg, #f5f0e9, var(--surface));
+}
+#discovery-content .discovery-intro .eyebrow { color: var(--amber); }
+#discovery-content .discovery-intro h2 { color: var(--ink); }
+#discovery-content .discovery-flow { color: #75624e; }
+#discovery-content .discovery-flow span {
+  color: #77624f;
+  border-color: #dbcfbe;
+  background: #fffdfa90;
+}
+#discovery-content .discovery-flow b { color: #ac9680; }
+#discovery-content .discovery-form textarea { background: #fffdfa; }
+#discovery-content .discovery-section-title .pill { border-color: #d7cfe4; }
+#discovery-content .discovery-step-number {
+  color: var(--cyan);
+  border-color: #d5cce4;
+  background: #eeebf7;
+}
+#discovery-content .discovery-upload {
+  border-color: #c8bfce;
+  background: #f7f4ee;
+}
+#discovery-content .discovery-upload label { color: var(--ink); }
+#discovery-content .discovery-upload input::file-selector-button {
+  background: #e8e3ef;
+  color: #5d5279;
+}
+#discovery-content .discovery-status {
+  background: #efedf7;
+  border-color: #d9d1e7;
+}
+#discovery-content .discovery-status.error {
+  background: #faf0ef;
+  border-color: #dfbdc1;
+}
+#discovery-content .discovery-pulse { box-shadow: 0 0 0 5px #5754a714; }
+#discovery-content .discovery-facet,
+#discovery-content .discovery-facet:nth-child(3n+2),
+#discovery-content .discovery-facet:nth-child(3n) {
+  background: linear-gradient(135deg, #f8f6f2, #fffdfa);
+  border-color: var(--line);
+  border-top-color: #b7aacb;
+}
+#discovery-content .discovery-facet:nth-child(3n+2) { border-top-color: #c4a991; }
+#discovery-content .discovery-facet:nth-child(3n) { border-top-color: #9bb4a3; }
+#discovery-content .discovery-facet-number { color: var(--amber); }
+#discovery-content .discovery-facet p { color: #625d6c; }
+#discovery-content .discovery-facet small { color: var(--muted); }
+#discovery-content .discovery-warnings {
+  background: #faf0e5;
+  border-color: #b78a62;
+}
+#discovery-content .discovery-warnings p { color: #806342; }
+#discovery-content .discovery-query b { color: var(--ink); }
+#discovery-content .discovery-query pre {
+  background: #f4f1f7;
+  color: #51476f;
+  border-color: #ddd4e5;
+}
+#discovery-content .discovery-metrics > div {
+  background: #f7f4ee;
+  border-color: var(--line);
+}
+#discovery-content .discovery-metrics strong { color: var(--cyan); }
+#discovery-content .discovery-new-terms > b { color: var(--ink); }
+#discovery-content .discovery-tags span {
+  color: #716079;
+  background: #f1ebf3;
+  border-color: #ddd2e0;
+}
+#discovery-content .discovery-candidate {
+  background: var(--surface);
+  border-color: var(--line);
+}
+#discovery-content .discovery-candidate.hypothesis { background: #faf8fc; }
+#discovery-content .discovery-candidate.chosen {
+  background: #efebf8;
+  border-color: #8d7fac;
+}
+#discovery-content .discovery-source { color: #557160; }
+#discovery-content .hypothesis .discovery-source { color: #70628c; }
+#discovery-content .discovery-source.synthetic { color: var(--amber); }
+#discovery-content .discovery-candidate-label b { color: var(--ink); }
+#discovery-content .discovery-candidate-title { color: #645b71; }
+#discovery-content .discovery-evidence-count { color: var(--muted); }
+#discovery-content .discovery-evidence-count b { color: var(--cyan); }
+#discovery-content .discovery-evidence { border-color: var(--line); }
+#discovery-content .discovery-evidence summary { color: #5e5572; }
+#discovery-content .discovery-evidence summary > span { color: var(--cyan); }
+#discovery-content .discovery-evidence li { border-color: var(--line); }
+#discovery-content .discovery-evidence li > span { color: #625d6c; }
+#discovery-content .discovery-evidence li > small { color: var(--muted); }
+#discovery-content .discovery-evidence em { border-color: #c49a724f; }
+#discovery-content .discovery-adoption {
+  background: #f8f5fdf5;
+  border-color: #cfc4e0;
+  box-shadow: 0 8px 24px #42315514;
+}
+#discovery-content .discovery-adoption span { color: #665a79; }
+#discovery-content .discovery-adoption p { color: var(--muted); }
+#discovery-content .discovery-log li { color: #655d70; }
+#discovery-content .discovery-log time { color: #796981; }
+#discovery-content .discovery-architecture h3 { color: var(--ink); }
+#discovery-content .discovery-empty .empty-orbit { color: var(--amber); }
+
+/* Comparison map: provenance remains visible through color and line style. */
+#discovery-content .discovery-compare-panel {
+  background: linear-gradient(150deg, #fffdfa, #faf7f1);
+}
+#discovery-content .discovery-compare-heading .eyebrow { color: var(--amber); }
+#discovery-content .discovery-compare-heading h3 { color: var(--ink); }
+#discovery-content .discovery-compare-heading p { color: var(--muted); }
+#discovery-content .discovery-view-tabs {
+  background: #ede8e2;
+  border-color: #e1d9d0;
+}
+#discovery-content .discovery-view-tabs button { color: var(--muted); }
+#discovery-content .discovery-view-tabs button.active {
+  color: var(--cyan);
+  background: var(--surface);
+  box-shadow: 0 1px 4px #2827420d;
+}
+#discovery-content .discovery-source-filters button {
+  color: #726977;
+  border-color: #ded5dd;
+  background: #faf7f2;
+}
+#discovery-content .discovery-source-filters button.active {
+  color: var(--cyan);
+  border-color: #aaa0c8;
+  background: #ece7f6;
+}
+#discovery-content .discovery-source-filters b {
+  color: #5e526f;
+  background: #7160910b;
+}
+#discovery-content .discovery-source-filters i { background: #9989ac; }
+#discovery-content .discovery-source-filters i.patent { background: var(--green); }
+#discovery-content .discovery-source-filters i.hypothesis { background: var(--cyan); }
+#discovery-content .discovery-source-filters i.synthetic { background: var(--amber); }
+#discovery-content .discovery-compare-filters {
+  background: #f2eee8;
+  border-color: #e1d9d0;
+}
+#discovery-content .discovery-compare-status { color: var(--muted); }
+#discovery-content .discovery-map-side {
+  background: var(--surface);
+  border-color: #d7cfdb;
+}
+#discovery-content .discovery-map-tools {
+  background: #f1edf5;
+  border-color: #dfd5e3;
+}
+#discovery-content .discovery-map-tools > span { color: #70627f; }
+#discovery-content .discovery-map-tools .button.active {
+  background: #ded7ed;
+  color: #5c4b7d;
+  border-color: #a597ba;
+}
+#discovery-content .discovery-map-tools select { background: var(--surface); }
+#discovery-content .discovery-map-viewport {
+  scrollbar-color: #b8adc1 #f3eee8;
+  background: radial-gradient(#93869a40 .65px, transparent .65px), #fbf8f3;
+  background-size: 20px 20px, auto;
+}
+#discovery-content .discovery-map-caption {
+  color: #76647c;
+  background: #f5f0e9;
+  border-color: #e0d7df;
+}
+#discovery-content .discovery-star circle { fill: #eae4f3; stroke: #9582b1; }
+#discovery-content .discovery-star.patent circle { fill: #e4ece2; stroke: #7b9a7f; }
+#discovery-content .discovery-star.synthetic circle { fill: #f0e2cf; stroke: #b28b59; }
+#discovery-content .discovery-star.chosen circle { fill: var(--cyan); stroke: #4b4182; }
+#discovery-content .discovery-star:hover circle,
+#discovery-content .discovery-star:focus-visible circle { stroke: var(--ink); }
+#discovery-content .discovery-star-kind { fill: #766486; }
+#discovery-content .discovery-star-mark { fill: #645071; }
+#discovery-content .discovery-star.chosen .discovery-star-kind,
+#discovery-content .discovery-star.chosen .discovery-star-mark { fill: #fffdfa; }
+#discovery-content .discovery-star-code { fill: var(--ink); }
+#discovery-content .discovery-star-title { fill: #665e73; }
+#discovery-content .discovery-star-regions rect { fill: #78688705; stroke: #b3a5bb77; }
+#discovery-content .discovery-star-regions text { fill: #716079; }
+#discovery-content .discovery-star-regions tspan { fill: #806887; }
+#discovery-content .discovery-star-links line { stroke: #ac9cb977; }
+#discovery-content .discovery-lasso-path { fill: #5754a718; stroke: var(--cyan); }
+#discovery-content .discovery-filter-empty { color: var(--muted); }
+#discovery-content .discovery-inspector {
+  background: var(--surface);
+  border-color: #d3c5dc;
+  scrollbar-color: #b8adc1 #f3eee8;
+}
+#discovery-content .discovery-inspector-heading {
+  background: #efe8f3;
+  border-color: #ddd0e5;
+}
+#discovery-content .discovery-inspector-heading > span { color: #796087; }
+#discovery-content .discovery-inspector-heading h4 { color: var(--ink); }
+#discovery-content .discovery-inspector .discovery-candidate { background: transparent; }
+#discovery-content .discovery-inspector .discovery-candidate-title { color: var(--ink); }
+#discovery-content .discovery-inspector .discovery-evidence-count {
+  border-color: #dcd1e1;
+  background: #f3edf6;
+}
+#discovery-content .discovery-definition {
+  background: #f7f3f8;
+  border-color: #e0d7e6;
+}
+#discovery-content .discovery-definition-language { color: #796087; }
+#discovery-content .discovery-definition p { color: #665670; }
+#discovery-content .discovery-definition small { color: var(--muted); }
+#discovery-content .discovery-definition-parent { color: #786781; border-color: #ddd3e3; }
+#discovery-content .discovery-list-viewport { scrollbar-color: #b8adc1 #f3eee8; }
+#discovery-content .discovery-comparison-table th {
+  color: #796c81;
+  background: #f0eaf5;
+  border-color: #ddd1e5;
+}
+#discovery-content .discovery-comparison-table td { color: #6a5f76; border-color: #e4dce8; }
+#discovery-content .discovery-comparison-table tr.chosen td { background: #eee7f8; }
+#discovery-content .discovery-comparison-table tr:hover td { background: #f7f2fb; }
+#discovery-content .discovery-comparison-table tr.chosen:hover td { background: #e6def3; }
+#discovery-content .discovery-list-focus b { color: var(--ink); }
+#discovery-content .discovery-list-source.patent { color: var(--green); }
+#discovery-content .discovery-list-source.hypothesis { color: var(--cyan); }
+#discovery-content .discovery-compare-panel .discovery-adoption {
+  background: #eeebf6;
+  border-color: #d4cbe2;
+}

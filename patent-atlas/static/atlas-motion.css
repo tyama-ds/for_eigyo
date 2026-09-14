@@ -1,0 +1,33 @@
+/* Navigation effects are triggered by navigation, never by background polling. */
+html[data-atlas-motion] .view,
+html[data-atlas-motion] #step-content {
+  animation: none !important;
+}
+
+html[data-atlas-motion="dynamic"] :is(.button, .icon-button, .tab, .step) {
+  transition: background-color 180ms ease, color 180ms ease,
+    border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+}
+
+html[data-atlas-motion="dynamic"] .button:active:not(:disabled),
+html[data-atlas-motion="dynamic"] .icon-button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+html[data-atlas-motion="static"],
+html[data-atlas-motion="static"] *,
+html[data-atlas-motion="static"] *::before,
+html[data-atlas-motion="static"] *::after {
+  animation: none !important;
+  transition: none !important;
+  scroll-behavior: auto !important;
+}
+
+/* The OS preference always takes precedence, including the explicit dynamic mode. */
+@media (prefers-reduced-motion: reduce) {
+  html, *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}

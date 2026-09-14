@@ -116,6 +116,18 @@ def _reader(app_id: str, proc: subprocess.Popen) -> None:
     proc.stdout.close()
 
 
+def resolve_command(command: list[str], cwd: Path) -> list[str]:
+    """Resolve Python placeholders without invoking a shell or wrapper process."""
+    venv_python = cwd / ".venv" / (
+        "Scripts/python.exe" if os.name == "nt" else "bin/python"
+    )
+    app_python = str(venv_python) if venv_python.is_file() else sys.executable
+    return [
+        part.replace("{python}", sys.executable).replace("{app_python}", app_python)
+        for part in command
+    ]
+
+
 def launch_app(app: dict) -> dict:
     state = app_state(app)
     if state in ("running", "link"):
@@ -126,10 +138,10 @@ def launch_app(app: dict) -> dict:
         if entry and entry["proc"].poll() is None:
             return {"ok": True, "state": "starting"}
 
-    cmd = [c.replace("{python}", sys.executable) for c in app["command"]]
     cwd = (BASE / app.get("cwd", ".")).resolve()
     if not cwd.exists():
         return {"ok": False, "error": f"作業フォルダが見つかりません: {cwd}"}
+    cmd = resolve_command(app["command"], cwd)
     env = {**os.environ, **{k: str(v) for k, v in app.get("env", {}).items()}}
 
     kwargs: dict = dict(

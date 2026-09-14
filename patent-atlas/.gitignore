@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+.pytest_cache/
+data/
+*.log
+.env
+.env.*
+!.env.example
+.cache/
+models/
+*.gguf
+*.safetensors
+*.pt
+*.pth
+*.pem
+*.key
+.sites-runtime/

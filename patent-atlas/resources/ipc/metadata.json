@@ -1,0 +1,41 @@
+{
+  "kind": "IPC",
+  "version": "2026.01",
+  "edition": "20260101",
+  "language": "en",
+  "publisher": "WIPO",
+  "verified": true,
+  "count": 80145,
+  "counts_by_level": {
+    "section": 8,
+    "class": 132,
+    "subclass": 655,
+    "main_group": 7668,
+    "subgroup": 71682
+  },
+  "valid_symbols_count": 80145,
+  "source": "https://www.wipo.int/classifications/ipc/en/ITsupport/Version20260101/",
+  "scheme_url": "https://www.wipo.int/classifications/data/ipc/ITSupport_and_download_area/20260101/MasterFiles/ipc_scheme_20260101.zip",
+  "valid_symbols_url": "https://www.wipo.int/classifications/data/ipc/ITSupport_and_download_area/20260101/valid_symbol_list/ipc_valid_symbols_20260101.zip",
+  "scheme_zip_sha256": "22977dd19b2061d155b4d48558b495192418bafca8147ea15eea2e05019e4849",
+  "scheme_xml_sha256": "60abc42ec68c8c8ea789fa5698404fe893a0f9b79156b1d8f2d15318ef6904a3",
+  "valid_symbols_zip_sha256": "103fb8eb7a8de2f6e4f8585e9e76036d65fc516ce9bea788e35b17cf75050c1e",
+  "retrieved_at": "2026-09-12T00:57:31+00:00",
+  "hierarchy_method": "Direct nested ipcEntry relationships in WIPO master XML; no symbol truncation",
+  "coverage": "All symbols in the WIPO 2026.01 valid-symbol list, including indexing codes",
+  "title_format": "Official English titles with references; plain text, illustrations marked [illustration]",
+  "limitations": [
+    "English titles only; no automatic Japanese translation",
+    "Classification notes and image contents require consulting the linked WIPO publication",
+    "IPC only; CPC, FI and F-term are separate systems"
+  ],
+  "record_columns": [
+    "code",
+    "title",
+    "parent",
+    "level",
+    "dots",
+    "entry_type",
+    "symbol"
+  ]
+}

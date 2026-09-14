@@ -1,0 +1,405 @@
+{
+  "kind": "IPC",
+  "language": "ja",
+  "publisher": "JPO / INPIT J-PlatPat PMGS",
+  "count": 1657,
+  "complete": false,
+  "version": "PMGS snapshot 2026-09-12",
+  "symbol_validation_version": "WIPO 2026.01",
+  "retrieved_at": "2026-09-12",
+  "coverage": "Requested symbols, their directly browsable tables, and all eight sections/classes",
+  "translation_status": "Official Japanese publication snapshot; wording edition is not asserted to match WIPO 2026.01",
+  "limitations": [
+    "This is a bounded subset, not the complete Japanese IPC catalogue.",
+    "Publication notes/illustrations and historical wording require checking linked PMGS pages.",
+    "Japanese subgroup captions depend on parent definitions; parent hierarchy remains the WIPO hierarchy."
+  ],
+  "copyright": "Underlying IPC classification: WIPO; Japanese translation: Government of Japan.",
+  "source_information": "https://www.jpo.go.jp/system/patent/gaiyo/bunrui/ipc/ipc8wk.html",
+  "sources": [
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcList/ipcListH01M10_00.html",
+      "sha256": "5972ddc72ba1f07fa6e4e38b862807850a3b17d41db8333f0021588d55d13026",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 94
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcSection/ipcSection.html",
+      "sha256": "134595b42aecfafc22573b1e9adf89e9d7845d19adbc996a62da939fe23c184b",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 8
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcClass/ipcClassH.html",
+      "sha256": "2a18087d2717628681e4e2e2ca223d2fa8d003e8e2c4f931c687ba1ead94db41",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 7
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcSubClass/ipcSubClassH01.html",
+      "sha256": "08a66f9a0baf7e900b404697f856ac296dfc4e051413bbf32476633af4d02c77",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 13
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcMainGroup/ipcMainGroupH01M.html",
+      "sha256": "8a653fe116649ee5ddf28a18ace5016bc967c16eb2fd94610266288a1bcbf065",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 8
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcList/ipcListH01M4_00.html",
+      "sha256": "aca789dbf493044f33e141f06c63ee029f635386f7fc97df484c2685f25027d3",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 75
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcList/ipcListH01M6_00.html",
+      "sha256": "1718e8acf3ac342b9d9a573dcf81adc3769614eb3f258f56dadc371ee3a7b7c8",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 27
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcList/ipcListH01M8_00.html",
+      "sha256": "94ff6ca4152390949e9ad68e77769a901627cc2ffd271e7322f3e66e5f70a7f3",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 161
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcList/ipcListH01M12_00.html",
+      "sha256": "8c827e55fc81f592d046966878f66031aee881770fbd114e1be15809cd732df9",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 5
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcList/ipcListH01M50_00.html",
+      "sha256": "b69dd3ac6955af6d9fb9ad4fb7d1c56e168a919a187418d203e6f3a6cad63a34",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 223
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcMainGroup/ipcMainGroupH01B.html",
+      "sha256": "f5da605f4c02aae140acb9bd5d9ac8427839852049e5081c3b58c343fb94df89",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 11
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcMainGroup/ipcMainGroupH01C.html",
+      "sha256": "f7ec98098c74393888c51ba993e2e7e4ceacc8aa1032bfaf89cb1cdfd73ce6e4",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 8
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcMainGroup/ipcMainGroupH01F.html",
+      "sha256": "1564ac64dfe8e8298f20be0d78a085b0c804a150bd3371f04627b0fe2cb0dbf0",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 17
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcMainGroup/ipcMainGroupH01G.html",
+      "sha256": "26f948d610e9697664fa1102f8fe241447681d362f89bfe54f8aa6c4ec6dbc5e",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 9
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcMainGroup/ipcMainGroupH01H.html",
+      "sha256": "097afba5c8c91c0272c7f78b8d295e5fc951d1feb9d5539e9afe78d35a0a406e",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 47
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcMainGroup/ipcMainGroupH01J.html",
+      "sha256": "be9817718b789ed62ee60f2e0ccfbfd5aeafe9c31a490da5341f28fd04099fc2",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 29
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcMainGroup/ipcMainGroupH01K.html",
+      "sha256": "2561140512f44787368964f050b8a882e60760f14648e4d60b6b7a888f20f593",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 7
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcMainGroup/ipcMainGroupH01P.html",
+      "sha256": "b9dc36ba78c59ec2f0ac2a593cd226f58e4b1c57b035942c45670c9b323ff0eb",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 6
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcMainGroup/ipcMainGroupH01Q.html",
+      "sha256": "ec6f3b57a56d507e775a7de355d75a2f080e35338fe53a47e69904f205d53627",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 13
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcMainGroup/ipcMainGroupH01R.html",
+      "sha256": "57c891834405573df7ce534378127956e55fbc0505685913cc5a54c134feb7cd",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 20
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcMainGroup/ipcMainGroupH01S.html",
+      "sha256": "38ce55947c440f73d829bd497e70f76f55feda60d995106122d61debfd71e18f",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 4
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcMainGroup/ipcMainGroupH01T.html",
+      "sha256": "ba96127c448ecc322ca7dcb25d451c58110bb01d5834890cce7828c2077d8ce6",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 12
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcSubClass/ipcSubClassH02.html",
+      "sha256": "a3377e349b23a963bb4be070de0873df03c7f3635a3226f390944a1f6166278e",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 9
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcSubClass/ipcSubClassH03.html",
+      "sha256": "a93f59af9870178b32b0c3566e81458ea72dae0a18efadccb100f1ed5f97712c",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 10
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcSubClass/ipcSubClassH04.html",
+      "sha256": "ba3ad2a411dc3ef734dcc9d085088189bf21375b9f69fa60d4768ba51ffee743",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 11
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcSubClass/ipcSubClassH05.html",
+      "sha256": "7e40bff251ac4a2a6a8e2cc040fe5063f65f1d7d3c37abc8c504eef8349b15e7",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 6
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcSubClass/ipcSubClassH10.html",
+      "sha256": "c9dce6a9e282b493eb85dcc86b18fa66d1b50bb05800c3f322932263e04e005d",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 8
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcSubClass/ipcSubClassH99.html",
+      "sha256": "85f3209f16fe0ac26578c9c6ed7a664c5f636916213095d79db1dd3ceb0e270b",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 1
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcList/ipcListH01G9_00.html",
+      "sha256": "d6670c9ab53722de316a9603d2968810862c742dcc1e49e14735b7fe9985e776",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 31
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcMainGroup/ipcMainGroupC01D.html",
+      "sha256": "c86c61aeef692eb6fee4ef25669d67ef66cbfab6e5e0ca31673157585c45acbc",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 8
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcClass/ipcClassC.html",
+      "sha256": "4d4da425dd9768c35835e5d98d34f0b1ed0cc1491b3b49bb70f5b5b425c1275e",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 21
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcSubClass/ipcSubClassC01.html",
+      "sha256": "fb0b1bbc539e1b36141d227fc87e08b60b33bc8c4cce486ea03ad1b8f9f4efd1",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 5
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcList/ipcListC01D15_00.html",
+      "sha256": "5620e2cc79a9ae667f9572c522e03dce39844e4be3d708a12b54e721f34b1e6d",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 6
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcMainGroup/ipcMainGroupC07F.html",
+      "sha256": "623dc13f4ef4f50df9817ffbb3f54d5255d03e702714750c45a76ac1c435aa46",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 10
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcSubClass/ipcSubClassC07.html",
+      "sha256": "0307266fc6621a39ef0c3c5ed17dd9e9ea76b0d0bfe49a8204d0c89d3a1371b6",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 8
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcList/ipcListC07F1_00.html",
+      "sha256": "e08c6f63f4d449bdb48af7c2c957c336abed3dec7855058fff336f21d36cdcd9",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 7
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcMainGroup/ipcMainGroupH10N.html",
+      "sha256": "f712ca5c74690da2ae478c3f6f4063efede385ddba459b30b284dc45fc92f641",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 17
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcList/ipcListH10N30_00.html",
+      "sha256": "9b148e70737c760df3abaed31f490dd37c393ca5e09e4afcc476007ef428345b",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 46
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcMainGroup/ipcMainGroupC04B.html",
+      "sha256": "8b3be0501ce08a1ec32ccfb227e89997c92d2678410cc2ec5bb6c00fd9dca635",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 24
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcSubClass/ipcSubClassC04.html",
+      "sha256": "2ea9d64b0227c8ad97a5de40150c99be396a38d60e543d3d4b0494d637610dcd",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 1
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcList/ipcListC04B35_00.html",
+      "sha256": "bea13f7b0aa4fcad0bd094f1b9ee74eddc84aa760f4d9c40ab01df0fc46e30ac",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 129
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcMainGroup/ipcMainGroupC25D.html",
+      "sha256": "e413db9d74d956ebcf0b14a1c811aaa86d2320ee311de6bf013b038d81122a38",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 12
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcSubClass/ipcSubClassC25.html",
+      "sha256": "4dd09c59f4891e5ef56a06e3bcafb48567041a23e8325ee282276fdef178e89b",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 4
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcList/ipcListC25D17_00.html",
+      "sha256": "d5dce838811ce1b85aec733f39ed0dfaaa08783385dda8933f8ac918429e8347",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 15
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcMainGroup/ipcMainGroupC25B.html",
+      "sha256": "1c70c8d8f62086ed816c0ad7cec7af83ea3ace9ee630e97a35886dfcc05bd342",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 8
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcList/ipcListC25B11_00.html",
+      "sha256": "26760bdb81f2786a6fb7e02a3505ac5f05d659dde71dade6f278f61ed5a630b0",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 45
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcList/ipcListC04B37_00.html",
+      "sha256": "75a337e2748b454007e67e55a16cdd01260f5ab926157b8f56197d9a9e1dc988",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 3
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcMainGroup/ipcMainGroupG01R.html",
+      "sha256": "aa98a1160448b3014f7495b9e2da9a4449a0007cb8bdc48280f36420ae4122ec",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 19
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcClass/ipcClassG.html",
+      "sha256": "df862989055e4e2baeafd2e55279ed656fb7e32ed5a31faaee4503ad0dd3baa3",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 15
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcSubClass/ipcSubClassG01.html",
+      "sha256": "c3d20a544102432140fd2617c2ee43d18ed54dce6051a03030d49e2e554150a3",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 18
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcList/ipcListG01R31_00.html",
+      "sha256": "89264ec79c7c1b0904f61161d77236b20cc5d05e11d46d3090f5f392b8e8d950",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 83
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcMainGroup/ipcMainGroupG01N.html",
+      "sha256": "1242d47f928975a055268cffc3f4df53b3540b3a8d89bef5bc8d9d54d51f4cc1",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 22
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcList/ipcListG01N27_00.html",
+      "sha256": "77159309f1d9b9c27d0d39ce45f96d6a67f7fc689eb6399c4d54f9d44667161e",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 70
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcMainGroup/ipcMainGroupB60L.html",
+      "sha256": "e32d4f7803b91a4be5fe8ddfe1813ec95dabeb9d20e6ba8559621380fad56ae0",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 12
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcClass/ipcClassB.html",
+      "sha256": "a40a2bdbe7604eaf3580e3ecd3e5729f00576b1e06bdf8a53660fe2b785283db",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 38
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcSubClass/ipcSubClassB60.html",
+      "sha256": "a39cef0d56ea41a2b0e840503e7e899c62d86126b8d4a82102071e5bc5a1a79b",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 18
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcList/ipcListB60L53_00.html",
+      "sha256": "2b0d73029c983045462bda7c96049d60b5f608200c7683d4ff9b5ed615b60719",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 38
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcMainGroup/ipcMainGroupB62M.html",
+      "sha256": "db02ff9bf5c7ee4faf297974ba83a6949d1db7d3cc09d904b4492f40f9b44b22",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 16
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcSubClass/ipcSubClassB62.html",
+      "sha256": "bab5ce32b35de45fcdc2346688f0125d812f8410e662f6c15d6366c725541935",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 8
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcList/ipcListB62M6_00.html",
+      "sha256": "7bf0031d813f715a84606c21c18774239603edceb64c1efd37bbd8e29f9fd600",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 18
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcClass/ipcClassA.html",
+      "sha256": "08138042c9b7a455602c0c4bf6c4a0537a72b5df7c6bfa4904818ac0bdf5bc20",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 16
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcClass/ipcClassD.html",
+      "sha256": "01789d506fb4c82972d4551ab01515be1de8d82f0c3d5475efbe69a6be2db585",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 9
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcClass/ipcClassE.html",
+      "sha256": "75add35261a6935c62c48edb993b7fcc39b953ae04594a5ddfb538268b6f60f8",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 8
+    },
+    {
+      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/ipcClass/ipcClassF.html",
+      "sha256": "3aadf972b816ab51d0a17fdb7c2ee20dab4c18f58ff8bf25191c35716c22a2fd",
+      "retrieved_at": "2026-09-12",
+      "parsed_rows": 18
+    }
+  ]
+}
