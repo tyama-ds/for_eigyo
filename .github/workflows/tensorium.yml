@@ -1,0 +1,56 @@
+# tensorium のテスト。
+#  core   : 標準ライブラリのみ（サーバ API・データ読み込み・ベースライン学習）。torch 系テストは自動 skip
+#  engine : CPU 版 PyTorch + transformers + sentence-transformers を入れ、全ファミリーの学習と GUI E2E（Playwright）
+name: tensorium tests
+
+on:
+  push:
+    paths: ["tensorium/**", ".github/workflows/tensorium.yml"]
+  pull_request:
+    paths: ["tensorium/**", ".github/workflows/tensorium.yml"]
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: tensorium
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Ruff
+        run: pip install ruff && ruff check tcore server.py tests tests_e2e sample_data
+      - name: Compileall
+        run: python -m compileall -q tcore server.py tests tests_e2e
+      - name: Unit + API tests (stdlib only)
+        run: python -m unittest discover -s tests -v
+
+  engine:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: tensorium
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install CPU PyTorch and ML libraries
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install transformers sentence-transformers openpyxl playwright pytest
+      - name: Unit + API + engine tests
+        env:
+          HF_HUB_OFFLINE: "1"
+        run: python -m unittest discover -s tests -v
+      - name: Install Chromium
+        run: playwright install --with-deps chromium
+      - name: GUI E2E (Playwright)
+        env:
+          HF_HUB_OFFLINE: "1"
+        run: python tests_e2e/test_gui_e2e.py
