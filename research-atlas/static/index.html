@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#080e18">
+  <meta name="description" content="公開論文検索と書誌情報から研究動向と技術の可能性を探索するResearch Atlas">
+  <title>Research Atlas — 技術の次の波を捉える</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath fill='%2358e0c5' d='M16 2 30 26H2zm0 8-8 13h16z'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="/static/foresight.css">
+  <link rel="stylesheet" href="/static/connection-settings.css">
+  <link rel="stylesheet" href="/static/map-terrain.css">
+  <script defer src="/static/connection-settings.js"></script>
+  <script defer src="/static/map-terrain.js"></script>
+  <script defer src="/static/landscape.js"></script>
+  <script defer src="/static/app.js"></script>
+  <script defer src="/static/foresight.js"></script>
+</head>
+<body>
+  <a href="#main" class="skip-link">分析結果へ移動</a>
+  <aside class="rail" aria-label="メインナビゲーション">
+    <button class="brand-symbol" data-view="overview" aria-label="Research Atlas ホーム"><svg viewBox="0 0 40 40" aria-hidden="true"><path d="M20 5 36 33H4L20 5Z"/><path d="m20 16 9 17M13.6 22h12.8"/></svg></button>
+    <div class="rail-divider"></div>
+    <nav id="navigation">
+      <button data-view="overview" class="nav-item active" aria-current="page"><span data-icon="grid"></span><span>概要</span></button>
+      <button data-view="technology" class="nav-item"><span data-icon="orbit"></span><span>技術マップ</span></button>
+      <button data-view="keywords" class="nav-item"><span data-icon="hash"></span><span>キーワード</span></button>
+      <button data-view="authors" class="nav-item"><span data-icon="network"></span><span>著者</span></button>
+      <button data-view="citations" class="nav-item"><span data-icon="quote"></span><span>引用</span></button>
+      <button data-view="forecasts" class="nav-item"><span data-icon="trend"></span><span>将来予測</span></button>
+      <button data-view="foresight" class="nav-item"><span data-icon="target"></span><span>有望領域</span></button>
+      <button data-view="papers" class="nav-item"><span data-icon="file"></span><span>論文</span></button>
+    </nav>
+    <div class="rail-bottom"><button class="nav-item" data-action="settings"><span data-icon="sliders"></span><span>分析設定</span></button><div class="rail-avatar" title="ローカルワークスペース">RA</div></div>
+  </aside>
+  <div class="app-shell">
+    <header class="topbar">
+      <a href="#" class="wordmark" data-view="overview">RESEARCH<span>ATLAS</span><b>LAB</b></a>
+      <div class="workspace-label"><span class="status-dot"></span>LOCAL WORKSPACE</div>
+      <div class="topbar-actions"><button class="icon-button" data-action="datasets" aria-label="データセット履歴" title="データセット履歴"><span data-icon="database"></span></button><span class="topbar-rule"></span><button class="button button-quiet" data-action="export"><span data-icon="download"></span><span>エクスポート</span></button><button class="button button-primary" data-action="upload"><span data-icon="plus"></span>データを追加</button></div>
+    </header>
+    <main id="main" tabindex="-1">
+      <section class="page-heading">
+        <div><div class="eyebrow">RESEARCH INTELLIGENCE <span>/</span> <span id="view-eyebrow">OVERVIEW</span></div><h1 id="page-title">研究の現在地と、その先へ。</h1><p id="page-description">論文に散らばるシグナルから、次の技術の可能性を見つける。</p></div>
+        <div class="heading-controls"><button class="period-control" data-action="settings"><span data-icon="calendar"></span><span id="period-label">分析期間を設定</span><span data-icon="chevron"></span></button><button class="icon-button refresh-button" data-action="analyze" title="再分析" aria-label="現在の設定で再分析"><span data-icon="refresh"></span></button></div>
+      </section>
+      <div class="dataset-strip"><div class="dataset-info"><span data-icon="database"></span><button id="dataset-name" data-action="datasets">データセットを読み込み中</button><span id="demo-badge" class="badge badge-demo" hidden>合成・テストデータ</span></div><div class="dataset-meta"><span id="embedding-label">LOCAL ANALYSIS</span><span class="small-separator">·</span><span id="analysis-time">—</span></div></div>
+      <div id="notice" class="notice" hidden></div>
+      <div id="source-notice" class="source-notice" hidden></div>
+      <div id="content" aria-live="polite"></div>
+      <footer class="footer"><span><i class="status-dot"></i> PYTHON ANALYTICS <span class="footer-divider">/</span> LOCAL FIRST</span><button data-action="methodology">分析手法とデータの限界 <span aria-hidden="true">↗</span></button><span>RESEARCH ATLAS <b>01</b></span></footer>
+    </main>
+  </div>
+  <div id="toast" class="toast" role="status" hidden></div>
+  <div id="tooltip" class="chart-tooltip" role="tooltip" hidden></div>
+  <dialog id="source-dialog" class="dialog dialog-wide source-dialog">
+    <div class="dialog-header"><div><div class="eyebrow">BUILD YOUR RESEARCH CORPUS</div><h2>研究データを、つなぐ。</h2><p class="muted" style="margin-top:5px">公開論文を検索して始める。手元のCSVで、さらに補う。</p></div><button class="icon-button" data-close aria-label="閉じる"><span data-icon="close"></span></button></div>
+    <div class="source-tabs" role="tablist" aria-label="データの追加方法"><button id="source-tab-public" class="active" role="tab" aria-selected="true" aria-controls="source-public" data-source-tab="public"><span data-icon="globe"></span>公開論文を検索</button><button id="source-tab-csv" role="tab" aria-selected="false" aria-controls="source-csv" data-source-tab="csv"><span data-icon="upload"></span>CSVを読み込む</button><button id="source-tab-saved" role="tab" aria-selected="false" aria-controls="source-saved" data-source-tab="saved"><span data-icon="database"></span>保存済み</button></div>
+    <div class="dialog-body source-body">
+      <section id="source-public" role="tabpanel" aria-labelledby="source-tab-public">
+        <form id="discover-form"><label class="field-label" style="margin-top:0">検索先<select id="source-provider" required><option value="">検索先を読み込んでいます…</option></select></label><div id="provider-description" class="provider-description"></div><label class="field-label">調べたい技術・研究テーマ<input type="search" id="discover-query" minlength="2" placeholder="例：solid state battery、quantum error correction" maxlength="500" required></label><p class="field-help">検索語・対象期間・取得件数などの検索条件を選択した公開サービスに送信します。手元の論文やAPIキーは送りません。</p><div class="discover-mode-row"><div class="segmented"><button type="button" class="active" data-discover-mode="year">年単位で取得</button><button type="button" data-discover-mode="month">月単位で取得</button></div><button type="button" class="text-link" data-action="recent-twelve">最近12か月を設定 ↗</button></div><div class="discover-options"><label id="discover-start-label">開始年<input id="discover-start" type="number" min="1900" max="2100" required></label><label id="discover-end-label">終了年<input id="discover-end" type="number" min="1900" max="2100" required></label><label id="discover-start-month-label" hidden>開始月<input id="discover-start-month" type="month" min="1900-01" disabled></label><label id="discover-end-month-label" hidden>終了月<input id="discover-end-month" type="month" min="1900-01" disabled></label><label>最大取得数<select id="discover-limit"><option value="20">20件 · 最小</option><option value="50">50件 · お試し</option><option value="100">100件</option><option value="250" selected>250件</option><option value="500">500件</option><option value="1000">1,000件</option></select></label></div><div class="source-search-footer"><span id="discovery-quota-help">APIキー不要 · 各年に取得枠を配分</span><button id="discover-button" class="button button-primary" type="submit"><span data-icon="search"></span>公開論文を取得</button></div></form>
+        <div id="discover-progress" class="discover-progress" role="status" hidden></div><div id="discover-error" class="inline-error" hidden></div><div id="discover-results" hidden></div>
+      </section>
+      <section id="source-csv" role="tabpanel" aria-labelledby="source-tab-csv" hidden><div class="source-method-card"><span class="source-method-icon"><span data-icon="file"></span></span><div><h3>手元の書誌情報で、分析を広げる。</h3><p>Scopusのエクスポート、またはTitle・Year・Abstractなどを含む汎用CSVを読み込めます。公開検索で取得した論文との結合も選べます。</p><button class="button button-primary" data-action="csv-upload">論文CSVを読み込む <span data-icon="arrow"></span></button></div></div><div class="source-method-card"><span class="source-method-icon"><span data-icon="quote"></span></span><div><h3>年ごとの引用履歴を補う</h3><p>累積被引用数から過去の推移は復元できません。EIDまたはDOI・Year・Citationsを含む年別引用CSVを追加できます。</p><button class="button button-quiet" data-action="citation-upload">引用履歴を追加 <span data-icon="plus"></span></button></div></div></section>
+      <section id="source-saved" role="tabpanel" aria-labelledby="source-tab-saved" hidden><p class="muted" style="margin-bottom:18px">保存済みのデータセットを選ぶと、収録年または検索期間に合わせて分析します。</p><div id="source-dataset-list"></div></section>
+    </div>
+  </dialog>
+  <dialog id="upload-dialog" class="dialog"><div class="dialog-header"><div><div class="eyebrow">DATA CONNECTION</div><h2>分析データを追加</h2></div><button class="icon-button" data-close aria-label="閉じる"><span data-icon="close"></span></button></div><div class="dialog-body"><div class="segmented upload-tabs"><button class="active" data-upload-mode="papers">論文CSV</button><button data-upload-mode="citations">年別引用履歴</button></div><p id="upload-description" class="muted">Scopusのエクスポート、またはタイトル・出版年・抄録を含む汎用CSVを読み込めます。</p><label id="csv-provider-field" class="field-label">CSVの取得元<select id="csv-provider"><option value="scopus_csv">Scopus CSV</option><option value="csv">汎用の論文CSV</option></select></label><label id="dropzone" class="dropzone" for="csv-file"><span class="upload-icon" data-icon="upload"></span><strong id="file-label">CSVファイルを選択、またはドロップ</strong><span>最大20 MB / 10,000件</span><input id="csv-file" type="file" accept=".csv,text/csv" class="sr-only"></label><div class="field-help" id="upload-help">推奨項目：Title、Year、Authors、Abstract、Author Keywords、Cited by、EID、DOI。月次分析にはPublication date / Cover Date / Monthを追加。</div><div id="csv-merge-choice"></div><div id="upload-error" class="inline-error" hidden></div><div class="download-samples"><a href="/api/demo.csv" download>デモCSVをダウンロード ↗</a><a href="/api/citation-template.csv" download>引用履歴の書式 ↗</a></div></div><div class="dialog-footer"><button class="button button-quiet" data-close>キャンセル</button><button id="import-button" class="button button-primary" disabled>読み込んで分析</button></div></dialog>
+  <dialog id="settings-dialog" class="dialog model-settings-dialog"><div class="dialog-header"><div><div class="eyebrow">ANALYSIS CONFIGURATION</div><h2>分析の設定</h2></div><button class="icon-button" data-close aria-label="閉じる"><span data-icon="close"></span></button></div><form id="settings-form"><div class="dialog-body"><div class="form-grid"><label>開始年<input type="number" id="start-year" min="1900" max="2100" required></label><label>終了年<input type="number" id="end-year" min="1900" max="2100" required></label><label><span id="topic-count-label">テーマ数</span><input id="topic-count" type="number" value="8" min="2" max="20" step="1" required></label><label>予測期間<select id="forecast-horizon"><option value="1">1 年先</option><option value="2">2 年先</option><option value="3" selected>3 年先</option></select></label></div>
+      <div class="model-settings-section"><div class="eyebrow">TEXT REPRESENTATION × TOPIC MODEL</div><label class="field-label" style="margin-top:0">テーマの抽出方法<select id="topic-model"><option value="kmeans">K-means · 文章の近さで分類</option><option value="nmf">NMF · 語のまとまりを分解</option><option value="lda">LDA · 語の出現からテーマを推定</option><option value="bertopic">BERTopic · 意味からテーマを自動検出</option></select></label><p class="field-help" id="topic-model-help"></p><label class="field-label">文章の表現方法<select id="embedding"><option value="tfidf">TF-IDF · 語の重要度で表現</option><option value="sbert">Sentence-BERT (SBERT) · 意味で表現</option></select></label><div id="sbert-model-field" class="sbert-model-field" hidden><label class="field-label">SBERTモデル<select id="sbert-model"><option value="mpnet" selected>MPNet · 英語論文</option><option value="multilingual_minilm">Multilingual MiniLM · 多言語</option></select></label><p class="field-help" id="sbert-model-help"></p></div><p class="field-help" id="transformer-help"></p><label id="min-topic-size-field" class="field-label" hidden>BERTopicの最小テーマサイズ<input id="min-topic-size" type="number" value="5" min="5" max="100" step="1" disabled></label><div id="model-availability-note" class="model-availability-note" hidden></div></div>
+      <div class="monthly-settings"><div class="eyebrow">MONTHLY SIGNALS</div><div class="form-grid"><label>月次の比較窓<select id="monthly-window"><option value="1">直近1か月 / その前の1か月</option><option value="3" selected>直近3か月 / その前の3か月</option><option value="6">直近6か月 / その前の6か月</option></select></label><label>月次の基準月<input id="monthly-anchor" type="month" min="1900-01"></label></div><p class="field-help">基準月を空欄にすると、分析終了年内の最新完了月を使います。当月は未完了のため比較から除外。月を特定できない論文は月次分析に使いません。</p></div><div class="info-box"><span data-icon="info"></span><p>初期値は完了した過去5暦年です。CSVの取込時は収録年、保存済みデータの選択時は収録年または検索期間に合わせます。当年を含む場合、未完了年の論文数は成長率と予測に影響します。</p></div><div class="settings-llm"><span class="eyebrow">LLM CONNECTION</span><strong id="llm-status"></strong><span id="connections-summary"></span><p class="field-help">LLMは数値分析を根拠に仮説を補足します。APIキーとプロキシは、このブラウザに保存して利用します。</p><button type="button" class="button button-quiet button-small connections-open" data-connection-open>LLM・プロキシ接続を設定</button></div><div id="settings-error" class="inline-error" hidden></div></div><div class="dialog-footer"><button type="button" class="button button-quiet" data-close>キャンセル</button><button type="submit" class="button button-primary">設定を適用して分析 <span data-icon="arrow"></span></button></div></form></dialog>
+  <dialog id="datasets-dialog" class="dialog"><div class="dialog-header"><div><div class="eyebrow">YOUR LIBRARY</div><h2>データセット</h2></div><button class="icon-button" data-close aria-label="閉じる"><span data-icon="close"></span></button></div><div class="dialog-body"><div id="dataset-list"></div></div><div class="dialog-footer"><button class="button button-quiet" data-action="demo">合成デモを開く</button><button class="button button-primary" data-action="upload"><span data-icon="plus"></span>データを追加</button></div></dialog>
+  <dialog id="export-dialog" class="dialog dialog-small"><div class="dialog-header"><div><div class="eyebrow">TAKE YOUR FINDINGS</div><h2>分析結果を保存</h2></div><button class="icon-button" data-close aria-label="閉じる"><span data-icon="close"></span></button></div><div class="dialog-body export-options"><a id="export-html" class="export-option" href="#" download><span data-icon="file"></span><div><strong>分析レポート</strong><small>HTML · 印刷・共有できるレポート</small></div><span data-icon="download"></span></a><a id="export-csv" class="export-option" href="#" download><span data-icon="grid"></span><div><strong>トピック集計</strong><small>CSV · 表計算ソフトで編集</small></div><span data-icon="download"></span></a><a id="export-json" class="export-option" href="#" download><span data-icon="database"></span><div><strong>分析データ一式</strong><small>JSON · 可視化と再利用のためのデータ</small></div><span data-icon="download"></span></a></div></dialog>
+  <dialog id="field-report-dialog" class="dialog field-report-dialog" aria-labelledby="field-report-title"><div class="dialog-header field-report-header"><div><div class="eyebrow">FIELD INTELLIGENCE · COMPREHENSIVE REPORT</div><h2 id="field-report-title">分野の総合分析</h2></div><button class="icon-button" data-close aria-label="総合分析を閉じる"><span data-icon="close"></span></button></div><div id="field-report-body" class="field-report-body" aria-live="polite"></div></dialog>
+  <dialog id="detail-dialog" class="dialog dialog-wide"><div class="dialog-header"><div><div class="eyebrow" id="detail-eyebrow">EVIDENCE</div><h2 id="detail-title">論文の詳細</h2></div><button class="icon-button" data-close aria-label="閉じる"><span data-icon="close"></span></button></div><div class="dialog-body" id="detail-body"></div></dialog>
+  <dialog id="connections-dialog" class="dialog connections-dialog" aria-labelledby="connections-title">
+    <div class="dialog-header"><div><div class="eyebrow">BROWSER CONNECTION PREFERENCES</div><h2 id="connections-title">LLM・プロキシ接続</h2></div><button type="button" class="icon-button" data-connection-close aria-label="接続設定を閉じる">×</button></div>
+    <form id="connections-form" autocomplete="off">
+      <div class="dialog-body">
+        <div class="connections-scope"><strong>このブラウザに保存します。</strong><br>この端末・ブラウザのプロファイル内で、<code id="connections-origin"></code> に保存します。Chromeと他のブラウザ、localhostと127.0.0.1は別の保存先です。<br>APIキー・プロキシ認証はブラウザの保存領域に保持され、必要なAPI通信時にPythonへ渡されます。サーバーの設定ファイルには保存しません。ブラウザのサイトデータを削除すると設定も消えます。</div>
+        <section class="connections-section"><span class="eyebrow">OPENAI API</span><h3>OpenAI</h3><div class="form-grid">
+          <label>OpenAI APIキー<input id="connection-openai-key" type="password" maxlength="2048" autocomplete="new-password" spellcheck="false" placeholder="APIキーを入力"></label>
+          <label>OpenAIモデル<input id="connection-openai-model" type="text" maxlength="160" autocomplete="off" spellcheck="false" placeholder="利用するモデルID"></label>
+        </div><div class="connections-test-row"><p class="field-help">接続確認は認証とモデル情報の取得を確認します。論文の送信・文章生成は行いません。</p><button type="button" class="button button-quiet button-small" data-connection-test="openai">OpenAI接続を確認</button></div></section>
+        <section class="connections-section"><span class="eyebrow">LOCAL MODEL</span><h3>ローカルLLM</h3><div class="form-grid">
+          <label>接続方式<select id="connection-local-backend"><option value="ollama">Ollama</option><option value="openai_compatible">OpenAI互換（LM Studioなど）</option></select></label>
+          <label>ローカルLLM URL<input id="connection-local-url" type="url" required maxlength="2048" spellcheck="false" placeholder="http://127.0.0.1:11434"></label>
+          <label>ローカルモデル<input id="connection-local-model" type="text" maxlength="160" spellcheck="false" placeholder="インストール済みモデルID"></label>
+          <label>ローカルAPIキー（必要な場合）<input id="connection-local-key" type="password" maxlength="2048" autocomplete="new-password" spellcheck="false"></label>
+        </div><div class="connections-test-row"><p class="field-help">Pythonが動くPC上のLLMに接続します。OpenAI互換URLは例：http://127.0.0.1:1234/v1</p><button type="button" class="button button-quiet button-small" data-connection-test="local">ローカル接続を確認</button></div></section>
+        <section class="connections-section"><span class="eyebrow">OUTBOUND NETWORK</span><h3>プロキシ</h3><label class="connections-checkbox"><input id="connection-proxy-enabled" type="checkbox">Pythonからの外部API通信にプロキシを使う</label><fieldset id="connection-proxy-fields" disabled><div class="form-grid">
+          <label class="connections-wide">プロキシURL<input id="connection-proxy-url" type="url" maxlength="2048" spellcheck="false" placeholder="http://proxy.example:8080"></label>
+          <label>ユーザー名（任意）<input id="connection-proxy-username" type="text" maxlength="2048" autocomplete="off" spellcheck="false"></label>
+          <label>パスワード（任意）<input id="connection-proxy-password" type="password" maxlength="2048" autocomplete="new-password" spellcheck="false"></label>
+          <label class="connections-wide">プロキシを使わない接続先<input id="connection-no-proxy" type="text" maxlength="2048" spellcheck="false" placeholder="localhost,127.0.0.1,::1"></label>
+        </div></fieldset><div class="connections-test-row"><p class="field-help">除外先はカンマ区切りです。ブラウザ自体のネットワーク設定は変更しません。</p><button type="button" class="button button-quiet button-small" data-connection-test="proxy">プロキシ接続を確認</button></div></section>
+        <div id="connections-message" class="connections-message" role="status" hidden></div>
+      </div>
+      <div class="dialog-footer"><button type="button" class="button button-quiet connections-clear" data-connection-clear>ブラウザの保存設定を削除</button><div class="connections-footer-actions"><button type="button" class="button button-quiet" data-connection-close>閉じる・未保存の変更を破棄</button><button type="submit" class="button button-primary">ブラウザに保存</button></div></div>
+    </form>
+  </dialog>
+</body>
+</html>

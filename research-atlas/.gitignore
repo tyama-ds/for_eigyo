@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.env
+data/
+artifacts/
+*.log
+*.pyc
+
+# Runtime files and local exports
+output/
+tmp/
+.env.*
+!.env.example
+.venv*/
+.coverage
+htmlcov/

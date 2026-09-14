@@ -172,6 +172,22 @@
       "wait_port": 8720
     },
     {
+      "id": "research-atlas",
+      "name": "Research Atlas",
+      "description": "公開論文・Scopus CSVから研究分野と共著ネットワークを可視化。NMF技術マップ、引用・年次動向、Rocchio反復探索、原文に基づくLLM評論とPDF・CSV出力。LLM・proxy設定はブラウザに保存",
+      "icon": "research",
+      "cwd": "../research-atlas",
+      "command": [
+        "{venv_python}",
+        "run.py",
+        "--no-browser",
+        "--port",
+        "8778"
+      ],
+      "url": "http://127.0.0.1:8778",
+      "wait_port": 8778
+    },
+    {
       "id": "tensorium",
       "name": "Tensorium",
       "description": "CSV / XLSX を入れるだけで、Transformer（BERT ファインチューニング / SentenceBERT 埋め込み + MLP / ゼロから学習 / FT-Transformer 表形式）による回帰・分類を GUI で実行。列型の自動判定、学習曲線のリアルタイム表示、混同行列・散布図での評価、新データへの一括予測と CSV 出力。ローカルモデル・オフライン対応",

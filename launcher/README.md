@@ -39,12 +39,35 @@ python launcher/launcher.py --port 9200 --open
 | Copilot Research | for_eigyo | M365 Copilot × 擬似GEPA（目次→章別リサーチ→統合レポート） | 8767 |
 | JupyterLab | for_eigyo | llmlab のノートブック環境（要 `pip install jupyterlab`） | 8888 |
 | Prism ニュースポータル | for_eigyo | RSS/Atom を束ねるニュース収集（検索・トレンド・AI要約） | 8780 |
+| Research Atlas | for_eigyo | 論文の技術マップ・共著ネットワーク・反復探索・根拠付きLLM評論（要依存インストール） | 8778 |
 | Agent Orchestrator | claudecode | Codex × Claude Code × ローカルLLM の協調（7戦略） | 8801 |
 | Deep Research Tool | claudecode | Web検索→検証→レポート生成のディープリサーチ | 8802 |
 | Patent Atlas | for_eigyo | 特許検索式・分類候補・CSVマップ・要不要判定と学習・探索の反復と収束表示 | 8810 |
 
 Studio / Loop は標準ライブラリのみで動くため、`PYTHONPATH=src` を通して
 リポジトリのソースから直接起動する（venv や pip install -e は不要）。
+
+Research Atlas は **Python 3.11 以降と専用の依存パッケージ**が必要です。
+Windows では初回に `research-atlas/start.bat` を実行すると、専用の `.venv` を作成し
+依存パッケージをインストールします。手動で準備する場合は、リポジトリのルートで
+次を実行します。
+
+```powershell
+python -m venv research-atlas/.venv
+.\research-atlas\.venv\Scripts\python.exe -m pip install -r research-atlas/requirements.txt
+python launcher/launcher.py --open
+```
+
+macOS / Linux では `.venv/Scripts/python.exe` を `.venv/bin/python` に読み替え、
+仮想環境の作成には `python3` を使用します。準備後は通常の
+`launcher/start_portal.bat` からも起動できます。Research Atlas のカードは
+`{venv_python}` を使い、アプリ専用の `.venv` の Python で直接
+`run.py --no-browser --port 8778` を実行します。専用環境がない場合は準備方法を
+起動エラーに表示し、ポータルから依存を自動インストールすることはありません。
+起動後は `http://127.0.0.1:8778` に表示されます。
+接続先の LLM API・proxy 設定はブラウザで入力・保存します。既存の別ポートの設定は
+ブラウザの保存先が異なるため自動移行されません。詳細は
+[Research Atlas の起動・設定](../research-atlas/README.md)を参照してください。
 
 claudecode の2つは、`for_eigyo` と `claudecode` が**同じ親フォルダに並んでいる**
 前提で `cwd: ../../claudecode` としてある。配置が違う場合は `apps.json` の
@@ -105,6 +128,9 @@ UI の「＋ アプリを追加」で以下を入力する（`apps.json` 直接�
 - `command` の `{app_python}` はアプリの `cwd` にある `.venv/Scripts/python.exe`
   （Windows）または `.venv/bin/python`（macOS / Linux）に置き換わる。
   該当ファイルがない場合はポータルを起動した Python を使うため、その環境に依存パッケージが必要
+- アプリ専用の仮想環境を必須にする場合は `{venv_python}` を指定する。
+  `cwd/.venv/Scripts/python.exe`（Windows）または `cwd/.venv/bin/python`（macOS / Linux）を
+  直接起動する。仮想環境と依存は事前に準備する必要があり、存在しなければ起動エラーになる
 - `command` を省略して `url` だけにすると「開くだけのリンクカード」になる
   （既に別の方法で常駐させているアプリや、社内Webページ等に便利）
 - `env` で環境変数を追加できる（例: `{"PYTHONPATH": "src"}`）

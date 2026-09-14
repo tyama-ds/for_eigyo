@@ -118,14 +118,24 @@ def _reader(app_id: str, proc: subprocess.Popen) -> None:
 
 def resolve_command(command: list[str], cwd: Path) -> list[str]:
     """Resolve Python placeholders without invoking a shell or wrapper process."""
-    venv_python = cwd / ".venv" / (
-        "Scripts/python.exe" if os.name == "nt" else "bin/python"
-    )
-    app_python = str(venv_python) if venv_python.is_file() else sys.executable
-    return [
-        part.replace("{python}", sys.executable).replace("{app_python}", app_python)
-        for part in command
-    ]
+    command = [part.replace("{python}", sys.executable) for part in command]
+    requires_venv = any("{venv_python}" in part for part in command)
+    if requires_venv or any("{app_python}" in part for part in command):
+        relative_python = "Scripts/python.exe" if os.name == "nt" else "bin/python"
+        venv_python = cwd / ".venv" / relative_python
+        venv_exists = venv_python.is_file()
+        if requires_venv and not venv_exists:
+            raise FileNotFoundError(
+                f"アプリ専用の Python が見つかりません: {venv_python}。"
+                "アプリの README に従って .venv を作成し、依存パッケージを"
+                "インストールしてから起動してください。"
+            )
+        app_python = str(venv_python) if venv_exists else sys.executable
+        command = [
+            part.replace("{app_python}", app_python).replace("{venv_python}", str(venv_python))
+            for part in command
+        ]
+    return command
 
 
 def launch_app(app: dict) -> dict:
@@ -141,7 +151,10 @@ def launch_app(app: dict) -> dict:
     cwd = (BASE / app.get("cwd", ".")).resolve()
     if not cwd.exists():
         return {"ok": False, "error": f"作業フォルダが見つかりません: {cwd}"}
-    cmd = resolve_command(app["command"], cwd)
+    try:
+        cmd = resolve_command(app["command"], cwd)
+    except FileNotFoundError as e:
+        return {"ok": False, "error": str(e)}
     env = {**os.environ, **{k: str(v) for k, v in app.get("env", {}).items()}}
 
     kwargs: dict = dict(
