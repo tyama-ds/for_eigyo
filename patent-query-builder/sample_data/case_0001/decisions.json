@@ -1,0 +1,20 @@
+{
+  "_comment": "記録済み判断（ScriptedHumanDecider 用）。統合テストと後方テストの手順確認に使う。",
+  "G1": {
+    "axes": [
+      {"axis_id": "A", "name": "対象物（高強度鋼板）", "kind": "required", "category": "structure",
+       "definition": "自動車部材に用いる高強度鋼板（高張力鋼板・ハイテン）を対象とする。", "evidence": "自動車部材に用いる高強度鋼板の製造方法", "terms": ["高強度鋼板"]},
+      {"axis_id": "B", "name": "手段（焼入れ）", "kind": "required", "category": "structure",
+       "definition": "加熱後の急冷による焼入れ処理を含むこと。", "evidence": "加熱した後に急冷して焼入れを行い", "terms": ["焼入れ"]},
+      {"axis_id": "C", "name": "用途（自動車部材）", "kind": "auxiliary", "category": "use",
+       "definition": "自動車の車体部品・部材への適用。", "evidence": "自動車の車体部品として好適", "terms": ["自動車部材"]}
+    ]
+  },
+  "G2": {
+    "rules": {"terms": "adopt_input_and_rsj", "codes": "adopt_known"},
+    "adopt_terms": ["高張力鋼板", "ハイテン", "焼き入れ", "急冷", "自動車部品", "車体部品"],
+    "reject_terms": ["steel sheet", "quenching", "automotive part"]
+  },
+  "G3": {"mode": "local_index"},
+  "G4": {"actions": ["iterate", "finalize"], "adopt_local_improvements": true, "adopt_ops": []}
+}

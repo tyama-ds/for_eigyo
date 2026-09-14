@@ -1,0 +1,8 @@
+{
+  "_comment": "調査種別ごとの目標母集団レンジ（件）と 3 案の選択方針。値は仮（企画書 §7.2・§10.6・Q7）。",
+  "prior_art":   {"label": "先行技術調査", "population_range": [200, 1500],  "selection": "recall_first",     "overall_rule": "min_required"},
+  "invalidity":  {"label": "無効資料調査", "population_range": [300, 3000],  "selection": "recall_first",     "overall_rule": "min_required"},
+  "fto":         {"label": "侵害予防調査", "population_range": [500, 5000],  "selection": "range_then_p_at_k", "overall_rule": "min_required"},
+  "landscape":   {"label": "技術動向調査", "population_range": [1000, 10000], "selection": "range_then_simple", "overall_rule": "min_required"},
+  "sdi":         {"label": "定期監視（SDI）", "population_range": [1000, 10000], "selection": "range_then_simple", "overall_rule": "min_required"}
+}

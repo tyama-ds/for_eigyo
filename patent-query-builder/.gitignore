@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+data/
+pqb.config.json
+prompts_out/
+prompts_in/
+*.sqlite
+*.sqlite-journal

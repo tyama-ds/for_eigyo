@@ -1,0 +1,18 @@
+{
+  "_comment": "J-PlatPat の CSV 出力（仮）。列名は Q2 の実データ確認後に確定。候補列名は左から順に探す。",
+  "id": "jplatpat",
+  "columns": {
+    "doc_id":    ["文献番号", "公開番号", "公報番号", "出願番号", "doc_id", "id"],
+    "title":     ["発明の名称", "名称", "title"],
+    "abstract":  ["要約", "抄録", "abstract"],
+    "claims":    ["請求の範囲", "特許請求の範囲", "claims"],
+    "FI":        ["FI", "ＦＩ"],
+    "FT":        ["Fターム", "Ｆターム", "FT", "F-term"],
+    "IPC":       ["IPC", "国際特許分類", "ＩＰＣ"],
+    "pub_date":  ["公知日", "公開日", "発行日", "pub_date"],
+    "applicant": ["出願人/権利者", "出願人", "applicant"],
+    "citations": ["引用文献", "citations"]
+  },
+  "multi_value_separators": [";", "；", ",", "，", "|", "\n"],
+  "rank_column": null
+}

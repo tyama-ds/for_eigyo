@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="ja" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Patent Query Builder — 特許検索式自動作成</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%230ea5e9'/%3E%3Cstop offset='1' stop-color='%236366f1'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='100' height='100' rx='24' fill='url(%23g)'/%3E%3Cpath d='M22 30h56M22 50h40M22 70h48' stroke='%23fff' stroke-width='9' stroke-linecap='round'/%3E%3Ccircle cx='76' cy='50' r='9' fill='%23fff'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-logo" aria-hidden="true"><span></span><span></span><span></span></div>
+    <div class="brand-text">
+      <h1>Patent <span class="grad">Query Builder</span></h1>
+      <p>広めに決めて、結果から逆算し、適合度で少しずつ改善する — 特許検索式の再帰的改善ループ</p>
+    </div>
+  </div>
+  <div class="topbar-actions">
+    <span id="badge-llm" class="badge" title="LLM 経路">LLM: —</span>
+    <span id="badge-db" class="badge" title="オフライン母集団（local_index）">母集団: —</span>
+    <span id="badge-dict" class="badge" title="分類表辞書">辞書: —</span>
+    <button id="btn-demo" class="btn ghost" title="同梱の合成サンプルで案件を作る">🧪 サンプル案件</button>
+    <button id="btn-theme" class="icon-btn" title="テーマ切替">🌗</button>
+    <button id="btn-settings" class="icon-btn" title="設定">⚙️</button>
+  </div>
+</header>
+
+<main class="layout">
+  <aside class="panel panel-left">
+    <div class="panel-title">案件 <button id="btn-new-case" class="mini-btn">＋ 新規</button></div>
+    <div id="case-list" class="case-list"></div>
+    <form id="new-case-form" class="new-case hidden" autocomplete="off">
+      <h3>新規案件</h3>
+      <label>案件名<input name="name" required placeholder="例: 高強度鋼板の焼入れ 先行技術調査"></label>
+      <label>調査種別<select name="purpose" id="purpose-select"></select></label>
+      <label>技術説明（発明提案書・クレーム案・技術メモ）<textarea name="input_text" rows="7" required placeholder="発明の説明を貼り付ける"></textarea></label>
+      <label>既知文献（1 行 1 件の文献番号。名称・分類つきの JSON 配列でも可）<textarea name="seeds" rows="3" placeholder="JP2020-000001A&#10;JP2019-123456A"></textarea></label>
+      <div class="row2">
+        <label>期間（自）<input name="date_from" type="date"></label>
+        <label>期間（至）<input name="date_to" type="date"></label>
+      </div>
+      <label>マスキング語（外部 LLM 送信時に置換。例: 社名:○○製鉄）<input name="mask_terms" placeholder="社名:○○製鉄, 人名:山田"></label>
+      <div class="actions"><button type="submit" class="btn primary">登録</button><button type="button" id="btn-cancel-new" class="btn ghost">キャンセル</button></div>
+    </form>
+  </aside>
+
+  <section class="panel panel-main">
+    <div id="empty" class="empty">
+      <div class="hero">
+        <h2>案件を選ぶか、新規登録してください</h2>
+        <p>初めての方は <b>🧪 サンプル案件</b> で、合成データによるエンドツーエンドの流れ（G1 観点 → G2 候補 → G3 実行 → G4 評価・改良 → 3 案＋根拠レポート）を試せます。</p>
+        <div class="flow">
+          <span>1 入力の構造化</span><i>→</i><span>2 キーワード展開</span><i>→</i><span>3 分類付与</span><i>→</i><span>4 検索式組立</span><i>→</i><span>5 実行・評価</span><i>→</i><span>6 改良（逆算・変換探索）</span>
+        </div>
+        <p class="dim">J-PlatPat 等 Web サイトへの自動アクセスは行いません。検索式はコピーして人が DB で実行し、CSV を取り込みます。</p>
+      </div>
+    </div>
+    <div id="case-view" class="case-view hidden">
+      <div class="case-head">
+        <div>
+          <h2 id="case-title"></h2>
+          <div id="case-meta" class="dim"></div>
+        </div>
+        <div class="case-head-actions">
+          <button id="btn-auto" class="btn ghost" title="Policy 決定者で残りのゲートを自動で回す（案A・オフライン母集団が必要）">🤖 自動で回す</button>
+          <button id="btn-delete-case" class="btn danger ghost" title="案件を削除">🗑</button>
+        </div>
+      </div>
+      <ol id="stepper" class="stepper">
+        <li data-step="g1"><b>G1</b> 観点の確認</li>
+        <li data-step="g2"><b>G2</b> 候補の採否</li>
+        <li data-step="g3"><b>G3</b> DB で実行</li>
+        <li data-step="g4"><b>G4</b> 確定／再反復</li>
+        <li data-step="done"><b>✓</b> 3 案＋根拠</li>
+      </ol>
+      <nav class="tabs" id="tabs">
+        <button data-tab="overview" class="active">概要</button>
+        <button data-tab="g1">G1 観点</button>
+        <button data-tab="g2">G2 候補</button>
+        <button data-tab="g3">G3 検索式・実行</button>
+        <button data-tab="g4">G4 評価・改良</button>
+        <button data-tab="report">レポート</button>
+        <button data-tab="log">ログ</button>
+      </nav>
+      <div id="tab-body" class="tab-body"></div>
+    </div>
+  </section>
+</main>
+
+<!-- 設定 -->
+<div id="modal-settings" class="modal hidden" role="dialog" aria-modal="true">
+  <div class="modal-box wide">
+    <div class="modal-head"><h3>⚙️ 設定</h3><button class="icon-btn modal-close">✕</button></div>
+    <div class="modal-body" id="settings-body"></div>
+  </div>
+</div>
+<!-- manual モード -->
+<div id="modal-manual" class="modal hidden" role="dialog" aria-modal="true">
+  <div class="modal-box wide">
+    <div class="modal-head"><h3>📋 LLM 返答待ち（manual モード）</h3><button class="icon-btn modal-close">✕</button></div>
+    <div class="modal-body" id="manual-body"></div>
+  </div>
+</div>
+<!-- 送信前確認 -->
+<div id="modal-confirm" class="modal hidden" role="dialog" aria-modal="true">
+  <div class="modal-box wide">
+    <div class="modal-head"><h3>🔒 外部送信前の確認（production）</h3><button class="icon-btn modal-close">✕</button></div>
+    <div class="modal-body" id="confirm-body"></div>
+  </div>
+</div>
+<!-- 追加フォーム等の汎用 -->
+<div id="modal-generic" class="modal hidden" role="dialog" aria-modal="true">
+  <div class="modal-box">
+    <div class="modal-head"><h3 id="generic-title"></h3><button class="icon-btn modal-close">✕</button></div>
+    <div class="modal-body" id="generic-body"></div>
+  </div>
+</div>
+
+<div id="toasts" class="toasts" aria-live="polite"></div>
+<div id="busy" class="busy hidden"><div class="spinner"></div><span id="busy-text">処理中…</span></div>
+
+<script src="app.js"></script>
+</body>
+</html>

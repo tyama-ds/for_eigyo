@@ -1,0 +1,32 @@
+# patent-query-builder のテスト（標準ライブラリのみ・モック LLM で実 LLM 不要）。
+name: patent-query-builder tests
+
+on:
+  push:
+    paths: ["patent-query-builder/**", ".github/workflows/patent-query-builder.yml"]
+  pull_request:
+    paths: ["patent-query-builder/**", ".github/workflows/patent-query-builder.yml"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    defaults:
+      run:
+        working-directory: patent-query-builder
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Compileall
+        run: python -m compileall -q pqb server.py tests sample_data
+      - name: Unit + integration + API tests
+        run: python -m unittest discover -s tests -v
+      - name: Demo (semi / auto)
+        run: |
+          python -m pqb --db /tmp/demo.sqlite demo -o /tmp/report.html
+          python -m pqb --db /tmp/demo_auto.sqlite demo --auto

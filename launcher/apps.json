@@ -170,6 +170,21 @@
       },
       "url": "http://127.0.0.1:8720",
       "wait_port": 8720
+    },
+    {
+      "id": "patent-query-builder",
+      "name": "Patent Query Builder",
+      "description": "特許検索式自動作成。発明の説明から観点（G1）→語・分類候補（G2）→3案（広め/標準/狭め）をDBで実行しCSV取込（G3）→LLM採点・RSJ逆算・変換候補の局所評価・推定再現率（G4）を回し、根拠レポート付きの検索式を作る。LLMなし（mock）/manual/API、標準ライブラリのみ",
+      "icon": "research",
+      "cwd": "../patent-query-builder",
+      "command": [
+        "{python}",
+        "server.py",
+        "--port",
+        "8740"
+      ],
+      "url": "http://127.0.0.1:8740",
+      "wait_port": 8740
     }
   ]
 }

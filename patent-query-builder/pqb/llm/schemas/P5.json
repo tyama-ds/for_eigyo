@@ -1,0 +1,15 @@
+{
+  "type": "object",
+  "required": ["transforms"],
+  "properties": {
+    "transforms": {"type": "array", "maxItems": 20, "items": {
+      "type": "object", "required": ["op", "target", "reason"],
+      "properties": {
+        "op": {"type": "string", "enum": ["ADD_TERM", "DROP_TERM", "ADD_CODE", "DROP_CODE", "CODE_LEVEL_UP", "CODE_LEVEL_DOWN", "ADD_AXIS", "DROP_AXIS", "SPLIT_BLOCK", "MERGE_BLOCK", "TERM_CODE_JOIN", "FIELD_CHANGE", "PROXIMITY_ON", "PROXIMITY_OFF", "ADD_EXCLUSION"]},
+        "target": {"type": "object"},
+        "reason": {"type": "string"},
+        "expected_effect": {"type": "string", "enum": ["narrow", "widen", "unknown"]}
+      }}},
+    "low_confidence": {"type": "boolean"}
+  }
+}
