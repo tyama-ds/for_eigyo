@@ -1,0 +1,13 @@
+# 日本語の説明文が多いため 120 桁
+line-length = 120
+target-version = "py311"
+
+[lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+
+[lint.per-file-ignores]
+"server.py" = ["E402"]          # sys.path 設定後の import
+"tcore/catalog.py" = ["E501"]   # モデル説明の長い文字列
+"tests/**" = ["E501"]
+"tests_e2e/**" = ["E501"]
+"sample_data/**" = ["E501"]

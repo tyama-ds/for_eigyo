@@ -170,6 +170,21 @@
       },
       "url": "http://127.0.0.1:8720",
       "wait_port": 8720
+    },
+    {
+      "id": "tensorium",
+      "name": "Tensorium",
+      "description": "CSV / XLSX を入れるだけで、Transformer（BERT ファインチューニング / SentenceBERT 埋め込み + MLP / ゼロから学習 / FT-Transformer 表形式）による回帰・分類を GUI で実行。列型の自動判定、学習曲線のリアルタイム表示、混同行列・散布図での評価、新データへの一括予測と CSV 出力。ローカルモデル・オフライン対応",
+      "icon": "tensorium",
+      "cwd": "../tensorium",
+      "command": [
+        "{python}",
+        "server.py",
+        "--port",
+        "8740"
+      ],
+      "url": "http://127.0.0.1:8740",
+      "wait_port": 8740
     }
   ]
 }

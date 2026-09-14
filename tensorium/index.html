@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="ja" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tensorium — Transformer 回帰・分類スタジオ</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%237c6cff'/%3E%3Cstop offset='1' stop-color='%2322b8cf'/%3E%3C/linearGradient%3E%3C/defs%3E%3Ccircle cx='16' cy='16' r='14' fill='%230f1526'/%3E%3Cpath d='M8 12L16 8L24 12L24 20L16 24L8 20Z' fill='none' stroke='url(%23g)' stroke-width='1.6'/%3E%3Ccircle cx='16' cy='16' r='3.2' fill='url(%23g)'/%3E%3Ccircle cx='8' cy='12' r='1.6' fill='%2322b8cf'/%3E%3Ccircle cx='24' cy='12' r='1.6' fill='%237c6cff'/%3E%3Ccircle cx='16' cy='24' r='1.6' fill='%2334d399'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="#" id="brand">
+    <svg class="brand-mark" viewBox="0 0 40 40" aria-hidden="true">
+      <defs><linearGradient id="bg1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7c6cff"/><stop offset=".6" stop-color="#22b8cf"/><stop offset="1" stop-color="#34d399"/></linearGradient></defs>
+      <path d="M9 14L20 8L31 14V26L20 32L9 26Z" fill="none" stroke="url(#bg1)" stroke-width="1.8" stroke-linejoin="round"/>
+      <path d="M9 14L20 20L31 14M20 20V32" fill="none" stroke="url(#bg1)" stroke-width="1.2" opacity=".6"/>
+      <circle cx="20" cy="20" r="3.6" fill="url(#bg1)"/>
+      <circle cx="9" cy="14" r="2" fill="#22b8cf"/><circle cx="31" cy="14" r="2" fill="#7c6cff"/><circle cx="20" cy="32" r="2" fill="#34d399"/>
+      <circle cx="20" cy="8" r="1.6" fill="#7c6cff"/><circle cx="9" cy="26" r="1.6" fill="#34d399"/><circle cx="31" cy="26" r="1.6" fill="#22b8cf"/>
+    </svg>
+    <span class="brand-name">Tensorium</span>
+    <span class="brand-sub">Transformer / BERT / SentenceBERT で表データを回帰・分類</span>
+  </a>
+  <div class="top-right">
+    <span class="pill click" id="pill-data" title="データ"><span class="dot"></span><span>データ未読込</span></span>
+    <span class="pill click" id="pill-job" title="学習ジョブ"><span class="dot"></span><span>学習なし</span></span>
+    <span class="pill click" id="pill-env" title="実行環境"><span class="dot"></span><span>環境を確認中…</span></span>
+    <button class="icon-btn" id="theme-toggle" title="ダーク / ライト切替">☾</button>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="side">
+    <nav class="stepper" id="stepper">
+      <button class="step active" data-step="data"><span class="step-n">1</span><span><span class="step-t">データ</span><br><span class="step-s" id="ss-data">CSV / XLSX を読み込む</span></span></button>
+      <button class="step" data-step="task"><span class="step-n">2</span><span><span class="step-t">タスク設定</span><br><span class="step-s" id="ss-task">目的変数・分割</span></span></button>
+      <button class="step" data-step="model"><span class="step-n">3</span><span><span class="step-t">モデル選択</span><br><span class="step-s" id="ss-model">ファミリーとパラメータ</span></span></button>
+      <button class="step" data-step="train"><span class="step-n">4</span><span><span class="step-t">学習</span><br><span class="step-s" id="ss-train">進捗と損失曲線</span></span></button>
+      <button class="step" data-step="eval"><span class="step-n">5</span><span><span class="step-t">評価</span><br><span class="step-s" id="ss-eval">指標・誤差・混同行列</span></span></button>
+      <button class="step" data-step="predict"><span class="step-n">6</span><span><span class="step-t">予測</span><br><span class="step-s" id="ss-predict">新しいデータに適用</span></span></button>
+    </nav>
+    <div class="side-links">
+      <button class="side-link" data-step="runs"><span class="ico">🗂</span>学習履歴・比較</button>
+      <button class="side-link" data-step="env"><span class="ico">⚙</span>環境・設定</button>
+    </div>
+    <div class="side-foot">Tensorium v<span id="ver">–</span> · 127.0.0.1 のみで動作</div>
+  </aside>
+
+  <main>
+    <!-- ================= 1. データ ================= -->
+    <section class="panel active" id="panel-data">
+      <div class="page-head">
+        <div><div class="eyebrow">Step 1</div><h1>データを読み込む</h1>
+          <p>CSV / TSV / XLSX をドラッグ＆ドロップ。列の型を自動判定し、ロール（目的変数・テキスト・数値・カテゴリ）を選べます。</p></div>
+      </div>
+      <div id="data-empty">
+        <div class="card">
+          <div class="drop" id="drop">
+            <input type="file" id="file" accept=".csv,.tsv,.txt,.xlsx,.xlsm">
+            <div class="ico">⬆</div>
+            <div class="t">ファイルをドロップ、またはクリックして選択</div>
+            <div class="s">CSV / TSV（UTF-8・Shift_JIS 自動判別）・XLSX（シート切替可）・300MB まで</div>
+          </div>
+          <h3>サンプルデータで試す</h3>
+          <div class="samples" id="samples"></div>
+        </div>
+      </div>
+      <div id="data-loaded" class="hidden">
+        <div class="card">
+          <div class="card-head">
+            <h2>📄 <span id="ds-name"></span> <span class="tag ignore" id="ds-reader"></span></h2>
+            <div class="row">
+              <select id="ds-sheet" class="inline hidden"></select>
+              <button class="btn sm ghost" id="ds-replace">別のファイルを読み込む</button>
+            </div>
+          </div>
+          <div class="tiles" id="ds-tiles"></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>列とロール</h2>
+            <span class="hint">目的変数を 1 列選び、説明変数に使う列のロールを確認してください（自動判定を上書きできます）</span></div>
+          <div class="cols" id="cols"></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>プレビュー <span class="muted small" id="prev-n"></span></h2></div>
+          <div class="tbl-wrap"><table class="tbl" id="prev-tbl"></table></div>
+        </div>
+        <div class="row end"><button class="btn primary big" data-go="task">次へ：タスク設定 →</button></div>
+      </div>
+    </section>
+
+    <!-- ================= 2. タスク ================= -->
+    <section class="panel" id="panel-task">
+      <div class="page-head"><div><div class="eyebrow">Step 2</div><h1>タスクを設定する</h1>
+        <p>何を予測するか（目的変数）と、回帰 / 分類、学習・検証・テストの分け方を決めます。</p></div></div>
+      <div class="grid-2">
+        <div class="card">
+          <h2>目的変数とタスク</h2>
+          <label class="field">目的変数（予測したい列）</label>
+          <select id="t-target"></select>
+          <label class="field">タスク種別 <span class="help" id="t-suggest"></span></label>
+          <div class="seg" id="t-task">
+            <button data-v="regression">回帰（数値を予測）</button>
+            <button data-v="classification">分類（カテゴリを予測）</button>
+          </div>
+          <h3>説明変数（ロール別）</h3>
+          <div id="t-roles" class="stack"></div>
+        </div>
+        <div class="card">
+          <h2>データ分割</h2>
+          <label class="field">検証データ <span class="help">早期終了・モデル選択に使用</span></label>
+          <div class="row"><input type="range" id="t-val" min="0" max="40" step="5" value="15"><span class="num" id="t-val-v" style="width:46px">15%</span></div>
+          <label class="field">テストデータ <span class="help">最終評価専用（学習中は一切使わない）</span></label>
+          <div class="row"><input type="range" id="t-test" min="0" max="40" step="5" value="15"><span class="num" id="t-test-v" style="width:46px">15%</span></div>
+          <div class="row" style="margin-top:6px">
+            <div><label class="field">乱数シード</label><input type="number" id="t-seed" class="inline" style="width:120px" value="42"></div>
+            <label class="check" id="t-strat-wrap" style="margin-top:22px"><input type="checkbox" id="t-strat" checked> 層化分割（クラス比率を保つ）</label>
+          </div>
+          <div id="t-split" class="hint"></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>目的変数の分布</h2><span class="muted small" id="t-valid"></span></div>
+        <div id="t-warn"></div>
+        <div class="chart short"><canvas id="t-chart"></canvas></div>
+      </div>
+      <div class="row end"><button class="btn ghost" data-go="data">← 戻る</button><button class="btn primary big" data-go="model">次へ：モデル選択 →</button></div>
+    </section>
+
+    <!-- ================= 3. モデル ================= -->
+    <section class="panel" id="panel-model">
+      <div class="page-head"><div><div class="eyebrow">Step 3</div><h1>モデルを選ぶ</h1>
+        <p>ファミリー（学習の方式）→ 事前学習モデル → ハイパーパラメータ。迷ったら「SentenceBERT 埋め込み + MLP」が速くて安定です。</p></div></div>
+      <div class="card">
+        <h2>モデルファミリー</h2>
+        <div class="fams" id="fams"></div>
+        <div class="fam-desc" id="fam-desc" style="margin-top:12px"></div>
+      </div>
+      <div class="card" id="preset-card">
+        <div class="card-head"><h2>事前学習モデル</h2><div class="chips" id="lang-chips"></div></div>
+        <div class="presets" id="presets"></div>
+        <label class="field">モデル ID / ローカルフォルダのパス
+          <span class="help">Hugging Face のリポジトリ ID、または save_pretrained 済みフォルダ（オフライン環境向け）</span></label>
+        <input type="text" id="m-model" placeholder="例: intfloat/multilingual-e5-small / C:\models\bert-base-japanese-v3">
+        <div id="m-model-note" class="hint"></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>ハイパーパラメータ</h2><button class="btn sm ghost" id="hp-reset">既定値に戻す</button></div>
+        <div class="hp-grid" id="hp-basic"></div>
+        <details class="adv" id="hp-adv-wrap"><summary>詳細設定</summary><div class="hp-grid" id="hp-adv"></div></details>
+        <div class="hint" id="hp-est"></div>
+      </div>
+      <div class="card">
+        <div class="row between">
+          <div class="grow"><label class="field">実行名（任意）</label><input type="text" id="m-name" placeholder="例: e5-small + MLP / 価格予測 v1"></div>
+        </div>
+        <div id="m-check" style="margin-top:10px"></div>
+        <div class="row end" style="margin-top:12px">
+          <button class="btn ghost" data-go="task">← 戻る</button>
+          <button class="btn primary big" id="m-train">▶ 学習を開始</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= 4. 学習 ================= -->
+    <section class="panel" id="panel-train">
+      <div class="page-head"><div><div class="eyebrow">Step 4</div><h1>学習</h1>
+        <p>損失と検証指標をリアルタイムに表示します。ベストなエポックの重みが自動で保存されます。</p></div></div>
+      <div id="train-empty" class="card empty">
+        <div class="ico">🧠</div>
+        <div>まだ学習を開始していません。</div>
+        <div style="margin-top:12px"><button class="btn primary" data-go="model">モデル選択へ</button></div>
+      </div>
+      <div id="train-live" class="hidden">
+        <div class="card">
+          <div class="card-head">
+            <div class="row"><span class="status" id="j-status"></span><span id="j-title" style="font-weight:700"></span><span class="chips" id="j-chips"></span></div>
+            <div class="row"><span class="muted small num" id="j-time"></span>
+              <button class="btn sm danger" id="j-cancel">■ 中止</button>
+              <button class="btn sm primary hidden" id="j-eval">評価を見る →</button>
+              <button class="btn sm ghost hidden" id="j-again">もう一度学習</button></div>
+          </div>
+          <div class="progress" id="j-prog"><div class="fill" style="width:0%"></div></div>
+          <div class="row between" style="margin-top:6px"><span class="small muted" id="j-phase"></span><span class="small muted num" id="j-pct"></span></div>
+          <div id="j-error"></div>
+        </div>
+        <div class="grid-2">
+          <div class="card"><div class="chart-title">損失 <span class="legend" id="j-loss-legend"></span></div><div class="chart"><canvas id="j-loss"></canvas></div></div>
+          <div class="card"><div class="chart-title"><span id="j-metric-title">検証指標</span><span class="legend" id="j-metric-legend"></span></div><div class="chart"><canvas id="j-metric"></canvas></div></div>
+        </div>
+        <div class="card"><div class="card-head"><h2>ログ</h2></div><div class="console" id="j-log"></div></div>
+      </div>
+    </section>
+
+    <!-- ================= 5. 評価 ================= -->
+    <section class="panel" id="panel-eval">
+      <div class="page-head"><div><div class="eyebrow">Step 5</div><h1>評価</h1>
+        <p>検証 / テストデータでの指標、予測と実測の比較、混同行列、誤差の大きい例を確認します。</p></div></div>
+      <div class="card">
+        <div class="row between">
+          <div class="row"><span class="small muted">実行</span><select id="e-run" class="inline" style="min-width:340px"></select></div>
+          <div class="seg" id="e-split"><button data-v="val" class="active">検証データ</button><button data-v="test">テストデータ</button></div>
+        </div>
+        <div id="e-head" class="row" style="margin-top:10px"></div>
+      </div>
+      <div id="e-body"></div>
+      <div class="row end"><button class="btn ghost" data-go="model">別のモデルを試す</button><button class="btn primary big" data-go="predict">次へ：予測 →</button></div>
+    </section>
+
+    <!-- ================= 6. 予測 ================= -->
+    <section class="panel" id="panel-predict">
+      <div class="page-head"><div><div class="eyebrow">Step 6</div><h1>予測</h1>
+        <p>学習済みモデルを新しいデータに適用します。ファイル一括、または 1 件ずつ手入力。</p></div></div>
+      <div class="card">
+        <div class="row"><span class="small muted">モデル</span><select id="p-run" class="inline" style="min-width:340px"></select></div>
+        <div id="p-req" class="hint"></div>
+      </div>
+      <div class="grid-2">
+        <div class="card"><h2>ファイルで一括予測</h2>
+          <div class="drop compact" id="p-drop"><input type="file" id="p-file" accept=".csv,.tsv,.txt,.xlsx,.xlsm">
+            <div class="t">CSV / XLSX をドロップ</div><div class="s">学習時と同じ列名（説明変数）が必要。目的変数の列があれば実測との比較も表示</div></div>
+        </div>
+        <div class="card"><h2>手入力で 1 件予測</h2>
+          <div id="p-form"></div>
+          <div class="row end" style="margin-top:8px"><button class="btn primary" id="p-one">予測する</button></div>
+          <div id="p-one-res"></div>
+        </div>
+      </div>
+      <div class="card hidden" id="p-res-card">
+        <div class="card-head"><h2>予測結果 <span class="muted small" id="p-res-n"></span></h2>
+          <div class="row"><span id="p-res-metric" class="small muted"></span><button class="btn sm" id="p-dl">⬇ CSV をダウンロード</button></div></div>
+        <div class="tbl-wrap"><table class="tbl compact" id="p-tbl"></table></div>
+      </div>
+    </section>
+
+    <!-- ================= 履歴 ================= -->
+    <section class="panel" id="panel-runs">
+      <div class="page-head"><div><div class="eyebrow">History</div><h1>学習履歴・比較</h1>
+        <p>これまでの実行を一覧し、代表指標で比較します。名前はクリックで編集できます。</p></div></div>
+      <div class="card">
+        <div class="card-head"><h2>すべての実行</h2><div class="row"><select id="r-filter" class="inline"></select><button class="btn sm ghost" id="r-refresh">更新</button></div></div>
+        <div class="tbl-wrap"><table class="tbl runs-tbl" id="r-tbl"></table></div>
+      </div>
+      <div class="card"><div class="chart-title"><span id="r-chart-title">代表指標の比較（検証データ）</span></div><div class="chart" id="r-chart-wrap"><canvas id="r-chart"></canvas></div></div>
+    </section>
+
+    <!-- ================= 環境 ================= -->
+    <section class="panel" id="panel-env">
+      <div class="page-head"><div><div class="eyebrow">Environment</div><h1>環境・設定</h1>
+        <p>PyTorch / transformers の有無、GPU、モデル取得のためのプロキシ・ミラー設定。</p></div></div>
+      <div class="card"><h2>実行環境</h2><div class="tiles" id="env-tiles"></div></div>
+      <div class="grid-2">
+        <div class="card"><h2>ライブラリ</h2><div class="tbl-wrap" style="max-height:none"><table class="tbl compact" id="env-libs"></table></div></div>
+        <div class="card"><h2>インストールコマンド</h2><div class="stack" id="env-install"></div></div>
+      </div>
+      <div class="card">
+        <h2>設定</h2>
+        <div class="hp-grid">
+          <div><label class="field">デバイス</label><select id="s-device"><option value="auto">自動（GPU があれば使用）</option><option value="cpu">CPU</option><option value="cuda">CUDA (NVIDIA GPU)</option><option value="mps">MPS (Apple Silicon)</option></select></div>
+          <div><label class="field">CPU スレッド数 <span class="help">0 = 既定</span></label><input type="number" id="s-num_threads" min="0" max="256"></div>
+          <div><label class="field">HF エンドポイント（ミラー）<span class="help">空 = huggingface.co</span></label><input type="text" id="s-hf_endpoint" placeholder="https://hf-mirror.example"></div>
+          <div><label class="field">モデルキャッシュ先 <span class="help">空 = ~/.cache/huggingface</span></label><input type="text" id="s-hf_cache_dir" placeholder="D:\hf-cache"></div>
+          <div><label class="field">HF トークン <span class="help">非公開モデル用</span></label><input type="password" id="s-hf_token" placeholder="（設定済みなら空のまま）"></div>
+          <div><label class="field">プロキシ URL <span class="help">空 = 環境変数</span></label><input type="text" id="s-proxy_url" placeholder="http://proxy.example:8080"></div>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <label class="check"><input type="checkbox" id="s-hf_offline"> オフライン（Hub に接続せずキャッシュ / ローカルのみ）</label>
+          <label class="check"><input type="checkbox" id="s-use_proxy"> プロキシを使う（OFF で環境変数も無視）</label>
+          <label class="check"><input type="checkbox" id="s-trust_remote_code"> リモートコードを信頼（カスタムモデル用・注意）</label>
+        </div>
+        <div class="row" style="margin-top:12px"><button class="btn primary" id="s-save">保存</button><span class="hint" id="s-msg"></span></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div id="tip" class="hidden"></div>
+<div id="toasts"></div>
+<script src="/charts.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>
