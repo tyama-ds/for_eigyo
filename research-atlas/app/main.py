@@ -10,7 +10,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Literal
+from typing import BinaryIO, Literal
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
@@ -28,12 +28,12 @@ from app.merge import merge_papers
 from app.embedding_models import SBERT_MODELS
 from app import field_llm, field_exports, author_exports
 from app import large_storage
-from app.limits import MAX_IMPORT_ROWS, MAX_DATASET_PAPERS, MAX_UPLOAD_BYTES, MAX_ANALYSIS_YEARS, PAPER_PAGE_LIMIT, public_limits
+from app.limits import MAX_IMPORT_ROWS, MAX_DATASET_PAPERS, MAX_ANALYSIS_YEARS, PAPER_PAGE_LIMIT, public_limits
 
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
-app = FastAPI(title="Research Atlas", version="1.8.0", description="Multi-source bibliometrics & evidence-grounded technology foresight")
-MAX_UPLOAD = MAX_UPLOAD_BYTES
+app = FastAPI(title="Research Atlas", version="1.8.1", description="Multi-source bibliometrics & evidence-grounded technology foresight")
+MAX_NON_UPLOAD_REQUEST_BYTES = 256 * 1024 * 1024
 EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="atlas-analysis")
 SOURCE_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="atlas-discovery")
 REPORT_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="atlas-report")
@@ -56,8 +56,10 @@ async def local_security(request: Request, call_next):
         size = request.headers.get("content-length")
         if size:
             try:
-                if int(size) > MAX_UPLOAD + 65536:
-                    return JSONResponse({"detail": f"アップロード上限は{MAX_UPLOAD // (1024 * 1024)}MBです。"}, status_code=413)
+                is_csv_upload = request.method == "POST" and (request.url.path == "/api/import"
+                    or re.fullmatch(r"/api/datasets/[a-f0-9]{32}/citations", request.url.path))
+                if not is_csv_upload and int(size) > MAX_NON_UPLOAD_REQUEST_BYTES:
+                    return JSONResponse({"detail": "リクエストが大きすぎます。"}, status_code=413)
             except ValueError:
                 return JSONResponse({"detail": "Content-Lengthが不正です。"}, status_code=400)
     try:
@@ -141,25 +143,22 @@ def test_connection(body: ConnectionTestRequest):
     return connection_settings.test_connection(body.target)
 
 
-async def file_bytes(file: UploadFile) -> bytes:
+def check_upload_filename(file: UploadFile):
     if not (file.filename or "").lower().endswith((".csv", ".tsv", ".txt")):
         raise HTTPException(422, "論文の書誌情報を含むCSVファイルを選択してください。")
-    value = await file.read(MAX_UPLOAD + 1)
-    await file.close()
-    if len(value) > MAX_UPLOAD:
-        raise HTTPException(413, f"アップロード上限は{MAX_UPLOAD // (1024 * 1024)}MBです。")
-    if not value:
-        raise HTTPException(422, "ファイルが空です。")
-    return value
 
 
 @app.post("/api/import")
 async def import_csv(file: UploadFile = File(...), provider: Literal["scopus_csv", "csv"] = Form("scopus_csv")):
-    content = await file_bytes(file)
-    return await run_in_threadpool(_import_csv_dataset, content, provider, file.filename)
+    try:
+        check_upload_filename(file)
+        await file.seek(0)
+        return await run_in_threadpool(_import_csv_dataset, file.file, provider, file.filename)
+    finally:
+        await file.close()
 
 
-def _import_csv_dataset(content: bytes, provider: str, filename: str | None):
+def _import_csv_dataset(content: bytes | BinaryIO, provider: str, filename: str | None):
     papers, report = parse_scopus_csv(content)
     retrieved_at = storage.now()
     for paper in papers:
@@ -330,11 +329,15 @@ def merge_datasets(body: MergeRequest):
 
 @app.post("/api/datasets/{dataset_id}/citations")
 async def import_citations(dataset_id: str, file: UploadFile = File(...)):
-    content = await file_bytes(file)
-    return await run_in_threadpool(_import_citations_dataset, dataset_id, content)
+    try:
+        check_upload_filename(file)
+        await file.seek(0)
+        return await run_in_threadpool(_import_citations_dataset, dataset_id, file.file)
+    finally:
+        await file.close()
 
 
-def _import_citations_dataset(dataset_id: str, content: bytes):
+def _import_citations_dataset(dataset_id: str, content: bytes | BinaryIO):
     dataset = storage.read("datasets", dataset_id)
     papers, report = attach_citation_history(dataset["papers"], content)
     # Create a new revision so existing analysis results remain reproducible.

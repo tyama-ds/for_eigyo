@@ -26,13 +26,37 @@ function importHarness(options={}){
   return {...h,calls,state};
 }
 
-test('CSV selection accepts 256 MB per file and selects accumulation for multiple files',()=>{
+test('CSV selection honors an explicit positive size limit from an older server',()=>{
   const h=context(['selectFiles'],{state:{status:{limits:{max_upload_bytes:268435456}},uploadMode:'papers'},updateUploadMode:()=>{}});
   h.ctx.selectFiles([file('a.csv'),{name:'b.csv',size:268435456}]);
   assert.equal(h.ctx.state.files.length,2);assert.equal(h.$('#csv-after-import').value,'save');assert.equal(h.$('#import-button').disabled,false);
   h.ctx.selectFiles([{name:'too-large.csv',size:268435457}]);
   assert.equal(h.ctx.state.files.length,0);assert.equal(h.$('#import-button').disabled,true);assert.match(h.$('#upload-error').textContent,/256 MB/);
   h.ctx.selectFiles([file('valid.csv'),file('invalid.exe')]);assert.equal(h.ctx.state.files.length,0);
+});
+
+test('CSV selection accepts files above 20 MB and 256 MB without a server size limit',()=>{
+  for(const status of [{limits:{max_upload_bytes:null}},{limits:{}},undefined]){
+    const h=context(['selectFiles'],{state:{status,uploadMode:'papers'},updateUploadMode:()=>{}});
+    h.ctx.selectFiles([file('scopus.csv'),{name:'large.csv',size:600*1024*1024}]);
+    assert.equal(h.ctx.state.files.length,2);assert.equal(h.$('#csv-after-import').value,'save');
+    assert.equal(h.$('#import-button').disabled,false);assert.equal(h.$('#upload-error').hidden,true);
+    assert.match(h.$('#file-label').textContent,/642\.0 MB/);
+    h.ctx.selectFiles([{name:'large.csv',size:600*1024*1024}]);
+    assert.equal(h.ctx.state.file.name,'large.csv');assert.match(h.$('#file-label').textContent,/600\.0 MB/);
+    h.ctx.selectFiles([file('invalid.exe')]);assert.equal(h.ctx.state.files.length,0);
+  }
+});
+
+test('upload instructions retain row limits and do not invent a file size limit',()=>{
+  for(const maxBytes of [null,undefined,268435456]){
+    const h=context(['updateUploadMode'],{state:{status:{limits:{max_upload_bytes:maxBytes}},uploadMode:'papers'},$$:()=>[],mergeChoice:()=>''});
+    h.ctx.updateUploadMode();
+    const label=h.$('#upload-limits').textContent;
+    assert.match(label,/20000行/);assert.match(label,/200000論文/);
+    if(maxBytes)assert.match(label,/256 MB/);
+    else{assert.match(label,/ファイル容量の固定上限なし/);assert.doesNotMatch(label,/256|最大 .*MB/);}
+  }
 });
 
 test('multi-file save imports sequentially and carries the latest merged dataset forward without analysis',async()=>{

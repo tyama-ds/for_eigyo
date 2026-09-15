@@ -7,24 +7,31 @@ count remains absent; it never becomes an observed zero.
 from __future__ import annotations
 
 import copy
+import codecs
 import csv
 import hashlib
 import io
 import random
 import re
+import struct
+import sys
 import unicodedata
 from collections import defaultdict
 from collections.abc import Iterator
+from typing import BinaryIO
 
 from .dates import merge_publication_dates, normalize_paper_date, normalize_publication_date
 from .bibliography import (attach_author_affiliations, bibliography_summary, normalize_affiliations,
                            normalize_references, references_status)
 from .text_metadata import is_test_summary
-from .limits import MAX_IMPORT_ROWS, MAX_UPLOAD_BYTES
+from .limits import MAX_IMPORT_ROWS
 
-# Scopus reference lists can exceed csv's default 128 KiB per-field limit.
-# Keep a process-wide bound rather than changing/restoring it across workers.
-csv.field_size_limit(max(csv.field_size_limit(), MAX_UPLOAD_BYTES))
+# Reference lists can exceed csv's default 128 KiB per-field limit. Let the
+# platform's CSV parser represent any field; paper-count limits remain separate.
+try:
+    csv.field_size_limit(sys.maxsize)
+except OverflowError:  # Some Windows Python versions accept a C long here.
+    csv.field_size_limit((1 << (8 * struct.calcsize("l") - 1)) - 1)
 
 
 def _key(value: str) -> str:
@@ -105,38 +112,101 @@ def _annual_header(header: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def _read_csv(content: bytes, *, max_rows: int, label: str) -> tuple[Iterator[tuple[int, list[str]]], list[str], str, str, list[dict]]:
-    if not isinstance(content, bytes) or not content.strip():
-        raise ValueError("CSV ファイルが空です。Scopus から書誌情報を CSV 形式で出力してください。")
-    if len(content) > MAX_UPLOAD_BYTES:
-        raise ValueError(f"CSV は {MAX_UPLOAD_BYTES // (1024 * 1024):,} MiB までです。ファイルを分割してください。")
-    encodings = ["utf-16"] if content.startswith((b"\xff\xfe", b"\xfe\xff")) else ["utf-8-sig", "cp932"]
-    decoded = None
+class _BorrowedBinary(io.BufferedIOBase):
+    """A TextIOWrapper may close this adapter without closing its caller's file."""
+
+    def __init__(self, source: BinaryIO):
+        super().__init__()
+        self.source = source
+
+    def readable(self):
+        return True
+
+    def seekable(self):
+        return True
+
+    def read(self, size=-1):
+        if size < 0:
+            raise ValueError("CSV の読み取りサイズを指定してください。")
+        return self.source.read(size)
+
+    def read1(self, size=-1):
+        return self.read(size)
+
+    def seek(self, offset, whence=io.SEEK_SET):
+        return self.source.seek(offset, whence)
+
+    def tell(self):
+        return self.source.tell()
+
+
+def _csv_encoding(source: BinaryIO) -> str:
+    """Validate the complete encoding in bounded chunks before yielding rows.
+
+    Checking only the header would choose UTF-8 for a CP932 file whose first
+    non-ASCII character occurs late in a long abstract/reference field.
+    """
+    source.seek(0)
+    prefix = source.read(2)
+    encodings = ["utf-16"] if prefix in (b"\xff\xfe", b"\xfe\xff") else ["utf-8-sig", "cp932"]
+    encoding_error = "CSV の文字コードを読み取れません。UTF-8 または CP932（Shift-JIS）の CSV を使用してください。"
     for encoding in encodings:
+        source.seek(0)
+        decoder = codecs.getincrementaldecoder(encoding)(errors="strict")
+        nonempty = False
         try:
-            decoded = content.decode(encoding)
-            break
+            while True:
+                chunk = source.read(1024 * 1024)
+                decoded = decoder.decode(chunk, final=not chunk)
+                if "\x00" in decoded:
+                    raise ValueError(encoding_error)
+                nonempty = nonempty or bool(decoded.strip())
+                if not chunk:
+                    break
         except UnicodeDecodeError:
             continue
-    if decoded is None or "\x00" in decoded:
-        raise ValueError("CSV の文字コードを読み取れません。UTF-8 または CP932（Shift-JIS）の CSV を使用してください。")
-    decoded = decoded.lstrip("\ufeff\r\n")
+        if not nonempty:
+            raise ValueError("CSV ファイルが空です。Scopus から書誌情報を CSV 形式で出力してください。")
+        source.seek(0)
+        return encoding
+    raise ValueError(encoding_error)
+
+
+def _skip_csv_prefix(stream: io.TextIOWrapper) -> None:
+    """Skip leading BOM/blank lines without reading a potentially huge line."""
+    while True:
+        position = stream.tell()
+        chunk = stream.read(65536)
+        stripped = chunk.lstrip("\ufeff\r\n")
+        if stripped or not chunk:
+            stream.seek(position)
+            stream.read(len(chunk) - len(stripped))
+            return
+
+
+def _read_csv(content: bytes | BinaryIO, *, max_rows: int, label: str) -> tuple[Iterator[tuple[int, list[str]]], list[str], str, str, list[dict]]:
+    source = io.BytesIO(content) if isinstance(content, bytes) else content
+    if not hasattr(source, "read") or not hasattr(source, "seek") or not source.seekable():
+        raise ValueError("CSV は読み取りとシークに対応するバイナリファイルで指定してください。")
+    encoding = _csv_encoding(source)
+    stream = io.TextIOWrapper(_BorrowedBinary(source), encoding=encoding, newline="")
+    _skip_csv_prefix(stream)
+    sample = stream.read(65536)
     # Excel's optional delimiter preamble is not a bibliographic header.
-    preamble = re.match(r"sep=([,;\t])\r?\n", decoded, flags=re.I)
+    preamble = re.match(r"sep=([,;\t])\r?\n", sample, flags=re.I)
     if preamble:
         delimiter = preamble.group(1)
-        decoded = decoded[preamble.end():]
     else:
         try:
-            delimiter = csv.Sniffer().sniff(decoded[:65536], delimiters=",;\t").delimiter
+            delimiter = csv.Sniffer().sniff(sample, delimiters=",;\t").delimiter
         except csv.Error:
-            first_line = decoded.partition("\n")[0]
+            first_line = sample.partition("\n")[0]
             delimiter = max(",;\t", key=first_line.count)
         # The header is reliable even when malformed rows confuse Sniffer.
         candidates = []
         for candidate in ",;\t":
             try:
-                head = next(csv.reader(io.StringIO(decoded[:65536]), delimiter=candidate, strict=True))
+                head = next(csv.reader(io.StringIO(sample), delimiter=candidate, strict=True))
                 recognized = sum(_key(cell) in _LOOKUP or _annual_header(cell) is not None for cell in head)
                 candidates.append((recognized, len(head), candidate))
             except (csv.Error, StopIteration):
@@ -145,10 +215,15 @@ def _read_csv(content: bytes, *, max_rows: int, label: str) -> tuple[Iterator[tu
             best = max(candidates)
             if best[0] >= 2:
                 delimiter = best[2]
-    reader = csv.reader(io.StringIO(decoded, newline=""), delimiter=delimiter, strict=True)
+    stream.seek(0)
+    _skip_csv_prefix(stream)
+    if preamble:
+        stream.read(preamble.end())
+    reader = csv.reader(stream, delimiter=delimiter, strict=True)
     try:
         headers = [cell.strip() for cell in next(reader)]
     except (csv.Error, StopIteration) as exc:
+        stream.close()
         raise ValueError("CSV の見出し行を読み取れません。引用符と区切り文字を確認してください。") from exc
     errors = []
     def rows():
@@ -168,6 +243,8 @@ def _read_csv(content: bytes, *, max_rows: int, label: str) -> tuple[Iterator[tu
                 yield reader.line_num, values
         except csv.Error as exc:
             errors.append({"row": reader.line_num, "reason": f"CSV の引用符が不正です。この位置以降を読み取れませんでした: {exc}"})
+        finally:
+            stream.close()
     return rows(), headers, encoding, delimiter, errors
 
 
@@ -397,7 +474,7 @@ def _report(errors: list[dict], warnings: list[str], count: int, duplicates: int
     return {"warnings": distinct[:100] + ([f"ほか {len(distinct) - 100} 件の警告があります。"] if len(distinct) > 100 else []), "duplicates_removed": duplicates, "invalid_rows": len(errors), "imported_count": count, "row_errors": errors[:100], "row_errors_truncated": len(errors) > 100, "encoding": encoding, "delimiter": delimiter}
 
 
-def parse_scopus_csv(content: bytes) -> tuple[list[dict], dict]:
+def parse_scopus_csv(content: bytes | BinaryIO) -> tuple[list[dict], dict]:
     """Read Scopus exports; retain usable rows and report malformed rows."""
     rows, headers, encoding, delimiter, errors = _read_csv(content, max_rows=MAX_IMPORT_ROWS, label="論文 CSV")
     columns, annual = _columns(headers)
@@ -517,7 +594,7 @@ def parse_scopus_csv(content: bytes) -> tuple[list[dict], dict]:
     return result, report
 
 
-def attach_citation_history(papers: list[dict], content: bytes) -> tuple[list[dict], dict]:
+def attach_citation_history(papers: list[dict], content: bytes | BinaryIO) -> tuple[list[dict], dict]:
     """Attach long-form annual citation observations without mutating inputs.
 
     Conflicting incoming observations for the same paper/year are all rejected.
