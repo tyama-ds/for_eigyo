@@ -17,6 +17,33 @@ const result={id:'result-a',meta:{years:[2024,2025],is_demo:false,sampled:false}
 const assessment=(id='assessment-a',extra={})=>({id,result_id:'result-a',meta:{...result.meta},papers:result.papers,candidates:[candidate('topic-a')],rounds:[],warnings:[],...extra});
 const response=data=>({ok:true,json:async()=>data});
 
+test('large corpus exploration gives its separate capacity limit before sending requests',async()=>{
+  let requests=0;const {t}=harness(async()=>{requests++;return response({});});
+  t.ui.result={...result,meta:{...result.meta,papers_total:200000,papers_truncated:true}};
+  await t.createAssessment();assert.equal(requests,0);assert.match(t.ui.error,/10,000論文/);assert.match(t.ui.error,/技術マップ/);
+});
+
+test('foresight evidence outside the displayed sample loads a single original paper and caches it',async()=>{
+  const calls=[],{t,elements}=harness(async url=>{calls.push(url);return response({id:'outside',title:'Outside paper',abstract:'<original> abstract',year:2023,authors:[]});});
+  t.ui.result={...result,meta:{...result.meta,papers_truncated:true}};
+  const dialog={open:false,showModal(){this.open=true;}};
+  elements.set('#fs-paper-dialog',dialog);elements.set('#fs-paper-dialog-title',{});elements.set('#fs-paper-dialog-body',{});
+  await t.showPaper('outside');await t.showPaper('outside');
+  assert.deepEqual(calls,['/api/results/result-a/papers/outside']);
+  assert.match(elements.get('#fs-paper-dialog-body').innerHTML,/Outside paper/);assert.match(elements.get('#fs-paper-dialog-body').innerHTML,/&lt;original&gt; abstract/);
+  assert.equal(t.ui.result.papers.length,1);
+});
+
+test('late foresight paper response cannot replace another opened original',async()=>{
+  const pending=[],{t,elements}=harness(()=>new Promise(resolve=>pending.push(resolve)));
+  t.ui.result={...result,meta:{...result.meta,papers_truncated:true}};
+  elements.set('#fs-paper-dialog',{open:true});elements.set('#fs-paper-dialog-title',{});elements.set('#fs-paper-dialog-body',{});
+  const old=t.showPaper('old'),latest=t.showPaper('new');
+  pending[1](response({id:'new',title:'Newest paper',authors:[]}));await latest;
+  pending[0](response({id:'old',title:'Old paper',authors:[]}));await old;
+  assert.match(elements.get('#fs-paper-dialog-body').innerHTML,/Newest paper/);assert.doesNotMatch(elements.get('#fs-paper-dialog-body').innerHTML,/Old paper/);
+});
+
 test('new browser connection settings invalidate a pending status response',async()=>{
   const pending=[];const {t,events}=harness(async()=>new Promise(resolve=>pending.push(resolve)));
   const previous=t.loadStatus();assert.equal(pending.length,1);

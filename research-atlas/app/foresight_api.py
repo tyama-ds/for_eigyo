@@ -101,6 +101,11 @@ def run_create(job_id, result):
 @router.post("/api/assessments")
 def create_assessment(body: AssessmentRequest):
     from .main import new_job
+    from .foresight import PAPER_LIMIT
+    summary = storage.read("results", body.result_id, include_papers=False)
+    count = summary.get("meta", {}).get("paper_count", len(summary.get("papers", [])))
+    if count > PAPER_LIMIT:
+        raise ValueError("有望領域の反復探索は10,000件までです。全件集計・NMF地図・分野レポートは200,000件まで利用できます。対象期間を絞った分析から探索してください。")
     result = storage.read("results", body.result_id)
     job = new_job("探索の準備中")
     submit_with_context(EXECUTOR, run_create, job, result)
@@ -109,7 +114,7 @@ def create_assessment(body: AssessmentRequest):
 
 @router.get("/api/assessments")
 def list_assessments(result_id: str):
-    storage.read("results", result_id)
+    storage.read("results", result_id, include_papers=False)
     values = []
     folder = storage.data_root() / "assessments"
     if folder.exists():

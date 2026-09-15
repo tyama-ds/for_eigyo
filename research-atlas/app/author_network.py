@@ -353,10 +353,11 @@ def _layout(nodes):
 
 
 def build_author_network(papers: list[dict], group_by="community", topics=None) -> dict:
+    from .limits import MAX_DATASET_PAPERS
     if group_by not in GROUPS:
         raise ValueError("共著者の表示方法は id・name・institution・community・topic から選んでください。")
-    if len(papers) > 10000:
-        raise ValueError("共著者ネットワークの分析上限は 10,000 論文です。")
+    if len(papers) > MAX_DATASET_PAPERS:
+        raise ValueError(f"共著者ネットワークの分析上限は {MAX_DATASET_PAPERS:,} 論文です。")
     identifiers = [str(paper.get("id") or "") for paper in papers]
     if any(not identifier for identifier in identifiers) or len(set(identifiers)) != len(identifiers):
         raise ValueError("論文IDは欠測や重複のない値である必要があります。")

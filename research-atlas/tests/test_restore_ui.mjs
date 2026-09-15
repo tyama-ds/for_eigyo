@@ -36,7 +36,7 @@ test('restoration retrieves the saved result and original dataset without runnin
   const {ctx,calls,result,dataset,$,events}=harness();
   await ctx.restoreAnalysisLink(link);
   assert.equal(ctx.state.dataset,dataset);assert.equal(ctx.state.result,result);assert.equal(ctx.state.view,'foresight');
-  assert.deepEqual(calls,[`/api/results/${resultId}`,['restoreAssessment',resultId,assessmentId],'render']);
+  assert.deepEqual(calls,[`/api/results/${resultId}?view=summary`,['restoreAssessment',resultId,assessmentId],'render']);
   assert.equal(events.length,1);assert.equal(events[0].detail,result);
   assert.equal($('#start-year').value,2026);assert.equal($('#end-year').value,2026);
   assert.equal($('#monthly-anchor').value,'2026-08');assert.equal($('#monthly-window').value,'3');

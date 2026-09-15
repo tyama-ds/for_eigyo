@@ -152,16 +152,27 @@ def normalize_references(value) -> list[dict]:
                 records.append(record)
             elif item.get("unstructured"):
                 records.extend(_references_from_text(item["unstructured"]))
-    output = []
+    output, identifiers = [], {}
     for record in records:
-        match = next((existing for existing in output
-                      if not (existing.get("doi") and record.get("doi") and existing["doi"] != record["doi"])
-                      and any(existing.get(field) == identifier for field, identifier in record.items())), None)
+        # Index identifiers instead of comparing each reference with every
+        # preceding reference. Long Scopus lists otherwise cost O(refs²) for
+        # each of hundreds of thousands of papers.
+        candidates = {index for field, identifier in record.items()
+                      for index in identifiers.get((field, identifier), ())}
+        index = next((index for index in sorted(candidates)
+                      if not (output[index].get("doi") and record.get("doi")
+                              and output[index]["doi"] != record["doi"])), None)
+        match = output[index] if index is not None else None
         if match is None:
+            index = len(output)
             output.append(deepcopy(record))
         else:
             for field, identifier in record.items():
                 match.setdefault(field, identifier)
+        # Only retained identifiers participate. Conflicting DOI values and
+        # IDs discarded by setdefault must not create a new identity link.
+        for field, identifier in output[index].items():
+            identifiers.setdefault((field, identifier), set()).add(index)
     return output
 
 

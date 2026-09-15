@@ -9,6 +9,9 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+from . import large_storage
+from .limits import MAX_ANALYSIS_YEARS
+
 ROOT = Path(__file__).resolve().parent.parent
 LOCK = threading.RLock()
 
@@ -37,22 +40,30 @@ def _path(kind: str, identifier: str) -> Path:
 
 def save(kind: str, value: dict) -> dict:
     path = _path(kind, value["id"])
-    with LOCK:
-        temp = path.with_suffix(f".{uuid.uuid4().hex}.tmp")
-        try:
-            temp.write_text(json.dumps(value, ensure_ascii=False, allow_nan=False), encoding="utf-8")
+    temp = path.with_suffix(f".{uuid.uuid4().hex}.tmp")
+    try:
+        # Each payload revision has a fresh owner. Publish only its completed
+        # manifest under the lock, so existing datasets remain readable during
+        # a large import; SQLite serializes writers independently.
+        manifest = large_storage.externalize(value, data_root())
+        if kind == "datasets" and "_large_store" in manifest:
+            manifest["_dataset_summary"] = dataset_summary(value)
+        with temp.open("w", encoding="utf-8") as output:
+            json.dump(manifest, output, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+        with LOCK:
             temp.replace(path)
-        finally:
-            temp.unlink(missing_ok=True)
+    finally:
+        temp.unlink(missing_ok=True)
     return value
 
 
-def read(kind: str, identifier: str) -> dict:
-    with LOCK:
-        try:
-            return json.loads(_path(kind, identifier).read_text(encoding="utf-8"))
-        except (FileNotFoundError, json.JSONDecodeError) as exc:
-            raise KeyError("データが見つかりません。") from exc
+def read(kind: str, identifier: str, *, include_papers: bool = True) -> dict:
+    try:
+        with LOCK:
+            value = json.loads(_path(kind, identifier).read_text(encoding="utf-8"))
+        return large_storage.restore(value, data_root(), include_papers)
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        raise KeyError("データが見つかりません。") from exc
 
 
 def _summary_year(value) -> int | None:
@@ -72,6 +83,8 @@ def _summary_period(start, end, current_year: int) -> tuple[int, int] | None:
 
 
 def dataset_summary(value: dict) -> dict:
+    if isinstance(value.get("_dataset_summary"), dict):
+        return dict(value["_dataset_summary"])
     result = {key: value[key] for key in ("id", "name", "paper_count", "is_demo", "created_at")}
     report = value.get("report") if isinstance(value.get("report"), dict) else {}
     request = report.get("discovery_request") if isinstance(report.get("discovery_request"), dict) else {}
@@ -87,9 +100,9 @@ def dataset_summary(value: dict) -> dict:
         if years:
             period = _summary_period(min(years), max(years), current_year)
     start, end = period or (current_year - 5, current_year - 1)
-    if end - start > 19:
-        start = end - 19
-        result["analysis_defaults_note"] = "分析APIの期間上限に合わせ、初期期間を最後の20暦年に絞っています。"
+    if end - start >= MAX_ANALYSIS_YEARS:
+        start = end - MAX_ANALYSIS_YEARS + 1
+        result["analysis_defaults_note"] = f"分析APIの期間上限に合わせ、初期期間を最後の{MAX_ANALYSIS_YEARS}暦年に絞っています。"
     result["analysis_defaults"] = {"start_year": start, "end_year": end}
     start_month = request.get("start_month") or report.get("start_month")
     end_month = request.get("end_month") or report.get("end_month")

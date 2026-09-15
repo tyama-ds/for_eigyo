@@ -14,9 +14,18 @@ import warnings as python_warnings
 
 import numpy as np
 from scipy import sparse
-from sklearn.decomposition import LatentDirichletAllocation, NMF
+from sklearn.decomposition import LatentDirichletAllocation, MiniBatchNMF, NMF
 from sklearn.exceptions import ConvergenceWarning
 from sklearn.feature_extraction.text import CountVectorizer, ENGLISH_STOP_WORDS
+
+from .limits import MAX_DATASET_PAPERS
+
+
+LARGE_CORPUS_THRESHOLD = 20000
+SEMANTIC_PAPER_LIMIT = 20000
+LEXICAL_BATCH_SIZE = 2048
+NMF_TRAINING_PASSES = 3
+LDA_TRAINING_PASSES = 2
 
 
 # Keep the lexical analyzer identical to analytics._tfidf. This is not a Japanese
@@ -45,9 +54,10 @@ def _positive_integer(value, name, minimum=1, maximum=20):
         raise TopicModelError(f"{name}は {minimum}〜{maximum} の整数で指定してください。") from None
 
 
-def _count_vectorizer():
+def _count_vectorizer(vocabulary=None):
     return CountVectorizer(stop_words=STOP_WORDS, ngram_range=(1, 2), max_features=6000,
-                           strip_accents="unicode", token_pattern=TOKEN_PATTERN, dtype=np.int64)
+                           strip_accents="unicode", token_pattern=TOKEN_PATTERN, dtype=np.int32,
+                           vocabulary=vocabulary)
 
 
 def _finite_nonnegative(matrix, name):
@@ -56,7 +66,7 @@ def _finite_nonnegative(matrix, name):
         raise TopicModelError(f"{name}に負数または有限でない値が含まれています。")
 
 
-def _distinct_rows(matrix):
+def _distinct_rows(matrix, limit=None):
     """Avoid an N x N distance matrix and dense conversion for large corpora."""
     if not sparse.issparse(matrix):
         return len(np.unique(np.round(matrix, 10), axis=0))
@@ -68,6 +78,8 @@ def _distinct_rows(matrix):
         digest.update(matrix.indices[start:end].tobytes())
         digest.update(np.round(matrix.data[start:end], 10).tobytes())
         fingerprints.add(digest.digest())
+        if limit is not None and len(fingerprints) >= limit:
+            break
     return len(fingerprints)
 
 
@@ -112,8 +124,51 @@ def _information_only(n, method, requested, warnings, map_matrix=None):
                         "label_to_component": {}, "status": "information_insufficient"}}
 
 
-def _fit_lexical(documents, tfidf, terms, method, requested):
+def _large_lexical_fit(matrix, method, effective, progress_callback=None):
+    """Visit every informative paper on each pass, then infer every membership.
+
+    Batches are shuffled with a fixed seed instead of using the (possibly
+    chronological) file order. No dense paper-by-vocabulary array is allocated.
+    """
+    if method == "nmf":
+        estimator = MiniBatchNMF(n_components=effective, init="nndsvda", random_state=42,
+                                batch_size=LEXICAL_BATCH_SIZE, max_iter=100,
+                                transform_max_iter=100, tol=1e-4)
+        passes = NMF_TRAINING_PASSES
+    else:
+        estimator = LatentDirichletAllocation(n_components=effective, random_state=42,
+                    learning_method="online", batch_size=LEXICAL_BATCH_SIZE,
+                    total_samples=matrix.shape[0], max_iter=1, max_doc_update_iter=30,
+                    n_jobs=1, evaluate_every=-1)
+        passes = LDA_TRAINING_PASSES
+    rng = np.random.default_rng(42)
+    batches = 0
+    for epoch in range(passes):
+        order = rng.permutation(matrix.shape[0])
+        for start in range(0, len(order), LEXICAL_BATCH_SIZE):
+            estimator.partial_fit(matrix[order[start:start + LEXICAL_BATCH_SIZE]])
+            batches += 1
+            if progress_callback:
+                progress_callback(f"{method.upper()} 学習 {epoch + 1}/{passes} 周・"
+                                  f"{min(start + LEXICAL_BATCH_SIZE, len(order)):,}/{len(order):,} 件")
+    weights = np.empty((matrix.shape[0], effective), dtype=np.float32)
+    for start in range(0, matrix.shape[0], LEXICAL_BATCH_SIZE):
+        stop = min(start + LEXICAL_BATCH_SIZE, matrix.shape[0])
+        weights[start:stop] = estimator.transform(matrix[start:stop])
+        if progress_callback:
+            progress_callback(f"{method.upper()} 全件の所属度を計算 {stop:,}/{matrix.shape[0]:,} 件")
+    return estimator, weights, {"estimator": type(estimator).__name__,
+        "training_mode": "full_corpus_minibatch", "training_passes": passes,
+        "training_batches": batches, "batch_size": LEXICAL_BATCH_SIZE,
+        "training_papers": matrix.shape[0], "transform_papers": matrix.shape[0],
+        "sampling": "none", "shuffle_seed": 42,
+        "iterations": passes, "max_iter": passes,
+        "document_update_limit": 100 if method == "nmf" else 30}
+
+
+def _fit_lexical(documents, tfidf, terms, method, requested, progress_callback=None):
     notices = [LEXICAL_WARNING]
+    large = len(documents) > LARGE_CORPUS_THRESHOLD
     if method == "nmf":
         if tfidf is None or getattr(tfidf, "ndim", 0) != 2 or tfidf.shape[0] != len(documents):
             raise TopicModelError("NMF の TF-IDF 行列と論文数が一致しません。")
@@ -123,13 +178,23 @@ def _fit_lexical(documents, tfidf, terms, method, requested):
         _finite_nonnegative(tfidf, "TF-IDF")
         # analytics uses this sentinel for empty rows; it is metadata, not a word.
         keep = (terms != "情報不足") & (terms != "")
-        matrix = sparse.csr_matrix(tfidf[:, keep], dtype=np.float64, copy=True)
+        # Column selection already owns its storage; do not duplicate a second
+        # full-corpus sparse matrix merely to normalize its CSR representation.
+        matrix = sparse.csr_matrix(tfidf[:, keep], dtype=np.float32, copy=False)
         vocabulary = terms[keep]
         input_name = "tfidf"
     else:
-        vectorizer = _count_vectorizer()
+        # For a large corpus reuse the exact full-corpus TF-IDF vocabulary.
+        # LDA still receives integer occurrence counts, never TF-IDF weights.
+        vocabulary = {str(term): index for index, term in enumerate(
+            term for term in terms if str(term) not in {"", "情報不足"})} if large else None
+        vectorizer = _count_vectorizer(vocabulary=vocabulary or None)
         try:
-            matrix = vectorizer.fit_transform(documents)
+            if large and vocabulary:
+                matrix = sparse.vstack([vectorizer.transform(documents[start:start + LEXICAL_BATCH_SIZE])
+                    for start in range(0, len(documents), LEXICAL_BATCH_SIZE)], format="csr")
+            else:
+                matrix = vectorizer.fit_transform(documents)
             vocabulary = vectorizer.get_feature_names_out()
         except ValueError as error:
             if "empty vocabulary" not in str(error):
@@ -142,26 +207,39 @@ def _fit_lexical(documents, tfidf, terms, method, requested):
     informative = np.asarray(matrix.sum(axis=1)).ravel() > 0
     if not informative.any():
         return _information_only(len(documents), method, requested, notices)
-    usable = matrix[informative]
-    effective = min(requested, usable.shape[0], usable.shape[1], _distinct_rows(usable))
+    usable = matrix if informative.all() else matrix[informative]
+    effective = min(requested, usable.shape[0], usable.shape[1], _distinct_rows(usable, limit=requested))
     if effective < requested:
         notices.append(f"有効な文書数・語彙数・異なる文書表現数に合わせ、{method.upper()} の成分数を {effective} に調整しました。")
-    if method == "nmf":
+    training_details = {}
+    if method == "nmf" and not large:
         estimator = NMF(n_components=effective, init="nndsvda", random_state=42, max_iter=300,
                         solver="cd", tol=1e-4)
-    else:
+    elif not large:
         estimator = LatentDirichletAllocation(n_components=effective, random_state=42,
                      learning_method="batch", max_iter=20, n_jobs=1, evaluate_every=-1)
     with python_warnings.catch_warnings(record=True) as captured:
         python_warnings.simplefilter("always", ConvergenceWarning)
-        weights = np.asarray(estimator.fit_transform(usable), dtype=float)
+        if large:
+            estimator, weights, training_details = _large_lexical_fit(
+                usable, method, effective, progress_callback)
+        else:
+            weights = np.asarray(estimator.fit_transform(usable), dtype=np.float32)
+            training_details = {"estimator": type(estimator).__name__, "training_mode": "batch",
+                                "training_papers": usable.shape[0], "transform_papers": usable.shape[0],
+                                "sampling": "none", "iterations": int(estimator.n_iter_),
+                                "max_iter": 300 if method == "nmf" else 20}
+    if large:
+        notices.append(f"{len(documents):,} 件のため {training_details['estimator']} を使い、"
+                       f"情報のある全 {usable.shape[0]:,} 件を {training_details['training_passes']} 周の分割学習・全件分類に使用しました。"
+                       "論文を標本に間引いていません。通常の一括学習とは最適化手順が異なるため、分野の分け方が変わる場合があります。")
     if any(issubclass(item.category, ConvergenceWarning) for item in captured):
         notices.append(f"{method.upper()} は反復上限に達しました。語彙やトピック数を変更すると結果が変わる可能性があります。")
     _finite_nonnegative(weights, "文書トピック重み")
     _finite_nonnegative(estimator.components_, "トピック語彙重み")
     sums = weights.sum(axis=1)
-    weights /= np.maximum(sums, np.finfo(float).tiny)[:, None]
-    full_weights = np.zeros((len(documents), effective), dtype=float)
+    weights /= np.maximum(sums, np.finfo(weights.dtype).tiny)[:, None]
+    full_weights = np.zeros((len(documents), effective), dtype=np.float32)
     full_weights[informative] = weights
     assigned = informative.copy()
     assigned[np.flatnonzero(informative)[sums <= 0]] = False
@@ -185,7 +263,9 @@ def _fit_lexical(documents, tfidf, terms, method, requested):
                         "effective_topics": len(mapping), "outlier_count": missing_count,
                         "information_insufficient_count": missing_count,
                         "information_insufficient_label": outlier, "vocabulary_size": len(vocabulary),
-                        "iterations": int(estimator.n_iter_), "max_iter": 300 if method == "nmf" else 20,
+                        **training_details, "matrix_dtype": str(matrix.dtype),
+                        "membership_dtype": str(full_weights.dtype),
+                        "corpus_papers": len(documents),
                         "membership_description": description,
                         "label_to_component": {str(new): old for old, new in mapping.items()},
                         "map_representation": "normalized_document_topic_weights",
@@ -299,16 +379,20 @@ def _fit_bertopic(documents, embeddings, requested, minimum_size):
                         "status": "all_noise" if not mapping else "ok"}}
 
 
-def fit_topic_model(documents, tfidf, terms, embeddings, method, n_topics, min_topic_size=5):
+def fit_topic_model(documents, tfidf, terms, embeddings, method, n_topics, min_topic_size=5,
+                    progress_callback=None):
     """Return a real NMF, LDA or BERTopic fit without dropping any input paper."""
     if method not in {"nmf", "lda", "bertopic"}:
         raise TopicModelError("トピックモデルは nmf・lda・bertopic のいずれかを指定してください。")
     if not isinstance(documents, (list, tuple)) or not documents or not all(isinstance(item, str) for item in documents):
         raise TopicModelError("文書は空ではない文字列のリストで指定してください（空文字の文書は情報不足として扱います）。")
-    if len(documents) > 10000:
-        raise TopicModelError("トピックモデルの分析上限は 10,000 件です。")
+    if len(documents) > MAX_DATASET_PAPERS:
+        raise TopicModelError(f"トピックモデルの分析上限は {MAX_DATASET_PAPERS:,} 件です。")
     requested = _positive_integer(n_topics, "トピック数")
     if method == "bertopic":
+        if len(documents) > SEMANTIC_PAPER_LIMIT:
+            raise TopicModelError(f"BERTopic のローカル分析上限は {SEMANTIC_PAPER_LIMIT:,} 件です。"
+                                  "対象期間を絞るか、全件を分析する NMF・LDA・TF-IDF + KMeans を選択してください。")
         minimum_size = _positive_integer(min_topic_size, "最小トピックサイズ", minimum=2, maximum=1000)
         return _fit_bertopic(documents, embeddings, requested, minimum_size)
-    return _fit_lexical(documents, tfidf, terms, method, requested)
+    return _fit_lexical(documents, tfidf, terms, method, requested, progress_callback)

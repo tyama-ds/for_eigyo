@@ -17,6 +17,10 @@ def citation_total(papers: list[dict]):
     return sum(values) if values else None
 
 
+def _stored_aggregates(result):
+    return bool(result.get("_large_store") or result.get("meta", {}).get("papers_truncated"))
+
+
 def topic_csv(result: dict) -> str:
     stream = io.StringIO(newline="")
     writer = csv.writer(stream)
@@ -26,10 +30,12 @@ def topic_csv(result: dict) -> str:
     for topic in result["topics"]:
         forecast = topic.get("forecast", [])
         last = forecast[-1] if forecast else {}
-        members = [p for p in result["papers"] if p["topic_id"] == topic["id"]]
-        known = sum(p.get("citations") is not None for p in members)
+        use_aggregate = _stored_aggregates(result) and "citation_total" in topic
+        members = [] if use_aggregate else [p for p in result["papers"] if p["topic_id"] == topic["id"]]
+        known = topic.get("citation_known_count", 0) if use_aggregate else sum(p.get("citations") is not None for p in members)
+        total = topic["citation_total"] if use_aggregate else citation_total(members)
         signal = monthly_topics.get(topic["id"], {})
-        writer.writerow([safe_cell(topic["label"]), topic["count"], citation_total(members), topic["growth_pct"], topic["score"], topic["status"], safe_cell("; ".join(topic["keywords"])),
+        writer.writerow([safe_cell(topic["label"]), topic["count"], total, topic["growth_pct"], topic["score"], topic["status"], safe_cell("; ".join(topic["keywords"])),
             last.get("year"), last.get("value"), last.get("lower"), last.get("upper"), topic["backtest"].get("mae"), topic["backtest"].get("baseline_mae"), known, bool(result["meta"].get("is_demo")), safe_cell("; ".join(result["meta"].get("providers", []))), bool(result["meta"].get("sampled")), safe_cell("; ".join(result["meta"].get("citation_sources", []))), monthly.get("anchor_month", ""), monthly.get("window_months", ""), signal.get("recent_count"), signal.get("baseline_count"), signal.get("growth_pct"), signal.get("share_change_pp"), signal.get("status", "unavailable"), safe_cell(result["meta"].get("topic_model", "kmeans")), safe_cell(result["meta"].get("embedding_model", "")), safe_cell(result["meta"].get("map_representation", "")), bool(topic.get("is_outlier"))])
     return "\ufeff" + stream.getvalue()
 
@@ -83,7 +89,7 @@ def report_html(result: dict) -> str:
     meta = result["meta"]
     rows = ""
     for t in result["topics"]:
-        total = citation_total([p for p in result["papers"] if p["topic_id"] == t["id"]])
+        total = t["citation_total"] if _stored_aggregates(result) and "citation_total" in t else citation_total([p for p in result["papers"] if p["topic_id"] == t["id"]])
         growth = f"{t['growth_pct']:+.1f}%" if t.get("growth_pct") is not None else "比較不可"
         rows += f"<tr><td>{esc(t['label'])}</td><td>{t['count']}</td><td>{total if total is not None else '未取得'}</td><td>{esc(growth)}</td><td>{t['score']:.1f}</td><td>{esc(t['status'])}</td></tr>"
     trajectory = ""
@@ -114,7 +120,10 @@ def report_html(result: dict) -> str:
         forecasts += f"<p><b>{esc(t['label'])}</b> — {esc(values)}<br><small>検証 MAE: {esc(bt.get('mae'))} / 前年維持 MAE: {esc(bt.get('baseline_mae'))} / 検証点: {bt.get('folds',0)}</small></p>"
     citations = ""
     for r in result["timeline"]:
-        total = citation_total([p for p in result["papers"] if p["year"] == r["year"]])
+        if _stored_aggregates(result) and "citation_known_count" in r:
+            total = r["citations"] if r["citation_known_count"] else None
+        else:
+            total = citation_total([p for p in result["papers"] if p["year"] == r["year"]])
         citations += f"<tr><td>{r['year']}</td><td>{r['papers']}</td><td>{total if total is not None else '未取得'}</td><td>{esc(r.get('annual_citations') if r.get('annual_citations') is not None else '欠測')}</td><td>{esc(r.get('annual_coverage') if r.get('annual_coverage') is not None else '—')}%</td></tr>"
     evidence = "".join(f"<li>{esc(p['title'])} ({p['year']}) — {esc(p['id'])}</li>" for p in result["papers"][:100])
     demo = "合成・テストデータを含む分析 — 実際の研究動向の判断には使用できません" if meta.get("is_demo") else "取り込みデータの分析"

@@ -14,11 +14,17 @@ import random
 import re
 import unicodedata
 from collections import defaultdict
+from collections.abc import Iterator
 
 from .dates import merge_publication_dates, normalize_paper_date, normalize_publication_date
 from .bibliography import (attach_author_affiliations, bibliography_summary, normalize_affiliations,
                            normalize_references, references_status)
 from .text_metadata import is_test_summary
+from .limits import MAX_IMPORT_ROWS, MAX_UPLOAD_BYTES
+
+# Scopus reference lists can exceed csv's default 128 KiB per-field limit.
+# Keep a process-wide bound rather than changing/restoring it across workers.
+csv.field_size_limit(max(csv.field_size_limit(), MAX_UPLOAD_BYTES))
 
 
 def _key(value: str) -> str:
@@ -99,9 +105,11 @@ def _annual_header(header: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def _read_csv(content: bytes) -> tuple[list[tuple[int, list[str]]], list[str], str, str, list[dict]]:
+def _read_csv(content: bytes, *, max_rows: int, label: str) -> tuple[Iterator[tuple[int, list[str]]], list[str], str, str, list[dict]]:
     if not isinstance(content, bytes) or not content.strip():
         raise ValueError("CSV ファイルが空です。Scopus から書誌情報を CSV 形式で出力してください。")
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise ValueError(f"CSV は {MAX_UPLOAD_BYTES // (1024 * 1024):,} MiB までです。ファイルを分割してください。")
     encodings = ["utf-16"] if content.startswith((b"\xff\xfe", b"\xfe\xff")) else ["utf-8-sig", "cp932"]
     decoded = None
     for encoding in encodings:
@@ -122,13 +130,13 @@ def _read_csv(content: bytes) -> tuple[list[tuple[int, list[str]]], list[str], s
         try:
             delimiter = csv.Sniffer().sniff(decoded[:65536], delimiters=",;\t").delimiter
         except csv.Error:
-            first_line = decoded.splitlines()[0]
+            first_line = decoded.partition("\n")[0]
             delimiter = max(",;\t", key=first_line.count)
         # The header is reliable even when malformed rows confuse Sniffer.
         candidates = []
         for candidate in ",;\t":
             try:
-                head = next(csv.reader(io.StringIO(decoded), delimiter=candidate, strict=True))
+                head = next(csv.reader(io.StringIO(decoded[:65536]), delimiter=candidate, strict=True))
                 recognized = sum(_key(cell) in _LOOKUP or _annual_header(cell) is not None for cell in head)
                 candidates.append((recognized, len(head), candidate))
             except (csv.Error, StopIteration):
@@ -142,18 +150,25 @@ def _read_csv(content: bytes) -> tuple[list[tuple[int, list[str]]], list[str], s
         headers = [cell.strip() for cell in next(reader)]
     except (csv.Error, StopIteration) as exc:
         raise ValueError("CSV の見出し行を読み取れません。引用符と区切り文字を確認してください。") from exc
-    rows, errors = [], []
-    try:
-        for values in reader:
-            if not values or not any(cell.strip() for cell in values):
-                continue
-            if len(values) != len(headers):
-                errors.append({"row": reader.line_num, "reason": f"列数が見出しと一致しません（{len(values)} / {len(headers)}）。抄録内の引用符や区切り文字を確認してください"})
-                continue
-            rows.append((reader.line_num, values))
-    except csv.Error as exc:
-        errors.append({"row": reader.line_num, "reason": f"CSV の引用符が不正です。この位置以降を読み取れませんでした: {exc}"})
-    return rows, headers, encoding, delimiter, errors
+    errors = []
+    def rows():
+        # Iterate records as they are normalized; don't retain a second full
+        # collection of raw abstracts/reference strings alongside the corpus.
+        count = 0
+        try:
+            for values in reader:
+                if not values or not any(cell.strip() for cell in values):
+                    continue
+                count += 1
+                if count > max_rows:
+                    raise ValueError(f"{label}は 1 回 {max_rows:,} 行までです。CSV を分割し、既存データへの追加を繰り返してください。")
+                if len(values) != len(headers):
+                    errors.append({"row": reader.line_num, "reason": f"列数が見出しと一致しません（{len(values)} / {len(headers)}）。抄録内の引用符や区切り文字を確認してください"})
+                    continue
+                yield reader.line_num, values
+        except csv.Error as exc:
+            errors.append({"row": reader.line_num, "reason": f"CSV の引用符が不正です。この位置以降を読み取れませんでした: {exc}"})
+    return rows(), headers, encoding, delimiter, errors
 
 
 def _columns(headers: list[str]) -> tuple[dict[str, list[int]], dict[int, list[int]]]:
@@ -334,6 +349,9 @@ def _provenance_report(papers: list[dict], warnings: list[str]) -> dict:
 
 def _merge_papers(first: dict, second: dict, warnings: list[str]) -> dict:
     merged = copy.deepcopy(first)
+    first_dois, second_dois = set(first["aliases"]["dois"]), set(second["aliases"]["dois"])
+    if first_dois and second_dois and not first_dois.intersection(second_dois):
+        warnings.append("共通 EID に異なる DOI が対応しています。先に読み込んだ DOI とすべての DOI 別名を保持しました。")
     dates, date_warnings = merge_publication_dates(first, second)
     merged.update(dates)
     warnings.extend(date_warnings)
@@ -352,13 +370,14 @@ def _merge_papers(first: dict, second: dict, warnings: list[str]) -> dict:
     merged["affiliations"] = normalize_affiliations([*first.get("affiliations", []), *second.get("affiliations", [])])
     merged["references"] = normalize_references([*first.get("references", []), *second.get("references", [])])
     merged["references_status"] = "provided" if "provided" in (references_status(first), references_status(second)) else "not_provided"
-    known_authors = {author["id"] for author in merged["authors"]}
+    known_authors = {author["id"]: author for author in merged["authors"]}
     for author in second["authors"]:
         if author["id"] not in known_authors:
-            merged["authors"].append(copy.deepcopy(author))
-            known_authors.add(author["id"])
+            target = copy.deepcopy(author)
+            merged["authors"].append(target)
+            known_authors[author["id"]] = target
         else:
-            target = next(item for item in merged["authors"] if item["id"] == author["id"])
+            target = known_authors[author["id"]]
             affiliations = normalize_affiliations([*target.get("affiliations", []), *author.get("affiliations", [])])
             if affiliations:
                 target["affiliations"] = affiliations
@@ -380,14 +399,26 @@ def _report(errors: list[dict], warnings: list[str], count: int, duplicates: int
 
 def parse_scopus_csv(content: bytes) -> tuple[list[dict], dict]:
     """Read Scopus exports; retain usable rows and report malformed rows."""
-    rows, headers, encoding, delimiter, errors = _read_csv(content)
+    rows, headers, encoding, delimiter, errors = _read_csv(content, max_rows=MAX_IMPORT_ROWS, label="論文 CSV")
     columns, annual = _columns(headers)
     if "title" not in columns or "year" not in columns:
         raise ValueError("CSV には Title（タイトル）と Year（出版年）の見出しが必要です。Scopus の CSV 書誌情報を選択してください。")
-    if len(rows) > 10000:
-        raise ValueError("この試作版では 10,000 行まで読み込めます。CSV を分割してください。")
     papers: dict[int, dict] = {}
     identities: dict[str, int] = {}
+    titles: dict[str, set[int]] = defaultdict(set)
+    parents: dict[int, int] = {}
+    def root(index):
+        while parents[index] != index:
+            parents[index] = parents[parents[index]]
+            index = parents[index]
+        return index
+
+    def register(index, keys):
+        for key in keys:
+            if key.startswith("title:"):
+                titles[key].add(index)
+            else:
+                identities[key] = index
     warnings: list[str] = []
     duplicates = 0
     for row_number, row in rows:
@@ -433,26 +464,39 @@ def parse_scopus_csv(content: bytes) -> tuple[list[dict], dict]:
             errors.append({"row": row_number, "reason": str(exc)})
             continue
         keys = _identity_keys(paper)
-        matches = sorted({identities[key] for key in keys if key in identities})
+        strong = {root(identities[key]) for key in keys if key in identities}
+        title_matches = {root(index) for key in keys if key.startswith("title:") for index in titles.get(key, ())} - strong
+        direct_dois = set(paper["aliases"]["dois"])
+        for index in strong:
+            direct_dois.update(papers[index]["aliases"]["dois"])
+        compatible = {index for index in title_matches if not direct_dois or not papers[index]["aliases"]["dois"]
+                      or direct_dois.intersection(papers[index]["aliases"]["dois"])}
+        if title_matches - compatible:
+            warnings.append("同じタイトル・出版年でも DOI が異なる論文は、タイトルだけで統合しませんでした。")
+        if not direct_dois:
+            doi_sets = [set(papers[index]["aliases"]["dois"]) for index in compatible if papers[index]["aliases"]["dois"]]
+            if any(not left.intersection(right) for index, left in enumerate(doi_sets) for right in doi_sets[index + 1:]):
+                compatible = set()
+                warnings.append("同じタイトル・出版年に異なる DOI が対応するため、DOI のない論文は別レコードとして保持しました。")
+        matches = sorted(strong | compatible)
         if matches:
             target = matches[0]
             # A bridging DOI / EID can join groups created earlier in the file.
             merged = papers[target]
             for other in matches[1:]:
                 merged = _merge_papers(merged, papers.pop(other), warnings)
-                for key, owner in list(identities.items()):
-                    if owner == other:
-                        identities[key] = target
+                # Retain old aliases via path-compressed roots. A bridge must
+                # not scan/rewrite the entire corpus index for each duplicate.
+                parents[other] = target
                 duplicates += 1
             merged = _merge_papers(merged, paper, warnings)
             papers[target] = merged
             duplicates += 1
-            for key in keys | _identity_keys(merged):
-                identities[key] = target
+            register(target, keys | _identity_keys(merged))
         else:
             papers[row_number] = paper
-            for key in keys:
-                identities[key] = row_number
+            parents[row_number] = row_number
+            register(row_number, keys)
     result = list(papers.values())
     if not result:
         detail = " / ".join(f"{error['row']} 行: {error['reason']}" for error in errors[:3])
@@ -479,12 +523,10 @@ def attach_citation_history(papers: list[dict], content: bytes) -> tuple[list[di
     Conflicting incoming observations for the same paper/year are all rejected.
     Existing observations survive such conflicts. Missing values are not updates.
     """
-    rows, headers, encoding, delimiter, errors = _read_csv(content)
+    rows, headers, encoding, delimiter, errors = _read_csv(content, max_rows=100000, label="年別引用 CSV")
     columns, _ = _columns(headers)
     if "year" not in columns or "citations" not in columns or not ({"eid", "doi"} & columns.keys()):
         raise ValueError("年別引用 CSV には EID または DOI、Year、Citations が必要です。Citations はその年に新たに受けた引用数です。")
-    if len(rows) > 100000:
-        raise ValueError("年別引用 CSV は 100,000 行までです。ファイルを分割してください。")
     result = copy.deepcopy(papers)
     identities: dict[str, set[int]] = defaultdict(set)
     for index, paper in enumerate(result):

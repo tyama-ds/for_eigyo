@@ -10,7 +10,7 @@ router = APIRouter()
 
 @router.get("/api/results/{result_id}/terrain")
 def get_terrain(result_id: str):
-    result = storage.read("results", result_id)
+    result = storage.read("results", result_id, include_papers=False)
     landscape = result.get("map")
     nodes = landscape.get("nodes", []) if isinstance(landscape, dict) else []
     return build_terrain(nodes)

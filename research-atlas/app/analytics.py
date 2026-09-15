@@ -22,14 +22,15 @@ from scipy import sparse
 from sklearn.cluster import KMeans, MiniBatchKMeans
 from sklearn.decomposition import PCA, TruncatedSVD
 from sklearn.exceptions import ConvergenceWarning
-from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS, TfidfVectorizer
+from sklearn.feature_extraction.text import CountVectorizer, ENGLISH_STOP_WORDS, TfidfTransformer, TfidfVectorizer
 from sklearn.manifold import TSNE
 from sklearn.neighbors import NearestNeighbors
 
 from .frontiers import analyze_frontiers
 from .dates import normalize_paper_date
 from .embedding_models import LEGACY_TRANSFORMER_MODEL, resolve_embedding_model
-from .topic_models import fit_topic_model
+from .topic_models import LARGE_CORPUS_THRESHOLD, LEXICAL_BATCH_SIZE, SEMANTIC_PAPER_LIMIT, fit_topic_model
+from .limits import MAX_ANALYSIS_YEARS, MAX_DATASET_PAPERS
 from .field_analysis import store_nmf_geometry
 from .author_network import build_author_network
 from .text_metadata import analysis_abstract, is_test_summary
@@ -142,27 +143,56 @@ def _normalize_papers(papers, first_year, last_year, notices):
     return sorted(filtered, key=lambda item: item["id"])
 
 
-def _tfidf(papers, notices):
+def _tfidf(papers, notices, progress_callback=None):
     documents = [" ".join([p["title"], analysis_abstract(p["abstract"]), " ".join(p["keywords"])]) for p in papers]
     test_count = sum(is_test_summary(p["abstract"]) for p in papers)
     if test_count:
         notices.append(f"{test_count} 件のタイトル由来テスト要約は、既知の TEST SUMMARY 接頭辞を除いて文章分析します。元の抄録は保持しています。実抄録を使った分析ではありません。")
     vectorizer = TfidfVectorizer(stop_words=STOP_WORDS, ngram_range=(1, 2),
                                 max_features=6000, sublinear_tf=True, strip_accents="unicode",
-                                token_pattern=r"(?u)\b[^\W\d_][\w-]+\b", dtype=np.float64)
+                                token_pattern=r"(?u)\b[^\W\d_][\w-]+\b", dtype=np.float32)
     try:
-        matrix = vectorizer.fit_transform(documents)
-        terms = vectorizer.get_feature_names_out()
+        if len(papers) > LARGE_CORPUS_THRESHOLD:
+            # Count vocabulary in a streaming pass before building a sparse
+            # document matrix. max_features alone prunes only after sklearn has
+            # materialized the potentially enormous unpruned matrix.
+            frequencies = Counter()
+            analyzer = vectorizer.build_analyzer()
+            for index, document in enumerate(documents):
+                frequencies.update(analyzer(document))
+                if progress_callback and (index + 1) % LEXICAL_BATCH_SIZE == 0:
+                    progress_callback(f"全件の語彙を集計 {index + 1:,}/{len(documents):,} 件")
+            chosen = sorted(frequencies, key=lambda term: (-frequencies[term], term))[:6000]
+            del frequencies
+            if not chosen:
+                raise ValueError("empty vocabulary")
+            terms = np.asarray(sorted(chosen))
+            counter = CountVectorizer(stop_words=STOP_WORDS, ngram_range=(1, 2),
+                strip_accents="unicode", token_pattern=vectorizer.token_pattern,
+                vocabulary={str(term): index for index, term in enumerate(terms)}, dtype=np.float32)
+            chunks = []
+            for start in range(0, len(documents), LEXICAL_BATCH_SIZE):
+                chunks.append(counter.transform(documents[start:start + LEXICAL_BATCH_SIZE]))
+                if progress_callback:
+                    progress_callback(f"全件の疎行列を作成 {min(start + LEXICAL_BATCH_SIZE, len(documents)):,}/{len(documents):,} 件")
+            matrix = sparse.vstack(chunks, format="csr")
+            del chunks
+            matrix = TfidfTransformer(sublinear_tf=True).fit_transform(matrix)
+            notices.append("大規模 TF-IDF は全論文の語出現数から最大 6,000 特徴を選び、分割した疎行列で計算しました。"
+                           "IDF・分類・年別集計には全対象論文を使用しています。")
+        else:
+            matrix = vectorizer.fit_transform(documents)
+            terms = vectorizer.get_feature_names_out()
     except ValueError as error:
         if "empty vocabulary" not in str(error):
             raise
-        matrix = sparse.csr_matrix(np.ones((len(papers), 1), dtype=np.float64))
+        matrix = sparse.csr_matrix(np.ones((len(papers), 1), dtype=np.float32))
         terms = np.array(["情報不足"])
         notices.append("有効な語彙を抽出できませんでした。単一トピックとして扱います。")
     empty_rows = np.asarray(matrix.getnnz(axis=1) == 0).ravel()
     if empty_rows.any():
         # Keep all papers while marking no-information papers in a distinct, real dimension.
-        matrix = sparse.hstack([matrix, sparse.csr_matrix(empty_rows.astype(float)[:, None])],
+        matrix = sparse.hstack([matrix, sparse.csr_matrix(empty_rows.astype(np.float32)[:, None])],
                                format="csr")
         terms = np.append(terms, "情報不足")
         notices.append(f"有効な語彙がない {int(empty_rows.sum())} 件は情報不足として扱います。")
@@ -280,6 +310,9 @@ def _represent(documents, tfidf, embedding, notices=None, details=None, sbert_mo
         if details is not None:
             details.update(strategy="whole_document_tfidf", **selection)
         return tfidf, selection["model_id"]
+    if len(documents) > SEMANTIC_PAPER_LIMIT:
+        raise TransformerError(f"SBERT・Transformer のローカル分析上限は {SEMANTIC_PAPER_LIMIT:,} 件です。"
+                               "対象期間を絞るか、全件を分析する NMF・LDA・TF-IDF + KMeans を選択してください。")
     model_name = selection["model_id"]
     try:
         model = _load_transformer(model_name)
@@ -301,7 +334,7 @@ def _represent(documents, tfidf, embedding, notices=None, details=None, sbert_mo
     return matrix, model_name
 
 
-def _cluster(matrix, requested, notices):
+def _cluster(matrix, requested, notices, progress_callback=None):
     if sparse.issparse(matrix):
         # Sparse fingerprints avoid dense conversion and protect identical/tiny corpora.
         fingerprints = set()
@@ -311,6 +344,8 @@ def _cluster(matrix, requested, notices):
             digest.update(matrix.indices[start:end].tobytes())
             digest.update(np.round(matrix.data[start:end], 10).tobytes())
             fingerprints.add(digest.digest())
+            if len(fingerprints) >= requested:
+                break
         unique = len(fingerprints)
     else:
         unique = len(np.unique(np.round(matrix, 8), axis=0))
@@ -321,12 +356,29 @@ def _cluster(matrix, requested, notices):
         return np.zeros(matrix.shape[0], dtype=int)
     if matrix.shape[0] > 1500:
         estimator = MiniBatchKMeans(n_clusters=effective, random_state=42, n_init=5,
-                                    batch_size=512, max_iter=100, reassignment_ratio=0)
+                                    batch_size=LEXICAL_BATCH_SIZE if matrix.shape[0] > LARGE_CORPUS_THRESHOLD else 512,
+                                    max_iter=100, reassignment_ratio=0)
     else:
         estimator = KMeans(n_clusters=effective, random_state=42, n_init=10, max_iter=200)
     with python_warnings.catch_warnings():
         python_warnings.simplefilter("ignore", ConvergenceWarning)
-        labels = estimator.fit_predict(matrix)
+        if matrix.shape[0] > LARGE_CORPUS_THRESHOLD:
+            rng = np.random.default_rng(42)
+            for epoch in range(2):
+                order = rng.permutation(matrix.shape[0])
+                for start in range(0, matrix.shape[0], LEXICAL_BATCH_SIZE):
+                    estimator.partial_fit(matrix[order[start:start + LEXICAL_BATCH_SIZE]])
+                    if progress_callback:
+                        progress_callback(f"KMeans 学習 {epoch + 1}/2 周・"
+                                          f"{min(start + LEXICAL_BATCH_SIZE, matrix.shape[0]):,}/{matrix.shape[0]:,} 件")
+            labels = np.empty(matrix.shape[0], dtype=np.int32)
+            for start in range(0, matrix.shape[0], LEXICAL_BATCH_SIZE):
+                stop = min(start + LEXICAL_BATCH_SIZE, matrix.shape[0])
+                labels[start:stop] = estimator.predict(matrix[start:stop])
+            notices.append(f"MiniBatchKMeans で全 {matrix.shape[0]:,} 件を 2 周の分割学習・全件分類に使用しました。"
+                           "一括 KMeans とは最適化手順が異なります。")
+        else:
+            labels = estimator.fit_predict(matrix)
     # Remap arbitrary estimator labels by size, then first document index.
     ordered = sorted(np.unique(labels), key=lambda k: (-int((labels == k).sum()),
                                                       int(np.flatnonzero(labels == k)[0])))
@@ -546,6 +598,12 @@ def _build_topics(papers, labels, tfidf, terms, years, horizon, totals,
     for label in sorted(set(labels)):
         indices = np.flatnonzero(labels == label)
         members = [papers[i] for i in indices]
+        known_citations = [p for p in members if p["citations"] is not None]
+        citation_total = sum(p["citations"] for p in known_citations) if known_citations else None
+        citation_aggregate = {"citation_total": citation_total,
+                              "citation_known_count": len(known_citations),
+                              "citation_mean": round(citation_total / len(known_citations), 6)
+                                               if known_citations else None}
         counts_by_year = Counter(p["year"] for p in members)
         counts = [counts_by_year[year] for year in years]
         keywords = (list(keyword_override[label]) if keyword_override is not None and label in keyword_override
@@ -557,6 +615,7 @@ def _build_topics(papers, labels, tfidf, terms, years, horizon, totals,
                            "label": "情報不足" if label == information_insufficient_label else "未分類",
                            "keywords": [], "count": len(members),
                            "citations": sum(p["citations"] or 0 for p in members),
+                           **citation_aggregate,
                            "growth_pct": None, "share": round(100 * len(members) / len(papers), 2),
                            "score": 0.0, "status": "unclassified", "is_outlier": True,
                            "color": "#8b96aa", "series": [
@@ -580,7 +639,6 @@ def _build_topics(papers, labels, tfidf, terms, years, horizon, totals,
         momentum = 0.5 + 0.5 * math.tanh(growth / 100)
         score = 100 * (0.6 * momentum + 0.4 * math.sqrt(recent_share))
         citation_growth = _citation_growth(members, years)
-        known_citations = [p for p in members if p["citations"] is not None]
         citation_proxy = (sum(p["citations"] / (date.today().year - p["year"] + 1)
                               for p in known_citations) / len(known_citations)) if known_citations else None
         citation_mode = "unavailable"
@@ -611,6 +669,7 @@ def _build_topics(papers, labels, tfidf, terms, years, horizon, totals,
         result.append({"id": f"topic-{label + 1}", "label": " · ".join(keywords[:2]),
                        "keywords": keywords, "count": len(members),
                        "citations": sum(p["citations"] or 0 for p in members),
+                       **citation_aggregate,
                        "growth_pct": round(growth, 2) if annual_comparison else None,
                        "share": round(100 * len(members) / len(papers), 2),
                        "score": round(min(100, max(0, score)), 2), "status": status, "is_outlier": False,
@@ -752,7 +811,7 @@ def _build_network(papers, group_by="community", topics=None):
     return network, network["stats"]["authors_total"]
 
 
-def analyze(papers: list[dict], options: dict | None = None) -> dict:
+def analyze(papers: list[dict], options: dict | None = None, progress_callback=None) -> dict:
     """Analyze an imported corpus, returning only JSON-safe values.
 
     Defaults intentionally exclude the unfinished current calendar year. The
@@ -761,16 +820,16 @@ def analyze(papers: list[dict], options: dict | None = None) -> dict:
     """
     if not papers:
         raise ValueError("論文がありません。Scopus の CSV を取り込んでください。")
-    if len(papers) > 10000:
-        raise ValueError("このローカル版の分析上限は 10,000 件です。対象期間や検索条件を絞ってください。")
+    if len(papers) > MAX_DATASET_PAPERS:
+        raise ValueError(f"このローカル版の分析上限は {MAX_DATASET_PAPERS:,} 件です。対象期間や検索条件を絞ってください。")
     options = options or {}
     current_year = date.today().year
     first_year = _integer(options.get("start_year"), current_year - 5, 1800, current_year, "開始年")
     last_year = _integer(options.get("end_year"), current_year - 1, 1800, current_year, "終了年")
     if first_year > last_year:
         raise ValueError("開始年は終了年以前にしてください。")
-    if last_year - first_year > 49:
-        raise ValueError("分析期間は 50 年以内にしてください。")
+    if last_year - first_year >= MAX_ANALYSIS_YEARS:
+        raise ValueError(f"分析期間は {MAX_ANALYSIS_YEARS} 年以内にしてください。")
     n_topics = _integer(options.get("n_topics"), 8, 1, 20, "トピック数")
     horizon = _integer(options.get("horizon"), 3, 1, 3, "予測年数")
     embedding = options.get("embedding", "tfidf")
@@ -788,9 +847,14 @@ def analyze(papers: list[dict], options: dict | None = None) -> dict:
     notices = []
     if last_year == current_year:
         notices.append("当年は未完了です。件数・増減率・予測は年途中の収録件数の影響を受けます。")
+    if progress_callback:
+        progress_callback(f"対象期間の論文を確認 {len(papers):,} 件")
     selected = _normalize_papers(papers, first_year, last_year, notices)
     if not selected:
         raise ValueError("指定期間に論文がありません。開始年・終了年を変更してください。")
+    if embedding != "tfidf" and len(selected) > SEMANTIC_PAPER_LIMIT:
+        raise TransformerError(f"SBERT・Transformer・BERTopic のローカル分析上限は {SEMANTIC_PAPER_LIMIT:,} 件です。"
+                               "対象期間を絞るか、全件を分析する NMF・LDA・TF-IDF + KMeans を選択してください。")
     years = list(range(first_year, last_year + 1))
     single_year_corpus = options.get("single_year_corpus") is True
     annual_comparison = len(years) > 1 and not single_year_corpus
@@ -812,21 +876,33 @@ def analyze(papers: list[dict], options: dict | None = None) -> dict:
         notices.append("年別引用は対象論文の取得済み履歴だけを合計します。年ごとの観測率を確認してください。")
     if snapshot_coverage < 100:
         notices.append(f"累積引用数の収録率は {snapshot_coverage:.1f}% です。表示合計は既知の値のみです。")
-    documents, tfidf, terms = _tfidf(selected, notices)
+    if progress_callback:
+        progress_callback(f"全 {len(selected):,} 件の文書表現を作成")
+    documents, tfidf, terms = _tfidf(selected, notices, progress_callback)
     embedding_details = {}
     matrix, embedding_model = _represent(documents, tfidf, embedding, notices, embedding_details,
                                           sbert_model=options.get("sbert_model"))
+    embedding_details.update(corpus_papers=len(selected), matrix_dtype=str(tfidf.dtype),
+        vocabulary_scope="full_corpus", vocabulary_limit=6000,
+        matrix_storage="sparse_csr" if sparse.issparse(matrix) else "dense_embeddings")
+    if progress_callback:
+        progress_callback(f"{topic_model.upper()} で全 {len(selected):,} 件を分類")
     if topic_model == "kmeans":
-        labels = _cluster(matrix, n_topics, notices)
+        labels = _cluster(matrix, n_topics, notices, progress_callback)
         fitted = {"labels": labels, "map_matrix": matrix, "topic_keywords": None,
                   "outlier_label": None, "membership": None,
                   "details": {"method": "kmeans", "estimator": "MiniBatchKMeans" if len(selected) > 1500 else "KMeans",
                               "requested_topics": n_topics, "actual_topics": len(set(labels)),
                               "random_state": 42, "outlier_count": 0,
+                              "corpus_papers": len(selected), "transform_papers": len(selected),
+                              "training_papers": len(selected),
+                              "training_mode": "full_corpus_minibatch" if len(selected) > LARGE_CORPUS_THRESHOLD else "batch",
+                              "training_passes": 2 if len(selected) > LARGE_CORPUS_THRESHOLD else None,
+                              "sampling": "none",
                               "membership_description": "文書表現の最近傍クラスタへの単一割当です。所属確率を推定しません。"}}
     else:
         fitted = fit_topic_model(documents, tfidf, terms, matrix if embedding != "tfidf" else None,
-                                 topic_model, n_topics, min_topic_size)
+                                 topic_model, n_topics, min_topic_size, progress_callback=progress_callback)
         labels = np.asarray(fitted["labels"], dtype=int)
         notices.extend(fitted.get("warnings", []))
     if topic_model == "lda":
@@ -842,6 +918,9 @@ def analyze(papers: list[dict], options: dict | None = None) -> dict:
     map_representation = {"nmf": "nmf_topic_distribution", "lda": "lda_topic_distribution"}.get(
         topic_model, "tfidf" if embedding == "tfidf" else "sbert_embeddings")
     model_details = deepcopy(fitted["details"])
+    del documents
+    if progress_callback:
+        progress_callback("全件の年次・引用・キーワード推移を集計")
     for paper, label in zip(selected, labels):
         paper["topic_id"] = f"topic-{label + 1}"
         paper["is_outlier"] = bool(outlier_label is not None and int(label) == int(outlier_label))
@@ -855,14 +934,23 @@ def analyze(papers: list[dict], options: dict | None = None) -> dict:
     field_geometry = (store_nmf_geometry(selected, topics, fitted.get("membership"), model_details)
                       if topic_model == "nmf" else None)
     keyword_rows, keyword_count = _build_keywords(selected, tfidf, terms, years, annual_comparison=annual_comparison)
+    # The map representation keeps its own reference (TF-IDF for KMeans, small
+    # topic weights for NMF/LDA). Release the other lexical buffers before the
+    # full-corpus author/frontier aggregation allocates its working structures.
+    del tfidf, matrix
+    if progress_callback:
+        progress_callback("全件から月次変化・隣接領域の候補を計算")
     frontiers = _frontier_analysis(selected, topics, keyword_rows,
                                   {**options, "start_year": first_year, "end_year": last_year})
     unclassified_count = sum(p["is_outlier"] for p in selected)
     classified_topic_count = sum(not topic["is_outlier"] for topic in topics)
+    if progress_callback:
+        progress_callback("全件の共著者・所属ネットワークを集計")
     network, author_count = _build_network(selected, topics=topics)
     citation_rows = _citation_events(selected, years)
     timeline = [{"year": year, "papers": totals[i],
                  "citations": sum(p["citations"] or 0 for p in selected if p["year"] == year),
+                 "citation_known_count": sum(p["citations"] is not None for p in selected if p["year"] == year),
                  **citation_rows[i]} for i, year in enumerate(years)]
     growth = 100 * (totals[-1] - totals[-2]) / totals[-2] if annual_comparison and totals[-2] else None
     methodology = [
@@ -901,12 +989,17 @@ def analyze(papers: list[dict], options: dict | None = None) -> dict:
         message = f"未分類・情報不足の {unclassified_count} 件を保持しています。トピック数は分類済み群だけを数え、未分類群を注目技術・月次増加候補・予測として評価しません。"
         notices.append(message)
         methodology.append(message)
+    if progress_callback:
+        progress_callback(f"代表 {min(MAP_LIMIT, len(selected))} 件の技術マップを作成（集計は全件）")
+    technology_map = _build_map(selected, labels, map_matrix, map_input)
     return {"meta": {"start_year": first_year, "end_year": last_year, "years": years,
                      "single_year_corpus": single_year_corpus, "annual_comparison_available": annual_comparison,
                      "embedding": embedding, "embedding_model": embedding_model, "forecast_horizon": horizon,
                      "embedding_details": embedding_details, "embedding_model_preset": selection["preset"],
                      "sbert_model": selection["preset"] if embedding == "sbert" else None,
                      "topic_model": topic_model, "topic_model_details": model_details,
+                     "analysis_scope": "full_corpus", "dataset_limit": MAX_DATASET_PAPERS,
+                     "map_display_limit": MAP_LIMIT, "large_corpus": len(selected) > LARGE_CORPUS_THRESHOLD,
                      "map_representation": map_representation, "min_topic_size": min_topic_size,
                      "unclassified_papers": unclassified_count, "classified_topics": classified_topic_count,
                      "paper_count": len(selected), "abstract_coverage": round(abstract_coverage, 2),
@@ -918,6 +1011,8 @@ def analyze(papers: list[dict], options: dict | None = None) -> dict:
                         "emerging_topics": sum(t["status"] == "emerging" for t in topics) if annual_comparison else 0,
                         "growth_pct": round(growth, 2) if growth is not None else None},
             "timeline": timeline, "topics": topics, "keywords": keyword_rows, "network": network,
-            "map": _build_map(selected, labels, map_matrix, map_input), "papers": selected,
+            "top_cited_papers": sorted((paper for paper in selected if paper["citations"] is not None),
+                key=lambda paper: (-paper["citations"], -paper["year"], paper["id"]))[:6],
+            "map": technology_map, "papers": selected,
             "frontiers": frontiers, "field_geometry": field_geometry,
             "methodology": methodology}

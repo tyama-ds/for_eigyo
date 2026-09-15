@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from copy import deepcopy
+from itertools import chain
 import hashlib
 import math
 import re
@@ -18,6 +19,7 @@ from urllib.parse import unquote, urlsplit
 from .ingest import SYNTHETIC_PROVENANCE, _is_synthetic
 from .dates import merge_publication_dates, normalize_paper_date
 from .bibliography import bibliography_summary, normalize_affiliations, normalize_references, references_status
+from .limits import MAX_DATASET_PAPERS
 
 
 def _text(value):
@@ -202,7 +204,11 @@ def _history_snapshot_key(item):
 def _normalize(raw, counters):
     if not isinstance(raw, dict):
         raise ValueError("統合する論文データは辞書の配列で指定してください。")
-    paper = deepcopy(raw)
+    # Normalizers below return new nested structures. Copy retained extension
+    # fields only, avoiding deep-copying every author/reference/snapshot twice.
+    rebuilt = {"authors", "affiliations", "references", "keywords", "providers", "aliases",
+               "citation_history", "citation_snapshots", "citation_history_snapshots"}
+    paper = {key: value if key in rebuilt else deepcopy(value) for key, value in raw.items()}
     paper["id"] = _text(paper.get("id"))
     if not paper["id"]:
         raise ValueError("統合する論文に ID がありません。先に書誌情報を正規化してください。")
@@ -269,7 +275,12 @@ def _has_counts(paper):
 
 
 def _merge_pair(first, second, counters):
-    merged = deepcopy(first)
+    # Both normalized records are already privately owned by this merge. Only
+    # the nested values mutated below need another copy; other collections are
+    # replaced with freshly normalized unions.
+    merged = first.copy()
+    merged["citation_history"] = first["citation_history"].copy()
+    merged["aliases"] = first["aliases"].copy()
     if not _compatible_dois(first, second):
         counters["doi_identifier_conflicts"] += 1
     merged["citation_snapshots"] = _union(first["citation_snapshots"], second["citation_snapshots"],
@@ -339,7 +350,7 @@ def merge_papers(existing: list[dict], incoming: list[dict]) -> tuple[list[dict]
         raise ValueError("統合する論文データは配列で指定してください。")
     counters = Counter()
     records, parents = {}, {}
-    strong_index, title_index = defaultdict(set), defaultdict(set)
+    strong_index, title_index = {}, defaultdict(set)
 
     def root(index):
         while parents[index] != index:
@@ -352,13 +363,15 @@ def merge_papers(existing: list[dict], incoming: list[dict]) -> tuple[list[dict]
 
     def register(index):
         for key in _strong_keys(records[index]):
-            strong_index[key].add(index)
+            # A strong identifier has one live root after each iteration.
+            # Hundreds of thousands of one-element sets waste substantial RAM.
+            strong_index[key] = index
         for key in _title_keys(records[index]):
             title_index[key].add(index)
 
-    for index, raw in enumerate([*existing, *incoming]):
+    for index, raw in enumerate(chain(existing, incoming)):
         current = _normalize(raw, counters)
-        strong = matches(strong_index, _strong_keys(current))
+        strong = {root(strong_index[key]) for key in _strong_keys(current) if key in strong_index}
         title_matches = matches(title_index, _title_keys(current)) - strong
         compatible = {item for item in title_matches if _compatible_dois(records[item], current)}
         counters["title_doi_conflicts"] += len(title_matches - compatible)
@@ -399,8 +412,8 @@ def merge_papers(existing: list[dict], incoming: list[dict]) -> tuple[list[dict]
             counters["matched_incoming_count"] += 1
         register(target)
     output = [records[index] for index in sorted(records)]
-    if len(output) > 10000:
-        raise ValueError("統合後の論文が 10,000 件を超えます。取得件数または対象集合を絞ってください。")
+    if len(output) > MAX_DATASET_PAPERS:
+        raise ValueError(f"重複を除いた統合後の論文が {MAX_DATASET_PAPERS:,} 件を超えます。別のデータセットに分けてください。")
     synthetic_count = sum(_is_synthetic(paper) for paper in output)
     warnings = []
     if counters["date_invalid_records"]:

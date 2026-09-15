@@ -311,10 +311,14 @@ def test_empty_inputs_and_added_count_have_defined_results():
     assert report["matched_incoming_count"] == 1
 
 
-def test_output_limit_is_checked_after_deduplication():
-    values = [paper(str(index), title=f"Unique article {index}") for index in range(10001)]
-    with pytest.raises(ValueError, match="10,000"):
+def test_output_limit_is_checked_after_deduplication(monkeypatch):
+    monkeypatch.setattr("app.merge.MAX_DATASET_PAPERS", 3)
+    values = [paper(str(index), title=f"Unique article {index}") for index in range(4)]
+    with pytest.raises(ValueError, match="3 件"):
         merge_papers([], values)
+    output, report = merge_papers(values[:3], [values[0]])
+    assert len(output) == 3 and report["added_count"] == 0
+    assert report["matched_incoming_count"] == 1
 
 
 @pytest.mark.parametrize("existing,incoming", [(None, []), ([], ["bad"]), ([], [{"title": "No ID"}])])

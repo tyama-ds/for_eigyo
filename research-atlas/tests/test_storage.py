@@ -3,6 +3,30 @@ from datetime import date
 
 import pytest
 
+
+def test_existing_snapshot_can_be_read_while_new_payload_is_prepared(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    from app import large_storage
+    monkeypatch.setenv("ATLAS_DATA_DIR", str(tmp_path))
+    original = storage.create_dataset([{"id": "original", "year": 2025}], "Original")
+    entered, release = Event(), Event()
+    real_externalize = large_storage.externalize
+    def preparing(value, root):
+        entered.set()
+        assert release.wait(10)
+        return real_externalize(value, root)
+    monkeypatch.setattr(large_storage, "externalize", preparing)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        saving = pool.submit(storage.create_dataset, [{"id": "new", "year": 2024}], "New")
+        try:
+            assert entered.wait(3)
+            reading = pool.submit(storage.read, "datasets", original["id"])
+            assert reading.result(timeout=3) == original
+        finally:
+            release.set()
+        assert saving.result(timeout=5)["paper_count"] == 1
+
 from app import storage
 
 
@@ -74,10 +98,10 @@ def test_monthly_anchor_outside_selected_years_is_none(monkeypatch):
     assert summary["analysis_defaults"]["anchor_month"] is None
 
 
-def test_long_csv_range_is_limited_to_twenty_calendar_years_with_note():
+def test_long_csv_range_is_limited_to_fifty_calendar_years_with_note():
     summary = storage.dataset_summary(dataset([{"year": 1900}, {"year": 2025}]))
-    assert summary["analysis_defaults"] == {"start_year": 2006, "end_year": 2025}
-    assert "20暦年" in summary["analysis_defaults_note"]
+    assert summary["analysis_defaults"] == {"start_year": 1976, "end_year": 2025}
+    assert "50暦年" in summary["analysis_defaults_note"]
 
 
 @pytest.mark.parametrize("report", [None, {"start_year": 2025, "end_year": 2030}])

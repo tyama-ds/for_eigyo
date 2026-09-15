@@ -40,8 +40,8 @@ def test_actual_topic_models_keep_every_paper_and_use_model_words_and_map(method
     actual_map = analytics._build_map
     captured = {}
 
-    def fit(*args):
-        captured["fit"] = actual_fit(*args)
+    def fit(*args, **kwargs):
+        captured["fit"] = actual_fit(*args, **kwargs)
         return captured["fit"]
 
     def build_map(papers, labels, matrix, representation):
@@ -173,7 +173,7 @@ def test_bertopic_noise_stays_in_counts_but_has_no_promising_topic_metrics(all_n
     monkeypatch.setattr(analytics, "_windowed_embeddings", lambda model, docs: (
         embeddings, {"capped_documents": 0}))
 
-    def fit(documents, tfidf, terms, supplied_embeddings, method, n_topics, min_topic_size):
+    def fit(documents, tfidf, terms, supplied_embeddings, method, n_topics, min_topic_size, progress_callback=None):
         assert method == "bertopic" and min_topic_size == 5
         np.testing.assert_allclose(supplied_embeddings, embeddings)
         labels = np.zeros(12, dtype=int) if all_noise else np.array([0] * 6 + [1] * 6)

@@ -78,6 +78,54 @@ def test_full_report_is_persisted_without_llm_and_exports_all_data(client, resul
     assert json.dumps(storage.read("results", result["id"])) == before
 
 
+def test_large_field_report_bounds_browser_evidence_and_retains_all_saved_and_exported_data(client, result):
+    from app.field_analysis import build_field_report
+    report = build_field_report(result, result["topics"][0]["id"], result["topics"][1]["id"])
+    report.update(id=storage.new_id(), created_at=storage.now())
+    # The view is selected by the actual full-corpus scope recorded by analysis.
+    # A compact fixture exercises that contract without a 200k model fit.
+    report["scope"]["corpus_papers"] = 200000
+    report["methods"]["rows"][0]["evidence_ids"] = [f"evidence-{index}" for index in range(175)]
+    report["methods"]["rows"][0]["evidence_total"] = 175
+    report["connections"]["shared_authors"][0]["paper_ids"] = [f"paper-{index}" for index in range(101)]
+    report["export_data"]["complete_marker"] = "all-export-rows-retained"
+    storage.save("field_reports", report)
+    before = json.dumps(storage.read("field_reports", report["id"]))
+    response = client.get(f"/api/field-reports/{report['id']}")
+    assert response.status_code == 200
+    display = response.json()
+    assert "export_data" not in display
+    assert display["display_limits"] == {"evidence_ids": 50, "export_data_included": False, "full_data_in_csv": True}
+    row = display["methods"]["rows"][0]
+    assert len(row["evidence_ids"]) == 50
+    assert row["evidence_ids_total"] == row["evidence_total"] == 175
+    assert row["evidence_ids_truncated"] is True
+    author = display["connections"]["shared_authors"][0]
+    assert len(author["paper_ids"]) == 50 and author["paper_ids_total"] == 101
+    assert display["annual"] == report["annual"]
+    assert display["focus"] == report["focus"]
+    assert display["scope"] == report["scope"]
+    exported = client.get(f"/api/field-reports/{report['id']}/export?kind=data")
+    assert exported.status_code == 200
+    assert "evidence-174" in exported.text and "all-export-rows-retained" in exported.text
+    papers = client.get(f"/api/field-reports/{report['id']}/export?kind=papers")
+    assert papers.status_code == 200
+    assert len(list(csv.DictReader(io.StringIO(papers.text.lstrip("\ufeff"))))) == 16
+    assert json.dumps(storage.read("field_reports", report["id"])) == before
+
+
+def test_small_field_report_keeps_existing_full_response(client, result):
+    from app.field_analysis import build_field_report
+    report = build_field_report(result, result["topics"][0]["id"], result["topics"][1]["id"])
+    report.update(id=storage.new_id(), created_at=storage.now())
+    report["methods"]["rows"][0]["evidence_ids"] = [f"evidence-{index}" for index in range(75)]
+    storage.save("field_reports", report)
+    display = client.get(f"/api/field-reports/{report['id']}").json()
+    assert display == report
+    assert len(display["methods"]["rows"][0]["evidence_ids"]) == 75
+    assert "display_limits" not in display
+
+
 def test_invalid_field_comparisons_are_rejected(client, result):
     topic = result["topics"][0]["id"]
     for options in ({"neighbor_id": topic}, {"topic_id": "unknown"}, {"provider": "remote_custom"}):

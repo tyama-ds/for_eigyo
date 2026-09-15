@@ -13,9 +13,9 @@ from pathlib import Path
 from typing import Literal
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from starlette.concurrency import run_in_threadpool
@@ -27,11 +27,13 @@ from app.ingest import attach_citation_history, demo_papers, parse_scopus_csv
 from app.merge import merge_papers
 from app.embedding_models import SBERT_MODELS
 from app import field_llm, field_exports, author_exports
+from app import large_storage
+from app.limits import MAX_IMPORT_ROWS, MAX_DATASET_PAPERS, MAX_UPLOAD_BYTES, MAX_ANALYSIS_YEARS, PAPER_PAGE_LIMIT, public_limits
 
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
-app = FastAPI(title="Research Atlas", version="1.7.0", description="Multi-source bibliometrics & evidence-grounded technology foresight")
-MAX_UPLOAD = 20 * 1024 * 1024
+app = FastAPI(title="Research Atlas", version="1.8.0", description="Multi-source bibliometrics & evidence-grounded technology foresight")
+MAX_UPLOAD = MAX_UPLOAD_BYTES
 EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="atlas-analysis")
 SOURCE_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="atlas-discovery")
 REPORT_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="atlas-report")
@@ -55,7 +57,7 @@ async def local_security(request: Request, call_next):
         if size:
             try:
                 if int(size) > MAX_UPLOAD + 65536:
-                    return JSONResponse({"detail": "アップロード上限は20MBです。"}, status_code=413)
+                    return JSONResponse({"detail": f"アップロード上限は{MAX_UPLOAD // (1024 * 1024)}MBです。"}, status_code=413)
             except ValueError:
                 return JSONResponse({"detail": "Content-Lengthが不正です。"}, status_code=400)
     try:
@@ -101,7 +103,7 @@ async def missing_value(_request, _exc):
 def status():
     transformer = importlib.util.find_spec("sentence_transformers") is not None
     bertopic = transformer and all(importlib.util.find_spec(name) is not None for name in ("bertopic", "umap", "hdbscan"))
-    return {"llm_configured": insights.configured(),
+    return {"llm_configured": insights.configured(), "limits": public_limits(),
         "transformer_available": transformer,
         "sbert_models": [{"id": key, "model_id": identifier,
             "label": "多言語 MiniLM" if key == "multilingual_minilm" else "SBERT MPNet（英語）",
@@ -145,7 +147,7 @@ async def file_bytes(file: UploadFile) -> bytes:
     value = await file.read(MAX_UPLOAD + 1)
     await file.close()
     if len(value) > MAX_UPLOAD:
-        raise HTTPException(413, "アップロード上限は20MBです。")
+        raise HTTPException(413, f"アップロード上限は{MAX_UPLOAD // (1024 * 1024)}MBです。")
     if not value:
         raise HTTPException(422, "ファイルが空です。")
     return value
@@ -154,7 +156,11 @@ async def file_bytes(file: UploadFile) -> bytes:
 @app.post("/api/import")
 async def import_csv(file: UploadFile = File(...), provider: Literal["scopus_csv", "csv"] = Form("scopus_csv")):
     content = await file_bytes(file)
-    papers, report = await run_in_threadpool(parse_scopus_csv, content)
+    return await run_in_threadpool(_import_csv_dataset, content, provider, file.filename)
+
+
+def _import_csv_dataset(content: bytes, provider: str, filename: str | None):
+    papers, report = parse_scopus_csv(content)
     retrieved_at = storage.now()
     for paper in papers:
         paper["providers"] = [provider]
@@ -164,10 +170,10 @@ async def import_csv(file: UploadFile = File(...), provider: Literal["scopus_csv
         if paper.get("doi"):
             paper["external_url"] = "https://doi.org/" + paper["doi"]
     report["providers"] = [provider]
-    if len(papers) > 10000:
-        raise HTTPException(422, "ローカル版の上限は10,000論文です。検索式や期間で分割してください。")
+    if len(papers) > MAX_IMPORT_ROWS:
+        raise HTTPException(422, f"1ファイルは{MAX_IMPORT_ROWS:,}論文以内で指定してください。")
     # Some clients supply the full Windows path as a filename.
-    name = (file.filename or "Scopus CSV").replace("\\", "/").rsplit("/", 1)[-1]
+    name = (filename or "Scopus CSV").replace("\\", "/").rsplit("/", 1)[-1]
     dataset = storage.create_dataset(papers, name, is_demo=bool(report.get("is_demo")), report=report)
     return {"dataset": storage.dataset_summary(dataset), "report": report}
 
@@ -231,7 +237,7 @@ def run_discovery(job_id: str, options: dict):
         progress("公開論文サービスを検索しています")
         # Reuse an identical saved search for 24 hours, including after restart.
         for item in storage.list_datasets():
-            saved = storage.read("datasets", item["id"])
+            saved = storage.read("datasets", item["id"], include_papers=False)
             report = saved.get("report", {})
             if report.get("discovery_request") != options or report.get("date_pipeline_version") != 2 or report.get("metadata_pipeline_version") != 3:
                 continue
@@ -310,8 +316,8 @@ def merge_datasets(body: MergeRequest):
     if base["is_demo"] != additional["is_demo"]:
         raise ValueError("合成デモと実際の論文は統合できません。実データ同士を選択してください。")
     papers, report = merge_papers(base["papers"], additional["papers"])
-    if len(papers) > 10000:
-        raise ValueError("統合後の論文が10,000件を超えます。検索範囲を絞ってください。")
+    if len(papers) > MAX_DATASET_PAPERS:
+        raise ValueError(f"統合後の論文が{MAX_DATASET_PAPERS:,}件を超えます。検索範囲を絞ってください。")
     report["warnings"] = list(dict.fromkeys(base.get("report", {}).get("warnings", []) + additional.get("report", {}).get("warnings", []) + report.get("warnings", [])))
     report["source_reports"] = source_reports(base) + source_reports(additional)
     report["parent_dataset_ids"] = [base["id"], additional["id"]]
@@ -324,8 +330,13 @@ def merge_datasets(body: MergeRequest):
 
 @app.post("/api/datasets/{dataset_id}/citations")
 async def import_citations(dataset_id: str, file: UploadFile = File(...)):
+    content = await file_bytes(file)
+    return await run_in_threadpool(_import_citations_dataset, dataset_id, content)
+
+
+def _import_citations_dataset(dataset_id: str, content: bytes):
     dataset = storage.read("datasets", dataset_id)
-    papers, report = await run_in_threadpool(attach_citation_history, dataset["papers"], await file_bytes(file))
+    papers, report = attach_citation_history(dataset["papers"], content)
     # Create a new revision so existing analysis results remain reproducible.
     previous = dataset.get("report", {}).get("warnings", [])
     report["warnings"] = list(dict.fromkeys(previous + report.get("warnings", [])))
@@ -358,8 +369,8 @@ class AnalyzeRequest(BaseModel):
             raise ValueError("開始年は終了年以下にしてください。")
         if self.end_year > date.today().year:
             raise ValueError("分析終了年に未来の年は指定できません。")
-        if self.end_year - self.start_year > 19:
-            raise ValueError("分析期間は20年以内で指定してください。")
+        if self.end_year - self.start_year >= MAX_ANALYSIS_YEARS:
+            raise ValueError(f"分析期間は{MAX_ANALYSIS_YEARS}年以内で指定してください。")
         if self.anchor_month:
             anchor = date.fromisoformat(self.anchor_month + "-01")
             latest_complete = (date.today().replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
@@ -370,17 +381,21 @@ class AnalyzeRequest(BaseModel):
         return self
 
 
-def run_analysis(job_id: str, dataset: dict, options: dict):
-    with JOBS_LOCK:
-        JOBS[job_id].update(status="running", stage="抄録のベクトル化・テーマ抽出・推移の検証")
+def run_analysis(job_id: str, dataset: dict | str, options: dict):
+    def progress(stage):
+        with JOBS_LOCK:
+            JOBS[job_id].update(status="running", stage=str(stage))
     try:
+        progress("分析対象のデータを読み込み中")
+        if isinstance(dataset, str):
+            dataset = storage.read("datasets", dataset)
         collection_reports = source_reports(dataset)
         corpus_years = {int(year) for paper in dataset["papers"] if isinstance(paper, dict)
                         and re.fullmatch(r"\d{4}", year := str(paper.get("year", "")).strip())}
         single_year_corpus = not collection_reports and len(corpus_years) == 1
         analysis_options = {**options, "observed_months": observed_months(dataset),
                             "single_year_corpus": single_year_corpus}
-        result = analyze(dataset["papers"], analysis_options)
+        result = analyze(dataset["papers"], analysis_options, progress_callback=progress)
         result.update(id=storage.new_id(), dataset_id=dataset["id"], dataset_name=dataset["name"], created_at=storage.now())
         result["meta"]["is_demo"] = dataset["is_demo"]
         result["meta"]["source_reports"] = collection_reports
@@ -410,6 +425,7 @@ def run_analysis(job_id: str, dataset: dict, options: dict):
         if dataset["is_demo"]:
             result["meta"]["warnings"].insert(0, "合成・テストデータを含む操作確認用の分析です。実際の研究動向の判断には使用できません。")
         result["options"] = {**options, "single_year_corpus": single_year_corpus}
+        progress("全件の分析結果を保存しています")
         storage.save("results", result)
         with JOBS_LOCK:
             JOBS[job_id].update(status="completed", stage="分析完了", result_id=result["id"])
@@ -424,9 +440,13 @@ def run_analysis(job_id: str, dataset: dict, options: dict):
 
 @app.post("/api/analyze")
 def start_analysis(body: AnalyzeRequest):
-    dataset = storage.read("datasets", body.dataset_id)
-    identifier = new_job("分析の準備中")
-    submit_with_context(EXECUTOR, run_analysis, identifier, dataset, body.model_dump(exclude={"dataset_id"}))
+    storage.read("datasets", body.dataset_id, include_papers=False)
+    with JOBS_LOCK:
+        if any(j.get("kind") == "analysis" and j["status"] in {"queued", "running"} for j in JOBS.values()):
+            raise HTTPException(409, "分析が進行中です。完了してから次の分析を実行してください。")
+        identifier = new_job("分析の準備中")
+        JOBS[identifier]["kind"] = "analysis"
+    submit_with_context(EXECUTOR, run_analysis, identifier, body.dataset_id, body.model_dump(exclude={"dataset_id"}))
     return {"job_id": identifier}
 
 
@@ -439,8 +459,37 @@ def get_job(job_id: str):
 
 
 @app.get("/api/results/{result_id}")
-def get_result(result_id: str):
-    return storage.read("results", result_id)
+def get_result(result_id: str, view: Literal["full", "summary"] = "full"):
+    result = storage.read("results", result_id, include_papers=view == "full")
+    if view == "summary":
+        descriptor = result.get("_large_store", {})
+        if descriptor.get("count"):
+            identifiers = [node["id"] for node in result.get("map", {}).get("nodes", [])]
+            identifiers += [pid for topic in result.get("topics", []) for pid in topic.get("evidence_ids", [])]
+            identifiers += [paper["id"] for paper in result.get("top_cited_papers", [])]
+            result["papers"] = large_storage.papers_by_ids(result, storage.data_root(), identifiers[:600])
+        count = descriptor.get("count", len(result.get("papers", [])))
+        result.setdefault("meta", {}).update(papers_total=count, papers_loaded=len(result.get("papers", [])),
+                                            papers_truncated=len(result.get("papers", [])) < count)
+        result.pop("_large_store", None)
+        result.pop("_dataset_summary", None)
+    return result
+
+
+@app.get("/api/results/{result_id}/papers")
+def result_papers(result_id: str, offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=PAPER_PAGE_LIMIT),
+                  query: str = Query("", max_length=500), topic_id: str | None = Query(None, max_length=500),
+                  author_id: str | None = Query(None, max_length=500), year: int | None = Query(None, ge=1900, le=2100),
+                  sort: Literal["title", "year", "citations"] = "year"):
+    result = storage.read("results", result_id, include_papers=False)
+    return large_storage.paper_page(result, storage.data_root(), offset=offset, limit=limit, query=query,
+                                    topic_id=topic_id, author_id=author_id, canonical_author_id=author_id, year=year, sort=sort)
+
+
+@app.get("/api/results/{result_id}/papers/{paper_id:path}")
+def result_paper(result_id: str, paper_id: str):
+    result = storage.read("results", result_id, include_papers=False)
+    return large_storage.paper_by_id(result, storage.data_root(), paper_id)
 
 
 class FieldReportRequest(BaseModel):
@@ -456,11 +505,13 @@ def llm_status():
     return field_llm.status()
 
 
-def run_field_report(job_id: str, result: dict, options: dict):
+def run_field_report(job_id: str, result: dict | str, options: dict):
     from app.field_analysis import build_field_report
     report = None
     persisted_id = None
     try:
+        if isinstance(result, str):
+            result = storage.read("results", result)
         with JOBS_LOCK:
             JOBS[job_id].update(status="running", stage="分野と隣接領域の比較指標を集計")
         report = build_field_report(result, options["topic_id"], options.get("neighbor_id"))
@@ -497,20 +548,30 @@ def run_field_report(job_id: str, result: dict, options: dict):
 
 @app.post("/api/field-reports")
 def start_field_report(body: FieldReportRequest):
-    result = storage.read("results", body.result_id)
+    result = storage.read("results", body.result_id, include_papers=False)
     ids = {t["id"] for t in result["topics"] if not t.get("is_outlier") and t.get("status") != "unclassified"}
     if body.topic_id not in ids or (body.neighbor_id and body.neighbor_id not in ids):
         raise ValueError("対象の分類済み分野が見つかりません。")
     if body.neighbor_id == body.topic_id:
         raise ValueError("比較先には別の分野を選んでください。")
     identifier = new_job("総合分析の準備中")
-    submit_with_context(REPORT_EXECUTOR, run_field_report, identifier, result, body.model_dump(exclude={"result_id"}))
+    submit_with_context(REPORT_EXECUTOR, run_field_report, identifier, body.result_id, body.model_dump(exclude={"result_id"}))
     return {"job_id": identifier}
 
 
 @app.get("/api/field-reports/{report_id}")
 def get_field_report(report_id: str):
-    return storage.read("field_reports", report_id)
+    from app.limits import LARGE_CORPUS_THRESHOLD
+    report = storage.read("field_reports", report_id)
+    scope = report.get("scope") or {}
+    counts = [scope.get("corpus_papers"), scope.get("focus_papers"), scope.get("neighbor_papers"),
+              (report.get("focus") or {}).get("count"), (report.get("neighbor") or {}).get("count")]
+    if max((value for value in counts if isinstance(value, (int, float))), default=0) > LARGE_CORPUS_THRESHOLD:
+        # Keep the complete saved report and CSVs. Bound only the browser view;
+        # this must not turn display sampling into a change of analytical scope.
+        report = large_storage.display_network(report)
+        report["display_limits"] = {"evidence_ids": 50, "export_data_included": False, "full_data_in_csv": True}
+    return report
 
 
 @app.get("/api/field-reports/{report_id}/export")
@@ -529,8 +590,10 @@ class AuthorNetworkRequest(BaseModel):
     group_by: Literal["id", "name", "institution", "community", "topic"] = "community"
 
 
-def run_author_network(job_id: str, result: dict, group_by: str):
+def run_author_network(job_id: str, result: dict | str, group_by: str):
     try:
+        if isinstance(result, str):
+            result = storage.read("results", result)
         from app.author_network import build_author_network
         with JOBS_LOCK:
             JOBS[job_id].update(status="running", stage="著者の照合・所属の集計・共著クラスタを計算")
@@ -554,15 +617,18 @@ def run_author_network(job_id: str, result: dict, group_by: str):
 
 @app.post("/api/author-networks")
 def start_author_network(body: AuthorNetworkRequest):
-    result = storage.read("results", body.result_id)
+    storage.read("results", body.result_id, include_papers=False)
     identifier = new_job("著者ネットワークを準備中")
-    submit_with_context(AUTHOR_EXECUTOR, run_author_network, identifier, result, body.group_by)
+    submit_with_context(AUTHOR_EXECUTOR, run_author_network, identifier, body.result_id, body.group_by)
     return {"job_id": identifier}
 
 
 @app.get("/api/author-networks/{network_id}")
 def get_author_network(network_id: str):
-    return storage.read("author_networks", network_id)
+    network = storage.read("author_networks", network_id, include_papers=False)
+    if network.pop("_large_store", None):
+        network = large_storage.display_network(network)
+    return network
 
 
 @app.get("/api/author-networks/{network_id}/export")
@@ -581,7 +647,7 @@ class InsightRequest(BaseModel):
 
 @app.post("/api/insights")
 def get_insights(body: InsightRequest):
-    result = storage.read("results", body.result_id)
+    result = get_result(body.result_id, view="summary")
     if body.use_llm:
         try:
             return insights.llm_insights(result, body.topic_id, body.question)
@@ -592,14 +658,20 @@ def get_insights(body: InsightRequest):
 
 @app.get("/api/results/{result_id}/export")
 def export_result(result_id: str, format: Literal["json", "csv", "html"] = "json"):
-    result = storage.read("results", result_id)
+    result = storage.read("results", result_id, include_papers=False)
+    headers = {"Content-Disposition": f'attachment; filename="research-atlas-{result_id[:8]}.{format}"'}
+    if format == "json":
+        return StreamingResponse(large_storage.export_json(result, storage.data_root()), media_type="application/json", headers=headers)
+    if any("citation_total" not in topic for topic in result.get("topics", [])):
+        result = storage.read("results", result_id)
     if format == "csv":
         content, mime = reports.topic_csv(result), "text/csv"
     elif format == "html":
+        if result.get("_large_store", {}).get("count"):
+            from itertools import islice
+            result["papers"] = list(islice(large_storage.iter_papers(result, storage.data_root()), 100))
         content, mime = reports.report_html(result), "text/html"
-    else:
-        content, mime = json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False), "application/json"
-    return Response(content, media_type=mime, headers={"Content-Disposition": f'attachment; filename="research-atlas-{result_id[:8]}.{format}"'})
+    return Response(content, media_type=mime, headers=headers)
 
 
 @app.get("/api/demo.csv")

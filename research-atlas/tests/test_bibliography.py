@@ -23,6 +23,26 @@ def csv_bytes(headers, rows):
     return stream.getvalue().encode("utf-8-sig")
 
 
+def test_long_reference_list_deduplicates_and_preserves_input_order():
+    references = [{"doi": f"10.1234/reference-{index}"} for index in range(2_000)]
+    original = copy.deepcopy(references)
+    assert normalize_references(references + references) == original
+    assert references == original
+
+
+def test_reference_index_does_not_join_conflicting_dois_or_discarded_ids():
+    assert normalize_references([
+        {"doi": "10.1234/a", "id": "pmid:1"},
+        {"doi": "10.1234/b", "id": "pmid:1"},
+        {"id": "pmid:1"},
+    ]) == [{"doi": "10.1234/a", "id": "pmid:1"}, {"doi": "10.1234/b", "id": "pmid:1"}]
+    assert normalize_references([
+        {"doi": "10.1234/a", "id": "pmid:1"},
+        {"doi": "10.1234/a", "id": "pmid:2"},
+        {"id": "pmid:2"},
+    ]) == [{"doi": "10.1234/a", "id": "pmid:1"}, {"id": "pmid:2"}]
+
+
 def test_csv_preserves_institution_addresses_without_inventing_author_mapping():
     content = csv_bytes(["EID", "Title", "Year", "Authors", "Affilations", "Cited by"], [
         ["2-s2.0-123", "Battery interfaces", 2025, "Smith J.;Jones K.",
