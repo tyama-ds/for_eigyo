@@ -83,12 +83,12 @@
           <label>OpenAI APIキー<input id="connection-openai-key" type="password" maxlength="2048" autocomplete="new-password" spellcheck="false" placeholder="APIキーを入力"></label>
           <label>OpenAIモデル<input id="connection-openai-model" type="text" maxlength="160" autocomplete="off" spellcheck="false" placeholder="利用するモデルID"></label>
         </div><div class="connections-test-row"><p class="field-help">接続確認は認証とモデル情報の取得を確認します。論文の送信・文章生成は行いません。</p><button type="button" class="button button-quiet button-small" data-connection-test="openai">OpenAI接続を確認</button></div></section>
-        <section class="connections-section"><span class="eyebrow">LOCAL MODEL</span><h3>ローカルLLM</h3><div class="form-grid">
+        <section class="connections-section"><span class="eyebrow">SELF-HOSTED MODEL</span><h3>ローカル・別PCのLLM</h3><div class="form-grid">
           <label>接続方式<select id="connection-local-backend"><option value="ollama">Ollama</option><option value="openai_compatible">OpenAI互換（LM Studioなど）</option></select></label>
-          <label>ローカルLLM URL<input id="connection-local-url" type="url" required maxlength="2048" spellcheck="false" placeholder="http://127.0.0.1:11434"></label>
+          <label>LLMサーバー URL<input id="connection-local-url" type="url" required maxlength="2048" spellcheck="false" placeholder="http://192.168.1.50:1234/v1"></label>
           <label>ローカルモデル<input id="connection-local-model" type="text" maxlength="160" spellcheck="false" placeholder="インストール済みモデルID"></label>
           <label>ローカルAPIキー（必要な場合）<input id="connection-local-key" type="password" maxlength="2048" autocomplete="new-password" spellcheck="false"></label>
-        </div><div class="connections-test-row"><p class="field-help">Pythonが動くPC上のLLMに接続します。OpenAI互換URLは例：http://127.0.0.1:1234/v1</p><button type="button" class="button button-quiet button-small" data-connection-test="local">ローカル接続を確認</button></div></section>
+        </div><div class="connections-test-row"><p class="field-help">Research Atlasから到達できる別PCのIP・ホスト名も指定できます。LM Studioの例：http://192.168.1.50:1234/v1（IPは接続先に置き換え）。別PCでは「Serve on Local Network」を有効にしてください。localhostはResearch AtlasのPythonが動くPCを指します。LLMへはプロキシを使わず直接接続します。</p><button type="button" class="button button-quiet button-small" data-connection-test="local">LLM接続を確認</button></div></section>
         <section class="connections-section"><span class="eyebrow">OUTBOUND NETWORK</span><h3>プロキシ</h3><label class="connections-checkbox"><input id="connection-proxy-enabled" type="checkbox">Pythonからの外部API通信にプロキシを使う</label><fieldset id="connection-proxy-fields" disabled><div class="form-grid">
           <label class="connections-wide">プロキシURL<input id="connection-proxy-url" type="url" maxlength="2048" spellcheck="false" placeholder="http://proxy.example:8080"></label>
           <label>ユーザー名（任意）<input id="connection-proxy-username" type="text" maxlength="2048" autocomplete="off" spellcheck="false"></label>

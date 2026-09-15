@@ -74,12 +74,33 @@ test('another tab save and global storage clear update settings without credenti
   assert.doesNotMatch(JSON.stringify(h.emitted),/fake-key/);
 });
 test('invalid URL, embedded credentials, control characters and oversized headers are rejected',()=>{
-  const h=harness();for(const change of [s=>s.local.url='https://external.test',s=>s.proxy.url='http://user:pass@proxy.test',s=>s.proxy.url='http://proxy.test/path',s=>s.openai.api_key='fake\nkey']){const s=configured(h);change(s);assert.throws(()=>h.t.save(s));}
+  const h=harness();for(const change of [s=>s.local.url='file:///models',s=>s.local.url='http://user:pass@llm.test/v1',s=>s.local.url='http://llm.test/v1?token=secret',s=>s.local.url='http://llm.test/v1#secret',s=>s.proxy.url='http://user:pass@proxy.test',s=>s.proxy.url='http://proxy.test/path',s=>s.openai.api_key='fake\nkey']){const s=configured(h);change(s);assert.throws(()=>h.t.save(s));}
   const huge=configured(h);huge.openai.api_key='x'.repeat(4096);huge.local.api_key='x'.repeat(4096);huge.proxy.password='x'.repeat(4096);assert.throws(()=>h.t.save(huge),/長すぎる/);assert.throws(()=>h.t.encode(huge),/合計サイズ/);
+});
+
+test('another PC LLM URL persists and is restored without changing other browser settings',()=>{
+  for(const url of ['http://192.168.1.50:1234/v1','http://10.20.30.40:11434','https://llm.example.internal/v1','http://lab-gpu:1234/v1','http://[fd00::50]:1234/v1','https://external.test/v1']) {
+    const h=harness(),settings=configured(h);settings.local={backend:'openai_compatible',url,model:'test-model',api_key:'local-test-key'};
+    h.t.save(settings);const restored=harness({store:h.values});
+    assert.deepEqual(plain(restored.api.get()),plain(settings));assert.equal(h.sent.length,0);
+  }
+});
+
+test('remote LLM draft connection check routes through Python and is not saved automatically',async()=>{
+  const h=harness();h.api.open();
+  h.elements.get('#connection-local-backend').value='openai_compatible';
+  h.elements.get('#connection-local-url').value='http://192.168.1.50:1234/v1';
+  h.elements.get('#connection-local-key').value='local-test-key';
+  await h.t.testConnection('local');
+  assert.equal(h.sent.length,1);const [url,options]=h.sent[0];
+  assert.equal(url,'/api/connections/test');assert.deepEqual(JSON.parse(options.body),{target:'local'});
+  const payload=JSON.parse(Buffer.from(options.headers.get('X-Atlas-Connection'),'base64').toString('utf8'));
+  assert.equal(payload.local.url,'http://192.168.1.50:1234/v1');assert.equal(payload.local.api_key,'local-test-key');
+  assert.equal(h.values.size,0);assert.equal(h.api.get().local.url,'http://127.0.0.1:11434');
 });
 test('server-invalid model, secret and proxy exclusion values cannot be persisted',()=>{
   const h=harness();h.t.save(configured(h));const prior=h.values.get(key);
-  for(const change of [s=>s.openai.model='bad model',s=>s.local.model='日本語',s=>s.openai.model='m'.repeat(161),s=>s.openai.api_key='x'.repeat(2049),s=>s.local.api_key='x'.repeat(2049),s=>s.proxy.username='x'.repeat(2049),s=>s.proxy.password='x'.repeat(2049),s=>s.proxy.no_proxy='https://example.com',s=>s.proxy.no_proxy='host:65536',s=>s.proxy.no_proxy='10.0.0.0/33',s=>s.proxy.no_proxy='[::1]:0',s=>s.proxy.no_proxy='a..b',s=>s.local.url='http://127.0.0.1:0']) {
+  for(const change of [s=>s.openai.model='bad model',s=>s.local.model='日本語',s=>s.openai.model='m'.repeat(161),s=>s.openai.api_key='x'.repeat(2049),s=>s.local.api_key='x'.repeat(2049),s=>s.proxy.username='x'.repeat(2049),s=>s.proxy.password='x'.repeat(2049),s=>s.proxy.no_proxy='https://example.com',s=>s.proxy.no_proxy='host:65536',s=>s.proxy.no_proxy='10.0.0.0/33',s=>s.proxy.no_proxy='[::1]:0',s=>s.proxy.no_proxy='a..b',s=>s.local.url='http://127.0.0.1:0',s=>s.local.url='http://bad..host/v1',s=>s.local.url='http://llm.test/v1?',s=>s.local.url='http://llm.test/v1#',s=>s.local.url='http://llm.test\\path',s=>s.local.url='http://bad_host/v1']) {
     const candidate=configured(h);change(candidate);assert.throws(()=>h.t.save(candidate));assert.equal(h.values.get(key),prior);
   }
 });
@@ -97,4 +118,5 @@ test('settings markup is separate from analytical submit and credential fields a
   for(const id of ['connection-openai-key','connection-local-key','connection-proxy-password'])assert.match(html,new RegExp(`id="${id}" type="password"`));
   assert.doesNotMatch(html+app+foresight,/\.env/);assert.match(app,/AtlasConnections\?\.fetch/);assert.match(foresight,/AtlasConnections\?\.fetch/);
   assert.match(app,/request!==fieldState\.llmRequest/);assert.match(foresight,/token!==ui\.statusRequest/);
+  assert.match(html,/ローカル・別PCのLLM/);assert.match(html,/Serve on Local Network/);assert.match(html,/localhostはResearch AtlasのPythonが動くPCを指します/);
 });

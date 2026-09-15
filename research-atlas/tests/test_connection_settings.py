@@ -55,10 +55,37 @@ def test_proxy_urls_disallow_embedded_credentials_and_non_proxy_components(url):
         settings.ConnectionSettings(proxy={"url": url})
 
 
-@pytest.mark.parametrize("url", ["https://external.example/v1", "http://127.0.0.1.evil.example", "http://192.168.1.1:11434",
-    "http://username:password@localhost:11434", "http://localhost:11434/?api_key=secret"])
-def test_local_urls_must_be_loopback(url):
-    with pytest.raises(ValueError, match="ループバック"):
+@pytest.mark.parametrize("url,expected", [
+    (" http://192.168.1.20:1234/v1/ ", "http://192.168.1.20:1234/v1"),
+    ("http://10.22.33.44:11434/", "http://10.22.33.44:11434"),
+    ("https://[fd00::1234]:443/llm/v1", "https://[fd00::1234]:443/llm/v1"),
+    ("http://[::1]:1234/v1", "http://[::1]:1234/v1"),
+    ("http://llm-workstation:1234/v1", "http://llm-workstation:1234/v1"),
+    ("http://lmstudio.local:1234/v1", "http://lmstudio.local:1234/v1"),
+    ("https://llm.example.org/v1", "https://llm.example.org/v1"),
+    ("https://研究.example/v1", "https://研究.example/v1"),
+    ("https://llm.example.org./v1", "https://llm.example.org./v1"),
+    ("http://localhost:65535", "http://localhost:65535"),
+])
+def test_browser_header_accepts_explicit_llm_hosts_and_normalizes_url(url, expected):
+    value = settings.parse_header(header({"local": {"url": url, "model": "local-model", "api_key": "local-secret"}}))
+    assert value.local.url == expected
+    with settings.settings_context(value):
+        assert field_llm._local_config() == ("ollama", expected)
+        assert settings.local_headers() == {"Authorization": "Bearer local-secret"}
+    assert settings.current_settings().local.url == "http://127.0.0.1:11434"
+
+
+@pytest.mark.parametrize("url", [
+    "http://username:password@localhost:11434", "http://localhost:11434/?api_key=secret",
+    "http://host#secret", "http://host?", "http://host#", "file:///tmp/model", "ftp://host/model", "http:///v1",
+    "http://host:0", "http://host:65536", "http://host:port", "http://host:", "http://host:1:2",
+    "http://bad host:1234", "http://host\x00:1234", "http://host\x7f:1234", "http://host\\path",
+    "http://[::1]suffix", "http://[not-ip]:1234", "http://::1:1234", "http://999.1.1.1:1234",
+    "http://bad..host", "http://-host", "http://host-", "http://host..", "http://host%2fpath",
+])
+def test_local_urls_reject_malformed_hosts_and_unwanted_components(url):
+    with pytest.raises(ValueError, match="HTTP"):
         settings.ConnectionSettings(local={"url": url})
 
 

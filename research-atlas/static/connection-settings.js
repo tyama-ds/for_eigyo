@@ -62,8 +62,9 @@
     const validateURL = (text, label, local = false) => {
       let url;
       try { url = new URL(text); } catch { throw new Error(`${label}のURLを確認してください。`); }
-      if (!['http:','https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash || /\s/.test(text) || url.port==='0') throw new Error(`${label}は認証情報・クエリを含まないHTTP(S) URLと有効なポートを指定してください。`);
-      if (local && !/^(?:localhost|127(?:\.\d{1,3}){3}|\[::1\])$/i.test(url.hostname)) throw new Error('ローカルLLMは、このPCのlocalhost・127.0.0.1・::1を指定してください。');
+      if (!['http:','https:'].includes(url.protocol) || url.username || url.password || /[?#\\\s]/.test(text) || url.port==='0') throw new Error(`${label}は認証情報・クエリ・フラグメントを含まないHTTP(S) URLと有効なポートを指定してください。`);
+      const host=url.hostname.replace(/\.$/,'');
+      if (!host.startsWith('[') && (host.length>253 || !host.split('.').every(label=>/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(label)))) throw new Error(`${label}のIPアドレス・ホスト名を確認してください。`);
       if (!local && url.pathname !== '/') throw new Error('プロキシURLはホストとポートまでを指定してください。');
       const canonical=url.href.replace(/\/+$/,'');
       if (canonical.length>2048) throw new Error(`${label}のURLが長すぎます。短いURLを指定してください。`);

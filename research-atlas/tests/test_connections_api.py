@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 from threading import Event
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -69,6 +70,33 @@ def test_draft_test_is_request_scoped_and_never_saved(client, monkeypatch, tmp_p
     assert client.post("/api/connections/test", json={"target": "openai"},
                        headers={**headers(), "Origin": "https://external.example"}).status_code == 403
     assert len(observed) == 1
+
+
+@pytest.mark.parametrize("base_url", ["http://192.168.10.20:1234/v1", "http://[fd00::20]:1234/v1",
+                                     "https://llm-server.example/v1"])
+def test_remote_llm_connection_check_uses_browser_header_without_persistence(client, monkeypatch, tmp_path, base_url):
+    requests, transports = [], []
+    real_client = httpx.Client
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(200, json={"data": [{"id": "remote-model"}]})
+    def transport(**kwargs):
+        transports.append(kwargs)
+        return real_client(transport=httpx.MockTransport(handler), **kwargs)
+    monkeypatch.setattr(connections.httpx, "Client", transport)
+    response = client.post("/api/connections/test", json={"target": "local"}, headers=headers(
+        local={"backend": "openai_compatible", "url": base_url, "model": "remote-model", "api_key": "local-secret"},
+        proxy={"enabled": True, "url": "http://proxy.example:8080", "no_proxy": ""}))
+    assert response.status_code == 200 and response.json()["ok"]
+    assert len(requests) == 1 and requests[0].method == "GET"
+    assert str(requests[0].url) == base_url + "/models" and not requests[0].content
+    assert requests[0].headers["Authorization"] == "Bearer local-secret"
+    assert "browser-A" not in str(requests[0].headers)
+    assert transports[0]["proxy"] is None and transports[0]["trust_env"] is False and transports[0]["follow_redirects"] is False
+    assert "secret" not in response.text and base_url not in response.text
+    assert client.get("/api/connections/status").json()["local"]["model"] is None
+    assert connections.current_settings().local.url == "http://127.0.0.1:11434"
+    assert not list(tmp_path.rglob("*"))
 
 
 @pytest.mark.parametrize("kind", ["discover", "analyze", "field", "authors", "assessment", "explore", "commentary"])

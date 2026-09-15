@@ -87,7 +87,7 @@ def local_status() -> dict:
     try:
         backend, url = _local_config()
         status["backend"] = backend
-        with http_client(url, local=True, timeout=2, headers=local_headers()) as client:
+        with http_client(url, local=True, timeout=httpx.Timeout(12, connect=5), headers=local_headers()) as client:
             response = _response_json(client.get(url + ("/api/tags" if backend == "ollama" else "/models")))
         models = response.get("models" if backend == "ollama" else "data", [])
         models = [{"id": _model_id(item.get("name") or item.get("id") or item.get("model"))}
@@ -103,7 +103,7 @@ def local_status() -> dict:
     except ValueError:
         status["error"] = "ローカルLLMのモデル一覧を読み取れませんでした。"
     except Exception:
-        status["error"] = "ローカルLLMに接続できません。Ollama / LM Studioの起動とサーバー設定を確認してください。"
+        status["error"] = "LLMサーバーに接続できません。URL・起動状態・ネットワーク公開設定と、Research AtlasのPCから接続できるかを確認してください。"
     return status
 
 

@@ -1,7 +1,7 @@
 """Browser-owned connection preferences, held only in a request/task context.
 
 There is deliberately no environment fallback and no persistence in this module.
-Only fixed application endpoints or validated loopback LLM URLs use the transport.
+Only fixed application endpoints or explicitly configured LLM URLs use the transport.
 """
 from __future__ import annotations
 
@@ -41,22 +41,41 @@ def _secret(value: SecretStr) -> SecretStr:
     return value
 
 
-def _url(value: str, *, loopback: bool) -> str:
+def _valid_hostname(host: str) -> bool:
+    """Accept IP literals or DNS/IDNA names without performing DNS lookups."""
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        if ":" in host or re.fullmatch(r"[\d.]+", host, re.ASCII):
+            return False
+    try:
+        name = host.removesuffix(".").encode("idna").decode("ascii")
+    except UnicodeError:
+        return False
+    return len(name) <= 253 and all(
+        re.fullmatch(r"[a-z0-9](?:[a-z0-9\-]{0,61}[a-z0-9])?", label, re.IGNORECASE | re.ASCII)
+        for label in name.split("."))
+
+
+def _url(value: str, *, allow_path: bool) -> str:
     value = value.strip().rstrip("/")
     try:
         parsed = urlsplit(value)
         host = parsed.hostname
         valid = bool(host) and parsed.scheme in {"http", "https"} and parsed.port != 0
-        valid = valid and not (parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment)
-        valid = valid and not any(char.isspace() or ord(char) < 32 for char in value)
-        if loopback:
-            valid = valid and (host == "localhost" or ipaddress.ip_address(host).is_loopback)
-        else:
+        valid = valid and not (parsed.username is not None or parsed.password is not None or "?" in value or "#" in value)
+        valid = valid and not any(char.isspace() or ord(char) < 32 or ord(char) == 127 or char == "\\" for char in value)
+        # urlsplit alone accepts malformed authorities such as '[::1]suffix'
+        # and 'server:'. Require an explicit port to contain valid digits.
+        authority = r"\[[^\]]+\](?::[0-9]+)?" if parsed.netloc.startswith("[") else r"[^:]+(?::[0-9]+)?"
+        valid = valid and bool(re.fullmatch(authority, parsed.netloc)) and _valid_hostname(host)
+        if not allow_path:
             valid = valid and parsed.path in {"", "/"}
     except (ValueError, TypeError):
         valid = False
     if not valid:
-        message = "ローカルLLMのURLは localhost / ループバックIPのHTTP(S)を指定してください。" if loopback else "Proxyは認証情報・パス・クエリを含まないHTTP(S) URLを指定してください。"
+        message = "LLMサーバーの有効なHTTP(S) URLを指定してください。IPアドレス・ホスト名を使用でき、URL内の認証情報・クエリ・フラグメントは使用できません。" if allow_path else "Proxyは認証情報・パス・クエリを含まないHTTP(S) URLを指定してください。"
         raise ValueError(message)
     return value
 
@@ -79,7 +98,7 @@ class LocalSettings(_SettingsModel):
     @field_validator("url")
     @classmethod
     def valid_url(cls, value: str) -> str:
-        return _url(value, loopback=True)
+        return _url(value, allow_path=True)
 
 
 def _no_proxy_rule(value: str) -> tuple[object, int | None]:
@@ -124,7 +143,7 @@ class ProxySettings(_SettingsModel):
     @field_validator("url")
     @classmethod
     def valid_url(cls, value: str) -> str:
-        return _url(value, loopback=False) if value.strip() else ""
+        return _url(value, allow_path=False) if value.strip() else ""
 
     @field_validator("no_proxy")
     @classmethod

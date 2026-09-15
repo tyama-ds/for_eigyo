@@ -43,10 +43,9 @@ def test_default_report_does_not_contact_any_llm(report, monkeypatch):
     assert value["sections"][0]["text"] == "10件"
 
 
-@pytest.mark.parametrize("url", ["https://external.example/v1", "http://192.168.0.10:1234", "http://127.0.0.1.evil.com",
-                                 "http://user:secret@localhost:11434", "file:///tmp/model", "http://localhost:1234/?key=secret"])
-def test_local_url_must_not_transmit_to_remote_server(url):
-    with pytest.raises(ValueError, match="ループバック"):
+@pytest.mark.parametrize("url", ["http://user:secret@llm.example:11434", "file:///tmp/model", "http://192.168.0.10:1234/?key=secret"])
+def test_configured_llm_url_rejects_credentials_and_non_http_urls(url):
+    with pytest.raises(ValueError, match="HTTP"):
         ConnectionSettings(local={"url": url})
 
 
@@ -64,8 +63,9 @@ def test_evidence_is_balanced_bounded_and_does_not_mutate(report):
     assert json.dumps(report) == before
 
 
-def test_local_ollama_generates_json_without_openai(report, monkeypatch, configure):
-    configure(local={"backend": "ollama", "url": "http://127.0.0.1:11434"})
+@pytest.mark.parametrize("host", ["127.0.0.1", "192.168.10.20", "[fd00::20]", "llm-server.local"])
+def test_local_ollama_generates_json_without_openai(report, monkeypatch, configure, host):
+    configure(local={"backend": "ollama", "url": f"http://{host}:11434"})
     calls = []
     def handler(request):
         calls.append(request)
@@ -85,7 +85,7 @@ def test_local_ollama_generates_json_without_openai(report, monkeypatch, configu
     value = field_llm.generate(report, "local")
     assert value["mode"] == "local_llm" and value["model"] == "local-test:1"
     assert len(calls) == 3
-    assert all(request.url.host == "127.0.0.1" for request in calls)
+    assert all(request.url.host == host.strip("[]") for request in calls)
 
 
 def test_local_cloud_model_rejected_before_sending_papers(report, monkeypatch, configure):
@@ -102,9 +102,12 @@ def test_local_cloud_model_rejected_before_sending_papers(report, monkeypatch, c
     assert paths == ["/api/tags", "/api/show"]
 
 
-def test_local_openai_compatible_protocol(report, monkeypatch, configure):
-    configure(local={"backend": "openai_compatible", "url": "http://127.0.0.1:1234/v1"})
+@pytest.mark.parametrize("base_url", ["http://127.0.0.1:1234/v1", "http://192.168.10.20:1234/v1",
+                                     "http://[fd00::20]:1234/v1", "https://llm-server.example/v1"])
+def test_local_openai_compatible_protocol(report, monkeypatch, configure, base_url):
+    configure(local={"backend": "openai_compatible", "url": base_url})
     def handler(request):
+        assert str(request.url).startswith(base_url + "/")
         if request.method == "GET":
             assert request.url.path == "/v1/models"
             return httpx.Response(200, json={"data": [{"id": "local-model"}]})
@@ -118,8 +121,10 @@ def test_local_openai_compatible_protocol(report, monkeypatch, configure):
     assert field_llm.generate(report, "local")["mode"] == "local_llm"
 
 
-def test_local_stream_preserves_browser_auth_direct_routing_and_progress(report, monkeypatch, configure):
-    configure(local={"backend": "openai_compatible", "url": "http://127.0.0.1:1234/v1", "api_key": "local-secret"},
+@pytest.mark.parametrize("base_url", ["http://127.0.0.1:1234/v1", "http://192.168.10.20:1234/v1",
+                                     "http://[fd00::20]:1234/v1", "https://llm-server.example/v1"])
+def test_local_stream_preserves_browser_auth_direct_routing_and_progress(report, monkeypatch, configure, base_url):
+    configure(local={"backend": "openai_compatible", "url": base_url, "api_key": "local-secret"},
               openai={"api_key": "cloud-secret", "model": "cloud-model"},
               proxy={"enabled": True, "url": "http://proxy.invalid:8080", "no_proxy": ""})
     requests, clients, progress = [], [], []
@@ -139,10 +144,24 @@ def test_local_stream_preserves_browser_auth_direct_routing_and_progress(report,
     assert value["mode"] == "local_llm"
     assert all(request.headers["Authorization"] == "Bearer local-secret" for request in requests)
     assert all("cloud-secret" not in str(request.headers) for request in requests)
-    assert all(client["proxy"] is None and client["trust_env"] is False for client in clients)
+    assert all(str(request.url).startswith(base_url + "/") for request in requests)
+    assert all(client["proxy"] is None and client["trust_env"] is False and client["follow_redirects"] is False for client in clients)
     assert clients[-1]["timeout"].read == 600
     assert progress[0]["received_chars"] == 0 and progress[-1]["received_chars"] > 0
     assert all(set(item) == {"elapsed_seconds", "received_chars"} for item in progress)
+
+
+def test_configured_remote_server_redirect_is_not_followed(report, monkeypatch, configure):
+    configure(local={"backend": "openai_compatible", "url": "https://llm-server.example/v1", "api_key": "local-secret"})
+    requests = []
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(302, headers={"Location": "https://other.example/v1/models"})
+    transport(monkeypatch, handler)
+    with pytest.raises(ValueError, match="接続"):
+        field_llm.generate(report, "local")
+    assert len(requests) == 1
+    assert requests[0].url.host == "llm-server.example" and requests[0].method == "GET"
 
 
 def test_remote_error_does_not_leak_response_or_secret(monkeypatch, configure):
