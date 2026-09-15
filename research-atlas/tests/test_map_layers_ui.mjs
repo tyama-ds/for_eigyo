@@ -28,7 +28,11 @@ test('time planes preserve common XY; moving between planes cannot fabricate a d
   assert.equal(a.distance,b.distance);
   assert.ok(Math.abs((a.to[0]-a.from[0])-(b.to[0]-b.from[0]))<1e-8);
   assert.ok(Math.abs((a.to[1]-a.from[1])-(b.to[1]-b.from[1]))<1e-8);
-  assert.equal(layers.arrowGeometry({...shift,status:'insufficient'},opts),null);
+  assert.equal(layers.arrowGeometry({...shift,status:'insufficient'},opts).distance,a.distance);
+  assert.equal(layers.arrowGeometry({...shift,status:'insufficient',insufficient_reason:'unclassified_topic'},opts),null);
+  assert.equal(layers.arrowGeometry({...shift,from:{x:null,y:.3}},opts),null);
+  assert.equal(layers.arrowGeometry({...shift,to:{x:Infinity,y:.3}},opts),null);
+  assert.equal(layers.arrowGeometry({...shift,from:null},opts),null);
 });
 test('long time series retain empty periods and window navigation is bounded to eight planes',()=>{
   const {layers}=harness(),periods=Array.from({length:600},(_,i)=>({id:String(i),count:0}));
@@ -75,6 +79,14 @@ test('comparison evidence keeps both periods visible when each has six source pa
   for(const side of ['before','after']){for(let i=0;i<3;i++)assert.match(html,new RegExp(`data-paper="${side}-${i}"`));assert.doesNotMatch(html,new RegExp(`data-paper="${side}-3"`));}
   assert.match(html,/前期の根拠 1/);assert.match(html,/後期の根拠 1/);
   assert.match(html,/投影前の文章表現の変化/);assert.doesNotMatch(html,/元の文章表現/);
+});
+test('insufficient comparisons retain geometric arrows as dashed paths with gap and status labels',async()=>{
+  const data=structuredClone(payload);Object.assign(data.movements[0],{status:'insufficient',insufficient_reason:'small_sample',gap_periods:2});
+  const h=harness(async()=>data);h.ui.view(h.context);await tick();h.internals.preferences.mode='layers';const html=h.ui.view(h.context);
+  assert.match(html,/class="centroid-arrow centroid-arrow-unconfirmed/);
+  assert.match(html,/aria-label="2024から2025の重心移動。比較データ不足 \/ 2期間の空白あり"/);
+  assert.match(html,/破線 = 内容変化は未確認・比較データ不足/);
+  assert.match(html,/marker-end="url\(#centroid-red-arrow\)"/);
 });
 test('report keeps unverified narrative visible with an alert and uses browser-wrapped api',async()=>{
   const h=harness(async(url,options)=>{

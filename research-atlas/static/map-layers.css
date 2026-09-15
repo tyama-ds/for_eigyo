@@ -10,7 +10,7 @@
 .time-plane text{fill:#a8c7d2;font:10px ui-monospace,monospace;paint-order:stroke;stroke:#101e2b;stroke-width:3px;stroke-linejoin:round}
 .temporal-map-stage[data-map-mode="layers"]{background:radial-gradient(ellipse at 45% 50%,#1b425250,transparent 72%),#0b1724}
 .centroid-arrow{fill:none;stroke:#ff6c79;stroke-width:2;opacity:.84;cursor:pointer;pointer-events:stroke;vector-effect:non-scaling-stroke}
-.centroid-arrow-stable{stroke-dasharray:5 4;opacity:.55}.centroid-arrow.selected,.centroid-arrow:hover{stroke-width:3;opacity:1;filter:drop-shadow(0 0 4px #ff647c80)}
+.centroid-arrow-unconfirmed{stroke-dasharray:5 4;opacity:.55}.centroid-arrow.selected,.centroid-arrow:hover{stroke-width:3;opacity:1;filter:drop-shadow(0 0 4px #ff647c80)}
 .topic-centroid{cursor:pointer}.topic-centroid text{fill:#d9ebed;font:9px ui-monospace,monospace;paint-order:stroke;stroke:#122331;stroke-width:3px;stroke-linejoin:round}
 .centroid-pulse{opacity:.6;animation:centroid-glow 2.6s ease-in-out infinite;transform-box:fill-box;transform-origin:center}
 @keyframes centroid-glow{0%,100%{opacity:.3;transform:scale(.75)}50%{opacity:.88;transform:scale(1.18)}}
