@@ -121,6 +121,41 @@ def test_local_openai_compatible_protocol(report, monkeypatch, configure, base_u
     assert field_llm.generate(report, "local")["mode"] == "local_llm"
 
 
+def test_local_qwen_thinking_envelope_preserves_final_narrative_and_evidence(report, monkeypatch, configure):
+    configure(local={"backend": "openai_compatible", "url": "http://127.0.0.1:1234/v1"})
+    final = response_data()
+    final["sections"][0]["evidence_ids"] = ["p1", "p2"]
+    paths = []
+
+    def handler(request):
+        paths.append(request.url.path)
+        if request.method == "GET":
+            assert request.url.path == "/v1/models"
+            return httpx.Response(200, json={"data": [{"id": "qwen-local-test"}]})
+        assert request.url.path == "/v1/chat/completions"
+        body = json.loads(request.content)
+        assert body["model"] == "qwen-local-test" and body["stream"] is True
+        assert body["response_format"]["json_schema"]["strict"] is True
+        parts = ['<think>private-thought {"evidence_ids":["unshared-paper"]}',
+                 '</think>\n```json\n', json.dumps(final, ensure_ascii=False), '\n```']
+        records = [{"choices": [{"index": 0, "delta": {"content": part}, "finish_reason": None}]}
+                   for part in parts]
+        records.append({"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]})
+        return httpx.Response(200, text="".join("data: " + json.dumps(record) + "\n\n" for record in records)
+                              + "data: [DONE]\n\n")
+
+    transport(monkeypatch, handler)
+    value = field_llm.generate(report, "local")
+    assert value["mode"] == "local_llm" and value["model"] == "qwen-local-test"
+    assert value["headline"] == final["headline"]
+    assert value["sections"] == final["sections"]
+    assert value["caveats"][:len(final["caveats"])] == final["caveats"]
+    serialized = json.dumps(value, ensure_ascii=False)
+    assert "private-thought" not in serialized and "unshared-paper" not in serialized
+    assert "<think>" not in serialized and "```" not in serialized
+    assert paths == ["/v1/models", "/v1/chat/completions"]
+
+
 @pytest.mark.parametrize("base_url", ["http://127.0.0.1:1234/v1", "http://192.168.10.20:1234/v1",
                                      "http://[fd00::20]:1234/v1", "https://llm-server.example/v1"])
 def test_local_stream_preserves_browser_auth_direct_routing_and_progress(report, monkeypatch, configure, base_url):

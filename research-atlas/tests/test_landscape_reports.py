@@ -6,7 +6,7 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-from app import connection_settings, field_llm, landscape, landscape_reports, large_storage, storage
+from app import connection_settings, field_llm, landscape, landscape_reports, large_storage, local_llm_stream, storage
 from app.main import app
 
 
@@ -127,8 +127,9 @@ def test_unknown_ids_rejected_and_no_abstract_avoids_llm(fixture, monkeypatch):
     for paper in report["evidence_papers"]:
         paper["abstract"] = ""
     assert landscape_reports.generate(report, "none")["mode"] == "deterministic"
-    with pytest.raises(ValueError, match="抄録がありません"):
+    with pytest.raises(landscape_reports.NarrativeValidationError, match="抄録がありません") as missing:
         landscape_reports.generate(report, "local")
+    assert missing.value.kind == "missing_abstracts"
 
 
 @pytest.mark.parametrize("ids", [[], ["paper-0"]])
@@ -180,8 +181,63 @@ def test_api_failure_keeps_deterministic_and_does_not_leak_exception_secrets(fix
         assert job["status"] == "completed" and job["validation_status"] == "warning"
         report = client.get("/api/landscape-reports/" + job["landscape_report_id"]).json()
     assert report["narrative"]["mode"] == "deterministic" and report["llm_error"]
+    assert report["generation_status"] == job["generation_status"] == "failed"
+    assert report["requested_provider"] == "local" and report["generation_error_kind"] == "generation_failed"
+    assert "LLM評論の生成に失敗" in job["stage"]
     assert report["movement"]["cosine_distance"] == .25
     assert "private-url" not in json.dumps(report) and "very-secret" not in json.dumps(job)
+
+
+@pytest.mark.parametrize("kind,expected", [
+    ("reasoning_incomplete", "思考部分（<think>）が閉じられず"),
+    ("missing_final_answer", "思考部分だけ"),
+    ("token_limit", "トークン上限"),
+    ("malformed_json", "JSONとして読み取れません"),
+    ("incomplete", "完了前に途切れました"),
+    ("read_timeout", "受信が長時間停止"),
+])
+def test_api_stream_failure_is_distinct_from_numeric_warning(fixture, monkeypatch, kind, expected):
+    def failed(*args, **kwargs):
+        raise local_llm_stream.LocalStreamError("private exception with key=secret", kind=kind)
+    monkeypatch.setattr(field_llm, "structured_output", failed)
+    with TestClient(app) as client:
+        job = wait_job(client, fixture[0]["id"], provider="local")
+        report = client.get("/api/landscape-reports/" + job["landscape_report_id"]).json()
+    assert job["status"] == "completed" and job["generation_status"] == "failed"
+    assert report["generation_status"] == "failed" and report["generation_error_kind"] == kind
+    assert expected in report["llm_error"]
+    assert report["narrative"]["mode"] == "deterministic"
+    assert report["movement"]["cosine_distance"] == .25
+    assert "key=secret" not in json.dumps(report)
+
+
+@pytest.mark.parametrize("kind,expected", [
+    ("invalid_schema", "形式を満たしていません"),
+    ("invalid_evidence_ids", "根拠資料にない論文ID"),
+    ("missing_abstracts", "抄録がなく"),
+])
+def test_api_validation_failure_reports_fixed_specific_reason(fixture, monkeypatch, kind, expected):
+    def failed(*args, **kwargs):
+        raise landscape_reports.NarrativeValidationError("private validation text", kind=kind)
+    monkeypatch.setattr(landscape_reports, "generate", failed)
+    with TestClient(app) as client:
+        job = wait_job(client, fixture[0]["id"], provider="local")
+        report = client.get("/api/landscape-reports/" + job["landscape_report_id"]).json()
+    assert report["generation_error_kind"] == kind and expected in report["llm_error"]
+    assert "private validation text" not in json.dumps(report)
+
+
+def test_api_numeric_warning_keeps_generated_critique_and_success_status(fixture, monkeypatch):
+    text = "強度は900 GPa、改善率は87%です。"
+    monkeypatch.setattr(field_llm, "structured_output", lambda *args, **kwargs: (output(text), "local_llm", "test"))
+    with TestClient(app) as client:
+        job = wait_job(client, fixture[0]["id"], provider="local")
+        report = client.get("/api/landscape-reports/" + job["landscape_report_id"]).json()
+    assert job["status"] == "completed" and job["generation_status"] == "generated"
+    assert job["validation_status"] == "warning" and "失敗" not in job["stage"]
+    assert report["generation_status"] == "generated" and "llm_error" not in report
+    assert report["narrative"]["sections"][0]["text"] == text
+    assert any(w["code"] == "numeric_mismatch" for w in report["narrative"]["validation"]["warnings"])
 
 
 def test_api_worker_receives_browser_context_without_persisting_connections(fixture, monkeypatch, tmp_path):

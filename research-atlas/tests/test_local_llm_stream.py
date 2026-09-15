@@ -95,6 +95,74 @@ def test_ollama_ndjson_fragmentation_thinking_only_and_final_content(width):
     assert invoke([data[index:index + width] for index in range(0, len(data), width)], backend="ollama") == {"result": "引張強度"}
 
 
+@pytest.mark.parametrize("backend", ["openai_compatible", "ollama"])
+@pytest.mark.parametrize("width", [1, 13, 4096])
+@pytest.mark.parametrize("fenced", [False, True])
+def test_qwen_inline_thinking_is_excluded_from_complete_final_json(backend, width, fenced):
+    answer = '{"result":"引張強度","value":900,"unit":"MPa"}'
+    if fenced:
+        answer = "```json\n" + answer + "\n```"
+    # Tags split between content deltas, in addition to arbitrary UTF-8 byte chunks.
+    pieces = ['  <thi', 'nk>private-thought {"value":9999}</thi', 'nk>\n', answer]
+    if backend == "ollama":
+        data = b"".join(ndjson(piece) for piece in pieces) + ndjson(done=True, reason="stop")
+    else:
+        data = b"".join(sse(piece) for piece in pieces) + sse(reason="stop") + b"data: [DONE]\n\n"
+    received = []
+    result = invoke([data[i:i + width] for i in range(0, len(data), width)], backend=backend, progress=received.append)
+    assert result == {"result": "引張強度", "value": 900, "unit": "MPa"}
+    assert "private-thought" not in json.dumps(received) and "9999" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("prefix", ["", "<think>\n\n</think>\n"])
+def test_json_literal_think_tags_and_backticks_are_preserved(prefix):
+    expected = {"quote": "literal <think>...</think> and ```json markers"}
+    assert invoke([sse(prefix + json.dumps(expected), "stop"), b"data: [DONE]\n\n"]) == expected
+
+
+@pytest.mark.parametrize("content,kind", [
+    ('<think>private-thought {"ok":true}', "reasoning_incomplete"),
+    ('<think>private-thought</think>', "missing_final_answer"),
+    ('', "missing_final_answer"),
+    ('<think>private-thought<think>nested</think>{"ok":true}', "malformed_json"),
+    ('<think>private-thought</think><think>second</think>{"ok":true}', "malformed_json"),
+    ('private-thought</think>{"ok":true}', "malformed_json"),
+    ('<think>private-thought</think>Answer: {"ok":true}', "malformed_json"),
+    ('<think>private-thought</think>{"ok":true} trailing', "malformed_json"),
+    ('<think>private-thought</think>{"ok":true}{"ok":false}', "malformed_json"),
+    ('<think>private-thought</think>```json\n{"ok":true}', "malformed_json"),
+    ('<think>private-thought</think>{"ok":1,"ok":2}', "malformed_json"),
+    ('<think>private-thought</think>{"ok":NaN}', "malformed_json"),
+    ('<think>private-thought</think>[]', "malformed_json"),
+])
+def test_thinking_wrappers_never_rescue_incomplete_or_ambiguous_answers(content, kind):
+    with pytest.raises(streaming.LocalStreamError) as caught:
+        invoke([sse(content, "stop"), b"data: [DONE]\n\n"])
+    assert caught.value.kind == kind
+    assert "private-thought" not in str(caught.value)
+
+
+@pytest.mark.parametrize("reason,terminator,kind", [("length", True, "token_limit"), ("stop", False, "incomplete")])
+def test_wrapped_json_still_requires_successful_protocol_completion(reason, terminator, kind):
+    chunks = [sse('<think>private-thought</think>{"ok":true}', reason)]
+    if terminator:
+        chunks.append(b"data: [DONE]\n\n")
+    with pytest.raises(streaming.LocalStreamError) as caught:
+        invoke(chunks)
+    assert caught.value.kind == kind
+
+
+@pytest.mark.parametrize("field", ["reasoning_content", "reasoning"])
+def test_separate_reasoning_is_ignored_and_does_not_replace_missing_answer(field):
+    thought = {"choices": [{"index": 0, "delta": {field: "private-thought"}, "finish_reason": None}]}
+    chunk = ("data: " + json.dumps(thought) + "\n\n").encode()
+    assert invoke([chunk, sse('{"ok":true}', "stop"), b"data: [DONE]\n\n"]) == {"ok": True}
+    with pytest.raises(streaming.LocalStreamError) as caught:
+        invoke([chunk, sse(reason="stop"), b"data: [DONE]\n\n"])
+    assert caught.value.kind == "missing_final_answer"
+    assert "private-thought" not in str(caught.value)
+
+
 @pytest.mark.parametrize("data,match", [
     (ndjson('{"ok":true}'), "完了前"),
     (ndjson('{"ok":true}', True), "完了前"),

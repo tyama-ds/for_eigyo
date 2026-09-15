@@ -69,3 +69,33 @@ test('flat and relief node positions match the surface projection and contours c
   h.internals.preferences.contours=false;const html=h.ui.view(h.context);
   assert.doesNotMatch(html,/class="terrain-contour(?: |")/);assert.match(html,/terrain-surface/);
 });
+
+test('failed thinking completion labels numerical fallback separately and escapes details',()=>{
+  const h=harness(),message='思考部分（<think>）が閉じられず、最終回答を確認できませんでした。';
+  h.internals.report.data={id:'report-a',requested_provider:'local',generation_status:'failed',llm_error:message,narrative:{mode:'deterministic',headline:'計算された説明',sections:[{title:'数値',text:'重心が変化しました。',evidence_ids:['p1']}],validation:{status:'warning',warnings:[{code:'llm_failed',message}]}}};
+  const html=h.internals.reportHTML(h.context);
+  assert.match(html,/LLM評論の生成に失敗しました/);
+  assert.match(html,/<details class="landscape-report-fallback"><summary>計算結果の説明（代替表示）/);
+  assert.match(html,/&lt;think>/);assert.doesNotMatch(html,/<think>/);
+  assert.equal((html.match(/思考部分/g)||[]).length,1);
+  assert.doesNotMatch(html,/照合に注意が必要です/);
+  assert.match(html,/data-paper="p1"/);assert.match(html,/report-a\/export/);
+});
+
+test('numeric mismatch keeps successful LLM critique expanded with ordinary warning',()=>{
+  const h=harness();
+  h.internals.report.data={generation_status:'generated',narrative:{mode:'local_llm',headline:'論文の比較',sections:[{title:'結果',text:'強度は900 GPaです。',validation:{status:'warning'}}],validation:{status:'warning',warnings:[{code:'numeric_mismatch',message:'単位の照合に失敗しました。'}]}}};
+  const html=h.internals.reportHTML(h.context);
+  assert.match(html,/照合に注意が必要です/);assert.match(html,/LOCAL LLM/);assert.match(html,/900 GPa/);
+  assert.doesNotMatch(html,/LLM評論の生成に失敗|<details|代替表示/);
+});
+
+test('legacy saved failure receives explicit fallback label while selected calculation does not',()=>{
+  const h=harness(),narrative={mode:'deterministic',headline:'数値の説明',sections:[]};
+  h.internals.report.data={llm_error:'過去の生成失敗',narrative};
+  assert.match(h.internals.reportHTML(h.context),/LLM評論の生成に失敗しました/);
+  h.internals.report.data={requested_provider:'none',generation_status:'not_requested',narrative};
+  const html=h.internals.reportHTML(h.context);
+  assert.match(html,/CALCULATED OBSERVATIONS/);
+  assert.doesNotMatch(html,/失敗|代替表示|<details/);
+});

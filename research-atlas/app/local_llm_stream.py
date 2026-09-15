@@ -10,6 +10,7 @@ from __future__ import annotations
 import codecs
 import json
 import queue
+import re
 import threading
 import time
 from typing import Callable
@@ -55,9 +56,9 @@ def _error(exc: Exception) -> LocalStreamError:
         hint = "認証情報を確認してください。" if status in {401, 403} else "接続先とモデル名を確認してください。" if status == 404 else "入力長・構造化出力対応・モデルのログを確認してください。"
         return LocalStreamError(f"ローカルLLMがHTTP {status}を返しました。{hint}応答本文は保存していません。")
     if isinstance(exc, httpx.RemoteProtocolError):
-        return LocalStreamError(_INCOMPLETE)
+        return LocalStreamError(_INCOMPLETE, kind="incomplete")
     if isinstance(exc, (ValueError, TypeError, KeyError, UnicodeError)):
-        return LocalStreamError(_MALFORMED)
+        return LocalStreamError(_MALFORMED, kind="malformed_json")
     return LocalStreamError("ローカルLLMの通信または応答処理に失敗しました。モデルの起動状態を確認してください。途中のJSONは採用していません。")
 
 
@@ -77,6 +78,25 @@ def _json_object(text: str) -> dict:
     return value
 
 
+def _final_answer_object(text: str) -> dict:
+    """Unwrap only recognized final-answer envelopes, never JSON inside reasoning."""
+    answer = text.strip()
+    if answer.startswith("<think>"):
+        end = answer.find("</think>", len("<think>"))
+        if end < 0:
+            raise LocalStreamError("思考タグ <think> が閉じておらず、最終回答を確認できませんでした。途中の回答は採用していません。", kind="reasoning_incomplete")
+        if "<think>" in answer[len("<think>"):end]:
+            raise LocalStreamError(_MALFORMED, kind="malformed_json")
+        answer = answer[end + len("</think>"):].strip()
+    if not answer:
+        raise LocalStreamError("ローカルLLMから最終回答のJSONが返りませんでした。思考部分だけで終了していないか、モデルのログを確認してください。", kind="missing_final_answer")
+    # Accept a single complete JSON fence, not arbitrary prose or brace extraction.
+    fenced = re.fullmatch(r"```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```", answer, re.IGNORECASE)
+    if fenced:
+        answer = fenced.group(1)
+    return _json_object(answer)
+
+
 class _Parser:
     def __init__(self, backend: str):
         self.backend = backend
@@ -93,16 +113,16 @@ class _Parser:
         if content is None:
             return
         if not isinstance(content, str) or self.stopped and content:
-            raise LocalStreamError(_MALFORMED)
+            raise LocalStreamError(_MALFORMED, kind="malformed_json")
         self.parts.append(content)
         self.received_chars += len(content)
 
     def _sse(self, text: str):
         if self.completed:
-            raise LocalStreamError(_MALFORMED)
+            raise LocalStreamError(_MALFORMED, kind="malformed_json")
         if text == "[DONE]":
             if not self.stopped:
-                raise LocalStreamError(_INCOMPLETE)
+                raise LocalStreamError(_INCOMPLETE, kind="incomplete")
             self.completed = True
             return
         record = _json_object(text)
@@ -110,26 +130,26 @@ class _Parser:
             raise LocalStreamError("ローカルLLMが生成中のエラーを通知しました。モデルのログを確認してください。途中のJSONは採用していません。")
         choices = record.get("choices")
         if not isinstance(choices, list) or len(choices) > 1:
-            raise LocalStreamError(_MALFORMED)
+            raise LocalStreamError(_MALFORMED, kind="malformed_json")
         if not choices:
             if "usage" not in record:
-                raise LocalStreamError(_MALFORMED)
+                raise LocalStreamError(_MALFORMED, kind="malformed_json")
             return
         choice = choices[0]
         if not isinstance(choice, dict) or choice.get("index", 0) != 0:
-            raise LocalStreamError(_MALFORMED)
+            raise LocalStreamError(_MALFORMED, kind="malformed_json")
         delta = choice.get("delta", {})
         if not isinstance(delta, dict) or delta.get("role") not in {None, "assistant"}:
-            raise LocalStreamError(_MALFORMED)
+            raise LocalStreamError(_MALFORMED, kind="malformed_json")
         if delta.get("tool_calls") or delta.get("function_call") or delta.get("refusal"):
             raise LocalStreamError("ローカルLLMが要求したJSON以外の応答を返しました。構造化出力対応を確認してください。")
         self._content(delta.get("content"))
         reason = choice.get("finish_reason")
         if reason == "length":
-            raise LocalStreamError(_LENGTH)
+            raise LocalStreamError(_LENGTH, kind="token_limit")
         if reason is not None:
             if reason != "stop" or self.stopped:
-                raise LocalStreamError(_INCOMPLETE)
+                raise LocalStreamError(_INCOMPLETE, kind="incomplete")
             self.stopped = True
 
     def _ndjson(self, text: str):
@@ -137,16 +157,16 @@ class _Parser:
         if "error" in record:
             raise LocalStreamError("ローカルLLMが生成中のエラーを通知しました。モデルのログを確認してください。途中のJSONは採用していません。")
         if type(record.get("done")) is not bool:
-            raise LocalStreamError(_MALFORMED)
+            raise LocalStreamError(_MALFORMED, kind="malformed_json")
         message = record.get("message", {})
         if not isinstance(message, dict) or message.get("tool_calls"):
-            raise LocalStreamError(_MALFORMED)
+            raise LocalStreamError(_MALFORMED, kind="malformed_json")
         self._content(message.get("content"))
         if record["done"]:
             if record.get("done_reason") == "length":
-                raise LocalStreamError(_LENGTH)
+                raise LocalStreamError(_LENGTH, kind="token_limit")
             if record.get("done_reason") != "stop":
-                raise LocalStreamError(_INCOMPLETE)
+                raise LocalStreamError(_INCOMPLETE, kind="incomplete")
             self.stopped = self.completed = True
 
     def _line(self, line: str):
@@ -168,7 +188,7 @@ class _Parser:
             elif field == "event":
                 self.event = value
             elif field not in {"id", "retry"}:
-                raise LocalStreamError(_MALFORMED)
+                raise LocalStreamError(_MALFORMED, kind="malformed_json")
 
     def feed(self, chunk: bytes, *, eof=False):
         self.pending += self.decoder.decode(chunk, final=eof)
@@ -189,12 +209,12 @@ class _Parser:
             if self.backend != "ollama" and self.data:
                 self._line("")
         if eof and not self.completed:
-            raise LocalStreamError(_INCOMPLETE)
+            raise LocalStreamError(_INCOMPLETE, kind="incomplete")
 
     def result(self) -> dict:
         if not self.completed or not self.stopped:
-            raise LocalStreamError(_INCOMPLETE)
-        return _json_object("".join(self.parts))
+            raise LocalStreamError(_INCOMPLETE, kind="incomplete")
+        return _final_answer_object("".join(self.parts))
 
 
 def stream_json(client: httpx.Client, url: str, body: dict, backend: str,

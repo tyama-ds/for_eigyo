@@ -9,6 +9,12 @@ from .field_exports import _csv
 from .foresight_llm import _number_warnings, _validation
 
 
+class NarrativeValidationError(RuntimeError):
+    def __init__(self, message: str, *, kind: str):
+        super().__init__(message)
+        self.kind = kind
+
+
 LIMITATIONS = [
     "同じ分析結果の全期間を用いて作った座標を各期間で共有しています。過去時点で未知の論文も座標の定義に使うため、将来予測の検証ではありません。",
     "マップは最大400論文の表示標本です。件数・重心・語の出現変化はその標本内の観測であり、分野全体の網羅的な変化ではありません。",
@@ -148,10 +154,10 @@ def validate_narrative(value, payload: dict, mode: str, model: str) -> dict:
     try:
         parsed = value if isinstance(value, field_llm.NarrativeOutput) else field_llm.NarrativeOutput.model_validate(value)
     except Exception:
-        raise RuntimeError("LLMの回答形式を確認できません。計測値と定型解釈は保持しています。") from None
+        raise NarrativeValidationError("LLMの回答形式を確認できません。計測値と定型解釈は保持しています。", kind="invalid_schema") from None
     papers = {p["id"]: p for p in payload["papers"]}
     if any(set(section.evidence_ids) - papers.keys() for section in parsed.sections):
-        raise RuntimeError("提供していない論文IDを含むため、LLMの解釈を採用しませんでした。")
+        raise NarrativeValidationError("提供していない論文IDを含むため、LLMの解釈を採用しませんでした。", kind="invalid_evidence_ids")
     # Source numbers come only from measured fields and raw excerpts, never generated prose or IDs.
     metric_keys = ("from_period", "to_period", "from_count", "to_count", "distance_2d", "cosine_distance", "p_value", "q_value", "gap_periods", "from_terms", "to_terms")
     metrics = ({key: payload["centroid"].get(key) for key in
@@ -196,7 +202,7 @@ def generate(report: dict, provider: str = "none", model: str | None = None, *, 
         raise ValueError("LLM接続先が不正です。")
     payload = evidence_payload(report)
     if not any(p["abstract"] for p in payload["papers"]):
-        raise ValueError("解釈に使える抄録がありません。計測値による定型解釈を表示します。")
+        raise NarrativeValidationError("解釈に使える抄録がありません。計測値による定型解釈を表示します。", kind="missing_abstracts")
     instructions = INSTRUCTIONS.replace("complete DISPLAY SAMPLE", "specified analysis scope (sample or full corpus)")
     if report.get("kind") == "centroid":
         from .centroid_reports import INSTRUCTIONS as centroid_instructions
