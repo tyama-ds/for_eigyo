@@ -31,7 +31,7 @@ def now() -> str:
 
 
 def _path(kind: str, identifier: str) -> Path:
-    if kind not in {"datasets", "results", "field_reports", "author_networks", "assessments"} or not re.fullmatch(r"[a-f0-9]{32}", identifier):
+    if kind not in {"datasets", "results", "field_reports", "author_networks", "assessments", "landscape_reports"} or not re.fullmatch(r"[a-f0-9]{32}", identifier):
         raise KeyError("データが見つかりません。")
     folder = data_root() / kind
     folder.mkdir(exist_ok=True)

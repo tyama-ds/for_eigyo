@@ -417,32 +417,79 @@ def _project(matrix):
     return _normalize_positions(reduced)
 
 
-def _map_projection(matrix, embedding):
+def _projection_inputs(matrix):
+    """Bounded, reusable display representation; never fits a time slice."""
+    sample_count, dimensions = matrix.shape
+    if not sample_count:
+        return np.zeros((0, min(50, dimensions))), "empty"
+    reduced_dimensions = min(50, dimensions - 1, max(1, sample_count - 1))
+    if dimensions > 50 and reduced_dimensions >= 1:
+        with python_warnings.catch_warnings():
+            python_warnings.simplefilter("ignore", RuntimeWarning)
+            reduced = TruncatedSVD(n_components=reduced_dimensions, random_state=42).fit_transform(matrix)
+        reduction = f"SVD ({reduced_dimensions}D)"
+    else:
+        reduced = matrix.toarray() if sparse.issparse(matrix) else np.asarray(matrix)
+        reduction = "none"
+    reduced = np.asarray(reduced, dtype=float)
+    reduced /= np.maximum(np.linalg.norm(reduced, axis=1), 1e-12)[:, None]
+    return reduced, reduction
+
+
+def _map_projection(matrix, embedding, requested_method="auto"):
     """Project only the bounded display sample; topic assignment is independent."""
     sample_count, dimensions = matrix.shape
+    if requested_method not in {"auto", "tsne", "pca", "umap"}:
+        raise ValueError("地図の投影法は auto・tsne・pca・umap を指定してください。")
     prefix = {"tfidf": "TF-IDF", "nmf": "NMF 文書–トピック重み", "lda": "LDA 文書–トピック確率"}.get(embedding, "Sentence Transformer")
     linear = "SVD" if sparse.issparse(matrix) else "PCA"
 
     def fallback(reason):
         return (_project(matrix), f"{prefix} → {linear} (2D; 少数・重複文書の線形投影)",
                 {"algorithm": linear.lower(), "sample_count": sample_count,
-                 "input_dimensions": dimensions, "fallback_reason": reason})
+                 "input_dimensions": dimensions, "fallback_reason": reason,
+                 "requested_method": requested_method, "random_state": 42})
 
+    umap_type = None
+    if requested_method == "umap":
+        try:
+            from umap import UMAP
+            umap_type = UMAP
+        except ImportError as exc:
+            raise ValueError("UMAP が未導入です。requirements.txt の umap-learn をインストールして再起動してください。") from exc
+    if requested_method == "pca" and min(sample_count, dimensions) >= 2:
+        reduced, reduction = _projection_inputs(matrix)
+        if min(reduced.shape) >= 2:
+            with python_warnings.catch_warnings():
+                python_warnings.simplefilter("ignore", RuntimeWarning)
+                estimator = PCA(n_components=2, svd_solver="full")
+                projected = estimator.fit_transform(reduced)
+            ratios = np.nan_to_num(estimator.explained_variance_ratio_).tolist()
+            return (_normalize_positions(projected), f"{prefix} → PCA (2D)",
+                    {"algorithm": "pca", "requested_method": requested_method,
+                     "sample_count": sample_count, "input_dimensions": dimensions,
+                     "reduced_dimensions": reduced.shape[1], "reduction": reduction,
+                     "explained_variance_ratio": ratios, "random_state": 42})
     if sample_count < 6 or dimensions < 2:
         return fallback("tiny_sample")
     # Retain up to 50 directions before t-SNE. This is never a 10,000-paper distance matrix.
-    reduced_dimensions = min(50, dimensions - 1, sample_count - 1)
-    if dimensions > 50 and reduced_dimensions >= 2:
-        reduced = TruncatedSVD(n_components=reduced_dimensions, random_state=42).fit_transform(matrix)
-        reduction = f"SVD ({reduced_dimensions}D) → "
-    else:
-        reduced = matrix.toarray() if sparse.issparse(matrix) else np.asarray(matrix)
-        reduction = ""
-        reduced_dimensions = reduced.shape[1]
-    reduced = np.asarray(reduced, dtype=float)
-    reduced /= np.maximum(np.linalg.norm(reduced, axis=1), 1e-12)[:, None]
+    reduced, reduction_name = _projection_inputs(matrix)
+    reduced_dimensions = reduced.shape[1]
+    reduction = "" if reduction_name == "none" else reduction_name + " → "
     if len(np.unique(np.round(reduced, 9), axis=0)) < 3:
         return fallback("insufficient_unique_vectors")
+    if requested_method == "umap":
+        neighbors = min(15, sample_count - 1)
+        estimator = umap_type(n_components=2, n_neighbors=neighbors, min_dist=0.1,
+                              metric="cosine", random_state=42, n_jobs=1, init="random")
+        projected = estimator.fit_transform(reduced)
+        if not np.isfinite(projected).all():
+            raise ValueError("UMAP の座標が非有限値になりました。PCA を選択してください。")
+        return (_normalize_positions(projected), f"{prefix} → {reduction}UMAP (2D; cosine)",
+                {"algorithm": "umap", "requested_method": requested_method,
+                 "sample_count": sample_count, "input_dimensions": dimensions,
+                 "reduced_dimensions": reduced_dimensions, "n_neighbors": neighbors,
+                 "min_dist": 0.1, "metric": "cosine", "random_state": 42})
     perplexity = min(30.0, max(2.0, (sample_count - 1) / 3))
     estimator = TSNE(n_components=2, perplexity=perplexity, metric="cosine", init="pca",
                      learning_rate="auto", random_state=42, max_iter=750,
@@ -452,7 +499,9 @@ def _map_projection(matrix, embedding):
         return fallback("nonfinite_tsne_coordinates")
     return (_normalize_positions(projected),
             f"{prefix} → {reduction}t-SNE (2D; cosine; perplexity={perplexity:.1f})",
-            {"algorithm": "tsne", "sample_count": sample_count, "input_dimensions": dimensions,
+            {"algorithm": "tsne", "requested_method": requested_method,
+             "selection_reason": "usable_sample" if requested_method == "auto" else "user_selected",
+             "sample_count": sample_count, "input_dimensions": dimensions,
              "reduced_dimensions": reduced_dimensions, "perplexity": round(perplexity, 3),
              "random_state": 42, "maximum_iterations": 750, "metric": "cosine"})
 
@@ -752,12 +801,16 @@ def _map_indices(papers, labels):
     return sorted(selected)
 
 
-def _build_map(papers, labels, matrix, embedding):
+def _build_map(papers, labels, matrix, embedding, requested_method="auto"):
     indices = _map_indices(papers, labels)
     subset = matrix[indices]
-    positions, projection_method, projection_details = _map_projection(subset, embedding)
+    positions, projection_method, projection_details = (_map_projection(subset, embedding)
+        if requested_method == "auto" else _map_projection(subset, embedding, requested_method))
+    vectors, reduction = _projection_inputs(subset)
     nodes = [{"id": papers[i]["id"], "label": papers[i]["title"], "topic_id": papers[i]["topic_id"],
               "year": papers[i]["year"], "citations": papers[i]["citations"] or 0,
+              "publication_date": papers[i].get("publication_date", ""),
+              "date_precision": papers[i].get("date_precision", "year"),
               "x": round(float(positions[j, 0]), 5), "y": round(float(positions[j, 1]), 5)} for j, i in enumerate(indices)]
     edges = []
     if len(indices) > 1:
@@ -778,6 +831,10 @@ def _build_map(papers, labels, matrix, embedding):
             "method": projection_method
                       + " / 表示文書間の cosine 近傍（引用関係ではありません）",
             "projection": projection_details,
+            "projection_inputs": {"paper_ids": [node["id"] for node in nodes],
+                "vectors": np.round(vectors, 9).tolist(), "embedding": embedding,
+                "source": "saved_analysis_representation", "dimensions": vectors.shape[1],
+                "original_dimensions": subset.shape[1], "reduction": reduction},
             "truncated": len(papers) > MAP_LIMIT}
 
 
@@ -823,6 +880,8 @@ def analyze(papers: list[dict], options: dict | None = None, progress_callback=N
     if len(papers) > MAX_DATASET_PAPERS:
         raise ValueError(f"このローカル版の分析上限は {MAX_DATASET_PAPERS:,} 件です。対象期間や検索条件を絞ってください。")
     options = options or {}
+    if options.get("map_projection", "auto") not in {"auto", "tsne", "pca", "umap"}:
+        raise ValueError("地図の投影法は auto・tsne・pca・umap を指定してください。")
     current_year = date.today().year
     first_year = _integer(options.get("start_year"), current_year - 5, 1800, current_year, "開始年")
     last_year = _integer(options.get("end_year"), current_year - 1, 1800, current_year, "終了年")
@@ -958,7 +1017,7 @@ def analyze(papers: list[dict], options: dict | None = None, progress_callback=N
         "タイトル・抄録・キーワードを結合し、選択した文書表現とトピック分類法を全対象論文へ適用します。手法・モデルID・実際の分類数はメタデータに記録します。失敗時に別手法へ自動変更しません。",
         "TF-IDF は単語・二語連結、英語停止語、最大 6,000 特徴です。日本語の形態素分割は行わないため、多言語文書には Transformer を検討してください。Transformer はモデル最大長から特殊トークン分を除いた区間（最大 510 トークン）へ本文を重複なしで分割し、各区間の正規化埋め込みをトークン数で加重平均して再正規化します。",
         "Transformer は 1 文書 32,000 字、最大 12 区間、全体 40,000 区間までです。文字上限超過では先頭と末尾、区間上限超過では全文に分散した区間を抽出します。上限による部分抽出は警告し、実際の区間数・対象文書数をメタデータへ記録します。これは抄録全体を学習する専用モデルの代替ではありません。",
-        "技術マップは最大 400 論文をトピック・出版年が分散するよう抽出し、その表示集合だけを t-SNE で二次元へ投影します。高次元の文書表現は SVD で最大 50 次元へ縮約して正規化します。cosine 距離、PCA 初期化、seed=42、最大 750 反復、perplexity は標本数に応じて最大 30 です。6 件未満または異なる表現が 3 未満の場合は線形 SVD / PCA に戻ります。",
+        "技術マップは最大 400 論文をトピック・出版年が分散するよう抽出し、その表示集合全体を auto・PCA・t-SNE・UMAP の選択法で二次元へ投影します。auto は通常 t-SNE、少数・重複文書では線形 SVD / PCA を選びます。高次元の文書表現は SVD で最大 50 次元へ縮約して正規化し、再投影用に保存します。年・四半期・月の層別表示では同じ座標を使い、期間別の再学習は行いません。t-SNE は cosine 距離・PCA 初期化・seed=42・最大 750 反復・perplexity 最大 30、UMAP は cosine 距離・近傍最大 15・min_dist=0.1・seed=42 です。",
         "t-SNE は局所的な文書の近傍関係を見やすくする表示です。遠いトピック同士の距離、島の面積・密度、軸に技術成熟度や成功確率の意味はありません。表示標本が変わると配置も変わります。辺は地図に入力した文章表現または文書–トピック分布による表示文書間の cosine 近傍で、引用関係ではありません。トピック分類・件数・予測は表示座標によらず全対象論文で計算します。",
         "共著者の辺は実際に同じ論文に記載された著者間の共著件数です。最多 120 著者・240 辺を表示し、表示著者間の全辺で共著コミュニティを計算します。明示ID・明示別名を優先し、ID欠測の名前一致は推定として扱います。所属は各著者へ明示されたものだけを使います。",
         "累積引用は取り込み時点の Cited by 合計です。出版年別累積引用は受領年別の推移ではありません。年別引用は追加された受領年ごとの新規引用数のみを使用し、欠測を 0 に置換しません。対象期間より古い論文への引用は含みません。",
@@ -978,7 +1037,7 @@ def analyze(papers: list[dict], options: dict | None = None, progress_callback=N
         "kmeans": "K-means は選択した文書表現を単一クラスタへ割り当てます。1,500 件超では MiniBatchKMeans を使用し、代表語はクラスタ内の平均 TF-IDF 上位語です。トピック数は文書数と異なる表現数までに制限し、乱数 seed=42 とします。",
         "nmf": "NMF は非負の TF-IDF 行列を文書–トピック重みとトピック–語重みに分解します。各論文を最大のトピック重みに割り当て、代表語にはモデルのトピック–語重み上位を使います。地図は文書ごとに合計 1 へ正規化した成分重みの表示です。これは確率でも SBERT の意味埋め込みでもありません。",
         "lda": "LDA は共通の語彙抽出条件で作った単語出現回数を使う確率的トピックモデルです。論文は最大の事後トピック確率へ割り当て、代表語は学習したトピック–語分布の上位語です。地図は文書–トピック確率を投影します。TF-IDF は選択する入力モード名ですが、LDA の学習自体には回数を使います。",
-        "bertopic": "BERTopic は SBERT 埋め込みを UMAP で縮約し HDBSCAN で密度により分類します。代表語には分類結果の c-TF-IDF を使用します。指定トピック数は削減目標で、K-means の固定クラスタ数と同じ意味ではありません。表示地図は元の SBERT 埋め込みを別途 t-SNE 投影したもので、内部 UMAP の座標を流用しません。",
+        "bertopic": "BERTopic は SBERT 埋め込みを UMAP で縮約し HDBSCAN で密度により分類します。代表語には分類結果の c-TF-IDF を使用します。指定トピック数は削減目標で、K-means の固定クラスタ数と同じ意味ではありません。表示地図は元の SBERT 埋め込みを別途選択した投影法で二次元化したもので、内部 UMAP の座標を流用しません。",
     }
     methodology.insert(2, topic_methodology[topic_model])
     if field_geometry is not None:
@@ -991,7 +1050,10 @@ def analyze(papers: list[dict], options: dict | None = None, progress_callback=N
         methodology.append(message)
     if progress_callback:
         progress_callback(f"代表 {min(MAP_LIMIT, len(selected))} 件の技術マップを作成（集計は全件）")
-    technology_map = _build_map(selected, labels, map_matrix, map_input)
+    requested_projection = options.get("map_projection", "auto")
+    technology_map = (_build_map(selected, labels, map_matrix, map_input)
+                      if requested_projection == "auto" else
+                      _build_map(selected, labels, map_matrix, map_input, requested_projection))
     return {"meta": {"start_year": first_year, "end_year": last_year, "years": years,
                      "single_year_corpus": single_year_corpus, "annual_comparison_available": annual_comparison,
                      "embedding": embedding, "embedding_model": embedding_model, "forecast_horizon": horizon,
@@ -1001,6 +1063,7 @@ def analyze(papers: list[dict], options: dict | None = None, progress_callback=N
                      "analysis_scope": "full_corpus", "dataset_limit": MAX_DATASET_PAPERS,
                      "map_display_limit": MAP_LIMIT, "large_corpus": len(selected) > LARGE_CORPUS_THRESHOLD,
                      "map_representation": map_representation, "min_topic_size": min_topic_size,
+                     "map_projection": options.get("map_projection", "auto"),
                      "unclassified_papers": unclassified_count, "classified_topics": classified_topic_count,
                      "paper_count": len(selected), "abstract_coverage": round(abstract_coverage, 2),
                      "citation_history_coverage": round(citation_history_coverage, 2),

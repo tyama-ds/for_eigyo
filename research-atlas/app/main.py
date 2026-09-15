@@ -32,7 +32,7 @@ from app.limits import MAX_IMPORT_ROWS, MAX_DATASET_PAPERS, MAX_ANALYSIS_YEARS, 
 
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
-app = FastAPI(title="Research Atlas", version="1.8.2", description="Multi-source bibliometrics & evidence-grounded technology foresight")
+app = FastAPI(title="Research Atlas", version="1.9.0", description="Multi-source bibliometrics & evidence-grounded technology foresight")
 MAX_NON_UPLOAD_REQUEST_BYTES = 256 * 1024 * 1024
 EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="atlas-analysis")
 SOURCE_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="atlas-discovery")
@@ -357,6 +357,7 @@ class AnalyzeRequest(BaseModel):
     embedding: Literal["tfidf", "transformer", "sbert"] = "tfidf"
     sbert_model: Literal["multilingual_minilm", "mpnet"] | None = None
     topic_model: Literal["kmeans", "nmf", "lda", "bertopic"] = "kmeans"
+    map_projection: Literal["auto", "tsne", "pca", "umap"] = "auto"
     min_topic_size: int = Field(default=5, ge=2, le=100)
     horizon: int = Field(default=3, ge=1, le=3)
     window_months: Literal[1, 3, 6] = 3
@@ -696,4 +697,8 @@ from app.foresight_api import router as foresight_router
 app.include_router(foresight_router)
 from app.map_terrain_api import router as terrain_router
 app.include_router(terrain_router)
+from app.landscape_api import router as landscape_router
+app.include_router(landscape_router)
+from app.landscape_reports_api import router as landscape_reports_router
+app.include_router(landscape_reports_router)
 app.mount("/static", StaticFiles(directory=str(ROOT / "static"), check_dir=False), name="static")
