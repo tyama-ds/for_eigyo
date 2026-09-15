@@ -137,7 +137,8 @@ class QueryFormatTests(unittest.TestCase):
 
     def test_upper_ipc_branches_render_without_changing_fine_code_scope(self):
         cases = {
-            'jplatpat': {'H04L': 'H04L/IP'},
+            'jplatpat': {'H': 'H/IP', 'H04': 'H04/IP', 'B': 'B/IP', 'B60': 'B60/IP',
+                         'H04L': 'H04L/IP', 'B60W': 'B60W/IP'},
             'derwent_innovation': {'H04': 'IC=(H04);', 'H04L': 'IC=(H04L);'},
             'derwent_dii': {'H04': 'IP=(H04*)', 'H04L': 'IP=(H04L*)'},
             'espacenet': {'H': 'ipc=H', 'H04': 'ipc=H04', 'H04L': 'ipc=H04L'},
@@ -160,9 +161,18 @@ class QueryFormatTests(unittest.TestCase):
         self.assertEqual(export_query(mixed, 'patentscope')['expression'],
                          '(EN_ALLTXT:("vehicle") AND (IC:("H04L") OR IC_EX:("H01M 10/00")))')
         self.assertFalse(export_query(mixed, 'uspto', descendants=True)['can_copy'])
+        mixed_jp = dict(type='改善案', keywords=['自動運転'], include_terms=['制御'], exclude_terms=['鉄道'],
+                        classifications=[dict(kind='IPC', code='B60', verified=True),
+                                         dict(kind='IPC', code='G05D1/00', verified=True)])
+        before = copy.deepcopy(mixed_jp)
+        result = export_query(mixed_jp, 'jplatpat')
+        self.assertTrue(result['can_copy'], result['problems'])
+        self.assertEqual(result['expression'], '[[自動運転/TX]*[B60/IP+G05D1/00/IP]*[制御/TX]]-[鉄道/TX]')
+        self.assertEqual(result['omitted_classifications'], [])
+        self.assertEqual(mixed_jp, before)
 
     def test_unconfirmed_upper_scope_is_blocked_without_silent_omission(self):
-        cases = {'jplatpat': ('H', 'H04'), 'derwent_dii': ('H',),
+        cases = {'derwent_dii': ('H',),
                  'derwent_innovation': ('H',)}
         for format_id, codes in cases.items():
             for code in codes:

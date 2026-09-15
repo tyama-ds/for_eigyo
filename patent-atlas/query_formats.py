@@ -11,8 +11,9 @@ VERIFIED_AT = '2026-09-12'
 PROFILES = {
     'jplatpat': dict(name='J-PlatPat', interface='特許・実用新案検索 → 論理式入力', url='https://www.j-platpat.inpit.go.jp/p0100',
         systems=['IPC','CPC','F-term'], text_scope='全文（/TX）。和文・英文の検索対象を検索画面で指定。',
-        class_note='IPCは /IP、CPCは /CP、F-termは /FT。通常の分類検索は下位階層も含みます。「指定コード」は完全一致の意味ではありません。上位IPCはサブクラスの論理式出力に対応。',
+        class_note='IPCは /IP、CPCは /CP、F-termは /FT。通常の分類検索は下位階層も含みます。「指定コード」は完全一致の意味ではありません。上位IPCもセクション（B/IP）・クラス（B60/IP）・サブクラス（B60W/IP）の形で出力します。',
         sources=[('J-PlatPat 論理式入力ヘルプ','https://www.j-platpat.inpit.go.jp/help/ja/p01/arithmetic.html'),
+                 ('J-PlatPat 特許・実用新案検索ヘルプ（IPC検索項目）','https://www.j-platpat.inpit.go.jp/help/ja/p01/p0101.html#9994'),
                  ('特許庁 GXTI検索式のJ-PlatPat入力例（H02S/IP）','https://www.jpo.go.jp/resources/statistics/document/gxti/gxti_jplatpat.pdf')], language='ja_en', descendants=False),
     'derwent_innovation': dict(name='Derwent Patent Search / Innovation', interface='Expert Search（専門検索）', url='https://www.derwentinnovation.com/',
         systems=['IPC','CPC','F-term'], text_scope='タイトル・要約・請求項（CTB）。コレクションによってDWPIも検索。明細書の全文TEXTとは範囲が異なります。',
@@ -103,10 +104,6 @@ def _upper_ipc_problem(node, format_id):
         return ('Derwent Patent Search / Innovation の上位IPC ' + node.value +
                 ' は、1文字のセクションを検索する構文を公式資料で確認できていないため出力を保留します。'
                 '分類Lookupから取得するか、クラスまで絞ってください。')
-    if format_id == 'jplatpat' and len(node.value) < 4:
-        return ('J-PlatPat の上位IPC ' + node.value +
-                ' は、セクション・クラス単位の論理式入力を公式資料で確認できていないため出力を保留します。'
-                'サブクラスまで絞るか、PATENTSCOPE形式を選んでください。')
     if format_id == 'derwent_dii' and len(node.value) == 1:
         return ('Derwent Innovations Index の上位IPC ' + node.value +
                 ' は、1文字の接頭辞によるワイルドカード検索の制約を確認できていないため出力を保留します。'
