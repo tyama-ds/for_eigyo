@@ -105,7 +105,7 @@ def create_assessment(body: AssessmentRequest):
     summary = storage.read("results", body.result_id, include_papers=False)
     count = summary.get("meta", {}).get("paper_count", len(summary.get("papers", [])))
     if count > PAPER_LIMIT:
-        raise ValueError("有望領域の反復探索は10,000件までです。全件集計・NMF地図・分野レポートは200,000件まで利用できます。対象期間を絞った分析から探索してください。")
+        raise ValueError("有望領域の反復探索は10,000件までです。大規模データは全件集計・技術マップの全件対応版で確認し、対象期間を絞った分析から反復探索してください。")
     result = storage.read("results", body.result_id)
     job = new_job("探索の準備中")
     submit_with_context(EXECUTOR, run_create, job, result)

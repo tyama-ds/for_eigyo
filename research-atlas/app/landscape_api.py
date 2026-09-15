@@ -10,5 +10,6 @@ router = APIRouter()
 
 @router.get("/api/results/{result_id}/landscape")
 def get_landscape(result_id: str, projection: Literal["auto", "tsne", "pca", "umap"] = "auto",
-                  interval: Literal["year", "quarter", "month"] = "year"):
-    return build_landscape(result_id, projection=projection, interval=interval)
+                  interval: Literal["year", "quarter", "month"] = "year",
+                  scope: Literal["sample", "full"] = "sample"):
+    return build_landscape(result_id, projection=projection, interval=interval, scope=scope)

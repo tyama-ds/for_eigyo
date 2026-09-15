@@ -386,7 +386,7 @@ def fit_topic_model(documents, tfidf, terms, embeddings, method, n_topics, min_t
         raise TopicModelError("トピックモデルは nmf・lda・bertopic のいずれかを指定してください。")
     if not isinstance(documents, (list, tuple)) or not documents or not all(isinstance(item, str) for item in documents):
         raise TopicModelError("文書は空ではない文字列のリストで指定してください（空文字の文書は情報不足として扱います）。")
-    if len(documents) > MAX_DATASET_PAPERS:
+    if MAX_DATASET_PAPERS is not None and len(documents) > MAX_DATASET_PAPERS:
         raise TopicModelError(f"トピックモデルの分析上限は {MAX_DATASET_PAPERS:,} 件です。")
     requested = _positive_integer(n_topics, "トピック数")
     if method == "bertopic":

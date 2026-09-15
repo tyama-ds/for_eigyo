@@ -50,12 +50,19 @@ test('CSV selection accepts files above 20 MB and 256 MB without a server size l
 
 test('upload instructions retain row limits and do not invent a file size limit',()=>{
   for(const maxBytes of [null,undefined,268435456]){
-    const h=context(['updateUploadMode'],{state:{status:{limits:{max_upload_bytes:maxBytes}},uploadMode:'papers'},$$:()=>[],mergeChoice:()=>''});
+    const h=context(['updateUploadMode'],{state:{status:{limits:{max_upload_bytes:maxBytes,max_dataset_papers:200000}},uploadMode:'papers'},$$:()=>[],mergeChoice:()=>''});
     h.ctx.updateUploadMode();
     const label=h.$('#upload-limits').textContent;
     assert.match(label,/20000行/);assert.match(label,/200000論文/);
     if(maxBytes)assert.match(label,/256 MB/);
     else{assert.match(label,/ファイル容量の固定上限なし/);assert.doesNotMatch(label,/256|最大 .*MB/);}
+  }
+});
+
+test('null corpus limit remains uncapped in upload instructions',()=>{
+  for(const limit of [null,undefined]){
+    const h=context(['updateUploadMode'],{state:{status:{limits:{max_dataset_papers:limit}},uploadMode:'papers'},$$:()=>[],mergeChoice:()=>''});
+    h.ctx.updateUploadMode();assert.match(h.$('#upload-limits').textContent,/蓄積件数の固定上限なし/);assert.doesNotMatch(h.$('#upload-limits').textContent,/200000/);
   }
 });
 

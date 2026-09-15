@@ -29,10 +29,11 @@ from app.embedding_models import SBERT_MODELS
 from app import field_llm, field_exports, author_exports
 from app import large_storage
 from app.limits import MAX_IMPORT_ROWS, MAX_DATASET_PAPERS, MAX_ANALYSIS_YEARS, PAPER_PAGE_LIMIT, public_limits
+from app.cluster_models import cluster_model_catalog
 
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
-app = FastAPI(title="Research Atlas", version="1.9.0", description="Multi-source bibliometrics & evidence-grounded technology foresight")
+app = FastAPI(title="Research Atlas", version="2.0.0", description="Multi-source bibliometrics & evidence-grounded technology foresight")
 MAX_NON_UPLOAD_REQUEST_BYTES = 256 * 1024 * 1024
 EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="atlas-analysis")
 SOURCE_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="atlas-discovery")
@@ -111,8 +112,9 @@ def status():
             "label": "多言語 MiniLM" if key == "multilingual_minilm" else "SBERT MPNet（英語）",
             "language": "multilingual" if key == "multilingual_minilm" else "en"}
             for key, identifier in SBERT_MODELS.items()],
-        "topic_models": [{"id": key, "label": label, "available": bertopic if key == "bertopic" else True}
-            for key, label in (("kmeans", "K-means"), ("nmf", "NMF"), ("lda", "LDA"), ("bertopic", "BERTopic"))],
+        "topic_models": [dict(item, available=True) for item in cluster_model_catalog()] +
+            [{"id": key, "label": label, "available": bertopic if key == "bertopic" else True}
+             for key, label in (("nmf", "NMF"), ("lda", "LDA"), ("bertopic", "BERTopic"))],
         "datasets": storage.list_datasets(), "default_start_year": date.today().year - 5,
         "default_end_year": date.today().year - 1}
 
@@ -315,7 +317,7 @@ def merge_datasets(body: MergeRequest):
     if base["is_demo"] != additional["is_demo"]:
         raise ValueError("合成デモと実際の論文は統合できません。実データ同士を選択してください。")
     papers, report = merge_papers(base["papers"], additional["papers"])
-    if len(papers) > MAX_DATASET_PAPERS:
+    if MAX_DATASET_PAPERS is not None and len(papers) > MAX_DATASET_PAPERS:
         raise ValueError(f"統合後の論文が{MAX_DATASET_PAPERS:,}件を超えます。検索範囲を絞ってください。")
     report["warnings"] = list(dict.fromkeys(base.get("report", {}).get("warnings", []) + additional.get("report", {}).get("warnings", []) + report.get("warnings", [])))
     report["source_reports"] = source_reports(base) + source_reports(additional)
@@ -356,7 +358,8 @@ class AnalyzeRequest(BaseModel):
     n_topics: int = Field(default=8, ge=2, le=20)
     embedding: Literal["tfidf", "transformer", "sbert"] = "tfidf"
     sbert_model: Literal["multilingual_minilm", "mpnet"] | None = None
-    topic_model: Literal["kmeans", "nmf", "lda", "bertopic"] = "kmeans"
+    topic_model: Literal["kmeans", "kmeans_pp", "minibatch_kmeans", "xmeans", "knn_graph", "dbscan", "gmm", "birch", "agglomerative", "nmf", "lda", "bertopic"] = "kmeans"
+    cluster_options: dict[str, float | int] = Field(default_factory=dict)
     map_projection: Literal["auto", "tsne", "pca", "umap"] = "auto"
     min_topic_size: int = Field(default=5, ge=2, le=100)
     horizon: int = Field(default=3, ge=1, le=3)

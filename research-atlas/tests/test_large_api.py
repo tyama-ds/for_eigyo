@@ -36,7 +36,7 @@ def saved(client):
 
 def test_capacity_and_multiyear_validation(client):
     limits = client.get("/api/status").json()["limits"]
-    assert limits == {"max_import_rows": 20000, "max_dataset_papers": 200000,
+    assert limits == {"max_import_rows": 20000, "max_dataset_papers": None,
                       "max_upload_bytes": None, "max_analysis_years": 50, "paper_page_limit": 200}
     body = {"dataset_id": "a" * 32, "start_year": 1976, "end_year": 2025}
     # Missing dataset is checked only after 50-year input validation succeeds.

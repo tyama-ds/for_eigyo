@@ -30,6 +30,7 @@ from .frontiers import analyze_frontiers
 from .dates import normalize_paper_date
 from .embedding_models import LEGACY_TRANSFORMER_MODEL, resolve_embedding_model
 from .topic_models import LARGE_CORPUS_THRESHOLD, LEXICAL_BATCH_SIZE, SEMANTIC_PAPER_LIMIT, fit_topic_model
+from .cluster_models import CLUSTER_MODELS, fit_cluster_model
 from .limits import MAX_ANALYSIS_YEARS, MAX_DATASET_PAPERS
 from .field_analysis import store_nmf_geometry
 from .author_network import build_author_network
@@ -355,11 +356,11 @@ def _cluster(matrix, requested, notices, progress_callback=None):
     if effective <= 1:
         return np.zeros(matrix.shape[0], dtype=int)
     if matrix.shape[0] > 1500:
-        estimator = MiniBatchKMeans(n_clusters=effective, random_state=42, n_init=5,
+        estimator = MiniBatchKMeans(n_clusters=effective, init="random", random_state=42, n_init=5,
                                     batch_size=LEXICAL_BATCH_SIZE if matrix.shape[0] > LARGE_CORPUS_THRESHOLD else 512,
                                     max_iter=100, reassignment_ratio=0)
     else:
-        estimator = KMeans(n_clusters=effective, random_state=42, n_init=10, max_iter=200)
+        estimator = KMeans(n_clusters=effective, init="random", random_state=42, n_init=10, max_iter=200)
     with python_warnings.catch_warnings():
         python_warnings.simplefilter("ignore", ConvergenceWarning)
         if matrix.shape[0] > LARGE_CORPUS_THRESHOLD:
@@ -431,7 +432,7 @@ def _projection_inputs(matrix):
     else:
         reduced = matrix.toarray() if sparse.issparse(matrix) else np.asarray(matrix)
         reduction = "none"
-    reduced = np.asarray(reduced, dtype=float)
+    reduced = np.array(reduced, dtype=float, copy=True)
     reduced /= np.maximum(np.linalg.norm(reduced, axis=1), 1e-12)[:, None]
     return reduced, reduction
 
@@ -877,7 +878,7 @@ def analyze(papers: list[dict], options: dict | None = None, progress_callback=N
     """
     if not papers:
         raise ValueError("論文がありません。Scopus の CSV を取り込んでください。")
-    if len(papers) > MAX_DATASET_PAPERS:
+    if MAX_DATASET_PAPERS is not None and len(papers) > MAX_DATASET_PAPERS:
         raise ValueError(f"このローカル版の分析上限は {MAX_DATASET_PAPERS:,} 件です。対象期間や検索条件を絞ってください。")
     options = options or {}
     if options.get("map_projection", "auto") not in {"auto", "tsne", "pca", "umap"}:
@@ -896,8 +897,8 @@ def analyze(papers: list[dict], options: dict | None = None, progress_callback=N
         raise ValueError("文書表現は tfidf・sbert・transformer を指定してください。")
     selection = resolve_embedding_model(embedding, options.get("sbert_model"))
     topic_model = options.get("topic_model", "kmeans")
-    if topic_model not in {"kmeans", "nmf", "lda", "bertopic"}:
-        raise ValueError("トピック分類は kmeans・nmf・lda・bertopic を指定してください。")
+    if topic_model not in {*CLUSTER_MODELS, "nmf", "lda", "bertopic"}:
+        raise ValueError("対応するクラスタリング・トピックモデルを指定してください。")
     if topic_model in {"nmf", "lda"} and embedding != "tfidf":
         raise ValueError("NMF・LDA の入力には TF-IDF を選択してください。SBERT の埋め込みから自動変換しません。")
     if topic_model == "bertopic" and embedding not in {"sbert", "transformer"}:
@@ -946,19 +947,13 @@ def analyze(papers: list[dict], options: dict | None = None, progress_callback=N
         matrix_storage="sparse_csr" if sparse.issparse(matrix) else "dense_embeddings")
     if progress_callback:
         progress_callback(f"{topic_model.upper()} で全 {len(selected):,} 件を分類")
-    if topic_model == "kmeans":
-        labels = _cluster(matrix, n_topics, notices, progress_callback)
-        fitted = {"labels": labels, "map_matrix": matrix, "topic_keywords": None,
-                  "outlier_label": None, "membership": None,
-                  "details": {"method": "kmeans", "estimator": "MiniBatchKMeans" if len(selected) > 1500 else "KMeans",
-                              "requested_topics": n_topics, "actual_topics": len(set(labels)),
-                              "random_state": 42, "outlier_count": 0,
-                              "corpus_papers": len(selected), "transform_papers": len(selected),
-                              "training_papers": len(selected),
-                              "training_mode": "full_corpus_minibatch" if len(selected) > LARGE_CORPUS_THRESHOLD else "batch",
-                              "training_passes": 2 if len(selected) > LARGE_CORPUS_THRESHOLD else None,
-                              "sampling": "none",
-                              "membership_description": "文書表現の最近傍クラスタへの単一割当です。所属確率を推定しません。"}}
+    if topic_model in CLUSTER_MODELS:
+        clustering_matrix = (sparse.csr_matrix(matrix.shape, dtype=np.float32)
+            if embedding == "tfidf" and all(term == "情報不足" for term in terms) else matrix)
+        fitted = fit_cluster_model(clustering_matrix, topic_model, n_topics, min_topic_size,
+                                   options=options.get("cluster_options"), progress_callback=progress_callback)
+        labels = np.asarray(fitted["labels"], dtype=int)
+        notices.extend(fitted.get("warnings", []))
     else:
         fitted = fit_topic_model(documents, tfidf, terms, matrix if embedding != "tfidf" else None,
                                  topic_model, n_topics, min_topic_size, progress_callback=progress_callback)
@@ -977,6 +972,8 @@ def analyze(papers: list[dict], options: dict | None = None, progress_callback=N
     map_representation = {"nmf": "nmf_topic_distribution", "lda": "lda_topic_distribution"}.get(
         topic_model, "tfidf" if embedding == "tfidf" else "sbert_embeddings")
     model_details = deepcopy(fitted["details"])
+    if topic_model in CLUSTER_MODELS:
+        model_details["requested_topics"] = n_topics
     del documents
     if progress_callback:
         progress_callback("全件の年次・引用・キーワード推移を集計")
@@ -988,7 +985,7 @@ def analyze(papers: list[dict], options: dict | None = None, progress_callback=N
     topics = _build_topics(selected, labels, tfidf, terms, years, horizon, totals,
                            keyword_override=fitted.get("topic_keywords"), outlier_label=outlier_label,
                            information_insufficient_label=(model_details.get("information_insufficient_label")
-                                                           if topic_model != "bertopic" else None),
+                               if topic_model != "bertopic" and not model_details.get("noise_count") else None),
                            annual_comparison=annual_comparison)
     field_geometry = (store_nmf_geometry(selected, topics, fitted.get("membership"), model_details)
                       if topic_model == "nmf" else None)
@@ -1034,12 +1031,15 @@ def analyze(papers: list[dict], options: dict | None = None, progress_callback=N
         "疎な語の組合せは、全対象論文のタイトル・抄録・キーワード内の実際の語句出現を調べます。各語 3 件以上・独立仮定の期待共起数 nA×nB/N が 2 以上・実際の共起が 2 以下かつ期待の半分未満を候補とします。地図上の空白や密度は使用せず、組合せの新規性・有望性・因果関係を示す値ではありません。",
     ]
     topic_methodology = {
-        "kmeans": "K-means は選択した文書表現を単一クラスタへ割り当てます。1,500 件超では MiniBatchKMeans を使用し、代表語はクラスタ内の平均 TF-IDF 上位語です。トピック数は文書数と異なる表現数までに制限し、乱数 seed=42 とします。",
+        "kmeans": "K-means はランダム初期化で文書表現を単一クラスタへ割り当てます。MiniBatch は別の選択肢です。代表語はクラスタ内の平均 TF-IDF 上位語で、乱数 seed=42 とします。",
         "nmf": "NMF は非負の TF-IDF 行列を文書–トピック重みとトピック–語重みに分解します。各論文を最大のトピック重みに割り当て、代表語にはモデルのトピック–語重み上位を使います。地図は文書ごとに合計 1 へ正規化した成分重みの表示です。これは確率でも SBERT の意味埋め込みでもありません。",
         "lda": "LDA は共通の語彙抽出条件で作った単語出現回数を使う確率的トピックモデルです。論文は最大の事後トピック確率へ割り当て、代表語は学習したトピック–語分布の上位語です。地図は文書–トピック確率を投影します。TF-IDF は選択する入力モード名ですが、LDA の学習自体には回数を使います。",
         "bertopic": "BERTopic は SBERT 埋め込みを UMAP で縮約し HDBSCAN で密度により分類します。代表語には分類結果の c-TF-IDF を使用します。指定トピック数は削減目標で、K-means の固定クラスタ数と同じ意味ではありません。表示地図は元の SBERT 埋め込みを別途選択した投影法で二次元化したもので、内部 UMAP の座標を流用しません。",
     }
-    methodology.insert(2, topic_methodology[topic_model])
+    methodology.insert(2, topic_methodology.get(topic_model,
+        CLUSTER_MODELS.get(topic_model, {}).get("description", "文書表現に対するクラスタリングです。")))
+    if topic_model in CLUSTER_MODELS:
+        methodology.append("クラスタリングと地図の入力は全論文で学習した最大50次元の表現をL2正規化したものです。必要時にSVDで縮約します。分類用の論文標本への間引きは行いません。")
     if field_geometry is not None:
         methodology.append("分野詳細の隣接度は、全対象論文の正規化 NMF 文書–トピック重みを群内平均した重心の cosine 類似度です。全文書の成分重みと群間類似度を保存し、2D地図距離から近さを推定しません。重みは確率ではなく、同じモデル内の比較に限ります。")
     if embedding != "tfidf":
@@ -1054,12 +1054,28 @@ def analyze(papers: list[dict], options: dict | None = None, progress_callback=N
     technology_map = (_build_map(selected, labels, map_matrix, map_input)
                       if requested_projection == "auto" else
                       _build_map(selected, labels, map_matrix, map_input, requested_projection))
+    if topic_model in CLUSTER_MODELS:
+        technology_map["method"] = "全件の共通表現（必要時 SVD≤50・L2正規化） / " + technology_map["method"]
+    # Save a common whole-corpus basis independently of the display sample.
+    # Rows stay with their indexed paper payload so summary API responses can
+    # remain bounded and the full landscape can stream them on demand.
+    full_vectors, full_reduction = _projection_inputs(map_matrix)
+    for start in range(0, len(selected), LEXICAL_BATCH_SIZE):
+        for paper, vector in zip(selected[start:start + LEXICAL_BATCH_SIZE],
+                                 full_vectors[start:start + LEXICAL_BATCH_SIZE]):
+            paper["landscape_vector"] = np.round(vector, 8).tolist()
+    landscape_representation = {"source": "saved_full_corpus_representation", "embedding": map_input,
+        "dimensions": int(full_vectors.shape[1]), "original_dimensions": int(map_matrix.shape[1]),
+        "reduction": full_reduction, "basis_scope": "full_corpus", "paper_count": len(selected)}
+    del full_vectors
     return {"meta": {"start_year": first_year, "end_year": last_year, "years": years,
                      "single_year_corpus": single_year_corpus, "annual_comparison_available": annual_comparison,
                      "embedding": embedding, "embedding_model": embedding_model, "forecast_horizon": horizon,
                      "embedding_details": embedding_details, "embedding_model_preset": selection["preset"],
                      "sbert_model": selection["preset"] if embedding == "sbert" else None,
                      "topic_model": topic_model, "topic_model_details": model_details,
+                     "cluster_options": deepcopy(options.get("cluster_options") or {}),
+                     "landscape_representation": landscape_representation,
                      "analysis_scope": "full_corpus", "dataset_limit": MAX_DATASET_PAPERS,
                      "map_display_limit": MAP_LIMIT, "large_corpus": len(selected) > LARGE_CORPUS_THRESHOLD,
                      "map_representation": map_representation, "min_topic_size": min_topic_size,

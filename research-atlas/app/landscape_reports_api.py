@@ -5,7 +5,7 @@ from typing import Literal
 
 from fastapi import APIRouter
 from fastapi.responses import Response
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from . import landscape_reports, storage
 from .job_context import submit_with_context
@@ -19,9 +19,21 @@ class LandscapeReportRequest(BaseModel):
     projection: Literal["auto", "pca", "umap", "tsne"] = "auto"
     projection_id: str | None = Field(default=None, max_length=100)
     interval: Literal["year", "quarter", "month"] = "year"
-    movement_id: str = Field(min_length=1, max_length=200)
+    scope: Literal["sample", "full"] = "sample"
+    kind: Literal["movement", "centroid"] = "movement"
+    movement_id: str | None = Field(default=None, min_length=1, max_length=200)
+    topic_id: str | None = Field(default=None, min_length=1, max_length=100)
+    period_id: str | None = Field(default=None, min_length=1, max_length=30)
     provider: Literal["none", "local", "openai"] = "none"
     model: str | None = Field(default=None, min_length=1, max_length=160)
+
+    @model_validator(mode="after")
+    def target_valid(self):
+        if self.kind == "movement" and not self.movement_id:
+            raise ValueError("比較する重心移動を指定してください。")
+        if self.kind == "centroid" and (not self.topic_id or not self.period_id):
+            raise ValueError("代表論文を読むクラスターと期間を指定してください。")
+        return self
 
 
 def _progress(job_id, **values):
@@ -34,8 +46,13 @@ def run_landscape_report(job_id: str, options: dict):
     report = None
     try:
         _progress(job_id, status="running", stage="共有座標と前後の根拠論文を照合")
-        report = landscape_reports.prepare_report(options["result_id"], options["projection"], options["interval"],
-                                                  options["movement_id"], options.get("projection_id"))
+        if options.get("kind") == "centroid":
+            from .centroid_reports import prepare_report
+            report = prepare_report(options["result_id"], options["projection"], options["interval"],
+                                    options["topic_id"], options["period_id"], options.get("projection_id"), options.get("scope", "sample"))
+        else:
+            report = landscape_reports.prepare_report(options["result_id"], options["projection"], options["interval"],
+                                                      options["movement_id"], options.get("projection_id"), options.get("scope", "sample"))
         storage.save("landscape_reports", report)
         _progress(job_id, landscape_report_id=report["id"], projection_id=report["projection_id"])
         if options["provider"] != "none":

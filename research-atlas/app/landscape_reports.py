@@ -45,10 +45,11 @@ def _unique_text(rows) -> list[str]:
 
 
 def prepare_report(result_id: str, projection: str, interval: str, movement_id: str,
-                   projection_id: str | None = None) -> dict:
+                   projection_id: str | None = None, scope: str = "sample") -> dict:
     from .landscape import build_landscape
 
-    landscape = build_landscape(result_id, projection=projection, interval=interval)
+    landscape = (build_landscape(result_id, projection=projection, interval=interval) if scope == "sample" else
+                 build_landscape(result_id, projection=projection, interval=interval, scope=scope))
     if projection_id and projection_id != landscape["projection_id"]:
         raise ValueError("座標の版が変わりました。技術ランドスケープを再表示してから解釈を作成してください。")
     movement = next((item for item in landscape.get("movements", []) if item["id"] == movement_id), None)
@@ -71,11 +72,14 @@ def prepare_report(result_id: str, projection: str, interval: str, movement_id: 
                  "period": movement["from_period"] if p["id"] in before else movement["to_period"],
                  "side": "before" if p["id"] in before else "after"} for p in papers]
     interpretation = landscape.get("interpretation") or {}
-    limitations = _unique_text([*LIMITATIONS, *landscape.get("warnings", []),
+    base_limits = [line for line in LIMITATIONS if scope == "sample" or "最大400" not in line]
+    if scope == "full":
+        base_limits.append("重心・件数・特徴語は選択した分析結果の全件を対象とします。画面の点は表示用標本であり、取得元の分野全体を網羅するとは限りません。")
+    limitations = _unique_text([*base_limits, *landscape.get("warnings", []),
                                *interpretation.get("limitations", [])])
     if result.get("meta", {}).get("is_demo") or result.get("is_demo"):
         limitations.insert(0, "合成・テストデータを含む架空のデモです。実際の研究動向の判断には使えません。")
-    report = {"id": storage.new_id(), "result_id": result_id, "created_at": storage.now(),
+    report = {"id": storage.new_id(), "kind": "movement", "scope": scope, "result_id": result_id, "created_at": storage.now(),
               "projection_id": landscape["projection_id"], "projection": projection, "interval": interval,
               "movement": deepcopy(movement), "topic": {"id": topic["id"], "label": topic.get("label", movement.get("topic_label", "話題"))},
               "meta": deepcopy(landscape.get("meta", {})), "evidence_papers": excerpts,
@@ -93,7 +97,8 @@ def observations(report: dict) -> list[dict]:
               "insufficient": "論文数・日付の精度・期間の連続性などが不足し、変化の判定を保留しています。"}.get(movement.get("status"), "判定の根拠を確認してください。")
     distance = movement.get("distance_2d")
     cosine = movement.get("cosine_distance")
-    text = (f"{before}から{after}の比較です。表示標本は前期{movement.get('from_count', 0)}件、後期{movement.get('to_count', 0)}件です。"
+    scope_name = "全件分析の対象は" if report.get("scope") == "full" else "表示標本は"
+    text = (f"{before}から{after}の比較です。{scope_name}前期{movement.get('from_count', 0)}件、後期{movement.get('to_count', 0)}件です。"
             f"{status} {movement.get('explanation', '')}")
     meta = report.get("meta", {})
     if meta.get("displayed_papers") is not None:
@@ -119,6 +124,9 @@ def observations(report: dict) -> list[dict]:
 
 
 def deterministic_narrative(report: dict) -> dict:
+    if report.get("kind") == "centroid":
+        from .centroid_reports import deterministic_narrative as centroid_narrative
+        return centroid_narrative(report)
     return {"mode": "deterministic", "model": None,
             "headline": report["topic"]["label"] + "：話題の重心変化",
             "sections": deepcopy(report["observations"]),
@@ -127,6 +135,10 @@ def deterministic_narrative(report: dict) -> dict:
 
 
 def evidence_payload(report: dict) -> dict:
+    if report.get("kind") == "centroid":
+        return {"kind": "centroid", "topic": report["topic"], "centroid": report["centroid"],
+                "scope": report["meta"], "papers": report["evidence_papers"], "limitations": report["limitations"],
+                "excerpt_limit": "選択期間の内容重心に近い最大6論文、抄録は先頭1800文字です。"}
     return {"topic": report["topic"], "movement": report["movement"], "scope": report["meta"],
             "papers": report["evidence_papers"], "limitations": report["limitations"],
             "excerpt_limit": "前後各期間最大6論文、抄録は先頭1800文字です。全文・全件ではありません。"}
@@ -142,7 +154,9 @@ def validate_narrative(value, payload: dict, mode: str, model: str) -> dict:
         raise RuntimeError("提供していない論文IDを含むため、LLMの解釈を採用しませんでした。")
     # Source numbers come only from measured fields and raw excerpts, never generated prose or IDs.
     metric_keys = ("from_period", "to_period", "from_count", "to_count", "distance_2d", "cosine_distance", "p_value", "q_value", "gap_periods", "from_terms", "to_terms")
-    metrics = {key: payload["movement"].get(key) for key in metric_keys}
+    metrics = ({key: payload["centroid"].get(key) for key in
+                ("count", "period_id", "valid_vector_count", "period_count", "share_of_period", "dispersion", "terms")}
+               if payload.get("kind") == "centroid" else {key: payload["movement"].get(key) for key in metric_keys})
     metric_text = json.dumps(metrics, ensure_ascii=False)
     full_evidence = metric_text + " " + " ".join(p.get("title", "") + " " + p.get("abstract", "") for p in papers.values())
     warnings = _number_warnings(parsed.headline, full_evidence, "headline")
@@ -159,10 +173,14 @@ def validate_narrative(value, payload: dict, mode: str, model: str) -> dict:
         warnings.extend(section_warnings)
         sections.append({**section.model_dump(), "validation": _validation(section_warnings)})
     cited = {pid for section in parsed.sections for pid in section.evidence_ids}
-    for side, label in (("before", "前期"), ("after", "後期")):
+    for side, label in (() if payload.get("kind") == "centroid" else (("before", "前期"), ("after", "後期"))):
         if not any(pid in cited and paper.get("side") == side for pid, paper in papers.items()):
             warnings.append({"code": "period_evidence_missing", "location": "sections",
                              "message": f"{label}の抄録への参照がありません。前後の研究内容の比較には両期間の原文確認が必要です。"})
+    if payload.get("kind") == "centroid":
+        for pid in papers.keys() - cited:
+            warnings.append({"code": "representative_not_reviewed", "location": "sections",
+                             "message": f"代表論文 {pid} への参照が評論にありません。"})
     note = ("⚠ 数値照合・原文への参照に確認事項があるため警告付きで表示しています。計算済み指標は変更していません。" if warnings
             else "論文IDと数値の参照を機械照合しました。意味・因果関係・科学的妥当性は未検証です。")
     return {"mode": mode, "model": model, "headline": parsed.headline, "sections": sections,
@@ -179,12 +197,18 @@ def generate(report: dict, provider: str = "none", model: str | None = None, *, 
     payload = evidence_payload(report)
     if not any(p["abstract"] for p in payload["papers"]):
         raise ValueError("解釈に使える抄録がありません。計測値による定型解釈を表示します。")
-    value, mode, chosen = field_llm.structured_output(payload, field_llm.NarrativeOutput, INSTRUCTIONS, provider, model, progress=progress)
+    instructions = INSTRUCTIONS.replace("complete DISPLAY SAMPLE", "specified analysis scope (sample or full corpus)")
+    if report.get("kind") == "centroid":
+        from .centroid_reports import INSTRUCTIONS as centroid_instructions
+        instructions = centroid_instructions
+    value, mode, chosen = field_llm.structured_output(payload, field_llm.NarrativeOutput, instructions, provider, model, progress=progress)
     return validate_narrative(value, payload, mode, chosen)
 
 
 def export_csv(report: dict) -> str:
-    rows = [["measurements", key, json.dumps(value, ensure_ascii=False, allow_nan=False)] for key, value in report["movement"].items()]
+    measured = report["centroid"] if report.get("kind") == "centroid" else report["movement"]
+    rows = [["measurements", key, json.dumps(value, ensure_ascii=False, allow_nan=False)] for key, value in measured.items()]
+    rows.append(["report", "kind", report.get("kind", "movement")])
     rows.extend(["narrative", section["title"], section["text"]] for section in report["narrative"]["sections"])
     rows.extend(["section_evidence_ids", section["title"], json.dumps(section.get("evidence_ids", []), ensure_ascii=False)]
                 for section in report["narrative"]["sections"])

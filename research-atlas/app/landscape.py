@@ -117,6 +117,18 @@ def _cosine(first, second):
     return float(np.clip(1 - float(np.dot(first, second)) / denominator, 0, 2))
 
 
+def _dispersion(values):
+    values = values[np.linalg.norm(values, axis=1) > 1e-12]
+    if not len(values):
+        return None
+    center = values.mean(axis=0)
+    length = float(np.linalg.norm(center))
+    if length < 1e-12:
+        return None
+    similarity = values @ center / (np.linalg.norm(values, axis=1) * length)
+    return float(np.mean(np.clip(1 - similarity, 0, 2)))
+
+
 def _test_shift(first, second, seed):
     # Empty lexical vectors have no cosine direction. They remain visible and
     # counted on the map but cannot increase the statistical sample size.
@@ -191,9 +203,14 @@ def _explain(row):
     return prefix + result + f"前期の特徴語は「{earlier}」、後期は「{later}」です。赤い矢印は表示上の平均位置の差で、研究者の移動・因果関係・実用化や将来の成功を意味しません。"
 
 
-def build_landscape(result_id, projection="auto", interval="year"):
+def build_landscape(result_id, projection="auto", interval="year", scope="sample"):
+    if scope not in {"sample", "full"}:
+        raise ValueError("重心の分析対象は sample・full を指定してください。")
     if projection not in PROJECTIONS or interval not in INTERVALS:
         raise ValueError("投影法は auto・tsne・pca・umap、期間は year・quarter・month を指定してください。")
+    if scope == "full":
+        from .corpus_landscape import build_full_landscape
+        return build_full_landscape(result_id, projection, interval)
     result = storage.read("results", result_id, include_papers=False)
     original_map = result.get("map") or {}
     nodes = deepcopy(original_map.get("nodes", [])[:MAP_LIMIT])
@@ -223,7 +240,7 @@ def build_landscape(result_id, projection="auto", interval="year"):
     projection_id = _digest({"ids": [node["id"] for node in nodes], "vectors": vector_key,
                              "embedding": embedding, "projection": projection,
                              "coordinates": coordinates, "algorithm": details.get("algorithm"),
-                             "version": 1})[:24]
+                             "version": 2, "scope": "sample"})[:24]
     for node, coordinate in zip(nodes, coordinates):
         node.update(x=coordinate[0], y=coordinate[1])
     groups = defaultdict(list)
@@ -260,7 +277,15 @@ def build_landscape(result_id, projection="auto", interval="year"):
             xy = np.mean([[nodes[i]["x"], nodes[i]["y"]] for i in indices], axis=0)
             centroids.append({"topic_id": topic, "period_id": _period(number, interval), "count": len(indices),
                               "x": float(xy[0]), "y": float(xy[1]), "paper_ids": [nodes[i]["id"] for i in indices],
-                              "count_scope": "display_sample"})
+                              "count_scope": "display_sample", "scope": "sample",
+                              "topic_label": topic_lookup.get(topic, {}).get("label", topic),
+                              "evidence_ids": _evidence(indices, values, nodes),
+                              "terms": [{"term": term, "count": count} for term, count in
+                                        sorted(_term_counts([lookup.get(str(nodes[i]["id"]), nodes[i]) for i in indices]).items(),
+                                               key=lambda item: (-item[1], item[0]))[:8]],
+                              "period_count": len(groups[number]), "share_of_period": len(indices) / len(groups[number]),
+                              "valid_vector_count": int(np.count_nonzero(np.linalg.norm(values[indices], axis=1) > 1e-12)),
+                              "dispersion": _dispersion(values[indices])})
     centroid_lookup = {(row["topic_id"], row["period_id"]): row for row in centroids}
     movements = []
     for topic, history in sorted(by_topic.items()):
@@ -328,7 +353,8 @@ def build_landscape(result_id, projection="auto", interval="year"):
     return {"result_id": result_id, "projection_id": projection_id, "map": public_map,
             "terrain": build_terrain(nodes), "topics": topics, "periods": periods,
             "centroids": centroids, "movements": movements, "warnings": notices,
-            "meta": {"interval": interval, "count_scope": "display_sample", "displayed_papers": len(nodes),
+            "meta": {"interval": interval, "scope": "sample", "count_scope": "display_sample", "displayed_papers": len(nodes),
+                     "map_displayed_papers": len(nodes), "analysis_papers": len(nodes),
                      "corpus_papers": result.get("summary", {}).get("papers", result.get("meta", {}).get("paper_count", len(nodes))),
                      "eligible_papers": len(nodes) - sum(excluded.values()), "excluded_date_count": sum(excluded.values()),
                      "excluded_date_reasons": dict(excluded), "representation_source": source,

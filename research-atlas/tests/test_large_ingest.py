@@ -23,7 +23,7 @@ def test_actual_20000_row_scopus_batch_is_accepted_without_truncation():
     content = export((f"2-s2.0-{index}", f"Article {index}", 2000 + index % 26, f"10.1234/p{index}")
                      for index in range(20_000))
     papers, report = parse_scopus_csv(content)
-    assert MAX_IMPORT_ROWS == 20_000 and MAX_DATASET_PAPERS == 200_000
+    assert MAX_IMPORT_ROWS == 20_000 and MAX_DATASET_PAPERS is None
     assert len(papers) == report["imported_count"] == 20_000
     assert papers[-1]["id"] == "2-s2.0-19999"
     assert report["invalid_rows"] == report["duplicates_removed"] == 0

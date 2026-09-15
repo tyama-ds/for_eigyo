@@ -114,8 +114,10 @@ def test_multiyear_nmf_aggregates_entire_corpus_but_bounds_map(monkeypatch):
 
 
 def test_analysis_rejects_over_capacity_and_semantic_before_model_load(monkeypatch):
-    with pytest.raises(ValueError, match="200,000"):
-        analytics.analyze([{}] * (MAX_DATASET_PAPERS + 1))
+    assert MAX_DATASET_PAPERS is None
+    monkeypatch.setattr(analytics, "MAX_DATASET_PAPERS", 20)
+    with pytest.raises(ValueError, match="20"):
+        analytics.analyze([{}] * 21)
     monkeypatch.setattr(analytics, "SEMANTIC_PAPER_LIMIT", 2)
     monkeypatch.setattr(analytics, "_tfidf", lambda *_: pytest.fail("Should reject before vectorizing"))
     with pytest.raises(analytics.TransformerError, match="NMF"):

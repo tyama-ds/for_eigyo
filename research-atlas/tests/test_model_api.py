@@ -78,7 +78,10 @@ def test_invalid_model_combinations_are_rejected_before_work(client):
 
 def test_model_catalog_exposes_available_choices(client):
     status = client.get("/api/status").json()
-    assert {r["id"] for r in status["topic_models"]} == {"kmeans", "nmf", "lda", "bertopic"}
+    assert {r["id"] for r in status["topic_models"]} == {
+        "kmeans", "kmeans_pp", "minibatch_kmeans", "xmeans", "knn_graph",
+        "dbscan", "gmm", "birch", "agglomerative", "nmf", "lda", "bertopic",
+    }
     assert {r["id"] for r in status["sbert_models"]} == {"mpnet", "multilingual_minilm"}
     assert all(r["available"] for r in status["topic_models"] if r["id"] != "bertopic")
     assert all(r["model_id"].startswith("sentence-transformers/") for r in status["sbert_models"])

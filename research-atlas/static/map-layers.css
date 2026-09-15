@@ -6,6 +6,15 @@
 .landscape-window button{border:1px solid #34566c;border-radius:5px;min-width:30px;min-height:30px;color:#b9d9e2}.landscape-window button:disabled{opacity:.3}
 .landscape-window small{display:block;color:#7d9cb0;margin-top:3px;text-align:center}
 .temporal-map-stage.large{height:auto;aspect-ratio:800/620;min-height:380px;max-height:720px}
+.temporal-map-stage:not([data-map-mode="flat"]) .map-svg{cursor:grab;touch-action:none}
+.temporal-map-stage:not([data-map-mode="flat"]){user-select:none;-webkit-user-select:none}
+.temporal-map-stage[data-orbiting="true"] .map-svg,.temporal-map-stage[data-orbiting="true"] .map-node{cursor:grabbing}
+.landscape-centroid-panel{margin:0 0 18px;padding:14px;border:1px solid #3c6273;border-radius:7px;background:#0d2330}
+.landscape-centroid-heading,.landscape-centroid-actions{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}
+.landscape-centroid-heading h4{font-size:13px;margin:0 0 10px;color:#d0efec}
+.landscape-centroid-heading .text-link{font-size:10px}.landscape-centroid-actions label{display:grid;gap:6px;font-size:10px;color:#94b5c2}
+.landscape-centroid-actions select{background:#101e2b;color:#d6e7ed;border:1px solid #304b60;border-radius:5px;padding:7px 9px}
+.cluster-options{padding:12px;border:1px solid #304b60;border-radius:6px;margin-top:14px}.cluster-options summary{font-size:12px;cursor:pointer;margin-bottom:8px}
 .time-plane path{fill:#173142;fill-opacity:.20;stroke:#547689;stroke-width:.8;stroke-opacity:.48}
 .time-plane text{fill:#a8c7d2;font:10px ui-monospace,monospace;paint-order:stroke;stroke:#101e2b;stroke-width:3px;stroke-linejoin:round}
 .temporal-map-stage[data-map-mode="layers"]{background:radial-gradient(ellipse at 45% 50%,#1b425250,transparent 72%),#0b1724}

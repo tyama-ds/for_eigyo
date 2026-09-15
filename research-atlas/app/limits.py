@@ -1,7 +1,9 @@
 """Shared capacity limits for CSV batches, accumulated corpora, and display."""
 
 MAX_IMPORT_ROWS = 20_000
-MAX_DATASET_PAPERS = 200_000
+# No arbitrary accumulated-paper ceiling. Individual algorithms still apply
+# explicit resource checks; this does not promise unlimited RAM or runtime.
+MAX_DATASET_PAPERS = None
 # None means CSV uploads have no application-level byte ceiling.
 MAX_UPLOAD_BYTES = None
 MAX_ANALYSIS_YEARS = 50

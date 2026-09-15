@@ -412,7 +412,7 @@ def merge_papers(existing: list[dict], incoming: list[dict]) -> tuple[list[dict]
             counters["matched_incoming_count"] += 1
         register(target)
     output = [records[index] for index in sorted(records)]
-    if len(output) > MAX_DATASET_PAPERS:
+    if MAX_DATASET_PAPERS is not None and len(output) > MAX_DATASET_PAPERS:
         raise ValueError(f"重複を除いた統合後の論文が {MAX_DATASET_PAPERS:,} 件を超えます。別のデータセットに分けてください。")
     synthetic_count = sum(_is_synthetic(paper) for paper in output)
     warnings = []

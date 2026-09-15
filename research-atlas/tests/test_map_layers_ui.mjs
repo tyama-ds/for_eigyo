@@ -106,3 +106,69 @@ test('late LLM reply for a previous interval is ignored',async()=>{
   h.listeners.change({target:{id:'landscape-interval',value:'month'}});finish({status:'completed',landscape_report_id:'old'});await request;
   assert.equal(h.internals.report.data,null);assert.equal(h.calls.some(c=>c.url==='/api/landscape-reports/old'),false);
 });
+
+test('scope is explicit in requests, cache identity and counts distinguish full population from drawn papers',async()=>{
+  const data=structuredClone(payload);data.scope='full';data.meta={analysis_papers:250000,map_displayed_papers:2};data.centroids[1].count=150000;
+  const h=harness(async()=>data);h.ui.view(h.context);await tick();h.listeners.change({target:{id:'landscape-scope',value:'full'}});await tick();
+  const html=h.ui.view(h.context);assert.match(h.calls.at(-1).url,/scope=full/);assert.equal(h.calls.length,2);
+  assert.match(html,/簡易版/);assert.match(html,/全件対応版/);assert.match(html,/250000論文の内容・重心/);assert.match(html,/150000論文の重心/);assert.match(html,/表示対象 2論文/);
+});
+
+test('topic title selection switches centroid analysis and preserves a separate field report action',async()=>{
+  const data=structuredClone(payload);data.topics.push({id:'t2',label:'Welding'});data.centroids.push({topic_id:'t2',period_id:'2025',count:77,x:.4,y:.5});
+  const h=harness(async()=>data),selected=[];h.context.setTopic=id=>selected.push(id);h.ui.view(h.context);await tick();h.ui.selectTopic('t2');
+  assert.deepEqual(selected,['t2']);assert.equal(h.internals.selectedCentroid(data).topic_id,'t2');const html=h.ui.view(h.context);
+  assert.match(html,/Welding · 重心の分析/);assert.match(html,/data-detail-topic="t2"/);assert.match(html,/重心付近の代表論文を分析/);
+});
+
+test('centroid report requests the selected period, topic and scope with the same projection identity',async()=>{
+  const h=harness(async(url,options)=>{
+    if(url==='/api/landscape-reports'){const body=JSON.parse(options.body);assert.equal(body.kind,'centroid');assert.equal(body.topic_id,'t1');assert.equal(body.period_id,'2024');assert.equal(body.scope,'sample');assert.equal(body.movement_id,undefined);return {job_id:'centroid-job'};}
+    if(url==='/api/jobs/centroid-job')return {status:'completed',landscape_report_id:'center-report'};
+    if(url==='/api/landscape-reports/center-report')return {kind:'centroid',scope:'sample',result_id:'r1',projection_id:'shared-pca',interval:'year',centroid:{topic_id:'t1',period_id:'2024'},narrative:{headline:'代表論文の分析',sections:[]}};
+    return structuredClone(payload);
+  });h.ui.view(h.context);await tick();h.internals.selectCentroid('t1','2024');await h.internals.generateReport('centroid');assert.equal(h.internals.report.data?.kind,'centroid');assert.equal(h.internals.report.error,'');
+});
+
+test('orbit updates existing coordinates once per frame and preserves click versus drag behavior',()=>{
+  const h=harness(),prefs={mode:'relief',height:65,topic:'t1',contours:true,camera:{yaw:-.16,pitch:.72}};
+  const html=h.layers.render(h.context,payload,prefs),tag=html.match(/<circle class="map-node"[^>]+>/)[0],index=tag.match(/data-orbit-index="(\d+)"/)[1];
+  const attributes={cx:tag.match(/cx="([^"]+)"/)[1],cy:tag.match(/cy="([^"]+)"/)[1]},before={...attributes},listeners={},captures=[];
+  const el={dataset:{orbitIndex:index},setAttribute:(key,value)=>{attributes[key]=value;}};
+  const svg={querySelectorAll:()=>[el],addEventListener:(type,fn)=>{listeners[type]=fn;},setPointerCapture:id=>captures.push(id),hasPointerCapture:()=>true,releasePointerCapture:()=>{}};
+  const stage={dataset:{mapMode:'relief'},querySelector:()=>svg},updates=[],orbit=h.layers.bindOrbit(stage,value=>updates.push(value));
+  const event=(x,y)=>({button:0,pointerId:4,clientX:x,clientY:y,preventDefault(){},stopImmediatePropagation(){this.stopped=true;}});
+  listeners.pointerdown(event(10,10));listeners.pointerup(event(10,10));let click=event(10,10);listeners.click(click);assert.equal(click.stopped,undefined);assert.equal(h.frames.length,0);
+  listeners.pointerdown(event(10,10));listeners.pointermove(event(30,25));listeners.pointermove(event(60,50));assert.equal(h.frames.length,1);assert.deepEqual(attributes,before);h.frames.shift()(100);assert.notDeepEqual(attributes,before);assert.deepEqual(captures,[4]);assert.equal(updates.length,1);
+  listeners.pointerup(event(60,50));click=event(60,50);listeners.click(click);assert.equal(click.stopped,true);
+  assert.equal(listeners.wheel,undefined);assert.ok(orbit.camera.pitch>=.25&&orbit.camera.pitch<=1.3);
+  const capped=h.layers.camera({yaw:900,pitch:-100});assert.equal(capped.yaw,1.25);assert.equal(capped.pitch,.25);
+});
+
+test('map selection refreshes the surrounding selected-technology panel as well as map preferences',()=>{
+  const appSource=readFileSync(new URL('../static/app.js',import.meta.url),'utf8'),line=appSource.split('\n').find(row=>row.startsWith('function setMapTopic(')),aside={},cards=[{dataset:{topic:'old'}},{dataset:{topic:'new'}}];
+  for(const card of cards)card.classList={toggle:(_name,value)=>{card.selected=value;}};
+  const state={view:'technology'},ctx=vm.createContext({state,$:()=>aside,$$:()=>cards,topicFor:id=>id==='new'?{id,label:'New field'}:null,topicDetail:t=>t.label});vm.runInContext(line,ctx);ctx.setMapTopic('new');assert.equal(state.topic,'new');assert.equal(aside.outerHTML,'New field');assert.equal(cards[0].selected,false);assert.equal(cards[1].selected,true);
+});
+
+test('orbit terrain bounds drawing work and never bridges invalid contour segments',()=>{
+  const h=harness(),data=structuredClone(payload);data.terrain.grid={width:49,height:33,values:Array(49*33).fill(.5)};data.terrain.contours=[{level:.5,paths:[[[0,0],[.2,.2],null,[.8,.8],[1,1]]]}];
+  const html=h.layers.render(h.context,data,{mode:'relief',height:65,topic:'t1',contours:true});
+  assert.ok((html.match(/data-orbit-index/g)||[]).length<850);assert.equal((html.match(/class="terrain-contour"/g)||[]).length,2);assert.doesNotMatch(html,/NaN|Infinity/);
+});
+
+test('full-scope test labels distinguish all valid rows, a bounded subset, and an untested comparison',()=>{
+  const h=harness(),meta={meta:{test_scope:'bounded_permutation_sample'}},movement={from_count:100,to_count:90,from_valid_count:95,to_valid_count:85,test_from_count:95,test_to_count:85,p_value:.02};
+  let note=h.internals.testScopeNote(h.context,meta,movement);assert.match(note,/有効論文をすべて使用/);assert.doesNotMatch(note,/抽出した標本/);
+  note=h.internals.testScopeNote(h.context,meta,{...movement,from_count:500,from_valid_count:490,test_from_count:200});assert.match(note,/抽出した標本を使用/);assert.match(note,/前期200件・後期85件/);
+  note=h.internals.testScopeNote(h.context,meta,{...movement,p_value:null});assert.match(note,/置換検定を実施していません/);
+  const appSource=readFileSync(new URL('../static/app.js',import.meta.url),'utf8');assert.match(appSource,/描画用 \$\{num\(state\.result\.map\.nodes\.length\)\}論文/);
+});
+
+test('orbit binds the main map SVG when zoom-tool icon SVGs precede it',()=>{
+  const h=harness(),mapListeners={},iconListeners={},selectors=[],icon={addEventListener:(type,fn)=>{iconListeners[type]=fn;}},map={querySelectorAll:()=>[],addEventListener:(type,fn)=>{mapListeners[type]=fn;}};
+  const stage={dataset:{mapMode:'layers'},querySelector:selector=>{selectors.push(selector);return selector==='svg.map-svg'?map:icon;}};
+  const orbit=h.layers.bindOrbit(stage);assert.ok(orbit);assert.deepEqual(selectors,['svg.map-svg']);assert.equal(Object.keys(iconListeners).length,0);assert.equal(typeof mapListeners.pointerdown,'function');
+  let prevented=false,stopped=false;mapListeners.pointerdown({button:0,pointerId:1,clientX:0,clientY:0,preventDefault(){prevented=true;}});mapListeners.pointerup({pointerId:1});mapListeners.click({preventDefault(){},stopImmediatePropagation(){stopped=true;}});
+  assert.equal(prevented,true);assert.equal(stopped,false);
+});
