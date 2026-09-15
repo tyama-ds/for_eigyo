@@ -52,6 +52,21 @@
     return grid ? sample(grid, x, y) : 0;
   }
 
+  function referenceGridLines(terrain, mode) {
+    if (!['relief', 'layers'].includes(mode)) return [];
+    const grid = mode === 'relief' ? readGrid(terrain) : null;
+    if (mode === 'relief' && (!grid || !grid.values.some(value => value > 0))) return [];
+    const lines = [];
+    // Three quiet guides per axis. Shared XY positions, independent of paper count.
+    for (const axis of [0, 1]) for (const step of [.25, .5, .75]) {
+      lines.push(Array.from({length: 33}, (_, i) => {
+        const x = axis === 0 ? step : i / 32, y = axis === 0 ? i / 32 : step;
+        return [x, y, grid ? sample(grid, x, y) : 0];
+      }));
+    }
+    return lines;
+  }
+
   function point(value) {
     return Array.isArray(value) && value.length >= 2 && Number.isFinite(value[0]) && Number.isFinite(value[1]);
   }
@@ -69,13 +84,7 @@
 
   function floor(v) {
     const corners = [[0, 0], [1, 0], [1, 1], [0, 1]].map(p => projected(...p, 0, v));
-    const lines = [];
-    for (let index = 0; index <= 10; index++) {
-      const step = index / 10;
-      lines.push(path([projected(step, 0, 0, v), projected(step, 1, 0, v)]));
-      lines.push(path([projected(0, step, 0, v), projected(1, step, 0, v)]));
-    }
-    return `<path class="terrain-floor" d="${path(corners, true)}"/><path class="terrain-floor-grid" d="${lines.join('')}"/>`;
+    return `<path class="terrain-floor" d="${path(corners, true)}"/>`;
   }
 
   function surface(grid, v) {
@@ -126,8 +135,10 @@
     const grid = readGrid(terrain);
     if (!grid || !grid.values.some(value => value > 0)) return '';
     const v = view(options);
-    return `<g class="map-terrain" aria-hidden="true" focusable="false" pointer-events="none">${v.mode === 'relief' ? floor(v) : ''}${surface(grid, v)}${options.contours === false ? '' : contours(terrain, v)}</g>`;
+    const guides = options.referenceGrid === true ? referenceGridLines(terrain, v.mode) : [];
+    const referenceGrid = guides.length ? `<g class="landscape-reference-grid" aria-hidden="true" pointer-events="none">${guides.map(points => `<path d="${path(points.map(p => projected(...p, v)))}"/>`).join('')}</g>` : '';
+    return `<g class="map-terrain" aria-hidden="true" focusable="false" pointer-events="none">${v.mode === 'relief' ? floor(v) : ''}${surface(grid, v)}${referenceGrid}${options.contours === false ? '' : contours(terrain, v)}</g>`;
   }
 
-  global.AtlasTerrain = Object.freeze({project, render, heightAt});
+  global.AtlasTerrain = Object.freeze({project, render, heightAt, referenceGridLines});
 })(window);

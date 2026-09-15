@@ -33,7 +33,7 @@ from app.cluster_models import cluster_model_catalog
 
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
-app = FastAPI(title="Research Atlas", version="2.0.0", description="Multi-source bibliometrics & evidence-grounded technology foresight")
+app = FastAPI(title="Research Atlas", version="2.0.1", description="Multi-source bibliometrics & evidence-grounded technology foresight")
 MAX_NON_UPLOAD_REQUEST_BYTES = 256 * 1024 * 1024
 EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="atlas-analysis")
 SOURCE_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="atlas-discovery")

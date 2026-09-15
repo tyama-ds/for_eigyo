@@ -1,7 +1,14 @@
 .map-terrain,.map-terrain *{pointer-events:none}
 .map-stage.map-terrain-stage[data-map-mode="relief"]{background:radial-gradient(ellipse at 50% 65%,#173c4230,transparent 68%),#0e1927}
 .terrain-floor{fill:#10202e;fill-opacity:.48;stroke:#416b78;stroke-width:.65;stroke-opacity:.35}
-.terrain-floor-grid{fill:none;stroke:#385f6e;stroke-opacity:.16;stroke-width:.5}
+.landscape-reference-grid,.landscape-reference-grid *{pointer-events:none}
+.map-svg .landscape-reference-grid path{fill:none;stroke:#a5bdc7;stroke-opacity:.25;stroke-width:.65;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke}
+.time-plane .landscape-reference-grid{animation:reference-grid-reveal .85s ease-out both}
+@keyframes reference-grid-reveal{0%,50%{opacity:0}100%{opacity:1}}
+@media(prefers-reduced-motion:reduce){.time-plane .landscape-reference-grid{animation:none}}
+.terrain-grid-toggle{white-space:nowrap}
+.terrain-grid-toggle input{accent-color:#7fd7c3}
+.terrain-grid-toggle:has(input:disabled){opacity:.45}
 .terrain-surface path{stroke-width:.32;stroke-linejoin:round}
 .terrain-surface-relief{opacity:.94}
 .terrain-surface-flat{opacity:.66}
