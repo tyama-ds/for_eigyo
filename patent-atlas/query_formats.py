@@ -68,7 +68,57 @@ def group(op, children):
     return children[0] if len(children) == 1 else Node(op, children=children)
 
 def terms_of(query):
+    if query.get('boolean_tree') is not None:
+        return list(dict.fromkeys(node.value for node in walk_tree(tree_from_data(query['boolean_tree'])) if node.op == 'text'))
     return list(dict.fromkeys(query.get('keywords', []) + query.get('include_terms', []) + query.get('exclude_terms', [])))
+
+
+def walk_tree(node):
+    yield node
+    for child in node.children:
+        yield from walk_tree(child)
+
+
+def tree_from_data(value, replacements=None):
+    """Validate a bounded Boolean AST, preserving negative and alternative scopes."""
+    replacements = replacements or {}
+    count = 0
+    def visit(item, depth=0):
+        nonlocal count
+        count += 1
+        if count > 256 or depth > 12 or not isinstance(item, dict):
+            raise ValueError('検索条件の構造が大きすぎるか不正です（256条件・12階層まで）。')
+        op = item.get('op')
+        if op == 'text':
+            value = item.get('value')
+            if not isinstance(value, str) or not value.strip() or len(value) > 500:
+                raise ValueError('検索語は1〜500文字で指定してください。')
+            return Node('text', _literal(replacements.get(value, value).strip()))
+        if op == 'class':
+            return _class(item.get('value'), item.get('system'))
+        if op not in ('and', 'or', 'not'):
+            raise ValueError('未対応の検索演算子です。AND・OR・AND NOTを指定してください。')
+        children = item.get('children')
+        if not isinstance(children, list) or not 2 <= len(children) <= 64 or op == 'not' and len(children) != 2:
+            raise ValueError('検索演算子の条件数が不正です。NOTは検索対象と除外対象の2条件です。')
+        return Node(op, children=tuple(visit(child, depth + 1) for child in children))
+    return visit(value)
+
+
+def tree_data(node):
+    if node.op == 'text':
+        return {'op': 'text', 'value': node.value}
+    if node.op == 'class':
+        return {'op': 'class', 'value': node.value, 'system': node.system}
+    return {'op': node.op, 'children': [tree_data(c) for c in node.children]}
+
+
+def describe_tree(node):
+    if node.op == 'text':
+        return 'TEXT=' + repr(node.value)
+    if node.op == 'class':
+        return node.system + '=' + node.value
+    return '(' + {'and': ' AND ', 'or': ' OR ', 'not': ' NOT '}[node.op].join(describe_tree(c) for c in node.children) + ')'
 
 def _strings(value, name, max_items=100):
     if not isinstance(value, list) or len(value)>max_items or any(not isinstance(t,str) or not t.strip() or len(t)>500 for t in value):
@@ -111,6 +161,14 @@ def _upper_ipc_problem(node, format_id):
     return ''
 
 def build_tree(query, replacements=None, omit_systems=()):
+    if query.get('boolean_tree') is not None:
+        if replacements is not None and (not isinstance(replacements, dict) or
+                any(k not in terms_of(query) or not isinstance(v, str) or not v.strip() or len(v) > 500 for k, v in replacements.items())):
+            raise ValueError('出力用語句は元の検索語に対応する非空の文字列で指定してください。')
+        node = tree_from_data(query['boolean_tree'], replacements)
+        if any(n.op == 'class' and n.system in omit_systems for n in walk_tree(node)):
+            raise ValueError('観点・取り込み式の分類を自動で省略すると論理関係が変わるため、編集画面で分類条件を変更してください。')
+        return node
     if query.get('type') == '改善案' and ('include_terms' not in query or 'exclude_terms' not in query):
         raise ValueError('旧形式の改善式には条件の構造が保存されていません。条件を確認して新しい式を作成してください。')
     base=_strings(query.get('keywords',[]),'キーワード')
@@ -216,6 +274,55 @@ def _render(node, format_id, language, descendants):
 def formats():
     return [dict(id=k,**v,verified_at=VERIFIED_AT,verification='公式資料照合・実サイトの検索結果は未検証') for k,v in PROFILES.items()]
 
+
+def _simplify_jplatpat_tree(node):
+    """Reduce nesting with Boolean identities, without distributing OR branches.
+
+    AND/OR are associative. A binary NOT means left AND NOT right, so
+    (A NOT B) AND C = (A AND C) NOT B and (A NOT B) NOT C = A NOT (B OR C).
+    The original saved AST is untouched; in particular NOT-of-AND is never
+    changed into NOT-of-OR. Cases needing distribution retain their structure.
+    """
+    if node.op in ('class', 'text'):
+        return node
+    children = [_simplify_jplatpat_tree(child) for child in node.children]
+
+    def flatten(op, values):
+        result = []
+        for child in values:
+            result.extend(child.children if child.op == op else (child,))
+        return group(op, result)
+
+    if node.op == 'or':
+        return flatten('or', children)
+    if node.op == 'and':
+        positives, negatives = [], []
+        for child in children:
+            if child.op == 'not':
+                positives.append(child.children[0])
+                negatives.append(child.children[1])
+            else:
+                positives.append(child)
+        base = flatten('and', positives)
+        return Node('not', children=(base, flatten('or', negatives))) if negatives else base
+    left, right = children
+    if left.op == 'not':
+        return Node('not', children=(left.children[0], flatten('or', [left.children[1], right])))
+    return Node('not', children=(left, right))
+
+
+def _render_structured(node, format_id, language, descendants):
+    if format_id != 'jplatpat':
+        return _render(node, format_id, language, descendants)
+    node = _simplify_jplatpat_tree(node)
+
+    def render(item):
+        if item.op in ('class', 'text'):
+            return _render(item, format_id, language, descendants)
+        operator = {'and': '*', 'or': '+', 'not': '-'}[item.op]
+        return '[' + operator.join(render(child) for child in item.children) + ']'
+    return render(node)
+
 def export_query(query,format_id,*,replacements=None,omit_unsupported=False,allow_unverified=False,descendants=False,language='auto'):
     if format_id not in PROFILES:
         raise ValueError('出力する検索サービスを選んでください。')
@@ -223,6 +330,10 @@ def export_query(query,format_id,*,replacements=None,omit_unsupported=False,allo
         raise ValueError('出力オプションの形式を確認してください。')
     profile=PROFILES[format_id]
     classes=query.get('classifications',[])
+    if query.get('boolean_tree') is not None:
+        actual = {(n.system, n.value) for n in walk_tree(tree_from_data(query['boolean_tree'])) if n.op == 'class'}
+        recorded = {(c.get('kind'), c.get('code')): c for c in classes}
+        classes = [recorded.get(key, dict(kind=key[0], code=key[1], verified=False)) for key in sorted(actual)]
     unsupported=[c for c in classes if c.get('kind') not in profile['systems']]
     unverified=[c for c in classes if not c.get('verified') and c not in unsupported]
     problems=[]
@@ -267,7 +378,15 @@ def export_query(query,format_id,*,replacements=None,omit_unsupported=False,allo
     if format_id=='uspto':
         warnings.append('ADJの距離ではストップワードが無視されます。句の一致条件は他DBと完全には同じではありません。')
     warnings.append('各DBの収録国・言語・分類付与・語形処理が異なるため、同じ論理条件でも結果件数は一致しません。')
-    expression='' if problems else _render(tree,format_id,actual_language,descendants)
+    expression='' if problems else (_render_structured(tree,format_id,actual_language,descendants) if query.get('boolean_tree') is not None else _render(tree,format_id,actual_language,descendants))
+    if expression and format_id == 'jplatpat':
+        depth = maximum = 0
+        for char in expression:
+            depth += (char == '[') - (char == ']')
+            maximum = max(maximum, depth)
+        if maximum > 3:
+            problems.append('J-PlatPatの括弧は3階層までです。観点や取り込み式の入れ子を整理するか、検索を複数の式に分けてください。')
+            expression = ''
     if expression and format_id=='derwent_innovation':
         expression+=';'
     if format_id=='derwent_dii':

@@ -268,15 +268,27 @@ def _supports_soft_no_think(settings):
                                                    'next', 'vl', 'omni', 'embedding', 'reranker')))
 
 
-def _request(base, headers, body, proxy, verify):
+def validate_timeout(value):
+    """Seconds to wait for an LLM response; keep JSON settings strictly numeric."""
+    if isinstance(value, bool) or not isinstance(value, int) or not 30 <= value <= 600:
+        raise ValueError('LLM応答の待ち時間は30〜600秒の整数で指定してください。')
+    return value
+
+
+def _request(base, headers, body, proxy, verify, *, read_timeout=120):
     try:
-        with httpx.Client(proxy=proxy, trust_env=False, timeout=120, verify=verify,
+        timeout = httpx.Timeout(120, connect=10, read=read_timeout)
+        with httpx.Client(proxy=proxy, trust_env=False, timeout=timeout, verify=verify,
                           follow_redirects=False) as client:
             response = client.post(base + '/chat/completions', headers=headers, json=body)
             response.raise_for_status()
             return response
     except httpx.HTTPStatusError as exc:
         raise ValueError(f'LLM API が HTTP {exc.response.status_code} を返しました。URL・モデル・認証設定を確認してください。') from None
+    except httpx.ReadTimeout:
+        raise ValueError(f'LLMの応答待ち時間（{read_timeout}秒）を超過しました。設定の「LLM応答の待ち時間」を延ばすか、入力を短くして再実行してください。') from None
+    except httpx.TimeoutException:
+        raise ValueError('LLM通信の待ち時間を超過しました。接続先の起動状態・ネットワークと、設定の「LLM応答の待ち時間」を確認してください。接続の待ち時間は10秒です。') from None
     except (httpx.RequestError, OSError, ValueError):
         raise ValueError('LLMへ接続できません。接続先、プロキシ、CA証明書、起動状態を確認してください。') from None
 
@@ -295,6 +307,7 @@ def complete(settings, system, payload, *, response_schema=None):
             'name': 'patent_judgments', 'strict': True, 'schema': schema}}
     if settings.get('provider', 'offline') == 'offline':
         raise ValueError('LLM接続が未設定です。設定タブで接続先を指定してください。')
+    read_timeout = validate_timeout(settings.get('llm_timeout', 120))
     base = settings.get('base_url', '').rstrip('/')
     url = urlparse(base)
     if url.scheme not in ('http', 'https') or not url.hostname or url.username or url.password:
@@ -322,7 +335,7 @@ def complete(settings, system, payload, *, response_schema=None):
             'max_tokens': MAX_OUTPUT_TOKENS}
         if response_format is not None:
             body['response_format'] = copy.deepcopy(response_format)
-        response = _request(base, headers, body, proxy, verify)
+        response = _request(base, headers, body, proxy, verify, read_timeout=read_timeout)
         try:
             return _parse_model_json(_response_content(response))
         except _ModelJSONError as exc:

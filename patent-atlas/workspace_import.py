@@ -28,7 +28,7 @@ def merge_patents(existing, incoming):
                 and previous['content_key'] != item['content_key']):
             raise ValueError(f'{item["id"]} の名称または要約が既存データと異なります。判定を維持するため追加を中止しました。')
         report['matched'] += 1
-        for field in ('ipc', 'fi', 'fterm', 'applicant', 'year', 'family'):
+        for field in ('ipc', 'fi', 'fterm', 'cpc', 'applicant', 'year', 'family'):
             if item.get(field) and not previous.get(field):
                 previous[field] = copy.deepcopy(item[field])
                 report['metadata_filled'] += 1

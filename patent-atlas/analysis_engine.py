@@ -20,6 +20,7 @@ ALIASES = {
     'abstract': ['abstract', '要約', '抄録', '要約（日本語）', 'summary'],
     'applicant': ['applicant', 'assignee', '出願人', '出願人/権利者', 'assignee - original'],
     'ipc': ['ipc', '国際特許分類', 'ipc分類', 'ipc classifications'],
+    'cpc': ['cpc', 'cpc分類', 'cpc classifications', 'cooperative patent classification'],
     'fi': ['fi', 'fi分類', 'fi分類記号', 'fi classifications', 'file index'],
     'fterm': ['fterm', 'f-term', 'fターム', 'fターム分類'],
     'year': ['year', '公開日', '出願日', 'publication date', 'publication_date'],

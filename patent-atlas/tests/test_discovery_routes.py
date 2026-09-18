@@ -166,10 +166,13 @@ class DiscoveryRouteTests(unittest.TestCase):
         manual = self.manual_snapshot()
         with patch.object(module, 'complete', return_value={
                 'english_terms': ['autonomous navigation'],
-                'facets': [{'id': 'interface', 'terms': ['通信接続'], 'english_terms': ['vehicle communication']}]}):
+                'facets': [{'id': 'interface', 'terms': ['通信接続'], 'english_terms': ['vehicle communication']}]}) as complete:
             response = self.client.post('/api/discovery/plan', json={
                 'keywords': '自動運転', 'english_terms': 'self driving', 'use_llm': True})
         self.assertEqual(response.status_code, 200, response.text)
+        from prompt_templates import DISCOVERY_SYSTEM, CLASSIFICATION_SYSTEM
+        self.assertEqual(complete.call_args.args[1], DISCOVERY_SYSTEM)
+        self.assertNotEqual(complete.call_args.args[1], CLASSIFICATION_SYSTEM)
         plan = response.json()['discovery']['plan']
         self.assertEqual(plan['english_terms'], ['self driving', 'autonomous navigation'])
         self.assertEqual(plan['llm_proposal']['english_terms'], ['autonomous navigation'])

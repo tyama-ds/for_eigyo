@@ -19,7 +19,8 @@ from fastapi.staticfiles import StaticFiles
 
 from analysis_engine import ALIASES, demo_rows, map_patents, parse_csv, refinement_terms, train
 from catalog import CATALOG, keywords, suggest
-from llm import complete
+from llm import complete, validate_timeout
+from prompt_templates import CLASSIFICATION_SYSTEM, SELECTION_SYSTEM
 import llm_judgment
 from query_formats import formats as query_formats, export_query
 from refinement_classifications import classification_feedback, feedback_origin
@@ -31,6 +32,8 @@ from orchestration_routes import register_orchestration_routes
 from convergence_routes import (display_convergence, display_search_result, new_observation,
                                 register_convergence_routes)
 from workspace_import import merge_patents
+from research_routes import register_research_routes, refined_tree
+from query_formats import tree_from_data, describe_tree, terms_of
 
 ROOT = Path(__file__).parent
 DATA = Path(os.environ.get('PATENT_ATLAS_DATA', str(ROOT / 'data')))
@@ -38,7 +41,7 @@ DATA.mkdir(parents=True, exist_ok=True)
 classification_translations.configure_cache(DATA)
 LOCK = threading.RLock()
 DEFAULT_SETTINGS = dict(provider='offline', base_url='http://localhost:11434/v1', model='qwen3:8b', api_key='', proxy='', ca_bundle='', bypass_local=True,
-                        transformer_model='', allow_model_download=False, classification_layout='semantic', ops_key='', ops_secret='')
+                        transformer_model='', allow_model_download=False, classification_layout='semantic', ops_key='', ops_secret='', llm_timeout=120)
 SECRET_SETTINGS = ('api_key', 'proxy', 'ops_key', 'ops_secret')
 STATE = dict(keywords='', candidates=[], selected=[], patents=[], clusters=[], queries=[], training=None, agent_log=[], demo=False, import_info=None, classification_view=None, candidate_proposal=None, discovery=None)
 SETTINGS = DEFAULT_SETTINGS.copy()
@@ -50,6 +53,10 @@ except (FileNotFoundError, ValueError):
     pass
 if SETTINGS['classification_layout'] not in ('semantic', 'grid'):
     SETTINGS['classification_layout'] = DEFAULT_SETTINGS['classification_layout']
+try:
+    SETTINGS['llm_timeout'] = validate_timeout(SETTINGS.get('llm_timeout', 120))
+except ValueError:
+    SETTINGS['llm_timeout'] = DEFAULT_SETTINGS['llm_timeout']
 if not isinstance(STATE.get('discovery'), dict):
     STATE['discovery'] = new_discovery()
 elif STATE['discovery'].get('status') == 'running':
@@ -332,22 +339,15 @@ def llm_candidate_rows(result, notices, proposal=None):
     return rows
 
 
-def candidate_list(text, use_llm=False, *, notices=None, proposal=None, connection=None):
+def candidate_list(text, use_llm=False, *, notices=None, proposal=None, connection=None, research_context=None):
     candidates = suggest(text)
     seed_keys = {classification_key(row) for row in candidates}
     llm_rows = []
     if use_llm:
-        result = complete(connection if connection is not None else SETTINGS,
-            '特許調査の分類候補を最大6件だけ提案してください。IPCは現行2026.01を優先し、存在が不確かなコードを推測しないでください。'
-            '細かい分類が不確かな場合は、既存の上位IPC（セクション・クラス・サブクラス）も候補にできます。'
-            'IPCコードの形式例は B、B60、B60L、B60W30/18 です。主群・小群は / とその後の数字まで必須です。'
-            '数字だけを付けた未完成コードや廃止・旧版のコードは避けてください。分類の定義を調査テーマに合わせて作り変えないでください。'
-            'F-termは 5H029AM12 のような完全なタームを使い、1件のcodeにコードを1つだけ入れてください。'
-            'これらは形式例であり、調査テーマへの推薦ではありません。製品・材料・製造・制御など異なる観点を検討してください。'
-            '名称はアプリの公式辞書で表示するため出力不要です。各reasonは関連を検討する理由を日本語60文字以内で、不確実性も示してください。'
-            '形式 {"candidates":[{"code":"分類コード","kind":"IPC","reason":"関連を検討する理由"}]}。'
-            'kindはIPCまたはF-term。候補がなければ空配列。JSON以外の説明やコードフェンスは出力しないでください。',
-            {'keywords': text})
+        payload = {'keywords': text}
+        if research_context:
+            payload['research_context'] = copy.deepcopy(research_context)
+        result = complete(connection if connection is not None else SETTINGS, CLASSIFICATION_SYSTEM, payload)
         llm_rows = llm_candidate_rows(result, notices if notices is not None else [], proposal)
         # A repeated code is still an LLM recommendation: preserve its reason
         # even when a keyword seed already supplied the same classification.
@@ -409,7 +409,7 @@ def previous_query_for_context(ignore_classifications=False):
     if not STATE['queries']:
         return {}
     previous=STATE['queries'][-1]
-    if previous.get('keywords') != keywords(STATE['keywords']):
+    if (previous.get('keyword_context') != STATE['keywords'] if previous.get('boolean_tree') else previous.get('keywords') != keywords(STATE['keywords'])):
         return {}
     if not ignore_classifications and {classification_key(c) for c in previous.get('classifications',[])} != set(normalize_selection(STATE['selected'])):
         return {}
@@ -446,7 +446,7 @@ def make_query(refine=False, include=None, exclude=None, preserve_conditions=Fal
                                     note=feedback['note'])
         preserve_conditions=True
     selected = copy.deepcopy([c for c in pool if classification_key(c) in selected_keys])
-    if not words and not selected:
+    if not words and not selected and not (refine and STATE['queries'] and STATE['queries'][-1].get('boolean_tree')):
         raise ValueError('キーワードを入力するか、検索に使う分類を選んでください。')
     def quote(s):
         return '"' + s.replace('"', ' ').replace('\n', ' ').strip() + '"'
@@ -456,6 +456,8 @@ def make_query(refine=False, include=None, exclude=None, preserve_conditions=Fal
     if classes:
         query += ('\nAND ' if query else '') + '(' + classes + ')'
     previous = previous_query_for_context(preserve_conditions) if refine else {}
+    if refine and STATE['queries'] and STATE['queries'][-1].get('boolean_tree') and not previous:
+        raise ValueError('観点・取り込み式と現在のキーワードまたは分類が変わっています。調査ナビで案を作り直すか、分類の改善案として更新してください。元の論理条件は保持しています。')
     old_include, old_exclude = previous.get('include_terms', []), previous.get('exclude_terms', [])
     for values in (include,exclude):
         if values is not None and (not isinstance(values,list) or any(not isinstance(v,str) for v in values)):
@@ -484,11 +486,22 @@ def make_query(refine=False, include=None, exclude=None, preserve_conditions=Fal
                 known_keep_coverage={'retained':retained,'total':len(kept)} if include and kept else None,
                 note='DB非依存の設計式です。TEXT・IPC・F-TERMは検索先の入力欄に割り当ててください。分類群はOR、キーワードはANDです。',
                 changes=('要否判断から特徴語を抽出。NOTは選択された語だけ適用。' if refine else '入力語と選択分類から初案を作成。'))
+    if previous.get('boolean_tree'):
+        base_tree, boolean_tree = refined_tree(previous, selected, include, exclude)
+        for name in ('concept_tree', 'facets', 'purpose', 'provenance', 'target_ids', 'prompt_version', 'keyword_context'):
+            if name in previous:
+                item[name] = copy.deepcopy(previous[name])
+        item.update(base_boolean_tree=base_tree, boolean_tree=boolean_tree,
+                    expression=describe_tree(tree_from_data(boolean_tree)),
+                    note='観点・取り込み式の論理構造を保持し、追加語と除外語を更新しています。')
+        item['term_catalog'] = terms_of(item)
     if classification_changes is not None:
         item['classification_changes']=classification_changes
         item['changes']='要否判定・学習予測の分類と特徴語から改善。FI・Fターム由来のIPCは対応づけた候補として扱い、選択した分類をOR条件に反映。NOTは選択された語だけ適用。'
         STATE.update(candidates=pool,selected=selected_keys)
     STATE['queries'].append(item)
+    if isinstance(STATE.get('research_workbench'), dict):
+        STATE['research_workbench']['active_query_id'] = item['id']
     return item
 
 @app.get('/api/state')
@@ -820,12 +833,21 @@ def labels(body: dict):
         save()
     return public_state()
 
+def assessment_options(body, *, allow_empty=False):
+    """Snapshot only the applied query; unsaved workbench plans are not criteria."""
+    workbench = STATE.get('research_workbench') or {}
+    active_id = workbench.get('active_query_id')
+    adopted = next((query for query in STATE['queries'] if active_id and query.get('id') == active_id), None)
+    return llm_judgment.prepare(body, STATE['patents'], STATE['keywords'], SETTINGS['provider'],
+                                allow_empty=allow_empty, adopted_query=copy.deepcopy(adopted))
+
+
 def run_llm_assessment(body, progress_callback=None, *, _prepared=None):
     """Synchronous shared judgment service; the caller owns JOB and STOP."""
     report_progress = progress_callback or progress
     with LOCK:
         if _prepared is None:
-            options = llm_judgment.prepare(body, STATE['patents'], STATE['keywords'], SETTINGS['provider'], allow_empty=True)
+            options = assessment_options(body, allow_empty=True)
             rows_snapshot = copy.deepcopy(STATE['patents'])
             settings_snapshot = copy.deepcopy(SETTINGS)
         else:
@@ -855,6 +877,7 @@ def run_llm_assessment(body, progress_callback=None, *, _prepared=None):
                             and prior.get('criteria') == options['criteria']
                             and prior.get('provider') == settings_snapshot.get('provider')
                             and prior.get('model') == settings_snapshot.get('model')
+                            and prior.get('context_fingerprint') == options.get('context_fingerprint')
                         )
                         for row in STATE['patents']:
                             if (same_judgment and row.get('label') in ('keep', 'exclude')
@@ -960,7 +983,7 @@ def training(body: dict):
     with LOCK:
         idle()
         if mode == 'llm':
-            options = llm_judgment.prepare(body, STATE['patents'], STATE['keywords'], SETTINGS['provider'])
+            options = assessment_options(body)
             prepared = options, copy.deepcopy(STATE['patents']), copy.deepcopy(SETTINGS)
             action = lambda: run_llm_assessment(body, _prepared=prepared)
         else:
@@ -984,7 +1007,9 @@ def settings(body: dict):
                 continue
             if k in SECRET_SETTINGS and not body[k]:
                 continue
-            if isinstance(DEFAULT_SETTINGS[k], bool):
+            if k == 'llm_timeout':
+                proposed[k] = validate_timeout(body[k])
+            elif isinstance(DEFAULT_SETTINGS[k], bool):
                 if not isinstance(body[k], bool):
                     raise ValueError('設定値の形式を確認してください。')
                 proposed[k] = body[k]
@@ -1041,7 +1066,7 @@ def agent(body: dict):
             with LOCK:
                 STATE['candidates'] = items
         progress(10, '判断基準から分類候補を選んでいます')
-        result = complete(SETTINGS, '分類候補から調査に必要な分類をkeyで選ぶ。IPCとCPCは異なる体系。候補にないkeyは禁止。形式 {"selected":["IPC:H01M10/0562"],"reason":"日本語の理由"}',
+        result = complete(SETTINGS, SELECTION_SYSTEM,
                           {'keywords': STATE['keywords'], 'criteria': criteria, 'candidates': [{**c,'key':classification_key(c)} for c in STATE['candidates']]})
         chosen = result.get('selected')
         chosen=normalize_selection(chosen)
@@ -1088,7 +1113,7 @@ def export():
 
 @app.get('/api/export/labels')
 def export_labels():
-    fields = ['id','title','abstract','applicant','ipc','fi','fterm','year','label','label_source','label_reason','score']
+    fields = ['id','title','abstract','applicant','ipc','fi','fterm','cpc','year','label','label_source','label_reason','score']
     stream = io.StringIO()
     writer = csv.DictWriter(stream, fieldnames=fields, extrasaction='ignore')
     writer.writeheader()
@@ -1112,4 +1137,5 @@ if STATE['candidates']:
 register_discovery_routes(app, globals())
 register_orchestration_routes(app, globals())
 register_convergence_routes(app, globals())
+register_research_routes(app, globals())
 app.mount('/static', StaticFiles(directory=ROOT / 'static'), name='static')

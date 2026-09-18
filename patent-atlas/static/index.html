@@ -25,13 +25,19 @@
   <script src="/static/patent-inspector.js?v=20260915-classification-bridge" defer></script>
   <script src="/static/convergence-ui.js?v=20260914-convergence" defer></script>
   <script src="/static/orchestration-ui.js?v=20260914-convergence" defer></script>
-  <script src="/static/app.js?v=20260914-convergence" defer></script>
+  <link rel="stylesheet" href="/static/research-workbench.css?v=20260918">
+  <link rel="stylesheet" href="/static/query-library-ui.css?v=20260918">
+  <link rel="stylesheet" href="/static/projection-ui.css?v=20260918">
+  <script src="/static/query-library-ui.js?v=20260918" defer></script>
+  <script src="/static/research-workbench.js?v=20260918" defer></script>
+  <script src="/static/projection-ui.js?v=20260918" defer></script>
+  <script src="/static/app.js?v=20260918-research" defer></script>
   <script src="/static/atlas-motion.js" defer></script>
 </head>
 <body>
  <header class="topbar">
   <a class="brand" href="/" aria-label="Patent Atlas ホーム"><svg viewBox="0 0 40 40" aria-hidden="true"><rect class="atlas-mark-frame" x="1" y="1" width="38" height="38" rx="12"/><path class="atlas-mark-orbit" d="M8 26 20 7l12 19-12 7Z"/><path class="atlas-mark-axis" d="m8 26 12-6 12 6M20 7v26"/><circle cx="20" cy="20" r="3"/></svg><span>PATENT <b>ATLAS</b></span><span class="version">β 01</span></a>
-  <nav class="tabs" aria-label="機能切替"><button class="tab active" data-tab="explore">対話で探索</button><button class="tab" data-tab="discovery">探索ラボ</button><button class="tab" data-tab="agent">判断エージェント</button><button class="tab" data-tab="orchestration">統括ワークフロー</button><button class="tab" data-tab="settings">表示・接続設定</button></nav>
+  <nav class="tabs" aria-label="機能切替"><button class="tab active" data-tab="workbench">調査ナビ</button><button class="tab" data-tab="explore">調査ワークスペース</button><button class="tab" data-tab="settings">表示・接続設定</button></nav>
   <div class="connection"><span class="status-dot"></span><span id="connection-label">ローカルワークスペース</span></div>
  </header>
  <main>
@@ -41,7 +47,8 @@
    <div class="heading-actions"><label class="atlas-motion-control"><select id="atlas-motion-mode" aria-label="画面の動き"><option value="system">動き：自動</option><option value="dynamic">動き：あり</option><option value="static">静止表示</option></select></label><button class="button subtle" id="demo-button">サンプルを試す <span>↗</span></button><a class="button subtle atlas-export" href="/api/export" download>プロジェクトを書き出す <span>↓</span></a></div>
   </div>
   <div id="job-banner" class="job-banner hidden" role="status" aria-live="polite"><span class="spinner"></span><span id="job-message"></span><progress id="job-progress" max="100" value="0"></progress><button class="button small" id="stop-job">停止</button></div>
-  <section id="explore-tab" class="view active">
+  <section id="workbench-tab" class="view active"><div id="research-workbench"></div></section>
+  <section id="explore-tab" class="view">
    <nav class="stepper" aria-label="探索ステップ">
     <button class="step active" data-step="0"><span class="step-number">00</span><span><b>技術の輪郭</b><small>キーワード・分類を選ぶ</small></span><span class="step-arrow">→</span></button>
     <button class="step" data-step="1"><span class="step-number">01</span><span><b>検索の初案</b><small>検索式をつくる・CSVを渡す</small></span><span class="step-arrow">→</span></button>
@@ -72,6 +79,7 @@
       <label>接続先<select id="provider"><option value="offline">オフライン · 辞書と軽量学習</option><option value="local">Local LLM · Ollama / LM Studio</option><option value="openai">OpenAI互換API</option></select></label>
       <label>API Base URL<input id="base-url" placeholder="http://localhost:11434/v1" type="url"></label>
       <label>モデル名<input id="llm-model" placeholder="qwen3:8b"></label>
+      <label>LLM応答の待ち時間（秒）<input id="llm-timeout" type="number" min="30" max="600" step="1" value="120" required></label><p class="caption">既定120秒。Local LLMの生成に時間がかかる場合は延ばせます（30〜600秒）。接続の待ち時間は10秒です。</p>
       <label>APIキー<input id="api-key" type="password" autocomplete="new-password" placeholder="必要な接続先のみ"></label><p id="key-status" class="caption"></p>
       <div class="notice">APIキーとプロキシURLはサーバーのメモリだけに保持します。アプリ再起動後は再入力してください。APIの接続ホストが変わると、以前のキーは消去します。</div>
       <div class="button-row"><button class="button primary" type="submit">設定を保存</button><button class="button" type="button" id="test-connection">保存して接続テスト</button></div>
@@ -85,5 +93,7 @@
  <div id="toast" role="status" aria-live="polite" class="toast"></div>
  <dialog id="mapping-dialog"><form id="mapping-form"><span class="eyebrow">CSV IMPORT</span><h2>列の意味を教えてください。</h2><p class="muted">このCSVの列名を、特許の項目に割り当てます。</p><div id="mapping-fields"></div><div class="button-row"><button class="button" type="button" id="cancel-mapping">キャンセル</button><button class="button primary" type="submit">この割り当てで読み込む</button></div></form></dialog>
  <dialog id="classification-dialog"><form id="classification-form"><span class="eyebrow">ADD CLASSIFICATION</span><h2>分類を追加する</h2><label>分類体系<select id="new-class-kind"><option>IPC</option><option>F-term</option><option>CPC</option></select></label><label>コード<input id="new-class-code" required placeholder="H01M10/0562"></label><label>名称<input id="new-class-title" required placeholder="無機固体電解質"></label><p class="caption">辞書にない分類は「未確認」として追加します。公式定義をご確認ください。IPCとCPCは別の体系として保持します。</p><div class="button-row"><button class="button" type="button" id="cancel-classification">キャンセル</button><button class="button primary" type="submit">追加</button></div></form></dialog>
+ <dialog id="research-aspects-dialog" class="research-dialog"><form id="research-aspects-form"><span class="eyebrow">YOUR PERSPECTIVE</span><h2>想定している観点</h2><p class="caption">分かる場合だけ入力してください。1行に1観点、最大8件・各160文字。必要に応じて「必須:」「任意:」「除外:」を先頭につけます。入力後、観点案に反映するには起案ボタンを押してください。</p><label>観点<textarea id="research-aspects-text" rows="8" placeholder="必須: 電極と電解質の界面\n任意: 加圧・積層プロセス\n除外: 液体電解質"></textarea></label><div class="button-row"><button class="button" type="button" id="research-aspects-close">キャンセル</button><button class="button primary" type="submit">入力を反映</button></div></form></dialog>
+ <dialog id="research-target-dialog" class="research-dialog"><form id="research-target-form"><span class="eyebrow">ADD A SEED</span><h2>ターゲット特許を追加</h2><p class="caption">公報から情報を転記してください。番号だけでの自動取得は行いません。既存のCSV・判定は保持します。</p><label>公報番号<input name="id" required maxlength="200" placeholder="JP2026000001A"></label><label>発明の名称<input name="title" required maxlength="12000"></label><label>要約<textarea name="abstract" rows="4" maxlength="12000"></textarea></label><div class="form-row"><label>IPC<input name="ipc" maxlength="12000" placeholder="H01M10/0562"></label><label>FI<input name="fi" maxlength="12000"></label></div><div class="form-row"><label>Fターム<input name="fterm" maxlength="12000"></label><label>CPC<input name="cpc" maxlength="12000"></label></div><div class="button-row"><button class="button" type="button" id="research-target-close">キャンセル</button><button class="button primary" id="research-target-save" type="submit">追加して選択</button></div></form></dialog>
 </body>
 </html>

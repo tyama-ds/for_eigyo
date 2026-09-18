@@ -17,7 +17,7 @@ from workspace_import import publication_key
 def new_observation(rows, state, *, scope='csv'):
     keys = list(dict.fromkeys(publication_key(row) for row in rows))
     latest = next((query for query in reversed(state.get('queries', []))
-                   if query.get('keywords') == keywords(state.get('keywords', ''))), None)
+                   if (query.get('keyword_context') == state.get('keywords', '') if query.get('boolean_tree') else query.get('keywords') == keywords(state.get('keywords', '')))), None)
     return dict(id=uuid.uuid4().hex, keywords=state.get('keywords', ''),
                 imported_at=time.time(), publication_keys=keys, uploaded_count=len(keys),
                 query_id=(latest or {}).get('id'), scope=scope)

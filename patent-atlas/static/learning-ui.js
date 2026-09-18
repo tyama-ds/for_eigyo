@@ -10,7 +10,7 @@ function captureLearningDraft(){
 function learningControlsHtml(){
  const d=learningDraft;
  return `<div class="learning-row"><label class="learning-mode-label">学習・判定方式<select id="training-mode" aria-label="学習方式"><option value="lightweight" ${d.mode==='lightweight'?'selected':''}>軽量学習 · TF-IDF</option><option value="transformer" ${d.mode==='transformer'?'selected':''}>Transformer本体を微調整</option><option value="llm" ${d.mode==='llm'?'selected':''}>LLMにおまかせ</option></select></label><button class="button primary" id="train-button">学習する ↗</button><label class="check" id="include-agent-control"><input id="include-agent" type="checkbox" ${d.include_agent?'checked':''}>エージェントの判定を含める</label><a class="button subtle small" href="/api/export/labels" download>判定をCSVで保存 ↓</a></div>
- <div id="llm-training-options" class="llm-training-options" hidden><label>判定基準（空欄なら現在の探索キーワード）<textarea id="llm-training-criteria" rows="2" maxlength="5000" placeholder="例：製造工程や界面の改善を含み、充電設備だけの特許は除く">${esc(d.criteria)}</textarea></label><div class="llm-training-limits"><label>今回判定する上限<input id="llm-training-limit" type="number" min="1" max="5000" step="1" value="${esc(d.max_items)}"></label><label>判定を採用する信頼度<input id="llm-training-threshold" type="number" min="0.5" max="1" step="0.05" value="${esc(d.threshold)}"></label></div><p class="caption">設定したLLMへタイトル・要約・IPCと判定例を渡します。人の確定判定を優先し、低信頼の回答は保留。LLMの重みは学習しません。</p></div>
+ <div id="llm-training-options" class="llm-training-options" hidden><label>判定基準（空欄なら採用した式の目的・観点、未設定なら探索キーワード）<textarea id="llm-training-criteria" rows="2" maxlength="5000" placeholder="例：製造工程や界面の改善を含み、充電設備だけの特許は除く">${esc(d.criteria)}</textarea></label><p id="llm-training-used-criteria" class="caption" hidden></p><div class="llm-training-limits"><label>今回判定する上限<input id="llm-training-limit" type="number" min="1" max="5000" step="1" value="${esc(d.max_items)}"></label><label>判定を採用する信頼度<input id="llm-training-threshold" type="number" min="0.5" max="1" step="0.05" value="${esc(d.threshold)}"></label></div><p class="caption">設定したLLMへタイトル・要約・IPCと判定例を渡します。採用した式があれば目的・観点も参照し、入力した判定基準を優先します。人の確定判定を優先し、低信頼の回答は保留。LLMの重みは学習しません。</p></div>
  <p id="learning-mode-note" class="caption learning-mode-note"></p>
  <div id="learning-progress" class="learning-progress" hidden><div class="learning-progress-heading"><div><span class="eyebrow">PROGRESS</span><b id="learning-progress-status"></b></div><strong id="learning-progress-percent">0%</strong></div><progress id="map-training-progress" max="100" value="0" aria-label="学習・判定の進捗"></progress><p id="learning-progress-message" role="status"></p><div class="learning-progress-bottom"><small id="learning-progress-count"></small><button id="map-training-stop" class="button small subtle" hidden>停止する</button></div><p id="learning-progress-error" class="learning-error" hidden></p><small class="caption">割合は処理工程の目安です。LLMの応答待ち・モデル読込中は進捗が止まる場合があります。</small></div>`;
 }
@@ -46,12 +46,20 @@ function renderLearningMode(){
   const mode=$('#training-mode');
   if(mode&&['lightweight','transformer','llm'].includes(job.mode))mode.value=job.mode;
   if(job.mode==='llm'&&training?.mode==='llm'&&training.job_id===job.id){
-   for(const [selector,value] of [['#llm-training-criteria',training.criteria],['#llm-training-limit',training.max_items],['#llm-training-threshold',training.threshold]]){
+   const savedCriteria=['adopted_query','keywords'].includes(training.criteria_source)?'':training.criteria;
+   for(const [selector,value] of [['#llm-training-criteria',savedCriteria],['#llm-training-limit',training.max_items],['#llm-training-threshold',training.threshold]]){
     if($(selector)&&value!==undefined&&value!==null)$(selector).value=String(value);
    }
   }
  }
  const llm=$('#training-mode')?.value==='llm';
+ const usedCriteria=$('#llm-training-used-criteria');
+ if(usedCriteria){
+  const current=training?.mode==='llm'&&training.criteria&&(job.status!=='running'||training.job_id===job.id);
+  usedCriteria.hidden=!llm||!current;
+  const source=({adopted_query:'採用した式の目的・観点',keywords:'探索キーワード',explicit:'入力した基準'})[training?.criteria_source]||'保存された基準';
+  usedCriteria.textContent=current?`${job.status==='running'?'今回':'直近の判定'}で使用した基準（${source}）：${training.criteria}`:'';
+ }
  $('#llm-training-options').hidden=!llm;$('#include-agent-control').hidden=llm;
  $('#train-button').textContent=llm?'LLMで判定する ↗':'学習する ↗';
  $('#learning-mode-note').textContent=llm?(state.settings.provider==='offline'?'LLMが未接続です。「表示・接続設定」でLocal LLMまたはAPIを設定してください。':`接続先：${state.settings.provider==='local'?'Local LLM':'LLM API'} · ${state.settings.model||'モデル未設定'}。未判定の特許から順に判定します。`):'軽量学習は必要・不要が各2件、Transformerは各4件から。関連度を計算し、次の式の特徴語・IPC候補に反映します。';

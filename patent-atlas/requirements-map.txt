@@ -1,0 +1,2 @@
+# Optional: real UMAP projection. PCA and t-SNE use the base requirements.
+umap-learn>=0.5,<0.6

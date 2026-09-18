@@ -124,6 +124,51 @@ class AppTests(unittest.TestCase):
         self.assertEqual(self.client.post('/api/labels',json={'ids':[],'label':'keep'}).status_code,409)
         module.JOB['status']='idle'
 
+    def test_llm_timeout_default_boundaries_and_persistence(self):
+        self.assertEqual(module.DEFAULT_SETTINGS['llm_timeout'], 120)
+        self.assertEqual(self.client.get('/api/state').json()['settings']['llm_timeout'], 120)
+        before = copy.deepcopy(module.STATE)
+        for value in (30, 300, 600, 120):
+            with self.subTest(value=value):
+                response = self.client.post('/api/settings', json={'llm_timeout': value})
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.json()['settings']['llm_timeout'], value)
+                persisted = json.loads((Path(TEMP.name) / 'workspace.json').read_text(encoding='utf-8'))
+                self.assertEqual(persisted['settings']['llm_timeout'], value)
+                self.assertEqual(module.STATE, before)
+
+    def test_invalid_llm_timeout_preserves_settings_state_and_disk(self):
+        self.client.post('/api/settings', json={'llm_timeout': 300, 'api_key': 'retained-secret'})
+        original_settings = module.SETTINGS.copy()
+        original_state = copy.deepcopy(module.STATE)
+        original_disk = (Path(TEMP.name) / 'workspace.json').read_bytes()
+        for value in (None, True, False, 29, 601, 120.0, '300', '', [], {}):
+            with self.subTest(value=value):
+                response = self.client.post('/api/settings', json={'llm_timeout': value, 'model': 'not-saved', 'clear_secrets': True})
+                self.assertEqual(response.status_code, 400)
+                self.assertIn('30〜600秒', response.json()['detail'])
+                self.assertEqual(module.SETTINGS, original_settings)
+                self.assertEqual(module.STATE, original_state)
+                self.assertEqual((Path(TEMP.name) / 'workspace.json').read_bytes(), original_disk)
+
+    def test_saved_llm_timeout_migration_and_reload_preserves_other_settings(self):
+        for saved_settings, expected in (({}, 120), ({'llm_timeout': 300}, 300),
+                                        ({'llm_timeout': 600}, 600), ({'llm_timeout': None}, 120),
+                                        ({'llm_timeout': True}, 120), ({'llm_timeout': '300'}, 120),
+                                        ({'llm_timeout': 5}, 120)):
+            with self.subTest(settings=saved_settings), tempfile.TemporaryDirectory(prefix='patent-atlas-settings-') as folder:
+                workspace = Path(folder) / 'workspace.json'
+                saved_settings = {**saved_settings, 'model': 'preserved-model', 'base_url': 'http://127.0.0.1:1234/v1'}
+                workspace.write_text(json.dumps({'settings': saved_settings, 'state': {'keywords': 'preserved-keyword'}}), encoding='utf-8')
+                original = workspace.read_bytes()
+                with patch.dict(os.environ, {'PATENT_ATLAS_DATA': folder}):
+                    loaded = runpy.run_path(str(module.ROOT / 'app.py'))
+                self.assertEqual(loaded['SETTINGS']['llm_timeout'], expected)
+                self.assertEqual(loaded['SETTINGS']['model'], 'preserved-model')
+                self.assertEqual(loaded['SETTINGS']['base_url'], 'http://127.0.0.1:1234/v1')
+                self.assertEqual(loaded['STATE']['keywords'], 'preserved-keyword')
+                self.assertEqual(workspace.read_bytes(), original)
+
     def test_case_insensitive_exclusion_protection(self):
         rows=[dict(title='SOLID BATTERY',abstract='',label='keep'),dict(title='solid battery',abstract='',label='exclude')]
         self.assertEqual(refinement_terms(rows)['exclude'],[])

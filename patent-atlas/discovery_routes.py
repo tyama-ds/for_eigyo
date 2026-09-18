@@ -12,6 +12,7 @@ from fastapi.responses import Response
 from analysis_engine import parse_csv
 from discovery_engine import propose_plan, analyze_patents, validate_llm_plan
 from patent_search import search_ops
+from prompt_templates import DISCOVERY_SYSTEM
 
 
 def new_discovery():
@@ -115,12 +116,7 @@ def register_discovery_routes(app, context):
             connection = settings.copy()
         llm_plan = None
         if use_llm:
-            llm_plan = context['complete'](connection,
-                '技術調査の探索観点を装置、材料、プロセス、界面、性能、用途に分ける。'
-                '架空の特許・分類コード・出典は作らない。日本語の説明と短い英語の検索語句を提案する。'
-                '観点idは device, material, process, interface, performance, application から選ぶ。'
-                '英語主題語は最大8個、各観点の terms は最大12個、english_terms は最大4個とする。'
-                '形式 {"english_terms":["topic synonym"],"facets":[{"id":"process","terms":["製造"],"english_terms":["manufacturing"]}]}。',
+            llm_plan = context['complete'](connection, DISCOVERY_SYSTEM,
                 {'keywords': topic, 'english_terms': english})
             validate_llm_plan(llm_plan)
         plan = propose_plan(topic, candidates, patents, llm_plan=llm_plan, manual_english_terms=additions)

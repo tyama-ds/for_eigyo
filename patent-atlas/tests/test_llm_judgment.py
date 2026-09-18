@@ -22,7 +22,29 @@ def answer(payload):
     return {'decisions': [decision(row['id']) for row in payload['patents']]}
 
 
+def applied_query():
+    return dict(id='query-applied', purpose='界面技術の母集団を作る', facets=[
+        dict(id='facet1', name='界面', role='required', terms=['界面', 'interface'],
+             abstract_terms=['未採用の抽象語'])])
+
+
 class JudgmentValidationTests(unittest.TestCase):
+    def test_applied_query_context_fills_empty_criteria_without_overriding_explicit_input(self):
+        query = applied_query()
+        before = copy.deepcopy(query)
+        rows = [dict(id='p1', label=None)]
+        automatic = llm_judgment.prepare({}, rows, 'old keywords', 'local', adopted_query=query)
+        explicit = llm_judgment.prepare({'criteria': '今回の独自基準'}, rows, 'old keywords', 'local', adopted_query=query)
+        self.assertEqual(automatic['criteria_source'], 'adopted_query')
+        self.assertIn('界面技術の母集団を作る', automatic['criteria'])
+        self.assertIn('必須観点: 界面', automatic['criteria'])
+        self.assertEqual(explicit['criteria'], '今回の独自基準')
+        self.assertEqual(explicit['criteria_source'], 'explicit')
+        self.assertNotIn('未採用の抽象語', json.dumps(automatic['query_context'], ensure_ascii=False))
+        self.assertEqual(automatic['context_fingerprint'], explicit['context_fingerprint'])
+        automatic['query_context']['concepts'][0]['terms'].append('changed')
+        self.assertEqual(query, before)
+
     def test_prepare_accepts_full_csv_limits_and_retains_default_hundred(self):
         rows = [dict(id=f'publication-{n}', label=None, label_source=None) for n in range(5000)]
         for count in (443, 5000):
@@ -136,6 +158,8 @@ class JudgmentRouteTests(unittest.TestCase):
         self.assertEqual(module.JOB['status'], 'done', module.JOB)
         self.assertEqual(len(requests), 2)
         for settings, system, payload in requests:
+            from prompt_templates import JUDGMENT_SYSTEM
+            self.assertEqual(system, JUDGMENT_SYSTEM)
             self.assertEqual(settings['provider'], 'local')
             self.assertEqual(settings['api_key'], 'isolated-secret')
             self.assertEqual(payload['criteria'], '固体電池の製造工程')
@@ -186,6 +210,67 @@ class JudgmentRouteTests(unittest.TestCase):
         self.assertEqual(complete.call_args.args[2]['human_examples'], [])
         self.assertEqual(complete.call_args.args[2]['criteria'], 'vehicle sensing')
         self.assertEqual(module.STATE['training']['total_count'], 1)
+
+    def test_applied_query_is_snapshotted_and_unadopted_plan_is_not_sent(self):
+        query = applied_query()
+        requests = []
+        workbench = dict(active_query_id=query['id'], plan=dict(purpose='未採用の別目的', concepts=['未採用の別観点']))
+
+        def respond(settings, system, payload, **kwargs):
+            requests.append(copy.deepcopy(payload))
+            query['facets'][0]['terms'][0] = '判定開始後の変更'
+            workbench['active_query_id'] = 'another-query'
+            return answer(payload)
+
+        with patch.dict(module.STATE, {'queries': [query], 'research_workbench': workbench}):
+            with patch.object(module, 'complete', side_effect=respond):
+                response = self.client.post('/api/train', json={'mode': 'llm'})
+                self.assertEqual(response.status_code, 200, response.text)
+                self.wait_job()
+            self.assertGreater(len(requests), 1)
+            for payload in requests:
+                self.assertEqual(payload['criteria_source'], 'adopted_query')
+                self.assertEqual(payload['purpose'], '界面技術の母集団を作る')
+                self.assertEqual(payload['concepts'][0]['terms'], ['界面', 'interface'])
+                self.assertEqual(payload['adopted_query_id'], 'query-applied')
+                self.assertNotIn('未採用', json.dumps(payload, ensure_ascii=False))
+            self.assertEqual(module.STATE['training']['query_context']['concepts'][0]['terms'], ['界面', 'interface'])
+
+    def test_unadopted_plan_alone_does_not_change_judgment_criteria(self):
+        with patch.dict(module.STATE, {'queries': [], 'keywords': '元のテーマ',
+                                      'research_workbench': dict(plan=applied_query())}):
+            with patch.object(module, 'complete', side_effect=lambda settings, system, payload, **kwargs: answer(payload)) as complete:
+                response = self.client.post('/api/train', json={'mode': 'llm', 'max_items': 1})
+                self.assertEqual(response.status_code, 200)
+                self.wait_job()
+            payload = complete.call_args.args[2]
+            self.assertEqual(payload['criteria'], '元のテーマ')
+            self.assertNotIn('concepts', payload)
+            self.assertNotIn('purpose', payload)
+
+    def test_applied_context_fingerprint_controls_score_resumption(self):
+        originals = copy.deepcopy(module.STATE['patents'])
+        original_query = applied_query()
+        context = llm_judgment.snapshot_query_context(original_query)
+        for changed in (False, True):
+            with self.subTest(changed=changed):
+                rows = copy.deepcopy(originals)
+                rows[2].update(label='keep', label_source='agent', label_reason='前回の理由',
+                               score=.88, score_source='llm', agent_confidence=.96, llm_relevance=.88)
+                query = copy.deepcopy(original_query)
+                if changed:
+                    query['facets'][0]['terms'] = ['接合']
+                prior = dict(mode='llm', criteria='同一の明示基準', provider='local', model='test-model',
+                             context_fingerprint=llm_judgment.context_fingerprint(context))
+                with patch.dict(module.STATE, {'patents': rows, 'training': prior, 'queries': [query],
+                                              'research_workbench': dict(active_query_id=query['id'])}):
+                    with patch.object(module, 'complete', side_effect=lambda settings, system, payload, **kwargs: answer(payload)) as complete:
+                        response = self.client.post('/api/train', json={'mode': 'llm', 'criteria': '同一の明示基準', 'max_items': 1})
+                        self.assertEqual(response.status_code, 200, response.text)
+                        self.wait_job()
+                    self.assertEqual(complete.call_args.args[2]['criteria'], '同一の明示基準')
+                    self.assertEqual(rows[2]['label'], 'keep')
+                    self.assertEqual(rows[2]['score'], None if changed else .88)
 
     def test_resuming_same_judgment_preserves_only_completed_llm_scores(self):
         rows = module.STATE['patents']

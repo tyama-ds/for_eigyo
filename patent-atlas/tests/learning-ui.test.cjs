@@ -6,7 +6,7 @@ const source = fs.readFileSync('static/learning-ui.js', 'utf8');
 const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[char]));
 function deferred() { let resolve, reject; const promise = new Promise((yes, no) => {resolve=yes; reject=no;}); return {promise,resolve,reject}; }
 function setup(apiHandler = async () => ({job_id:'job-new'})) {
-  const ids = ['training-mode','train-button','include-agent','include-agent-control','llm-training-options','llm-training-criteria','llm-training-limit','llm-training-threshold','patent-search','label-filter','learning-mode-note','learning-progress','map-training-progress','learning-progress-percent','learning-progress-status','learning-progress-message','learning-progress-count','learning-progress-error','map-training-stop','next-refine'];
+  const ids = ['training-mode','train-button','include-agent','include-agent-control','llm-training-options','llm-training-criteria','llm-training-used-criteria','llm-training-limit','llm-training-threshold','patent-search','label-filter','learning-mode-note','learning-progress','map-training-progress','learning-progress-percent','learning-progress-status','learning-progress-message','learning-progress-count','learning-progress-error','map-training-stop','next-refine'];
   const dom = Object.fromEntries(ids.map(id => ['#'+id,{value:'',checked:false,disabled:false,hidden:false,dataset:{},textContent:'',innerHTML:''}]));
   Object.assign(dom['#training-mode'],{value:'llm'}); dom['#llm-training-limit'].value='25'; dom['#llm-training-threshold'].value='.85'; dom['#label-filter'].value='all';
   const requests = [], notices = [], handlers = new Map(), judgmentButtons=[{disabled:false},{disabled:false}];
@@ -78,6 +78,38 @@ test('idle mode rendering leaves current draft inputs and saved draft unchanged'
   assert.equal(s.dom['#llm-training-threshold'].value,'0.95');
   assert.equal(s.read('JSON.stringify(learningDraft)'),draft);
   assert.equal(s.dom['#training-mode'].disabled,false);
+});
+
+test('automatic criteria stay blank across polling and the next run uses fresh server context',async()=>{
+  for(const source of ['adopted_query','keywords']){
+    const s=setup();
+    s.context.state.job={id:'active',kind:'training',mode:'llm',status:'running',progress:40};
+    s.context.state.training={job_id:'active',mode:'llm',criteria:'以前の自動基準 <b>本文</b>',criteria_source:source,max_items:443,threshold:.9};
+    s.context.renderLearningMode();s.context.captureLearningDraft();
+    assert.equal(s.dom['#llm-training-criteria'].value,'');
+    assert.equal(s.read('learningDraft.criteria'),'');
+    assert.equal(s.dom['#llm-training-used-criteria'].hidden,false);
+    assert.match(s.dom['#llm-training-used-criteria'].textContent,/以前の自動基準 <b>本文<\/b>/);
+    assert.equal(s.dom['#llm-training-used-criteria'].innerHTML,'');
+    s.context.state.job={id:'active',kind:'training',mode:'llm',status:'done'};
+    s.context.renderLearningMode();
+    assert.match(s.dom['#llm-training-used-criteria'].textContent,/直近の判定/);
+    await s.context.startMapTraining();
+    assert.equal(s.requests[0].body.criteria,'');
+  }
+});
+
+test('explicit criteria remain editable and an older job cannot masquerade as current criteria',()=>{
+  const s=setup();
+  s.context.state.job={id:'active',kind:'training',mode:'llm',status:'running'};
+  s.context.state.training={job_id:'active',mode:'llm',criteria:'利用者の明示基準',criteria_source:'explicit',max_items:25,threshold:.85};
+  s.context.renderLearningMode();
+  assert.equal(s.dom['#llm-training-criteria'].value,'利用者の明示基準');
+  assert.match(s.dom['#llm-training-used-criteria'].textContent,/入力した基準/);
+  s.context.state.job.id='next-job';s.context.renderLearningMode();
+  assert.equal(s.dom['#llm-training-used-criteria'].hidden,true);
+  assert.equal(s.dom['#llm-training-used-criteria'].textContent,'');
+  assert.match(s.context.learningControlsHtml(),/空欄なら採用した式の目的・観点/);
 });
 
 test('progress polls keep all in-progress draft fields and search/filter values',()=>{
@@ -157,7 +189,7 @@ test('table regeneration creates disabled judgment buttons immediately while run
     s.context.state.job.status=status==='running'?'running':'idle';
     s.read(`learningStarting=${status==='starting'}`);
     vm.runInContext(rowSource,s.context);s.context.renderPatentRows();
-    const buttons=s.dom['#patent-rows'].innerHTML.match(/<button\b[^>]*>/g);
+    const buttons=s.dom['#patent-rows'].innerHTML.match(/<button\b[^>]*\brow-label\b[^>]*>/g);
     assert.equal(buttons.length,2);
     for(const button of buttons)assert.equal(/\bdisabled\b/.test(button),status!=='idle',status);
   }

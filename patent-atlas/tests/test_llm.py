@@ -73,7 +73,7 @@ class LLMTests(unittest.TestCase):
         original = copy.deepcopy(schema)
         calls = []
 
-        def request(_base, _headers, body, _proxy, _verify):
+        def request(_base, _headers, body, _proxy, _verify, *, read_timeout):
             calls.append(copy.deepcopy(body))
             body['response_format']['json_schema']['schema']['properties']['ok']['type'] = 'string'
             return response('{"ok":') if len(calls) == 1 else response()
@@ -242,6 +242,44 @@ class LLMTests(unittest.TestCase):
         self.assertIsNone(self.clients[0]['proxy'])
         self.run_requests([response()], dict(SETTINGS, bypass_local=False))
         self.assertEqual(self.clients[0]['proxy'], SETTINGS['proxy'])
+
+    def test_response_timeout_is_configurable_without_changing_other_limits_or_settings(self):
+        for value in (None, 30, 300, 600):
+            with self.subTest(value=value):
+                settings = dict(SETTINGS)
+                if value is not None:
+                    settings['llm_timeout'] = value
+                original = copy.deepcopy(settings)
+                self.run_requests([response('bad JSON'), response()], settings)
+                self.assertEqual(len(self.clients), 2)
+                for options in self.clients:
+                    timeout = options['timeout']
+                    self.assertEqual(timeout.read, value if value is not None else 120)
+                    self.assertEqual(timeout.connect, 10)
+                    self.assertEqual(timeout.write, 120)
+                    self.assertEqual(timeout.pool, 120)
+                self.assertEqual(settings, original)
+
+    def test_timeout_has_actionable_message_without_leaking_or_retrying(self):
+        errors = (httpx.ReadTimeout('test-secret'), httpx.ConnectTimeout('test-secret'),
+                  httpx.WriteTimeout('test-secret'), httpx.PoolTimeout('test-secret'))
+        for error in errors:
+            with self.subTest(error=type(error).__name__), self.assertRaisesRegex(ValueError, '待ち時間.*超過') as caught:
+                self.run_requests([error], dict(SETTINGS, llm_timeout=300))
+            self.assertEqual(len(self.calls), 1)
+            message = str(caught.exception)
+            self.assertIn('設定', message)
+            self.assertNotIn('接続できません', message)
+            self.assertNotIn('test-secret', message)
+            if isinstance(error, httpx.ReadTimeout):
+                self.assertIn('300秒', message)
+
+    def test_invalid_timeout_fails_before_network(self):
+        for value in (None, True, False, 29, 601, 120.0, '300', '', [], {}, float('nan')):
+            with self.subTest(value=value), patch.object(llm.httpx, 'Client') as client:
+                with self.assertRaisesRegex(ValueError, '30〜600秒の整数'):
+                    llm.complete(dict(SETTINGS, llm_timeout=value), SYSTEM, PAYLOAD)
+                client.assert_not_called()
 
     def test_invalid_settings_and_ca_fail_before_http(self):
         for settings in ({'provider': 'offline'}, dict(SETTINGS, base_url='https://user:secret@model.invalid')):
