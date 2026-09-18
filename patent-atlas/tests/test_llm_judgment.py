@@ -29,6 +29,25 @@ def applied_query():
 
 
 class JudgmentValidationTests(unittest.TestCase):
+    def test_selected_invention_elements_do_not_require_the_whole_invention(self):
+        query = dict(id='element-query', purpose='先行例の探索',
+                     boolean_tree={'op':'text', 'value':'障害物検出'},
+                     invention_context=dict(strategy='element', elements=[dict(
+                         id='e1', name='検出部', description='障害物を検出する', relation='制御部へ結果を渡す')]))
+        options = llm_judgment.prepare({}, [dict(id='p', label=None)], '', 'local', adopted_query=query)
+        self.assertIn('未選択の要素や発明全体の一致を必須に追加しない', options['criteria'])
+        recorded = []
+        llm_judgment.run([dict(id='p', label=None)], options,
+                         lambda system, payload: recorded.append(copy.deepcopy(payload)) or answer(payload),
+                         lambda *args, **kwargs: None, lambda: False)
+        self.assertEqual(recorded[0]['invention_search']['elements'][0]['name'], '検出部')
+        self.assertEqual(recorded[0]['search_conditions'], query['boolean_tree'])
+        before = options['context_fingerprint']
+        query['invention_context']['elements'][0]['description'] = '温度を検出する'
+        changed = llm_judgment.prepare({}, [dict(id='p', label=None)], '', 'local', adopted_query=query)
+        self.assertNotEqual(before, changed['context_fingerprint'])
+        self.assertEqual(options['query_context']['invention_search']['elements'][0]['description'], '障害物を検出する')
+
     def test_union_criteria_keep_alternatives_and_change_resume_fingerprint(self):
         query = applied_query()
         query['facets'] = [dict(id='a', name='自動運転', role='required', terms=['自動運転'], or_group='driving'),

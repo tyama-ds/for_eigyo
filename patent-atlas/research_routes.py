@@ -32,7 +32,7 @@ def merge_target_references(existing, selected):
 def new_workbench():
     return dict(id=uuid.uuid4().hex, revision=0, entry_mode='target',
                 brief=dict(entry_mode='target', purpose='', goal='', keywords='', user_aspects=[], target_ids=[]),
-                plan=None, library=[], adoptions=[], target_patents=[])
+                plan=None, library=[], adoptions=[], target_patents=[], invention=None)
 
 
 def fingerprint(value):
@@ -220,6 +220,12 @@ def register_research_routes(app, context):
         workbench()['active_query_id'] = query['id']
         context['classification_overview']()
         return query
+
+    from invention_routes import register_invention_routes
+    register_invention_routes(app, context, dict(workbench=workbench, source_patents=source_patents,
+        check_revision=check_revision, commit=commit, fingerprint=fingerprint,
+        checked_brief=checked_brief, merge_target_references=merge_target_references,
+        enrich_query=enrich_query, save_query=save_query))
 
     @app.post('/api/research/brief')
     def update_brief(body: dict):

@@ -504,7 +504,7 @@ def make_query(refine=False, include=None, exclude=None, preserve_conditions=Fal
             item['term_catalog'] = terms_of(item)
     if previous.get('boolean_tree'):
         base_tree, boolean_tree = refined_tree(previous, selected, include, exclude)
-        for name in ('concept_tree', 'facets', 'purpose', 'provenance', 'target_ids', 'prompt_version', 'keyword_context'):
+        for name in ('concept_tree', 'facets', 'purpose', 'provenance', 'target_ids', 'prompt_version', 'keyword_context', 'invention_context', 'invention_plan_id'):
             if name in previous:
                 item[name] = copy.deepcopy(previous[name])
         item.update(base_boolean_tree=base_tree, boolean_tree=boolean_tree,

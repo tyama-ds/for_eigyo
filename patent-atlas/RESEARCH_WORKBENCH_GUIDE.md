@@ -66,3 +66,7 @@ LLM判定の基準が空なら、適用済み検索式の目的・観点と論�
 ## 更新時
 
 通常の依存にUMAPを追加しました。更新後はアプリのPython環境で `python -m pip install -r requirements.txt` を実行してください。既存環境へUMAPだけを追加するには `python -m pip install -r requirements-map.txt` も使えます。設定ファイルやワークスペースの置き換えは不要です。
+
+## 発明を要素分解して調べる
+
+要素分解を主な導線として追加しました。従来の観点案は折りたたんで利用できます。要素単独と組合せの検索、分類とKWの対応付け、根拠引用の確認は [発明要素検索ガイド](INVENTION_SEARCH_GUIDE.md) を参照してください。

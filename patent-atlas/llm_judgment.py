@@ -87,6 +87,23 @@ def snapshot_query_context(query):
                    prompt_version=PROMPT_VERSION)
     if conditions is not None:
         context['search_conditions'] = conditions
+    invention = query.get('invention_context')
+    if invention is not None:
+        if (not isinstance(invention, dict) or invention.get('strategy') not in ('element', 'combination', 'alternatives')
+                or not isinstance(invention.get('elements'), list) or not 1 <= len(invention['elements']) <= 8):
+            raise ValueError('採用した検索式の発明要素を確認してください。')
+        elements = []
+        for element in invention['elements']:
+            if not isinstance(element, dict):
+                raise ValueError('採用した検索式の発明要素を確認してください。')
+            clean = {}
+            for key, limit in (('id', 80), ('name', 160), ('description', 600), ('relation', 400)):
+                value = element.get(key, '')
+                if not isinstance(value, str) or len(value) > limit or (key in ('id', 'name') and not value):
+                    raise ValueError('採用した検索式の発明要素を確認してください。')
+                clean[key] = value
+            elements.append(clean)
+        context['invention_search'] = dict(strategy=invention['strategy'], elements=elements)
     return context
 
 
@@ -124,6 +141,8 @@ def prepare(body, rows, keywords, provider, *, allow_empty=False, adopted_query=
             parts.append('和集合の中は代替条件です。全項目の一致を要求せず、別の必須観点との組合せを評価してください。')
         if query_context.get('search_conditions'):
             parts.append('採用済み検索式のsearch_conditionsがAND・OR・NOTの範囲を示します。同じOR内はどれかの条件で足ります。')
+        if query_context.get('invention_search'):
+            parts.append('今回は選択した発明要素の探索です。invention_searchは要素の説明で、条件の組合せと除外範囲はsearch_conditionsを優先します。未選択の要素や発明全体の一致を必須に追加しないでください。')
         parts.append('採用済み検索式のconceptsに示した語句・観点の意味を判断してください。語の文字列一致だけで要否を決めないでください。')
         criteria = '\n'.join(parts)
         criteria_source = 'adopted_query'
@@ -297,6 +316,8 @@ def run(rows, options, request, publish, cancelled):
                                adopted_query_id=context['query_id'], criteria_source=options['criteria_source'])
                 if context.get('search_conditions'):
                     payload['search_conditions'] = copy.deepcopy(context['search_conditions'])
+                if context.get('invention_search'):
+                    payload['invention_search'] = copy.deepcopy(context['invention_search'])
             for attempt in range(2):
                 if attempt:
                     emit(stage='判定形式を再確認中')
