@@ -126,3 +126,62 @@ test('brief edits show the previous-plan notice immediately without erasing conc
  let inputHandler;s.dom['#research-purpose']={value:'変更後の目的'};s.dom['#research-stale-plan']={hidden:true};s.groups['.research-brief input,.research-brief textarea']=[{addEventListener:(_event,handler)=>inputHandler=handler}];c.renderResearchWorkbench();inputHandler();
  assert.equal(s.dom['#research-stale-plan'].hidden,false);assert.equal(c.researchBrief().purpose,'変更後の目的');assert.equal(s.read('researchPlanDraft').concepts[0].terms[0],'保持する観点');assert.throws(()=>c.researchPlanPayload(),/もう一度起案/);
 });
+
+function unionPlan(){const p=plan();p.concepts=[
+ {id:'driving',name:'自動運転',role:'required',terms:['自動運転','自律走行'],abstract_terms:[],or_group:'driving_axis',group_reason:'技術の代替表現として拾う',reason:'入力',evidence_ids:[]},
+ {id:'system',name:'運転システム',role:'required',terms:['運転システム'],abstract_terms:[],or_group:'driving_axis',group_reason:'技術の代替表現として拾う',reason:'入力',evidence_ids:[]},
+ {id:'vehicle',name:'車両',role:'required',terms:['車両'],abstract_terms:[],or_group:'',reason:'対象',evidence_ids:[]},
+ {id:'optional',name:'速度制御',role:'optional',terms:['速度制御'],abstract_terms:[],or_group:'driving_axis',reason:'任意',evidence_ids:[]},
+ {id:'excluded',name:'玩具',role:'exclude',terms:['玩具'],abstract_terms:[],reason:'明示除外',evidence_ids:[]}
+ ];return p;}
+
+test('proposed union groups survive preview payload without selecting optional or excluded concepts',()=>{
+ const s=setup(),c=s.context,p=unionPlan();c.state.research_workbench.plan=p;const d=c.researchPlanState(p),payload=c.researchPlanPayload();
+ assert.deepEqual([...payload.concepts].map(x=>x.id),['driving','system','vehicle']);assert.equal(payload.concepts[0].or_group,'driving_axis');assert.equal(payload.concepts[1].or_group,'driving_axis');assert.notEqual(payload.concepts[2].or_group,'driving_axis');assert.equal(d.concepts[3].selected,false);assert.equal(d.concepts[4].selected,false);
+ const html=c.researchLogicHtml(p,d);assert.equal((html.match(/class="research-logic-set"/g)||[]).length,2);assert.match(html,/OR · 和集合/);assert.match(html,/積集合/);assert.doesNotMatch(html,/速度制御|玩具/);
+});
+
+test('group control supports merging then separating one concept with readable names and no raw IDs',()=>{
+ const s=setup(),c=s.context,p=unionPlan(),d=c.researchPlanState(p),system=d.concepts[1];let options=c.researchGroupOptions(p,d,system);
+ assert.match(options,/条件 · 自動運転 \/ 運転システム \/ 速度制御/);assert.match(options,/この観点だけの独立条件にする/);
+ assert.doesNotMatch(options.replace(/<[^>]*>/g,''),/driving_axis|ui_/);
+ const separate=options.match(/value="([^"]+)"[^>]*>この観点だけの独立条件にする/)[1];system.or_group=separate;
+ assert.equal((c.researchLogicHtml(p,d).match(/class="research-logic-set"/g)||[]).length,3);
+ system.or_group=d.concepts[2].or_group;const html=c.researchLogicHtml(p,d);assert.equal((html.match(/class="research-logic-set"/g)||[]).length,2);assert.match(c.researchGroupOptions(p,d,system),/条件 · 運転システム \/ 車両/);
+});
+
+test('unique independent defaults never collide with a proposed group identifier',()=>{
+ const s=setup(),c=s.context,p=unionPlan();p.concepts[0].or_group='ui_3';const d=c.researchPlanState(p);
+ assert.notEqual(d.concepts[2].or_group,'ui_3');assert.notEqual(d.concepts[2].or_group,d.concepts[0].or_group);
+});
+
+test('explicit must-have aspects cannot be merged into OR and are not offered to other groups',()=>{
+ for(const legacy of [false,true]){
+  const s=setup(),c=s.context,p=unionPlan();p.concepts[2].name='必須: 車両';p.concepts[2].locked_and=!legacy;p.concepts[2].or_group='driving_axis';p.brief={...c.state.research_workbench.brief,user_aspects:['必須: 車両']};c.state.research_workbench.brief.user_aspects=['必須: 車両'];c.state.research_workbench.plan=p;
+  const d=c.researchPlanState(p),html=c.researchPlanHtml(p),payload=c.researchPlanPayload();assert.match(html,/aria-label="必須: 車両 の和集合グループ" disabled/);assert.equal(payload.concepts[2].or_group,'');assert.equal((c.researchLogicHtml(p,d).match(/class="research-logic-set"/g)||[]).length,2);
+  assert.doesNotMatch(c.researchGroupOptions(p,d,d.concepts[0]),/条件 · [^<]*車両/);
+ }
+});
+
+test('explicit exclusion is separate from unions even if an old draft contains a group',()=>{
+ const s=setup(),c=s.context,p=unionPlan();c.state.research_workbench.plan=p;const d=c.researchPlanState(p);d.concepts[4].selected=true;d.concepts[4].or_group='driving_axis';
+ const payload=c.researchPlanPayload(),html=c.researchLogicHtml(p,d);assert.equal(payload.concepts.find(x=>x.id==='excluded').or_group,'');assert.match(html,/NOT · 除外/);assert.equal((html.match(/class="research-logic-set"/g)||[]).length,2);
+});
+
+test('capturing group edits preserves plan metadata, edited terms and selection state',()=>{
+ const s=setup(),c=s.context,p=unionPlan();c.state.research_workbench.plan=p;const d=c.researchPlanState(p);s.dom['#research-concepts']={};
+ s.groups['.research-concept']=d.concepts.map(x=>({dataset:{concept:x.id},children:{'input[data-use]':{checked:x.selected},'select[data-role]':{value:x.role},'select[data-or-group]':{value:x.id==='system'?'ui_3':x.or_group},textarea:{value:x.id==='system'?'運転システム\n走行制御':x.terms.join('\n')}}}));
+ c.captureResearchPlan();const payload=c.researchPlanPayload(),system=payload.concepts.find(x=>x.id==='system');assert.equal(system.or_group,'ui_3');assert.deepEqual([...system.terms],['運転システム','走行制御']);assert.equal(s.read('researchPlanDraft').concepts[1].group_reason,'技術の代替表現として拾う');assert.equal(s.read('researchPlanDraft').concepts[3].selected,false);
+});
+
+test('changing a group updates the live set diagram and invalidates the prior preview',()=>{
+ const s=setup(),c=s.context,p=unionPlan();c.state.research_workbench.plan=p;const d=c.researchPlanState(p);let handler;
+ s.dom['#research-concepts']={};s.dom['#research-logic']={innerHTML:''};s.dom['#research-query-preview']={innerHTML:'old'};d.preview={expression:'old',query:{boolean_tree:{}}};
+ s.groups['.research-concept']=d.concepts.map(x=>({dataset:{concept:x.id},children:{'input[data-use]':{checked:x.selected},'select[data-role]':{value:x.role},'select[data-or-group]':{value:x.or_group,innerHTML:'',disabled:false},textarea:{value:x.terms.join('\n')}}}));
+ s.groups['.research-plan input,.research-plan textarea,.research-plan select']=[{addEventListener:(_event,fn)=>handler=fn}];c.renderResearchWorkbench();s.groups['.research-concept'][1].children['select[data-or-group]'].value='ui_3';handler();
+ assert.equal(s.read('researchPlanDraft').preview,null);assert.equal(s.dom['#research-query-preview'].innerHTML,'');assert.match(s.dom['#research-logic'].innerHTML,/運転システム/);assert.equal(s.read('researchPlanDraft').concepts[1].or_group,'ui_3');
+});
+
+test('group reasons and live query terms escape untrusted model strings',()=>{
+ const s=setup(),c=s.context,p=unionPlan();p.concepts[0].name='<img>';p.concepts[0].group_reason='<script>reason';p.concepts[0].terms=['<svg>'];const html=c.researchPlanHtml(p);assert.doesNotMatch(html,/<img>|<script>|<svg>/);assert.match(html,/&lt;img&gt;/);assert.match(html,/&lt;svg&gt;/);
+});

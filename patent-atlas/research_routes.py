@@ -2,6 +2,7 @@
 import copy
 import hashlib
 import json
+import re
 import time
 import uuid
 import threading
@@ -70,7 +71,7 @@ def concept_conditions(plan, body):
     if not isinstance(values, list) or not values or len(values) > 8:
         raise ValueError('採用する観点を1〜8件選んでください。')
     available = {c['id']: c for c in plan['concepts']}
-    positive, negative, facets, seen = [], [], [], set()
+    positive, negative, facets, seen = {}, [], [], set()
     for item in values:
         if not isinstance(item, dict) or item.get('id') not in available or item['id'] in seen:
             raise ValueError('観点が重複しているか、計画に存在しません。')
@@ -83,13 +84,27 @@ def concept_conditions(plan, body):
         role = item.get('role', source['role'])
         if role not in ('required', 'exclude'):
             raise ValueError('採用する観点は必須条件か除外条件を選んでください。')
+        or_group = item.get('or_group', source.get('or_group', '') if role != 'exclude' else '')
+        if not isinstance(or_group, str) or (or_group and not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]{0,31}', or_group)):
+            raise ValueError('和集合グループを選び直してください。')
+        locked = source.get('locked_and', False) or (source['id'].startswith('aspect') and
+                 re.match(r'^(必須|required)\s*[:：]', source['name'], re.I))
+        if or_group and (role == 'exclude' or locked):
+            raise ValueError('明示した必須観点・除外観点は、他の観点との和集合にできません。')
         node = group('or', [Node('text', t) for t in terms])
-        (negative if role == 'exclude' else positive).append(node)
+        if role == 'exclude':
+            negative.append(node)
+        else:
+            # Namespaced keys keep an independent condition distinct even when
+            # an untrusted group ID happens to equal another concept ID.
+            key = ('union', or_group) if or_group else ('single', source['id'])
+            positive.setdefault(key, []).append(node)
         facets.append({**copy.deepcopy(source), 'terms': terms, 'role': role,
-                       'edited': terms != source['terms'] or role != source['role']})
+                       'or_group': or_group,
+                       'edited': terms != source['terms'] or role != source['role'] or or_group != source.get('or_group', '')})
     if not positive:
         raise ValueError('少なくとも1つは検索に含める観点が必要です。')
-    node = group('and', positive)
+    node = group('and', [group('or', alternatives) for alternatives in positive.values()])
     if negative:
         node = Node('not', children=(node, group('or', negative)))
     tree_from_data(tree_data(node))
@@ -196,7 +211,7 @@ def register_research_routes(app, context):
         state['selected'] = [c['key'] for c in query['classifications']]
         query.update(id=uuid.uuid4().hex, version=len(state['queries']) + 1,
                      created_at=time.strftime('%Y-%m-%d %H:%M'), type=kind,
-                     keyword_context=state['keywords'], note='観点内はOR、観点間はAND。取り込み式は元の括弧とNOTの範囲を保持します。')
+                     keyword_context=state['keywords'], note='同じ和集合グループはOR、独立した条件はAND。取り込み式は元の括弧とNOTの範囲を保持します。')
         query.setdefault('keywords', keywords(state['keywords']))
         query.setdefault('include_terms', [])
         query.setdefault('exclude_terms', [])

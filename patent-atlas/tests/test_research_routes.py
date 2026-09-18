@@ -24,6 +24,57 @@ def patent(identifier='JP2024000001A', title='車両の走行制御方法'):
 
 
 class ResearchRoutesTests(unittest.TestCase):
+    def test_union_group_preview_apply_and_refinement_preserve_boolean_meaning(self):
+        plan = self.plan(keywords='自動運転 自動車 運転システム')
+        payload = self.query_payload(plan)
+        preview = self.post('preview', payload)
+        tree = preview['query']['boolean_tree']
+        def matches(node, present):
+            if node['op'] == 'text': return node['value'] in present
+            values = [matches(child, present) for child in node['children']]
+            return all(values) if node['op'] == 'and' else any(values)
+        self.assertTrue(matches(tree, {'自動車', '自動運転'}))
+        self.assertTrue(matches(tree, {'自動車', '運転システム'}))
+        self.assertFalse(matches(tree, {'自動運転', '運転システム'}))
+        self.assertFalse(matches(tree, {'自動車'}))
+        for format_id in ('jplatpat', 'espacenet', 'google_patents'):
+            exported = export_query(preview['query'], format_id, replacements=None if format_id == 'jplatpat' else
+                                    {'自動車': 'automobile', '自動運転': 'autonomous driving', '運転システム': 'driving system'})
+            self.assertTrue(exported['can_copy'], exported)
+            self.assertIn('+' if format_id == 'jplatpat' else 'OR', exported['expression'])
+        changed = copy.deepcopy(payload)
+        for facet in changed['concepts']: facet['or_group'] = ''
+        self.unchanged('apply', {**changed, 'expected_preview_hash': preview['preview_hash']}, 409)
+        result = self.post('apply', {**payload, 'expected_preview_hash': preview['preview_hash']})
+        self.assertEqual(result['queries'][-1]['boolean_tree'], tree)
+        grouped = [f for f in result['queries'][-1]['facets'] if f['name'] in ('自動運転', '運転システム')]
+        self.assertEqual(grouped[0]['or_group'], grouped[1]['or_group'])
+        with patch.object(module, 'refinement_terms', return_value={'include': [], 'exclude': []}):
+            response = self.client.post('/api/query', json={'refine': True, 'include': [], 'exclude': []})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(module.STATE['queries'][-1]['boolean_tree'], tree)
+        self.assertEqual(module.SETTINGS, self.settings)
+
+    def test_group_changes_cannot_union_explicit_required_or_excluded_aspects(self):
+        plan = self.plan(keywords='自動運転', user_aspects=['必須: 自動車', '除外: 玩具'])
+        payload = self.query_payload(plan)
+        payload['concepts'][1]['role'] = 'exclude'
+        for index in (0, 1):
+            changed = copy.deepcopy(payload)
+            changed['concepts'][index]['or_group'] = 'driving'
+            self.unchanged('preview', changed)
+        for value in (['group'], 'not a group', 'a' * 33):
+            changed = copy.deepcopy(payload)
+            changed['concepts'][-1]['or_group'] = value
+            self.unchanged('preview', changed)
+        # Ordinary input terms remain manually regroupable across technical areas.
+        plan = self.plan(keywords='語甲 語乙 語丙')
+        payload = self.query_payload(plan)
+        payload['concepts'][0]['or_group'] = 'custom'
+        payload['concepts'][1]['or_group'] = 'custom'
+        preview = self.post('preview', payload)
+        self.assertEqual(preview['query']['boolean_tree']['children'][0]['op'], 'or')
+
     @classmethod
     def setUpClass(cls):
         cls.client = TestClient(module.app)

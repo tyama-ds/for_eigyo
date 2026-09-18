@@ -19,6 +19,33 @@ MAX_SOURCES = 20
 _ROLES = {'required', 'optional', 'exclude'}
 _MODES = {'target', 'discover', 'examples', 'tools'}
 _DEFAULT_PURPOSE = '探索・母集団作成'
+_OR_GROUP_PATTERN = r'[A-Za-z][A-Za-z0-9_-]{0,31}'
+# These are deliberately small, reviewable retrieval axes, not a synonym
+# classifier. Unknown phrases stay independent until a user or LLM reviews
+# their meaning. In particular, a broad functional phrase is not evidence of
+# strict synonymy or of relevance to the selected patents.
+_OFFLINE_OR_AXES = (
+    ('driving', ('自動運転', '自律走行', '自動走行', '運転システム',
+                 'autonomous driving', 'automated driving', 'self driving', 'driving system'),
+     '自動運転・運転システムの探索軸。厳密な同義語ではなく、代替表現として広めに拾う仮の和集合です。'),
+    ('battery', ('電池', 'battery', 'batteries'),
+     '電池の日本語・英語表記を和集合にします。対象となる電池の種類は結果で確認してください。'),
+    ('solid_electrolyte', ('固体電解質', 'solid electrolyte', 'solid electrolytes'),
+     '固体電解質の日本語・英語表記を和集合にします。材料の詳細は別の観点で確認してください。'),
+)
+
+
+def suggest_keyword_or_group(term):
+    """Return a conservative retrieval-axis (ID, reason), or ('', '') for unknown text.
+
+    The result only proposes a union; it never adds terms or equates the input
+    with a mandatory user aspect. Callers must preserve explicit AND/NOT rules.
+    """
+    folded = term.casefold()
+    for group_id, phrases, reason in _OFFLINE_OR_AXES:
+        if folded in phrases:
+            return group_id, reason
+    return '', ''
 
 
 def _text(value, name, limit, *, empty=True):
@@ -153,6 +180,10 @@ def _aspect_role(value):
     return role, match[2].strip()
 
 
+def _locked_and_aspect(value):
+    return bool(re.match(r'^(必須|required)\s*[:：]', value, re.I))
+
+
 def _anchors(brief, sources):
     concepts, omitted_keywords = [], []
     for index, aspect in enumerate(brief['user_aspects'], 1):
@@ -160,7 +191,8 @@ def _anchors(brief, sources):
         _term(literal)
         concepts.append(dict(id=f'aspect{index}', name=aspect, role=role, terms=[literal],
                              abstract_terms=[], reason='利用者が指定した観点。検索語への分解は未実施です。',
-                             evidence_ids=_evidence_ids([literal], sources)))
+                             evidence_ids=_evidence_ids([literal], sources), or_group='', group_reason='',
+                             locked_and=_locked_and_aspect(aspect)))
     existing_terms = {term.casefold() for concept in concepts for term in concept['terms']}
     for index, term in enumerate(parse_keywords(brief['keywords']), 1):
         if term.casefold() in existing_terms:
@@ -168,9 +200,11 @@ def _anchors(brief, sources):
         if len(concepts) >= MAX_CONCEPTS:
             omitted_keywords.append(term)
             continue
+        or_group, group_reason = suggest_keyword_or_group(term)
         concepts.append(dict(id=f'keyword{index}', name=term, role='required', terms=[term],
-                             abstract_terms=[], reason='入力キーワード。ほかの語との同義関係はまだ仮定していません。',
-                             evidence_ids=_evidence_ids([term], sources)))
+                             abstract_terms=[], reason='入力キーワード。原文を保持しています。',
+                             evidence_ids=_evidence_ids([term], sources),
+                             or_group=or_group, group_reason=group_reason, locked_and=False))
         existing_terms.add(term.casefold())
     return concepts, omitted_keywords
 
@@ -212,6 +246,9 @@ def response_schema(source_ids):
                                        'terms': {'type': 'array', 'minItems': 1, 'maxItems': MAX_TERMS, 'items': {'type': 'string'}},
                                        'abstract_terms': {'type': 'array', 'maxItems': MAX_TERMS, 'items': {'type': 'string'}},
                                        'reason': {'type': 'string'},
+                                       'or_group': {'type': 'string', 'maxLength': 32,
+                                                    'pattern': r'^$|^[A-Za-z][A-Za-z0-9_-]{0,31}$'},
+                                       'group_reason': {'type': 'string', 'maxLength': 300},
                                        'evidence_ids': {'type': 'array', 'maxItems': len(source_ids), 'items': evidence},
                                    }}},
         },
@@ -231,8 +268,11 @@ def _validate_result(result, anchors, source_ids, purpose):
         raise ValueError('LLMの観点は1〜8件の配列である必要があります。')
     expected = {item['id']: item for item in anchors}
     seen, concepts, deduplicated = set(), [], False
+    independent_inputs = 0
+    required_fields = {'id', 'name', 'role', 'terms', 'abstract_terms', 'reason', 'evidence_ids'}
+    allowed_fields = required_fields | {'or_group', 'group_reason'}
     for item in items:
-        if not isinstance(item, dict) or set(item) != {'id', 'name', 'role', 'terms', 'abstract_terms', 'reason', 'evidence_ids'}:
+        if not isinstance(item, dict) or not required_fields <= set(item) or not set(item) <= allowed_fields:
             raise ValueError('LLMの観点に必要な項目が不足しているか、不要な項目が含まれています。')
         concept_id = _text(item['id'], '観点ID', 64, empty=False)
         if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]{0,63}', concept_id) or concept_id in seen:
@@ -243,6 +283,15 @@ def _validate_result(result, anchors, source_ids, purpose):
         if not isinstance(role, str) or role not in _ROLES:
             raise ValueError('LLMの観点roleはrequired / optional / excludeのみです。')
         anchor = expected.get(concept_id)
+        # Older models may omit new fields. Keep the explainable anchor default
+        # in that case; an explicit empty string still means independent AND.
+        or_group = _text(item.get('or_group', anchor.get('or_group', '') if anchor else ''), '和集合グループID', 32)
+        if or_group and not re.fullmatch(_OR_GROUP_PATTERN, or_group):
+            raise ValueError('和集合グループIDは英字で始まる32文字以内の英数字・ハイフン・アンダースコアにしてください。')
+        default_group_reason = anchor.get('group_reason', '') if anchor and or_group == anchor.get('or_group') else ''
+        group_reason = _text(item.get('group_reason', default_group_reason), '和集合の理由', 300)
+        if not or_group:
+            group_reason = ''
         raw_terms = _term_array(item['terms'], '検索語')
         raw_abstract_terms = _term_array(item['abstract_terms'], '抽象語')
         terms = _unique_terms(raw_terms, anchor['terms'] if anchor else ())
@@ -263,8 +312,15 @@ def _validate_result(result, anchors, source_ids, purpose):
                 raise ValueError('LLMが入力キーワードを省略しました。元の条件を保持して再実行してください。')
         elif role == 'exclude':
             raise ValueError('LLMが利用者の指定にない除外観点を作成しました。除外候補は先に確認してください。')
+        locked_and = bool(anchor and anchor.get('locked_and'))
+        if or_group and (role == 'exclude' or locked_and):
+            # A declared requirement cannot become an alternative to another
+            # condition merely because the model reused a group identifier.
+            or_group, group_reason = '', ''
+            independent_inputs += 1
         concepts.append(dict(id=concept_id, name=name, role=role, terms=terms,
-                             abstract_terms=abstract_terms, reason=reason, evidence_ids=evidence_ids))
+                             abstract_terms=abstract_terms, reason=reason, evidence_ids=evidence_ids,
+                             or_group=or_group, group_reason=group_reason, locked_and=locked_and))
     # Every raw proposal has passed validation before applying the output cap.
     # Preserve missing user inputs literally; never guess that a new model ID
     # is a renamed anchor based on similar names or terms.
@@ -289,6 +345,8 @@ def _validate_result(result, anchors, source_ids, purpose):
         notices.append(f'入力観点を優先し、8観点の上限によりLLM追加提案{omitted}件を省略しました')
     if deduplicated:
         notices.append('同一語の重複を整理しました（大小文字を同一視し、具体語を優先）')
+    if independent_inputs:
+        notices.append(f'利用者の必須・除外条件{independent_inputs}件は他観点との和集合にせず独立条件として保持しました')
     if notices:
         questions = ['。'.join(notices) + '。'] + questions
     questions = questions[:5]
@@ -335,11 +393,11 @@ def plan_research(brief, patents, settings, *, use_llm=False):
                     continue
                 concepts.append(dict(id=f'seed{index}', name=title, role='optional', terms=[title],
                                      abstract_terms=[], reason='選択した特許のタイトル原文。構成要素の分解・機能抽象化は未実施です。',
-                                     evidence_ids=[row['id']]))
+                                     evidence_ids=[row['id']], or_group='', group_reason='', locked_and=False))
         if not concepts:
             questions.insert(0, '説明文から観点を分解するにはLLMで計画するか、キーワード・観点を入力してください。')
         plan = dict(purpose=purpose,
-                    summary='入力語と指定観点をそのまま整理しました。同義語や機能の抽象化は未実施です。選択したターゲットの実付与分類は別の根拠として保持し、検索結果で既知の必要例を回収できるか確認します。',
+                    summary='入力語と指定観点を保持し、既知の同一探索軸だけ仮の和集合（OR）に整理しました。独立した観点は積集合（AND）です。未知語の同義語生成・機能抽象化は未実施です。既知の必要例を検索結果で回収できるか確認します。',
                     concepts=concepts, questions=questions[:5], method='offline')
     plan.update(prompt_version=PROMPT_VERSION, brief=copy.deepcopy(normalized),
                 sources=sources, source_ids=source_ids, unmapped_keywords=omitted_keywords)

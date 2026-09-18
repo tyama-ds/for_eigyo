@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import research_strategy as strategy
-from prompt_templates import CLASSIFICATION_SYSTEM, DISCOVERY_SYSTEM, JUDGMENT_SYSTEM, PROMPT_VERSION
+from prompt_templates import CLASSIFICATION_SYSTEM, DISCOVERY_SYSTEM, JUDGMENT_SYSTEM, PROMPT_VERSION, RESEARCH_PLAN_SYSTEM
 
 
 def brief(**values):
@@ -26,6 +26,14 @@ def llm_result():
                           dict(id='keyword1', name='電池', role='required', terms=['電池', 'battery'],
                                abstract_terms=['蓄電装置'], reason='入力キーワードを保持し、表記ゆれを検討。', evidence_ids=['p1'])],
                 questions=['製造工程も独立の必須観点にしますか。'])
+
+
+def legacy_result_for(request):
+    plan = strategy.plan_research(request, [], {})
+    fields = {'id', 'name', 'role', 'terms', 'abstract_terms', 'reason', 'evidence_ids'}
+    return dict(purpose=plan['purpose'], summary='入力条件を整理し、必要例を回収できるか確認する。', questions=[],
+                concepts=[{key: copy.deepcopy(value) for key, value in concept.items() if key in fields}
+                          for concept in plan['concepts']])
 
 
 class ResearchStrategyTests(unittest.TestCase):
@@ -82,6 +90,103 @@ class ResearchStrategyTests(unittest.TestCase):
         plan = strategy.plan_research(dict(keywords='"solid electrolyte" 界面'), [], {})
         self.assertEqual([c['terms'] for c in plan['concepts']], [['solid electrolyte'], ['界面']])
         self.assertTrue(all(c['role'] == 'required' for c in plan['concepts']))
+
+    def test_offline_driving_alternatives_are_or_but_vehicle_and_unknown_axes_stay_independent(self):
+        request = dict(keywords='自動運転 自動車 運転システム 冷却工程')
+        before = copy.deepcopy(request)
+        with patch('research_strategy.complete') as network:
+            plan = strategy.plan_research(request, [], {})
+        self.assertEqual([c['or_group'] for c in plan['concepts']], ['driving', '', 'driving', ''])
+        self.assertEqual([c['terms'] for c in plan['concepts']], [['自動運転'], ['自動車'], ['運転システム'], ['冷却工程']])
+        self.assertIn('代替表現として広めに拾う仮の和集合', plan['concepts'][0]['group_reason'])
+        self.assertFalse(any(c['locked_and'] for c in plan['concepts']))
+        self.assertEqual(request, before)
+        network.assert_not_called()
+
+    def test_offline_only_groups_reviewable_known_bilingual_axes(self):
+        request = dict(keywords='電池 battery 固体電解質 "solid electrolyte" 硫化物 硫黄化合物')
+        plan = strategy.plan_research(request, [], {})
+        self.assertEqual([c['or_group'] for c in plan['concepts']],
+                         ['battery', 'battery', 'solid_electrolyte', 'solid_electrolyte', '', ''])
+        self.assertEqual(plan['brief']['keywords'], request['keywords'])
+        self.assertTrue(all(c['terms'] == [c['name']] for c in plan['concepts']))
+
+    def test_explicit_required_aspects_lock_and_plain_aspects_are_editable(self):
+        plan = strategy.plan_research(dict(user_aspects=['必須: 自動運転', 'required: 冷却工程', '界面', '除外: 玩具']), [], {})
+        self.assertEqual([c['locked_and'] for c in plan['concepts']], [True, True, False, False])
+        self.assertTrue(all(c['or_group'] == '' for c in plan['concepts']))
+
+    def test_older_llm_responses_inherit_known_groups_but_explicit_empty_means_and(self):
+        request = dict(keywords='自動運転 自動車 運転システム')
+        response = legacy_result_for(request)
+        with patch('research_strategy.complete', return_value=response):
+            plan = strategy.plan_research(request, [], {}, use_llm=True)
+        self.assertEqual([c['or_group'] for c in plan['concepts']], ['driving', '', 'driving'])
+        self.assertIn('仮の和集合', plan['concepts'][0]['group_reason'])
+        response['concepts'][0]['or_group'] = ''
+        with patch('research_strategy.complete', return_value=response):
+            plan = strategy.plan_research(request, [], {}, use_llm=True)
+        self.assertEqual(plan['concepts'][0]['or_group'], '')
+        self.assertEqual(plan['concepts'][0]['group_reason'], '')
+
+    def test_missing_keyword_anchor_restores_its_default_or_group(self):
+        request = dict(keywords='自動運転 自動車 運転システム')
+        response = legacy_result_for(request)
+        response['concepts'].pop()
+        with patch('research_strategy.complete', return_value=response):
+            plan = strategy.plan_research(request, [], {}, use_llm=True)
+        restored = plan['concepts'][2]
+        self.assertEqual(restored['id'], 'keyword3')
+        self.assertEqual(restored['terms'], ['運転システム'])
+        self.assertEqual(restored['or_group'], plan['concepts'][0]['or_group'])
+        self.assertIn('仮の和集合', restored['group_reason'])
+        self.assertFalse(restored['locked_and'])
+
+    def test_llm_can_group_unknown_alternatives_without_changing_input_anchors(self):
+        request = dict(keywords='圧粉成形 粉末圧縮 冷却')
+        response = legacy_result_for(request)
+        for item in response['concepts'][:2]:
+            item.update(or_group='powder_pressing', group_reason='粉体を押し固める工程の代替表現として広めに拾う仮の和集合。')
+        response_before = copy.deepcopy(response)
+        with patch('research_strategy.complete', return_value=response):
+            plan = strategy.plan_research(request, [], {}, use_llm=True)
+        self.assertEqual([c['or_group'] for c in plan['concepts']], ['powder_pressing', 'powder_pressing', ''])
+        self.assertEqual([c['id'] for c in plan['concepts']], ['keyword1', 'keyword2', 'keyword3'])
+        self.assertTrue(all(c['terms'] == [c['name']] for c in plan['concepts']))
+        self.assertEqual(response, response_before)
+
+    def test_llm_grouping_cannot_weaken_declared_mandatory_or_exclude_aspects(self):
+        request = dict(keywords='自動運転', user_aspects=['必須: 界面', '除外: 玩具', '温度'])
+        response = legacy_result_for(request)
+        for item in response['concepts']:
+            item.update(or_group='same', group_reason='同一視した提案')
+        with patch('research_strategy.complete', return_value=response):
+            plan = strategy.plan_research(request, [], {}, use_llm=True)
+        self.assertEqual([c['or_group'] for c in plan['concepts']], ['', '', 'same', 'same'])
+        self.assertEqual([c['locked_and'] for c in plan['concepts']], [True, False, False, False])
+        self.assertEqual([c['role'] for c in plan['concepts']], ['required', 'exclude', 'required', 'required'])
+        self.assertTrue(any('必須・除外条件2件' in question for question in plan['questions']))
+
+    def test_or_group_ids_reasons_and_derived_lock_are_validated_without_relaxing_bounds(self):
+        invalid = [dict(or_group='a OR b'), dict(or_group='日本語'), dict(or_group='3group'),
+                   dict(or_group='a' * 33), dict(or_group=['x']), dict(or_group=None),
+                   dict(group_reason='理' * 301), dict(group_reason=None), dict(locked_and=False)]
+        for changes in invalid:
+            response = llm_result()
+            response['concepts'][0].update(changes)
+            with self.subTest(changes=changes), patch('research_strategy.complete', return_value=response), self.assertRaises(ValueError):
+                strategy.plan_research(brief(), patents(), {}, use_llm=True)
+        schema = strategy.response_schema(['p1'])['properties']['concepts']['items']
+        self.assertIn('or_group', schema['properties'])
+        self.assertNotIn('or_group', schema['required'])
+        self.assertNotIn('locked_and', schema['properties'])
+
+    def test_prompt_explains_union_by_meaning_and_avoids_unsupported_required_additions(self):
+        self.assertIn('一般語はAND、専門語はOR', RESEARCH_PLAN_SYSTEM)
+        self.assertIn('入力語の数だけ必須AND条件を作らない', RESEARCH_PLAN_SYSTEM)
+        self.assertIn('通常optional', RESEARCH_PLAN_SYSTEM)
+        self.assertIn('自動車 AND (自動運転 OR 運転システム)', RESEARCH_PLAN_SYSTEM)
+        self.assertIn('その全語・全観点を同時必須と解釈しません', JUDGMENT_SYSTEM)
 
     def test_explicit_aspect_roles(self):
         plan = strategy.plan_research(dict(user_aspects=['必須: 界面', '任意: 工程', '除外: 玩具']), [], {})

@@ -7,8 +7,10 @@ import copy
 import hashlib
 import json
 import math
+import re
 from collections import Counter
 from prompt_templates import JUDGMENT_SYSTEM, PROMPT_VERSION
+from query_formats import tree_from_data, tree_data
 
 
 BATCH_SIZE = 4
@@ -68,14 +70,24 @@ def snapshot_query_context(query):
                 or not isinstance(terms, list) or not 1 <= len(terms) <= 24
                 or any(not isinstance(term, str) or not term.strip() or len(term) > 160 for term in terms)):
             raise ValueError('採用した検索式の観点名・役割・語句を確認してください。')
-        concepts.append(dict(name=name.strip(), role=role, terms=[term.strip() for term in terms]))
-    if not purpose.strip() and not concepts:
+        union = facet.get('or_group', '')
+        if not isinstance(union, str) or (union and not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]{0,31}', union)) or (role == 'exclude' and union):
+            raise ValueError('採用した検索式の和集合グループを確認してください。')
+        concept = dict(name=name.strip(), role=role, terms=[term.strip() for term in terms])
+        if union:
+            concept['or_group'] = union
+        concepts.append(concept)
+    conditions = tree_data(tree_from_data(query['boolean_tree'])) if query.get('boolean_tree') else None
+    if not purpose.strip() and not concepts and conditions is None:
         return None
     query_id = query.get('id')
     if not isinstance(query_id, str) or not query_id or len(query_id) > 200:
         raise ValueError('採用した検索式のIDを確認してください。')
-    return dict(query_id=query_id, purpose=purpose.strip(), concepts=concepts,
-                prompt_version=PROMPT_VERSION)
+    context = dict(query_id=query_id, purpose=purpose.strip(), concepts=concepts,
+                   prompt_version=PROMPT_VERSION)
+    if conditions is not None:
+        context['search_conditions'] = conditions
+    return context
 
 
 def context_fingerprint(context):
@@ -97,9 +109,21 @@ def prepare(body, rows, keywords, provider, *, allow_empty=False, adopted_query=
         parts = []
         if query_context['purpose']:
             parts.append('調査目的: ' + query_context['purpose'])
-        for concept in query_context['concepts']:
-            label = '必須観点' if concept['role'] == 'required' else '除外観点'
-            parts.append(label + ': ' + concept['name'])
+        groups = {}
+        for index, concept in enumerate(query_context['concepts']):
+            key = ('union', concept['or_group']) if concept.get('or_group') else ('single', index)
+            groups.setdefault(key, []).append(concept)
+        for alternatives in groups.values():
+            if len(alternatives) > 1:
+                parts.append('和集合（いずれかの観点）: ' + ' OR '.join(c['name'] for c in alternatives))
+            else:
+                concept = alternatives[0]
+                label = '必須観点' if concept['role'] == 'required' else '除外観点'
+                parts.append(label + ': ' + concept['name'])
+        if any(len(alternatives) > 1 for alternatives in groups.values()):
+            parts.append('和集合の中は代替条件です。全項目の一致を要求せず、別の必須観点との組合せを評価してください。')
+        if query_context.get('search_conditions'):
+            parts.append('採用済み検索式のsearch_conditionsがAND・OR・NOTの範囲を示します。同じOR内はどれかの条件で足ります。')
         parts.append('採用済み検索式のconceptsに示した語句・観点の意味を判断してください。語の文字列一致だけで要否を決めないでください。')
         criteria = '\n'.join(parts)
         criteria_source = 'adopted_query'
@@ -271,6 +295,8 @@ def run(rows, options, request, publish, cancelled):
                 context = options['query_context']
                 payload.update(purpose=context['purpose'], concepts=copy.deepcopy(context['concepts']),
                                adopted_query_id=context['query_id'], criteria_source=options['criteria_source'])
+                if context.get('search_conditions'):
+                    payload['search_conditions'] = copy.deepcopy(context['search_conditions'])
             for attempt in range(2):
                 if attempt:
                     emit(stage='判定形式を再確認中')

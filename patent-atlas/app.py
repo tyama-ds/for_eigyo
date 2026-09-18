@@ -33,7 +33,8 @@ from convergence_routes import (display_convergence, display_search_result, new_
                                 register_convergence_routes)
 from workspace_import import merge_patents
 from research_routes import register_research_routes, refined_tree
-from query_formats import tree_from_data, describe_tree, terms_of
+from query_formats import Node, group, tree_data, tree_from_data, describe_tree, terms_of
+from research_strategy import suggest_keyword_or_group
 
 ROOT = Path(__file__).parent
 DATA = Path(os.environ.get('PATENT_ATLAS_DATA', str(ROOT / 'data')))
@@ -486,6 +487,21 @@ def make_query(refine=False, include=None, exclude=None, preserve_conditions=Fal
                 known_keep_coverage={'retained':retained,'total':len(kept)} if include and kept else None,
                 note='DB非依存の設計式です。TEXT・IPC・F-TERMは検索先の入力欄に割り当ててください。分類群はOR、キーワードはANDです。',
                 changes=('要否判断から特徴語を抽出。NOTは選択された語だけ適用。' if refine else '入力語と選択分類から初案を作成。'))
+    if not refine:
+        groups = {}
+        for index, word in enumerate(words):
+            union, _ = suggest_keyword_or_group(word)
+            key = ('union', union) if union else ('single', index)
+            groups.setdefault(key, []).append(Node('text', word))
+        if any(len(alternatives) > 1 for alternatives in groups.values()):
+            concepts = group('and', [group('or', alternatives) for alternatives in groups.values()])
+            draft = dict(concept_tree=tree_data(concepts))
+            base_tree, boolean_tree = refined_tree(draft, selected, include, exclude)
+            item.update(concept_tree=tree_data(concepts), base_boolean_tree=base_tree,
+                        boolean_tree=boolean_tree, keyword_context=STATE['keywords'],
+                        expression=describe_tree(tree_from_data(boolean_tree)),
+                        note='既知の代替表現を仮のORグループにまとめ、別の条件とANDで結びました。調査ナビで意味・和集合の範囲を見直せます。')
+            item['term_catalog'] = terms_of(item)
     if previous.get('boolean_tree'):
         base_tree, boolean_tree = refined_tree(previous, selected, include, exclude)
         for name in ('concept_tree', 'facets', 'purpose', 'provenance', 'target_ids', 'prompt_version', 'keyword_context'):

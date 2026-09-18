@@ -18,6 +18,27 @@ import app as module
 from analysis_engine import demo_rows, parse_csv, refinement_terms, train
 
 class AppTests(unittest.TestCase):
+    def test_individual_initial_query_uses_union_and_refinement_keeps_it(self):
+        module.STATE.update(keywords='自動運転 自動車 運転システム', selected=[], queries=[])
+        first = module.make_query()
+        self.assertIn(' OR ', first['expression'])
+        self.assertIn(' AND ', first['expression'])
+        self.assertEqual(first['concept_tree']['children'][0]['op'], 'or')
+        self.assertEqual(module.export_query(first, 'jplatpat')['expression'], '[[自動運転/TX+運転システム/TX]*自動車/TX]')
+        second = module.make_query(True, [], [])
+        self.assertEqual(second['boolean_tree'], first['boolean_tree'])
+        context = module.llm_judgment.snapshot_query_context(second)
+        self.assertEqual(context['search_conditions'], first['boolean_tree'])
+        # A previously saved unstructured AND query is not rewritten on refine.
+        old = copy.deepcopy(first)
+        for field in ('boolean_tree', 'concept_tree', 'base_boolean_tree', 'keyword_context'):
+            old.pop(field, None)
+        module.STATE['queries'] = [old]
+        old_refined = module.make_query(True, [], [])
+        self.assertNotIn('boolean_tree', old_refined)
+        self.assertNotIn(' OR ', old_refined['expression'])
+        self.assertEqual(module.STATE['queries'][0], old)
+
     @classmethod
     def setUpClass(cls):
         cls.client = TestClient(module.app)

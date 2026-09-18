@@ -29,6 +29,26 @@ def applied_query():
 
 
 class JudgmentValidationTests(unittest.TestCase):
+    def test_union_criteria_keep_alternatives_and_change_resume_fingerprint(self):
+        query = applied_query()
+        query['facets'] = [dict(id='a', name='自動運転', role='required', terms=['自動運転'], or_group='driving'),
+                           dict(id='b', name='運転システム', role='required', terms=['運転システム'], or_group='driving'),
+                           dict(id='c', name='自動車', role='required', terms=['自動車'])]
+        before = copy.deepcopy(query)
+        result = llm_judgment.prepare({}, [dict(id='p', label=None)], '', 'local', adopted_query=query)
+        self.assertIn('和集合（いずれかの観点）: 自動運転 OR 運転システム', result['criteria'])
+        self.assertIn('必須観点: 自動車', result['criteria'])
+        self.assertNotIn('必須観点: 運転システム', result['criteria'])
+        self.assertEqual(result['query_context']['concepts'][1]['or_group'], 'driving')
+        query['facets'][1]['or_group'] = 'independent'
+        separated = llm_judgment.prepare({}, [dict(id='p', label=None)], '', 'local', adopted_query=query)
+        self.assertNotEqual(result['context_fingerprint'], separated['context_fingerprint'])
+        self.assertEqual(before['facets'][1]['or_group'], 'driving')
+        for value in ([], 'bad group', 'x' * 33):
+            query['facets'][1]['or_group'] = value
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                llm_judgment.snapshot_query_context(query)
+
     def test_applied_query_context_fills_empty_criteria_without_overriding_explicit_input(self):
         query = applied_query()
         before = copy.deepcopy(query)
@@ -213,12 +233,15 @@ class JudgmentRouteTests(unittest.TestCase):
 
     def test_applied_query_is_snapshotted_and_unadopted_plan_is_not_sent(self):
         query = applied_query()
+        query['boolean_tree'] = dict(op='or', children=[dict(op='text', value='界面'), dict(op='text', value='interface')])
+        expected_conditions = copy.deepcopy(query['boolean_tree'])
         requests = []
         workbench = dict(active_query_id=query['id'], plan=dict(purpose='未採用の別目的', concepts=['未採用の別観点']))
 
         def respond(settings, system, payload, **kwargs):
             requests.append(copy.deepcopy(payload))
             query['facets'][0]['terms'][0] = '判定開始後の変更'
+            query['boolean_tree']['children'][0]['value'] = '判定開始後の変更'
             workbench['active_query_id'] = 'another-query'
             return answer(payload)
 
@@ -232,6 +255,7 @@ class JudgmentRouteTests(unittest.TestCase):
                 self.assertEqual(payload['criteria_source'], 'adopted_query')
                 self.assertEqual(payload['purpose'], '界面技術の母集団を作る')
                 self.assertEqual(payload['concepts'][0]['terms'], ['界面', 'interface'])
+                self.assertEqual(payload['search_conditions'], expected_conditions)
                 self.assertEqual(payload['adopted_query_id'], 'query-applied')
                 self.assertNotIn('未採用', json.dumps(payload, ensure_ascii=False))
             self.assertEqual(module.STATE['training']['query_context']['concepts'][0]['terms'], ['界面', 'interface'])
