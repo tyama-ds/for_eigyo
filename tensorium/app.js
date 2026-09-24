@@ -128,7 +128,7 @@
     }
     const badge = $("#aug-badge");
     const as = S.augStatus;
-    const augOk = as && as.n_rows > 0 && S.spec && as.target === S.spec.target && as.task === S.spec.task;
+    const augOk = augMatches(as);
     badge.classList.toggle("hidden", !augOk);
     if (augOk) badge.textContent = `+${fmtInt(as.n_rows)}`;
     const pe = $("#pill-env");
@@ -369,7 +369,7 @@
   async function startTraining() {
     const { values } = hpValues();
     const as = S.augStatus;
-    const useSyn = !!(as && as.enabled && as.n_rows > 0 && as.target === S.spec.target && as.task === S.spec.task);
+    const useSyn = !!(as && as.enabled && augMatches(as));
     const body = { spec: S.spec, family: S.family, model: (S.family === "hf" || S.family === "sbert") ? S.model : null, hparams: values, name: $("#m-name").value, use_synthetic: useSyn };
     const btn = $("#m-train"); btn.disabled = true;
     try {
@@ -685,8 +685,13 @@
   }
 
   // ---------------------------------------------------------------- データ拡張（LLM 知識蒸留）
-  const AUG_REAL = () => Charts.theme().series[0];
-  const AUG_SYN = () => Charts.theme().series[2];
+  const AUG_REAL = () => "var(--s1)";
+  const AUG_SYN = () => "var(--s3)";
+  function specKey(spec) {
+    const feats = Object.entries(spec.roles).filter(([, r]) => ["text", "numeric", "categorical"].includes(r)).map(([c, r]) => `${c}:${r}`).sort();
+    return [spec.target, spec.task, ...feats].join("|");
+  }
+  function augMatches(as) { return !!(as && as.n_rows > 0 && S.spec && S.spec.target && as.spec_key === specKey(S.spec)); }
   function fmtRatio(r) { return r === null || r === undefined ? "∞" : (Math.round(r * 100) / 100).toFixed(2); }
   function fmtBal(e) { return e === null || e === undefined ? "–" : (100 * e).toFixed(0) + "%"; }
   function renderImbalanceHint(r) {
@@ -705,8 +710,8 @@
     const box = $("#m-synthetic");
     if (!box) return;
     const as = S.augStatus;
-    const ok = as && as.n_rows > 0 && S.spec && as.target === S.spec.target && as.task === S.spec.task;
-    if (!ok) { box.innerHTML = ""; return; }
+    const ok = augMatches(as);
+    if (!ok) { box.innerHTML = as && as.n_rows > 0 && S.spec && S.spec.target ? `<div class="warn-box">⚠ 合成データ ${fmtInt(as.n_rows)} 行がありますが、目的変数 / タスク / 列のロールが生成時と異なるため学習には使われません。<button class="btn xs" data-go="augment">再生成</button></div>` : ""; const b = box.querySelector("[data-go]"); if (b) b.onclick = () => go("augment"); return; }
     box.innerHTML = `<div class="${as.enabled ? "ok-box" : "warn-box"} row between"><label class="check"><input type="checkbox" id="m-use-syn" ${as.enabled ? "checked" : ""}> 合成データ <b>${fmtInt(as.n_rows)}</b> 行を学習データに含める（検証 / テストには含めない）</label><button class="btn sm ghost" data-go="augment">拡張タブで確認</button></div>`;
     box.querySelector("#m-use-syn").onchange = async (e) => { try { const r = await POST("/api/augment/enable", { enabled: e.target.checked }); S.augStatus.enabled = r.enabled; renderSynthToggle(); } catch (err) { toast(err.message, "err"); } };
     box.querySelector("[data-go]").onclick = () => go("augment");
@@ -732,7 +737,11 @@
       ["最少グループ", fmtInt(st.min), esc(minG.label)], ["最大 / 最小比", fmtRatio(st.ratio), "1.00 が完全均衡"],
       ["均衡度", fmtBal(st.entropy), "正規化エントロピー（100% が均等）"],
     ].map(([k, v, d]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="d">${d}</div></div>`).join("");
-    Charts.bars($("#aug-chart-before"), { labels: prof.groups.map((g) => g.label), values: prof.groups.map((g) => g.count), fmt: fmtInt, unit: " 行", color: AUG_REAL() });
+    const chartH = Math.max(200, prof.groups.length > 8 ? 24 * prof.groups.length + 40 : 200) + "px";
+    $("#aug-chart-before").parentElement.style.height = chartH; $("#aug-chart-after").parentElement.style.height = chartH;
+    Charts.bars($("#aug-chart-before"), { labels: prof.groups.map((g) => g.label), values: prof.groups.map((g) => g.count), fmt: fmtInt, unit: " 行" });
+    $("#aug-verify").disabled = prof.task !== "classification";
+    if (prof.task !== "classification") $("#aug-verify").checked = false;
     // 件数チップ
     const presets = prof.presets || [100, 200, 500, 1000, 2000];
     $("#aug-counts").innerHTML = presets.map((n) => `<span class="chip click ${S.aug.n === n ? "on" : ""}" data-n="${n}">${fmtInt(n)}</span>`).join("");
@@ -762,10 +771,12 @@
     clearTimeout(S.aug.planTimer);
     S.aug.planTimer = setTimeout(async () => {
       if (!S.aug.profile) return;
+      const seq = (S.aug.planSeq = (S.aug.planSeq || 0) + 1);
       try {
         const r = await POST("/api/augment/plan", { spec: S.spec, n_total: S.aug.n, mode: S.aug.mode, cap: S.aug.cap, custom: S.aug.custom });
+        if (seq !== S.aug.planSeq) return;                      // 古い応答は捨てる
         S.aug.plan = r; renderAugPlan(r);
-      } catch (e) { $("#aug-plan-hint").textContent = e.message; }
+      } catch (e) { if (seq === S.aug.planSeq) $("#aug-plan-hint").textContent = e.message; }
     }, ms);
   }
   function renderAugPlan(r) {
@@ -780,19 +791,22 @@
       ["最大 / 最小比", arrow(b.ratio === null ? Infinity : b.ratio, a.ratio === null ? Infinity : a.ratio, fmtRatio, true), "1.00 が完全均衡"],
       ["均衡度", arrow(b.entropy, a.entropy, fmtBal, false), "正規化エントロピー"],
     ].map(([k, v, d]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="d">${d}</div></div>`).join("");
-    $("#aug-legend").innerHTML = `<span><i class="box" style="background:${AUG_REAL()}"></i>実データ</span><span><i class="box" style="background:${AUG_SYN()}"></i>合成データ</span><span><i style="background:${Charts.theme().axis};height:1px"></i>最多グループ</span>`;
-    Charts.stacked($("#aug-chart-after"), { labels, series: [{ name: "実データ", values: r.counts_before, color: AUG_REAL() }, { name: "合成データ", values: alloc, color: AUG_SYN() }], refLine: b.max });
+    $("#aug-legend").innerHTML = `<span><i class="box" style="background:${AUG_REAL()}"></i>実データ</span><span><i class="box" style="background:${AUG_SYN()}"></i>合成データ</span><span><i style="background:var(--chart-axis);height:1px"></i>最多グループ</span>`;
+    Charts.stacked($("#aug-chart-after"), { labels, series: [{ name: "実データ", values: r.counts_before, slot: 0 }, { name: "合成データ", values: alloc, slot: 2 }], refLine: b.max });
     const maxAfter = Math.max(...r.counts_after) || 1;
-    $("#aug-plan-tbl").innerHTML = `<thead><tr><th>グループ</th><th class="num">実データ</th><th class="num">追加</th><th class="num">合成後</th><th>構成比（合成後）</th></tr></thead><tbody>${r.groups.map((g, i) => `<tr><td>${esc(g.label)}${g.range ? ` <span class="dim small">(${prof.target})</span>` : ""}</td><td class="num">${fmtInt(r.counts_before[i])}</td><td class="num" style="color:${alloc[i] ? AUG_SYN() : "inherit"}">${alloc[i] ? "+" + fmtInt(alloc[i]) : "–"}</td><td class="num"><b>${fmtInt(r.counts_after[i])}</b></td><td><span class="bar" style="width:${Math.round(120 * r.counts_after[i] / maxAfter)}px;background:${AUG_REAL()}"></span><span class="bar" style="width:${Math.round(120 * alloc[i] / maxAfter)}px;background:${AUG_SYN()};margin-left:-6px"></span> ${(100 * r.counts_after[i] / a.n).toFixed(1)}%</td></tr>`).join("")}</tbody>`;
+    $("#aug-plan-tbl").innerHTML = `<thead><tr><th>グループ</th><th class="num">実データ</th><th class="num">追加</th><th class="num">合成後</th><th>構成比（合成後）</th></tr></thead><tbody>${r.groups.map((g, i) => `<tr><td>${esc(g.label)}${g.range ? ` <span class="dim small">(${esc(prof.target)})</span>` : ""}</td><td class="num">${fmtInt(r.counts_before[i])}</td><td class="num" style="color:${alloc[i] ? AUG_SYN() : "inherit"}">${alloc[i] ? "+" + fmtInt(alloc[i]) : "–"}</td><td class="num"><b>${fmtInt(r.counts_after[i])}</b></td><td><span class="bar" style="width:${Math.round(120 * r.counts_before[i] / maxAfter)}px;background:${AUG_REAL()}"></span><span class="bar" style="width:${Math.round(120 * alloc[i] / maxAfter)}px;background:${AUG_SYN()};margin-left:-6px"></span> ${(100 * r.counts_after[i] / a.n).toFixed(1)}%</td></tr>`).join("")}</tbody>`;
     const est = Math.ceil(r.n_alloc / Math.max(1, parseInt($("#aug-batch").value || "10", 10)));
     const capped = S.aug.mode === "balance" && S.aug.cap && r.n_alloc < S.aug.n;
-    $("#aug-plan-hint").innerHTML = r.n_alloc ? `合計 <b>${fmtInt(r.n_alloc)}</b> 行を生成${capped ? `（「最多グループを超えない」により要求 ${fmtInt(S.aug.n)} 行から制限。もっと増やすにはチェックを外すか「均等」を選択）` : ""}（LLM 呼び出し約 ${fmtInt(est)} 回${$("#aug-verify").checked ? " + 検証 " + fmtInt(Math.ceil(r.n_alloc / 10)) + " 回" : ""}）` : "追加件数が 0 です（既に均衡している場合は「均等」またはグループ別指定を選んでください）";
+    const isLlm = $("#llm-provider").value !== "builtin";
+    const verifyN = isLlm && prof.task === "classification" && $("#aug-verify").checked ? Math.ceil(r.n_alloc / 10) : 0;
+    $("#aug-plan-hint").innerHTML = r.n_alloc ? `合計 <b>${fmtInt(r.n_alloc)}</b> 行を生成${capped ? `（「最多グループを超えない」により要求 ${fmtInt(S.aug.n)} 行から制限。もっと増やすにはチェックを外すか「均等」を選択）` : ""}${isLlm ? `（LLM 呼び出し約 ${fmtInt(est)} 回${verifyN ? " + 検証 " + fmtInt(verifyN) + " 回" : ""}）` : "（内蔵生成・LLM 呼び出しなし）"}` : "追加件数が 0 です（既に均衡している場合は「均等」またはグループ別指定を選んでください）";
   }
   function fillLlmSettings() {
     const st = S.settings || {};
     $("#llm-provider").value = st.llm_provider || "openai";
     ["base_url", "model", "max_tokens", "timeout"].forEach((k) => { $("#llm-" + k).value = st["llm_" + k] ?? ""; });
     $("#llm-api_key").value = ""; $("#llm-api_key").placeholder = st.llm_api_key_set ? "（設定済み・変更する場合のみ入力）" : "（未設定。ローカル LLM なら不要）";
+    $("#llm-key-clear").classList.toggle("hidden", !st.llm_api_key_set);
     $("#llm-fields").classList.toggle("hidden", $("#llm-provider").value === "builtin");
     $("#aug-conc").value = st.llm_concurrency || 2;
   }
@@ -823,8 +837,7 @@
       const r = await POST("/api/augment/start", { spec: S.spec, params: augParams() });
       S.aug.job = r.job; S.aug.logNext = 0; $("#ag-log").textContent = ""; $("#aug-result").classList.add("hidden");
       renderAugJob(r.job); pollAug(); updatePills();
-    } catch (e) { toast(e.message, "err", 8000); }
-    finally { btn.disabled = false; }
+    } catch (e) { toast(e.message, "err", 8000); btn.disabled = false; }
   }
   async function pollAug() {
     clearTimeout(S.aug.jobTimer);
@@ -856,8 +869,12 @@
       try { const r = await GET("/api/augment"); S.aug.current = r.augment; if (r.augment) renderAugResult(r.augment); } catch (e) { toast(e.message, "err"); }
       const a = j.result || {};
       toast(`合成データ ${fmtInt(a.n_rows)} 行を生成しました（均衡度 ${fmtBal((a.stats_before || {}).entropy)} → ${fmtBal((a.stats_after || {}).entropy)}）`, "ok", 7000);
-    } else if (j.status === "failed") toast("生成に失敗しました: " + (j.error || ""), "err", 10000);
-    else if (j.status === "cancelled") toast("生成を中止しました", "", 3000);
+    } else {
+      if (j.status === "failed") toast("生成に失敗しました: " + (j.error || ""), "err", 10000);
+      else if (j.status === "cancelled") toast("生成を中止しました", "", 3000);
+      if (S.aug.current) renderAugResult(S.aug.current);
+    }
+    if (j.status === "done" && j.result && j.result.stored === false) toast("生成中にデータが差し替えられたため、合成データは保存されませんでした", "err", 8000);
     renderSynthToggle();
   }
   function renderAugResult(aug) {
@@ -875,7 +892,7 @@
       ls ? ["LLM 呼び出し", fmtInt(ls.calls), `入力 ${fmtInt(ls.input_tokens)} / 出力 ${fmtInt(ls.output_tokens)} トークン`] : ["生成元", "内蔵", "実データの組み替え（LLM なし）"],
     ].map(([k, v, d]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="d">${d}</div></div>`).join("");
     const rej = Object.entries(aug.rejected || {});
-    $("#aug-res-rejected").innerHTML = (rej.length ? "却下の内訳: " + rej.map(([k, v]) => `${esc(k)} ${fmtInt(v)}`).join(" · ") : "却下なし") +
+    $("#aug-res-rejected").innerHTML = (aug.aborted ? `<div class="warn-box" style="margin-bottom:6px">⚠ ${esc(aug.aborted)}</div>` : "") + (rej.length ? "却下の内訳: " + rej.map(([k, v]) => `${esc(k)} ${fmtInt(v)}`).join(" · ") : "却下なし") +
       (aug.groups ? `　｜　グループ別追加: ${aug.groups.map((g) => `${esc(g.label)} +${fmtInt(g.added)}`).join(" · ")}` : "");
     const cols = aug.columns, spec = S.spec;
     const featureCols = cols.filter((c) => spec.roles[c] && spec.roles[c] !== "ignore" && spec.roles[c] !== "target");
@@ -901,7 +918,8 @@
     $("#aug-batch").oninput = () => { if (S.aug.plan) renderAugPlan(S.aug.plan); };
     $("#aug-verify").onchange = () => { if (S.aug.plan) renderAugPlan(S.aug.plan); };
     $$("#aug-student-policy button").forEach((b) => b.onclick = () => $$("#aug-student-policy button").forEach((x) => x.classList.toggle("active", x === b)));
-    $("#llm-provider").onchange = () => $("#llm-fields").classList.toggle("hidden", $("#llm-provider").value === "builtin");
+    $("#llm-provider").onchange = () => { $("#llm-fields").classList.toggle("hidden", $("#llm-provider").value === "builtin"); if (S.aug.plan) renderAugPlan(S.aug.plan); };
+    $("#llm-key-clear").onclick = async () => { try { S.settings = await POST("/api/settings", { llm_api_key_clear: true }); fillLlmSettings(); toast("API キーを削除しました", "ok", 2000); } catch (e) { toast(e.message, "err"); } };
     $("#llm-save").onclick = () => saveLlmSettings().catch((e) => toast(e.message, "err"));
     $("#llm-test").onclick = testLlm;
     $("#aug-start").onclick = startAugment;

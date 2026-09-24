@@ -293,7 +293,7 @@
               <input type="text" id="llm-base_url" placeholder="https://api.openai.com/v1">
               <label class="field">モデル</label>
               <input type="text" id="llm-model" placeholder="例: gpt-4o-mini / claude-sonnet-5 / qwen3:14b">
-              <label class="field">API キー <span class="help">保存済みなら空のままで変更なし</span></label>
+              <label class="field">API キー <span class="help">保存済みなら空のままで変更なし</span> <button class="btn xs ghost hidden" id="llm-key-clear" type="button">保存済みキーを削除</button></label>
               <input type="password" id="llm-api_key" placeholder="">
               <div class="hp-grid">
                 <div><label class="field">max_tokens</label><input type="number" id="llm-max_tokens" min="256" max="128000"></div>

@@ -149,7 +149,20 @@ def run(shots: str | None = None, headed: bool = False, fmt: str = "png") -> int
             page.locator("#aug-counts .chip[data-n='100']").click()
             page.wait_for_function("document.querySelector('#aug-plan-hint').textContent.includes('100')", timeout=15000)
             check("拡張タブ: 100 件の計画", "100" in page.locator("#aug-tiles-after").inner_text())
+            # 配分方式: グループ別指定 → 入力が出て計画に反映される / 上限チェックの切替
+            page.locator("#aug-mode button[data-v='custom']").click()
+            page.wait_for_function("document.querySelectorAll('#aug-custom-tbl input').length === 3")
+            page.locator("#aug-custom-tbl input").first.fill("50")
+            page.locator("#aug-custom-tbl input").first.dispatch_event("input")
+            page.wait_for_function("document.querySelector('#aug-plan-hint').textContent.includes('50')", timeout=15000)
+            check("拡張タブ: グループ別指定が計画に反映", "+50" in page.locator("#aug-plan-tbl").inner_text())
+            page.locator("#aug-mode button[data-v='balance']").click()
+            page.wait_for_function("document.querySelector('#aug-plan-hint').textContent.includes('100')", timeout=15000)
+            check("拡張タブ: 積み上げチャートが描画される", page.evaluate(
+                "(() => { const c = document.querySelector('#aug-chart-after'); const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; "
+                "for (let i = 3; i < d.length; i += 4) if (d[i] > 0) return true; return false; })()"))
             page.locator("#llm-provider").select_option("builtin")
+            page.wait_for_function("document.querySelector('#aug-plan-hint').textContent.includes('内蔵生成')", timeout=15000)
             page.locator("#aug-start").click()
             page.wait_for_function("['完了','失敗','中止'].some(s => document.querySelector('#ag-status').textContent.includes(s))", timeout=120000)
             check("拡張タブ: 生成完了", "完了" in page.locator("#ag-status").inner_text(), page.locator("#ag-error").inner_text())
@@ -158,6 +171,12 @@ def run(shots: str | None = None, headed: bool = False, fmt: str = "png") -> int
             check("拡張タブ: 合成行の表", n_syn >= 50, str(n_syn))
             check("拡張タブ: 均衡度の表示", "→" in page.locator("#aug-res-tiles").inner_text())
             check("サイドバーに合成件数バッジ", "+" in page.locator("#aug-badge").inner_text())
+            # 学習への取り込みトグル OFF → ON
+            page.locator("#aug-enabled").uncheck()
+            page.wait_for_function("fetch('/api/status').then(r => r.json()).then(s => s.augment && s.augment.enabled === false)", timeout=15000)
+            page.locator("#aug-enabled").check()
+            page.wait_for_function("fetch('/api/status').then(r => r.json()).then(s => s.augment && s.augment.enabled === true)", timeout=15000)
+            check("拡張タブ: 取り込みトグルが反映", True)
             shot(page, "03b-augment")
 
             # 4. モデル

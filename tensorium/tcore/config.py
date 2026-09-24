@@ -42,13 +42,36 @@ def load_settings() -> dict:
     return cfg
 
 
+def _write_private(path: Path, text: str) -> None:
+    """0600 で原子的に書く（API キーを含むため他ユーザーから読めないようにする）。"""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(text)
+    try:
+        os.chmod(tmp, 0o600)
+    except OSError:
+        pass
+    os.replace(tmp, path)
+
+
 def save_settings(update: dict) -> dict:
     cfg = load_settings()
     for k, v in update.items():
+        if k.endswith("_clear") and k[:-6] in SECRET_KEYS:      # 例: llm_api_key_clear: true
+            if v:
+                cfg[k[:-6]] = ""
+            continue
         if k not in DEFAULTS:
             continue
-        if k in SECRET_KEYS and v == "":
-            continue                      # 空なら変更なし
+        if k in SECRET_KEYS and (v is None or v == ""):
+            continue                      # 空 / null なら変更なし
+        if k.endswith("_base_url") and v:
+            from .llm import LLMError, validate_base_url
+            try:
+                v = validate_base_url(str(v))
+            except LLMError as e:
+                raise ValueError(str(e)) from e
         if isinstance(DEFAULTS[k], bool):
             v = bool(v)
         elif isinstance(DEFAULTS[k], float):
@@ -64,7 +87,8 @@ def save_settings(update: dict) -> dict:
         else:
             v = str(v)
         cfg[k] = v
-    CONFIG_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _write_private(CONFIG_FILE, json.dumps(cfg, ensure_ascii=False, indent=2) + "\n")
     return cfg
 
 

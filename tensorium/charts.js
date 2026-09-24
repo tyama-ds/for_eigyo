@@ -222,6 +222,7 @@
       const labels = opts.labels || [], series = (opts.series || []).filter((s) => s.values && s.values.length);
       if (!labels.length || !series.length) { ctx.fillStyle = th.muted; ctx.font = th.font; ctx.textAlign = "center"; ctx.fillText("データなし", w / 2, h / 2); return; }
       const totals = labels.map((_, i) => series.reduce((a, s) => a + (s.values[i] || 0), 0));
+      series.forEach((s, si) => { s._c = s.color || th.series[(s.slot ?? si) % 8]; });
       const horizontal = opts.horizontal ?? labels.length > 8;
       ctx.font = th.font;
       const refLine = opts.refLine;                       // 例: 最多クラスの件数
@@ -235,7 +236,7 @@
         labels.forEach((lab, i) => {
           const y = pad.t + step * i + (step - bh) / 2; let x0 = pad.l;
           series.forEach((s, si) => { const v = s.values[i] || 0; if (!v) return; const x1 = X(x0 === pad.l ? v : (x0 - pad.l) / (w - pad.l - pad.r) * maxV + v); const wv = Math.max(0, X(v) - pad.l);
-            ctx.fillStyle = s.color; rr(ctx, x0 + (si ? 2 : 0), y, Math.max(0, wv - (si ? 2 : 0)), bh, si === series.length - 1 || !series.slice(si + 1).some((t) => t.values[i]) ? 4 : 0, "right"); ctx.fill(); x0 += wv; void x1; });
+            ctx.fillStyle = s._c; rr(ctx, x0 + (si ? 2 : 0), y, Math.max(0, wv - (si ? 2 : 0)), bh, si === series.length - 1 || !series.slice(si + 1).some((t) => t.values[i]) ? 4 : 0, "right"); ctx.fill(); x0 += wv; void x1; });
           ctx.fillStyle = th.ink; ctx.textAlign = "right"; ctx.textBaseline = "middle"; ctx.fillText(trunc(ctx, String(lab), lw), pad.l - 8, y + bh / 2);
           ctx.fillStyle = th.muted; ctx.textAlign = "left"; ctx.fillText(fmtTick(totals[i]), x0 + 6, y + bh / 2);
         });
@@ -250,7 +251,7 @@
           const x = pad.l + slot * i + (slot - bw) / 2; let base = h - pad.b;
           series.forEach((s, si) => { const v = s.values[i] || 0; if (!v) return; const top = Y((base === h - pad.b ? 0 : (h - pad.b - base) / (h - pad.t - pad.b) * maxV * 1.08) + v);
             const hh = Math.max(0, base - top); const last = !series.slice(si + 1).some((t) => t.values[i]);
-            ctx.fillStyle = s.color; rr(ctx, x, top + (si ? 2 : 0), bw, Math.max(0, hh - (si ? 2 : 0)), last ? 4 : 0, "top"); ctx.fill(); base = top; });
+            ctx.fillStyle = s._c; rr(ctx, x, top + (si ? 2 : 0), bw, Math.max(0, hh - (si ? 2 : 0)), last ? 4 : 0, "top"); ctx.fill(); base = top; });
           ctx.fillStyle = th.muted; ctx.textAlign = "center"; ctx.textBaseline = "top"; ctx.fillText(trunc(ctx, String(lab), slot - 4), x + bw / 2, h - pad.b + 6);
           if (labels.length <= 12) { ctx.fillStyle = th.ink; ctx.textBaseline = "bottom"; ctx.fillText(fmtTick(totals[i]), x + bw / 2, base - 3); }
         });
@@ -263,7 +264,7 @@
       const r = canvas.getBoundingClientRect(); const mx = e.clientX - r.left, my = e.clientY - r.top;
       const i = g.horizontal ? Math.floor((my - g.pad.t) / g.step) : Math.floor((mx - g.pad.l) / g.slot);
       if (i < 0 || i >= g.labels.length) { hideTip(); return; }
-      const rows = g.series.map((s) => `<div><i style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${s.color};margin-right:6px"></i>${esc(s.name)}: <b>${(s.values[i] || 0).toLocaleString("ja-JP")}</b></div>`).join("");
+      const rows = g.series.map((s) => `<div><i style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${s._c};margin-right:6px"></i>${esc(s.name)}: <b>${(s.values[i] || 0).toLocaleString("ja-JP")}</b></div>`).join("");
       showTip(e.clientX, e.clientY, `<div><b>${esc(String(g.labels[i]))}</b> 合計 ${g.totals[i].toLocaleString("ja-JP")}</div>${rows}`);
     });
   }

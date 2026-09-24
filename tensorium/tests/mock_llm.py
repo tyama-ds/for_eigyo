@@ -21,20 +21,35 @@ class MockState:
     fail_next = 0            # 次の N 呼び出しを 500 で失敗させる
     verify_label: str | None = None   # 検証時に返す固定ラベル（None なら生成クラス＝一致）
     garbage = False          # JSON でない応答を返す
+    malformed = False        # 200 だが形式不正の応答（choices/content が壊れている）
+    reject_response_format = False    # response_format 付きの要求を 400 で拒否（非対応サーバの模倣）
+    verify_fail = False      # 検証プロンプトだけ 500 を返す
+    disconnect_next = 0      # 次の N 呼び出しは本文を送らず切断する
+
+    @classmethod
+    def reset(cls):
+        cls.calls.clear()
+        cls.fail_next = 0
+        cls.verify_label = None
+        cls.garbage = False
+        cls.malformed = False
+        cls.reject_response_format = False
+        cls.verify_fail = False
+        cls.disconnect_next = 0
 
 
 def make_reply(system: str, user: str) -> str:
     if MockState.garbage:
         return "これは JSON ではありません。"
     if "厳格な審査員" in system:
-        ids = [int(m) for m in re.findall(r'"id": (\d+)', user)]
+        ids = [int(m) for m in re.findall(r'"_id": (\d+)', user)]
         labels = []
         for i in ids:
             lab = MockState.verify_label
             if lab is None:
-                m = re.search(rf'"id": {i}, .*?"レビュー本文": "([^"]*)"', user)
+                m = re.search(rf'"_id": {i}, .*?"レビュー本文": "([^"]*)"', user)
                 lab = "低評価" if (m and "低評価用" in m.group(1)) else "高評価" if (m and "高評価用" in m.group(1)) else "普通"
-            labels.append({"id": i, "label": lab})
+            labels.append({"_id": i, "label": lab})
         return json.dumps({"labels": labels}, ensure_ascii=False)
     n = int(_N_RE.search(user).group(1)) if _N_RE.search(user) else 5
     keys = [k.strip() for k in _KEYS_RE.search(user).group(1).split(",")] if _KEYS_RE.search(user) else []
@@ -77,15 +92,33 @@ class _Handler(BaseHTTPRequestHandler):
         if MockState.fail_next > 0:
             MockState.fail_next -= 1
             return self._send(500, {"error": {"message": "mock failure"}})
+        if MockState.disconnect_next > 0:
+            MockState.disconnect_next -= 1
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", "100000")
+            self.end_headers()
+            self.wfile.write(b"{")
+            self.wfile.flush()
+            self.connection.close()
+            return None
         if self.path.endswith("/chat/completions"):
+            if MockState.reject_response_format and "response_format" in body:
+                return self._send(400, {"error": {"message": "response_format is not supported by this server"}})
             system = "".join(m["content"] for m in body["messages"] if m["role"] == "system")
             user = "".join(m["content"] for m in body["messages"] if m["role"] == "user")
+            if MockState.verify_fail and "厳格な審査員" in system:
+                return self._send(500, {"error": {"message": "verify failure"}})
+            if MockState.malformed:
+                return self._send(200, {"choices": [{"message": "oops"}]})
             text = make_reply(system, user)
             return self._send(200, {"choices": [{"message": {"role": "assistant", "content": text}}],
                                     "usage": {"prompt_tokens": len(user) // 4, "completion_tokens": len(text) // 4}})
         if self.path.endswith("/v1/messages"):
             if self.headers.get("x-api-key") != "test-key":
                 return self._send(401, {"error": {"message": "bad key"}})
+            if MockState.malformed:
+                return self._send(200, {"content": "oops"})
             user = "".join(m["content"] for m in body["messages"] if m["role"] == "user")
             text = make_reply(body.get("system", ""), user)
             return self._send(200, {"content": [{"type": "text", "text": text}],

@@ -51,6 +51,7 @@ def prepare(table: dict, req: dict, log=None) -> dict:
              if (task == "classification" and spec["split"]["stratify"]) else None)
     split0 = split_indices(len(real_idx), spec["split"]["val"], spec["split"]["test"], spec["split"]["seed"], strat)
     split = {part: [real_idx[j] for j in idx] for part, idx in split0.items()}
+    train_real = list(split["train"])
     if syn_idx:
         rng = random.Random(spec["split"]["seed"])
         split["train"] = split["train"] + syn_idx
@@ -90,7 +91,8 @@ def prepare(table: dict, req: dict, log=None) -> dict:
         "spec": spec, "family": fam_id, "family_info": fam, "hparams": hp, "model_id": model_id,
         "examples": examples, "split": split, "preproc": preproc, "task": task,
         "classes": classes, "y_enc": y_enc, "n_out": n_out, "class_weights": cw,
-        "table_name": table.get("name"), "n_rows": len(real_idx), "n_synthetic": len(syn_idx),
+        "table_name": table.get("name"), "n_rows": table.get("synthetic_from", table["n_rows"]),
+        "n_synthetic": len(syn_idx), "train_real": train_real,
     }
 
 

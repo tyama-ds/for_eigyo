@@ -1,6 +1,8 @@
 """server.py の API テスト（標準ライブラリのみ。学習はベースラインなので torch 不要）。"""
 from __future__ import annotations
 
+import csv
+import io
 import json
 import os
 import sys
@@ -51,7 +53,7 @@ class ApiTestCase(unittest.TestCase):
             h["Content-Type"] = "application/json"
         req = urllib.request.Request(self.base + path, data=data, method=method, headers=h)
         try:
-            with urllib.request.urlopen(req, timeout=60) as r:
+            with urllib.request.urlopen(req, timeout=180) as r:
                 return r.status, json.loads(r.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             return e.code, json.loads(e.read().decode("utf-8"))
@@ -274,6 +276,85 @@ class TestAugmentFlow(ApiTestCase):
         st, r = self.call("POST", "/api/augment/enable", {"enabled": True})
         self.assertEqual(st, 400)
 
+    def test_custom_mode_roles_and_csrf(self):
+        self.call("POST", "/api/dataset/sample", {"name": "reviews_ja.csv"})
+        self.call("POST", "/api/settings", {"llm_provider": "builtin"})
+        # custom で全 0 は 400
+        st, r = self.call("POST", "/api/augment/start", {"spec": SPEC_CLS, "params": {"mode": "custom", "custom": {}}})
+        self.assertEqual(st, 400)
+        st, r = self.call("POST", "/api/augment/start", {"spec": SPEC_CLS, "params": {"mode": "custom", "custom": {"普通": 30}}})
+        self.assertEqual(st, 200, r)
+        job = self.wait_job(r["job_id"])
+        self.assertEqual(job["status"], "done", job.get("error"))
+        self.assertTrue(job["result"]["stored"])
+        _, cur = self.call("GET", "/api/augment")
+        aug = cur["augment"]
+        added = {g["label"]: g["added"] for g in aug["groups"]}
+        self.assertEqual(added["高評価"], 0)
+        self.assertEqual(added["低評価"], 0)
+        self.assertGreater(added["普通"], 0)
+        self.assertLessEqual(added["普通"], 30)
+        # 目的変数が違う spec では学習に混ざらない
+        other = dict(SPEC_CLS, target="カテゴリ", roles={"レビュー本文": "text", "評価": "categorical"})
+        st, r2 = self.call("POST", "/api/train", {"family": "baseline", "spec": other, "use_synthetic": True})
+        j2 = self.wait_job(r2["job_id"])
+        self.assertEqual(j2["status"], "done", j2.get("error"))
+        self.assertNotIn("n_synthetic", j2["params"])
+        _, m2 = self.call("GET", f"/api/runs/{j2['result']['run_id']}")
+        self.assertEqual(m2["n_synthetic"], 0)
+        # ロールを変えた spec でも混ざらない（生成時と説明変数が違う）
+        changed = dict(SPEC_CLS, roles={**SPEC_CLS["roles"], "商品": "categorical"})
+        st, r3 = self.call("POST", "/api/train", {"family": "baseline", "spec": changed, "use_synthetic": True})
+        j3 = self.wait_job(r3["job_id"])
+        self.assertNotIn("n_synthetic", j3["params"])
+        st, prof = self.call("POST", "/api/augment/profile", {"spec": changed})
+        self.assertIsNone(prof["current"])
+        st, status = self.call("GET", "/api/status")
+        self.assertEqual(status["augment"]["spec_key"], aug["spec_key"])
+        # CSV エクスポート: csv で読み戻し、危険な先頭文字はエスケープされる
+        with srv._state_lock:
+            srv.STATE["augment"]["rows"][0][0] = '=HYPERLINK("http://evil")\n改行, "引用"'
+        with urllib.request.urlopen(self.base + "/api/augment/export?kind=all") as res:
+            text = res.read().decode("utf-8-sig")
+        rows = list(csv.reader(io.StringIO(text)))
+        self.assertEqual(len(rows), 600 + aug["n_rows"] + 1)
+        self.assertEqual(rows[0][-2:], ["_source", "_group"])
+        self.assertEqual({r[-2] for r in rows[1:]}, {"real", "synthetic"})
+        first_syn = next(r for r in rows[1:] if r[-2] == "synthetic")
+        self.assertTrue(first_syn[0].startswith("'=HYPERLINK"))
+        self.assertIn("\n", first_syn[0])
+        # CSRF ガード: 外部 Origin は 403、text/plain の JSON は 415、Infinity は 400
+        st, r = self.call("POST", "/api/augment/enable", {"enabled": True}, headers={"Origin": "http://evil.example"})
+        self.assertEqual(st, 403)
+        st, r = self.call("POST", "/api/augment/enable", {"enabled": True}, headers={"Origin": f"http://127.0.0.1:{self.http.server_address[1]}"})
+        self.assertEqual(st, 200)
+        req = urllib.request.Request(self.base + "/api/augment/enable", data=b'{"enabled": true}', method="POST",
+                                     headers={"Content-Type": "text/plain"})
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            urllib.request.urlopen(req)
+        self.assertEqual(cm.exception.code, 415)
+        st, r = self.call("POST", "/api/augment/plan", raw=b'{"spec": {}, "n_total": Infinity}',
+                          headers={"Content-Type": "application/json"})
+        self.assertEqual(st, 400)
+        # データを差し替えると合成データは消える
+        self.call("POST", "/api/dataset/sample", {"name": "used_cars_ja.csv"})
+        _, cur = self.call("GET", "/api/augment")
+        self.assertIsNone(cur["augment"])
+
+    def test_preview_limit_and_full(self):
+        self.call("POST", "/api/dataset/sample", {"name": "used_cars_ja.csv"})
+        self.call("POST", "/api/settings", {"llm_provider": "builtin"})
+        st, r = self.call("POST", "/api/augment/start", {"spec": SPEC_REG, "params": {"n_total": 260, "mode": "equal", "dedupe": False}})
+        self.assertEqual(st, 200, r)
+        job = self.wait_job(r["job_id"])
+        self.assertEqual(job["status"], "done", job.get("error"))
+        _, cur = self.call("GET", "/api/augment")
+        self.assertEqual(cur["augment"]["n_rows"], 260)
+        self.assertEqual(len(cur["augment"]["rows"]), 200)
+        _, full = self.call("GET", "/api/augment?full=1")
+        self.assertEqual(len(full["augment"]["rows"]), 260)
+        self.assertEqual(len(full["augment"]["meta"]), 260)
+
     def test_start_validation(self):
         self.call("POST", "/api/dataset/sample", {"name": "reviews_ja.csv"})
         self.call("POST", "/api/settings", {"llm_provider": "openai", "llm_model": ""})
@@ -283,6 +364,20 @@ class TestAugmentFlow(ApiTestCase):
         self.call("POST", "/api/settings", {"llm_provider": "builtin"})
         st, r = self.call("POST", "/api/augment/start", {"spec": SPEC_CLS, "params": {"n_total": 0}})
         self.assertEqual(st, 400)
+        self.assertIn("0", r["error"])
+        st, r = self.call("POST", "/api/settings", {"llm_base_url": "file:///etc/passwd"})
+        self.assertEqual(st, 400)
+        st, cfg = self.call("POST", "/api/settings", {"llm_api_key": "sk-x"})
+        self.assertTrue(cfg["llm_api_key_set"])
+        st, cfg = self.call("POST", "/api/settings", {"llm_api_key": None})
+        self.assertTrue(cfg["llm_api_key_set"])                             # null は変更なし
+        st, cfg = self.call("POST", "/api/settings", {"llm_api_key_clear": True})
+        self.assertFalse(cfg["llm_api_key_set"])
+        import stat
+
+        from tcore.config import CONFIG_FILE
+        mode = stat.S_IMODE(os.stat(CONFIG_FILE).st_mode)
+        self.assertEqual(mode & 0o077, 0)                                   # 他ユーザーから読めない
         st, r = self.call("POST", "/api/augment/profile", {"spec": {"target": "nope"}})
         self.assertEqual(st, 400)
         st, r = self.call("POST", "/api/llm/test")
