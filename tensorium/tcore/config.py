@@ -20,8 +20,17 @@ DEFAULTS = {
     "use_proxy": True,           # False なら環境変数のプロキシも無視
     "proxy_url": "",             # 空なら環境変数 HTTP(S)_PROXY
     "trust_remote_code": False,
+    # ---- データ拡張（知識蒸留）に使う教師 LLM
+    "llm_provider": "openai",    # openai（OpenAI 互換）/ anthropic / builtin（LLM なしの内蔵生成）
+    "llm_base_url": "",          # 空なら既定（OpenAI: https://api.openai.com/v1 / Anthropic: https://api.anthropic.com）
+    "llm_model": "",             # 例: gpt-4o-mini / claude-sonnet-5 / qwen3:14b
+    "llm_api_key": "",
+    "llm_max_tokens": 4096,
+    "llm_timeout": 180,
+    "llm_temperature": 0.9,
+    "llm_concurrency": 2,
 }
-SECRET_KEYS = ("hf_token",)
+SECRET_KEYS = ("hf_token", "llm_api_key")
 
 
 def load_settings() -> dict:
@@ -42,6 +51,11 @@ def save_settings(update: dict) -> dict:
             continue                      # 空なら変更なし
         if isinstance(DEFAULTS[k], bool):
             v = bool(v)
+        elif isinstance(DEFAULTS[k], float):
+            try:
+                v = float(v)
+            except (TypeError, ValueError):
+                v = DEFAULTS[k]
         elif isinstance(DEFAULTS[k], int):
             try:
                 v = int(v)

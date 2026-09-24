@@ -42,6 +42,8 @@
     catalog: null, env: null, settings: null, samples: [], dataset: null, spec: null, validate: null,
     family: store.get("family", "sbert"), model: store.get("model", ""), hparams: store.get("hparams", {}), lang: store.get("lang", "all"),
     job: null, jobTimer: null, logNext: 0, runs: [], evalRun: null, evalSplit: "val", predRun: null, predResult: null, step: "data",
+    augStatus: null,
+    aug: { profile: null, plan: null, n: 200, mode: "balance", cap: true, custom: {}, current: null, job: null, jobTimer: null, logNext: 0, planTimer: null },
   };
 
   // ---------------------------------------------------------------- toast / theme
@@ -63,6 +65,7 @@
   function locked(step) {
     if ((step === "task" || step === "model") && !S.dataset) return "先にデータを読み込んでください";
     if (step === "model" && !(S.spec && S.spec.target)) return "先に目的変数を選んでください";
+    if (step === "augment" && !(S.dataset && S.spec && S.spec.target)) return "先にデータを読み込み、目的変数を選んでください";
     if ((step === "eval" || step === "predict") && !S.runs.length && !(S.job && S.job.status === "done")) return "学習済みモデルがまだありません";
     return null;
   }
@@ -79,6 +82,7 @@
     if (step === "eval") renderEvalPanel();
     if (step === "predict") renderPredictPanel();
     if (step === "runs") loadRuns().then(renderRuns);
+    if (step === "augment") renderAugmentPanel();
     if (step === "env") loadEnv();
     window.scrollTo({ top: 0, behavior: "smooth" });
     requestAnimationFrame(() => Charts.redrawAll());
@@ -110,10 +114,23 @@
     pd.querySelector(".dot").className = "dot " + (S.dataset ? "ok" : "");
     pd.querySelector("span:last-child").textContent = S.dataset ? `${S.dataset.name} · ${fmtInt(S.dataset.n_rows)} 行` : "データ未読込";
     const pj = $("#pill-job");
+    const aj = S.aug.job;
+    if (aj && (aj.status === "running" || aj.status === "queued")) {
+      pj.querySelector(".dot").className = "dot run";
+      pj.querySelector("span:last-child").textContent = `合成データ生成中 ${Math.round((aj.progress || {}).pct || 0)}%`;
+      pj.onclick = () => go("augment");
+    } else pj.onclick = () => go("train");
     const j = S.job;
     const jd = !j ? "" : j.status === "running" || j.status === "queued" ? "run" : j.status === "done" ? "ok" : j.status === "failed" ? "bad" : "";
+    if (!(aj && (aj.status === "running" || aj.status === "queued"))) {
     pj.querySelector(".dot").className = "dot " + jd;
     pj.querySelector("span:last-child").textContent = !j ? "学習なし" : j.status === "running" ? `学習中 ${Math.round(j.progress.pct || 0)}%` : ({ done: "学習完了", failed: "学習失敗", cancelled: "学習中止", queued: "待機中" }[j.status] || j.status);
+    }
+    const badge = $("#aug-badge");
+    const as = S.augStatus;
+    const augOk = as && as.n_rows > 0 && S.spec && as.target === S.spec.target && as.task === S.spec.task;
+    badge.classList.toggle("hidden", !augOk);
+    if (augOk) badge.textContent = `+${fmtInt(as.n_rows)}`;
     const pe = $("#pill-env");
     if (S.env) {
       const d = S.env.device;
@@ -146,7 +163,7 @@
     return "classification";
   }
   function setDataset(ds) {
-    S.dataset = ds; S.validate = null;
+    S.dataset = ds; S.validate = null; S.augStatus = null; S.aug.current = null; S.aug.profile = null; S.aug.plan = null;
     const saved = store.get("spec:" + ds.name);
     if (saved && saved.roles && ds.columns.every((c) => c in saved.roles) && ds.columns.includes(saved.target)) S.spec = saved;
     else S.spec = { target: ds.suggest.target, task: ds.suggest.task, roles: Object.assign({}, ds.suggest.roles), split: { val: 0.15, test: 0.15, seed: 42, stratify: true } };
@@ -253,6 +270,7 @@
     $("#t-split").innerHTML = `学習 <b>${fmtInt(sc.train)}</b> 行 / 検証 <b>${fmtInt(sc.val)}</b> 行 / テスト <b>${fmtInt(sc.test)}</b> 行（有効 ${fmtInt(r.n_valid)} 行）`;
     $("#t-valid").textContent = `有効 ${fmtInt(r.n_valid)} 行` + (r.n_dropped ? ` · 目的変数が欠損/無効の ${fmtInt(r.n_dropped)} 行は除外` : "");
     $("#t-warn").innerHTML = r.warning ? `<div class="warn-box">⚠ ${esc(r.warning)}</div>` : "";
+    renderImbalanceHint(r);
     const cv = $("#t-chart");
     if (r.spec.task === "regression") Charts.hist(cv, { edges: r.target_hist.edges, counts: r.target_hist.counts, xLabel: r.spec.target, yLabel: "件数" });
     else Charts.bars(cv, { labels: r.class_counts.map((c) => c.value), values: r.class_counts.map((c) => c.count), unit: " 件", fmt: fmtInt, horizontal: r.class_counts.length > 8 });
@@ -295,6 +313,7 @@
     if (usesPreset && S.model) { const p = cat.presets.find((x) => x.id === S.model); if (p && p.extra_pip) check += `<div class="warn-box" style="margin-top:8px">⚠ このモデルには追加ライブラリが必要: <code>pip install ${p.extra_pip.join(" ")}</code></div>`; }
     if (usesPreset && S.env && S.settings && S.settings.hf_offline) check += `<div class="warn-box" style="margin-top:8px">ℹ オフライン設定中: キャッシュ済み / ローカルフォルダのモデルのみ使えます</div>`;
     $("#m-check").innerHTML = check;
+    renderSynthToggle();
     $("#m-train").disabled = !av.ok || (usesPreset && !S.model);
   }
   function renderPresets() {
@@ -349,7 +368,9 @@
   }
   async function startTraining() {
     const { values } = hpValues();
-    const body = { spec: S.spec, family: S.family, model: (S.family === "hf" || S.family === "sbert") ? S.model : null, hparams: values, name: $("#m-name").value };
+    const as = S.augStatus;
+    const useSyn = !!(as && as.enabled && as.n_rows > 0 && as.target === S.spec.target && as.task === S.spec.task);
+    const body = { spec: S.spec, family: S.family, model: (S.family === "hf" || S.family === "sbert") ? S.model : null, hparams: values, name: $("#m-name").value, use_synthetic: useSyn };
     const btn = $("#m-train"); btn.disabled = true;
     try {
       const r = await POST("/api/train", body);
@@ -465,6 +486,7 @@
       meta.model ? `<span class="chip mono" title="${esc(meta.model)}">${esc(shortModel(meta.model))}</span>` : "",
       `<span class="chip">${isReg ? "回帰" : "分類"} · ${esc(meta.target)}</span>`,
       `<span class="chip">学習 ${fmtInt(meta.n_train)} / 検証 ${fmtInt(meta.n_val)} / テスト ${fmtInt(meta.n_test)}</span>`,
+      meta.n_synthetic ? `<span class="chip" style="border-color:var(--green)">⚗ 合成 ${fmtInt(meta.n_synthetic)} 行を学習に使用</span>` : "",
       `<span class="chip">${fmtDur(meta.duration_sec)} · ${esc(meta.device || "")}</span>`,
       meta.n_params ? `<span class="chip">${fmtInt(meta.n_params)} params</span>` : "",
       meta.best_epoch ? `<span class="chip">best epoch ${meta.best_epoch}/${meta.epochs_run}</span>` : "",
@@ -612,7 +634,7 @@
       ${filt.map((m) => { const pk = m.task === "regression" ? "RMSE" : "F1"; const v = primaryOf(m, "val"), t = primaryOf(m, "test"); return `<tr class="${best.has(m.id) ? "best-row" : ""}" data-id="${m.id}">
         <td><input class="name-in" value="${esc(m.name)}" data-rename="${m.id}" title="クリックして名前を編集"></td><td class="dim">${fmtDate(m.created)}</td>
         <td><span class="chip" style="border-color:${FAM_COLOR[m.family]}">${FAM_ICON[m.family] || ""} ${esc(m.family_name || m.family)}</span></td>
-        <td class="mono small" title="${esc(m.model || "")}">${esc(shortModel(m.model))}</td><td>${m.task === "regression" ? "回帰" : "分類"} · ${esc(m.target)}</td>
+        <td class="mono small" title="${esc(m.model || "")}">${esc(shortModel(m.model))}</td><td>${m.task === "regression" ? "回帰" : "分類"} · ${esc(m.target)}${m.n_synthetic ? ` <span class="dim small">⚗+${fmtInt(m.n_synthetic)}</span>` : ""}</td>
         <td class="num">${best.has(m.id) ? "🏆 " : ""}${pk} <b>${v === null || v === undefined ? "–" : fmt(v)}</b></td><td class="num">${t === null || t === undefined ? "–" : fmt(t)}</td><td class="num dim">${fmtDur(m.duration_sec)}</td>
         <td><span class="row" style="gap:4px"><button class="btn xs" data-act="eval">評価</button><button class="btn xs" data-act="predict">予測</button><button class="btn xs danger" data-act="del">削除</button></span></td></tr>`; }).join("")}</tbody>`;
     $$("#r-tbl [data-act]").forEach((b) => b.onclick = async () => {
@@ -662,6 +684,233 @@
     catch (e) { toast(e.message, "err"); }
   }
 
+  // ---------------------------------------------------------------- データ拡張（LLM 知識蒸留）
+  const AUG_REAL = () => Charts.theme().series[0];
+  const AUG_SYN = () => Charts.theme().series[2];
+  function fmtRatio(r) { return r === null || r === undefined ? "∞" : (Math.round(r * 100) / 100).toFixed(2); }
+  function fmtBal(e) { return e === null || e === undefined ? "–" : (100 * e).toFixed(0) + "%"; }
+  function renderImbalanceHint(r) {
+    const box = $("#t-imbalance");
+    if (!box) return;
+    if (r.spec.task !== "classification" || !r.class_counts || r.class_counts.length < 2) { box.innerHTML = ""; return; }
+    const counts = r.class_counts.map((c) => c.count);
+    const mx = Math.max(...counts), mn = Math.min(...counts), ratio = mn ? mx / mn : Infinity;
+    const n = counts.reduce((a, b) => a + b, 0), k = counts.length;
+    const ent = -counts.filter((c) => c > 0).reduce((a, c) => a + (c / n) * Math.log(c / n), 0) / Math.log(k);
+    if (ratio < 1.5) { box.innerHTML = `<div class="ok-box">✓ クラスの偏りは小さめです（最大/最小比 ${fmtRatio(ratio)} · 均衡度 ${fmtBal(ent)}）</div>`; return; }
+    box.innerHTML = `<div class="warn-box row between"><span>⚠ クラスが偏っています: 最大/最小比 <b>${fmtRatio(ratio)}</b> · 均衡度 <b>${fmtBal(ent)}</b>（最少「${esc(r.class_counts[r.class_counts.length - 1].value)}」${fmtInt(mn)} 行）。少数クラスは LLM 知識蒸留の合成データで均衡化できます。</span><button class="btn sm" data-go="augment">⚗ データ拡張へ</button></div>`;
+    box.querySelector("[data-go]").onclick = () => go("augment");
+  }
+  function renderSynthToggle() {
+    const box = $("#m-synthetic");
+    if (!box) return;
+    const as = S.augStatus;
+    const ok = as && as.n_rows > 0 && S.spec && as.target === S.spec.target && as.task === S.spec.task;
+    if (!ok) { box.innerHTML = ""; return; }
+    box.innerHTML = `<div class="${as.enabled ? "ok-box" : "warn-box"} row between"><label class="check"><input type="checkbox" id="m-use-syn" ${as.enabled ? "checked" : ""}> 合成データ <b>${fmtInt(as.n_rows)}</b> 行を学習データに含める（検証 / テストには含めない）</label><button class="btn sm ghost" data-go="augment">拡張タブで確認</button></div>`;
+    box.querySelector("#m-use-syn").onchange = async (e) => { try { const r = await POST("/api/augment/enable", { enabled: e.target.checked }); S.augStatus.enabled = r.enabled; renderSynthToggle(); } catch (err) { toast(err.message, "err"); } };
+    box.querySelector("[data-go]").onclick = () => go("augment");
+  }
+  async function refreshAugStatus() {
+    try { const st = await GET("/api/status"); S.augStatus = st.augment; } catch (_) { /* ignore */ }
+    updatePills();
+  }
+  async function renderAugmentPanel() {
+    const ok = S.dataset && S.spec && S.spec.target;
+    $("#aug-nodata").classList.toggle("hidden", !!ok); $("#aug-body").classList.toggle("hidden", !ok);
+    if (!ok) return;
+    try {
+      const prof = await POST("/api/augment/profile", { spec: S.spec });
+      S.aug.profile = prof;
+    } catch (e) { toast(e.message, "err"); return; }
+    const prof = S.aug.profile;
+    $("#aug-target").textContent = `${prof.target} · ${prof.task === "regression" ? "回帰（分位ビン）" : "分類"} · 有効 ${fmtInt(prof.n_valid)} 行`;
+    const st = prof.stats;
+    const minG = prof.groups.reduce((a, g) => (g.count < a.count ? g : a), prof.groups[0]);
+    $("#aug-tiles-before").innerHTML = [
+      ["グループ数", fmtInt(st.k), prof.task === "regression" ? "目的変数の分位ビン" : "クラス"],
+      ["最少グループ", fmtInt(st.min), esc(minG.label)], ["最大 / 最小比", fmtRatio(st.ratio), "1.00 が完全均衡"],
+      ["均衡度", fmtBal(st.entropy), "正規化エントロピー（100% が均等）"],
+    ].map(([k, v, d]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="d">${d}</div></div>`).join("");
+    Charts.bars($("#aug-chart-before"), { labels: prof.groups.map((g) => g.label), values: prof.groups.map((g) => g.count), fmt: fmtInt, unit: " 行", color: AUG_REAL() });
+    // 件数チップ
+    const presets = prof.presets || [100, 200, 500, 1000, 2000];
+    $("#aug-counts").innerHTML = presets.map((n) => `<span class="chip click ${S.aug.n === n ? "on" : ""}" data-n="${n}">${fmtInt(n)}</span>`).join("");
+    $$("#aug-counts .chip").forEach((c) => c.onclick = () => { S.aug.n = +c.dataset.n; $("#aug-n").value = S.aug.n; renderAugCounts(); planAugment(0); });
+    $("#aug-n").value = S.aug.n;
+    $$("#aug-mode button").forEach((b) => b.classList.toggle("active", b.dataset.v === S.aug.mode));
+    $("#aug-cap").checked = S.aug.cap;
+    $("#aug-custom").classList.toggle("hidden", S.aug.mode !== "custom");
+    if (S.aug.mode === "custom") renderAugCustom();
+    // 生徒モデル候補
+    await loadRuns();
+    const cands = S.runs.filter((m) => m.target === prof.target && m.task === prof.task && m.family !== "baseline");
+    $("#aug-student").innerHTML = `<option value="">使わない</option>` + cands.map((m) => `<option value="${m.id}">${esc(runLabel(m))}</option>`).join("");
+    fillLlmSettings();
+    planAugment(0);
+    if (prof.current) { S.aug.current = prof.current; renderAugResult(prof.current); } else $("#aug-result").classList.add("hidden");
+    if (S.aug.job) renderAugJob(S.aug.job);
+    updatePills();
+  }
+  function renderAugCounts() { $$("#aug-counts .chip").forEach((c) => c.classList.toggle("on", +c.dataset.n === S.aug.n)); }
+  function renderAugCustom() {
+    const prof = S.aug.profile; if (!prof) return;
+    $("#aug-custom-tbl").innerHTML = `<thead><tr><th>グループ</th><th class="num">実データ</th><th class="num">追加件数</th></tr></thead><tbody>${prof.groups.map((g) => `<tr><td>${esc(g.label)}</td><td class="num">${fmtInt(g.count)}</td><td class="num"><input class="num-in" type="number" min="0" max="20000" data-key="${esc(g.key)}" value="${S.aug.custom[g.key] || 0}"></td></tr>`).join("")}</tbody>`;
+    $$("#aug-custom-tbl input").forEach((inp) => inp.oninput = () => { S.aug.custom[inp.dataset.key] = parseInt(inp.value || "0", 10); planAugment(); });
+  }
+  function planAugment(ms = 200) {
+    clearTimeout(S.aug.planTimer);
+    S.aug.planTimer = setTimeout(async () => {
+      if (!S.aug.profile) return;
+      try {
+        const r = await POST("/api/augment/plan", { spec: S.spec, n_total: S.aug.n, mode: S.aug.mode, cap: S.aug.cap, custom: S.aug.custom });
+        S.aug.plan = r; renderAugPlan(r);
+      } catch (e) { $("#aug-plan-hint").textContent = e.message; }
+    }, ms);
+  }
+  function renderAugPlan(r) {
+    const prof = S.aug.profile;
+    const labels = r.groups.map((g) => g.label);
+    const alloc = r.groups.map((g) => r.allocation[g.key] || 0);
+    const b = r.stats_before, a = r.stats_after;
+    const arrow = (x, y, fmt, betterLow) => { const same = fmt(x) === fmt(y); const good = betterLow ? (y < x) : (y > x); return `${fmt(x)} <span class="dim">→</span> <span class="${same ? "" : good ? "delta-up" : "delta-down"}">${fmt(y)}</span>`; };
+    $("#aug-tiles-after").innerHTML = [
+      ["合計件数", `${fmtInt(a.n)} <small>+${fmtInt(r.n_alloc)}</small>`, `実データ ${fmtInt(b.n)} 行 + 合成 ${fmtInt(r.n_alloc)} 行`],
+      ["最少グループ", arrow(b.min, a.min, fmtInt, false), "少数グループの件数"],
+      ["最大 / 最小比", arrow(b.ratio === null ? Infinity : b.ratio, a.ratio === null ? Infinity : a.ratio, fmtRatio, true), "1.00 が完全均衡"],
+      ["均衡度", arrow(b.entropy, a.entropy, fmtBal, false), "正規化エントロピー"],
+    ].map(([k, v, d]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="d">${d}</div></div>`).join("");
+    $("#aug-legend").innerHTML = `<span><i class="box" style="background:${AUG_REAL()}"></i>実データ</span><span><i class="box" style="background:${AUG_SYN()}"></i>合成データ</span><span><i style="background:${Charts.theme().axis};height:1px"></i>最多グループ</span>`;
+    Charts.stacked($("#aug-chart-after"), { labels, series: [{ name: "実データ", values: r.counts_before, color: AUG_REAL() }, { name: "合成データ", values: alloc, color: AUG_SYN() }], refLine: b.max });
+    const maxAfter = Math.max(...r.counts_after) || 1;
+    $("#aug-plan-tbl").innerHTML = `<thead><tr><th>グループ</th><th class="num">実データ</th><th class="num">追加</th><th class="num">合成後</th><th>構成比（合成後）</th></tr></thead><tbody>${r.groups.map((g, i) => `<tr><td>${esc(g.label)}${g.range ? ` <span class="dim small">(${prof.target})</span>` : ""}</td><td class="num">${fmtInt(r.counts_before[i])}</td><td class="num" style="color:${alloc[i] ? AUG_SYN() : "inherit"}">${alloc[i] ? "+" + fmtInt(alloc[i]) : "–"}</td><td class="num"><b>${fmtInt(r.counts_after[i])}</b></td><td><span class="bar" style="width:${Math.round(120 * r.counts_after[i] / maxAfter)}px;background:${AUG_REAL()}"></span><span class="bar" style="width:${Math.round(120 * alloc[i] / maxAfter)}px;background:${AUG_SYN()};margin-left:-6px"></span> ${(100 * r.counts_after[i] / a.n).toFixed(1)}%</td></tr>`).join("")}</tbody>`;
+    const est = Math.ceil(r.n_alloc / Math.max(1, parseInt($("#aug-batch").value || "10", 10)));
+    const capped = S.aug.mode === "balance" && S.aug.cap && r.n_alloc < S.aug.n;
+    $("#aug-plan-hint").innerHTML = r.n_alloc ? `合計 <b>${fmtInt(r.n_alloc)}</b> 行を生成${capped ? `（「最多グループを超えない」により要求 ${fmtInt(S.aug.n)} 行から制限。もっと増やすにはチェックを外すか「均等」を選択）` : ""}（LLM 呼び出し約 ${fmtInt(est)} 回${$("#aug-verify").checked ? " + 検証 " + fmtInt(Math.ceil(r.n_alloc / 10)) + " 回" : ""}）` : "追加件数が 0 です（既に均衡している場合は「均等」またはグループ別指定を選んでください）";
+  }
+  function fillLlmSettings() {
+    const st = S.settings || {};
+    $("#llm-provider").value = st.llm_provider || "openai";
+    ["base_url", "model", "max_tokens", "timeout"].forEach((k) => { $("#llm-" + k).value = st["llm_" + k] ?? ""; });
+    $("#llm-api_key").value = ""; $("#llm-api_key").placeholder = st.llm_api_key_set ? "（設定済み・変更する場合のみ入力）" : "（未設定。ローカル LLM なら不要）";
+    $("#llm-fields").classList.toggle("hidden", $("#llm-provider").value === "builtin");
+    $("#aug-conc").value = st.llm_concurrency || 2;
+  }
+  async function saveLlmSettings(silent = false) {
+    const body = { llm_provider: $("#llm-provider").value, llm_base_url: $("#llm-base_url").value.trim(), llm_model: $("#llm-model").value.trim(),
+      llm_api_key: $("#llm-api_key").value, llm_max_tokens: $("#llm-max_tokens").value || 4096, llm_timeout: $("#llm-timeout").value || 180,
+      llm_concurrency: $("#aug-conc").value || 2 };
+    S.settings = await POST("/api/settings", body);
+    fillLlmSettings();
+    if (!silent) { $("#llm-msg").textContent = "保存しました"; toast("LLM 設定を保存しました", "ok", 2000); }
+  }
+  async function testLlm() {
+    $("#llm-msg").innerHTML = '<span class="spinner"></span> 接続中…';
+    try { await saveLlmSettings(true); const r = await POST("/api/llm/test"); $("#llm-msg").innerHTML = r.ok ? `<span class="check-ok">✓ ${esc(r.message)}</span>` : `<span class="check-ng">✕ ${esc(r.message)}</span>`; }
+    catch (e) { $("#llm-msg").innerHTML = `<span class="check-ng">✕ ${esc(e.message)}</span>`; }
+  }
+  function augParams() {
+    return { n_total: S.aug.n, mode: S.aug.mode, cap: S.aug.cap, custom: S.aug.custom,
+      batch_rows: parseInt($("#aug-batch").value || "10", 10), concurrency: parseInt($("#aug-conc").value || "2", 10),
+      verify_llm: $("#aug-verify").checked, student_run: $("#aug-student").value || null, student_policy: $("#aug-student-policy .active").dataset.v,
+      dedupe: $("#aug-dedupe").checked, instructions: $("#aug-instructions").value, temperature: $("#aug-temp").value === "" ? null : parseFloat($("#aug-temp").value),
+      seed: parseInt($("#aug-seed").value || "42", 10) };
+  }
+  async function startAugment() {
+    const btn = $("#aug-start"); btn.disabled = true;
+    try {
+      await saveLlmSettings(true);
+      const r = await POST("/api/augment/start", { spec: S.spec, params: augParams() });
+      S.aug.job = r.job; S.aug.logNext = 0; $("#ag-log").textContent = ""; $("#aug-result").classList.add("hidden");
+      renderAugJob(r.job); pollAug(); updatePills();
+    } catch (e) { toast(e.message, "err", 8000); }
+    finally { btn.disabled = false; }
+  }
+  async function pollAug() {
+    clearTimeout(S.aug.jobTimer);
+    if (!S.aug.job) return;
+    try {
+      const r = await GET(`/api/jobs/${S.aug.job.id}?log_from=${S.aug.logNext}`);
+      if (r.log && r.log.length) { const el = $("#ag-log"); const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 30; el.insertAdjacentHTML("beforeend", r.log.map((l) => `<div class="${/エラー|Error/.test(l) ? "err" : ""}">${esc(l)}</div>`).join("")); if (atBottom) el.scrollTop = el.scrollHeight; }
+      S.aug.logNext = r.log_next; S.aug.job = r;
+      renderAugJob(r); updatePills();
+      if (r.status === "running" || r.status === "queued") S.aug.jobTimer = setTimeout(pollAug, 800);
+      else await onAugFinished(r);
+    } catch (e) { S.aug.jobTimer = setTimeout(pollAug, 2000); }
+  }
+  function renderAugJob(j) {
+    if (S.step !== "augment") return;
+    $("#ag-live").classList.remove("hidden");
+    const st = $("#ag-status"); st.classList.remove("hidden"); st.className = "status " + j.status; st.innerHTML = (j.status === "running" ? '<span class="spinner"></span>' : "") + (STATUS_JA[j.status] || j.status);
+    const pr = j.progress || {};
+    $("#ag-prog .fill").style.width = Math.max(0, Math.min(100, pr.pct || 0)) + "%"; $("#ag-prog").classList.toggle("done", j.status !== "running");
+    $("#ag-phase").textContent = pr.phase || ""; $("#ag-pct").textContent = (pr.pct || 0).toFixed(0) + "%";
+    $("#ag-time").textContent = `経過 ${fmtDur(j.elapsed)}`;
+    $("#ag-cancel").classList.toggle("hidden", !(j.status === "running" || j.status === "queued"));
+    $("#aug-start").disabled = j.status === "running" || j.status === "queued";
+    $("#ag-error").innerHTML = j.error ? `<div class="err-box" style="margin-top:8px">${esc(j.error)}</div>` : "";
+  }
+  async function onAugFinished(j) {
+    await refreshAugStatus();
+    if (j.status === "done") {
+      try { const r = await GET("/api/augment"); S.aug.current = r.augment; if (r.augment) renderAugResult(r.augment); } catch (e) { toast(e.message, "err"); }
+      const a = j.result || {};
+      toast(`合成データ ${fmtInt(a.n_rows)} 行を生成しました（均衡度 ${fmtBal((a.stats_before || {}).entropy)} → ${fmtBal((a.stats_after || {}).entropy)}）`, "ok", 7000);
+    } else if (j.status === "failed") toast("生成に失敗しました: " + (j.error || ""), "err", 10000);
+    else if (j.status === "cancelled") toast("生成を中止しました", "", 3000);
+    renderSynthToggle();
+  }
+  function renderAugResult(aug) {
+    const card = $("#aug-result"); card.classList.remove("hidden");
+    const b = aug.stats_before || {}, a = aug.stats_after || {};
+    const rejected = Object.values(aug.rejected || {}).reduce((x, y) => x + y, 0);
+    const ls = aug.llm_stats;
+    $("#aug-res-n").textContent = `${fmtInt(aug.n_rows)} 行 · ${aug.provider === "builtin" ? "内蔵生成" : `${aug.provider} / ${aug.model || ""}`} · ${fmtDur(aug.duration_sec)}`;
+    $("#aug-enabled").checked = !!aug.enabled;
+    $("#aug-res-tiles").innerHTML = [
+      ["採用", fmtInt(aug.n_rows), `却下 ${fmtInt(rejected)} 行`],
+      ["均衡度", `${fmtBal(b.entropy)} <small>→</small> ${fmtBal(a.entropy)}`, "正規化エントロピー"],
+      ["最大 / 最小比", `${fmtRatio(b.ratio)} <small>→</small> ${fmtRatio(a.ratio)}`, "1.00 が完全均衡"],
+      ["最少グループ", `${fmtInt(b.min)} <small>→</small> ${fmtInt(a.min)}`, "行数"],
+      ls ? ["LLM 呼び出し", fmtInt(ls.calls), `入力 ${fmtInt(ls.input_tokens)} / 出力 ${fmtInt(ls.output_tokens)} トークン`] : ["生成元", "内蔵", "実データの組み替え（LLM なし）"],
+    ].map(([k, v, d]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="d">${d}</div></div>`).join("");
+    const rej = Object.entries(aug.rejected || {});
+    $("#aug-res-rejected").innerHTML = (rej.length ? "却下の内訳: " + rej.map(([k, v]) => `${esc(k)} ${fmtInt(v)}`).join(" · ") : "却下なし") +
+      (aug.groups ? `　｜　グループ別追加: ${aug.groups.map((g) => `${esc(g.label)} +${fmtInt(g.added)}`).join(" · ")}` : "");
+    const cols = aug.columns, spec = S.spec;
+    const featureCols = cols.filter((c) => spec.roles[c] && spec.roles[c] !== "ignore" && spec.roles[c] !== "target");
+    const mark = (v) => v === true ? '<span class="check-ok">✓</span>' : v === false ? '<span class="check-ng">✕</span>' : '<span class="check-na">–</span>';
+    const hasTeacher = (aug.meta || []).some((m) => m.checks && m.checks.teacher_agree !== undefined);
+    const hasStudent = (aug.meta || []).some((m) => m.checks && m.checks.student_agree !== undefined);
+    $("#aug-res-tbl").innerHTML = `<thead><tr><th>#</th><th>グループ</th>${featureCols.map((c) => `<th>${esc(c)}</th>`).join("")}${hasTeacher ? "<th>教師</th>" : ""}${hasStudent ? "<th>生徒</th>" : ""}</tr></thead><tbody>${(aug.rows || []).map((r, i) => { const m = (aug.meta || [])[i] || { checks: {} }; return `<tr><td class="num dim">${i + 1}</td><td><span class="tag target">${esc(m.label)}</span></td>${featureCols.map((c) => `<td class="${spec.roles[c] === "text" ? "wrap-s" : ""}" title="${esc(r[cols.indexOf(c)])}">${esc(r[cols.indexOf(c)])}</td>`).join("")}${hasTeacher ? `<td>${mark(m.checks.teacher_agree)}${m.checks.teacher_label && m.checks.teacher_agree === false ? ` <span class="dim small">${esc(m.checks.teacher_label)}</span>` : ""}</td>` : ""}${hasStudent ? `<td>${mark(m.checks.student_agree)}${m.checks.student_pred !== undefined && m.checks.student_agree === false ? ` <span class="dim small">${esc(m.checks.student_pred)}</span>` : ""}${m.checks.student_conf ? ` <span class="dim small">${fmtPct(m.checks.student_conf, 0)}</span>` : ""}</td>` : ""}</tr>`; }).join("")}</tbody>`;
+    if (aug.n_rows > (aug.rows || []).length) $("#aug-res-n").textContent += `（先頭 ${aug.rows.length} 行を表示）`;
+  }
+  async function downloadAugment(kind) {
+    try {
+      const res = await fetch(`/api/augment/export?kind=${kind}`);
+      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || res.statusText); }
+      const blob = await res.blob();
+      const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `${kind === "all" ? "augmented" : "synthetic"}_${(S.dataset.name || "data").replace(/\.[^.]+$/, "")}.csv`; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    } catch (e) { toast(e.message, "err"); }
+  }
+  function bindAugmentEvents() {
+    $("#aug-n").oninput = (e) => { S.aug.n = Math.max(0, parseInt(e.target.value || "0", 10)); renderAugCounts(); planAugment(); };
+    $$("#aug-mode button").forEach((b) => b.onclick = () => { S.aug.mode = b.dataset.v; $$("#aug-mode button").forEach((x) => x.classList.toggle("active", x === b)); $("#aug-custom").classList.toggle("hidden", S.aug.mode !== "custom"); $("#aug-cap-wrap").style.visibility = S.aug.mode === "balance" ? "visible" : "hidden"; if (S.aug.mode === "custom") renderAugCustom(); planAugment(0); });
+    $("#aug-cap").onchange = (e) => { S.aug.cap = e.target.checked; planAugment(0); };
+    $("#aug-batch").oninput = () => { if (S.aug.plan) renderAugPlan(S.aug.plan); };
+    $("#aug-verify").onchange = () => { if (S.aug.plan) renderAugPlan(S.aug.plan); };
+    $$("#aug-student-policy button").forEach((b) => b.onclick = () => $$("#aug-student-policy button").forEach((x) => x.classList.toggle("active", x === b)));
+    $("#llm-provider").onchange = () => $("#llm-fields").classList.toggle("hidden", $("#llm-provider").value === "builtin");
+    $("#llm-save").onclick = () => saveLlmSettings().catch((e) => toast(e.message, "err"));
+    $("#llm-test").onclick = testLlm;
+    $("#aug-start").onclick = startAugment;
+    $("#ag-cancel").onclick = async () => { if (!S.aug.job) return; try { await POST(`/api/jobs/${S.aug.job.id}/cancel`); } catch (e) { toast(e.message, "err"); } };
+    $("#aug-enabled").onchange = async (e) => { try { const r = await POST("/api/augment/enable", { enabled: e.target.checked }); await refreshAugStatus(); toast(r.enabled ? "学習データに含めます" : "学習データから外しました", "ok", 2000); } catch (err) { toast(err.message, "err"); } };
+    $("#aug-dl-syn").onclick = () => downloadAugment("synthetic"); $("#aug-dl-all").onclick = () => downloadAugment("all");
+    $("#aug-clear").onclick = async () => { if (!confirm("合成データを削除しますか？")) return; try { await POST("/api/augment/clear"); S.aug.current = null; $("#aug-result").classList.add("hidden"); await refreshAugStatus(); renderSynthToggle(); toast("削除しました", "ok", 2000); } catch (e) { toast(e.message, "err"); } };
+  }
+
   // ---------------------------------------------------------------- 初期化
   function bindEvents() {
     $("#theme-toggle").onclick = () => setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
@@ -705,6 +954,7 @@
     // 履歴 / 環境
     $("#r-filter").onchange = renderRuns; $("#r-refresh").onclick = () => loadRuns().then(renderRuns);
     $("#s-save").onclick = saveSettings;
+    bindAugmentEvents();
   }
   async function init() {
     setTheme(store.get("theme", "dark"));
@@ -715,7 +965,9 @@
       loadEnv();
       loadRuns();
       if (status.dataset) { const d = await GET("/api/dataset"); if (d.dataset) setDataset(d.dataset); }
-      if (status.job) { S.job = { id: status.job.id, status: status.job.status, progress: status.job.progress, params: status.job.params, curves: [], step_losses: [] }; pollJob(); }
+      S.augStatus = status.augment || null;
+      if (status.job && status.job.kind === "augment") { S.aug.job = { id: status.job.id, status: status.job.status, progress: status.job.progress, params: status.job.params }; pollAug(); }
+      else if (status.job) { S.job = { id: status.job.id, status: status.job.status, progress: status.job.progress, params: status.job.params, curves: [], step_losses: [] }; pollJob(); }
     } catch (e) { toast("サーバーに接続できません: " + e.message, "err", 0); }
     updatePills(); updateStepper();
   }

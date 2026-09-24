@@ -25,14 +25,19 @@ from urllib.parse import parse_qs, unquote, urlparse
 BASE = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE))
 
-from tcore import __version__, dataio  # noqa: E402
+from tcore import (  # noqa: E402
+    __version__,
+    augment,  # noqa: E402
+    dataio,
+)
 from tcore import runs as runstore  # noqa: E402
 from tcore.catalog import catalog_payload  # noqa: E402
-from tcore.catalog import family as family_info
+from tcore.catalog import family as family_info  # noqa: E402
 from tcore.config import apply_env, load_settings, public_settings, save_settings  # noqa: E402
 from tcore.dataio import DataError  # noqa: E402
 from tcore.env import env_payload  # noqa: E402
 from tcore.jobs import JobBusy, JobManager  # noqa: E402
+from tcore.llm import LLMClient  # noqa: E402
 from tcore.prep import PrepError, build_spec, make_examples  # noqa: E402
 
 HOST = "127.0.0.1"
@@ -53,7 +58,8 @@ SAMPLES = [
 
 JOBS = JobManager()
 _state_lock = threading.Lock()
-STATE: dict = {"raw": None, "filename": None, "table": None, "summary": None}
+STATE: dict = {"raw": None, "filename": None, "table": None, "summary": None, "augment": None}
+AUGMENT_PREVIEW = 200
 _pred_lock = threading.Lock()
 PREDICTORS: dict = {}
 
@@ -72,7 +78,7 @@ def set_dataset(raw: bytes, filename: str, sheet: str | None = None) -> dict:
     table = dataio.read_table_bytes(raw, filename, sheet)
     summary = dataio.table_summary(table)
     with _state_lock:
-        STATE.update({"raw": raw, "filename": filename, "table": table, "summary": summary})
+        STATE.update({"raw": raw, "filename": filename, "table": table, "summary": summary, "augment": None})
     return summary
 
 
@@ -155,11 +161,133 @@ def api_train(body: dict) -> dict:
         from tcore.engine.pipeline import train_run as fn
     params = {"family": fam_id, "family_name": fam["name"], "model": body.get("model"),
               "target": spec["target"], "task": spec["task"], "name": body.get("name")}
+    if body.get("use_synthetic"):
+        table = table_with_synthetic(table, spec)
+        if "synthetic_from" in table:
+            params["n_synthetic"] = len(table["rows"]) - table["synthetic_from"]
     try:
         job = JOBS.start("train", params, lambda job: fn(table, body, job))
     except JobBusy as e:
         raise ApiError(str(e), 409) from e
     return {"job_id": job.id, "job": job.snapshot()}
+
+
+def table_with_synthetic(table: dict, spec: dict) -> dict:
+    """採用済みの合成行を末尾に足した表（synthetic_from 以降が合成）。目的変数が違えば元の表のまま。"""
+    with _state_lock:
+        aug = STATE["augment"]
+    if not aug or not aug.get("enabled") or not aug.get("rows"):
+        return table
+    if aug["target"] != spec["target"] or aug["task"] != spec["task"] or aug["columns"] != table["columns"]:
+        return table
+    rows = list(table["rows"]) + [list(r) for r in aug["rows"]]
+    return {**table, "rows": rows, "n_rows": len(rows), "synthetic_from": len(table["rows"]),
+            "name": f"{table.get('name')} (+合成 {len(aug['rows'])} 行)"}
+
+
+# ---------------------------------------------------------------- データ拡張（LLM 知識蒸留）
+
+def _augment_summary(aug: dict | None, full: bool = False) -> dict | None:
+    if not aug:
+        return None
+    out = {k: aug.get(k) for k in ("target", "task", "columns", "dataset_name", "n_real", "groups", "rejected",
+                                    "rejected_samples", "stats_before", "stats_after", "params", "provider", "model",
+                                    "llm_stats", "duration_sec", "created", "enabled")}
+    out["n_rows"] = len(aug.get("rows") or [])
+    limit = None if full else AUGMENT_PREVIEW
+    out["rows"] = aug["rows"][:limit] if limit else aug["rows"]
+    out["meta"] = aug["meta"][:limit] if limit else aug["meta"]
+    return out
+
+
+def api_augment_profile(body: dict) -> dict:
+    table = current_table()
+    spec = build_spec(table, body.get("spec") or {})
+    tg = augment.target_groups(table, spec)
+    groups = [{k: g[k] for k in ("key", "label", "count", "range")} for g in tg["groups"]]
+    with _state_lock:
+        aug = STATE["augment"]
+    return {"task": spec["task"], "target": spec["target"], "groups": groups, "n_valid": len(tg["examples"]),
+            "stats": augment.balance_stats([g["count"] for g in groups]), "presets": augment.PRESET_COUNTS,
+            "max_total": augment.MAX_TOTAL,
+            "current": (_augment_summary(aug)
+                        if aug and aug["target"] == spec["target"] and aug["task"] == spec["task"] else None)}
+
+
+def api_augment_plan(body: dict) -> dict:
+    table = current_table()
+    spec = build_spec(table, body.get("spec") or {})
+    tg = augment.target_groups(table, spec)
+    p = augment.coerce_params(body)
+    counts = {g["key"]: g["count"] for g in tg["groups"]}
+    alloc = augment.plan_allocation(counts, p["n_total"], p["mode"], p["cap"], p["custom"])
+    out = augment.plan_payload(tg["groups"], alloc)
+    out["groups"] = [{k: g[k] for k in ("key", "label", "count", "range")} for g in tg["groups"]]
+    return out
+
+
+def api_augment_start(body: dict) -> dict:
+    table = current_table()
+    spec = build_spec(table, body.get("spec") or {})
+    cfg = load_settings()
+    params = augment.coerce_params(body.get("params") or {})
+    if params["n_total"] <= 0 and params["mode"] != "custom":
+        raise ApiError("生成件数を 1 以上にしてください")
+    if cfg.get("llm_provider", "openai") != "builtin" and not cfg.get("llm_model"):
+        raise ApiError("LLM のモデル名が未設定です。「LLM 接続」で設定を保存するか、内蔵生成を選んでください")
+
+    def fn(job):
+        result = augment.run_augmentation(table, body.get("spec") or {}, params, job, cfg)
+        with _state_lock:
+            STATE["augment"] = result
+        return {"n_rows": len(result["rows"]), "stats_before": result["stats_before"],
+                "stats_after": result["stats_after"], "rejected": result["rejected"]}
+
+    job_params = {"kind": "augment", "target": spec["target"], "task": spec["task"], "n_total": params["n_total"],
+                  "provider": cfg.get("llm_provider", "openai"), "model": cfg.get("llm_model")}
+    try:
+        job = JOBS.start("augment", job_params, fn)
+    except JobBusy as e:
+        raise ApiError(str(e), 409) from e
+    return {"job_id": job.id, "job": job.snapshot()}
+
+
+def api_augment_get(query: dict) -> dict:
+    with _state_lock:
+        aug = STATE["augment"]
+    return {"augment": _augment_summary(aug, full=query.get("full", ["0"])[0] == "1")}
+
+
+def api_augment_enable(body: dict) -> dict:
+    with _state_lock:
+        if STATE["augment"] is None:
+            raise ApiError("合成データがありません")
+        STATE["augment"]["enabled"] = bool(body.get("enabled", True))
+        return {"enabled": STATE["augment"]["enabled"]}
+
+
+def augment_export_csv(kind: str) -> bytes:
+    """合成データ（synthetic）または 実データ + 合成データ（all）を CSV（UTF-8 BOM）で返す。"""
+    with _state_lock:
+        aug = STATE["augment"]
+        table = STATE["table"]
+    if not aug:
+        raise ApiError("合成データがありません")
+    import csv
+    import io
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(list(aug["columns"]) + ["_source", "_group"])
+    if kind == "all" and table is not None and table["columns"] == aug["columns"]:
+        for r in table["rows"]:
+            w.writerow(list(r) + ["real", ""])
+    for r, m in zip(aug["rows"], aug["meta"], strict=True):
+        w.writerow(list(r) + ["synthetic", m.get("label", "")])
+    return ("\ufeff" + buf.getvalue()).encode("utf-8")
+
+
+def api_llm_test() -> dict:
+    return LLMClient(load_settings()).test()
 
 
 def api_job(job_id: str, query: dict) -> dict:
@@ -276,9 +404,13 @@ def api_status() -> dict:
     dataset = None
     if summary:
         dataset = {k: summary.get(k) for k in ("name", "n_rows", "n_cols", "sheet", "sheets")}
+    with _state_lock:
+        aug = STATE["augment"]
     return {"version": __version__, "dataset": dataset,
-            "job": ({"id": job.id, "status": job.status, "progress": job.progress, "params": job.params}
-                    if job else None),
+            "job": ({"id": job.id, "kind": job.kind, "status": job.status, "progress": job.progress,
+                     "params": job.params} if job else None),
+            "augment": ({"target": aug["target"], "task": aug["task"], "n_rows": len(aug["rows"]),
+                         "enabled": aug["enabled"]} if aug else None),
             "settings": public_settings(cfg), "n_runs": len(runstore.list_runs())}
 
 
@@ -297,7 +429,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *args):     # ポーリングで騒がしくならないように API エラーのみ表示
         msg = fmt % args
-        if '"GET /api/jobs/' in msg or '"GET /api/status' in msg:
+        if '"GET /api/jobs/' in msg or '"GET /api/status' in msg or '"GET /api/augment' in msg:
             return
         if " 200 " in msg or " 304 " in msg:
             return
@@ -380,6 +512,17 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json({"dataset": STATE["summary"]})
             if path == "/api/jobs/current":
                 return self._json(api_job_current())
+            if path == "/api/augment":
+                return self._json(api_augment_get(query))
+            if path == "/api/augment/export":
+                kind = query.get("kind", ["synthetic"])[0]
+                data = augment_export_csv("all" if kind == "all" else "synthetic")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/csv; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return self.wfile.write(data)
             if path.startswith("/api/jobs/"):
                 return self._json(api_job(path.split("/")[3], query))
             if path == "/api/runs":
@@ -406,12 +549,26 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"dataset": api_dataset_sheet(body)})
             if path == "/api/dataset/clear":
                 with _state_lock:
-                    STATE.update({"raw": None, "filename": None, "table": None, "summary": None})
+                    STATE.update({"raw": None, "filename": None, "table": None, "summary": None, "augment": None})
                 return self._json({"ok": True})
             if path == "/api/spec/validate":
                 return self._json(api_spec_validate(body))
             if path == "/api/train":
                 return self._json(api_train(body))
+            if path == "/api/augment/profile":
+                return self._json(api_augment_profile(body))
+            if path == "/api/augment/plan":
+                return self._json(api_augment_plan(body))
+            if path == "/api/augment/start":
+                return self._json(api_augment_start(body))
+            if path == "/api/augment/enable":
+                return self._json(api_augment_enable(body))
+            if path == "/api/augment/clear":
+                with _state_lock:
+                    STATE["augment"] = None
+                return self._json({"ok": True})
+            if path == "/api/llm/test":
+                return self._json(api_llm_test())
             if path.startswith("/api/jobs/") and path.endswith("/cancel"):
                 return self._json({"cancelled": JOBS.cancel(path.split("/")[3])})
             if path == "/api/predict":
