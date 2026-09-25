@@ -1,0 +1,39 @@
+# 開発進捗ダッシュボードの確認。
+#  for_eigyo と claudecode の全プロジェクトに progress/projects/<slug>.json があり、書式が正しいこと
+#  （dashboard.html は claudecode の更新でも変わるため、ここでは差分を確認しない）
+name: progress dashboard
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: for_eigyo
+      # 同じ名前のブランチが claudecode にあればそれを使う（両リポジトリにまたがる変更を一緒に確認するため）。なければ main
+      - name: Choose claudecode ref
+        id: other
+        env:
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          if git ls-remote --exit-code --heads https://github.com/tyama-ds/claudecode "$BRANCH" >/dev/null; then
+            echo "ref=$BRANCH" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=main" >> "$GITHUB_OUTPUT"
+          fi
+          echo "claudecode: $(grep -o 'ref=.*' "$GITHUB_OUTPUT" | tail -1)"
+      - uses: actions/checkout@v4
+        with:
+          repository: tyama-ds/claudecode
+          ref: ${{ steps.other.outputs.ref }}
+          path: claudecode
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Check progress files
+        run: python for_eigyo/progress/build_dashboard.py --check --data-only

@@ -1,0 +1,67 @@
+{
+  "slug": "launcher",
+  "name": "App Portal",
+  "path": "launcher/",
+  "summary": "各アプリをワンクリックで起動して開くローカルポータル。13アプリを登録済み。",
+  "status": "active",
+  "phase": "新規アプリの登録ごとに更新",
+  "progress": 90,
+  "started": "2026-07-07",
+  "ports": [
+    8770
+  ],
+  "ci": false,
+  "portal": false,
+  "stack": [
+    "Python 標準ライブラリ"
+  ],
+  "milestones": [
+    {
+      "title": "カード起動・状態表示・生成アートワーク",
+      "state": "done",
+      "date": "2026-07-07"
+    },
+    {
+      "title": "claudecode 側アプリの登録",
+      "state": "done",
+      "date": "2026-07-10"
+    },
+    {
+      "title": "Patent Atlas / Research Atlas / Tensorium の統合",
+      "state": "done",
+      "date": "2026-09-14"
+    },
+    {
+      "title": "CI ワークフロー",
+      "state": "todo"
+    }
+  ],
+  "next": [
+    "新しいアプリを作ったら apps.json に登録",
+    "ポータル統合テストの CI 化"
+  ],
+  "risks": [
+    "各アプリの起動方法（venv の有無）が異なり、初回セットアップが必要なものがある"
+  ],
+  "log": [
+    {
+      "date": "2026-09-24",
+      "summary": "Tensorium のデータ拡張タブに合わせて登録情報を更新",
+      "ref": "#48"
+    },
+    {
+      "date": "2026-09-14",
+      "summary": "Patent Atlas / Research Atlas / Tensorium を登録、Windows パスのテスト修正"
+    },
+    {
+      "date": "2026-07-13",
+      "summary": "FermiScope の起動を python 方式に変更"
+    },
+    {
+      "date": "2026-07-07",
+      "summary": "初版",
+      "ref": "#14, #17, #27"
+    }
+  ],
+  "updated": "2026-09-24"
+}

@@ -1,0 +1,102 @@
+{
+  "slug": "jupyter-local-llm",
+  "name": "llmlab",
+  "path": "jupyter-local-llm/",
+  "summary": "JupyterLab × ローカルLLM。補完・チャット・各種RAG・Studio・Loop・Copilot Research をひとつのパッケージで提供。",
+  "status": "maintenance",
+  "phase": "v0.9.2 安定化（監査修正の完了後）",
+  "progress": 85,
+  "started": "2026-07-04",
+  "version": "0.9.2",
+  "ports": [
+    8765,
+    8766,
+    8767,
+    8888
+  ],
+  "ci": true,
+  "portal": true,
+  "stack": [
+    "Python",
+    "JupyterLab",
+    "LlamaIndex",
+    "ローカルLLM"
+  ],
+  "milestones": [
+    {
+      "title": "コード補完・チャット（自前実装）",
+      "state": "done",
+      "date": "2026-07-06"
+    },
+    {
+      "title": "RAG群（PagedRAG / BookRAG / MultiPaperRAG / TableQA / DocQA）",
+      "state": "done",
+      "date": "2026-07-10"
+    },
+    {
+      "title": "llmlab Loop・Copilot Research",
+      "state": "done",
+      "date": "2026-07-10"
+    },
+    {
+      "title": "v0.8〜0.9 RAG大型改善・ナレッジグラフ可視化",
+      "state": "done",
+      "date": "2026-08-03"
+    },
+    {
+      "title": "監査1〜11の修正・CI・ruffクリーン（v0.9.1）",
+      "state": "done",
+      "date": "2026-08-03"
+    },
+    {
+      "title": "BookRAG 抽出不全・低速化の修正（v0.9.2）",
+      "state": "done",
+      "date": "2026-08-04"
+    },
+    {
+      "title": "別リポジトリへの切り出し",
+      "state": "todo"
+    }
+  ],
+  "next": [
+    "実運用フィードバックの反映",
+    "別リポジトリへの切り出し（README に手順あり）の要否判断"
+  ],
+  "risks": [
+    "BookRAG は論文の完全再現ではない軽量版",
+    "Copilot Research は M365 画面の変更に弱い（Selenium スクリプト依存）"
+  ],
+  "log": [
+    {
+      "date": "2026-08-04",
+      "summary": "BookRAG 抽出不全・低速化を修正（v0.9.2）、relations の名寄せを NFKC 正規化",
+      "ref": "#42"
+    },
+    {
+      "date": "2026-08-03",
+      "summary": "再監査修正、ruff 142件→0、E2E ハーネス、CI 追加（v0.9.1）",
+      "ref": "#40, #41"
+    },
+    {
+      "date": "2026-08-03",
+      "summary": "v0.8〜0.9: 検索再設計・コレクション/タグ・ナレッジグラフ可視化",
+      "ref": "#38, #39"
+    },
+    {
+      "date": "2026-07-10",
+      "summary": "Copilot Research（M365 Copilot × 擬似GEPA）、Selenium コネクタの差し替え",
+      "ref": "#20, #23, #29"
+    },
+    {
+      "date": "2026-07-07",
+      "summary": "llmlab Loop（自律ループ）を追加",
+      "ref": "#13"
+    },
+    {
+      "date": "2026-07-03",
+      "summary": "初版: 補完・チャット・RAG",
+      "ref": "#9〜#12"
+    }
+  ],
+  "updated": "2026-08-04"
+}
