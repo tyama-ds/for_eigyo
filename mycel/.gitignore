@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+# 利用者のノートと設定（API キーを含む）
+vault/
+mycel.config.json
