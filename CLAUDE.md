@@ -36,5 +36,5 @@
 ### 確認
 
 `python progress/build_dashboard.py --check` で、進捗ファイルの欠け・書式の誤り・dashboard.html の生成漏れを検出できる。
-CI（`.github/workflows/progress.yml`）では claudecode の main も取得して、両リポジトリの進捗ファイルを確認する（dashboard.html の差分は確認しない）。
+CI（`.github/workflows/progress.yml`）では claudecode も取得して（同じ名前のブランチがあればそれ、なければ main）、両リポジトリの進捗ファイルを確認する（dashboard.html の差分は確認しない）。
 claudecode 側の手順は claudecode の CLAUDE.md にある。

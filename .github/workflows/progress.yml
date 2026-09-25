@@ -15,9 +15,22 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: for_eigyo
+      # 同じ名前のブランチが claudecode にあればそれを使う（両リポジトリにまたがる変更を一緒に確認するため）。なければ main
+      - name: Choose claudecode ref
+        id: other
+        env:
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          if git ls-remote --exit-code --heads https://github.com/tyama-ds/claudecode "$BRANCH" >/dev/null; then
+            echo "ref=$BRANCH" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=main" >> "$GITHUB_OUTPUT"
+          fi
+          echo "claudecode: $(grep -o 'ref=.*' "$GITHUB_OUTPUT" | tail -1)"
       - uses: actions/checkout@v4
         with:
           repository: tyama-ds/claudecode
+          ref: ${{ steps.other.outputs.ref }}
           path: claudecode
       - uses: actions/setup-python@v5
         with:
