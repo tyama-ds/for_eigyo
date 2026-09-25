@@ -1,0 +1,4 @@
+[
+  {"repo": "for_eigyo", "github": "tyama-ds/for_eigyo", "path": "."},
+  {"repo": "claudecode", "github": "tyama-ds/claudecode", "path": "../claudecode", "ignore": ["docs", "notebooks"]}
+]

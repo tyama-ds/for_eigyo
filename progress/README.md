@@ -1,20 +1,24 @@
 # 開発進捗ダッシュボード
 
-for_eigyo の各プロジェクトの状態・フェーズ・進捗・マイルストーン・作業ログを1画面で見るためのダッシュボード。
+for_eigyo と claudecode（tyama-ds/claudecode）の各プロジェクトの状態・フェーズ・進捗・マイルストーン・作業ログを1画面で見るためのダッシュボード。
 
 - 見る: `progress/dashboard.html` をブラウザで開く、または claude.ai の公開ページ
   https://claude.ai/artifact/ANrf5LMNjv2ojHr9JHZ3fP
-- 更新する: `progress/projects/<slug>.json` を編集して `python progress/build_dashboard.py` を実行
-- 確認する: `python progress/build_dashboard.py --check`（CI でも実行）
+- 更新する: 該当リポジトリの `progress/projects/<slug>.json` を編集して `python progress/build_dashboard.py` を実行
+- 確認する: `python progress/build_dashboard.py --check`（CI では `--check --data-only`）
 
-README.md を持つトップレベルのフォルダはプロジェクトとして扱い、進捗ファイルが無ければ
-`build_dashboard.py` の実行時に下書きを自動作成する（`--check` ではエラーになる）。
+対象リポジトリは `sources.json` に書く。claudecode は for_eigyo と同じ親フォルダにある前提
+（`../claudecode`）。別の場所なら `--source claudecode=<パス>` で指定する。
+
+各リポジトリのトップレベルのフォルダ（隠しフォルダと `sources.json` の `ignore` を除く）はプロジェクトとして扱い、
+進捗ファイルが無ければ `build_dashboard.py` の実行時に下書きを自動作成する（`--check` ではエラーになる）。
 
 ## ファイル構成
 
 | ファイル | 役割 |
 |----------|------|
-| `projects/<slug>.json` | 進捗の正本（1プロジェクト1ファイル） |
+| `sources.json` | 対象リポジトリ（名前・GitHub・for_eigyo からの相対パス・除外フォルダ） |
+| `projects/<slug>.json` | for_eigyo の進捗の正本（claudecode の分は claudecode の `progress/projects/`） |
 | `dashboard_template.html` | 画面のテンプレート |
 | `build_dashboard.py` | JSON を検証し、テンプレートにデータを埋め込んで `dashboard.html` を生成 |
 | `dashboard.html` | 生成物（直接編集しない） |

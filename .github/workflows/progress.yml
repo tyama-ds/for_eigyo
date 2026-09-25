@@ -1,5 +1,6 @@
 # 開発進捗ダッシュボードの確認。
-#  全プロジェクトに progress/projects/<slug>.json があり、書式が正しく、dashboard.html が最新であること
+#  for_eigyo と claudecode の全プロジェクトに progress/projects/<slug>.json があり、書式が正しいこと
+#  （dashboard.html は claudecode の更新でも変わるため、ここでは差分を確認しない）
 name: progress dashboard
 
 on:
@@ -12,8 +13,14 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: for_eigyo
+      - uses: actions/checkout@v4
+        with:
+          repository: tyama-ds/claudecode
+          path: claudecode
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Check progress files and generated dashboard
-        run: python progress/build_dashboard.py --check
+      - name: Check progress files
+        run: python for_eigyo/progress/build_dashboard.py --check --data-only

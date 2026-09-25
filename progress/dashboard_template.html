@@ -55,6 +55,8 @@ header h1 { font-size: 28px; font-weight: 700; letter-spacing: .01em; margin-top
 .chip:hover { border-color: var(--muted); }
 .chip[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--ink); }
 .chip .count { font-family: var(--mono); color: var(--muted); }
+.seg { display: contents; }
+.seg + div .chip:first-child { margin-left: 8px; }
 .search { margin-left: auto; min-width: 0; flex: 0 1 240px; font: 14px var(--sans); color: var(--ink);
   background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 6px 10px; }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
@@ -132,7 +134,7 @@ footer code { font-family: var(--mono); }
 <div class="wrap">
   <header>
     <div>
-      <div class="eyebrow">tyama-ds / for_eigyo</div>
+      <div class="eyebrow" id="repos-label">tyama-ds</div>
       <h1>開発ボード</h1>
     </div>
     <div class="asof">最終更新 <b id="asof"></b></div>
@@ -140,8 +142,9 @@ footer code { font-family: var(--mono); }
 
   <section class="summary" id="summary" aria-label="集計"></section>
 
-  <div class="filters" role="group" aria-label="状態で絞り込む">
-    <div id="chips" style="display:contents"></div>
+  <div class="filters">
+    <div class="seg" id="repo-chips" role="group" aria-label="リポジトリで絞り込む"></div>
+    <div id="chips" role="group" aria-label="状態で絞り込む" style="display:contents"></div>
     <input class="search" id="q" type="search" placeholder="プロジェクト名・内容で検索" aria-label="検索">
   </div>
 
@@ -152,7 +155,7 @@ footer code { font-family: var(--mono); }
     <div id="rows"></div>
   </section>
 
-  <footer>進捗は <code>progress/projects/*.json</code> を正本とし、<code>progress/build_dashboard.py</code> で生成しています。進捗率は完了したマイルストーンと残作業からの目安です。</footer>
+  <footer>進捗は各リポジトリの <code>progress/projects/*.json</code> を正本とし、for_eigyo の <code>progress/build_dashboard.py</code> で生成しています。進捗率は完了したマイルストーンと残作業からの目安です。</footer>
 </div>
 
 <script id="data" type="application/json">__DATA__</script>
@@ -161,8 +164,15 @@ footer code { font-family: var(--mono); }
   var D = JSON.parse(document.getElementById("data").textContent);
   var S = D.statuses, P = D.projects;
   var ORDER = ["active", "planning", "maintenance", "paused", "done"];
-  var state = { status: "all", q: "" };
-  try { var saved = localStorage.getItem("board-filter"); if (saved && (saved === "all" || S[saved])) state.status = saved; } catch (e) {}
+  var REPOS = D.repos.map(function (r) { return r.repo; });
+  var state = { status: "all", repo: "all", q: "" };
+  try {
+    var saved = JSON.parse(localStorage.getItem("board-filter") || "{}");
+    if (saved.status === "all" || S[saved.status]) state.status = saved.status;
+    if (saved.repo === "all" || REPOS.indexOf(saved.repo) >= 0) state.repo = saved.repo;
+  } catch (e) {}
+  function inRepo(p) { return state.repo === "all" || p.repo === state.repo; }
+  function save() { try { localStorage.setItem("board-filter", JSON.stringify({ status: state.status, repo: state.repo })); } catch (err) {} }
 
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
   function days(a, b) { return Math.round((Date.parse(b) - Date.parse(a)) / 864e5); }
@@ -170,24 +180,44 @@ footer code { font-family: var(--mono); }
   function isStale(p) { return (p.status === "active" || p.status === "planning") && days(p.updated, today) > D.staleDays; }
 
   document.getElementById("asof").textContent = D.asOf;
+  document.getElementById("repos-label").textContent = "tyama-ds / " + REPOS.join(" · ");
 
-  // 集計
-  var active = P.filter(function (p) { return p.status !== "done"; });
+  // 集計（リポジトリの絞り込みに連動）
+  function renderSummary() {
+  var Q = P.filter(inRepo);
+  var active = Q.filter(function (p) { return p.status !== "done"; });
   var avg = active.length ? Math.round(active.reduce(function (s, p) { return s + p.progress; }, 0) / active.length) : 0;
-  var open = P.reduce(function (s, p) { return s + p.milestones.filter(function (m) { return m.state !== "done"; }).length; }, 0);
-  var tiles = [["プロジェクト", P.length, "件"]];
-  ORDER.forEach(function (k) { var n = P.filter(function (p) { return p.status === k; }).length; if (n) tiles.push([S[k], n, "件", k]); });
+  var open = Q.reduce(function (s, p) { return s + p.milestones.filter(function (m) { return m.state !== "done"; }).length; }, 0);
+  var tiles = [["プロジェクト", Q.length, "件"]];
+  ORDER.forEach(function (k) { var n = Q.filter(function (p) { return p.status === k; }).length; if (n) tiles.push([S[k], n, "件", k]); });
   tiles.push(["平均進捗（完了を除く）", avg, "%"], ["残りのマイルストーン", open, "件"]);
   document.getElementById("summary").innerHTML = tiles.map(function (t) {
     return '<div class="tile"><span class="label">' + (t[3] ? '<span class="dot" data-s="' + t[3] + '"></span>' : "") + esc(t[0]) +
       '</span><span class="value">' + t[1] + "<small>" + t[2] + "</small></span></div>";
   }).join("");
+  }
 
   // フィルター
   var chipsEl = document.getElementById("chips");
+  var repoEl = document.getElementById("repo-chips");
+  function renderRepoChips() {
+    var list = [["all", "すべてのリポジトリ", P.length]].concat(REPOS.map(function (r) { return [r, r, P.filter(function (p) { return p.repo === r; }).length]; }));
+    repoEl.innerHTML = list.map(function (c) {
+      return '<button type="button" class="chip" id="repo-' + esc(c[0]) + '" data-r="' + esc(c[0]) + '" aria-pressed="' + (state.repo === c[0]) + '">' +
+        esc(c[1]) + ' <span class="count">' + c[2] + "</span></button>";
+    }).join("");
+  }
+  repoEl.addEventListener("click", function (e) {
+    var b = e.target.closest(".chip"); if (!b) return;
+    state.repo = b.dataset.r;
+    var Q = P.filter(inRepo);
+    if (state.status !== "all" && !Q.some(function (p) { return p.status === state.status; })) state.status = "all";
+    save(); renderAll();
+  });
   function renderChips() {
-    var list = [["all", "すべて", P.length]];
-    ORDER.forEach(function (k) { var n = P.filter(function (p) { return p.status === k; }).length; if (n) list.push([k, S[k], n]); });
+    var Q = P.filter(inRepo);
+    var list = [["all", "すべて", Q.length]];
+    ORDER.forEach(function (k) { var n = Q.filter(function (p) { return p.status === k; }).length; if (n) list.push([k, S[k], n]); });
     chipsEl.innerHTML = list.map(function (c) {
       return '<button type="button" class="chip" id="chip-' + c[0] + '" data-k="' + c[0] + '" aria-pressed="' + (state.status === c[0]) + '">' +
         (c[0] !== "all" ? '<span class="dot" data-s="' + c[0] + '"></span>' : "") + esc(c[1]) + ' <span class="count">' + c[2] + "</span></button>";
@@ -196,8 +226,7 @@ footer code { font-family: var(--mono); }
   chipsEl.addEventListener("click", function (e) {
     var b = e.target.closest(".chip"); if (!b) return;
     state.status = b.dataset.k;
-    try { localStorage.setItem("board-filter", state.status); } catch (err) {}
-    renderChips(); renderRows();
+    save(); renderChips(); renderRows();
   });
   document.getElementById("q").addEventListener("input", function (e) { state.q = e.target.value.trim().toLowerCase(); renderRows(); });
 
@@ -219,8 +248,8 @@ footer code { font-family: var(--mono); }
     meta.push("<span>App Portal <b>" + (p.portal ? "登録済み" : "対象外") + "</b></span>");
     meta.push('<span>開始 <b class="num">' + esc(p.started) + "</b></span>");
     var stale = isStale(p) ? '<span class="stale" title="' + D.staleDays + '日以上更新がありません">! ' + days(p.updated, today) + "日更新なし</span>" : "";
-    return '<details id="p-' + esc(p.slug) + '"><summary class="row" data-s="' + p.status + '">' +
-      '<span class="name"><b>' + esc(p.name) + "</b><code>" + esc(p.path) + "</code></span>" +
+    return '<details id="p-' + esc(p.repo + "-" + p.slug) + '"><summary class="row" data-s="' + p.status + '">' +
+      '<span class="name"><b>' + esc(p.name) + "</b><code>" + esc(p.repo + " / " + p.path) + "</code></span>" +
       '<span class="st"><span class="pill"><span class="dot"></span>' + esc(S[p.status]) + "</span></span>" +
       '<span class="phase">' + esc(p.phase) + "</span>" +
       '<span class="meter" title="進捗の目安 ' + p.progress + '%"><span class="bar" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + p.progress + '" aria-label="進捗"><i style="width:' + p.progress + '%"></i></span><span class="num">' + p.progress + "%</span></span>" +
@@ -233,14 +262,16 @@ footer code { font-family: var(--mono); }
   }
   function renderRows() {
     var xs = P.filter(function (p) {
+      if (!inRepo(p)) return false;
       if (state.status !== "all" && p.status !== state.status) return false;
       if (!state.q) return true;
-      return [p.name, p.path, p.summary, p.phase].concat(p.stack || []).join(" ").toLowerCase().indexOf(state.q) >= 0;
+      return [p.name, p.repo, p.path, p.summary, p.phase].concat(p.stack || []).join(" ").toLowerCase().indexOf(state.q) >= 0;
     });
     document.getElementById("rows").innerHTML = xs.length ? xs.map(row).join("") : '<div class="empty">条件に合うプロジェクトはありません。</div>';
     var h = location.hash.slice(1);
     if (h) { var el = document.getElementById(h); if (el && el.tagName === "DETAILS") el.open = true; }
   }
-  renderChips(); renderRows();
+  function renderAll() { renderRepoChips(); renderSummary(); renderChips(); renderRows(); }
+  renderAll();
 })();
 </script>
