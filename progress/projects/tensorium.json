@@ -1,0 +1,68 @@
+{
+  "slug": "tensorium",
+  "name": "Tensorium",
+  "path": "tensorium/",
+  "summary": "CSV / XLSX を読み込み、Transformer 系モデルで回帰・分類を行う GUI スタジオ。LLM 知識蒸留によるデータ拡張つき。",
+  "status": "active",
+  "phase": "データ拡張タブを追加",
+  "progress": 75,
+  "started": "2026-09-14",
+  "ports": [
+    8740
+  ],
+  "ci": true,
+  "portal": true,
+  "stack": [
+    "Python 標準ライブラリ（サーバ）",
+    "PyTorch",
+    "transformers",
+    "sentence-transformers"
+  ],
+  "milestones": [
+    {
+      "title": "6ステップ GUI（読み込み〜一括予測）",
+      "state": "done",
+      "date": "2026-09-14"
+    },
+    {
+      "title": "4モデルファミリー（BERT FT / SBERT+MLP / スクラッチ / FT-Transformer）",
+      "state": "done",
+      "date": "2026-09-14"
+    },
+    {
+      "title": "LLM 知識蒸留によるデータ拡張",
+      "state": "done",
+      "date": "2026-09-24"
+    },
+    {
+      "title": "レビュー指摘の修正（リーク防止・CSRF ガード）",
+      "state": "done",
+      "date": "2026-09-24"
+    },
+    {
+      "title": "実データでの精度検証",
+      "state": "todo"
+    }
+  ],
+  "next": [
+    "実データで拡張前後の精度を比較",
+    "GPU 環境での学習時間の確認"
+  ],
+  "risks": [
+    "合成データの品質が LLM に依存する",
+    "学習には PyTorch などの別途インストールが必要"
+  ],
+  "log": [
+    {
+      "date": "2026-09-24",
+      "summary": "LLM 知識蒸留のデータ拡張タブを追加、レビュー指摘を修正",
+      "ref": "#48"
+    },
+    {
+      "date": "2026-09-14",
+      "summary": "初版",
+      "ref": "#47"
+    }
+  ],
+  "updated": "2026-09-24"
+}

@@ -1,0 +1,19 @@
+# 開発進捗ダッシュボードの確認。
+#  全プロジェクトに progress/projects/<slug>.json があり、書式が正しく、dashboard.html が最新であること
+name: progress dashboard
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Check progress files and generated dashboard
+        run: python progress/build_dashboard.py --check

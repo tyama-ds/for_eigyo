@@ -1,0 +1,77 @@
+{
+  "slug": "patent-atlas",
+  "name": "Patent Atlas",
+  "path": "patent-atlas/",
+  "summary": "IPC・Fターム候補の選択、特許CSVの可視化と要不要判定、学習・LLM 判定から検索式を更新するローカルアプリ。",
+  "status": "active",
+  "phase": "発明要素ごとの検索を追加",
+  "progress": 70,
+  "started": "2026-09-14",
+  "ports": [
+    8810
+  ],
+  "ci": true,
+  "portal": true,
+  "stack": [
+    "FastAPI",
+    "HTML/JS",
+    "ローカルLLM"
+  ],
+  "milestones": [
+    {
+      "title": "可視化・要不要判定・検索式提案",
+      "state": "done",
+      "date": "2026-09-14"
+    },
+    {
+      "title": "J-PlatPat 出力・上位 IPC 対応",
+      "state": "done",
+      "date": "2026-09-15"
+    },
+    {
+      "title": "調査ナビ・探索ラボ・統括ワークフロー",
+      "state": "done",
+      "date": "2026-09-18"
+    },
+    {
+      "title": "発明要素からの検索（要素別 Boolean 式）",
+      "state": "done",
+      "date": "2026-09-18"
+    },
+    {
+      "title": "能動学習",
+      "state": "todo"
+    },
+    {
+      "title": "同義語・日英対訳辞書の蓄積",
+      "state": "todo"
+    },
+    {
+      "title": "契約検索DB での構文・ヒット検証",
+      "state": "todo"
+    }
+  ],
+  "next": [
+    "能動学習（モデルが迷う特許を優先提示）",
+    "同義語・対訳辞書の蓄積",
+    "ファミリー単位の折りたたみ"
+  ],
+  "risks": [
+    "共有サーバー向けの認証・マルチユーザー分離は未実装（127.0.0.1 前提）"
+  ],
+  "log": [
+    {
+      "date": "2026-09-18",
+      "summary": "発明要素からの検索計画、同義語の OR グループ化、ワークフロー整理"
+    },
+    {
+      "date": "2026-09-15",
+      "summary": "上位 IPC の J-PlatPat 出力、Qwen の推論応答に対応"
+    },
+    {
+      "date": "2026-09-14",
+      "summary": "初版とポータル統合"
+    }
+  ],
+  "updated": "2026-09-18"
+}
