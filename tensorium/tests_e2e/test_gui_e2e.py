@@ -7,6 +7,7 @@
  1. 初期表示（サンプル一覧・環境ピル）とコンソール/ページエラーがない
  2. サンプル CSV 読み込み → 行数・列カード・プレビューが表示される
  3. タスク設定 → 分割件数と目的変数の分布チャートが出る
+ 3.5 データ拡張 → 内蔵生成で 100 行の合成データを作り、均衡度と表が出る
  4. モデル選択 → ファミリー / ハイパーパラメータフォームが描画される
  5. 学習（torch があれば scratch を短時間、無ければベースライン）→ 完了ステータス
  6. 評価 → 指標タイルと混同行列 / 散布図
@@ -139,8 +140,47 @@ def run(shots: str | None = None, headed: bool = False, fmt: str = "png") -> int
             check("スライダー変更が反映", True)
             shot(page, "03-task")
 
+            # 3.5 データ拡張（内蔵生成で 100 行）
+            page.locator(".side-link[data-step='augment']").click()
+            page.wait_for_selector("#panel-augment.active")
+            page.wait_for_selector("#aug-body:not(.hidden)")
+            page.wait_for_function("document.querySelectorAll('#aug-plan-tbl tbody tr').length >= 3", timeout=15000)
+            check("拡張タブ: 分布タイル", page.locator("#aug-tiles-before .tile").count() == 4)
+            page.locator("#aug-counts .chip[data-n='100']").click()
+            page.wait_for_function("document.querySelector('#aug-plan-hint').textContent.includes('100')", timeout=15000)
+            check("拡張タブ: 100 件の計画", "100" in page.locator("#aug-tiles-after").inner_text())
+            # 配分方式: グループ別指定 → 入力が出て計画に反映される / 上限チェックの切替
+            page.locator("#aug-mode button[data-v='custom']").click()
+            page.wait_for_function("document.querySelectorAll('#aug-custom-tbl input').length === 3")
+            page.locator("#aug-custom-tbl input").first.fill("50")
+            page.locator("#aug-custom-tbl input").first.dispatch_event("input")
+            page.wait_for_function("document.querySelector('#aug-plan-hint').textContent.includes('50')", timeout=15000)
+            check("拡張タブ: グループ別指定が計画に反映", "+50" in page.locator("#aug-plan-tbl").inner_text())
+            page.locator("#aug-mode button[data-v='balance']").click()
+            page.wait_for_function("document.querySelector('#aug-plan-hint').textContent.includes('100')", timeout=15000)
+            check("拡張タブ: 積み上げチャートが描画される", page.evaluate(
+                "(() => { const c = document.querySelector('#aug-chart-after'); const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; "
+                "for (let i = 3; i < d.length; i += 4) if (d[i] > 0) return true; return false; })()"))
+            page.locator("#llm-provider").select_option("builtin")
+            page.wait_for_function("document.querySelector('#aug-plan-hint').textContent.includes('内蔵生成')", timeout=15000)
+            page.locator("#aug-start").click()
+            page.wait_for_function("['完了','失敗','中止'].some(s => document.querySelector('#ag-status').textContent.includes(s))", timeout=120000)
+            check("拡張タブ: 生成完了", "完了" in page.locator("#ag-status").inner_text(), page.locator("#ag-error").inner_text())
+            page.wait_for_selector("#aug-result:not(.hidden)")
+            n_syn = page.locator("#aug-res-tbl tbody tr").count()
+            check("拡張タブ: 合成行の表", n_syn >= 50, str(n_syn))
+            check("拡張タブ: 均衡度の表示", "→" in page.locator("#aug-res-tiles").inner_text())
+            check("サイドバーに合成件数バッジ", "+" in page.locator("#aug-badge").inner_text())
+            # 学習への取り込みトグル OFF → ON
+            page.locator("#aug-enabled").uncheck()
+            page.wait_for_function("fetch('/api/status').then(r => r.json()).then(s => s.augment && s.augment.enabled === false)", timeout=15000)
+            page.locator("#aug-enabled").check()
+            page.wait_for_function("fetch('/api/status').then(r => r.json()).then(s => s.augment && s.augment.enabled === true)", timeout=15000)
+            check("拡張タブ: 取り込みトグルが反映", True)
+            shot(page, "03b-augment")
+
             # 4. モデル
-            page.locator("[data-go='model']").first.click()
+            page.locator("#aug-result [data-go='model']").click()
             page.wait_for_selector("#panel-model.active")
             page.wait_for_selector("#fams .fam")
             check("ファミリーカード 5 枚", page.locator("#fams .fam").count() == 5)
@@ -155,6 +195,7 @@ def run(shots: str | None = None, headed: bool = False, fmt: str = "png") -> int
                 page.locator("[data-hp='d_model']").dispatch_event("input")
                 check("ハイパーパラメータフォーム", page.locator("[data-hp]").count() >= 5)
             page.locator("#m-name").fill("E2E テスト実行")
+            check("モデル画面に合成データのトグル", page.locator("#m-use-syn").count() == 1 and page.locator("#m-use-syn").is_checked())
             check("学習ボタンが有効", not page.locator("#m-train").is_disabled())
             shot(page, "04-model")
 
@@ -174,6 +215,7 @@ def run(shots: str | None = None, headed: bool = False, fmt: str = "png") -> int
             page.wait_for_selector("#panel-eval.active")
             page.wait_for_selector("#e-body .metric")
             check("指標タイル", "Accuracy" in page.locator("#e-body").inner_text())
+            check("評価ヘッダに合成データ件数", "合成" in page.locator("#e-head").inner_text())
             check("混同行列キャンバス", page.locator("#e-cm").count() == 1)
             page.locator("#e-split button[data-v='test']").click()
             page.wait_for_function("document.querySelector('#e-body').textContent.includes('テストデータ')", timeout=15000)

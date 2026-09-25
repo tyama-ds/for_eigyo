@@ -15,7 +15,7 @@ _ID_RE = re.compile(r"^[A-Za-z0-9_\-]{4,64}$")
 
 LIST_FIELDS = ("id", "name", "created", "family", "family_name", "model", "model_name", "task", "target",
                "dataset", "metrics", "duration_sec", "device", "n_params", "status", "primary_metric",
-               "n_train", "n_val", "n_test", "classes", "spec", "hparams")
+               "n_train", "n_val", "n_test", "n_synthetic", "classes", "spec", "hparams")
 
 
 def new_run_id() -> str:

@@ -40,6 +40,7 @@
       <button class="step" data-step="predict"><span class="step-n">6</span><span><span class="step-t">予測</span><br><span class="step-s" id="ss-predict">新しいデータに適用</span></span></button>
     </nav>
     <div class="side-links">
+      <button class="side-link" data-step="augment" title="LLM 知識蒸留で少数クラスの合成データを作り均衡化"><span class="ico">⚗</span>データ拡張・蒸留<span class="side-badge hidden" id="aug-badge"></span></button>
       <button class="side-link" data-step="runs"><span class="ico">🗂</span>学習履歴・比較</button>
       <button class="side-link" data-step="env"><span class="ico">⚙</span>環境・設定</button>
     </div>
@@ -122,6 +123,7 @@
       <div class="card">
         <div class="card-head"><h2>目的変数の分布</h2><span class="muted small" id="t-valid"></span></div>
         <div id="t-warn"></div>
+        <div id="t-imbalance"></div>
         <div class="chart short"><canvas id="t-chart"></canvas></div>
       </div>
       <div class="row end"><button class="btn ghost" data-go="data">← 戻る</button><button class="btn primary big" data-go="model">次へ：モデル選択 →</button></div>
@@ -154,6 +156,7 @@
         <div class="row between">
           <div class="grow"><label class="field">実行名（任意）</label><input type="text" id="m-name" placeholder="例: e5-small + MLP / 価格予測 v1"></div>
         </div>
+        <div id="m-synthetic" style="margin-top:10px"></div>
         <div id="m-check" style="margin-top:10px"></div>
         <div class="row end" style="margin-top:12px">
           <button class="btn ghost" data-go="task">← 戻る</button>
@@ -230,6 +233,101 @@
         <div class="card-head"><h2>予測結果 <span class="muted small" id="p-res-n"></span></h2>
           <div class="row"><span id="p-res-metric" class="small muted"></span><button class="btn sm" id="p-dl">⬇ CSV をダウンロード</button></div></div>
         <div class="tbl-wrap"><table class="tbl compact" id="p-tbl"></table></div>
+      </div>
+    </section>
+
+    <!-- ================= データ拡張（LLM 知識蒸留） ================= -->
+    <section class="panel" id="panel-augment">
+      <div class="page-head"><div><div class="eyebrow">Augment · Knowledge Distillation</div><h1>データ拡張 — LLM 知識蒸留で偏りを均衡化</h1>
+        <p>目的変数が偏っている（少数クラスが極端に少ない）と、モデルは多数クラスばかり予測しがちです。教師 LLM に元データの傾向を学ばせて少数グループの合成データを生成し、教師 LLM の再ラベリングと学習済み生徒モデルの予測で検証したうえで<b>学習データにのみ</b>追加します（検証 / テストには混ぜません）。</p></div></div>
+      <div id="aug-nodata" class="card empty"><div class="ico">⚗</div><div>先に「1. データ」で読み込み、「2. タスク設定」で目的変数を選んでください。</div><div style="margin-top:12px"><button class="btn primary" data-go="data">データへ</button></div></div>
+      <div id="aug-body" class="hidden">
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-head"><h2>現在の分布 <span class="muted small" id="aug-target"></span></h2></div>
+            <div class="tiles" id="aug-tiles-before"></div>
+            <div class="chart short" style="margin-top:12px"><canvas id="aug-chart-before"></canvas></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>生成後の見込み <span class="muted small">実データ + 合成データ</span></h2><span class="legend" id="aug-legend"></span></div>
+            <div class="tiles" id="aug-tiles-after"></div>
+            <div class="chart short" style="margin-top:12px"><canvas id="aug-chart-after"></canvas></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>生成計画</h2><span class="hint" id="aug-plan-hint"></span></div>
+          <div class="row" style="gap:16px;align-items:flex-end;flex-wrap:wrap">
+            <div><label class="field">生成件数（合計）</label><div class="chips" id="aug-counts"></div></div>
+            <div><label class="field">カスタム件数</label><input type="number" id="aug-n" class="inline" style="width:120px" min="0" max="20000" step="50"></div>
+            <div><label class="field">配分方式</label><div class="seg" id="aug-mode"><button data-v="balance" class="active">均衡化（不足分に比例）</button><button data-v="equal">均等</button><button data-v="custom">グループ別に指定</button></div></div>
+            <label class="check" style="margin-bottom:8px" id="aug-cap-wrap"><input type="checkbox" id="aug-cap" checked> 最多グループを超えない</label>
+          </div>
+          <div id="aug-custom" class="hidden" style="margin-top:10px"><div class="tbl-wrap" style="max-height:260px"><table class="tbl compact" id="aug-custom-tbl"></table></div></div>
+          <div class="tbl-wrap" style="margin-top:10px;max-height:260px"><table class="tbl compact" id="aug-plan-tbl"></table></div>
+        </div>
+        <div class="grid-2">
+          <div class="card">
+            <h2>品質チェック（知識蒸留）</h2>
+            <p class="lead">生成した行をそのまま使わず、教師と生徒の両方で裏取りします。</p>
+            <label class="check"><input type="checkbox" id="aug-dedupe" checked> 重複を除く（実データ・生成済みとの近似重複を落とす）</label><br>
+            <label class="check" style="margin-top:6px"><input type="checkbox" id="aug-verify"> 教師 LLM で再ラベリングし、一致した行だけ採用（分類のみ・LLM 呼び出しが増える）</label>
+            <label class="field" style="margin-top:10px">学習済み生徒モデルで予測を照合 <span class="help">同じ目的変数の実行のみ</span></label>
+            <select id="aug-student"><option value="">使わない</option></select>
+            <div class="seg" id="aug-student-policy" style="margin-top:6px"><button data-v="drop" class="active">不一致は除外</button><button data-v="keep">不一致も残す（フラグのみ）</button></div>
+            <label class="field" style="margin-top:10px">追加の指示（任意）<span class="help">業務ドメインの前提・NG 表現など</span></label>
+            <textarea id="aug-instructions" rows="3" placeholder="例: 製鉄所の設備点検メモの文体。専門用語（圧延、転炉、連鋳）を自然に使う。個人名は入れない"></textarea>
+            <div class="hp-grid" style="margin-top:8px">
+              <div><label class="field">1 回の生成件数</label><input type="number" id="aug-batch" value="10" min="1" max="50"></div>
+              <div><label class="field">並列リクエスト数</label><input type="number" id="aug-conc" value="2" min="1" max="8"></div>
+              <div><label class="field">temperature <span class="help">空 = 設定値</span></label><input type="number" id="aug-temp" step="0.1" min="0" max="2" placeholder="0.9"></div>
+              <div><label class="field">乱数シード</label><input type="number" id="aug-seed" value="42" min="0"></div>
+            </div>
+          </div>
+          <div class="card">
+            <h2>教師 LLM 接続</h2>
+            <p class="lead">OpenAI 互換 API（OpenAI / Azure 互換 / Ollama / LM Studio / vLLM）または Anthropic。LLM が使えない環境では「内蔵生成」で動作を確認できます。</p>
+            <label class="field">プロバイダ</label>
+            <select id="llm-provider"><option value="openai">OpenAI 互換（chat/completions）</option><option value="anthropic">Anthropic（Messages API）</option><option value="builtin">内蔵生成（LLM なし・実データの組み替え）</option></select>
+            <div id="llm-fields">
+              <label class="field">Base URL <span class="help">空 = 既定。Ollama: http://127.0.0.1:11434/v1</span></label>
+              <input type="text" id="llm-base_url" placeholder="https://api.openai.com/v1">
+              <label class="field">モデル</label>
+              <input type="text" id="llm-model" placeholder="例: gpt-4o-mini / claude-sonnet-5 / qwen3:14b">
+              <label class="field">API キー <span class="help">保存済みなら空のままで変更なし</span> <button class="btn xs ghost hidden" id="llm-key-clear" type="button">保存済みキーを削除</button></label>
+              <input type="password" id="llm-api_key" placeholder="">
+              <div class="hp-grid">
+                <div><label class="field">max_tokens</label><input type="number" id="llm-max_tokens" min="256" max="128000"></div>
+                <div><label class="field">タイムアウト（秒）</label><input type="number" id="llm-timeout" min="10" max="3600"></div>
+              </div>
+            </div>
+            <div class="row" style="margin-top:10px"><button class="btn" id="llm-save">保存</button><button class="btn" id="llm-test">接続テスト</button><span class="hint" id="llm-msg"></span></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head">
+            <div class="row"><h2 style="margin:0">実行</h2><span class="status hidden" id="ag-status"></span><span class="muted small num" id="ag-time"></span></div>
+            <div class="row"><button class="btn sm danger hidden" id="ag-cancel">■ 中止</button><button class="btn primary big" id="aug-start">⚗ 合成データを生成</button></div>
+          </div>
+          <div id="ag-live" class="hidden">
+            <div class="progress" id="ag-prog"><div class="fill" style="width:0%"></div></div>
+            <div class="row between" style="margin-top:6px"><span class="small muted" id="ag-phase"></span><span class="small muted num" id="ag-pct"></span></div>
+            <div id="ag-error"></div>
+            <div class="console" id="ag-log" style="height:160px;margin-top:10px"></div>
+          </div>
+        </div>
+        <div class="card hidden" id="aug-result">
+          <div class="card-head"><h2>合成データ <span class="muted small" id="aug-res-n"></span></h2>
+            <div class="row">
+              <label class="check"><input type="checkbox" id="aug-enabled" checked> 学習データに含める</label>
+              <button class="btn sm" id="aug-dl-syn">⬇ 合成のみ CSV</button>
+              <button class="btn sm" id="aug-dl-all">⬇ 拡張後 CSV</button>
+              <button class="btn sm danger" id="aug-clear">削除</button>
+            </div></div>
+          <div class="tiles" id="aug-res-tiles"></div>
+          <div id="aug-res-rejected" class="hint" style="margin-top:8px"></div>
+          <div class="tbl-wrap" style="margin-top:10px;max-height:380px"><table class="tbl compact" id="aug-res-tbl"></table></div>
+          <div class="row end" style="margin-top:12px"><button class="btn primary" data-go="model">次へ：モデル選択で学習 →</button></div>
+        </div>
       </div>
     </section>
 

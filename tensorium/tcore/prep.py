@@ -95,6 +95,7 @@ def make_examples(table: dict, spec: dict, require_target: bool = True) -> list[
         out.append({
             "i": row_i,
             "text": _join_text(row, text_names, text_idx) if text_idx else "",
+            "texts": [("" if is_missing(row[i]) else str(row[i]).strip()) for i in text_idx],
             "num": [parse_number(row[i]) if i is not None else None for i in num_idx],
             "cat": [("" if i is None or is_missing(row[i]) else str(row[i]).strip()) for i in cat_idx],
             "y": y,

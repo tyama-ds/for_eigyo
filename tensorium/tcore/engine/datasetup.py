@@ -1,6 +1,7 @@
 """ファミリー共通のデータ準備・評価・メタ情報（torch 非依存）。"""
 from __future__ import annotations
 
+import random
 import time
 from datetime import datetime
 
@@ -40,8 +41,22 @@ def prepare(table: dict, req: dict, log=None) -> dict:
     if dropped:
         log(f"目的変数が欠損/無効の {dropped} 行を除外（有効 {n_total} 行）")
 
-    strat = [e["y"] for e in examples] if (task == "classification" and spec["split"]["stratify"]) else None
-    split = split_indices(n_total, spec["split"]["val"], spec["split"]["test"], spec["split"]["seed"], strat)
+    # 合成データ（table["synthetic_from"] 以降の行）は学習にのみ使い、検証 / テストには混ぜない
+    syn_from = table.get("synthetic_from")
+    real_idx = [k for k, e in enumerate(examples) if syn_from is None or e["i"] < syn_from]
+    syn_idx = [k for k, e in enumerate(examples) if syn_from is not None and e["i"] >= syn_from]
+    if not real_idx:
+        raise PrepError("実データの行がありません")
+    strat = ([examples[k]["y"] for k in real_idx]
+             if (task == "classification" and spec["split"]["stratify"]) else None)
+    split0 = split_indices(len(real_idx), spec["split"]["val"], spec["split"]["test"], spec["split"]["seed"], strat)
+    split = {part: [real_idx[j] for j in idx] for part, idx in split0.items()}
+    train_real = list(split["train"])
+    if syn_idx:
+        rng = random.Random(spec["split"]["seed"])
+        split["train"] = split["train"] + syn_idx
+        rng.shuffle(split["train"])
+        log(f"合成データ {len(syn_idx)} 行を学習データに追加（検証 / テストには含めない）")
     preproc = Preproc(spec).fit([examples[i] for i in split["train"]])
 
     classes = None
@@ -76,7 +91,8 @@ def prepare(table: dict, req: dict, log=None) -> dict:
         "spec": spec, "family": fam_id, "family_info": fam, "hparams": hp, "model_id": model_id,
         "examples": examples, "split": split, "preproc": preproc, "task": task,
         "classes": classes, "y_enc": y_enc, "n_out": n_out, "class_weights": cw,
-        "table_name": table.get("name"), "n_rows": table["n_rows"],
+        "table_name": table.get("name"), "n_rows": table.get("synthetic_from", table["n_rows"]),
+        "n_synthetic": len(syn_idx), "train_real": train_real,
     }
 
 
@@ -151,6 +167,7 @@ def build_meta(bundle: dict, run_id: str, req: dict, extra: dict, started: float
         "n_train": len(bundle["split"]["train"]),
         "n_val": len(bundle["split"]["val"]),
         "n_test": len(bundle["split"]["test"]),
+        "n_synthetic": bundle.get("n_synthetic", 0),
         "metrics": {"val": val_eval["metrics"] if val_eval else None,
                     "test": test_eval["metrics"] if test_eval else None},
         "primary_metric": {"name": pm_name, "value": (abs(pm_val) if pm_val is not None else None),

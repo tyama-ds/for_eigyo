@@ -347,11 +347,11 @@ def train_run(table: dict, req: dict, job) -> dict:
             evals[part] = evaluate_split(b, idx, preds, probs)
         else:
             evals[part] = None
-    if evals["val"] is None and evals["test"] is None:      # 検証もテストも無い: 学習データで参考評価
-        idx = b["split"]["train"]
+    if evals["val"] is None and evals["test"] is None:      # 検証もテストも無い: 実データの学習行で参考評価
+        idx = b.get("train_real") or b["split"]["train"]
         preds, probs, _ = trainer.predict(idx, with_loss=False)
         evals["val"] = evaluate_split(b, idx, preds, probs)
-        job.log("検証/テストが 0 件のため、学習データでの参考評価を val として保存")
+        job.log(f"検証/テストが 0 件のため、実データの学習 {len(idx)} 行での参考評価を val として保存")
 
     run_id = new_run_id()
     d = run_dir(run_id, create=True)
