@@ -216,6 +216,21 @@
       ],
       "url": "http://127.0.0.1:8810",
       "wait_port": 8810
+    },
+    {
+      "id": "mycel",
+      "name": "Mycel",
+      "description": "ローカルの Markdown フォルダを、つながるノートに。[[リンク]]・バックリンク・グラフ・全文検索・デイリーノート・テンプレート。ノートに質問（RAG）・要約・リンク候補などの AI 機能は OpenAI 互換 API / Azure OpenAI 対応（標準ライブラリのみ）",
+      "icon": "docs",
+      "cwd": "../mycel",
+      "command": [
+        "{python}",
+        "server.py",
+        "--port",
+        "8795"
+      ],
+      "url": "http://127.0.0.1:8795",
+      "wait_port": 8795
     }
   ]
 }
