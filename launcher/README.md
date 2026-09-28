@@ -43,6 +43,7 @@ python launcher/launcher.py --port 9200 --open
 | Agent Orchestrator | claudecode | Codex × Claude Code × ローカルLLM の協調（7戦略） | 8801 |
 | Deep Research Tool | claudecode | Web検索→検証→レポート生成のディープリサーチ | 8802 |
 | Patent Atlas | for_eigyo | 特許検索式・分類候補・CSVマップ・要不要判定と学習・探索の反復と収束表示 | 8810 |
+| Mycel | for_eigyo | Markdown ノート（リンク・バックリンク・グラフ・全文検索・ノートに質問などの AI 機能） | 8795 |
 
 Studio / Loop は標準ライブラリのみで動くため、`PYTHONPATH=src` を通して
 リポジトリのソースから直接起動する（venv や pip install -e は不要）。
