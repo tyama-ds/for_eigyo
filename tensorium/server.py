@@ -357,7 +357,7 @@ def get_predictor(run_id: str):
     return p
 
 
-def _predict_with_table(run_id: str, table: dict, preview: bool) -> dict:
+def _predict_with_table(run_id: str, table: dict, preview: bool, loops=None) -> dict:
     if not run_id:
         raise ApiError("run_id を指定してください")
     try:
@@ -366,7 +366,11 @@ def _predict_with_table(run_id: str, table: dict, preview: bool) -> dict:
         raise ApiError(str(e)) from e
     if not table["rows"]:
         raise ApiError("予測する行がありません")
-    out = p.predict_table(table)
+    try:
+        loops = int(loops) if loops not in (None, "", 0, "0") else None
+    except (TypeError, ValueError):
+        loops = None
+    out = p.predict_table(table, loops=loops)
     out["columns"] = table["columns"]
     out["n_rows"] = len(table["rows"])
     out["rows"] = table["rows"]
@@ -388,12 +392,12 @@ def api_predict(body: dict) -> dict:
     else:
         raise ApiError("rows または table を指定してください")
     table["n_rows"] = len(table["rows"])
-    return _predict_with_table(run_id, table, preview=False)
+    return _predict_with_table(run_id, table, preview=False, loops=body.get("loops"))
 
 
-def api_predict_upload(raw: bytes, filename: str, run_id: str) -> dict:
+def api_predict_upload(raw: bytes, filename: str, run_id: str, loops=None) -> dict:
     table = dataio.read_table_bytes(raw, filename)
-    return _predict_with_table(run_id, table, preview=True)
+    return _predict_with_table(run_id, table, preview=True, loops=loops)
 
 
 # ---------------------------------------------------------------- runs
@@ -596,7 +600,8 @@ class Handler(BaseHTTPRequestHandler):
                                                           unquote(self.headers.get("X-Sheet") or "") or None)})
             if path == "/api/predict/upload":
                 run_id = self.headers.get("X-Run-Id") or ""
-                return self._json(api_predict_upload(self._body(), self._filename(), run_id))
+                return self._json(api_predict_upload(self._body(), self._filename(), run_id,
+                                                     self.headers.get("X-Loops")))
             body = self._json_body()
             if path == "/api/dataset/sample":
                 return self._json({"dataset": api_dataset_sample(body)})

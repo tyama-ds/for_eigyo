@@ -107,6 +107,75 @@ class TestTorchFamilies(unittest.TestCase):
         self.assertIn(out["predictions"][0]["pred"], p.classes)
         self.assertEqual(len(out["actual"]), 5)
 
+    def test_looped_text_classification(self):
+        req = {"family": "looped", "spec": SPEC_CLS,
+               "hparams": {"epochs": 6, "batch_size": 32, "lr": 1e-3, "d_model": 64, "nhead": 4, "ff_dim": 128,
+                           "loops": 3, "loops_min": 1, "core_layers": 1, "prelude_layers": 1, "coda_layers": 1,
+                           "state_init": "noise", "backprop_loops": 2, "early_stopping": 0}}
+        res, job = self._train(self.reviews, req)
+        self.assertGreater(res["metrics"]["val"]["accuracy"], 0.6)
+        from tcore.runs import load_meta
+        meta = load_meta(res["run_id"])
+        self.assertEqual(meta["loops_train"], 3)
+        self.assertEqual(len(meta["loop_curve"]), 8)                       # max(2*loops, 8)
+        self.assertEqual([c["loops"] for c in meta["loop_curve"]], list(range(1, 9)))
+        self.assertTrue(1 <= meta["loops_selected"] <= 8)
+        self.assertEqual(meta["hparams"]["loops_eval"], meta["loops_selected"])
+        self.assertTrue(any("ループ回数 → 検証指標" in line for line in job.log_lines))
+        # 予測: 既定はと選択されたループ回数、上書きも可能
+        p, out = self._roundtrip(res["run_id"], self.reviews)
+        self.assertTrue(p.looped)
+        self.assertEqual(out["loops"], meta["loops_selected"])
+        out1 = p.predict_table({"name": "x", "columns": self.reviews["columns"], "rows": self.reviews["rows"][:5], "n_rows": 5}, loops=1)
+        self.assertEqual(out1["loops"], 1)
+        self.assertEqual(len(out1["predictions"]), 5)
+        # 指定したループ回数は自動選択されない
+        req2 = dict(req, hparams=dict(req["hparams"], epochs=1, loops_eval=5))
+        res2, _ = self._train(self.reviews, req2)
+        self.assertEqual(load_meta(res2["run_id"])["loops_selected"], 5)
+
+    def test_looped_core_mechanics(self):
+        import torch
+
+        from tcore.engine.looped import LoopedCore
+        core = LoopedCore(16, 4, 32, 0.0, prelude_layers=1, core_layers=1, coda_layers=0, loops=5, loops_min=2,
+                          backprop_loops=2, injection="concat", state_init="noise", noise_std=0.1)
+        x = torch.randn(2, 7, 16)
+        core.train()
+        seen = {core.sample_train_loops() for _ in range(200)}
+        self.assertEqual(seen, {2, 3, 4, 5})
+        y = core(x)
+        self.assertEqual(tuple(y.shape), (2, 7, 16))
+        y.sum().backward()                                                  # truncated backprop でも勾配が流れる
+        self.assertIsNotNone(core.core.layers[0].linear1.weight.grad)
+        core.eval()
+        core.set_loops(3)
+        y3 = core(x)
+        self.assertEqual(core.last_loops, 3)
+        y9 = core(x, loops=9)
+        self.assertEqual(core.last_loops, 9)
+        self.assertFalse(torch.allclose(y3, y9))
+        self.assertTrue(torch.allclose(core(x, loops=3), y3))               # 推論は決定的
+        with self.assertRaises(ValueError):
+            LoopedCore(15, 4, 32, 0.0, prelude_layers=1, core_layers=1, coda_layers=1, loops=2)
+        add = LoopedCore(16, 4, 32, 0.0, prelude_layers=0, core_layers=1, coda_layers=0, loops=2, injection="add")
+        self.assertIsNone(add.adapter)
+        self.assertEqual(tuple(add(x).shape), (2, 7, 16))
+
+    def test_tabular_looped_regression(self):
+        req = {"family": "tabular", "spec": SPEC_REG,
+               "hparams": {"epochs": 20, "batch_size": 64, "lr": 2e-3, "layers": 1, "loops": 3, "loops_min": 1,
+                           "early_stopping": 0}}
+        res, _ = self._train(self.cars, req)
+        self.assertGreater(res["metrics"]["val"]["r2"], 0.3)
+        from tcore.runs import load_meta
+        meta = load_meta(res["run_id"])
+        self.assertEqual(meta["loops_train"], 3)
+        self.assertTrue(meta["loop_curve"])
+        p, out = self._roundtrip(res["run_id"], self.cars)
+        self.assertTrue(p.looped)
+        self.assertEqual(out["loops"], meta["loops_selected"])
+
     def test_tabular_regression(self):
         req = {"family": "tabular", "spec": SPEC_REG, "hparams": {"epochs": 25, "batch_size": 64, "lr": 2e-3, "early_stopping": 0}}
         res, _ = self._train(self.cars, req)

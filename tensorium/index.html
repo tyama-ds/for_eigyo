@@ -215,7 +215,8 @@
       <div class="page-head"><div><div class="eyebrow">Step 6</div><h1>予測</h1>
         <p>学習済みモデルを新しいデータに適用します。ファイル一括、または 1 件ずつ手入力。</p></div></div>
       <div class="card">
-        <div class="row"><span class="small muted">モデル</span><select id="p-run" class="inline" style="min-width:340px"></select></div>
+        <div class="row"><span class="small muted">モデル</span><select id="p-run" class="inline" style="min-width:340px"></select>
+          <span id="p-loops-wrap" class="row hidden" style="gap:6px"><span class="small muted">🔁 ループ回数</span><input type="number" id="p-loops" class="inline" style="width:80px" min="1" max="64"><span class="hint" id="p-loops-hint" style="margin:0"></span></span></div>
         <div id="p-req" class="hint"></div>
       </div>
       <div class="grid-2">
