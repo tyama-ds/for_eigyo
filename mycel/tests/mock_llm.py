@@ -24,7 +24,7 @@ def chat_response(messages: list[dict]) -> str:
     prompt = messages[-1]["content"] if messages else ""
     task = (re.search(r"\[TASK:(\w+)\]", prompt) or [None, ""])[1]
     if task == "ask":
-        titles = re.findall(r"\[\d+\] ノート「([^」]+)」", prompt)
+        titles = re.findall(r"\[\d+\] (?:ノート|資料)「([^」]+)」", prompt)
         cited = " ".join(f"[[{t}]]" for t in titles[:2])
         return f"<think>考え中</think>ノートによると、稼働率を重視しています。{cited}"
     if task == "summarize":

@@ -1,6 +1,7 @@
-"""アプリ本体: Vault・インデックス・AI・プラグインをまとめ、HTTP 層から呼ばれる操作を提供する。"""
+"""アプリ本体: Vault・読み込み範囲・インデックス・AI・プラグインをまとめ、HTTP 層から呼ばれる操作を提供する。"""
 from __future__ import annotations
 
+import os
 import shutil
 import threading
 import time
@@ -8,25 +9,33 @@ from pathlib import Path
 
 from . import links as L
 from .ai import AIService
-from .config import load_config, save_config, vault_path
+from .config import embed_configured, load_config, save_config, vault_path
+from .extract import EXT_GROUP, KINDS, TYPE_GROUPS, pdf_available
 from .index import Index, open_index
+from .jobs import JobRunner
 from .plugins import NoteEvent, PluginContext, PluginManager
-from .vault import Vault, VaultError, folder_of, normalize_rel, title_of
+from .scope import Scope, ScopeError, browse, split_id
+from .vault import Vault, VaultError, folder_of, normalize_rel, title_of, version_of
 
 BASE = Path(__file__).resolve().parent.parent
 PLUGIN_DIR = BASE / "plugins"
 SAMPLE_DIR = BASE / "sample_vault"
+IMPORT_FOLDER = "取り込み"
 
 
 class MycelApp:
     def __init__(self, config_path: Path | None = None, vault_override: str | None = None,
-                 seed_sample: bool = True, plugin_dir: Path | None = None):
+                 seed_sample: bool = True, plugin_dir: Path | None = None, initial_load: str = "background"):
+        """initial_load: インデックスが空のときの初回読込。background / sync / none"""
         self.config_path = config_path
         self.vault_override = vault_override
         self.seed_sample = seed_sample
+        self.initial_load = initial_load
         self.plugins = PluginManager(plugin_dir or PLUGIN_DIR)
+        self.jobs = JobRunner()
         self._lock = threading.RLock()
         self.vault: Vault
+        self.scope: Scope
         self.index: Index
         self.ai: AIService
         self.open_vault()
@@ -46,6 +55,9 @@ class MycelApp:
         return cfg
 
     def open_vault(self) -> None:
+        if self.jobs.running():
+            self.jobs.cancel()
+            self.jobs.wait(30)
         with self._lock:
             cfg = self.config()
             root = Path(self.vault_override).expanduser() if self.vault_override else vault_path(cfg)
@@ -55,42 +67,110 @@ class MycelApp:
             if getattr(self, "index", None):
                 self.index.close()
             self.vault = Vault(root)
-            self.index = open_index(self.vault)
+            self.scope = Scope(self.vault.root, self.vault.internal)
+            self.index = open_index(self.vault, self.scope)
             self.ai = AIService(self.index, self.config)
             self.plugins.load(cfg["plugins"], PluginContext(self))
             self.plugins.emit("on_vault_opened")
+        # 初回の読込（インデックスが空のときだけ）。以降の読み込みは利用者の「更新」で行う
+        if self.index.is_empty() and self.index.meta("last_update") is None and self.initial_load != "none":
+            self.update_index(None, wait=self.initial_load == "sync", label="初回の読込")
+        elif self.initial_load == "background":
+            # 起動時は「変更の確認」だけ（日時とサイズを見るだけで本文は読まない）
+            self.check_index(None)
 
     def _author(self) -> str:
         return self.config()["user_name"]
 
+    # ------------------------------------------------------------ パス
+    def _path(self, path: str) -> str:
+        """画面から来たパスを正規化する。ノートは .md を補い、資料・外部フォルダはそのまま。"""
+        if not isinstance(path, str) or not path.strip():
+            raise VaultError("パスが空です")
+        path = path.replace("\\", "/").strip().strip("/")
+        ext = Path(path).suffix.lower()
+        if path.startswith("@") or (ext in KINDS and ext not in (".md", ".markdown")):
+            self.scope.abs_path(path)          # 範囲外・不正なパスはここで拒否
+            return path
+        return normalize_rel(path)
+
+    def _is_doc(self, path: str) -> bool:
+        return path.startswith("@") or not path.lower().endswith((".md", ".markdown"))
+
+    def _require_note(self, path: str) -> None:
+        if self._is_doc(path):
+            raise VaultError("資料は読み取り専用です（「ノートとして取り込む」で編集できるノートを作れます）", 403)
+
     # ------------------------------------------------------------ 参照
     def tree(self) -> dict:
-        self.index.sync()
-        return {"notes": self.index.notes(), "folders": self.vault.list_folders()}
+        sources = [{"id": s.id, "label": s.label, "prefix": "" if s.id == "vault" else f"@{s.id}", "editable": s.editable,
+                    "path": str(s.root)} for s in self.scope.sources()]
+        return {"notes": self.index.notes(), "folders": self.vault.list_folders(), "sources": sources}
 
-    def note(self, rel: str) -> dict:
-        rel = normalize_rel(rel)
-        self.index.sync()
-        text, version = self.vault.read(rel)
+    def note(self, path: str) -> dict:
+        path = self._path(path)
+        if self._is_doc(path):
+            return self._doc(path)
+        text, version = self.vault.read(path)
         props, _, _ = L.split_frontmatter(text)
         return {
-            "path": rel, "title": title_of(rel), "folder": folder_of(rel),
-            "text": text, "version": version, "props": props,
-            "headings": L.extract_headings(text),
-            "tags": L.extract_tags(text),
-            "outgoing": self.index.outgoing(rel),
-            "backlinks": self.index.backlinks(rel),
-            "unlinked": self.index.unlinked_mentions(rel),
+            "path": path, "title": title_of(path), "folder": folder_of(path), "kind": "note",
+            "readonly": False, "text": text, "version": version, "props": props,
+            "headings": L.extract_headings(text), "tags": L.extract_tags(text),
+            "outgoing": self.index.outgoing(path), "backlinks": self.index.backlinks(path),
+            "unlinked": self.index.unlinked_mentions(path),
         }
 
-    def links_info(self, rel: str) -> dict:
-        rel = normalize_rel(rel)
-        return {"backlinks": self.index.backlinks(rel), "unlinked": self.index.unlinked_mentions(rel),
-                "outgoing": self.index.outgoing(rel)}
+    def _doc(self, path: str) -> dict:
+        item = self.index.get(path)
+        abs_p = self.scope.abs_path(path)
+        if item is None:
+            if not abs_p.is_file():
+                raise VaultError(f"資料が見つかりません: {path}", 404)
+            item = {"text": "", "status": "pending", "error": "", "title": abs_p.name, "grp": EXT_GROUP.get(abs_p.suffix.lower(), "")}
+        stale = False
+        if abs_p.is_file() and item.get("mtime_ns") is not None:
+            st = abs_p.stat()
+            stale = (st.st_mtime_ns, st.st_size) != (item["mtime_ns"], item["size"])
+        text = item["text"] or ""
+        return {
+            "path": path, "title": item["title"], "folder": folder_of(path), "kind": "doc",
+            "grp": item.get("grp", ""), "readonly": True, "text": text,
+            "version": f"{item.get('mtime_ns')}-{item.get('size')}", "props": {},
+            "status": item["status"], "error": item.get("error", ""), "stale": stale,
+            "exists": abs_p.is_file(), "headings": L.extract_headings(text), "tags": [],
+            "outgoing": [], "backlinks": self.index.backlinks(path),
+            "unlinked": self.index.unlinked_mentions(path),
+            "source_path": str(abs_p), "indexed_at": item.get("indexed_at"),
+        }
+
+    def note_version(self, path: str) -> dict:
+        """開いているノートが外部で変わったかを調べる軽い確認（1 ファイルだけ）。"""
+        path = self._path(path)
+        p = self.scope.abs_path(path)
+        if not p.is_file():
+            return {"path": path, "exists": False, "version": None}
+        if self._is_doc(path):
+            st = p.stat()
+            return {"path": path, "exists": True, "version": f"{st.st_mtime_ns}-{st.st_size}"}
+        return {"path": path, "exists": True, "version": version_of(p.read_bytes())}
+
+    def links_info(self, path: str) -> dict:
+        path = self._path(path)
+        return {"backlinks": self.index.backlinks(path), "unlinked": self.index.unlinked_mentions(path),
+                "outgoing": self.index.outgoing(path)}
+
+    def raw_file(self, path: str) -> Path:
+        path = self._path(path)
+        p = self.scope.abs_path(path)
+        if not p.is_file() or Path(p.name).suffix.lower() not in KINDS:
+            raise VaultError("ファイルが見つかりません", 404)
+        return p
 
     # ------------------------------------------------------------ 変更
     def save(self, rel: str, text: str, base_version: str | None) -> dict:
-        rel = normalize_rel(rel)
+        rel = self._path(rel)
+        self._require_note(rel)
         if not isinstance(text, str):
             raise VaultError("本文が不正です")
         existed = self.vault.exists(rel)
@@ -107,6 +187,8 @@ class MycelApp:
         if not rel:
             title = (title or "").strip() or self._untitled(folder)
             rel = f"{folder.strip().strip('/')}/{title}" if folder.strip().strip("/") else title
+        if rel.startswith("@"):
+            raise VaultError("外部フォルダにはノートを作れません", 403)
         rel = normalize_rel(rel)
         if text is None:
             text = self._from_template(template, title_of(rel)) if template else f"# {title_of(rel)}\n\n"
@@ -129,7 +211,9 @@ class MycelApp:
         return f"{base} {int(time.time())}"
 
     def rename(self, old: str, new: str, update_links: bool = True) -> dict:
-        old, new = normalize_rel(old), normalize_rel(new)
+        old = self._path(old)
+        self._require_note(old)
+        new = normalize_rel(new)
         if old == new:
             return {"path": new, "updated": []}
         old_title, new_title = title_of(old), title_of(new)
@@ -145,6 +229,8 @@ class MycelApp:
             updated = []
             for src in referrers:
                 src = new if src == old else src
+                if self._is_doc(src):
+                    continue
                 text, ver = self.vault.read(src)
                 out = text
                 for name in {old_title, old[:-3]}:
@@ -159,12 +245,34 @@ class MycelApp:
         return {"path": new, "updated": updated}
 
     def delete(self, rel: str) -> dict:
-        rel = normalize_rel(rel)
+        rel = self._path(rel)
+        self._require_note(rel)
         with self._lock:
             where = self.vault.delete(rel)
             self.index.refresh(rel)
         self.plugins.emit("on_deleted", NoteEvent("deleted", rel, self._author()))
         return {"path": rel, "trash": where}
+
+    def import_doc(self, path: str, folder: str = IMPORT_FOLDER) -> dict:
+        """資料の本文を、編集できる Markdown ノートとして Vault に保存する。"""
+        path = self._path(path)
+        if not self._is_doc(path):
+            raise VaultError("すでにノートです")
+        d = self._doc(path)
+        if d["status"] != "ok":
+            raise VaultError(d["error"] or "この資料はまだ読み込まれていません（「更新」で読み込んでください）")
+        stem = d["title"].rsplit(".", 1)[0] if "." in d["title"] else d["title"]
+        folder = (folder or "").strip().strip("/")
+        name = stem
+        n = 2
+        while self.vault.exists(f"{folder}/{name}" if folder else name):
+            name = f"{stem} ({n})"
+            n += 1
+        head = (f"---\n元の資料: [[{path}]]\n取り込み日: {time.strftime('%Y-%m-%d')}\n---\n")
+        body = d["text"]
+        if not body.lstrip().startswith("# "):
+            body = f"# {stem}\n\n{body}"
+        return self.create(f"{folder}/{name}" if folder else name, text=head + body + "\n")
 
     # ------------------------------------------------------------ デイリーノートとテンプレート
     def daily(self, date: str | None = None) -> dict:
@@ -180,10 +288,21 @@ class MycelApp:
         return {"path": rel, "created": True}
 
     def templates(self) -> list[dict]:
+        """テンプレートはインデックスではなくフォルダを直接見る（読み込み範囲の外でも使える）。"""
         folder = self.config()["template_folder"].strip().strip("/")
         if not folder:
             return []
-        return [n for n in self.index.notes() if n["folder"] == folder or n["folder"].startswith(folder + "/")]
+        base = self.vault.root / folder
+        if not base.is_dir():
+            return []
+        out = []
+        for dirpath, dirnames, filenames in os.walk(base):
+            dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
+            for name in sorted(filenames):
+                if name.lower().endswith(".md") and not name.startswith("."):
+                    rel = (Path(dirpath) / name).relative_to(self.vault.root).as_posix()
+                    out.append({"path": rel, "title": title_of(rel), "folder": folder_of(rel)})
+        return out
 
     def _template_path(self, name: str) -> str | None:
         for n in self.templates():
@@ -205,3 +324,127 @@ class MycelApp:
 
     def render_template(self, template: str, title: str) -> str:
         return self._from_template(template, title)
+
+    # ------------------------------------------------------------ 読み込み（インデックス）
+    @staticmethod
+    def _prefixes(value) -> list[str] | None:
+        if value is None:
+            return None
+        if not isinstance(value, list):
+            raise VaultError("範囲の指定が不正です")
+        out = []
+        for p in value:
+            if isinstance(p, str):
+                p = p.replace("\\", "/").strip().strip("/")
+                if ".." in p.split("/"):
+                    raise VaultError("範囲の指定が不正です")
+                out.append(p)
+        return out
+
+    def _label(self, prefixes: list[str] | None) -> str:
+        if prefixes is None:
+            return "すべて"
+        names = []
+        for p in prefixes:
+            if p == "":
+                names.append("Vault")
+            elif p.startswith("@") and "/" not in p:
+                try:
+                    names.append(self.scope.source(split_id(p)[0]).label)
+                except ScopeError:
+                    names.append(p)
+            else:
+                names.append(p.rsplit("/", 1)[-1])
+        return "、".join(names[:3]) + (f" ほか {len(names) - 3} 件" if len(names) > 3 else "")
+
+    def update_index(self, prefixes=None, wait: bool = False, label: str = "") -> dict:
+        """差分だけを読み込む（新規・変更・削除）。埋め込みモデルがあれば意味検索の索引も作る。"""
+        prefixes = self._prefixes(prefixes)
+        index, ai = self.index, self.ai
+
+        def run(job):
+            res = index.update(prefixes, cancel=job.cancel, progress=job.progress)
+            res["embedded"] = 0
+            if embed_configured(self.config()):
+                job.progress("意味検索の索引", 0, 0, "")
+                try:
+                    res["embedded"] = ai.embed_pending(prefixes, cancel=job.cancel, progress=job.progress)
+                except Exception as e:  # noqa: BLE001 - LLM の不調で読み込み結果は失わない
+                    if e.__class__.__name__ == "Cancelled":
+                        raise
+                    res["embed_error"] = str(e)
+            return {k: (len(v) if isinstance(v, list) else v) for k, v in res.items()}
+
+        return self.jobs.start("update", label or f"更新（{self._label(prefixes)}）", prefixes, run, wait=wait)
+
+    def check_index(self, prefixes=None, wait: bool = False) -> dict:
+        """ファイルの日時・サイズだけを見て、未反映の変更を数える（本文は読まない）。"""
+        prefixes = self._prefixes(prefixes)
+        index = self.index
+
+        def run(job):
+            res = index.scan(prefixes, cancel=job.cancel, progress=job.progress)
+            res.pop("_found", None)
+            return {k: (len(v) if isinstance(v, list) else v) for k, v in res.items()}
+
+        return self.jobs.start("scan", f"変更を確認（{self._label(prefixes)}）", prefixes, run, wait=wait)
+
+    def rebuild_index(self, wait: bool = False) -> dict:
+        index, ai = self.index, self.ai
+
+        def run(job):
+            res = index.rebuild(cancel=job.cancel, progress=job.progress)
+            if embed_configured(self.config()):
+                res["embedded"] = ai.embed_pending(None, cancel=job.cancel, progress=job.progress)
+            return {k: (len(v) if isinstance(v, list) else v) for k, v in res.items()}
+
+        return self.jobs.start("update", "作り直し（すべて）", None, run, wait=wait)
+
+    def index_status(self) -> dict:
+        st = self.index.status()
+        st["job"] = self.jobs.status()
+        st["pdf_available"] = pdf_available()
+        return st
+
+    # ------------------------------------------------------------ 読み込み範囲
+    def scope_info(self) -> dict:
+        srcs = []
+        for s in self.scope.sources():
+            prefix = "" if s.id == "vault" else f"@{s.id}"
+            srcs.append({"id": s.id, "label": s.label, "path": str(s.root), "editable": s.editable,
+                         "prefix": prefix, "exists": s.root.is_dir(), "stats": self.index.folder_stats(prefix)})
+        return {"sources": srcs, "exclude": self.scope.data["exclude"], "types": self.scope.data["types"],
+                "max_mb": self.scope.data["max_mb"],
+                "type_groups": [{"id": k, "label": v["label"], "exts": v["exts"]} for k, v in TYPE_GROUPS.items()],
+                "pdf_available": pdf_available(), "status": self.index_status()}
+
+    def save_scope(self, update: dict) -> dict:
+        self.scope.save(update)
+        return self.scope_info()
+
+    def scope_tree(self, path: str) -> dict:
+        """フォルダ 1 階層分。各フォルダ・ファイルに読み込み状態を付ける。"""
+        listing = self.scope.list_dir(path)
+        for f in listing["folders"]:
+            f["stats"] = self.index.folder_stats(f["path"])
+        states = self.index.item_states([f["path"] for f in listing["files"]])
+        for f in listing["files"]:
+            it = states.get(f["path"])
+            pend = self.index.pending.get(f["path"])
+            if f["state"] != "in":
+                f["status"] = "indexed_out" if it else f["state"]   # 範囲外なのに読込済み → 更新で消える
+            elif it is None:
+                f["status"] = "new"
+            elif it["status"] != "ok":
+                f["status"] = "error"
+                f["error"] = it["error"]
+            elif pend == "modified":
+                f["status"] = "modified"
+            else:
+                f["status"] = "indexed"
+        listing["stats"] = self.index.folder_stats(path if path else "")
+        return listing
+
+    @staticmethod
+    def browse(path: str) -> dict:
+        return browse(path)

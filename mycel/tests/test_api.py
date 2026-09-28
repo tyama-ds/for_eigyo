@@ -26,7 +26,7 @@ class ApiTest(unittest.TestCase):
         cls.tmp = tempfile.TemporaryDirectory()
         root = Path(cls.tmp.name)
         cls.llm, cls.llm_url, cls.llm_requests = start_mock_llm()
-        cls.app = MycelApp(config_path=root / "cfg.json", vault_override=str(root / "vault"))
+        cls.app = MycelApp(config_path=root / "cfg.json", vault_override=str(root / "vault"), initial_load="sync")
         cls.httpd = server.make_server(cls.app, 0)
         cls.port = cls.httpd.server_address[1]
         threading.Thread(target=cls.httpd.serve_forever, daemon=True).start()
@@ -181,14 +181,15 @@ class ApiTest(unittest.TestCase):
 
     def test_embeddings_and_suggest(self):
         self.configure_llm(embed_model="emb")
-        st, j = self.post("/api/ai/reindex")
-        self.assertEqual(st, 200)
-        for _ in range(50):
-            st, s = self.get("/api/ai/status")
-            if s["job"]["state"] != "running":
+        st, j = self.post("/api/index/rebuild")
+        self.assertEqual(st, 200, j)
+        for _ in range(100):
+            st, ix = self.get("/api/index/status")
+            if ix["job"]["state"] != "running":
                 break
             time.sleep(0.1)
-        self.assertEqual(s["job"]["state"], "done", s)
+        self.assertEqual(ix["job"]["state"], "done", ix)
+        st, s = self.get("/api/ai/status")
         self.assertEqual(s["embedded"], s["chunks"])
         self.assertEqual(s["retrieval"], "hybrid")
         st, sg = self.get("/api/ai/suggest", path="顧客/B社 物流DX.md")

@@ -32,7 +32,7 @@
       this.edges = data.edges.map(([a, b]) => [idx[a], idx[b]]).filter(([a, b]) => a !== undefined && b !== undefined);
       this.nb = new Set();
       if (center) this.edges.forEach(([a, b]) => { if (this.nodes[a].id === center) this.nb.add(b); if (this.nodes[b].id === center) this.nb.add(a); });
-      const folders = [...new Set(this.nodes.map((n) => n.folder.split("/")[0]).filter(Boolean))].sort();
+      const folders = [...new Set(this.nodes.map((n) => (n.folder || "").split("/")[0]).filter(Boolean))].sort();
       this.folderHue = Object.fromEntries(folders.map((f, i) => [f, HUES[i % HUES.length]]));
       if (!Object.keys(prev).length) this.view = { x: W / 2, y: H / 2, k: this.nodes.length > 80 ? 0.6 : 1 };
       this.alpha = 1; this.autoFit = true;
@@ -92,7 +92,8 @@
     nodeColor(n, i) {
       if (!n.exists) return null;
       if (n.id === this.center) return this.color("--accent");
-      const hue = this.folderHue[n.folder.split("/")[0]];
+      if (n.kind === "doc") return this.color("--warn");
+      const hue = this.folderHue[(n.folder || "").split("/")[0]];
       const light = document.documentElement.dataset.theme === "light";
       if (hue === undefined) return light ? "hsl(160 8% 50%)" : "hsl(160 8% 62%)";
       return light ? `hsl(${hue} 45% 42%)` : `hsl(${hue} 45% 64%)`;
@@ -119,7 +120,9 @@
       if (focus >= 0) for (const [a, b] of this.edges) { if (a === focus) nbs.add(b); if (b === focus) nbs.add(a); }
       this.nodes.forEach((n, i) => {
         const r = 3.5 + Math.sqrt(n.degree) * 1.7; n.r = r;
-        g.beginPath(); g.arc(n.x, n.y, r, 0, Math.PI * 2);
+        g.beginPath();
+        if (n.kind === "doc") { const a = r * 0.95; g.rect(n.x - a, n.y - a, a * 2, a * 2); }   // 資料は四角
+        else g.arc(n.x, n.y, r, 0, Math.PI * 2);
         const col = this.nodeColor(n, i);
         if (col) { g.fillStyle = col; g.fill(); } else { g.fillStyle = bg; g.fill(); g.strokeStyle = muted; g.lineWidth = 1; g.stroke(); }
         const neighbor = nbs.has(i);

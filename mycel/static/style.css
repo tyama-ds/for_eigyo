@@ -214,3 +214,75 @@ canvas.graph.big{height:100%;border:0;border-radius:0}
   .app.show-right .right{display:flex}.app.show-right .side{display:none}
 }
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+/* 資料（Word・PDF など） */
+.ft{display:inline-block;min-width:22px;padding:0 3px;margin-right:5px;border-radius:3px;font-size:9.5px;font-weight:600;line-height:15px;text-align:center;vertical-align:1px;color:#fff;background:#6B7A74;letter-spacing:0}
+.ft-word{background:#3A6FC4}.ft-excel{background:#2E8B57}.ft-powerpoint{background:#C8643B}.ft-pdf{background:#B8453E}
+.ft-email{background:#7B62B8}.ft-csv{background:#3C8C7E}.ft-html{background:#A8742E}.ft-code{background:#5B6770}.ft-note{background:var(--accent);color:var(--accent-ink)}
+.tree .file.doc{color:var(--ink);opacity:.92}
+.tree .file.err{color:var(--danger)}
+.tree .folder.src{color:var(--ink);margin-top:6px}
+.tree .folder svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.7;margin-right:2px;vertical-align:-2px}
+.docbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;max-width:860px;margin:18px auto 0;padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface);font-size:12.5px}
+.docbar .dpath{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:0 1 auto}
+.docbar .dmeta{color:var(--muted);font-size:11.5px}
+.docbar .sp{flex:1}
+.docbar a.btn{text-decoration:none;color:var(--ink)}
+.body > .notice{max-width:860px;margin:10px auto 0}
+.notice .btn{margin-left:8px}
+.notice.err{color:var(--danger);border-color:var(--danger)}
+.preview.docview{padding-top:18px}
+.doctext{white-space:pre-wrap;word-break:break-word;font-family:var(--mono);font-size:12.5px;line-height:1.6;background:transparent;border:0;padding:0}
+.btn.xs{padding:0 7px;font-size:11px;line-height:18px}
+
+/* ステータスバーの読み込み状況 */
+.status .stindex{margin-right:auto;display:flex;align-items:center;gap:6px;min-width:0}
+.stindex .ixbtn{display:flex;align-items:center;gap:5px;border:0;background:transparent;color:var(--muted);font-size:11.5px;cursor:pointer;padding:1px 4px;border-radius:4px}
+.stindex .ixbtn:hover{background:var(--surface);color:var(--ink)}
+.stindex svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.7}
+.stindex .ixt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:46vw}
+.pend{color:var(--warn);font-weight:600}
+.ng{color:var(--danger)}
+
+/* 読み込み範囲ダイアログ */
+.modal.xwide{width:min(1180px,100%);height:86vh;max-height:none}
+.scope{display:flex;flex-direction:column;height:100%;gap:10px;min-height:0}
+.scope-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.scope-top .sp{flex:1}
+.scsum{font-size:12.5px;color:var(--muted)}
+.scope-grid{display:grid;grid-template-columns:minmax(0,1fr) 280px;gap:16px;flex:1;min-height:0}
+.scope-grid > div:first-child{display:flex;flex-direction:column;min-height:0}
+.scope-tree{flex:1;overflow:auto;border:1px solid var(--line);border-radius:8px;background:var(--bg);padding:4px 0}
+.srow{display:flex;align-items:center;gap:6px;padding:3px 10px 3px 8px;font-size:13px;cursor:pointer;border-left:2px solid transparent}
+.srow:hover{background:var(--surface)}
+.srow.sel{background:var(--mark);border-left-color:var(--accent)}
+.srow.off .nm{color:var(--muted);text-decoration:line-through}
+.srow .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.srow .sp{flex:1}
+.srow .car{border:0;background:transparent;color:var(--muted);width:16px;padding:0;cursor:pointer;transition:transform .12s;font-size:11px}
+.srow .car.open{transform:rotate(90deg)}
+.srow .srcic svg{width:15px;height:15px;fill:none;stroke:var(--accent);stroke-width:1.7;vertical-align:-3px}
+.srow .btn.xs{visibility:hidden}
+.srow:hover .btn.xs,.srow.sel .btn.xs{visibility:visible}
+.srow small{color:var(--muted);font-size:11px;margin-left:auto;font-variant-numeric:tabular-nums}
+.srow.file .nm{flex:0 1 auto}
+.sb{font-size:10.5px;color:var(--muted);border:1px solid var(--line);border-radius:99px;padding:0 6px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.sb.mod,.fst.mod{color:var(--warn);border-color:var(--warn)}
+.sb.ng,.fst.ng{color:var(--danger);border-color:var(--danger)}
+.fst{font-size:10.5px;color:var(--ok);border:1px solid transparent;border-radius:99px;padding:0 6px;white-space:nowrap}
+.fst.new{color:var(--link);border-color:var(--link)}
+.fst.off{color:var(--muted)}
+.scope-side{overflow:auto;font-size:13px}
+.scope-side h4{margin:4px 0 6px;font-size:11px;letter-spacing:.08em;color:var(--muted);text-transform:uppercase;border-bottom:1px solid var(--line);padding-bottom:3px}
+.scope-side h4:not(:first-child){margin-top:14px}
+.scope-side .tg{display:block;padding:2px 0;cursor:pointer}
+.scope-side input[type=number]{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:3px 6px}
+.srcrow{display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px dashed var(--line)}
+.srcrow > div{flex:1;min-width:0}
+.srcrow small{display:block;color:var(--muted);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.browse{margin-top:12px;border:1px solid var(--line);border-radius:8px;max-height:44vh;overflow:auto;padding:4px}
+.browse svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.7;vertical-align:-2px}
+.askbox select{background:var(--bg);border:1px solid var(--line);border-radius:5px;font-size:12px;padding:1px 4px;max-width:200px}
+.gctl label{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:3px}
+@media (max-width:900px){.scope-grid{grid-template-columns:1fr}.scope-side{max-height:30vh}}
+.res .ft{display:inline-block;-webkit-line-clamp:unset;overflow:visible;color:#fff;font-size:9.5px;line-height:15px}

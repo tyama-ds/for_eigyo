@@ -34,6 +34,11 @@
   }
   const fail = (e) => toast(e.message || String(e), true);
   const titleOf = (p) => p.split("/").pop().replace(/\.md$/i, "");
+  const isDoc = (p) => p.startsWith("@") || !/\.(md|markdown)$/i.test(p);
+  const FT = { word: "W", excel: "X", powerpoint: "P", pdf: "PDF", email: "✉", csv: "CSV", html: "HTML", text: "TXT", code: "{ }", note: "MD" };
+  const ftBadge = (grp) => `<span class="ft ft-${esc(grp || "text")}">${esc(FT[grp] || "?")}</span>`;
+  const fmtSize = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : n >= 1024 ? Math.round(n / 1024) + " KB" : n + " B");
+  const fmtTime = (t) => { if (!t) return "—"; const d = new Date(t * 1000); return d.toLocaleDateString("ja-JP", { month: "numeric", day: "numeric" }) + " " + d.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" }); };
   const folderOf = (p) => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "");
   const icon = (d) => `<svg viewBox="0 0 24 24">${d}</svg>`;
 
@@ -43,18 +48,24 @@
     cur: null, mode: store.get("mode", "prev"), dirty: false, saving: null, saveTimer: 0, conflict: null,
     rtab: store.get("rtab", "links"), panel: "files", closed: new Set(store.get("closed", [])), selFolder: "",
     hist: [], histPos: -1, chat: [], depth: store.get("depth", 1), graph: null, tag: "",
+    sources: [], index: null, jobSeen: null, aiScope: store.get("aiScope", "all"), gDocs: store.get("gDocs", false),
   };
 
   // ------------------------------------------------------------ ツリー
   async function loadTree() {
     const t = await api.get("/api/tree");
-    S.tree = t.notes; S.folders = t.folders;
+    S.tree = t.notes; S.folders = t.folders; S.sources = t.sources || [];
     S.titleMap = new Map(); S.pathMap = new Map(); S.mtimes = new Map();
-    const sorted = [...t.notes].sort((a, b) => a.path.length - b.path.length);
+    const sorted = [...t.notes].sort((a, b) => (a.kind === "note" ? 0 : 1) - (b.kind === "note" ? 0 : 1) || a.path.length - b.path.length);
     for (const n of sorted) {
       const k = n.title.toLowerCase();
       if (!S.titleMap.has(k)) S.titleMap.set(k, n.path);
-      S.pathMap.set(n.path.slice(0, -3).toLowerCase(), n.path);
+      if (n.kind === "note") S.pathMap.set(n.path.replace(/\.(md|markdown)$/i, "").toLowerCase(), n.path);
+      else {
+        S.pathMap.set(n.path.toLowerCase(), n.path);
+        const stem = k.replace(/\.[^.]+$/, "");
+        if (!S.titleMap.has(stem)) S.titleMap.set(stem, n.path);
+      }
       S.mtimes.set(n.path, n.mtime_ns);
     }
     renderTree();
@@ -63,6 +74,7 @@
   function resolve(target) {
     let k = (target || "").trim().toLowerCase();
     if (!k) return S.cur ? S.cur.path : null;
+    if (S.pathMap.has(k)) return S.pathMap.get(k);
     if (k.endsWith(".md")) k = k.slice(0, -3);
     if (k.includes("/")) { if (S.pathMap.has(k)) return S.pathMap.get(k); k = k.split("/").pop(); }
     return S.titleMap.get(k) || null;
@@ -84,14 +96,18 @@
       return cur;
     };
     S.folders.forEach((f) => node(f));
+    S.sources.forEach((s) => { if (s.prefix) node(s.prefix); });
     S.tree.forEach((n) => node(n.folder).notes.push(n));
+    const srcLabel = Object.fromEntries(S.sources.map((s) => [s.prefix, s.label]));
     const coll = (a, b) => a.localeCompare(b, "ja", { numeric: true });
     const walk = (nd, path, depth) => {
       let h = "";
-      for (const name of Object.keys(nd.folders).sort(coll)) {
+      const names = Object.keys(nd.folders).sort((a, b) => (a.startsWith("@") ? 1 : 0) - (b.startsWith("@") ? 1 : 0) || coll(a, b));
+      for (const name of names) {
         const fp = path ? path + "/" + name : name;
         const closed = S.closed.has(fp);
-        h += `<button class="folder${closed ? " closed" : ""}" data-folder="${esc(fp)}" style="padding-left:${6 + depth * 14}px" draggable="false"><span class="car">▾</span>${esc(name)}</button>`;
+        const src = !path && name.startsWith("@");
+        h += `<button class="folder${closed ? " closed" : ""}${src ? " src" : ""}" data-folder="${esc(fp)}" style="padding-left:${6 + depth * 14}px" draggable="false" title="${src ? "外部フォルダ（読み取り専用）" : esc(fp)}"><span class="car">▾</span>${src ? icon('<path d="M3 6.5h7l2 2h9V19H3z"/><path d="M14 13h5M16.5 10.5l2.5 2.5-2.5 2.5"/>') : ""}${esc(src ? srcLabel[name] || name : name)}</button>`;
         if (!closed) h += walk(nd.folders[name], fp, depth + 1);
       }
       nd.notes.sort((a, b) => coll(a.title, b.title)).forEach((n) => (h += fileBtn(n, depth)));
@@ -101,7 +117,9 @@
   }
   function fileBtn(n, depth, showFolder = false) {
     const on = S.cur && S.cur.path === n.path ? " on" : "";
-    return `<button class="file${on}" data-open="${esc(n.path)}" draggable="true" title="${esc(n.path)}" style="padding-left:${20 + depth * 14}px">${esc(n.title)}${showFolder && n.folder ? ` <small style="color:var(--muted)">${esc(n.folder)}</small>` : ""}</button>`;
+    const doc = n.kind && n.kind !== "note";
+    const err = n.status && n.status !== "ok";
+    return `<button class="file${on}${doc ? " doc" : ""}${err ? " err" : ""}" data-open="${esc(n.path)}" draggable="${doc ? "false" : "true"}" title="${esc(n.path)}${err ? "（読み込みエラー）" : ""}" style="padding-left:${20 + depth * 14}px">${doc ? ftBadge(n.grp) : ""}${esc(n.title)}${showFolder && n.folder ? ` <small style="color:var(--muted)">${esc(n.folder)}</small>` : ""}</button>`;
   }
 
   $("#tree").addEventListener("click", (e) => {
@@ -114,8 +132,9 @@
   });
   $("#tree").addEventListener("contextmenu", (e) => {
     const b = e.target.closest("[data-open]");
-    if (!b) return;
-    e.preventDefault(); noteMenu(e.clientX, e.clientY, b.dataset.open);
+    const f = e.target.closest("[data-folder]");
+    if (b) { e.preventDefault(); noteMenu(e.clientX, e.clientY, b.dataset.open); }
+    else if (f) { e.preventDefault(); folderMenu(e.clientX, e.clientY, f.dataset.folder); }
   });
   // ドラッグでフォルダへ移動
   $("#tree").addEventListener("dragstart", (e) => { const b = e.target.closest("[data-open]"); if (b) e.dataTransfer.setData("text/mycel-path", b.dataset.open); });
@@ -129,6 +148,7 @@
     const f = e.target.closest("[data-folder]");
     const folder = f ? f.dataset.folder : "";
     if (folderOf(path) === folder) return;
+    if (folder.startsWith("@")) { toast("外部フォルダにはノートを移動できません", true); return; }
     await renameNote(path, (folder ? folder + "/" : "") + titleOf(path));
   });
   $("#filter").addEventListener("input", renderTree);
@@ -140,7 +160,7 @@
     let data;
     try { data = await api.get("/api/note", { path }); } catch (e) { fail(e); return; }
     S.cur = data; S.dirty = false; S.conflict = null;
-    if (mode) setMode(mode, false);
+    if (mode && !data.readonly) setMode(mode, false);
     if (push) { S.hist = S.hist.slice(0, S.histPos + 1); if (S.hist[S.histPos] !== path) S.hist.push(path); S.histPos = S.hist.length - 1; }
     store.set("last", path);
     S.mtimes.set(path, (S.tree.find((n) => n.path === path) || {}).mtime_ns);
@@ -177,9 +197,10 @@
   // ------------------------------------------------------------ 本文
   function renderMain() {
     const c = S.cur;
-    $("#titleIn").disabled = !c;
+    $("#titleIn").disabled = !c || c.readonly;
+    $("#mEdit").disabled = !!(c && c.readonly);
     $("#titleIn").value = c ? c.title : "";
-    $("#crumb").textContent = c && c.folder ? c.folder + " /" : "";
+    $("#crumb").textContent = c && c.folder ? docLabel(c.folder) + " /" : "";
     document.title = c ? `${c.title} — Mycel` : "Mycel";
     $("#mPrev").classList.toggle("on", S.mode === "prev");
     $("#mEdit").classList.toggle("on", S.mode === "edit");
@@ -188,8 +209,41 @@
       $("#body").innerHTML = `<div class="welcome"><h1>Mycel</h1><p>左のファイルからノートを開くか、<b>Ctrl+K</b> でノートを探して開いてください。見つからない名前を入力すると新しく作れます。</p></div>`;
       updateStats(); return;
     }
-    if (S.mode === "edit") renderEditor(); else renderPreview();
+    if (c.readonly) renderDoc();
+    else if (S.mode === "edit") renderEditor(); else renderPreview();
     updateStats();
+  }
+
+  const docLabel = (p) => { const m = p.match(/^@([^/]+)\/?(.*)$/); if (!m) return p; const s = S.sources.find((x) => x.id === m[1]); return (s ? s.label : "@" + m[1]) + (m[2] ? " / " + m[2] : ""); };
+  /** 資料（Word・PDF など）の表示。読み取り専用。 */
+  function renderDoc() {
+    const c = S.cur;
+    const plain = c.grp === "code" || c.grp === "text";
+    const status = c.status === "ok" ? "" : c.status === "pending"
+      ? `<div class="notice">この資料はまだ読み込まれていません。<button class="btn sm" data-docact="update">今すぐ読み込む</button></div>`
+      : `<div class="notice err">読み込めませんでした: ${esc(c.error || c.status)}</div>`;
+    const stale = c.stale && c.status !== "pending"
+      ? `<div class="notice">元のファイルが変更されています。表示・検索・AI は前回読み込んだ内容です。<button class="btn sm" data-docact="update">この資料を更新</button></div>` : "";
+    const gone = c.exists === false ? `<div class="notice err">元のファイルが見つかりません（「更新」で一覧から消えます）。</div>` : "";
+    $("#body").innerHTML = `<div class="docbar">${ftBadge(c.grp)}<span class="dpath" title="${esc(c.source_path || "")}">${esc(docLabel(c.path))}</span><span class="dmeta">読込 ${esc(fmtTime(c.indexed_at))}</span><span class="sp"></span>
+        <button class="btn sm" data-docact="open"${c.exists === false ? " disabled" : ""}>アプリで開く</button>
+        <a class="btn sm" href="/api/file?path=${encodeURIComponent(c.path)}" download>ダウンロード</a>
+        <button class="btn sm" data-docact="import"${c.status === "ok" ? "" : " disabled"} title="本文を編集できる Markdown ノートとして Vault に保存します">ノートとして取り込む</button>
+        <button class="btn sm" data-docact="update" title="この資料だけ読み込み直します">再読込</button></div>
+      ${gone}${stale}${status}
+      <article class="preview md docview">${plain ? `<pre class="doctext">${esc(c.text)}</pre>` : MD.render(c.text, { resolve })}</article>`;
+    $$("[data-docact]", $("#body")).forEach((b) => (b.onclick = () => docAction(b.dataset.docact)));
+  }
+  async function docAction(act) {
+    const c = S.cur; if (!c) return;
+    try {
+      if (act === "open") { await api.post("/api/file/open", { path: c.path }); toast("既定のアプリで開きました"); }
+      else if (act === "update") { await updateIndex([c.path], `「${c.title}」を読み込み直しています`); }
+      else if (act === "import") {
+        const r = await api.post("/api/note/import", { path: c.path });
+        await loadTree(); await openNote(r.path); toast(`ノート「${titleOf(r.path)}」として取り込みました`);
+      }
+    } catch (e) { fail(e); }
   }
 
   function renderPreview() {
@@ -209,6 +263,7 @@
   }
 
   function setMode(mode, render = true) {
+    if (mode === "edit" && S.cur && S.cur.readonly) { toast("資料は読み取り専用です（「ノートとして取り込む」で編集できます）"); return; }
     let caret = null;
     const ta = $("#editor");
     if (ta) caret = ta.selectionStart;
@@ -224,6 +279,7 @@
   function updateStats() {
     if (!S.cur) { $("#stInfo").textContent = ""; $("#stWords").textContent = ""; return; }
     const text = S.cur.text;
+    if (S.cur.readonly) { $("#stInfo").textContent = `資料 ・ バックリンク ${(S.cur.backlinks || []).length}`; $("#stWords").textContent = `${text.replace(/\s/g, "").length.toLocaleString()} 文字`; return; }
     const links = (text.match(/\[\[[^\[\]\n]+?\]\]/g) || []).length;
     $("#stInfo").textContent = `リンク ${links} ・ バックリンク ${(S.cur.backlinks || []).length}`;
     $("#stWords").textContent = `${text.replace(/\s/g, "").length.toLocaleString()} 文字`;
@@ -231,7 +287,7 @@
 
   /** 現在のノートの本文を関数で書き換えて保存する（AI の提案の反映など）。 */
   function mutateCurrent(fn) {
-    if (!S.cur) return;
+    if (!S.cur || S.cur.readonly) return;
     const ta = $("#editor");
     const next = fn(S.cur.text);
     if (next === S.cur.text) return;
@@ -304,25 +360,106 @@
   };
   window.addEventListener("beforeunload", (e) => { if (S.dirty || S.saving) { save(); e.preventDefault(); e.returnValue = ""; } });
 
-  // 外部エディタでの変更を拾う
+  // 読み込み状況と、開いているファイルの外部変更を見張る（重い処理はしない）
   async function poll() {
-    if (document.hidden) return;
-    try {
-      const before = S.cur ? S.mtimes.get(S.cur.path) : null;
-      await loadTree();
-      if (!S.cur) return;
-      const now = S.mtimes.get(S.cur.path);
-      if (now === undefined) {
-        if (!S.tree.some((n) => n.path === S.cur.path)) { toast(`「${S.cur.title}」は別の場所で削除または移動されました`, true); }
-        return;
-      }
-      if (before !== undefined && now !== before && !S.dirty && !S.saving) {
-        const d = await api.get("/api/note", { path: S.cur.path });
-        if (d.version !== S.cur.version) { S.cur = d; renderMain(); renderRight(); toast("外部の変更を読み込みました"); }
-      }
-    } catch { /* サーバ停止中など */ }
+    let running = false;
+    if (!document.hidden) {
+      try {
+        const st = await api.get("/api/index/status");
+        running = !!(st.job && st.job.state === "running");
+        await applyIndexStatus(st);
+        if (S.cur && !S.dirty && !S.saving && !S.conflict) {
+          const path = S.cur.path;
+          const v = await api.get("/api/note/version", { path });
+          if (S.cur && S.cur.path === path) {
+            if (!v.exists) { if (!S.cur.gone) { S.cur.gone = true; toast(`「${S.cur.title}」は別の場所で削除または移動されました`, true); } }
+            else if (v.version !== S.cur.version) {
+              if (S.cur.readonly) { if (!S.cur.stale) { S.cur.stale = true; renderMain(); } }
+              else { const d = await api.get("/api/note", { path }); if (!S.dirty && d.version !== S.cur.version) { S.cur = d; renderMain(); renderRight(); toast("外部の変更を読み込みました"); } }
+            }
+          }
+        }
+      } catch { /* サーバ停止中など */ }
+    }
+    setTimeout(poll, running ? 700 : 4000);
   }
-  setInterval(poll, 4000);
+
+  // ------------------------------------------------------------ 読み込み（インデックス）の状態と更新
+  const JOB_DONE = { update: "読み込み", scan: "確認" };
+  async function applyIndexStatus(st) {
+    S.index = st;
+    renderIndexChip();
+    const job = st.job;
+    if (!job || job.state === "running") return;
+    const key = job.kind + ":" + job.started;
+    if (S.jobSeen === key) return;
+    const first = S.jobSeen === null;
+    S.jobSeen = key;
+    if (first && Date.now() / 1000 - (job.finished || 0) > 10) return;    // 起動前に終わった処理は通知しない
+    const r = job.result || {};
+    if (job.state === "done" && job.kind === "update") {
+      const n = (r.added || 0) + (r.modified || 0);
+      toast(`${job.label}: 新規 ${r.added || 0} ・ 変更 ${r.modified || 0} ・ 削除 ${r.deleted || 0}${r.errors ? ` ・ エラー ${r.errors}` : ""}${r.embedded ? ` ・ 意味検索 ${r.embedded} 区画` : ""}${r.embed_error ? "（意味検索は失敗: " + r.embed_error + "）" : ""}`, !!r.embed_error);
+      await loadTree();
+      if (!S.cur) { const start = resolve("ホーム") || (S.tree.find((x) => x.kind === "note") || {}).path; if (start) openNote(start); }
+      else if (!S.dirty && (n || r.deleted)) { const cur = S.cur.path; if (S.tree.some((x) => x.path === cur) || !isDoc(cur)) openNote(cur, { push: false }).catch(() => {}); }
+      if (S.rtab !== "links" || !S.cur) renderRight();
+    } else if (job.state === "done" && job.kind === "scan") {
+      const pend = (r.added || 0) + (r.modified || 0) + (r.deleted || 0);
+      if (!first && pend) toast(`未反映の変更が ${pend} 件あります（「更新」で読み込みます）`);
+    } else if (job.state === "cancelled") toast(job.message);
+    else if (job.state === "error") toast(`${JOB_DONE[job.kind] || "処理"}に失敗しました: ${job.message}`, true);
+    if (scopeUI) scopeUI.refresh();
+  }
+
+  function renderIndexChip() {
+    const el = $("#stIndex"), st = S.index; if (!el || !st) return;
+    const job = st.job;
+    if (job && job.state === "running") {
+      const pct = job.total ? ` ${job.done}/${job.total}` : job.done ? ` ${job.done} 件` : "";
+      el.innerHTML = `<span class="spin"></span><span class="ixt" title="${esc(job.current || "")}">${esc(job.label)} ・ ${esc(job.phase)}${pct}${job.current ? " ・ " + esc(job.current.split("/").pop()) : ""}</span><button class="btn xs" id="ixCancel">中断</button>`;
+      $("#ixCancel").onclick = async () => { try { await api.post("/api/index/cancel"); } catch (e) { fail(e); } };
+      return;
+    }
+    const p = st.pending, pend = p.added + p.modified + p.deleted;
+    el.innerHTML = `<button class="ixbtn" id="ixScope" title="読み込み範囲を開く ・ 最終更新 ${esc(fmtTime(st.last_update))}">${icon('<ellipse cx="12" cy="6" rx="7" ry="2.6"/><path d="M5 6v12c0 1.4 3.1 2.6 7 2.6s7-1.2 7-2.6V6M5 12c0 1.4 3.1 2.6 7 2.6s7-1.2 7-2.6"/>')}ノート ${st.notes} ・ 資料 ${st.docs}${st.errors ? ` ・ <span class="ng">エラー ${st.errors}</span>` : ""}${pend ? ` ・ <b class="pend">未反映 ${pend}</b>` : ""}</button><button class="btn xs${pend ? " pri" : ""}" id="ixUpdate" title="変更されたファイルだけを読み込みます（範囲は「読み込み範囲」で指定）">更新</button>`;
+    $("#ixScope").onclick = () => openScope();
+    $("#ixUpdate").onclick = () => updateIndex(null);
+  }
+
+  async function updateIndex(prefixes, msg = "") {
+    try {
+      const st = await api.post("/api/index/update", { prefixes });
+      toast(msg || `${st.label} を開始しました`);
+      S.index = { ...(S.index || {}), job: st }; renderIndexChip();
+      setTimeout(poll, 300);
+    } catch (e) { fail(e); }
+  }
+  async function checkIndex(prefixes) {
+    try { await api.post("/api/index/check", { prefixes }); setTimeout(poll, 300); } catch (e) { if (!(e.data && e.data.busy)) fail(e); }
+  }
+
+  function folderMenu(x, y, folder) {
+    const src = S.sources.find((s) => s.prefix && (folder === s.prefix));
+    popMenu(x, y, [
+      { label: "このフォルダを更新", run: () => updateIndex([folder]) },
+      { label: "変更を確認", run: () => checkIndex([folder]) },
+      ...(src ? [] : [{ label: "読み込み範囲から外す", run: () => excludeFolder(folder) }]),
+      "-",
+      { label: "読み込み範囲を開く…", run: () => openScope() },
+      ...(folder.startsWith("@") ? [] : [{ label: "ここに新しいノート", run: () => newNote(folder) }]),
+    ]);
+  }
+  async function excludeFolder(folder) {
+    const ok = await confirmBox("読み込み範囲から外す", `「${esc(folder)}」を読み込み範囲から外しますか？<br><span class="hint">ファイルは消えません。一覧・検索・AI の対象から外れます（すぐ反映します）。</span>`, "外す");
+    if (!ok) return;
+    try {
+      const sc = await api.get("/api/scope");
+      await api.post("/api/scope", { exclude: [...sc.exclude, folder] });
+      await updateIndex([folder], `「${folder}」を範囲から外しました`);
+    } catch (e) { fail(e); }
+  }
+
 
   // ------------------------------------------------------------ クリック（リンク・タグ・カード）
   document.addEventListener("click", async (e) => {
@@ -432,6 +569,16 @@
 
   function noteMenu(x, y, path) {
     const isCur = S.cur && S.cur.path === path;
+    if (isDoc(path)) {
+      popMenu(x, y, [
+        { label: "開く", run: () => openNote(path) },
+        { label: "アプリで開く", run: () => api.post("/api/file/open", { path }).catch(fail) },
+        { label: "この資料を再読込", run: () => updateIndex([path]) },
+        { label: "ノートとして取り込む", run: async () => { try { const r = await api.post("/api/note/import", { path }); await loadTree(); openNote(r.path); } catch (e) { fail(e); } } },
+        { label: "リンク用の名前をコピー", run: () => copyText(`[[${path}]]`) },
+      ]);
+      return;
+    }
     popMenu(x, y, [
       { label: "開く", run: () => openNote(path) },
       { label: "名前を変更", run: async () => { if (!isCur) await openNote(path); const t = $("#titleIn"); t.focus(); t.select(); } },
@@ -444,6 +591,7 @@
   $("#btnMore").onclick = (e) => {
     if (!S.cur) return;
     const r = e.currentTarget.getBoundingClientRect();
+    if (S.cur.readonly) { noteMenu(r.right - 230, r.bottom + 4, S.cur.path); return; }
     popMenu(r.right - 230, r.bottom + 4, [
       { label: "名前を変更", key: "F2", run: () => { const t = $("#titleIn"); t.focus(); t.select(); } },
       { label: "フォルダへ移動…", run: () => moveNote(S.cur.path) },
@@ -650,13 +798,16 @@
   }
 
   async function renderGraphPane(p) {
-    p.innerHTML = `<div class="gctl"><span>範囲</span><div class="seg">${[1, 2, 0].map((d) => `<button data-d="${d}" class="${S.depth === d ? "on" : ""}">${d ? d + " ホップ" : "全体"}</button>`).join("")}</div><span style="flex:1"></span><button class="btn sm" id="gBig">拡大</button></div><canvas class="graph" id="gSmall" aria-label="ノートのつながり。ノードをクリックで開く"></canvas><div class="hint" style="margin-top:8px">ドラッグで移動、ホイールで拡大縮小。薄い輪は未作成のリンクです。色はフォルダごと。</div>`;
+    p.innerHTML = `<div class="gctl"><span>範囲</span><div class="seg">${[1, 2, 0].map((d) => `<button data-d="${d}" class="${S.depth === d ? "on" : ""}">${d ? d + " ホップ" : "全体"}</button>`).join("")}</div><label title="リンクされていない資料も表示"><input type="checkbox" id="gDocs"${S.gDocs ? " checked" : ""}> 資料</label><span style="flex:1"></span><button class="btn sm" id="gBig">拡大</button></div><canvas class="graph" id="gSmall" aria-label="ノートのつながり。ノードをクリックで開く"></canvas><div class="hint" style="margin-top:8px">ドラッグで移動、ホイールで拡大縮小。薄い輪は未作成のリンク、四角は資料（Word・PDF など）。色はフォルダごと。</div>`;
+    $("#gDocs").onchange = (e) => { S.gDocs = e.target.checked; store.set("gDocs", S.gDocs); renderGraphPane(p); };
     $$("[data-d]", p).forEach((b) => (b.onclick = () => { S.depth = +b.dataset.d; store.set("depth", S.depth); renderGraphPane(p); }));
     $("#gBig").onclick = () => bigGraph(S.cur ? S.cur.path : null);
     if (S.graph) S.graph.destroy();
     S.graph = new ForceGraph($("#gSmall"), { onOpen: graphOpen });
     try {
-      const data = await api.get("/api/graph", S.depth ? { path: S.cur.path, depth: S.depth } : {});
+      const q = S.depth ? { path: S.cur.path, depth: S.depth } : {};
+      if (S.gDocs) q.docs = "1";
+      const data = await api.get("/api/graph", q);
       if (S.graph) S.graph.setData(data, S.cur.path);
     } catch (e) { fail(e); }
   }
@@ -665,22 +816,26 @@
     const m = modal({ title: "グラフ（Vault 全体）", body: '<canvas class="graph big" id="gBigC" aria-label="Vault 全体のグラフ"></canvas>', buttons: [], wide: true, onClose: () => g.destroy() });
     m.body.style.padding = "0"; m.body.style.overflow = "hidden";
     const g = new ForceGraph($("#gBigC"), { onOpen: (p, t) => { m.close(); graphOpen(p, t); } });
-    try { g.setData(await api.get("/api/graph"), center); } catch (e) { fail(e); }
+    try { g.setData(await api.get("/api/graph", S.gDocs ? { docs: "1" } : {}), center); } catch (e) { fail(e); }
   }
   $("#btnGraph").onclick = () => bigGraph(S.cur ? S.cur.path : null);
 
   // ---- AI
   async function renderAI(p) {
     let st = S.state.llm || {};
-    p.innerHTML = `<div class="rh"><span>ノートに質問</span><span id="aiMode"></span></div>
+    const scopes = [["all", "すべて（読み込み済みの全体）"], ["vault", "Vault"], ...S.sources.filter((s) => s.prefix).map((s) => ["src:" + s.prefix, "外部: " + s.label])];
+    if (S.cur.folder) scopes.push(["folder", `このフォルダ（${S.cur.folder.split("/").pop()}）`]);
+    if (!scopes.some(([k]) => k === S.aiScope)) S.aiScope = "all";
+    p.innerHTML = `<div class="rh"><span>ノート・資料に質問</span><span id="aiMode"></span></div>
       ${st.chat ? "" : `<div class="notice">LLM が未設定です。関連ノートの検索だけ動きます。<br><button class="btn sm" style="margin-top:6px" id="aiSetup">LLM を設定する</button></div>`}
       <div class="chat" id="chat"></div>
       <div class="askbox"><textarea id="askIn" placeholder="例: A社の決裁者が気にしていることは？（Ctrl+Enter で送信）"></textarea>
-        <div class="row"><label><input type="checkbox" id="askCur" checked> 開いているノートを含める</label><span><button class="btn sm" id="chatClear" title="会話を消す">クリア</button> <button class="btn sm pri" id="askGo">質問</button></span></div></div>
+        <div class="row"><label title="検索する範囲。読み込み済みの内容から探します（その場で読み直しはしません）">対象 <select id="askScope">${scopes.map(([k, l]) => `<option value="${esc(k)}"${k === S.aiScope ? " selected" : ""}>${esc(l)}</option>`).join("")}</select></label></div>
+        <div class="row"><label><input type="checkbox" id="askCur" checked> 開いているファイルを含める</label><span><button class="btn sm" id="chatClear" title="会話を消す">クリア</button> <button class="btn sm pri" id="askGo">質問</button></span></div></div>
       <div class="rh"><span>このノート</span></div>
       <div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn sm" id="aiSum"${st.chat ? "" : " disabled"}>要約とタグ提案</button><button class="btn sm" id="aiSug">リンク候補を探す</button></div>
       <div id="aiOut" style="margin-top:8px"></div>
-      <div class="rh"><span>意味検索インデックス</span></div><div id="aiIdx" class="hint">確認中…</div>`;
+      <div class="rh"><span>検索インデックス</span></div><div id="aiIdx" class="hint">確認中…</div>`;
     const chat = $("#chat");
     const drawChat = () => {
       chat.innerHTML = S.chat.map((m) => m.role === "user" ? `<div class="msg-q">${esc(m.content)}</div>` :
@@ -693,13 +848,16 @@
       const history = S.chat.filter((m) => !m.pending && m.content).map((m) => ({ role: m.role, content: m.content }));
       S.chat.push({ role: "user", content: q }); const a = { role: "assistant", pending: true }; S.chat.push(a); drawChat();
       try {
-        const r = await api.post("/api/ai/ask", { question: q, path: $("#askCur").checked ? S.cur.path : "", history });
+        const sc = $("#askScope").value;
+        const prefixes = sc === "all" ? null : sc === "vault" ? [""] : sc === "folder" ? [S.cur.folder] : [sc.slice(4)];
+        const r = await api.post("/api/ai/ask", { question: q, path: $("#askCur").checked ? S.cur.path : "", history, prefixes });
         Object.assign(a, { pending: false, content: r.answer, sources: r.sources, message: r.message });
       } catch (e) { Object.assign(a, { pending: false, content: "", message: e.message }); }
       drawChat();
       p.scrollTop = chat.offsetTop + chat.scrollHeight;
     };
     $("#askGo").onclick = ask;
+    $("#askScope").onchange = (e) => { S.aiScope = e.target.value; store.set("aiScope", S.aiScope); };
     $("#askIn").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); ask(); } });
     $("#chatClear").onclick = () => { S.chat = []; drawChat(); };
     if ($("#aiSetup")) $("#aiSetup").onclick = () => openSettings("llm");
@@ -725,13 +883,9 @@
       const s = await api.get("/api/ai/status");
       $("#aiMode").textContent = s.retrieval === "hybrid" ? "意味＋キーワード検索" : "キーワード検索";
       const idx = $("#aiIdx"); if (!idx) return;
-      if (!s.embed) idx.innerHTML = "埋め込みモデルが未設定のため、キーワード検索で関連ノートを探しています。設定の「LLM」で Embed モデルを登録すると意味検索も併用します。";
-      else {
-        const job = s.job;
-        idx.innerHTML = `${s.embedded} / ${s.chunks} 区画を登録済み。${job.state === "running" ? `<span class="spin"></span> 作成中 ${job.done}/${job.total}` : job.state === "error" ? `<span style="color:var(--danger)">${esc(job.message)}</span>` : ""} <button class="btn sm" id="embBuild"${job.state === "running" ? " disabled" : ""}>更新</button>`;
-        $("#embBuild").onclick = async () => { try { await api.post("/api/ai/reindex"); toast("意味検索インデックスを作成しています"); setTimeout(() => S.rtab === "ai" && renderAI(p), 1500); } catch (e) { fail(e); } };
-        if (job.state === "running") setTimeout(() => S.rtab === "ai" && $("#aiIdx") && renderAIStatusOnly(), 2000);
-      }
+      const emb = s.embed ? `意味検索: ${s.embedded} / ${s.chunks} 区画。` : "意味検索: 未設定（設定の「LLM」で Embed モデルを登録すると併用します）。";
+      idx.innerHTML = `キーワード索引: ${s.chunks} 区画。${emb}<br>索引は「更新」を押したときだけ作ります（質問のたびに読み直しません）。 <button class="btn sm" id="embBuild">範囲と更新…</button>`;
+      $("#embBuild").onclick = () => openScope();
     } catch { /* 無視 */ }
   }
   function renderAIStatusOnly() { if (S.rtab === "ai") renderAI($("#rpane")); }
@@ -817,7 +971,7 @@
     try {
       const { results } = await api.get("/api/search", { q });
       const first = q.split(/\s+/)[0];
-      el.innerHTML = results.length ? `<div class="empty">${results.length} 件</div>` + results.map((r) => `<button class="res" data-open="${esc(r.path)}"><b>${esc(r.title)}</b><span>${markTitle(r.snippet, first)}</span><small>${esc(folderOf(r.path))}</small></button>`).join("") : '<div class="empty">見つかりませんでした。</div>';
+      el.innerHTML = results.length ? `<div class="empty">${results.length} 件</div>` + results.map((r) => `<button class="res" data-open="${esc(r.path)}"><b>${r.kind === "doc" ? ftBadge((S.tree.find((n) => n.path === r.path) || {}).grp) : ""}${esc(r.title)}</b><span>${markTitle(r.snippet, first)}</span><small>${esc(folderOf(r.path))}</small></button>`).join("") : '<div class="empty">見つかりませんでした。</div>';
     } catch (e) { fail(e); }
   }
 
@@ -872,7 +1026,10 @@
       { label: "AI に質問", run: () => { S.rtab = "ai"; app.classList.remove("no-right"); renderRight(); setTimeout(() => $("#askIn") && $("#askIn").focus(), 50); } },
       { label: "テンプレートを挿入…", run: insertTemplate },
       { label: "設定", run: () => openSettings() },
-      { label: "インデックスを作り直す", run: async () => { const r = await api.post("/api/reindex"); await loadTree(); toast(`${r.updated} 件のノートを読み込み直しました`); } },
+      { label: "読み込み範囲…", run: () => openScope() },
+      { label: "更新（変更されたファイルを読み込む）", run: () => updateIndex(null) },
+      { label: "変更を確認（読み込みはしない）", run: () => checkIndex(null) },
+      { label: "インデックスを作り直す（全ファイルを読み直す）", run: async () => { if (await confirmBox("作り直し", "すべてのファイルを読み込み直します。資料が多いと時間がかかります。", "作り直す")) { try { await api.post("/api/index/rebuild"); setTimeout(poll, 300); } catch (e) { fail(e); } } } },
       { label: "ライト / ダーク切り替え", run: toggleTheme },
     ];
   }
@@ -897,7 +1054,7 @@
       if (fixedItems) items = fixedItems.map((it) => ({ ...it, s: score(it.label, q) })).filter((x) => x.s > 0).sort((a, b) => b.s - a.s);
       else if (raw.startsWith(">")) items = commands().map((c) => ({ ...c, hint: c.key || "", s: score(c.label, q) })).filter((x) => x.s > 0).sort((a, b) => b.s - a.s);
       else {
-        items = S.tree.map((n) => ({ label: n.title, hint: n.folder, path: n.path, s: Math.max(score(n.title, q), score(n.path, q) * 0.5) }))
+        items = S.tree.map((n) => ({ label: n.title, hint: (n.kind === "note" ? "" : "資料 ・ ") + n.folder, path: n.path, s: Math.max(score(n.title, q), score(n.path, q) * 0.5) }))
           .filter((x) => x.s > 0).sort((a, b) => b.s - a.s || a.label.length - b.label.length).slice(0, 60)
           .map((x) => ({ ...x, run: () => openNote(x.path) }));
         if (raw && !resolve(raw)) items.push({ label: `「${raw}」を新規作成`, hint: "Shift+Enter", run: () => openTarget(raw), create: true });
@@ -919,6 +1076,196 @@
     ul.addEventListener("click", (e) => { const li = e.target.closest("[data-i]"); if (li) pick(items[+li.dataset.i]); });
     ov.addEventListener("mousedown", (e) => { if (e.target === ov) close(); });
     build(); inp.focus();
+  }
+
+  // ------------------------------------------------------------ 読み込み範囲（インタラクティブに決める）
+  let scopeUI = null;
+  const FSTATE = {
+    indexed: ["読込済み", ""], new: ["未読込", "new"], modified: ["変更あり", "mod"], error: ["エラー", "ng"],
+    excluded: ["除外", "off"], type_off: ["形式オフ", "off"], too_big: ["大きすぎ", "off"], indexed_out: ["範囲外（更新で削除）", "mod"],
+  };
+  function statBadges(st) {
+    if (!st) return "";
+    const pend = [st.added ? `+${st.added}` : "", st.modified ? `~${st.modified}` : "", st.deleted ? `−${st.deleted}` : ""].filter(Boolean).join(" ");
+    return `<span class="sb">読込 ${st.indexed}</span>${pend ? `<span class="sb mod" title="未反映（+新規 ~変更 −削除）">${pend}</span>` : ""}${st.errors ? `<span class="sb ng">エラー ${st.errors}</span>` : ""}`;
+  }
+
+  async function openScope() {
+    if (scopeUI) return;
+    let info;
+    try { info = await api.get("/api/scope"); } catch (e) { fail(e); return; }
+    const open = new Set(store.get("scopeOpen", [""]));
+    const sel = new Set();
+    const body = document.createElement("div");
+    body.className = "scope";
+    body.innerHTML = `<div class="scope-top"><div id="scSum" class="scsum"></div><span class="sp"></span>
+        <button class="btn sm" id="scCheck" title="日時とサイズだけを見て、未反映の変更を数えます（本文は読みません）">変更を確認</button>
+        <button class="btn sm pri" id="scUpdSel" disabled>選択した範囲を更新</button>
+        <button class="btn sm" id="scUpdAll" title="範囲内で変更されたファイルだけを読み込みます">すべて更新</button></div>
+      <div class="scope-grid">
+        <div><div class="hint" style="margin:0 0 6px">チェックを外したフォルダは読み込みません。行をクリックで選択（Ctrl で複数）し「選択した範囲を更新」で、その部分だけを読み込みます。</div>
+          <div class="scope-tree" id="scTree" role="tree"></div></div>
+        <div class="scope-side">
+          <h4>読み込む形式</h4><div id="scTypes"></div>
+          <h4>1 ファイルの上限</h4><div><input type="number" id="scMax" min="1" max="2048" style="width:80px"> MB</div>
+          <h4>外部フォルダ（読み取り専用）</h4><div id="scSrc"></div>
+          <button class="btn sm" id="scAdd" style="margin-top:6px">＋ フォルダを追加</button>
+          <p class="hint">共有フォルダなどを追加すると、Vault の外の資料も検索・AI の対象にできます。ファイルは変更しません。</p>
+        </div>
+      </div>`;
+    const m = modal({ title: "読み込み範囲", body, buttons: [{ label: "閉じる" }], wide: true, onClose: () => { scopeUI = null; } });
+    m.el.querySelector(".modal").classList.add("xwide");
+
+    const drawSide = () => {
+      $("#scTypes", body).innerHTML = info.type_groups.map((g) => {
+        const na = g.id === "pdf" && !info.pdf_available;
+        return `<label class="tg" title="${esc(g.exts.join(" "))}"><input type="checkbox" data-type="${esc(g.id)}"${info.types.includes(g.id) ? " checked" : ""}> ${ftBadge(g.id)} ${esc(g.label)}${na ? ' <small class="ng">要 pip install pypdf</small>' : ""}</label>`;
+      }).join("");
+      $("#scMax", body).value = info.max_mb;
+      const ext = info.sources.filter((s) => s.id !== "vault");
+      $("#scSrc", body).innerHTML = ext.length ? ext.map((s) => `<div class="srcrow"><div><b>${esc(s.label)}</b><small>${esc(s.path)}${s.exists ? "" : ' <span class="ng">見つかりません</span>'}</small></div><button class="ibtn" data-rmsrc="${esc(s.id)}" title="範囲から外す">${icon('<path d="M6 6l12 12M18 6L6 18"/>')}</button></div>`).join("") : '<div class="hint">まだありません。</div>';
+      $$("[data-type]", body).forEach((c) => (c.onchange = () => saveScope({ types: $$("[data-type]", body).filter((x) => x.checked).map((x) => x.dataset.type) }, null)));
+      $$("[data-rmsrc]", body).forEach((b) => (b.onclick = () => removeSource(b.dataset.rmsrc)));
+    };
+    const drawSum = () => {
+      const st = S.index || info.status;
+      const p = st.pending, pend = p.added + p.modified + p.deleted;
+      const job = st.job && st.job.state === "running" ? st.job : null;
+      $("#scSum", body).innerHTML = job ? `<span class="spin"></span> ${esc(job.label)} ・ ${esc(job.phase)} ${job.total ? job.done + "/" + job.total : ""}`
+        : `ノート ${st.notes} ・ 資料 ${st.docs}${st.errors ? ` ・ <span class="ng">エラー ${st.errors}</span>` : ""} ・ ${pend ? `<b class="pend">未反映 ${pend}</b>（+${p.added} ~${p.modified} −${p.deleted}）` : "未反映なし"} ・ 最終更新 ${esc(fmtTime(st.last_update))}${st.last_scan ? ` ・ 確認 ${esc(fmtTime(st.last_scan))}` : ""}`;
+      $("#scCheck", body).disabled = $("#scUpdAll", body).disabled = !!job;
+      const b = $("#scUpdSel", body);
+      b.disabled = !!job || !sel.size; b.textContent = sel.size ? `選択した範囲を更新（${sel.size}）` : "選択した範囲を更新";
+    };
+
+    const row = (it, depth, kind) => {
+      const pad = 8 + depth * 18;
+      if (kind === "file") {
+        const [lbl, cls] = FSTATE[it.status] || [it.status, ""];
+        return `<div class="srow file${sel.has(it.path) ? " sel" : ""}" data-sel="${esc(it.path)}" style="padding-left:${pad + 22}px">${ftBadge(it.group)}<span class="nm" title="${esc(it.path)}">${esc(it.name)}</span><span class="fst ${cls}" title="${esc(it.error || "")}">${esc(lbl)}</span><small>${fmtSize(it.size)}</small></div>`;
+      }
+      const isOpen = open.has(it.path);
+      const direct = info.exclude.includes(it.path);
+      const inherited = it.excluded && !direct;
+      const src = kind === "source";
+      return `<div class="srow${sel.has(it.path) ? " sel" : ""}${it.excluded ? " off" : ""}" data-sel="${esc(it.path)}" style="padding-left:${pad}px">
+          <button class="car${isOpen ? " open" : ""}" data-tog="${esc(it.path)}" aria-label="開く">▸</button>
+          ${src ? `<span class="srcic">${icon(it.path ? '<path d="M3 6.5h7l2 2h9V19H3z"/><path d="M14 13h5M16.5 10.5l2.5 2.5-2.5 2.5"/>' : '<path d="M3 6.5h7l2 2h9V19H3z"/>')}</span>` : `<input type="checkbox" data-inc="${esc(it.path)}"${it.excluded ? "" : " checked"}${inherited ? " disabled title=\"上のフォルダが除外されています\"" : ' title="読み込む"'}>`}
+          <span class="nm">${esc(it.name)}</span>${it.excluded ? "" : statBadges(it.stats)}
+          <span class="sp"></span>${it.excluded ? "" : `<button class="btn xs" data-upd="${esc(it.path)}" title="このフォルダの変更だけを読み込みます">更新</button>`}</div>
+        <div data-kids="${esc(it.path)}"${isOpen ? "" : " hidden"}></div>`;
+    };
+    async function fillKids(path, depth) {
+      const box = $$("[data-kids]", body).find((d) => d.dataset.kids === path);
+      if (!box) return;
+      let r;
+      try { r = await api.get("/api/scope/tree", { path }); } catch (e) { box.innerHTML = `<div class="hint" style="padding-left:${30 + depth * 18}px">${esc(e.message)}</div>`; return; }
+      box.innerHTML = r.folders.map((f) => row(f, depth, "folder")).join("") + r.files.map((f) => row(f, depth, "file")).join("")
+        + (r.unsupported ? `<div class="hint" style="padding-left:${30 + depth * 18}px">対象外の形式 ${r.unsupported} 件（画像など）</div>` : "")
+        + (!r.folders.length && !r.files.length && !r.unsupported ? `<div class="hint" style="padding-left:${30 + depth * 18}px">空のフォルダです</div>` : "");
+      await Promise.all(r.folders.filter((f) => open.has(f.path)).map((f) => fillKids(f.path, depth + 1)));
+    }
+    async function drawTree() {
+      const tree = $("#scTree", body);
+      const scroll = tree.scrollTop;
+      tree.innerHTML = info.sources.map((s) => row({ path: s.prefix, name: s.id === "vault" ? `Vault（${s.path}）` : s.label, excluded: false, stats: s.stats }, 0, "source")).join("");
+      await Promise.all(info.sources.filter((s) => open.has(s.prefix)).map((s) => fillKids(s.prefix, 1)));
+      tree.scrollTop = scroll;
+    }
+    async function reload() {
+      try { info = await api.get("/api/scope"); } catch (e) { fail(e); return; }
+      drawSide(); drawSum(); await drawTree();
+    }
+    async function saveScope(update, checkPrefixes) {
+      try {
+        info = { ...info, ...(await api.post("/api/scope", update)) };
+        drawSide();
+        await api.post("/api/index/check", { prefixes: checkPrefixes }).catch(() => {});
+        toast("範囲を変更しました。「更新」で反映します");
+        setTimeout(poll, 300);
+        await drawTree();
+      } catch (e) { fail(e); }
+    }
+    async function removeSource(sid) {
+      const s = info.sources.find((x) => x.id === sid);
+      if (!(await confirmBox("外部フォルダを外す", `「${esc(s.label)}」を読み込み範囲から外しますか？<br><span class="hint">ファイルは消えません。読み込んだ内容は一覧・検索・AI から消えます。</span>`, "外す"))) return;
+      try {
+        info = { ...info, ...(await api.post("/api/scope", { sources: info.sources.filter((x) => x.id !== "vault" && x.id !== sid).map((x) => ({ id: x.id, path: x.path, label: x.label })) })) };
+        await updateIndex(["@" + sid], `「${s.label}」を外しました`);
+        await reload(); await loadTree();
+      } catch (e) { fail(e); }
+    }
+
+    {
+      const tree = $("#scTree", body);
+      tree.addEventListener("click", async (e) => {
+        const tog = e.target.closest("[data-tog]");
+        if (tog) {
+          const p = tog.dataset.tog, kids = $$("[data-kids]", body).find((d) => d.dataset.kids === p);
+          if (open.has(p)) { open.delete(p); kids.hidden = true; tog.classList.remove("open"); }
+          else { open.add(p); kids.hidden = false; tog.classList.add("open"); const depth = (p ? p.split("/").length : 0) + (p.startsWith("@") ? 0 : 1); kids.innerHTML = '<div class="hint" style="padding-left:40px"><span class="spin"></span></div>'; await fillKids(p, depth); }
+          store.set("scopeOpen", [...open]);
+          return;
+        }
+        const upd = e.target.closest("[data-upd]");
+        if (upd) { updateIndex([upd.dataset.upd]); return; }
+        if (e.target.closest("[data-inc]")) return;
+        const r = e.target.closest("[data-sel]");
+        if (!r) return;
+        const p = r.dataset.sel;
+        if (!(e.ctrlKey || e.metaKey)) { const had = sel.has(p) && sel.size === 1; sel.clear(); $$(".srow.sel", body).forEach((x) => x.classList.remove("sel")); if (had) { drawSum(); return; } }
+        if (sel.has(p)) { sel.delete(p); r.classList.remove("sel"); } else { sel.add(p); r.classList.add("sel"); }
+        drawSum();
+      });
+      tree.addEventListener("change", (e) => {
+        const c = e.target.closest("[data-inc]"); if (!c) return;
+        const p = c.dataset.inc;
+        const ex = new Set(info.exclude);
+        if (c.checked) { ex.delete(p); [...ex].forEach((x) => { if (x.startsWith(p + "/")) ex.delete(x); }); } else ex.add(p);
+        saveScope({ exclude: [...ex] }, [p]);
+      });
+    }
+    $("#scMax", body).onchange = (e) => saveScope({ max_mb: e.target.value }, null);
+    $("#scCheck", body).onclick = () => checkIndex(null);
+    $("#scUpdAll", body).onclick = () => updateIndex(null);
+    $("#scUpdSel", body).onclick = () => { if (sel.size) { updateIndex([...sel]); sel.clear(); $$(".srow.sel", body).forEach((x) => x.classList.remove("sel")); drawSum(); } };
+    $("#scAdd", body).onclick = () => addSourceDialog(async (path, label) => {
+      const cur = info.sources.filter((x) => x.id !== "vault").map((x) => ({ id: x.id, path: x.path, label: x.label }));
+      try {
+        info = { ...info, ...(await api.post("/api/scope", { sources: [...cur, { path, label }] })) };
+        const added = info.sources[info.sources.length - 1];
+        open.add(added.prefix); store.set("scopeOpen", [...open]);
+        await reload(); await loadTree();
+        if (await confirmBox("外部フォルダを追加しました", `「${esc(added.label)}」を今すぐ読み込みますか？<br><span class="hint">あとで範囲を絞ってから「更新」してもかまいません。</span>`, "今すぐ読み込む")) updateIndex([added.prefix]);
+        else checkIndex([added.prefix]);
+        return true;
+      } catch (e) { fail(e); return false; }
+    });
+
+    scopeUI = { refresh: async () => { if (!scopeUI) return; await reload(); }, sum: drawSum };
+    drawSide(); drawSum(); drawTree();
+  }
+
+  function addSourceDialog(onAdd) {
+    const body = document.createElement("div");
+    body.innerHTML = `<div class="form" style="grid-template-columns:90px 1fr"><label for="brPath">場所</label><div style="display:flex;gap:6px"><input id="brPath" type="text" style="flex:1" placeholder="例: \\\\server\\share\\営業資料 ・ D:\\資料"><button class="btn sm" id="brGo">移動</button></div>
+      <label for="brLabel">表示名</label><input id="brLabel" type="text" placeholder="空欄ならフォルダ名"></div>
+      <div class="browse" id="brList"></div>`;
+    let cur = "";
+    const go = async (path) => {
+      try {
+        const r = await api.get("/api/scope/browse", { path });
+        cur = r.path; $("#brPath", body).value = r.path;
+        $("#brList", body).innerHTML = (r.parent !== null && r.parent !== undefined ? `<button class="res" data-br="${esc(r.parent)}"><b>↑ 上のフォルダ</b></button>` : "")
+          + r.dirs.map((d) => `<button class="res" data-br="${esc(d.path)}"><b>${icon('<path d="M3 6.5h7l2 2h9V19H3z"/>')} ${esc(d.name)}</b></button>`).join("")
+          + (r.dirs.length ? "" : '<div class="empty">サブフォルダはありません</div>');
+      } catch (e) { fail(e); }
+    };
+    modal({ title: "外部フォルダを追加", body, buttons: [{ label: "キャンセル" }, { label: "このフォルダを追加", primary: true, onClick: async () => { const p = $("#brPath", body).value.trim() || cur; if (!p) return false; return (await onAdd(p, $("#brLabel", body).value.trim())) ? undefined : false; } }] });
+    $("#brList", body).addEventListener("click", (e) => { const b = e.target.closest("[data-br]"); if (b) go(b.dataset.br); });
+    $("#brGo", body).onclick = () => go($("#brPath", body).value.trim());
+    $("#brPath", body).addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); go(e.target.value.trim()); } });
+    go("");
   }
 
   // ------------------------------------------------------------ 設定
@@ -1012,6 +1359,7 @@
     };
   }
   $("#btnSettings").onclick = () => openSettings();
+  $("#btnScope").onclick = () => openScope();
 
   // ------------------------------------------------------------ テーマ・レイアウト
   function applyTheme(t) { if (t === "light") document.documentElement.dataset.theme = "light"; else delete document.documentElement.dataset.theme; if (S.graph) S.graph.draw(); }
@@ -1067,6 +1415,8 @@
       await loadTree();
     } catch (e) { $("#body").innerHTML = `<div class="welcome"><h1>接続できません</h1><p>${esc(e.message)}</p></div>`; return; }
     renderMain(); renderRight();
+    if (S.state.index) await applyIndexStatus(S.state.index);
+    setTimeout(poll, 1000);
     const hash = decodeURIComponent(location.hash.slice(1));
     const start = (hash && S.tree.some((n) => n.path === hash) && hash) || (store.get("last") && S.tree.some((n) => n.path === store.get("last")) && store.get("last")) || resolve("ホーム") || (S.tree[0] && S.tree[0].path);
     if (start) openNote(start);
