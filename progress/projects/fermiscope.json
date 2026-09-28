@@ -1,0 +1,72 @@
+{
+  "slug": "fermiscope",
+  "name": "FermiScope",
+  "path": "fermiscope/",
+  "summary": "証拠に基づくフェルミ推定。数値計算はすべて Python で決定論的に行い、出典・仮定・監査ログを付ける。",
+  "status": "paused",
+  "phase": "Phase 1〜2 の監査対応済み。次は実行状態の復元",
+  "progress": 70,
+  "started": "2026-07-10",
+  "ports": [
+    8720
+  ],
+  "ci": false,
+  "portal": true,
+  "stack": [
+    "Python",
+    "NumPy/SciPy/Pint",
+    "Docker"
+  ],
+  "milestones": [
+    {
+      "title": "推定パイプライン初版",
+      "state": "done",
+      "date": "2026-07-10"
+    },
+    {
+      "title": "監査 Phase 1（APIキー漏えい・検証・CSV抽出など）",
+      "state": "done",
+      "date": "2026-07-14"
+    },
+    {
+      "title": "wheel 配布・Docker・CI 整備（Phase 2 の一部）",
+      "state": "done",
+      "date": "2026-07-14"
+    },
+    {
+      "title": "run ID 単位の SSE・再読込時の実行状態復元",
+      "state": "todo"
+    },
+    {
+      "title": "確認ウィザード・既知情報の採用・アクセシビリティ",
+      "state": "todo"
+    }
+  ],
+  "next": [
+    "SSE を run ID 単位に分離し、再接続・状態復元を実装",
+    "調査開始前の確認ウィザード"
+  ],
+  "risks": [
+    "Brave アダプタは実キーでの疎通未確認",
+    "Docker ビルドは未検証",
+    "ルート CI（.github/workflows）に未登録"
+  ],
+  "log": [
+    {
+      "date": "2026-07-14",
+      "summary": "監査対応 Phase 1-2〜1-6、wheel/Docker/CI 整備、設計判断の文書化",
+      "ref": "#32〜#34"
+    },
+    {
+      "date": "2026-07-11",
+      "summary": "監査修正の第1弾",
+      "ref": "#31"
+    },
+    {
+      "date": "2026-07-10",
+      "summary": "初版",
+      "ref": "#28, #30"
+    }
+  ],
+  "updated": "2026-07-14"
+}

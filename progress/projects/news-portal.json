@@ -1,0 +1,81 @@
+{
+  "slug": "news-portal",
+  "name": "Prism ニュースポータル",
+  "path": "news-portal/",
+  "summary": "多数の RSS/Atom をカテゴリ別に束ねて表示するニュース収集ポータル。過去ログ×AIのリサーチ画面つき。",
+  "status": "maintenance",
+  "phase": "機能は揃った。運用で改善中",
+  "progress": 85,
+  "started": "2026-07-07",
+  "ports": [
+    8780
+  ],
+  "ci": false,
+  "portal": true,
+  "stack": [
+    "Python 標準ライブラリ",
+    "Selenium（任意）"
+  ],
+  "milestones": [
+    {
+      "title": "フィード集約・カテゴリ分光 UI",
+      "state": "done",
+      "date": "2026-07-07"
+    },
+    {
+      "title": "プロキシ設定・接続テスト",
+      "state": "done",
+      "date": "2026-07-10"
+    },
+    {
+      "title": "推論系ローカルLLMの think 分離",
+      "state": "done",
+      "date": "2026-07-21"
+    },
+    {
+      "title": "過去ログ自動保存・リサーチ画面",
+      "state": "done",
+      "date": "2026-07-30"
+    },
+    {
+      "title": "本文取得の Selenium 2段構え",
+      "state": "done",
+      "date": "2026-08-07"
+    },
+    {
+      "title": "自動テスト・CI",
+      "state": "todo"
+    }
+  ],
+  "next": [
+    "自動テストと CI の追加",
+    "0件になる情報源の定期点検"
+  ],
+  "risks": [
+    "テストがなく CI 対象外",
+    "フィード URL の変更・廃止で取得できなくなる"
+  ],
+  "log": [
+    {
+      "date": "2026-08-07",
+      "summary": "本文取得を urllib→Selenium の2段構えに。WebDriver パスを GUI から指定",
+      "ref": "#45"
+    },
+    {
+      "date": "2026-07-30",
+      "summary": "過去ログ自動保存、リサーチ画面、AIパネルのバグ修正",
+      "ref": "#37"
+    },
+    {
+      "date": "2026-07-10",
+      "summary": "プロキシ強化、0件の情報源対策、think 分離",
+      "ref": "#21, #22, #26"
+    },
+    {
+      "date": "2026-07-07",
+      "summary": "初版",
+      "ref": "#16"
+    }
+  ],
+  "updated": "2026-08-07"
+}

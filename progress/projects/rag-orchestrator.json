@@ -1,0 +1,61 @@
+{
+  "slug": "rag-orchestrator",
+  "name": "RAG Orchestrator",
+  "path": "rag-orchestrator/",
+  "summary": "同じコーパス・同じ質問を複数の RAG 実装へ並列実行して比較・統合。ナレッジグラフ可視化つき。",
+  "status": "maintenance",
+  "phase": "外部エンジン拡充済み",
+  "progress": 80,
+  "started": "2026-08-04",
+  "ports": [
+    8750
+  ],
+  "ci": true,
+  "portal": true,
+  "stack": [
+    "Python 標準ライブラリ",
+    "ローカルLLM"
+  ],
+  "milestones": [
+    {
+      "title": "組み込み GraphRAG / Vector / BM25 / Hybrid",
+      "state": "done",
+      "date": "2026-08-04"
+    },
+    {
+      "title": "「情報がみつからない」6経路の修正",
+      "state": "done",
+      "date": "2026-08-04"
+    },
+    {
+      "title": "外部アダプタ（nano-graphrag / LightRAG / MiniRAG / HippoRAG 2 / RAG-Anything）",
+      "state": "done",
+      "date": "2026-08-07"
+    },
+    {
+      "title": "NRAExplorer（エージェント型の多段推論）",
+      "state": "todo"
+    }
+  ],
+  "next": [
+    "NRAExplorer の要否検討",
+    "大規模コーパス向けにインデックス保存方式を見直す"
+  ],
+  "risks": [
+    "外部アダプタはライブラリ側 API の変化に弱い（実験的扱い）",
+    "JSON 保存のため数万チャンク規模には向かない"
+  ],
+  "log": [
+    {
+      "date": "2026-08-07",
+      "summary": "外部エンジンアダプタ3種を追加、グラフタブで外部エンジンのグラフ表示",
+      "ref": "#44"
+    },
+    {
+      "date": "2026-08-04",
+      "summary": "初版と GraphRAG 監査修正",
+      "ref": "#43"
+    }
+  ],
+  "updated": "2026-08-07"
+}

@@ -1,0 +1,64 @@
+{
+  "slug": "deep-research-orchestrator",
+  "name": "Deep Research Orchestrator",
+  "path": "deep-research-orchestrator/",
+  "summary": "複数の Deep Research 実装へ同じ調査を並列送信し、進捗・引用・コストを比較して根拠付き統合レポートを生成。",
+  "status": "maintenance",
+  "phase": "受入マトリクス完成。実エンジン設定待ち",
+  "progress": 80,
+  "started": "2026-07-24",
+  "ports": [
+    8802
+  ],
+  "ci": false,
+  "portal": true,
+  "stack": [
+    "FastAPI",
+    "Celery",
+    "PostgreSQL",
+    "Next.js",
+    "SearXNG",
+    "Docker Compose"
+  ],
+  "milestones": [
+    {
+      "title": "バックエンド中核・Runner 共通基盤",
+      "state": "done",
+      "date": "2026-07-24"
+    },
+    {
+      "title": "受入テスト群・インフラ",
+      "state": "done",
+      "date": "2026-07-24"
+    },
+    {
+      "title": "フロントエンド・実アダプタ・E2E",
+      "state": "done",
+      "date": "2026-07-24"
+    },
+    {
+      "title": "実エンジンでの end-to-end 確認",
+      "state": "todo"
+    },
+    {
+      "title": "GitHub Actions CI",
+      "state": "todo"
+    }
+  ],
+  "next": [
+    "ローカルLLMと SearXNG を実設定して end-to-end で確認",
+    "CI ワークフローの追加"
+  ],
+  "risks": [
+    "open-deep-research の PyPI 版が GitHub main より古い",
+    "rate limit が API インスタンス単位"
+  ],
+  "log": [
+    {
+      "date": "2026-07-24",
+      "summary": "バックエンド・フロント・実アダプタ・受入テスト・ドキュメント一式",
+      "ref": "#36"
+    }
+  ],
+  "updated": "2026-07-24"
+}
