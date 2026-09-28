@@ -24,6 +24,7 @@ from collections import Counter
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
 from .dataio import is_missing, parse_number
+from .jobs import JobCancelled
 from .llm import LLMClient, LLMError
 from .prep import PrepError, build_spec, make_examples, split_indices
 
@@ -694,8 +695,11 @@ def run_augmentation(table: dict, spec_in: dict, params: dict, job, cfg: dict) -
                 job.update(pct=2.0 + 78.0 * min(1.0, got / max(n_target, 1)),
                            phase=f"合成データを生成中 {got}/{n_target}", generated=got, target=n_target,
                            batches=done_batches, batches_est=total_batches_est)
+    except JobCancelled:
+        ex.shutdown(wait=False, cancel_futures=True)              # 中止は残りの呼び出しを捨てて即戻る
+        raise
     except BaseException:
-        ex.shutdown(wait=False, cancel_futures=True)              # 中止 / 失敗時は残りの呼び出しを捨てて即戻る
+        ex.shutdown(wait=True, cancel_futures=True)               # 失敗時は実行中のバッチの完了を待つ
         raise
     else:
         ex.shutdown(wait=True)

@@ -7,6 +7,7 @@ import os
 import random
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -539,12 +540,15 @@ class TestMockLLM(unittest.TestCase):
         MockState.garbage = True
         job = Job("a", {})
         with self.assertRaises(PrepError) as cm:
-            augment.run_augmentation(t, SPEC, {"n_total": 30, "mode": "balance", "seed": 1}, job, self.cfg())
+            augment.run_augmentation(t, SPEC, {"n_total": 30, "mode": "balance", "seed": 1, "concurrency": 2}, job,
+                                     self.cfg())
         self.assertIn("失敗", str(cm.exception))
+        n_calls = len(MockState.calls)
+        time.sleep(0.3)
+        self.assertEqual(len(MockState.calls), n_calls)                     # 失敗後に実行中の呼び出しが漏れない
         self.assertTrue(any("JSON" in line for line in job.log_lines))
 
     def test_extract_json_is_fast_on_pathological_input(self):
-        import time
         t0 = time.time()
         self.assertIsNone(augment.extract_json("{" * 50000))
         self.assertLess(time.time() - t0, 2.0)

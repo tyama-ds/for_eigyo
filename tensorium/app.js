@@ -13,9 +13,10 @@
     get(k, d) { try { const v = localStorage.getItem("tensorium." + k); return v === null ? d : JSON.parse(v); } catch (_) { return d; } },
     set(k, v) { try { localStorage.setItem("tensorium." + k, JSON.stringify(v)); } catch (_) { /* ignore */ } },
   };
-  const FAM_COLOR = { hf: "var(--violet)", sbert: "var(--cyan)", scratch: "var(--amber)", tabular: "var(--green)", baseline: "var(--gray)" };
-  const FAM_SERIES = { hf: 6, sbert: 0, scratch: 3, tabular: 2, baseline: null };   // dataviz パレットの slot（0 起点）
-  const FAM_ICON = { hf: "🧬", sbert: "🧭", scratch: "⚡", tabular: "▦", baseline: "▁" };
+  const FAM_COLOR = { hf: "var(--violet)", sbert: "var(--cyan)", scratch: "var(--amber)", looped: "var(--pink)", tabular: "var(--green)", baseline: "var(--gray)" };
+  const FAM_SERIES = { hf: 6, sbert: 0, scratch: 3, looped: 4, tabular: 2, baseline: null };   // dataviz パレットの slot（0 起点）
+  const FAM_ICON = { hf: "🧬", sbert: "🧭", scratch: "⚡", looped: "🔁", tabular: "▦", baseline: "▁" };
+  const isLoopedRun = (m) => !!(m && (m.family === "looped" || (m.family === "tabular" && m.hparams && +m.hparams.loops > 1)));
   const ROLE_LABEL = { target: "目的変数", text: "テキスト", numeric: "数値", categorical: "カテゴリ", ignore: "使わない" };
   const TYPE_LABEL = { numeric: "数値", categorical: "カテゴリ", text: "テキスト", datetime: "日時", id: "ID", empty: "空" };
   const LANG_LABEL = { ja: "日本語", multi: "多言語", en: "英語" };
@@ -490,6 +491,7 @@
       `<span class="chip">${fmtDur(meta.duration_sec)} · ${esc(meta.device || "")}</span>`,
       meta.n_params ? `<span class="chip">${fmtInt(meta.n_params)} params</span>` : "",
       meta.best_epoch ? `<span class="chip">best epoch ${meta.best_epoch}/${meta.epochs_run}</span>` : "",
+      meta.loops_selected ? `<span class="chip" style="border-color:var(--pink)">🔁 ${fmtInt(meta.loops_selected)} ループで推論</span>` : "",
       `<span class="chip">${esc(meta.dataset && meta.dataset.name)}</span>`,
     ].join("");
     const ev = meta.eval && meta.eval[S.evalSplit];
@@ -521,6 +523,15 @@
     }
     if (meta.curves && meta.curves.length) html += `<div class="grid-2"><div class="card"><div class="chart-title">損失の推移</div><div class="chart short"><canvas id="e-curve"></canvas></div></div>
       <div class="card"><div class="chart-title">検証指標の推移</div><div class="chart short"><canvas id="e-curve2"></canvas></div></div></div>`;
+    if (meta.loop_curve && meta.loop_curve.length) {
+      const lc = meta.loop_curve;
+      const nm = (lc[0].name || "").toUpperCase();
+      html += `<div class="card"><div class="card-head"><h2>🔁 ループ回数と検証指標 <span class="muted small">Looped Transformer · test-time compute</span></h2>
+        <span class="chips"><span class="chip">学習時 ${fmtInt(meta.loops_train)} ループ</span><span class="chip" style="border-color:var(--pink)">推論時 ${fmtInt(meta.loops_selected)} ループ${meta.hparams && meta.hparams.loops_eval_requested ? "（指定）" : "（検証で自動選択）"}</span></span></div>
+        <p class="lead">再帰コアを何回適用するかで精度がどう変わるか。学習時より多く回しても改善するなら深さが効く問題です。予測画面でループ回数を変えて試せます。</p>
+        <div class="chart short"><canvas id="e-loops"></canvas></div>
+        <div class="hint">指標: ${esc(nm)}${isReg ? "（小さいほど良い）" : "（大きいほど良い）"}。学習時の最大ループ回数より右は外挿（学習で見ていない深さ）。</div></div>`;
+    }
     const ex = ev.examples || [];
     if (ex.length) {
       html += `<div class="card"><div class="card-head"><h2>${isReg ? "誤差が大きい例" : "誤分類の例（確信度の高い順）"} <span class="muted small">上位 ${ex.length} 件 · 行番号は元ファイルの行（ヘッダー = 1）</span></h2></div>
@@ -536,6 +547,10 @@
         Charts.hist($("#e-resid"), { edges: ev.plot.residual_hist.edges, counts: ev.plot.residual_hist.counts, xLabel: "残差", yLabel: "件数", color: th.series[1], zeroLine: true });
       } else {
         Charts.heatmap($("#e-cm"), { matrix: ev.plot.confusion, labels: ev.plot.classes });
+      }
+      if (meta.loop_curve && meta.loop_curve.length) {
+        const lc = meta.loop_curve.filter((c) => c.metric !== null && c.metric !== undefined);
+        Charts.line($("#e-loops"), { series: [{ name: (lc[0] && lc[0].name || "metric").toUpperCase(), points: lc.map((c) => [c.loops, c.metric]), color: th.series[4], dots: true }], xLabel: "ループ回数", yLabel: isReg ? "誤差" : "スコア", yMin: 0, yMax: isReg ? undefined : 1, xTicks: lc.map((c) => c.loops).filter((x, i, a) => a.length <= 12 || i % Math.ceil(a.length / 12) === 0) });
       }
       if (meta.curves && meta.curves.length) {
         const cv = meta.curves;
@@ -556,6 +571,9 @@
     sel.innerHTML = S.runs.map((m) => `<option value="${m.id}" ${m.id === S.predRun ? "selected" : ""}>${esc(runLabel(m))}</option>`).join("");
     predMeta = S.runs.find((m) => m.id === S.predRun);
     const sp = predMeta.spec;
+    const lw = $("#p-loops-wrap");
+    lw.classList.toggle("hidden", !isLoopedRun(predMeta));
+    if (isLoopedRun(predMeta)) { $("#p-loops").value = predMeta.loops_selected || (predMeta.hparams && predMeta.hparams.loops) || 1; $("#p-loops-hint").textContent = `学習時 ${predMeta.loops_train || (predMeta.hparams && predMeta.hparams.loops)} ループ · 検証で選ばれた回数 ${predMeta.loops_selected || "–"}`; }
     const req = [].concat(sp.text_cols, sp.num_cols, sp.cat_cols);
     $("#p-req").innerHTML = `必要な列: ${req.map((c) => `<code>${esc(c)}</code>`).join(" ")} → 予測: <b>${esc(sp.target)}</b>（${predMeta.task === "regression" ? "回帰" : "分類"}${predMeta.classes ? " · " + predMeta.classes.length + " クラス" : ""}）`;
     $("#p-form").innerHTML = [
@@ -569,7 +587,7 @@
   async function predictFile(file) {
     if (!file || !S.predRun) return;
     const t = document.createElement("div"); t.className = "toast"; t.innerHTML = `<span class="spinner"></span><span>${esc(file.name)} を予測中…（モデル読み込みに時間がかかることがあります）</span>`; $("#toasts").appendChild(t);
-    try { const r = await upload("/api/predict/upload", file, { "X-Run-Id": S.predRun }); r.filename = file.name; S.predResult = r; renderPredResult(r); toast(`${fmtInt(r.predictions.length)} 行を予測しました`, "ok", 3000); updateStepper(); }
+    try { const r = await upload("/api/predict/upload", file, Object.assign({ "X-Run-Id": S.predRun }, predLoops() ? { "X-Loops": String(predLoops()) } : {})); r.filename = file.name; S.predResult = r; renderPredResult(r); toast(`${fmtInt(r.predictions.length)} 行を予測しました`, "ok", 3000); updateStepper(); }
     catch (e) { toast(e.message, "err", 9000); }
     finally { t.remove(); }
   }
@@ -590,8 +608,9 @@
         if (nums.length) { const mse = nums.reduce((s, [a, p]) => s + (p - a) ** 2, 0) / nums.length; const mae = nums.reduce((s, [a, p]) => s + Math.abs(p - a), 0) / nums.length; metric = `実測との比較（${nums.length} 行）: RMSE ${fmt(Math.sqrt(mse))} · MAE ${fmt(mae)}`; }
       } else if (pairs.length) { const acc = pairs.filter(([a, p]) => String(a) === String(p.pred)).length / pairs.length; metric = `実測との比較（${pairs.length} 行）: 正解率 ${fmtPct(acc)}`; }
     }
-    $("#p-res-metric").textContent = metric;
+    $("#p-res-metric").textContent = (r.loops ? `🔁 ${fmtInt(r.loops)} ループで推論　` : "") + metric;
   }
+  function predLoops() { const el = $("#p-loops"); if (!el || $("#p-loops-wrap").classList.contains("hidden")) return null; const v = parseInt(el.value || "0", 10); return v > 0 ? v : null; }
   function downloadCsv() {
     const r = S.predResult; if (!r) return;
     const isReg = r.task === "regression";
@@ -609,12 +628,13 @@
     const row = {}; $$("#p-form [data-col]").forEach((el) => row[el.dataset.col] = el.value);
     const btn = $("#p-one"); btn.disabled = true;
     try {
-      const r = await POST("/api/predict", { run_id: S.predRun, rows: [row], columns: Object.keys(row) });
+      const r = await POST("/api/predict", { run_id: S.predRun, rows: [row], columns: Object.keys(row), loops: predLoops() });
       const p = r.predictions[0];
-      if (r.task === "regression") $("#p-one-res").innerHTML = `<div class="sep"></div><div class="dim small">${esc(r.target)} の予測値</div><div class="result-hero">${fmt(p.pred)}</div>`;
+      const loopNote = r.loops ? `<div class="dim small">🔁 ${fmtInt(r.loops)} ループで推論</div>` : "";
+      if (r.task === "regression") $("#p-one-res").innerHTML = `<div class="sep"></div><div class="dim small">${esc(r.target)} の予測値</div><div class="result-hero">${fmt(p.pred)}</div>${loopNote}`;
       else {
         const order = r.classes.map((c, i) => [c, p.probs[i]]).sort((a, b) => b[1] - a[1]);
-        $("#p-one-res").innerHTML = `<div class="sep"></div><div class="dim small">${esc(r.target)} の予測</div><div class="result-hero">${esc(p.pred)}</div><div class="dim small" style="margin-bottom:8px">確信度 ${fmtPct(p.prob)}</div>
+        $("#p-one-res").innerHTML = `<div class="sep"></div><div class="dim small">${esc(r.target)} の予測</div><div class="result-hero">${esc(p.pred)}</div><div class="dim small" style="margin-bottom:8px">確信度 ${fmtPct(p.prob)}</div>${loopNote}
           <div class="probs">${order.slice(0, 8).map(([c, v]) => `<div class="prob"><span title="${esc(c)}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(c)}</span><span class="track"><i style="width:${Math.round(100 * v)}%"></i></span><span class="num dim">${fmtPct(v)}</span></div>`).join("")}</div>`;
       }
     } catch (e) { toast(e.message, "err", 8000); }
@@ -634,7 +654,7 @@
       ${filt.map((m) => { const pk = m.task === "regression" ? "RMSE" : "F1"; const v = primaryOf(m, "val"), t = primaryOf(m, "test"); return `<tr class="${best.has(m.id) ? "best-row" : ""}" data-id="${m.id}">
         <td><input class="name-in" value="${esc(m.name)}" data-rename="${m.id}" title="クリックして名前を編集"></td><td class="dim">${fmtDate(m.created)}</td>
         <td><span class="chip" style="border-color:${FAM_COLOR[m.family]}">${FAM_ICON[m.family] || ""} ${esc(m.family_name || m.family)}</span></td>
-        <td class="mono small" title="${esc(m.model || "")}">${esc(shortModel(m.model))}</td><td>${m.task === "regression" ? "回帰" : "分類"} · ${esc(m.target)}${m.n_synthetic ? ` <span class="dim small">⚗+${fmtInt(m.n_synthetic)}</span>` : ""}</td>
+        <td class="mono small" title="${esc(m.model || "")}">${esc(shortModel(m.model))}${m.loops_selected ? ` <span class="dim">🔁${m.loops_selected}</span>` : ""}</td><td>${m.task === "regression" ? "回帰" : "分類"} · ${esc(m.target)}${m.n_synthetic ? ` <span class="dim small">⚗+${fmtInt(m.n_synthetic)}</span>` : ""}</td>
         <td class="num">${best.has(m.id) ? "🏆 " : ""}${pk} <b>${v === null || v === undefined ? "–" : fmt(v)}</b></td><td class="num">${t === null || t === undefined ? "–" : fmt(t)}</td><td class="num dim">${fmtDur(m.duration_sec)}</td>
         <td><span class="row" style="gap:4px"><button class="btn xs" data-act="eval">評価</button><button class="btn xs" data-act="predict">予測</button><button class="btn xs danger" data-act="del">削除</button></span></td></tr>`; }).join("")}</tbody>`;
     $$("#r-tbl [data-act]").forEach((b) => b.onclick = async () => {

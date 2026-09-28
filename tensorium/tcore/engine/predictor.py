@@ -36,6 +36,7 @@ class Predictor:
         import torch
 
         from .common import FusionModel, TabularFeatures, parse_hidden
+        from .looped import LoopedFTTransformer, LoopedTextEncoder, loop_core_kwargs
         from .pipeline import feature_tensors
         from .sbert import SentenceEmbedder
         from .tabular import FTTransformer
@@ -81,9 +82,22 @@ class Predictor:
             self.model = FusionModel(enc, enc.out_dim, tab, [], n_out, 0.0)
             self.model.load_state_dict(torch.load(self.dir / "model.pt", map_location="cpu"))
             self.text_collate = ScratchCollate(tokenizer, hp["max_len"], self.device)
+        elif self.family == "looped":
+            tokenizer = ScratchTokenizer.from_dict(self.arch["tokenizer"])
+            enc = LoopedTextEncoder(tokenizer.vocab_size, hp["d_model"], hp["nhead"], hp["ff_dim"], hp["dropout"],
+                                    hp["max_len"], hp["pooling"], **loop_core_kwargs(hp))
+            self.model = FusionModel(enc, enc.out_dim, tab, [], n_out, 0.0)
+            self.model.load_state_dict(torch.load(self.dir / "model.pt", map_location="cpu"))
+            self.text_collate = ScratchCollate(tokenizer, hp["max_len"], self.device)
         elif self.family == "tabular":
-            enc = FTTransformer(self.arch["num_dim"], self.arch["cat_cards"], hp["d_token"], hp["nhead"],
-                                hp["layers"], hp["dropout"])
+            if self.arch.get("looped"):
+                enc = LoopedFTTransformer(self.arch["num_dim"], self.arch["cat_cards"], hp["d_token"], hp["nhead"],
+                                          hp["dropout"], prelude_layers=0, core_layers=hp["layers"], coda_layers=0,
+                                          loops=hp["loops"], loops_min=hp.get("loops_min", 0),
+                                          loops_eval=hp.get("loops_eval", 0), backprop_loops=0, injection="concat")
+            else:
+                enc = FTTransformer(self.arch["num_dim"], self.arch["cat_cards"], hp["d_token"], hp["nhead"],
+                                    hp["layers"], hp["dropout"])
             self.model = FusionModel(enc, enc.out_dim, None, [], n_out, 0.0)
             self.model.load_state_dict(torch.load(self.dir / "model.pt", map_location="cpu"))
         else:
@@ -94,15 +108,21 @@ class Predictor:
     def required_columns(self) -> list[str]:
         return list(self.spec["text_cols"]) + list(self.spec["num_cols"]) + list(self.spec["cat_cols"])
 
-    def predict_table(self, table: dict) -> dict:
+    @property
+    def looped(self) -> bool:
+        model = getattr(self, "model", None)
+        return self._impl is None and hasattr(getattr(model, "encoder", None), "set_loops")
+
+    def predict_table(self, table: dict, loops: int | None = None) -> dict:
         missing = [c for c in self.required_columns() if c not in table["columns"]]
         if missing:
             raise PrepError("予測に必要な列がありません: " + ", ".join(missing))
         examples = make_examples(table, self.spec, require_target=False)
+        loops = max(1, min(64, int(loops))) if loops else None
         if self._impl is not None:
             preds, probs = self._impl.predict_examples(examples)
         else:
-            preds, probs = self._predict_torch(examples)
+            preds, probs = self._predict_torch(examples, loops if self.looped else None)
         rows = []
         for k, e in enumerate(examples):
             item: dict = {"row": e["i"]}
@@ -115,6 +135,8 @@ class Predictor:
             rows.append(item)
         out = {"run_id": self.run_id, "task": self.task, "target": self.spec["target"],
                "classes": self.classes, "predictions": rows}
+        if self.looped:
+            out["loops"] = loops or self.model.encoder.loops_eval
         if self.spec["target"] in table["columns"]:
             out["actual"] = self._actuals(table, examples)
         return out
@@ -127,7 +149,7 @@ class Predictor:
             vals.append(None if is_missing(v) else str(v).strip())
         return vals
 
-    def _predict_torch(self, examples: list[dict]):
+    def _predict_torch(self, examples: list[dict], loops: int | None = None):
         import torch
 
         feats = self._feature_tensors({"preproc": self.preproc}, examples)
@@ -140,6 +162,8 @@ class Predictor:
             for s in range(0, len(examples), PRED_BATCH):
                 sl = slice(s, s + PRED_BATCH)
                 b: dict = {}
+                if loops:
+                    b["loops"] = loops
                 if self.text_collate is not None:
                     b.update(self.text_collate(texts[sl]))
                 if emb is not None:

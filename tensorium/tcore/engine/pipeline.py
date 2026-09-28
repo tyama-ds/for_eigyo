@@ -14,6 +14,7 @@ from ..prep import PrepError
 from ..runs import new_run_id, run_dir, save_meta, write_json
 from .common import FusionModel, TabularFeatures, count_params, make_loss, parse_hidden, set_seed
 from .datasetup import build_meta, evaluate_split, prepare
+from .looped import LoopedFTTransformer, LoopedTextEncoder, loop_core_kwargs
 from .sbert import SentenceEmbedder
 from .tabular import FTTransformer
 from .text import (
@@ -293,21 +294,92 @@ def build_model(bundle: dict, device: str, cfg: dict, job):
             torch.save(model.state_dict(), d / "model.pt")
         return model, collate, None, arch, saver
 
+    if fam == "looped":
+        train_texts = [bundle["examples"][i]["text"] for i in bundle["split"]["train"]]
+        mode = hp["tokenizer"] if hp["tokenizer"] != "auto" else ScratchTokenizer.detect_mode(train_texts)
+        tokenizer = ScratchTokenizer(mode).fit(train_texts, hp["vocab_size"])
+        job.log(f"トークナイザ: {'文字単位' if mode == 'char' else '単語単位'} / 語彙 {tokenizer.vocab_size}")
+        try:
+            enc = LoopedTextEncoder(tokenizer.vocab_size, hp["d_model"], hp["nhead"], hp["ff_dim"], hp["dropout"],
+                                    hp["max_len"], hp["pooling"], **loop_core_kwargs(hp))
+        except ValueError as e:
+            raise PrepError(str(e)) from e
+        core = enc.core
+        job.log(f"Looped Transformer: prelude {hp['prelude_layers']} 層 → コア {hp['core_layers']} 層 × "
+                f"{core.loops_min}〜{core.loops} ループ（入力注入: {hp['injection']}）→ coda {hp['coda_layers']} 層")
+        model = FusionModel(enc, enc.out_dim, tab, [], n_out, hp["dropout"])
+        collate = ScratchCollate(tokenizer, hp["max_len"], device)
+        arch.update({"enc_dim": enc.out_dim, "tokenizer": tokenizer.to_dict(), "looped": True})
+
+        def saver(d):
+            torch.save(model.state_dict(), d / "model.pt")
+        return model, collate, None, arch, saver
+
     if fam == "tabular":
         spec = bundle["spec"]
         cards = bundle["preproc"].cat.cardinalities if spec["cat_cols"] else []
+        looped = int(hp.get("loops", 1) or 1) > 1
         try:
-            enc = FTTransformer(len(spec["num_cols"]), cards, hp["d_token"], hp["nhead"], hp["layers"], hp["dropout"])
+            if looped:
+                enc = LoopedFTTransformer(len(spec["num_cols"]), cards, hp["d_token"], hp["nhead"], hp["dropout"],
+                                          prelude_layers=0, core_layers=hp["layers"], coda_layers=0, loops=hp["loops"],
+                                          loops_min=hp.get("loops_min", 0), loops_eval=hp.get("loops_eval", 0),
+                                          backprop_loops=hp.get("backprop_loops", 0), injection="concat")
+                job.log(f"Looped FT-Transformer: コア {hp['layers']} 層 × "
+                        f"{enc.core.loops_min}〜{enc.core.loops} ループ")
+            else:
+                enc = FTTransformer(len(spec["num_cols"]), cards, hp["d_token"], hp["nhead"], hp["layers"],
+                                    hp["dropout"])
         except ValueError as e:
             raise PrepError(str(e)) from e
         model = FusionModel(enc, enc.out_dim, None, [], n_out, hp["dropout"])
-        arch.update({"enc_dim": enc.out_dim, "num_dim": len(spec["num_cols"]), "cat_cards": cards})
+        arch.update({"enc_dim": enc.out_dim, "num_dim": len(spec["num_cols"]), "cat_cards": cards, "looped": looped})
 
         def saver(d):
             torch.save(model.state_dict(), d / "model.pt")
         return model, None, None, arch, saver
 
     raise PrepError(f"このファミリーは torch パイプラインでは扱えません: {fam}")
+
+
+# ---------------------------------------------------------------- Looped: ループ回数の曲線
+
+MAX_LOOP_EVAL = 32
+
+
+def evaluate_loops(trainer: Trainer, bundle: dict, enc, hp: dict, job) -> dict:
+    """検証データでループ回数 1..R の指標を測り、推論時のループ回数を決める（0 = 最良を自動選択）。"""
+    idx = bundle["split"]["val"] or bundle.get("train_real") or bundle["split"]["train"]
+    if not idx:
+        return {}
+    train_loops = enc.core.loops
+    requested = int(hp.get("loops_eval", 0) or 0)
+    r_max = min(MAX_LOOP_EVAL, max(train_loops * 2, 8, requested))
+    curve = []
+    for r in range(1, r_max + 1):
+        job.check_cancel()
+        enc.set_loops(r)
+        preds, probs, loss = trainer.predict(idx)
+        ev = evaluate_split(bundle, idx, preds, probs)
+        name, score = M.primary_metric(bundle["task"], ev["metrics"])
+        curve.append({"loops": r, "metric": abs(score) if score is not None else None, "score": score,
+                      "loss": loss, "name": name})
+    valid = [c for c in curve if c["score"] is not None]
+    if requested > 0:
+        chosen = requested
+    elif valid:
+        chosen = max(valid, key=lambda c: (c["score"], -c["loops"]))["loops"]
+    else:
+        chosen = train_loops
+    enc.set_loops(chosen)
+    hp["loops_eval_requested"] = requested
+    hp["loops_eval"] = chosen
+    best = next((c for c in curve if c["loops"] == chosen), None)
+    job.log("ループ回数 → 検証指標: "
+            + ", ".join(f"{c['loops']}:{c['metric']:.4g}" for c in curve if c["metric"] is not None))
+    job.log(f"推論時のループ回数: {chosen}{'（自動選択）' if requested == 0 else '（指定）'}"
+            + (f" / {best['name']} = {best['metric']:.4g}" if best and best["metric"] is not None else ""))
+    return {"loop_curve": curve, "loops_selected": chosen, "loops_train": train_loops}
 
 
 # ---------------------------------------------------------------- エントリ
@@ -338,6 +410,12 @@ def train_run(table: dict, req: dict, job) -> dict:
     trainer = Trainer(model, b, device, job, make_batch, loss_fn)
     fit_info = trainer.fit(b["split"]["train"], b["split"]["val"])
 
+    loop_info = {}
+    if hasattr(model.encoder, "set_loops"):
+        job.update(phase="ループ回数ごとに評価中", pct=97.0)
+        loop_info = evaluate_loops(trainer, b, model.encoder, b["hparams"], job)
+        arch["hparams"] = b["hparams"]
+
     job.update(phase="評価中", pct=99.0)
     evals = {}
     for part in ("val", "test"):
@@ -360,7 +438,7 @@ def train_run(table: dict, req: dict, job) -> dict:
     write_json(d / "preproc.json", b["preproc"].to_dict())
     write_json(d / "arch.json", arch)
     extra = {"eval": evals, "curves": job.curves, "step_losses": job.step_losses, "device": device,
-             "n_params": n_params, "n_trainable": n_train, **fit_info}
+             "n_params": n_params, "n_trainable": n_train, **fit_info, **loop_info}
     meta = build_meta(b, run_id, req, extra, started)
     save_meta(run_id, meta)
     job.update(pct=100.0, phase="完了")
