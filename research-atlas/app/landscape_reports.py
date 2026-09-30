@@ -3,10 +3,12 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
+import re
 
 from . import field_llm, large_storage, storage
 from .field_exports import _csv
 from .foresight_llm import _number_warnings, _validation
+from .landscape_evidence import input_summary, prepare_papers
 
 
 class NarrativeValidationError(RuntimeError):
@@ -34,6 +36,14 @@ migration, causal influence, actual technology adoption, or a validated future p
 sample counts, date exclusions, gaps and uncertainty must be respected. A stable result is not proof of no change.
 Mention missing abstracts or insufficient evidence explicitly. Distinguish measured observations from hypotheses.
 Compare actual supplied abstract content and term changes; do not just repeat the arrow's direction.
+Lead with specific paper content. Write these sections: (1) before-period research objects, methods and
+reported findings, (2) after-period research objects, methods and reported findings, (3) what changed and
+what stayed similar, linked to named papers from BOTH periods, (4) how that content relates to the measured
+centroid change and alternative explanations, (5) a concrete follow-up question grounded in those papers.
+Use 2-3 concise Japanese sentences per section. If abstracts support no content change, explain the observed
+commonality instead. Caveats and template/methodological boilerplate must not replace the content analysis.
+Use each paper's short citation_id (B1 means before, A1 means after) or exact id in evidence_ids.
+Marked omissions are unavailable evidence; do not infer their contents. Put general limitations in caveats.
 Attach exact supplied paper IDs in evidence_ids to every paper-specific claim, using papers from both periods
 when claiming a before/after content change. Never cite an absent paper ID. Avoid restating numerical values;
 the application displays them alongside this commentary. If unavoidable, copy exact numbers and units from
@@ -72,11 +82,11 @@ def prepare_report(result_id: str, projection: str, interval: str, movement_id: 
     papers = large_storage.papers_by_ids(result, storage.data_root(), identifiers)
     if {str(p["id"]) for p in papers} != set(identifiers):
         raise ValueError("対象の重心移動と保存論文の根拠IDが一致しません。")
-    excerpts = [{"id": p["id"], "title": str(p.get("title") or "")[:350],
-                 "abstract": str(p.get("abstract") or "")[:1800], "year": p.get("year"),
+    excerpts = prepare_papers([{"id": p["id"], "title": str(p.get("title") or "")[:350],
+                 "abstract": str(p.get("abstract") or ""), "year": p.get("year"),
                  "publication_date": p.get("publication_date"),
                  "period": movement["from_period"] if p["id"] in before else movement["to_period"],
-                 "side": "before" if p["id"] in before else "after"} for p in papers]
+                 "side": "before" if p["id"] in before else "after"} for p in papers])
     interpretation = landscape.get("interpretation") or {}
     base_limits = [line for line in LIMITATIONS if scope == "sample" or "最大400" not in line]
     if scope == "full":
@@ -89,6 +99,7 @@ def prepare_report(result_id: str, projection: str, interval: str, movement_id: 
               "projection_id": landscape["projection_id"], "projection": projection, "interval": interval,
               "movement": deepcopy(movement), "topic": {"id": topic["id"], "label": topic.get("label", movement.get("topic_label", "話題"))},
               "meta": deepcopy(landscape.get("meta", {})), "evidence_papers": excerpts,
+              "input_summary": input_summary(excerpts),
               "limitations": limitations}
     report["movement"].update(evidence_before=before, evidence_after=after)
     report["observations"] = observations(report)
@@ -141,44 +152,108 @@ def deterministic_narrative(report: dict) -> dict:
 
 
 def evidence_payload(report: dict) -> dict:
+    summary = report.get("input_summary") or input_summary(report["evidence_papers"])
     if report.get("kind") == "centroid":
         return {"kind": "centroid", "topic": report["topic"], "centroid": report["centroid"],
                 "scope": report["meta"], "papers": report["evidence_papers"], "limitations": report["limitations"],
-                "excerpt_limit": "選択期間の内容重心に近い最大6論文、抄録は先頭1800文字です。"}
+                "input_summary": summary, "excerpt_limit": summary["excerpt_policy"]}
     return {"topic": report["topic"], "movement": report["movement"], "scope": report["meta"],
             "papers": report["evidence_papers"], "limitations": report["limitations"],
-            "excerpt_limit": "前後各期間最大6論文、抄録は先頭1800文字です。全文・全件ではありません。"}
+            "input_summary": summary, "excerpt_limit": summary["excerpt_policy"]}
+
+
+def _readable_narrative(value) -> tuple[dict, list[dict]]:
+    """Keep completed final prose when schema conventions differ; never render reasoning fields."""
+    try:
+        parsed = value if isinstance(value, field_llm.NarrativeOutput) else field_llm.NarrativeOutput.model_validate(value)
+        data = parsed.model_dump()
+        if any(section["text"].strip() for section in data["sections"]):
+            return data, []
+    except Exception:
+        pass
+    raw = value if isinstance(value, dict) else {}
+    if isinstance(raw.get("narrative"), dict):
+        raw = raw["narrative"]
+    sections, shortened = [], False
+    candidates = raw.get("sections", [])
+    if isinstance(candidates, list):
+        shortened = len(candidates) > 16
+        for index, section in enumerate(candidates[:16], 1):
+            if isinstance(section, str):
+                section = {"text": section}
+            if not isinstance(section, dict):
+                continue
+            text = section.get("text", section.get("content"))
+            if not isinstance(text, str) or not text.strip():
+                continue
+            shortened = shortened or len(text) > 16000
+            ids = section.get("evidence_ids", [])
+            ids = [ids] if isinstance(ids, str) else ids if isinstance(ids, list) else []
+            title = section.get("title")
+            sections.append({"title": title if isinstance(title, str) and title.strip() else f"分析 {index}",
+                             "text": text[:16000], "evidence_ids": [pid for pid in ids[:24] if isinstance(pid, str)]})
+    if not sections:
+        text = value if isinstance(value, str) else next((raw[key] for key in ("text", "content", "analysis", "answer")
+                                                         if isinstance(raw.get(key), str) and raw[key].strip()), None)
+        if isinstance(text, str) and text.strip():
+            shortened = shortened or len(text) > 48000
+            sections = [{"title": "論文内容に基づく分析", "text": text[:48000], "evidence_ids": []}]
+    if not sections:
+        raise NarrativeValidationError("LLMの回答に表示できる分析本文がありません。", kind="missing_final_answer")
+    headline = raw.get("headline")
+    caveats = raw.get("caveats", [])
+    caveats = [caveats] if isinstance(caveats, str) else caveats if isinstance(caveats, list) else []
+    warnings = [{
+                "code": "output_format_recovered", "location": "narrative",
+                "message": "指定の回答形式と異なるため、受信した最終回答の本文を表示しています。論文への参照・数値は原文で確認してください。"}]
+    if shortened:
+        warnings.append({"code": "output_display_limit", "location": "narrative",
+                         "message": "長い回答の表示上限に達したため、本文の一部を省略しています。"})
+    return {"headline": headline if isinstance(headline, str) and headline.strip() else "LLMによる論文内容の分析",
+            "sections": sections, "caveats": [x for x in caveats[:12] if isinstance(x, str)]}, warnings
 
 
 def validate_narrative(value, payload: dict, mode: str, model: str) -> dict:
-    try:
-        parsed = value if isinstance(value, field_llm.NarrativeOutput) else field_llm.NarrativeOutput.model_validate(value)
-    except Exception:
-        raise NarrativeValidationError("LLMの回答形式を確認できません。計測値と定型解釈は保持しています。", kind="invalid_schema") from None
+    parsed, warnings = _readable_narrative(value)
     papers = {p["id"]: p for p in payload["papers"]}
-    if any(set(section.evidence_ids) - papers.keys() for section in parsed.sections):
-        raise NarrativeValidationError("提供していない論文IDを含むため、LLMの解釈を採用しませんでした。", kind="invalid_evidence_ids")
+    aliases = {p["citation_id"]: p["id"] for p in papers.values() if p.get("citation_id")}
     # Source numbers come only from measured fields and raw excerpts, never generated prose or IDs.
     metric_keys = ("from_period", "to_period", "from_count", "to_count", "distance_2d", "cosine_distance", "p_value", "q_value", "gap_periods", "from_terms", "to_terms")
     metrics = ({key: payload["centroid"].get(key) for key in
                 ("count", "period_id", "valid_vector_count", "period_count", "share_of_period", "dispersion", "terms")}
                if payload.get("kind") == "centroid" else {key: payload["movement"].get(key) for key in metric_keys})
     metric_text = json.dumps(metrics, ensure_ascii=False)
-    full_evidence = metric_text + " " + " ".join(p.get("title", "") + " " + p.get("abstract", "") for p in papers.values())
-    warnings = _number_warnings(parsed.headline, full_evidence, "headline")
-    for index, caveat in enumerate(parsed.caveats):
+    def paper_text(p):
+        return p.get("title", "") + " " + p.get("abstract", "") + " " + json.dumps(
+            {key: p[key] for key in ("year", "publication_date", "rank") if key in p}, ensure_ascii=False)
+    full_evidence = metric_text + " " + " ".join(paper_text(p) for p in papers.values())
+    warnings.extend(_number_warnings(parsed["headline"], full_evidence, "headline"))
+    for index, caveat in enumerate(parsed["caveats"]):
         warnings.extend(_number_warnings(caveat, full_evidence, f"caveats/{index}"))
     sections = []
-    for index, section in enumerate(parsed.sections):
-        evidence = metric_text + " " + " ".join(papers[pid].get("title", "") + " " + papers[pid].get("abstract", "") for pid in section.evidence_ids)
+    for index, section in enumerate(parsed["sections"]):
+        resolved = [pid if pid in papers else aliases.get(pid, pid) for pid in section["evidence_ids"]]
+        known = list(dict.fromkeys(pid for pid in resolved if pid in papers))
+        unknown = list(dict.fromkeys(pid for pid in resolved if pid not in papers))
+        evidence = metric_text + " " + " ".join(paper_text(papers[pid]) for pid in known)
+        # Heading list markers and explicitly supplied citation labels are not experimental numbers.
+        def check_text(text, title=False):
+            for alias in sorted(aliases, key=len, reverse=True):
+                text = re.sub(r"(?<![A-Za-z0-9])" + re.escape(alias) + r"(?![A-Za-z0-9])", "", text)
+            return re.sub(r"^\s*(?:\d+[.．、)）]|[（(]\d+[)）])\s*", "", text) if title else text
         section_warnings = [warning for field in ("title", "text") for warning in
-                            _number_warnings(getattr(section, field), evidence, f"sections/{index}/{field}")]
-        if not section.evidence_ids:
+                            _number_warnings(check_text(section[field], field == "title"), evidence, f"sections/{index}/{field}")]
+        if unknown:
+            section_warnings.append({"code": "unknown_evidence_id", "location": f"sections/{index}",
+                                     "message": "照合できない論文IDがあります。回答本文は残し、不明なIDは原文リンクとして扱いません。",
+                                     "unverified_evidence_ids": unknown})
+        if not known:
             section_warnings.append({"code": "uncited_section", "location": f"sections/{index}",
                                      "message": "この段落には論文IDが付いていません。計測値だけの説明には不要ですが、研究内容に関する主張は原文で確認してください。"})
         warnings.extend(section_warnings)
-        sections.append({**section.model_dump(), "validation": _validation(section_warnings)})
-    cited = {pid for section in parsed.sections for pid in section.evidence_ids}
+        sections.append({**section, "evidence_ids": known, "unverified_evidence_ids": unknown,
+                         "validation": _validation(section_warnings)})
+    cited = {pid for section in sections for pid in section["evidence_ids"]}
     for side, label in (() if payload.get("kind") == "centroid" else (("before", "前期"), ("after", "後期"))):
         if not any(pid in cited and paper.get("side") == side for pid, paper in papers.items()):
             warnings.append({"code": "period_evidence_missing", "location": "sections",
@@ -189,10 +264,10 @@ def validate_narrative(value, payload: dict, mode: str, model: str) -> dict:
                              "message": f"代表論文 {pid} への参照が評論にありません。"})
     note = ("⚠ 数値照合・原文への参照に確認事項があるため警告付きで表示しています。計算済み指標は変更していません。" if warnings
             else "論文IDと数値の参照を機械照合しました。意味・因果関係・科学的妥当性は未検証です。")
-    return {"mode": mode, "model": model, "headline": parsed.headline, "sections": sections,
-            "caveats": _unique_text([*parsed.caveats, note, *payload["limitations"]]),
+    return {"mode": mode, "model": model, "headline": parsed["headline"], "sections": sections,
+            "caveats": _unique_text([*parsed["caveats"], note, *payload["limitations"]]),
             "validation": _validation(warnings), "semantic_validation": "not_human_verified",
-            "input_paper_ids": list(papers), "prompt_version": "landscape-movement-v1"}
+            "input_paper_ids": list(papers), "prompt_version": "landscape-abstract-critique-v2"}
 
 
 def generate(report: dict, provider: str = "none", model: str | None = None, *, progress=None) -> dict:
@@ -201,13 +276,14 @@ def generate(report: dict, provider: str = "none", model: str | None = None, *, 
     if provider not in {"local", "openai"}:
         raise ValueError("LLM接続先が不正です。")
     payload = evidence_payload(report)
-    if not any(p["abstract"] for p in payload["papers"]):
+    if not any(p["abstract"].strip() for p in payload["papers"]):
         raise NarrativeValidationError("解釈に使える抄録がありません。計測値による定型解釈を表示します。", kind="missing_abstracts")
     instructions = INSTRUCTIONS.replace("complete DISPLAY SAMPLE", "specified analysis scope (sample or full corpus)")
     if report.get("kind") == "centroid":
         from .centroid_reports import INSTRUCTIONS as centroid_instructions
         instructions = centroid_instructions
-    value, mode, chosen = field_llm.structured_output(payload, field_llm.NarrativeOutput, instructions, provider, model, progress=progress)
+    value, mode, chosen = field_llm.structured_output(payload, field_llm.NarrativeOutput, instructions, provider, model,
+                                                    progress=progress, allow_text=True)
     return validate_narrative(value, payload, mode, chosen)
 
 
@@ -218,6 +294,9 @@ def export_csv(report: dict) -> str:
     rows.extend(["narrative", section["title"], section["text"]] for section in report["narrative"]["sections"])
     rows.extend(["section_evidence_ids", section["title"], json.dumps(section.get("evidence_ids", []), ensure_ascii=False)]
                 for section in report["narrative"]["sections"])
+    rows.extend(["unverified_evidence_ids", section["title"], json.dumps(section["unverified_evidence_ids"], ensure_ascii=False)]
+                for section in report["narrative"]["sections"] if section.get("unverified_evidence_ids"))
+    rows.append(["input_summary", "abstracts", json.dumps(report.get("input_summary", {}), ensure_ascii=False)])
     rows.append(["scope", "meta", json.dumps(report["meta"], ensure_ascii=False, allow_nan=False)])
     rows.append(["narrative_metadata", "mode", report["narrative"]["mode"]])
     rows.append(["narrative_metadata", "model", report["narrative"].get("model") or ""])

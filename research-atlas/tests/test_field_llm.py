@@ -237,3 +237,91 @@ def test_fabricated_or_unshared_paper_ids_are_rejected(report):
             field_llm._validate_narrative(response_data(identifier), payload, "local_llm", "test")
     with pytest.raises(RuntimeError, match="形式"):
         field_llm._validate_narrative({"headline": "invalid"}, payload, "local_llm", "test")
+
+
+@pytest.mark.parametrize("backend", ["openai_compatible", "ollama"])
+def test_shared_gateway_prose_fallback_is_explicit_and_does_not_change_field_reports(report, monkeypatch, configure, backend):
+    configure(local={"backend": backend, "url": "http://127.0.0.1:1234"})
+    final = "観測された研究内容の変化です。因果関係は判断できません。"
+
+    def handler(request):
+        if request.method == "GET":
+            listing = {"models": [{"name": "qwen-test"}]} if backend == "ollama" else {"data": [{"id": "qwen-test"}]}
+            return httpx.Response(200, json=listing)
+        if request.url.path == "/api/show":
+            return httpx.Response(200, json={"details": {"family": "qwen"}})
+        body = json.loads(request.content)
+        assert body["stream"] is True
+        text = "<think>private-thought</think>\n" + final
+        if backend == "ollama":
+            assert body["format"]["type"] == "object"
+            return httpx.Response(200, text=json.dumps({"message": {"content": text}, "done": True, "done_reason": "stop"}) + "\n")
+        assert body["response_format"]["json_schema"]["strict"] is True
+        record = {"choices": [{"index": 0, "delta": {"content": text}, "finish_reason": "stop"}]}
+        return httpx.Response(200, text="data: " + json.dumps(record) + "\n\ndata: [DONE]\n\n")
+
+    transport(monkeypatch, handler)
+    value, mode, model = field_llm.structured_output({}, field_llm.NarrativeOutput, "Instructions", "local", allow_text=True)
+    assert (value, mode, model) == (final, "local_llm", "qwen-test")
+    with pytest.raises(RuntimeError, match="形式"):
+        field_llm.generate(report, "local")
+
+
+def openai_response(text, *, status="completed", incomplete_details=None, part_type="output_text"):
+    return SimpleNamespace(status=status, incomplete_details=incomplete_details, error=None,
+        output=[SimpleNamespace(type="reasoning", summary=["private-thought"]),
+                SimpleNamespace(type="message", role="assistant", status="completed",
+                                content=[SimpleNamespace(type=part_type, text=text)])], output_text=text)
+
+
+@pytest.mark.parametrize("answer,expected", [
+    ("<think>private-thought</think>\n完了した通常文です。", "完了した通常文です。"),
+    ('{"headline":"比較"}', {"headline": "比較"}),
+])
+def test_openai_opt_in_uses_one_completed_request_and_preserves_schema(monkeypatch, configure, answer, expected):
+    configure(openai={"api_key": "test-secret", "model": "configured-model"})
+    calls = []
+
+    class Client:
+        responses = None
+        def __init__(self, **kwargs): self.responses = self
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            return openai_response(answer)
+        def parse(self, **kwargs): pytest.fail("Opt-in must inspect completion before schema parsing")
+
+    import openai
+    monkeypatch.setattr(openai, "OpenAI", Client)
+    result = field_llm.structured_output({}, field_llm.NarrativeOutput, "Instructions", "openai", allow_text=True)
+    assert result == (expected, "openai", "configured-model")
+    assert len(calls) == 1 and calls[0]["store"] is False
+    assert calls[0]["text"]["format"] == {"type": "json_schema", "name": "NarrativeOutput", "strict": True,
+                                            "schema": field_llm.NarrativeOutput.model_json_schema()}
+    assert "private-thought" not in json.dumps(result, ensure_ascii=False)
+
+
+@pytest.mark.parametrize("response", [
+    openai_response("完了したように見える文。", status="incomplete", incomplete_details={"reason": "max_output_tokens"}),
+    openai_response("完了したように見える文。", incomplete_details={"reason": "max_output_tokens"}),
+    openai_response("private-secret", part_type="refusal"),
+    openai_response(""),
+    openai_response('<think>private-thought'),
+    openai_response('<think>private-thought</think>{"headline":"未完了'),
+    openai_response('data: {"choices":[]}'),
+])
+def test_openai_prose_opt_in_never_salvages_refusals_incomplete_or_invalid_answers(monkeypatch, configure, response):
+    configure(openai={"api_key": "test-secret", "model": "configured-model"})
+
+    class Client:
+        def __init__(self, **kwargs): self.responses = self
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def create(self, **kwargs): return response
+
+    import openai
+    monkeypatch.setattr(openai, "OpenAI", Client)
+    with pytest.raises(RuntimeError) as caught:
+        field_llm.structured_output({}, field_llm.NarrativeOutput, "Instructions", "openai", allow_text=True)
+    assert "private" not in str(caught.value) and "test-secret" not in str(caught.value)

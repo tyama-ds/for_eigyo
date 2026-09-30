@@ -37,14 +37,14 @@ def ndjson(content="", done=False, reason=None):
     return (json.dumps(value, ensure_ascii=False) + "\n").encode()
 
 
-def invoke(chunks, *, backend="openai_compatible", progress=None, status=200):
+def invoke(chunks, *, backend="openai_compatible", progress=None, status=200, allow_text=False):
     stream = chunks if isinstance(chunks, Chunks) else Chunks(chunks)
     def handler(request):
         assert request.method == "POST" and json.loads(request.content)["stream"] is True
         return httpx.Response(status, stream=stream)
     with httpx.Client(transport=httpx.MockTransport(handler), trust_env=False) as client:
         result = streaming.stream_json(client, "http://127.0.0.1:1234/v1/chat/completions",
-            {"stream": True}, backend, progress)
+            {"stream": True}, backend, progress, allow_text=allow_text)
     assert stream.closed.is_set()
     return result
 
@@ -286,3 +286,66 @@ def test_progress_callback_failure_does_not_discard_complete_result():
     def broken(_value):
         raise RuntimeError("private display error")
     assert invoke([sse('{"ok":true}', "stop"), b"data: [DONE]\n\n"], progress=broken) == {"ok": True}
+
+
+@pytest.mark.parametrize("backend", ["openai_compatible", "ollama"])
+@pytest.mark.parametrize("width", [1, 19, 4096])
+def test_opt_in_accepts_completed_qwen_prose_after_thinking_only(backend, width):
+    final = "## 研究内容の変化\n\n対象の内容に変化が見られます。[p1]\n因果関係は判断できません。"
+    parts = ["<thi", "nk>private-thought {\"secret\":9999}</thi", "nk>\n", final]
+    if backend == "ollama":
+        data = b"".join(ndjson(part) for part in parts) + ndjson(done=True, reason="stop")
+    else:
+        data = b"".join(sse(part) for part in parts) + sse(reason="stop") + b"data: [DONE]\n\n"
+    chunks = [data[i:i + width] for i in range(0, len(data), width)]
+    progress = []
+    assert invoke(chunks, backend=backend, progress=progress.append, allow_text=True) == final
+    assert "private-thought" not in json.dumps(progress)
+    with pytest.raises(streaming.LocalStreamError) as caught:
+        invoke(chunks, backend=backend)
+    assert caught.value.kind == "malformed_json"
+
+
+@pytest.mark.parametrize("answer", ['{"result":"観測"}', '```json\n{"result":"観測"}\n```'])
+def test_text_opt_in_keeps_complete_json_as_an_object(answer):
+    assert invoke([sse(answer, "stop"), b"data: [DONE]\n\n"], allow_text=True) == {"result": "観測"}
+
+
+@pytest.mark.parametrize("answer,kind", [
+    ('<think>private-thought', "reasoning_incomplete"),
+    ('<think>private-thought</think>', "missing_final_answer"),
+    ('<think>private-thought</think><think>second</think>通常文。', "malformed_json"),
+    ('private-thought</think>通常文。', "malformed_json"),
+    ('<analysis>private-thought</analysis>通常文。', "malformed_json"),
+    ('{"headline":"未完了', "malformed_json"),
+    ('Answer: {"headline":"未完了', "malformed_json"),
+    ('{"ok":1,"ok":2}', "malformed_json"),
+    ('{"ok":NaN}', "malformed_json"),
+    ('```json\n{"ok":true}', "malformed_json"),
+    ('```json\n通常文。\n```', "malformed_json"),
+    ('[]', "malformed_json"),
+    ('null', "malformed_json"),
+    ('"JSON string"', "malformed_json"),
+    ('data: {"choices":[]}\n\ndata: [DONE]', "malformed_json"),
+    ('<|im_start|>assistant\nprivate-thought', "malformed_json"),
+])
+def test_text_opt_in_never_salvages_json_protocol_or_reasoning_fragments(answer, kind):
+    with pytest.raises(streaming.LocalStreamError) as caught:
+        invoke([sse(answer, "stop"), b"data: [DONE]\n\n"], allow_text=True)
+    assert caught.value.kind == kind
+    assert "private-thought" not in str(caught.value)
+
+
+@pytest.mark.parametrize("backend", ["openai_compatible", "ollama"])
+@pytest.mark.parametrize("reason", ["length", None])
+def test_prose_opt_in_requires_successful_protocol_completion(backend, reason):
+    answer = "<think>private-thought</think>見た目は完了した文章です。"
+    if backend == "ollama":
+        chunks = [ndjson(answer, done=reason is not None, reason=reason)]
+    else:
+        chunks = [sse(answer, reason)]
+        if reason:
+            chunks.append(b"data: [DONE]\n\n")
+    with pytest.raises(streaming.LocalStreamError) as caught:
+        invoke(chunks, backend=backend, allow_text=True)
+    assert caught.value.kind == ("token_limit" if reason == "length" else "incomplete")

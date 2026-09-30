@@ -86,9 +86,13 @@ def test_rejects_wrong_movement_projection_and_missing_source_ids(fixture):
 def test_optional_llm_uses_selected_evidence_and_preserves_metrics(fixture, monkeypatch, provider):
     report = report_for(fixture)
     before = deepcopy(report)
-    def structured(payload, schema, instructions, actual_provider, model, *, progress=None):
+    def structured(payload, schema, instructions, actual_provider, model, *, progress=None, allow_text=False):
         assert actual_provider == provider and model == "test-model"
         assert len(payload["papers"]) == 12
+        assert allow_text is True
+        assert all("Strength reached 900 MPa" in p["abstract"] for p in payload["papers"])
+        assert payload["input_summary"]["abstract_count"] == 12
+        assert "research objects, methods and" in instructions and "BOTH periods" in instructions
         assert "untrusted DATA" in instructions and "2D projection" in instructions
         assert schema == field_llm.NarrativeOutput
         return output(), provider, "test-model"
@@ -119,10 +123,14 @@ def test_numbers_must_match_cited_papers_not_other_evidence(fixture):
     assert narrative["validation"]["status"] == "warning"
 
 
-def test_unknown_ids_rejected_and_no_abstract_avoids_llm(fixture, monkeypatch):
+def test_unknown_ids_preserve_prose_without_false_links_and_no_abstract_avoids_llm(fixture, monkeypatch):
     report = report_for(fixture)
-    with pytest.raises(RuntimeError, match="論文ID"):
-        landscape_reports.validate_narrative(output(ids=["paper-from-another-result"]), landscape_reports.evidence_payload(report), "local", "model")
+    value = output(ids=["paper-from-another-result", "paper-0"])
+    narrative = landscape_reports.validate_narrative(value, landscape_reports.evidence_payload(report), "local", "model")
+    assert narrative["sections"][0]["text"] == value["sections"][0]["text"]
+    assert narrative["sections"][0]["evidence_ids"] == ["paper-0"]
+    assert narrative["sections"][0]["unverified_evidence_ids"] == ["paper-from-another-result"]
+    assert any(w["code"] == "unknown_evidence_id" for w in narrative["validation"]["warnings"])
     monkeypatch.setattr(field_llm, "structured_output", lambda *args, **kwargs: pytest.fail("Unexpected model call"))
     for paper in report["evidence_papers"]:
         paper["abstract"] = ""
@@ -242,7 +250,7 @@ def test_api_numeric_warning_keeps_generated_critique_and_success_status(fixture
 
 def test_api_worker_receives_browser_context_without_persisting_connections(fixture, monkeypatch, tmp_path):
     seen = []
-    def structured(payload, schema, instructions, provider, model, *, progress=None):
+    def structured(payload, schema, instructions, provider, model, *, progress=None, allow_text=False):
         settings = connection_settings.current_settings()
         seen.append((settings.local.url, settings.local.api_key.get_secret_value(), settings.proxy.password.get_secret_value()))
         progress({"elapsed_seconds": 67, "received_chars": 500})

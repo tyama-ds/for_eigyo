@@ -2,6 +2,13 @@
 
 Local FastAPI + plain HTML/CSS/JS application. All labels/help are Japanese with restrained English design accents. No external frontend CDN. Python does numerical analysis. `data/` persisted locally and ignored by git.
 
+## Abstract-grounded landscape commentary (v2.1.1)
+
+- Movement/centroid reports include auditable input_summary and exact sent evidence_papers excerpts. Select at most six papers per period, bound each abstract to4,000 and all abstracts to24,000 characters, retain long abstract beginnings and conclusions with explicit omission markers/ranges. Missing abstracts stay missing.
+- Prompts compare supplied research objects, methods and findings with paper references; numerical/metadata-only boilerplate is not a content critique. Collision-free short citation labels resolve only against supplied papers. Unknown model IDs remain as unverified_evidence_ids, never clickable/verified evidence, while the generated prose remains visible with warnings.
+- Valid completed prose is displayed above validation details. Recoverable output-schema differences and explicit free-text transport fallback preserve analysis with warning status. Incomplete streams, token cutoffs, unclosed reasoning envelopes, malformed JSON and empty/reasoning-only output remain failures; deterministic fallback cannot be mislabeled as LLM output.
+- field_llm.structured_output and local_llm_stream.stream_json accept opt-in allow_text=False by default; other fact-extraction/report callers retain their existing strict semantics. OpenAI prose fallback uses one completed response, no automatic additional paid call. Model/proxy credentials remain browser-only.
+
 ## Citation time atlas (v2.1)
 
 - `citation-flow` is a separate navigation view from the technology landscape and citation count charts. `static/citation-flow.js` mounts with the app's browser-aware API helper, disposes animation work on navigation, and uses no external libraries or settings storage. The root app calls unmount before replacing its content.
