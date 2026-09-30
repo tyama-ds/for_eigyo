@@ -78,8 +78,12 @@ def _json_object(text: str) -> dict:
     return value
 
 
-def _final_answer_object(text: str) -> dict:
-    """Unwrap only recognized final-answer envelopes, never JSON inside reasoning."""
+def _final_answer_object(text: str, *, allow_text: bool = False) -> dict | str:
+    """Unwrap final content only; prose is an explicit caller opt-in.
+
+    This helper does not establish completion. Both transports must confirm a
+    successful response before calling it, even when the final answer is prose.
+    """
     answer = text.strip()
     if answer.startswith("<think>"):
         end = answer.find("</think>", len("<think>"))
@@ -93,8 +97,23 @@ def _final_answer_object(text: str) -> dict:
     # Accept a single complete JSON fence, not arbitrary prose or brace extraction.
     fenced = re.fullmatch(r"```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```", answer, re.IGNORECASE)
     if fenced:
-        answer = fenced.group(1)
-    return _json_object(answer)
+        # A JSON fence is a structured answer, never a prose fallback.
+        return _json_object(fenced.group(1))
+    try:
+        return _json_object(answer)
+    except ValueError:
+        if not allow_text:
+            raise
+    # Do not turn incomplete/invalid JSON, wire-protocol records or a second
+    # reasoning envelope into visible prose. Never extract braces or repair it.
+    if (answer.startswith(("{", "[", '"', "```"))
+            or re.search(r'(?m)^\s*(?:```|data:|event:|retry:|[\[{])', answer)
+            or re.search(r'"[^"\r\n]*"\s*:', answer)
+            or "{" in answer or "}" in answer or "[DONE]" in answer
+            or re.search(r"</?(?:think|analysis|reasoning)\b|<\|", answer, re.IGNORECASE)
+            or re.fullmatch(r"(?:null|true|false|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)", answer)):
+        raise LocalStreamError(_MALFORMED, kind="malformed_json")
+    return answer
 
 
 class _Parser:
@@ -211,15 +230,15 @@ class _Parser:
         if eof and not self.completed:
             raise LocalStreamError(_INCOMPLETE, kind="incomplete")
 
-    def result(self) -> dict:
+    def result(self, *, allow_text: bool = False) -> dict | str:
         if not self.completed or not self.stopped:
             raise LocalStreamError(_INCOMPLETE, kind="incomplete")
-        return _final_answer_object("".join(self.parts))
+        return _final_answer_object("".join(self.parts), allow_text=allow_text)
 
 
 def stream_json(client: httpx.Client, url: str, body: dict, backend: str,
-                progress: Callable[[dict], None] | None = None) -> dict:
-    """Return only a complete JSON object with a successful protocol terminator."""
+                progress: Callable[[dict], None] | None = None, *, allow_text: bool = False) -> dict | str:
+    """Return complete final content only after a successful protocol terminator."""
     started = last_received = time.monotonic()
     has_received = False
     last_notified = started - PROGRESS_INTERVAL_SECONDS
@@ -297,7 +316,7 @@ def stream_json(client: httpx.Client, url: str, body: dict, backend: str,
             notify()
         if time.monotonic() - started >= TOTAL_TIMEOUT_SECONDS:
             raise LocalStreamError(_TOTAL_TIMEOUT)
-        parsed = parser.result()
+        parsed = parser.result(allow_text=allow_text)
         notify(force=True)
         return parsed
     except Exception as exc:

@@ -182,9 +182,34 @@ def generate(report: dict, provider: str = "none", model: str | None = None, *, 
     return _validate_narrative(parsed, payload, mode, chosen)
 
 
+def _openai_final_output(response) -> dict | str:
+    """Read final output text only after OpenAI reports successful completion."""
+    if (getattr(response, "status", None) != "completed"
+            or getattr(response, "incomplete_details", None)
+            or getattr(response, "error", None)):
+        raise RuntimeError("OpenAIの回答が完了していないため採用しませんでした。出力上限・接続状態を確認して再試行してください。")
+    for item in getattr(response, "output", []) or []:
+        if getattr(item, "type", None) == "reasoning":
+            continue
+        if (getattr(item, "type", None) != "message"
+                or getattr(item, "role", None) != "assistant"
+                or getattr(item, "status", None) != "completed"):
+            raise RuntimeError("OpenAIから完了した最終回答を取得できませんでした。数値分析は保存されています。")
+        if any(getattr(part, "type", None) != "output_text" for part in getattr(item, "content", []) or []):
+            raise RuntimeError("OpenAIが回答を拒否したか、対応していない形式を返したため採用しませんでした。")
+    text = getattr(response, "output_text", None)
+    if not isinstance(text, str) or not text.strip():
+        raise RuntimeError("OpenAIから最終回答が返りませんでした。数値分析は保存されています。")
+    try:
+        return local_llm_stream._final_answer_object(text, allow_text=True)
+    except (ValueError, local_llm_stream.LocalStreamError):
+        raise RuntimeError("OpenAIの最終回答の形式が不正です。途中のJSONや思考部分は採用していません。") from None
+
+
 def structured_output(payload: dict, schema: type[BaseModel], instructions: str,
-                      provider: str, model: str | None = None, *, progress=None) -> tuple[object, str, str]:
-    """Shared explicit gateway. Callers validate evidence after schema parsing."""
+                      provider: str, model: str | None = None, *, progress=None,
+                      allow_text: bool = False) -> tuple[object, str, str]:
+    """Shared gateway; prose fallback requires opt-in and caller validation."""
     if provider not in {"local", "openai"}:
         raise ValueError("LLM接続先が不正です。")
     messages = [{"role": "system", "content": instructions},
@@ -197,12 +222,20 @@ def structured_output(payload: dict, schema: type[BaseModel], instructions: str,
             raise ValueError("OpenAIモデルはブラウザの接続設定で保存したモデルを使用してください。")
         try:
             with openai_client(timeout=120, max_retries=0) as client:
-                response = client.responses.parse(model=chosen, store=False, max_output_tokens=4500,
-                                                  input=messages, text_format=schema)
-            parsed = response.output_parsed
+                if allow_text:
+                    # Keep the schema request, but inspect the completed raw
+                    # response before SDK schema parsing can discard its text.
+                    # No second generation request is needed for the fallback.
+                    response = client.responses.create(model=chosen, store=False, max_output_tokens=4500,
+                        input=messages, text={"format": {"type": "json_schema", "name": schema.__name__,
+                                                        "strict": True, "schema": schema.model_json_schema()}})
+                else:
+                    response = client.responses.parse(model=chosen, store=False, max_output_tokens=4500,
+                                                      input=messages, text_format=schema)
+            parsed = None if allow_text else response.output_parsed
         except Exception:
             raise RuntimeError("OpenAIへの接続または構造化回答の取得に失敗しました。認証・モデル・利用上限を確認してください。") from None
-        return parsed, "openai", chosen
+        return _openai_final_output(response) if allow_text else parsed, "openai", chosen
     connection = local_status()
     if not connection["available"]:
         raise ValueError(connection["error"] or "ローカルLLMを起動してください。")
@@ -227,7 +260,8 @@ def structured_output(payload: dict, schema: type[BaseModel], instructions: str,
                     "messages": messages, "stream": True, "temperature": 0, "max_tokens": 4000,
                     "response_format": {"type": "json_schema", "json_schema": {"name": "field_report",
                         "strict": True, "schema": schema.model_json_schema()}}}
-            parsed = local_llm_stream.stream_json(client, endpoint, body, backend, progress)
+            options = {"allow_text": True} if allow_text else {}
+            parsed = local_llm_stream.stream_json(client, endpoint, body, backend, progress, **options)
     except local_llm_stream.LocalStreamError:
         raise
     except (httpx.HTTPStatusError, httpx.RequestError) as exc:

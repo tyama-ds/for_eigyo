@@ -75,7 +75,8 @@ test('failed thinking completion labels numerical fallback separately and escape
   h.internals.report.data={id:'report-a',requested_provider:'local',generation_status:'failed',llm_error:message,narrative:{mode:'deterministic',headline:'計算された説明',sections:[{title:'数値',text:'重心が変化しました。',evidence_ids:['p1']}],validation:{status:'warning',warnings:[{code:'llm_failed',message}]}}};
   const html=h.internals.reportHTML(h.context);
   assert.match(html,/LLM評論の生成に失敗しました/);
-  assert.match(html,/<details class="landscape-report-fallback"><summary>計算結果の説明（代替表示）/);
+  assert.match(html,/<section class="landscape-report-fallback" aria-label="計算結果の説明（代替表示）">/);
+  assert.match(html,/重心が変化しました/);assert.doesNotMatch(html,/<details/);
   assert.match(html,/&lt;think>/);assert.doesNotMatch(html,/<think>/);
   assert.equal((html.match(/思考部分/g)||[]).length,1);
   assert.doesNotMatch(html,/照合に注意が必要です/);
@@ -87,7 +88,79 @@ test('numeric mismatch keeps successful LLM critique expanded with ordinary warn
   h.internals.report.data={generation_status:'generated',narrative:{mode:'local_llm',headline:'論文の比較',sections:[{title:'結果',text:'強度は900 GPaです。',validation:{status:'warning'}}],validation:{status:'warning',warnings:[{code:'numeric_mismatch',message:'単位の照合に失敗しました。'}]}}};
   const html=h.internals.reportHTML(h.context);
   assert.match(html,/照合に注意が必要です/);assert.match(html,/LOCAL LLM/);assert.match(html,/900 GPa/);
+  assert.ok(html.indexOf('900 GPa')<html.indexOf('照合に注意が必要です'), 'the answer is visible before potentially long warning details');
   assert.doesNotMatch(html,/LLM評論の生成に失敗|<details|代替表示/);
+});
+
+test('a saved failure flag never hides or relabels an actual LLM answer as a calculated fallback',()=>{
+  const h=harness(),text='前期の抄録では電極構造を比較し、後期の抄録では耐久性の検証を行っています。';
+  h.internals.report.data={requested_provider:'local',generation_status:'failed',llm_error:'後処理に失敗しました。',narrative:{mode:'local_llm',headline:'抄録から読む変化',sections:[{title:'対象と手法',text,evidence_ids:['p1','p2']}],validation:{status:'warning',warnings:[{code:'llm_failed',message:'後処理に失敗しました。'}]}}};
+  const html=h.internals.reportHTML(h.context);
+  assert.match(html,/LOCAL LLM · 要確認/);assert.ok(html.includes(text));
+  assert.ok(html.indexOf(text)<html.indexOf('LLM評論の生成に失敗しました'));
+  assert.match(html,/取得できた回答本文は上に表示しています/);
+  assert.doesNotMatch(html,/<details|CALCULATED OBSERVATIONS|代替表示/);
+  assert.equal((html.match(/後処理に失敗しました/g)||[]).length,1);
+  assert.match(html,/data-paper="p1"/);assert.match(html,/data-paper="p2"/);
+});
+
+test('an empty LLM completion is explicitly incomplete instead of looking like a generated answer',()=>{
+  const h=harness();
+  for(const sections of [[],[{title:'本文のない見出し',text:'  ',evidence_ids:['p1']}]]){
+    h.internals.report.data={requested_provider:'openai',generation_status:'generated',narrative:{mode:'openai',headline:'回答の見出しだけ',sections,caveats:['注意事項だけ'],validation:{status:'warning',warnings:[{code:'uncited_section',message:'参照先を確認してください。'}]}}};
+    const html=h.internals.reportHTML(h.context);
+    assert.match(html,/LLMの回答本文が空です/);assert.match(html,/LLMによる評論は表示できていません/);
+    assert.match(html,/参照先を確認してください/);assert.doesNotMatch(html,/class="landscape-generated"|回答の見出しだけ|本文のない見出し/);
+  }
+});
+
+test('section-only validation warnings leave the answer expanded and surface escaped warning details',()=>{
+  const h=harness();
+  h.internals.report.data={generation_status:'generated',narrative:{mode:'openai',headline:'比較',sections:[{title:'結果',text:'<script>unsafe</script> 抄録の比較内容。',validation:{status:'warning',warnings:[{message:'<img src=x>数値に要確認'}]}}]}};
+  const html=h.internals.reportHTML(h.context);
+  assert.match(html,/照合に注意が必要です/);assert.match(html,/&lt;script>/);assert.match(html,/&lt;img/);
+  assert.doesNotMatch(html,/<script>|<img|<details|代替表示/);
+  assert.ok(html.indexOf('抄録の比較内容')<html.indexOf('数値に要確認'));
+});
+
+test('failed generation without a narrative does not promise a nonexistent fallback',()=>{
+  const h=harness();h.internals.report.data={requested_provider:'local',generation_status:'failed',llm_error:'接続に失敗しました。'};
+  const html=h.internals.reportHTML(h.context);
+  assert.match(html,/LLM評論の生成に失敗しました/);assert.match(html,/接続に失敗しました/);
+  assert.doesNotMatch(html,/下の代替表示|class="landscape-generated"/);
+});
+
+test('submitted abstract coverage and exact input excerpts are inspectable without covering the answer',()=>{
+  const h=harness();
+  h.internals.report.data={requested_provider:'local',generation_status:'generated',input_summary:{paper_count:3,abstract_count:2,missing_abstract_count:1,truncated_abstract_count:1,before:{paper_count:2,abstract_count:1},after:{paper_count:1,abstract_count:1}},evidence_papers:[{id:'p1',title:'<img onerror="x"> 前期の論文',year:2024,abstract:'Actual <script>abstract</script> sent to the model.',abstract_original_chars:8000,abstract_sent_chars:2400,abstract_truncated:true},{id:'p2',title:'後期の論文',year:2025,abstract:'Observed electrode durability.'},{id:'p3',title:'抄録のない論文',abstract:''}],narrative:{mode:'local_llm',headline:'抄録の比較',sections:[{title:'解釈',text:'後期は耐久性に焦点を移しています。',evidence_ids:['p2']}]}};
+  const html=h.internals.reportHTML(h.context);
+  assert.match(html,/抄録あり 2 \/ 3論文（前期 1 \/ 2論文 · 後期 1 \/ 1論文）/);
+  assert.match(html,/抄録なし 1論文 · 長さを調整した抄録 1件/);
+  assert.match(html,/<details><summary>入力した論文・抄録を確認/);assert.doesNotMatch(html,/<details open/);
+  assert.match(html,/入力 2400文字 \/ 元の抄録 8000文字（長さを調整）/);
+  assert.match(html,/Actual &lt;script>abstract/);assert.match(html,/Observed electrode durability/);assert.match(html,/抄録は取得されていません/);
+  assert.doesNotMatch(html,/<img|<script>/);
+  assert.ok(html.indexOf('</details>')<html.indexOf('後期は耐久性に焦点を移しています'), 'the answer is outside the collapsed input details');
+});
+
+test('unknown generated evidence IDs are displayed only as warnings and never as paper links',()=>{
+  const h=harness(),unknown='not-provided" onclick="bad';
+  h.internals.report.data={generation_status:'generated',narrative:{mode:'openai',headline:'比較',sections:[{title:'解釈',text:'返された分析の本文を保持します。',evidence_ids:['p1'],unverified_evidence_ids:[unknown],validation:{status:'warning'}}],validation:{status:'warning',warnings:[{code:'unknown_evidence_id',message:'入力資料にない論文IDがあります。'}]}}};
+  const html=h.internals.reportHTML(h.context);
+  assert.match(html,/返された分析の本文を保持します/);assert.match(html,/照合できない論文ID：not-provided&quot; onclick=&quot;bad/);
+  assert.match(html,/data-paper="p1"/);assert.doesNotMatch(html,/data-paper="not-provided| onclick="bad|代替表示/);
+});
+
+test('short citation labels match source periods and preserve prose and excerpt line breaks',()=>{
+  const h=harness();
+  h.internals.report.data={generation_status:'generated',input_summary:{paper_count:3,abstract_count:3,missing_abstract_count:0,truncated_abstract_count:1},evidence_papers:[{id:'p1',citation_id:'B1',side:'before',title:'Prior methods',abstract:'First paragraph.\n\nLast paragraph.',abstract_truncated:true,abstract_original_chars:9000,abstract_sent_chars:4000,excerpt_strategy:'head_and_tail'},{id:'p2',citation_id:'A1',side:'after',title:'Recent methods',abstract:'Later abstract.'},{id:'p3',citation_id:'P1',side:'centroid',title:'Representative study',abstract:'Representative abstract.'}],narrative:{mode:'local_llm',headline:'本文で比較',sections:[{title:'研究対象',text:'B1では材料を比較。\n\nA1では耐久性を比較。',evidence_ids:['p1','p2']}],caveats:['注意事項。\n追加の留意点。']}};
+  const html=h.internals.reportHTML(h.context);
+  for(const label of ['B1 · 前期 · Prior methods','A1 · 後期 · Recent methods','P1 · 選択期間 · Representative study'])assert.ok(html.includes(label));
+  assert.match(html,/data-paper="p1" title="B1 · 前期 · Prior methods">B1 · 前期 · Prior methods/);
+  assert.match(html,/入力 4000文字 \/ 元の抄録 9000文字（冒頭・末尾の抜粋）/);
+  assert.match(html,/<p style="white-space:pre-wrap">First paragraph\.\n\nLast paragraph\.<\/p>/);
+  assert.match(html,/<p style="white-space:pre-wrap">B1では材料を比較。\n\nA1では耐久性を比較。<\/p>/);
+  assert.match(html,/<p style="white-space:pre-wrap">注意事項。\n追加の留意点。<\/p>/);
 });
 
 test('legacy saved failure receives explicit fallback label while selected calculation does not',()=>{
