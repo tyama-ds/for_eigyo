@@ -2,6 +2,14 @@
 
 Local FastAPI + plain HTML/CSS/JS application. All labels/help are Japanese with restrained English design accents. No external frontend CDN. Python does numerical analysis. `data/` persisted locally and ignored by git.
 
+## Annual landscape report (v2.2)
+
+- One selected topic and calendar-year range produce a separately saved annual_landscape_reports bundle. It shares one yearly landscape snapshot across all child reports. Existing centroid and movement LLM instruction strings are unchanged; each child uses the existing excerpt preparation and final-answer validation. No synthesized all-year LLM conclusion is presented as generated output.
+- Each annual row retains topic count, same-year/same-scope denominator, fractional share, characteristic terms and coverage state. A topic absent from an observed corpus year has count/share0; a year with no corpus observations has no defined share. Missing vectors/abstracts never produce invented content. Sample/full scope is explicit.
+- Year chapters are existing centroid reports. Optional transitions are only existing landscape movements with both endpoints in the selected range; gap metadata and uncertainty are retained. The overall overview is deterministic, distinguishes endpoint changes from a monotonic trend, and does not call corpus growth global popularity.
+- POST /api/landscape-annual-reports creates a queued request-context-owned job. GET /api/landscape-annual-reports/{id} returns initial, partial or completed state; /export emits formula-safe UTF-8 CSV. Cancellation stops subsequent chapter calls, retains completed chapters, and does not imply immediate interruption of an in-flight generation. API/proxy settings remain browser-only and are never copied into stored reports.
+- Frontend shows planned call count before generation, chronological chapters and count/share graphics, known paper links, exact input excerpts and non-blocking verification warnings. Stale responses cannot replace another topic/result/range. Report-only browser printing supports Save as PDF; it is not a server-generated PDF endpoint.
+
 ## Abstract-grounded landscape commentary (v2.1.1)
 
 - Movement/centroid reports include auditable input_summary and exact sent evidence_papers excerpts. Select at most six papers per period, bound each abstract to4,000 and all abstracts to24,000 characters, retain long abstract beginnings and conclusions with explicit omission markers/ranges. Missing abstracts stay missing.

@@ -60,12 +60,23 @@ def _unique_text(rows) -> list[str]:
     return list(dict.fromkeys(row for row in rows if isinstance(row, str) and row))
 
 
-def prepare_report(result_id: str, projection: str, interval: str, movement_id: str,
-                   projection_id: str | None = None, scope: str = "sample") -> dict:
+def _report_landscape(result_id, projection, interval, scope, snapshot=None):
     from .landscape import build_landscape
 
-    landscape = (build_landscape(result_id, projection=projection, interval=interval) if scope == "sample" else
-                 build_landscape(result_id, projection=projection, interval=interval, scope=scope))
+    if snapshot is None:
+        return (build_landscape(result_id, projection=projection, interval=interval) if scope == "sample" else
+                build_landscape(result_id, projection=projection, interval=interval, scope=scope))
+    meta = snapshot.get("meta", {})
+    requested = snapshot.get("map", {}).get("projection", {}).get("requested_method")
+    if (snapshot.get("result_id") != result_id or meta.get("interval") != interval
+            or meta.get("scope") != scope or (requested is not None and requested != projection)):
+        raise ValueError("年次レポートの分析結果・座標・期間区分が一致しません。")
+    return snapshot
+
+
+def prepare_report(result_id: str, projection: str, interval: str, movement_id: str,
+                   projection_id: str | None = None, scope: str = "sample", *, landscape_snapshot=None) -> dict:
+    landscape = _report_landscape(result_id, projection, interval, scope, landscape_snapshot)
     if projection_id and projection_id != landscape["projection_id"]:
         raise ValueError("座標の版が変わりました。技術ランドスケープを再表示してから解釈を作成してください。")
     movement = next((item for item in landscape.get("movements", []) if item["id"] == movement_id), None)
