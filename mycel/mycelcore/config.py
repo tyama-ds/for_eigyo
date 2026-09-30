@@ -37,7 +37,8 @@ DEFAULT_CONFIG: dict = {
     "plugins": ["change_journal"],
     # ---- LLM
     "provider": "openai",
-    "base_url": "",
+    # 既定はローカル LLM（Ollama）。モデルを選ぶまでは未設定扱い
+    "base_url": "http://127.0.0.1:11434/v1",
     "api_key": "",
     "model": "",
     "api_version": "2024-10-21",        # Azure のみ
@@ -51,6 +52,10 @@ DEFAULT_CONFIG: dict = {
     # プロキシ。use_proxy=False なら環境変数のプロキシも無視して直結
     "use_proxy": False,
     "proxy_url": "",
+    # ---- AI 取り込み（ローカル LLM の短い文脈長に合わせて小さめに区切る）
+    "ingest_chunk_chars": 3000,
+    "ingest_max_chunks": 24,
+    "ingest": {},                      # 取り込み画面で最後に使ったオプション
 }
 
 _SECRET_KEYS = ("api_key", "embed_api_key")
@@ -101,9 +106,14 @@ def save_config(update: dict, path: Path | None = None) -> dict:
         cfg["use_proxy"] = bool(update["use_proxy"])
     if isinstance(update.get("plugins"), list):
         cfg["plugins"] = [p for p in update["plugins"] if isinstance(p, str) and p.isidentifier()]
+    if isinstance(update.get("ingest"), dict):
+        cfg["ingest"] = {k: v for k, v in update["ingest"].items()
+                         if isinstance(k, str) and isinstance(v, (str, bool, int, float))}
     for key, lo, hi, cast in (("temperature", 0.0, 2.0, float),
                               ("max_tokens", 64, 65536, int),
-                              ("request_timeout", 5.0, 3600.0, float)):
+                              ("request_timeout", 5.0, 3600.0, float),
+                              ("ingest_chunk_chars", 500, 50000, int),
+                              ("ingest_max_chunks", 1, 200, int)):
         if key in update:
             try:
                 cfg[key] = cast(max(lo, min(hi, float(update[key]))))

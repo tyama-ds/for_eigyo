@@ -127,6 +127,31 @@ class LLMClient:
         msg = (choices[0].get("message") or {}) if choices else {}
         return strip_think(msg.get("content") or "")
 
+    def list_models(self) -> list[str]:
+        """使えるモデル名の一覧（OpenAI 互換の /models、だめなら Ollama の /api/tags）。"""
+        base = (self.cfg.get("base_url") or "").rstrip("/")
+        if not base:
+            raise LLMError("Base URL を入力してください")
+        if self.cfg.get("provider") == "azure":
+            raise LLMError("Azure OpenAI ではデプロイ名を直接入力してください")
+        headers = {"Authorization": f"Bearer {self.cfg['api_key']}"} if self.cfg.get("api_key") else {}
+        timeout = min(float(self.cfg.get("request_timeout") or 120.0), 15.0)
+        errors = []
+        root = re.sub(r"/v1$", "", base)
+        for url, key in ((f"{base}/models", "data"), (f"{root}/api/tags", "models")):
+            try:
+                req = urllib.request.Request(url, headers=headers)
+                with self._opener.open(req, timeout=timeout) as res:
+                    data = json.loads(res.read().decode("utf-8", errors="replace"))
+                rows = data.get(key) or []
+                names = sorted({str(r.get("id") or r.get("name") or r.get("model")) for r in rows if isinstance(r, dict)} - {"None"})
+                if names:
+                    return names
+            except (urllib.error.URLError, socket.timeout, OSError, ValueError) as e:
+                errors.append(str(e))
+        raise LLMError("モデル一覧を取得できません（LLM が起動しているか、URL を確認してください）"
+                       + (f": {errors[0]}" if errors else ""))
+
     def embed(self, texts: list[str]) -> list[list[float]]:
         url, headers, model = self._endpoint("embed")
         out: list[list[float]] = []

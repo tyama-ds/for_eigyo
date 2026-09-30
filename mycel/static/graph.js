@@ -29,10 +29,10 @@
         return Object.assign({ x: p ? p.x : Math.cos(a) * r, y: p ? p.y : Math.sin(a) * r, vx: 0, vy: 0 }, n);
       });
       const idx = Object.fromEntries(this.nodes.map((n, i) => [n.id, i]));
-      this.edges = data.edges.map(([a, b]) => [idx[a], idx[b]]).filter(([a, b]) => a !== undefined && b !== undefined);
+      this.edges = data.edges.map(([a, b, t]) => [idx[a], idx[b], t]).filter(([a, b]) => a !== undefined && b !== undefined);
       this.nb = new Set();
       if (center) this.edges.forEach(([a, b]) => { if (this.nodes[a].id === center) this.nb.add(b); if (this.nodes[b].id === center) this.nb.add(a); });
-      const folders = [...new Set(this.nodes.map((n) => n.folder.split("/")[0]).filter(Boolean))].sort();
+      const folders = [...new Set(this.nodes.map((n) => (n.folder || "").split("/")[0]).filter(Boolean))].sort();
       this.folderHue = Object.fromEntries(folders.map((f, i) => [f, HUES[i % HUES.length]]));
       if (!Object.keys(prev).length) this.view = { x: W / 2, y: H / 2, k: this.nodes.length > 80 ? 0.6 : 1 };
       this.alpha = 1; this.autoFit = true;
@@ -92,7 +92,8 @@
     nodeColor(n, i) {
       if (!n.exists) return null;
       if (n.id === this.center) return this.color("--accent");
-      const hue = this.folderHue[n.folder.split("/")[0]];
+      if (n.kind === "doc") return this.color("--warn");
+      const hue = this.folderHue[(n.folder || "").split("/")[0]];
       const light = document.documentElement.dataset.theme === "light";
       if (hue === undefined) return light ? "hsl(160 8% 50%)" : "hsl(160 8% 62%)";
       return light ? `hsl(${hue} 45% 42%)` : `hsl(${hue} 45% 64%)`;
@@ -105,21 +106,25 @@
       g.save(); g.translate(v.x, v.y); g.scale(v.k, v.k);
       const line = this.color("--line"), acc = this.color("--accent"), muted = this.color("--muted"), ink = this.color("--ink"), bg = this.color("--bg");
       const focus = this.hover ?? (this.center ? this.nodes.findIndex((n) => n.id === this.center) : -1);
-      for (const [i, j] of this.edges) {
+      const warn = this.color("--warn");
+      for (const [i, j, t] of this.edges) {
         const p = this.nodes[i], q = this.nodes[j];
         const hot = focus >= 0 && (i === focus || j === focus);
-        g.strokeStyle = hot ? acc : line; g.lineWidth = (hot ? 1.6 : 1) / Math.sqrt(v.k);
+        g.strokeStyle = hot ? acc : t === "rel" ? warn : line; g.lineWidth = (hot ? 1.6 : 1) / Math.sqrt(v.k);
+        g.setLineDash(t === "rel" ? [4 / v.k, 3 / v.k] : []);   // 資料同士のつながりは点線
         g.globalAlpha = focus >= 0 && !hot ? 0.7 : 1;
         g.beginPath(); g.moveTo(p.x, p.y); g.lineTo(q.x, q.y); g.stroke();
       }
-      g.globalAlpha = 1;
+      g.globalAlpha = 1; g.setLineDash([]);
       g.font = `${11 / Math.sqrt(v.k)}px ${getComputedStyle(document.body).fontFamily}`;
       g.textAlign = "center";
       const nbs = new Set();
       if (focus >= 0) for (const [a, b] of this.edges) { if (a === focus) nbs.add(b); if (b === focus) nbs.add(a); }
       this.nodes.forEach((n, i) => {
         const r = 3.5 + Math.sqrt(n.degree) * 1.7; n.r = r;
-        g.beginPath(); g.arc(n.x, n.y, r, 0, Math.PI * 2);
+        g.beginPath();
+        if (n.kind === "doc") { const a = r * 0.95; g.rect(n.x - a, n.y - a, a * 2, a * 2); }   // 資料は四角
+        else g.arc(n.x, n.y, r, 0, Math.PI * 2);
         const col = this.nodeColor(n, i);
         if (col) { g.fillStyle = col; g.fill(); } else { g.fillStyle = bg; g.fill(); g.strokeStyle = muted; g.lineWidth = 1; g.stroke(); }
         const neighbor = nbs.has(i);
