@@ -99,6 +99,7 @@ def env_payload(cfg: dict) -> dict:
             "hf": {"torch", "transformers"} <= have,
             "sbert": {"torch", "transformers"} <= have,
             "scratch": "torch" in have,
+            "looped": "torch" in have,
             "tabular": "torch" in have,
             "baseline": True,
         },

@@ -1,0 +1,55 @@
+{
+  "slug": "kaleido-agents",
+  "name": "Kaleido Agents",
+  "path": "kaleido-agents/",
+  "summary": "プランナーとサブエージェントがツールモジュールを使い分けて依頼を完結させるマルチエージェント・オーケストレータ。",
+  "status": "paused",
+  "phase": "初版公開後、更新なし",
+  "progress": 60,
+  "started": "2026-07-15",
+  "ports": [
+    8790
+  ],
+  "ci": false,
+  "portal": true,
+  "stack": [
+    "Python 標準ライブラリ",
+    "JavaScript"
+  ],
+  "milestones": [
+    {
+      "title": "オーケストレータ・サブエージェント・組み込みツール",
+      "state": "done",
+      "date": "2026-07-15"
+    },
+    {
+      "title": "LLM 接続（Ollama / OpenAI互換 / Claude）",
+      "state": "done",
+      "date": "2026-07-15"
+    },
+    {
+      "title": "自動テスト・CI",
+      "state": "todo"
+    },
+    {
+      "title": "実タスクでの評価",
+      "state": "todo"
+    }
+  ],
+  "next": [
+    "自動テストの追加",
+    "実運用タスクで計画品質を評価"
+  ],
+  "risks": [
+    "テストがなく CI 対象外",
+    "コミット1件のみで検証が浅い"
+  ],
+  "log": [
+    {
+      "date": "2026-07-15",
+      "summary": "初版: サブエージェント×ツールのオーケストレータ",
+      "ref": "#35"
+    }
+  ],
+  "updated": "2026-07-15"
+}

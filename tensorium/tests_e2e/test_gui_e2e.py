@@ -183,7 +183,7 @@ def run(shots: str | None = None, headed: bool = False, fmt: str = "png") -> int
             page.locator("#aug-result [data-go='model']").click()
             page.wait_for_selector("#panel-model.active")
             page.wait_for_selector("#fams .fam")
-            check("ファミリーカード 5 枚", page.locator("#fams .fam").count() == 5)
+            check("ファミリーカード 6 枚", page.locator("#fams .fam").count() == 6)
             fam = "scratch" if have_torch else "baseline"
             page.locator(f"#fams .fam[data-fam='{fam}']").click()
             page.wait_for_function(f"document.querySelector('#fams .fam.on').dataset.fam === '{fam}'")

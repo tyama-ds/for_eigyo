@@ -1,0 +1,42 @@
+{
+  "slug": "mycel",
+  "name": "Mycel",
+  "path": "mycel/",
+  "summary": "ローカルの Markdown フォルダを [[リンク]] でつなぐ Obsidian 風ノートアプリ。バックリンク・グラフ・全文検索に加え、LLM でノートへの質問・要約・リンク候補を使える。",
+  "status": "active",
+  "phase": "初版を公開（個人利用）",
+  "progress": 60,
+  "started": "2026-09-25",
+  "version": "0.1.0",
+  "ports": [8795],
+  "ci": true,
+  "portal": true,
+  "stack": [
+    "Python 標準ライブラリ（サーバ）",
+    "SQLite FTS5",
+    "OpenAI 互換 / Azure OpenAI",
+    "Vanilla JS"
+  ],
+  "milestones": [
+    {"title": "ノート編集・[[リンク]]・バックリンク・名前変更時のリンク書き換え", "state": "done", "date": "2026-09-25"},
+    {"title": "全文検索（FTS5 trigram）・タグ・デイリーノート・グラフ表示", "state": "done", "date": "2026-09-25"},
+    {"title": "AI 機能（質問・要約・リンク候補・書き換え、意味検索）", "state": "done", "date": "2026-09-25"},
+    {"title": "プラグイン機構（変更ジャーナル・Git 履歴）と CI（Ubuntu / Windows）", "state": "done", "date": "2026-09-25"},
+    {"title": "App Portal に登録", "state": "done", "date": "2026-09-25"},
+    {"title": "実際のノートでの試用とフィードバック反映", "state": "todo"},
+    {"title": "チーム共有（shared_vault プラグインの実装）", "state": "todo"}
+  ],
+  "next": [
+    "実際の営業ノートで試用し、使い勝手を確認",
+    "社内 LLM（Azure OpenAI / Ollama）での接続確認",
+    "共有に進むか判断し、shared_vault プラグインを実装"
+  ],
+  "risks": [
+    "共有機能はひな形のみ（当面は個人利用）",
+    "AI 機能の質は接続する LLM に依存する"
+  ],
+  "log": [
+    {"date": "2026-09-25", "summary": "初版（リンク・グラフ・AI・プラグイン）を追加し、App Portal に登録", "ref": "#50"}
+  ],
+  "updated": "2026-09-25"
+}

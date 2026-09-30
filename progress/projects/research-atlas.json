@@ -1,0 +1,67 @@
+{
+  "slug": "research-atlas",
+  "name": "Research Atlas",
+  "path": "research-atlas/",
+  "summary": "公開論文・Scopus CSV から研究分野、技術マップ、共著ネットワーク、引用・年次動向を分析するローカルアプリ。",
+  "status": "active",
+  "phase": "v2.1 引用タイムアトラス",
+  "progress": 75,
+  "started": "2026-09-14",
+  "version": "2.1",
+  "ports": [
+    8778
+  ],
+  "ci": true,
+  "portal": true,
+  "stack": [
+    "Python 3.11+",
+    "SBERT",
+    "NMF",
+    "ローカルLLM / OpenAI"
+  ],
+  "milestones": [
+    {
+      "title": "書誌分析・NMF 技術マップ・共著ネットワーク",
+      "state": "done",
+      "date": "2026-09-14"
+    },
+    {
+      "title": "20,000件バッチ・20万件の多年コーパス",
+      "state": "done",
+      "date": "2026-09-15"
+    },
+    {
+      "title": "時層ランドスケープ・重心分析・3D 表示",
+      "state": "done",
+      "date": "2026-09-15"
+    },
+    {
+      "title": "引用タイムアトラス（v2.1）",
+      "state": "done",
+      "date": "2026-09-15"
+    },
+    {
+      "title": "内容に基づく将来予測・TRL 判定",
+      "state": "todo"
+    }
+  ],
+  "next": [
+    "内容に基づく将来予測・TRL 判定の検討",
+    "大規模コーパスでの応答時間の確認"
+  ],
+  "risks": [
+    "LLM・proxy 設定をブラウザに保存する",
+    "Python 3.11 以降と依存パッケージの導入が必要"
+  ],
+  "log": [
+    {
+      "date": "2026-09-15",
+      "summary": "引用タイムアトラス、全コーパスの重心評論、3D レイヤー、他PCの LLM 接続"
+    },
+    {
+      "date": "2026-09-14",
+      "summary": "初版とポータル統合"
+    }
+  ],
+  "updated": "2026-09-15"
+}
