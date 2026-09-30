@@ -24,11 +24,21 @@ def chat_response(messages: list[dict]) -> str:
     prompt = messages[-1]["content"] if messages else ""
     task = (re.search(r"\[TASK:(\w+)\]", prompt) or [None, ""])[1]
     if task == "ask":
-        titles = re.findall(r"\[\d+\] ノート「([^」]+)」", prompt)
+        titles = re.findall(r"\[\d+\] (?:ノート|資料)「([^」]+)」", prompt)
         cited = " ".join(f"[[{t}]]" for t in titles[:2])
         return f"<think>考え中</think>ノートによると、稼働率を重視しています。{cited}"
     if task == "summarize":
         return '```json\n{"summary": "A社の更改案件。決裁者は稼働率重視。", "tags": ["顧客", "要フォロー"]}\n```'
+    if task == "ingest_map":
+        part = (re.search(r"（(\d+)/(\d+)）", prompt) or [None, "?"])[1]
+        return f"- 部分{part}の要点: 初期費用 1,200万円"
+    if task == "ingest":
+        return ('考えた結果です。```json\n{"title": "A社 見積の概要", "doc_type": "見積書", "date": "2026-09-01",'
+                ' "summary": "A社向けの概算見積。初期費用は1,200万円。", "points": ["初期費用 1,200万円", "保守 月額30万円"],'
+                ' "entities": {"customers": ["A社"], "people": ["田中部長"], "products": ["生産管理システム"],'
+                ' "projects": [], "others": ["保守"]}, "tags": ["見積", "A社"]}\n```')
+    if task in ("ingest_links", "relate"):
+        return '[{"n": 1, "reason": "同じ顧客の案件"}]'
     if task == "transform":
         return "- 整えた文章"
     return "接続OK"
@@ -40,6 +50,18 @@ def start_mock_llm():
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *a):
             pass
+
+        def do_GET(self):  # noqa: N802
+            if self.path == "/v1/models":
+                data = json.dumps({"data": [{"id": "mock"}, {"id": "mock-embed"}]}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            else:
+                self.send_response(404)
+                self.end_headers()
 
         def do_POST(self):  # noqa: N802
             body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")

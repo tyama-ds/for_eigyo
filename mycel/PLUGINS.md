@@ -48,10 +48,11 @@ class Example(Plugin):
 `author`（設定の作成者名）、`version`（内容ハッシュ）、`text`（本文。削除では `None`）、`timestamp`。
 
 `ctx`（`PluginContext`）: `ctx.vault`（読み書き）、`ctx.index`（検索・リンク）、`ctx.config()`、
-`ctx.data_dir(id)`、`ctx.log(id, msg)`。
+`ctx.data_dir(id)`、`ctx.log(id, msg)`、`ctx.update_index(prefixes)`（範囲を指定して差分を読み込む）。
 
-Vault の外部で .md を書き換えたときは `ctx.index.refresh(相対パス)` を呼ぶとすぐ反映されます
-（呼ばなくても数秒以内に差分同期されます）。
+インデックスは自動では読み直しません（初回と、利用者が「更新」を押したときだけ）。
+プラグインが Vault の .md を書き換えたときは `ctx.index.refresh(相対パス)` で 1 件ずつ、
+まとめて取り込んだときは `ctx.update_index(["フォルダ"])` で反映してください。
 
 ## 共有に進むとき
 

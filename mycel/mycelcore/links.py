@@ -100,6 +100,35 @@ def extract_headings(text: str) -> list[dict]:
     return out
 
 
+def rewrite_link_prefix(text: str, old: str, new: str) -> tuple[str, int]:
+    """``[[old/…]]`` のようにフォルダ old の配下を指すリンクを ``[[new/…]]`` に書き換える。"""
+    old_key = old.strip().strip("/").lower() + "/"
+    count = 0
+    lines = text.split("\n")
+    in_fence = False
+
+    def _sub(m: re.Match) -> str:
+        nonlocal count
+        target, heading, alias = parse_wikilink(m.group(1))
+        if not target.lower().startswith(old_key):
+            return m.group(0)
+        count += 1
+        out = new.strip("/") + "/" + target[len(old_key):]
+        if heading:
+            out += "#" + heading
+        if alias:
+            out += "|" + alias
+        return f"[[{out}]]"
+
+    for i, line in enumerate(lines):
+        if FENCE_RE.match(line):
+            in_fence = not in_fence
+            continue
+        if not in_fence and "[[" in line:
+            lines[i] = WIKILINK_RE.sub(_sub, line)
+    return "\n".join(lines), count
+
+
 def rewrite_links(text: str, old: str, new: str) -> tuple[str, int]:
     """``[[old]]`` 系のリンクを ``new`` に書き換える（見出し・別名は保持）。
 

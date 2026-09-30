@@ -63,6 +63,10 @@ class PluginContext:
     def config(self) -> dict:
         return self._app.config()
 
+    def update_index(self, prefixes: list[str] | None = None, wait: bool = False) -> dict:
+        """まとめて取り込んだあとなどに、指定範囲の差分を読み込む（画面の「更新」と同じ）。"""
+        return self._app.update_index(prefixes, wait=wait)
+
     def data_dir(self, plugin_id: str) -> Path:
         """プラグインが自由に使える保存場所（<vault>/.mycel/plugins/<id>/）。"""
         d = self._app.vault.internal / "plugins" / plugin_id

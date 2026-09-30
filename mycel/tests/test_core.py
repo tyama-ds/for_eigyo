@@ -116,7 +116,7 @@ class AppTest(unittest.TestCase):
         (self.plugdir / "recorder.py").write_text(RECORDER_SRC, encoding="utf-8")
         cfg = root / "cfg.json"
         cfg.write_text('{"user_name": "tester", "plugins": ["recorder", "missing"]}', encoding="utf-8")
-        self.app = MycelApp(config_path=cfg, vault_override=str(root / "vault"), plugin_dir=self.plugdir)
+        self.app = MycelApp(config_path=cfg, vault_override=str(root / "vault"), plugin_dir=self.plugdir, initial_load="sync")
         self.events = self.app.plugins.loaded["recorder"].events
 
     def tearDown(self):
@@ -199,13 +199,18 @@ class AppTest(unittest.TestCase):
         full = self.app.index.graph()
         self.assertTrue(any(not n["exists"] for n in full["nodes"]))
 
-    def test_external_edit_picked_up_by_sync(self):
+    def test_external_edit_needs_manual_update(self):
         p = self.app.vault.root / "外部.md"
         p.write_text("# 外部\n[[ホーム]]", encoding="utf-8")
-        self.app.index.sync(force=True)
+        self.assertIsNone(self.app.index.get("外部.md"))          # 自動では読まない
+        r = self.app.check_index(None, wait=True)
+        self.assertEqual(r["result"]["added"], 1)
+        self.assertEqual(self.app.index_status()["pending"]["added"], 1)
+        self.app.update_index(None, wait=True)
         self.assertIn("外部.md", {b["path"] for b in self.app.index.backlinks("ホーム.md")})
+        self.assertEqual(self.app.index_status()["pending"]["added"], 0)
         p.unlink()
-        self.app.index.sync(force=True)
+        self.app.update_index([""], wait=True)
         self.assertIsNone(self.app.index.get("外部.md"))
 
     def test_delete(self):
