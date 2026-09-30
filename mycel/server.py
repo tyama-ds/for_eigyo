@@ -102,6 +102,17 @@ def api_config_test(app: MycelApp, _p: dict) -> dict:
     return out
 
 
+def api_llm_models(app: MycelApp, b: dict) -> dict:
+    """画面で入力中の URL でモデル一覧を取る（API キーは入力が無ければ保存済みのものを使う）。"""
+    cfg = dict(app.config())
+    for k in ("provider", "base_url", "api_key", "embed_base_url"):
+        if isinstance(b.get(k), str) and b[k].strip():
+            cfg[k] = b[k].strip()
+    if b.get("target") == "embed" and cfg.get("embed_base_url"):
+        cfg["base_url"] = cfg["embed_base_url"]
+    return {"models": LLMClient(cfg).list_models()}
+
+
 GET_ROUTES = {
     "/api/state": api_state,
     "/api/tree": lambda app, p: app.tree(),
@@ -124,6 +135,7 @@ GET_ROUTES = {
     "/api/scope": lambda app, p: app.scope_info(),
     "/api/scope/tree": lambda app, p: app.scope_tree(_str(p, "path")),
     "/api/scope/browse": lambda app, p: app.browse(_str(p, "path")),
+    "/api/ingest": lambda app, p: app.ingest.list(),
 }
 
 POST_ROUTES = {
@@ -143,6 +155,13 @@ POST_ROUTES = {
     "/api/index/update": lambda app, b: app.update_index(_list(b, "prefixes")),
     "/api/index/rebuild": lambda app, b: app.rebuild_index(),
     "/api/index/cancel": lambda app, b: {"cancelled": app.jobs.cancel()},
+    "/api/ingest/add": lambda app, b: {"drafts": app.ingest.add_paths(_list(b, "paths") or [])},
+    "/api/ingest/run": lambda app, b: app.ingest.start(_list(b, "ids"), b.get("options") if isinstance(b.get("options"), dict) else None),
+    "/api/ingest/edit": lambda app, b: app.ingest.edit(_str(b, "id"), b.get("markdown") if isinstance(b.get("markdown"), str) else None,
+                                                       _str(b, "note_path") or None),
+    "/api/ingest/save": lambda app, b: app.ingest_save(_list(b, "ids") or []),
+    "/api/ingest/discard": lambda app, b: {"discarded": app.ingest.discard(_list(b, "ids") or [])},
+    "/api/llm/models": api_llm_models,
     "/api/config": lambda app, b: public_config(app.update_config(b)),
     "/api/config/test": api_config_test,
     "/api/ai/ask": lambda app, b: app.ai.ask(_str(b, "question"), _str(b, "path") or None,
@@ -204,6 +223,8 @@ def make_handler(app: MycelApp):
                     if o.scheme != "http" or (o.hostname or "").lower() not in {"127.0.0.1", "localhost", "::1"}:
                         raise ApiError("この要求は許可されていません（Origin）", 403)
                 ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+                if ctype == "application/octet-stream" and urlparse(self.path).path == "/api/ingest/upload":
+                    return                     # 単純リクエストにならない型なので、別サイトからは送れない
                 if ctype != "application/json":
                     raise ApiError("Content-Type は application/json にしてください", 415)
 
@@ -284,6 +305,9 @@ def make_handler(app: MycelApp):
             url = urlparse(self.path)
             try:
                 self._guard(write=True)
+                if url.path == "/api/ingest/upload":
+                    self._json(self._upload())
+                    return
                 body = self._body()
                 if url.path.startswith("/api/plugins/"):
                     self._json(self._plugin_call(url.path, body, "POST"))
@@ -294,6 +318,19 @@ def make_handler(app: MycelApp):
                 self._json(fn(app, body))
             except Exception as e:  # noqa: BLE001
                 self._error(e)
+
+        def _upload(self) -> dict:
+            from urllib.parse import unquote
+            if (self.headers.get("Content-Type") or "").split(";")[0].strip().lower() != "application/octet-stream":
+                raise ApiError("Content-Type は application/octet-stream にしてください", 415)
+            length = int(self.headers.get("Content-Length") or 0)
+            if length > max(MAX_BODY, app.scope.max_bytes()):
+                raise ApiError("ファイルが大きすぎます", 413)
+            name = unquote(self.headers.get("X-Filename") or "")
+            data = self.rfile.read(length) if length else b""
+            if not data:
+                raise ApiError("ファイルが空です")
+            return app.ingest.upload(name, data)
 
         def _plugin_call(self, path: str, params: dict, method: str) -> dict:
             """params["_method"] に GET / POST を入れて渡す。状態を変える処理は POST に限ること。"""

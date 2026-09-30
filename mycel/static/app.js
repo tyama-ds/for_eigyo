@@ -228,7 +228,8 @@
     $("#body").innerHTML = `<div class="docbar">${ftBadge(c.grp)}<span class="dpath" title="${esc(c.source_path || "")}">${esc(docLabel(c.path))}</span><span class="dmeta">読込 ${esc(fmtTime(c.indexed_at))}</span><span class="sp"></span>
         <button class="btn sm" data-docact="open"${c.exists === false ? " disabled" : ""}>アプリで開く</button>
         <a class="btn sm" href="/api/file?path=${encodeURIComponent(c.path)}" download>ダウンロード</a>
-        <button class="btn sm" data-docact="import"${c.status === "ok" ? "" : " disabled"} title="本文を編集できる Markdown ノートとして Vault に保存します">ノートとして取り込む</button>
+        <button class="btn sm pri" data-docact="ai"${c.status === "ok" ? "" : " disabled"} title="ローカル LLM が要約・名前・タグ・関連ノートを付けたノートの下書きを作ります">AI でノート化</button>
+        <button class="btn sm" data-docact="import"${c.status === "ok" ? "" : " disabled"} title="本文をそのまま Markdown ノートとして Vault に保存します">本文をノートに</button>
         <button class="btn sm" data-docact="update" title="この資料だけ読み込み直します">再読込</button></div>
       ${gone}${stale}${status}
       <article class="preview md docview">${plain ? `<pre class="doctext">${esc(c.text)}</pre>` : MD.render(c.text, { resolve })}</article>`;
@@ -239,6 +240,7 @@
     try {
       if (act === "open") { await api.post("/api/file/open", { path: c.path }); toast("既定のアプリで開きました"); }
       else if (act === "update") { await updateIndex([c.path], `「${c.title}」を読み込み直しています`); }
+      else if (act === "ai") { await openIngest({ paths: [c.path], autoRun: true }); }
       else if (act === "import") {
         const r = await api.post("/api/note/import", { path: c.path });
         await loadTree(); await openNote(r.path); toast(`ノート「${titleOf(r.path)}」として取り込みました`);
@@ -368,6 +370,7 @@
         const st = await api.get("/api/index/status");
         running = !!(st.job && st.job.state === "running");
         await applyIndexStatus(st);
+        if (ingestUI && running && st.job.kind === "ingest") ingestUI.refresh();
         if (S.cur && !S.dirty && !S.saving && !S.conflict) {
           const path = S.cur.path;
           const v = await api.get("/api/note/version", { path });
@@ -385,7 +388,7 @@
   }
 
   // ------------------------------------------------------------ 読み込み（インデックス）の状態と更新
-  const JOB_DONE = { update: "読み込み", scan: "確認" };
+  const JOB_DONE = { update: "読み込み", scan: "確認", ingest: "AI 取り込み" };
   async function applyIndexStatus(st) {
     S.index = st;
     renderIndexChip();
@@ -407,9 +410,13 @@
     } else if (job.state === "done" && job.kind === "scan") {
       const pend = (r.added || 0) + (r.modified || 0) + (r.deleted || 0);
       if (!first && pend) toast(`未反映の変更が ${pend} 件あります（「更新」で読み込みます）`);
+    } else if (job.state === "done" && job.kind === "ingest") {
+      toast(`AI 取り込み: 下書き ${r.drafted || 0} 件${r.errors ? ` ・ エラー ${r.errors} 件` : ""}。確認して保存してください`, !!r.errors);
+      if (!ingestUI) openIngest();
     } else if (job.state === "cancelled") toast(job.message);
     else if (job.state === "error") toast(`${JOB_DONE[job.kind] || "処理"}に失敗しました: ${job.message}`, true);
     if (scopeUI) scopeUI.refresh();
+    if (ingestUI) ingestUI.refresh();
   }
 
   function renderIndexChip() {
@@ -574,7 +581,8 @@
         { label: "開く", run: () => openNote(path) },
         { label: "アプリで開く", run: () => api.post("/api/file/open", { path }).catch(fail) },
         { label: "この資料を再読込", run: () => updateIndex([path]) },
-        { label: "ノートとして取り込む", run: async () => { try { const r = await api.post("/api/note/import", { path }); await loadTree(); openNote(r.path); } catch (e) { fail(e); } } },
+        { label: "AI でノート化…", run: () => openIngest({ paths: [path], autoRun: true }) },
+        { label: "本文をノートに取り込む", run: async () => { try { const r = await api.post("/api/note/import", { path }); await loadTree(); openNote(r.path); } catch (e) { fail(e); } } },
         { label: "リンク用の名前をコピー", run: () => copyText(`[[${path}]]`) },
       ]);
       return;
@@ -1026,6 +1034,7 @@
       { label: "AI に質問", run: () => { S.rtab = "ai"; app.classList.remove("no-right"); renderRight(); setTimeout(() => $("#askIn") && $("#askIn").focus(), 50); } },
       { label: "テンプレートを挿入…", run: insertTemplate },
       { label: "設定", run: () => openSettings() },
+      { label: "AI 取り込み（文書をノートにする）…", run: () => openIngest() },
       { label: "読み込み範囲…", run: () => openScope() },
       { label: "更新（変更されたファイルを読み込む）", run: () => updateIndex(null) },
       { label: "変更を確認（読み込みはしない）", run: () => checkIndex(null) },
@@ -1268,6 +1277,233 @@
     go("");
   }
 
+  // ------------------------------------------------------------ AI 取り込み（記法の無い文書 → つながったノート）
+  let ingestUI = null;
+  const IG_ST = { queued: ["待機", "off"], processing: ["処理中", "mod"], ready: ["下書き完了", "new"], error: ["エラー", "ng"], saved: ["保存済み", ""] };
+  const IG_ACCEPT = ".pdf,.docx,.xlsx,.xlsm,.pptx,.eml,.txt,.log,.csv,.tsv,.html,.htm,.json,.xml,.yaml,.yml";
+
+  async function uploadFiles(files) {
+    let ok = 0;
+    for (const f of files) {
+      try {
+        const res = await fetch("/api/ingest/upload", { method: "POST", headers: { "Content-Type": "application/octet-stream", "X-Filename": encodeURIComponent(f.name) }, body: f });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `エラー (${res.status})`);
+        ok++;
+      } catch (e) { toast(`${f.name}: ${e.message}`, true); }
+    }
+    if (ok) toast(`${ok} 件のファイルを追加しました。「AI で下書きを作る」を押してください`);
+    return ok;
+  }
+
+  async function openIngest({ files = null, paths = null, autoRun = false } = {}) {
+    if (!ingestUI) buildIngest();
+    if (files && files.length) await uploadFiles(files);
+    if (paths && paths.length) { try { await api.post("/api/ingest/add", { paths }); } catch (e) { fail(e); } }
+    await ingestUI.refresh();
+    if (autoRun) ingestUI.run();
+  }
+
+  function buildIngest() {
+    let data = { drafts: [], options: {}, llm: {} }, cur = null, sel = new Set(), tab = "prev", editTimer = 0;
+    const body = document.createElement("div");
+    body.className = "ing";
+    body.innerHTML = `<div class="ing-llm" id="igLlm"></div>
+      <div class="ing-grid">
+        <div class="ing-left">
+          <div class="drop" id="igDrop" tabindex="0" role="button">${icon('<path d="M12 15V4M7.5 8.5 12 4l4.5 4.5"/><path d="M4 14v5h16v-5"/>')}<b>ここにファイルをドロップ</b><small>またはクリックして選ぶ ・ PDF / Word / Excel / PowerPoint / メール / テキスト</small><input type="file" id="igFile" multiple accept="${IG_ACCEPT}" hidden></div>
+          <button class="btn sm" id="igPick">読み込み済みの資料から選ぶ…</button>
+          <div class="ing-list" id="igList" role="listbox" aria-label="取り込むファイル"></div>
+          <details class="ing-opts" id="igOpts"><summary>取り込みの設定</summary><div class="form"></div></details>
+          <div class="ing-acts"><button class="btn pri" id="igRun">AI で下書きを作る</button><button class="btn sm danger" id="igDiscard" disabled>選択を破棄</button></div>
+        </div>
+        <div class="ing-right" id="igDetail"></div>
+      </div>`;
+    const m = modal({
+      title: "AI 取り込み — 文書をつながったノートにする", body, wide: true,
+      buttons: [{ label: "保存済みを片付ける", onClick: () => { discard(data.drafts.filter((d) => d.status === "saved").map((d) => d.id), false); return false; } },
+                { label: "閉じる" },
+                { label: "下書きをすべて保存", primary: true, onClick: () => { save(data.drafts.filter((d) => d.status === "ready").map((d) => d.id)); return false; } }],
+      onClose: () => { flushEdit(); ingestUI = null; },
+    });
+    m.el.querySelector(".modal").classList.add("xwide");
+    const saveAllBtn = $$("footer .btn", m.el).pop();
+
+    const opt = (k) => data.options[k];
+    function drawLlm() {
+      const l = data.llm, el = $("#igLlm", body);
+      if (!l.chat) el.innerHTML = `<span class="dot err"></span><span>LLM が未設定です。本文の取り込みとキーワード検索での関連付けだけ行います。</span><button class="btn sm" id="igSetup">ローカル LLM を設定</button>`;
+      else el.innerHTML = `<span class="dot${l.local ? "" : " dirty"}"></span><span>${l.local ? "ローカル LLM" : "<b>外部の LLM</b>"}: <b>${esc(l.model)}</b> <small>${esc(l.base_url)}</small>${l.embed_model ? ` ・ 意味検索: ${esc(l.embed_model)}` : " ・ 関連付けはキーワード検索（Embed モデル未設定）"}</span>${l.local ? "" : '<span class="ng">文書の内容が外部に送られます</span>'}<button class="btn sm" id="igSetup">LLM の設定</button>`;
+      $("#igSetup", body).onclick = () => openSettings("llm");
+    }
+    function drawOpts() {
+      const o = data.options, box = $("#igOpts .form", body);
+      if (box.dataset.done) return;
+      box.dataset.done = "1";
+      box.innerHTML = `<label for="igDest">ノートの保存先</label><input id="igDest" type="text" value="${esc(o.dest_folder || "")}" placeholder="（Vault 直下）">
+        <label></label><label class="ck"><input type="checkbox" id="igKeep"${o.keep_original ? " checked" : ""}> 原本を Vault に保存する（ノートから原本へリンク）</label>
+        <label for="igOrig">原本の保存先</label><input id="igOrig" type="text" value="${esc(o.original_folder || "")}" placeholder="（Vault 直下）">
+        <label></label><label class="ck"><input type="checkbox" id="igBody"${o.include_body ? " checked" : ""}> ノートに本文も入れる（原本を保存しないときは常に入れます）</label>
+        <label></label><label class="ck"><input type="checkbox" id="igNew"${o.link_new_names ? " checked" : ""}> まだノートの無い顧客名・人名も [[リンク]] にする</label>
+        <label></label><label class="ck"><input type="checkbox" id="igLlmUse"${o.use_llm ? " checked" : ""}> AI（LLM）で要約・名前・タグ・関連を作る</label>`;
+    }
+    const options = () => ({ dest_folder: $("#igDest", body).value, keep_original: $("#igKeep", body).checked, original_folder: $("#igOrig", body).value,
+      include_body: $("#igBody", body).checked, link_new_names: $("#igNew", body).checked, use_llm: $("#igLlmUse", body).checked });
+
+    function drawList() {
+      const el = $("#igList", body), ds = data.drafts;
+      el.innerHTML = ds.length ? ds.map((d) => {
+        const [lbl, cls] = IG_ST[d.status] || [d.status, ""];
+        return `<div class="igrow${cur === d.id ? " on" : ""}" data-id="${esc(d.id)}" role="option"><input type="checkbox" data-ck="${esc(d.id)}"${sel.has(d.id) ? " checked" : ""} aria-label="選択">${ftBadge(d.grp)}<span class="nm" title="${esc(d.origin === "doc" ? d.source : d.name)}">${esc(d.status === "ready" || d.status === "saved" ? d.title || d.name : d.name)}${d.origin === "doc" ? ' <small>読込済みの資料</small>' : ""}</span><span class="fst ${cls}">${d.status === "processing" ? '<span class="spin"></span> ' : ""}${esc(lbl)}</span></div>`;
+      }).join("") : '<div class="empty">まだファイルがありません。上にドロップしてください。</div>';
+      const todo = ds.filter((d) => ["queued", "error"].includes(d.status)).length;
+      const running = S.index && S.index.job && S.index.job.state === "running";
+      const runBtn = $("#igRun", body);
+      runBtn.disabled = running || !(sel.size ? [...sel].some((id) => (ds.find((d) => d.id === id) || {}).status !== "saved") : todo);
+      runBtn.textContent = running && S.index.job.kind === "ingest" ? "作成中…" : sel.size ? `選択した ${sel.size} 件の下書きを作る` : `AI で下書きを作る（${todo}）`;
+      $("#igDiscard", body).disabled = !sel.size;
+      const ready = ds.filter((d) => d.status === "ready").length;
+      saveAllBtn.disabled = !ready; saveAllBtn.textContent = `下書きをすべて保存（${ready}）`;
+    }
+
+    function drawDetail() {
+      const el = $("#igDetail", body);
+      const d = data.drafts.find((x) => x.id === cur);
+      if (!d) {
+        el.innerHTML = `<div class="ing-help"><h3>文書を「つながったノート」にします</h3><ol>
+          <li><b>ファイルを入れる</b> — 左にドロップ（アプリのどこにドロップしても開きます）。読み込み済みの資料からも選べます。</li>
+          <li><b>AI が読む</b> — ローカル LLM が本文を区切って読み、タイトル・要約・要点・登場する顧客名や人名・タグをまとめます。</li>
+          <li><b>RAG で関連付け</b> — 要約と名前で既存のノート・資料を検索し、本当に関係するものを LLM が選んで理由を付けます。</li>
+          <li><b>確認して保存</b> — 下書きを直して保存。原本は資料として Vault に入り、ノートから <code>[[原本]]</code> でたどれます。</li></ol>
+          <p class="hint">保存したノートは <code>[[顧客名]]</code> などのリンクでグラフ・バックリンク・AI の質問につながります。LLM がなくても本文の取り込みはできます。</p></div>`;
+        return;
+      }
+      const head = `<div class="igh">${ftBadge(d.grp)}<b>${esc(d.name)}</b><small>${fmtSize(d.size)}${d.chars ? ` ・ ${d.chars.toLocaleString()} 文字` : ""}${d.model ? ` ・ ${esc(d.model)}` : d.status === "ready" ? " ・ AI なし" : ""}</small></div>`;
+      if (d.status === "queued" || d.status === "processing") {
+        el.innerHTML = head + `<div class="ing-wait">${d.status === "processing" ? `<span class="spin"></span> ${esc(d.phase || "処理中")}` : "待機中です。「AI で下書きを作る」を押すと始まります。"}</div>`;
+        return;
+      }
+      if (d.status === "error") {
+        el.innerHTML = head + `<div class="notice err">${esc(d.error)}</div><button class="btn sm" data-igact="rerun">作り直す</button> <button class="btn sm danger" data-igact="discard">破棄</button>`;
+        bindActs(d); return;
+      }
+      if (d.status === "saved") {
+        el.innerHTML = head + `<div class="notice">ノート「${esc(titleOf(d.saved_path))}」として保存しました。${d.original_path && d.origin === "upload" ? `原本は <code>${esc(d.original_path)}</code> にあります。` : ""}</div><button class="btn sm pri" data-igact="open">ノートを開く</button>`;
+        bindActs(d); return;
+      }
+      el.innerHTML = head + `${d.error ? `<div class="notice">${esc(d.error)}</div>` : ""}
+        <div class="form igpath"><label for="igPath">保存するノート</label><input id="igPath" type="text" value="${esc(d.note_path.replace(/\.md$/, ""))}"></div>
+        ${d.related.length ? `<div class="srcs igrel"><span class="hint">関連（RAG）:</span>${d.related.map((r) => `<button class="chip" data-open="${esc(r.path)}" title="${esc(r.snippet)}">${esc(r.title)}${r.reason ? " — " + esc(r.reason) : ""}</button>`).join("")}</div>` : ""}
+        <div class="seg igtabs"><button data-tab="prev" class="${tab === "prev" ? "on" : ""}">プレビュー</button><button data-tab="edit" class="${tab === "edit" ? "on" : ""}">編集</button></div>
+        <div class="igbody">${tab === "edit" ? `<textarea class="editor" id="igMd" spellcheck="false" aria-label="下書き">${esc(d.markdown)}</textarea>` : `<article class="md">${MD.render(d.markdown, { resolve })}</article>`}</div>
+        <div class="ing-acts"><button class="btn pri" data-igact="save">このノートを保存</button><button class="btn sm" data-igact="rerun" title="設定を変えて作り直します">作り直す</button><button class="btn sm danger" data-igact="discard">破棄</button></div>`;
+      $$("[data-tab]", el).forEach((b) => (b.onclick = () => { flushEdit(); tab = b.dataset.tab; drawDetail(); }));
+      const ta = $("#igMd", el);
+      if (ta) ta.addEventListener("input", () => { d.markdown = ta.value; clearTimeout(editTimer); editTimer = setTimeout(() => flushEdit(), 700); });
+      $("#igPath", el).addEventListener("change", async (e) => { try { const r = await api.post("/api/ingest/edit", { id: d.id, note_path: e.target.value }); d.note_path = r.note_path; } catch (err) { fail(err); e.target.value = d.note_path.replace(/\.md$/, ""); } });
+      $$("[data-open]", el).forEach((b) => b.addEventListener("click", () => m.close()));
+      bindActs(d);
+    }
+    let pendingEdit = null;
+    function flushEdit() {
+      clearTimeout(editTimer);
+      const d = data.drafts.find((x) => x.id === cur);
+      if (!d || d.status !== "ready") return Promise.resolve();
+      const ta = $("#igMd", body);
+      if (!ta) return pendingEdit || Promise.resolve();
+      pendingEdit = api.post("/api/ingest/edit", { id: d.id, markdown: ta.value }).catch(fail);
+      return pendingEdit;
+    }
+    function bindActs(d) {
+      $$("[data-igact]", $("#igDetail", body)).forEach((b) => (b.onclick = async () => {
+        const act = b.dataset.igact;
+        if (act === "save") { await flushEdit(); save([d.id]); }
+        else if (act === "rerun") run([d.id]);
+        else if (act === "discard") discard([d.id], true);
+        else if (act === "open") { m.close(); openNote(d.saved_path); }
+      }));
+    }
+
+    async function refresh() {
+      try { data = await api.get("/api/ingest"); } catch (e) { fail(e); return; }
+      if (cur && !data.drafts.some((d) => d.id === cur)) cur = null;
+      if (!cur && data.drafts.length) cur = (data.drafts.find((d) => d.status === "ready") || data.drafts[0]).id;
+      [...sel].forEach((id) => { if (!data.drafts.some((d) => d.id === id)) sel.delete(id); });
+      drawLlm(); drawOpts(); drawList();
+      // 編集中は本文を描き直さない
+      const ta = $("#igMd", body);
+      if (!(ta && document.activeElement === ta)) drawDetail();
+    }
+    async function run(ids = null) {
+      await flushEdit();
+      const target = ids || (sel.size ? [...sel] : null);
+      try {
+        await api.post("/api/ingest/run", { ids: target, options: options() });
+        toast("AI が読み込んでいます（閉じても続きます。進み具合はステータスバー）");
+        setTimeout(poll, 300); setTimeout(refresh, 400);
+      } catch (e) { fail(e); }
+    }
+    async function save(ids) {
+      if (!ids.length) return;
+      await flushEdit();
+      try {
+        const r = await api.post("/api/ingest/save", { ids });
+        r.errors.forEach((e) => toast(e.error, true));
+        if (r.saved.length) {
+          await loadTree();
+          toast(`${r.saved.length} 件のノートを保存しました${r.embedding ? "（意味検索に登録しています）" : ""}`);
+        }
+        await refresh();
+      } catch (e) { fail(e); }
+    }
+    async function discard(ids, ask) {
+      if (!ids.length) return;
+      if (ask && !(await confirmBox("下書きを破棄", `${ids.length} 件の下書きを破棄しますか？<br><span class="hint">アップロードしたファイルの一時コピーも消えます（元のファイルはそのままです）。</span>`, "破棄", true))) return;
+      try { await api.post("/api/ingest/discard", { ids }); ids.forEach((id) => sel.delete(id)); await refresh(); } catch (e) { fail(e); }
+    }
+
+    const drop = $("#igDrop", body), fileIn = $("#igFile", body);
+    drop.addEventListener("click", (e) => { if (e.target !== fileIn) fileIn.click(); });
+    drop.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileIn.click(); } });
+    fileIn.onchange = async () => { const fs = [...fileIn.files]; fileIn.value = ""; if (await uploadFiles(fs)) refresh(); };
+    ["dragenter", "dragover"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+    ["dragleave", "drop"].forEach((t) => drop.addEventListener(t, () => drop.classList.remove("over")));
+    $("#igPick", body).onclick = () => pickDocs(async (paths) => { try { await api.post("/api/ingest/add", { paths }); await refresh(); } catch (e) { fail(e); } });
+    $("#igList", body).addEventListener("click", (e) => {
+      const ck = e.target.closest("[data-ck]");
+      if (ck) { ck.checked ? sel.add(ck.dataset.ck) : sel.delete(ck.dataset.ck); drawList(); return; }
+      const row = e.target.closest("[data-id]");
+      if (row) { flushEdit(); cur = row.dataset.id; tab = "prev"; drawList(); drawDetail(); }
+    });
+    $("#igRun", body).onclick = () => run();
+    $("#igDiscard", body).onclick = () => discard([...sel], true);
+    ingestUI = { refresh, run: () => run(), el: m.el };
+  }
+
+  /** 読み込み済みの資料を複数選ぶ。 */
+  function pickDocs(onPick) {
+    const docs = S.tree.filter((n) => n.kind !== "note" && n.status === "ok");
+    const body = document.createElement("div");
+    body.innerHTML = `<input class="field-in" id="pdQ" type="search" placeholder="名前で絞り込み" style="margin:0 0 8px;width:100%"><div class="pdlist" id="pdList"></div>`;
+    const draw = () => {
+      const q = $("#pdQ", body).value.trim().toLowerCase();
+      const hits = docs.filter((d) => d.path.toLowerCase().includes(q)).slice(0, 300);
+      $("#pdList", body).innerHTML = hits.length ? hits.map((d) => `<label class="pdrow"><input type="checkbox" value="${esc(d.path)}">${ftBadge(d.grp)}<span>${esc(d.title)}</span><small>${esc(docLabel(d.folder))}</small></label>`).join("") : '<div class="empty">資料がありません（読み込み範囲に資料フォルダを追加して「更新」してください）</div>';
+    };
+    modal({ title: "読み込み済みの資料から選ぶ", body, buttons: [{ label: "キャンセル" }, { label: "追加", primary: true, onClick: () => { const v = $$("#pdList input:checked", body).map((c) => c.value); if (v.length) onPick(v); } }] });
+    $("#pdQ", body).addEventListener("input", draw);
+    draw();
+  }
+
+  // アプリのどこにファイルをドロップしても取り込みを開く
+  document.addEventListener("dragover", (e) => { if ([...e.dataTransfer.types].includes("Files")) e.preventDefault(); });
+  document.addEventListener("drop", (e) => {
+    if (![...e.dataTransfer.types].includes("Files")) return;
+    e.preventDefault();
+    const files = [...e.dataTransfer.files];
+    if (files.length) openIngest({ files });
+  });
+
   // ------------------------------------------------------------ 設定
   async function openSettings(tab = "general") {
     let cfg, plugins;
@@ -1285,15 +1521,18 @@
         <div class="help">テンプレートでは {{title}} {{date}} {{time}} {{author}} が置き換わります。</div>
       </div>
       <div data-tp="llm" class="form" style="padding-top:14px">
+        <label>ローカル LLM</label><div class="presets"><button class="btn sm" data-preset="http://127.0.0.1:11434/v1">Ollama</button><button class="btn sm" data-preset="http://127.0.0.1:1234/v1">LM Studio</button><button class="btn sm" data-preset="http://127.0.0.1:8080/v1">llama.cpp server</button></div>
+        <div class="help">文書を外部に出さないため、ローカル LLM を基本にしています。例: <code>ollama pull qwen2.5:7b</code>（チャット）と <code>ollama pull bge-m3</code>（意味検索）。</div>
         <label for="cProv">接続方式</label><select id="cProv"><option value="openai">OpenAI 互換 API（OpenAI / Ollama / LM Studio / vLLM など）</option><option value="azure">Azure OpenAI</option></select>
         <label for="cUrl">Base URL</label><input id="cUrl" type="text" value="${v("base_url")}" placeholder="例: http://127.0.0.1:11434/v1 ・ https://api.openai.com/v1">
         <div class="help" id="urlHelp"></div>
         <label for="cKey">API キー</label><input id="cKey" type="password" autocomplete="off" placeholder="${cfg.has_api_key ? "設定済み（変更する場合だけ入力）" : "ローカル LLM なら空欄で可"}">
         ${cfg.has_api_key ? '<label></label><label style="color:var(--muted)"><input type="checkbox" id="cKeyClr"> 保存済みのキーを消す</label>' : ""}
-        <label for="cModel" id="modelLbl">モデル</label><input id="cModel" type="text" value="${v("model")}" placeholder="例: qwen2.5:14b ・ gpt-4o-mini">
+        <label for="cModel" id="modelLbl">モデル</label><div class="inrow"><input id="cModel" type="text" list="dlModels" value="${v("model")}" placeholder="例: qwen2.5:7b ・ gemma2:9b"><button class="btn sm" id="cList" type="button">一覧を取得</button></div><datalist id="dlModels"></datalist>
+        <div class="help" id="cListRes"></div>
         <label for="cVer" class="az">API バージョン</label><input id="cVer" class="az" type="text" value="${v("api_version")}">
         <h4>意味検索（任意）</h4>
-        <label for="cEmb">Embed モデル</label><input id="cEmb" type="text" value="${v("embed_model")}" placeholder="例: nomic-embed-text ・ text-embedding-3-small">
+        <label for="cEmb">Embed モデル</label><input id="cEmb" type="text" list="dlModels" value="${v("embed_model")}" placeholder="例: bge-m3 ・ nomic-embed-text">
         <div class="help">空欄ならキーワード検索だけで関連ノートを探します。</div>
         <label for="cEmbUrl">Embed の Base URL</label><input id="cEmbUrl" type="text" value="${v("embed_base_url")}" placeholder="空欄なら上と同じ">
         <label for="cEmbKey">Embed の API キー</label><input id="cEmbKey" type="password" autocomplete="off" placeholder="${cfg.has_embed_api_key ? "設定済み" : "空欄なら上と同じ"}">
@@ -1301,6 +1540,10 @@
         <label for="cTemp">Temperature</label><input id="cTemp" type="number" step="0.1" min="0" max="2" value="${v("temperature")}">
         <label for="cMax">Max tokens</label><input id="cMax" type="number" min="64" value="${v("max_tokens")}">
         <label for="cTo">タイムアウト（秒）</label><input id="cTo" type="number" min="5" value="${v("request_timeout")}">
+        <div class="help">ローカル LLM は 1 回の応答に時間がかかることがあります。長い文書の取り込みでは 300 秒以上を推奨します。</div>
+        <label for="cChunk">取り込みの区切り（文字）</label><input id="cChunk" type="number" min="500" step="500" value="${v("ingest_chunk_chars")}">
+        <div class="help">AI 取り込みで 1 回に LLM へ送る文字数。モデルの文脈長（Ollama の既定は 2048〜4096 トークン程度）に合わせて小さめに。</div>
+        <label for="cMaxChunk">取り込みで読む区画の上限</label><input id="cMaxChunk" type="number" min="1" value="${v("ingest_max_chunks")}">
         <label for="cProxy">プロキシ</label><span><label style="color:var(--ink)"><input type="checkbox" id="cUseProxy"${cfg.use_proxy ? " checked" : ""}> プロキシを使う</label></span>
         <label for="cProxyUrl">プロキシ URL</label><input id="cProxyUrl" type="text" value="${v("proxy_url")}" placeholder="空欄なら環境変数 HTTPS_PROXY">
         <label></label><div><button class="btn" id="cTest">保存して接続テスト</button><div class="testres" id="cTestRes"></div></div>
@@ -1314,7 +1557,7 @@
         vault_path: $("#cVault", body).value, user_name: $("#cUser", body).value, daily_folder: $("#cDaily", body).value, template_folder: $("#cTpl", body).value,
         provider: $("#cProv", body).value, base_url: $("#cUrl", body).value, model: $("#cModel", body).value, api_version: $("#cVer", body).value,
         embed_model: $("#cEmb", body).value, embed_base_url: $("#cEmbUrl", body).value, temperature: $("#cTemp", body).value, max_tokens: $("#cMax", body).value,
-        request_timeout: $("#cTo", body).value, use_proxy: $("#cUseProxy", body).checked, proxy_url: $("#cProxyUrl", body).value,
+        request_timeout: $("#cTo", body).value, ingest_chunk_chars: $("#cChunk", body).value, ingest_max_chunks: $("#cMaxChunk", body).value, use_proxy: $("#cUseProxy", body).checked, proxy_url: $("#cProxyUrl", body).value,
         plugins: $$("[data-plug]", body).filter((c) => c.checked).map((c) => c.dataset.plug),
       };
       if ($("#cKey", body).value) d.api_key = $("#cKey", body).value;
@@ -1348,6 +1591,17 @@
       $("#urlHelp", body).textContent = az ? "例: https://<リソース名>.openai.azure.com" : "末尾は /v1 まで（/chat/completions は付けない）";
     };
     prov.onchange = syncProv; syncProv();
+    $$("[data-preset]", body).forEach((b) => (b.onclick = () => { prov.value = "openai"; syncProv(); $("#cUrl", body).value = b.dataset.preset; $("#cList", body).click(); }));
+    $("#cList", body).onclick = async () => {
+      const out = $("#cListRes", body); out.innerHTML = '<span class="spin"></span> 取得中…';
+      try {
+        const r = await api.post("/api/llm/models", { provider: prov.value, base_url: $("#cUrl", body).value, api_key: $("#cKey", body).value });
+        $("#dlModels", body).innerHTML = r.models.map((x) => `<option value="${esc(x)}">`).join("");
+        out.innerHTML = `${r.models.length} 件: ${r.models.slice(0, 12).map((x) => `<a href="#" data-mdl="${esc(x)}">${esc(x)}</a>`).join(" ・ ")}${r.models.length > 12 ? " …" : ""}<br>クリックでチャット用、Shift+クリックで Embed 用に設定します。`;
+        $$("[data-mdl]", out).forEach((a) => (a.onclick = (e) => { e.preventDefault(); $(e.shiftKey ? "#cEmb" : "#cModel", body).value = a.dataset.mdl; }));
+        if (!$("#cModel", body).value && r.models.length) $("#cModel", body).value = r.models.find((x) => !/embed|bge|e5/i.test(x)) || r.models[0];
+      } catch (e) { out.innerHTML = `<span class="ng">${esc(e.message)}</span>`; }
+    };
     $("#cTest", body).onclick = async () => {
       const out = $("#cTestRes", body); out.innerHTML = '<span class="spin"></span> テスト中…';
       if (!(await saveCfg())) { out.innerHTML = ""; return; }
@@ -1360,6 +1614,7 @@
   }
   $("#btnSettings").onclick = () => openSettings();
   $("#btnScope").onclick = () => openScope();
+  $("#btnIngest").onclick = () => openIngest();
 
   // ------------------------------------------------------------ テーマ・レイアウト
   function applyTheme(t) { if (t === "light") document.documentElement.dataset.theme = "light"; else delete document.documentElement.dataset.theme; if (S.graph) S.graph.draw(); }

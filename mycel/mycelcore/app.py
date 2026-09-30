@@ -12,6 +12,7 @@ from .ai import AIService
 from .config import embed_configured, load_config, save_config, vault_path
 from .extract import EXT_GROUP, KINDS, TYPE_GROUPS, pdf_available
 from .index import Index, open_index
+from .ingest import Ingestor
 from .jobs import JobRunner
 from .plugins import NoteEvent, PluginContext, PluginManager
 from .scope import Scope, ScopeError, browse, split_id
@@ -33,6 +34,7 @@ class MycelApp:
         self.initial_load = initial_load
         self.plugins = PluginManager(plugin_dir or PLUGIN_DIR)
         self.jobs = JobRunner()
+        self.ingest = Ingestor(self)
         self._lock = threading.RLock()
         self.vault: Vault
         self.scope: Scope
@@ -405,6 +407,19 @@ class MycelApp:
         st["job"] = self.jobs.status()
         st["pdf_available"] = pdf_available()
         return st
+
+    # ------------------------------------------------------------ AI 取り込み
+    def ingest_save(self, ids: list[str]) -> dict:
+        """下書きをノートとして保存する。埋め込みモデルがあれば、保存したものだけ意味検索に登録する。"""
+        res = self.ingest.save(ids)
+        res["embedding"] = False
+        if res["paths"] and embed_configured(self.config()):
+            try:
+                self.update_index(res["paths"], label="取り込んだノートの登録")
+                res["embedding"] = True
+            except Exception:  # noqa: BLE001 - 他の処理中なら次の「更新」で登録される
+                pass
+        return res
 
     # ------------------------------------------------------------ 読み込み範囲
     def scope_info(self) -> dict:
