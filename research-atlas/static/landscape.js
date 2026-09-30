@@ -43,8 +43,8 @@
     const papers=Array.isArray(data.evidence_papers)?data.evidence_papers:[];
     return `<div class="landscape-report-inputs"><p class="field-help">評論の入力資料：抄録あり ${count(input.abstract_count)} / ${count(input.paper_count)}論文${sides.length?`（${sides.join(' · ')}）`:''}。抄録なし ${count(input.missing_abstract_count)}論文${input.truncated_abstract_count>0?` · 長さを調整した抄録 ${count(input.truncated_abstract_count)}件`:''}。</p>${papers.length?`<details><summary>入力した論文・抄録を確認</summary>${papers.map(p=>`<article><h4>${p.id?`<button class="text-link" data-paper="${e(p.id)}">${e(reportPaperLabel(p))} ↗</button>`:e(reportPaperLabel(p))}</h4><p class="field-help">${e(p.year??'出版年不明')}${p.abstract_sent_chars!=null?` · 入力 ${count(p.abstract_sent_chars)}文字`:''}${p.abstract_truncated?` / 元の抄録 ${count(p.abstract_original_chars)}文字（${p.excerpt_strategy==='head_and_tail'?'冒頭・末尾の抜粋':'長さを調整'}）`:''}</p><p style="white-space:pre-wrap">${e(p.abstract||'抄録は取得されていません。')}</p></article>`).join('')}</details>`:''}</div>`;
   }
-  function reportHTML(context){
-    const {e}=context,data=report.data,n=data?.narrative;
+  function reportHTML(context,reportState=report){
+    const {e}=context,data=reportState.data,n=data?.narrative;
     const rows=value=>Array.isArray(value)?value:[],sections=rows(n?.sections).filter(section=>section&&typeof section==='object');
     const papers=new Map(rows(data?.evidence_papers).map(paper=>[paper.id,paper]));
     const evidenceButton=(id,index)=>{const paper=papers.get(id),label=paper?reportPaperLabel(paper):`根拠論文 ${index+1}`;return `<button data-paper="${e(id)}" title="${e(label)}">${e(label.length>54?label.slice(0,54)+'…':label)} ↗</button>`;};
@@ -59,7 +59,7 @@
     const narrative=hasNarrative?`<div class="landscape-generated"><span class="eyebrow">${fallback?'CALCULATED OBSERVATIONS · FALLBACK':['local','local_llm'].includes(n.mode)?'LOCAL LLM':n.mode==='openai'?'OPENAI':'CALCULATED OBSERVATIONS'}${realLLM&&(failed||hasWarning)?' · 要確認':''}</span><h4>${e(n.headline||'重心移動の解釈')}</h4>${sections.filter(s=>typeof s.text==='string'&&s.text.trim()).map(s=>`<h4>${s.validation?.status==='warning'?'⚠ ':''}${e(s.title||'論文の解釈')}</h4><p style="white-space:pre-wrap">${e(s.text)}</p>${rows(s.evidence_ids).length?`<div class="landscape-evidence">${s.evidence_ids.slice(0,6).map(evidenceButton).join('')}</div>`:''}${rows(s.unverified_evidence_ids).length?`<p class="field-help">⚠ 照合できない論文ID：${s.unverified_evidence_ids.map(id=>e(id)).join(' · ')}。この参照先は根拠論文として確認できていません。</p>`:''}`).join('')}${rows(n.caveats).map(c=>`<p style="white-space:pre-wrap">${e(c)}</p>`).join('')}${data?.id?`<a class="text-link" href="/api/landscape-reports/${encodeURIComponent(data.id)}/export" download>解釈・分析データをCSVで出力 ↗</a>`:''}</div>`:'';
     // Prose remains expanded and precedes validation details, even with a saved failure flag.
     const output=realLLM?`${narrative}${alert}`:`${alert}${fallback?`<section class="landscape-report-fallback" aria-label="計算結果の説明（代替表示）"><h4>計算結果の説明（代替表示）</h4>${narrative}</section>`:narrative}`;
-    return `${report.busy?`<p role="status">${e(report.stage||'解釈を生成しています…')}</p>`:''}${report.error?`<div class="landscape-report-warning" role="alert">⚠ ${e(report.error)}<br>上の計算結果は保持されています。</div>`:''}${reportInputsHTML(context,data)}${output}`;
+    return `${reportState.busy?`<p role="status">${e(reportState.stage||'解釈を生成しています…')}</p>`:''}${reportState.error?`<div class="landscape-report-warning" role="alert">⚠ ${e(reportState.error)}<br>上の計算結果は保持されています。</div>`:''}${reportInputsHTML(context,data)}${output}`;
   }
   function driftPanel(context,data){
     const {e,num}=context,items=visibleMovements(data),selected=selectedMovement(data),summary=data.interpretation?.summary||'';
@@ -67,8 +67,9 @@
   }
   function advancedView(context){
     if(preferenceResult!==context.result.id){preferenceResult=context.result.id;const projection=context.result.options?.map_projection||context.result.meta?.map_projection;preferences.projection=['auto','pca','umap','tsne'].includes(projection)?projection:'auto';preferences.topic=context.topic||context.result.topics[0]?.id;preferences.start=null;preferences.movement=null;preferences.centroid=null;resetReport();}
+    window.AtlasAnnualLandscape?.sync(context,preferences);
     fetchLandscape(context);const entry=landscapeCache.get(landscapeKey(context)),data=entry?.data;Promise.resolve().then(bindCurrentOrbit);
-    return `<div class="landscape-root" data-landscape-result="${context.e(context.result.id)}" data-landscape-key="${context.e(landscapeKey(context))}">${advancedControls(context,entry)}${data?window.AtlasLayers.render(context,data,preferences):scene(context,null)}<div class="landscape-reading-key"><span><i>⊙</i> 点滅 = 話題の重心</span><span><b>→</b> 赤 = 同一平面上の重心移動</span><span>破線 = 内容変化は未確認・比較データ不足</span></div><p class="terrain-explanation">全期間に一度だけ投影した共通座標を使用します。時層の高さは時間、立体の高さ・等高線は表示論文の相対密度です。矢印は前の期間の平面上に投影し、層の高さの差を移動量に含めません。${data?`表示対象 ${context.num(data.map.nodes.length)}論文。${preferences.scope==='full'?`全件対応版：${context.num(data.meta?.analysis_papers??data.meta?.corpus_papers??0)}論文の内容・重心を集計します。画面の点は描画用の抜粋です。`:'簡易版：表示標本内の探索分析です。全論文の統計とは区別してください。'}`:''}</p>${data?(data.warnings||[]).map(w=>`<p class="terrain-explanation">${context.e(w)}</p>`).join('')+driftPanel(context,data):''}</div>`;
+    return `<div class="landscape-root" data-landscape-result="${context.e(context.result.id)}" data-landscape-key="${context.e(landscapeKey(context))}">${advancedControls(context,entry)}${data?window.AtlasLayers.render(context,data,preferences):scene(context,null)}<div class="landscape-reading-key"><span><i>⊙</i> 点滅 = 話題の重心</span><span><b>→</b> 赤 = 同一平面上の重心移動</span><span>破線 = 内容変化は未確認・比較データ不足</span></div><p class="terrain-explanation">全期間に一度だけ投影した共通座標を使用します。時層の高さは時間、立体の高さ・等高線は表示論文の相対密度です。矢印は前の期間の平面上に投影し、層の高さの差を移動量に含めません。${data?`表示対象 ${context.num(data.map.nodes.length)}論文。${preferences.scope==='full'?`全件対応版：${context.num(data.meta?.analysis_papers??data.meta?.corpus_papers??0)}論文の内容・重心を集計します。画面の点は描画用の抜粋です。`:'簡易版：表示標本内の探索分析です。全論文の統計とは区別してください。'}`:''}</p>${data?(data.warnings||[]).map(w=>`<p class="terrain-explanation">${context.e(w)}</p>`).join('')+driftPanel(context,data)+(window.AtlasAnnualLandscape?.panel(context,data,preferences)||''):''}</div>`;
   }
   function selectedCentroid(data){
     const win=window.AtlasLayers.periodWindow(data.periods||[],preferences.start),periods=new Set(win.periods.map(p=>p.id));
@@ -166,12 +167,12 @@
     if(target.id==='landscape-interval'&&['year','quarter','month'].includes(target.value)){preferences.interval=target.value;preferences.start=null;preferences.movement=null;resetReport();refresh();document.querySelector('#landscape-interval')?.focus();return;}
     if(target.id==='landscape-topic'){selectTopic(target.value);document.querySelector('#landscape-topic')?.focus();return;}
     if(target.id==='landscape-centroid-period'){selectCentroid(preferences.topic,target.value);return;}
-    if(target.id==='landscape-provider'){preferences.provider=target.value;return;}
+    if(target.id==='landscape-provider'){preferences.provider=target.value;window.AtlasAnnualLandscape?.setProvider();return;}
     if(target.matches('[data-landscape-grid]')){preferences.referenceGrid=target.checked;refresh();document.querySelector('[data-landscape-grid]')?.focus();return;}
     if(!target.matches('[data-landscape-contours]'))return;preferences.contours=target.checked;refresh();document.querySelector('[data-landscape-contours]')?.focus();
   });
   document.addEventListener('keydown',event=>{if(!['Enter',' '].includes(event.key))return;const target=event.target.closest?.('g[data-landscape-centroid-topic],g[data-landscape-movement],path[data-landscape-movement]');if(target){event.preventDefault();if(target.dataset.landscapeCentroidTopic)selectCentroid(target.dataset.landscapeCentroidTopic,target.dataset.landscapeCentroidPeriod);else{preferences.movement=target.dataset.landscapeMovement;resetReport();refresh();}}});
   document.addEventListener('input',event=>{if(event.target.id!=='landscape-height')return;preferences.height=Math.max(20,Math.min(100,Number(event.target.value)||65));refresh(true);});
-  window.AtlasLandscape=Object.freeze({view,selectTopic,resetCamera});
+  window.AtlasLandscape=Object.freeze({view,selectTopic,resetCamera,renderReport:(context,data)=>reportHTML(context,{data,busy:false,error:'',stage:''})});
   if(window.__ATLAS_UI_TEST__)window.__landscapeTest={cache,landscapeCache,preferences,fetchTerrain,fetchLandscape,controls,scene,refresh,advancedControls,selectedMovement,selectedCentroid,selectTopic,selectCentroid,visibleMovements,generateReport,centroidPanel,testScopeNote,reportHTML,get report(){return report;}};
 })();

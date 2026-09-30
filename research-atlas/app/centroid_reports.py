@@ -24,11 +24,12 @@ Avoid repeating numerical values; if necessary, preserve exact values, signs and
 Return JSON headline, sections (at most 8), caveats. No Markdown code fences."""
 
 
-def prepare_report(result_id, projection, interval, topic_id, period_id, projection_id=None, scope="sample"):
+def prepare_report(result_id, projection, interval, topic_id, period_id, projection_id=None, scope="sample", *, landscape_snapshot=None):
     from .landscape import build_landscape
-    from .landscape_reports import LIMITATIONS, _unique_text
+    from .landscape_reports import LIMITATIONS, _unique_text, _report_landscape
 
-    landscape = build_landscape(result_id, projection=projection, interval=interval, scope=scope)
+    landscape = (build_landscape(result_id, projection=projection, interval=interval, scope=scope)
+                 if landscape_snapshot is None else _report_landscape(result_id, projection, interval, scope, landscape_snapshot))
     if projection_id and projection_id != landscape["projection_id"]:
         raise ValueError("座標・分析範囲の版が変わりました。マップを再取得してください。")
     center = next((row for row in landscape.get("centroids", [])
