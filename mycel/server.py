@@ -38,6 +38,7 @@ HOST = "127.0.0.1"
 DEFAULT_PORT = 8795
 STATIC = BASE / "static"
 MAX_BODY = 20 * 1024 * 1024
+UPLOAD_PATHS = ("/api/ingest/upload", "/api/file/upload")
 _ALLOWED_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
 
 
@@ -136,6 +137,9 @@ GET_ROUTES = {
     "/api/scope/tree": lambda app, p: app.scope_tree(_str(p, "path")),
     "/api/scope/browse": lambda app, p: app.browse(_str(p, "path")),
     "/api/ingest": lambda app, p: app.ingest.list(),
+    "/api/folder": lambda app, p: app.folder_view(_str(p, "path")),
+    "/api/relations/suggest": lambda app, p: {"suggestions": app.ai.suggest_related(
+        app._path(_str(p, "path")), use_llm=_str(p, "llm", "1") != "0")},
 }
 
 POST_ROUTES = {
@@ -162,6 +166,15 @@ POST_ROUTES = {
     "/api/ingest/save": lambda app, b: app.ingest_save(_list(b, "ids") or []),
     "/api/ingest/discard": lambda app, b: {"discarded": app.ingest.discard(_list(b, "ids") or [])},
     "/api/llm/models": api_llm_models,
+    "/api/relations/add": lambda app, b: app.relate(_str(b, "a"), _str(b, "b"), _str(b, "label"), _str(b, "origin", "user")),
+    "/api/relations/remove": lambda app, b: app.unrelate(_str(b, "a"), _str(b, "b")),
+    "/api/relations/many": lambda app, b: app.relate_many(_list(b, "pairs") or [], _str(b, "origin", "ai")),
+    "/api/relations/propose": lambda app, b: {"pairs": app.ai.propose_relations(_str(b, "prefix"))},
+    "/api/folder/create": lambda app, b: app.create_folder(_str(b, "path")),
+    "/api/folder/rename": lambda app, b: app.rename_folder(_str(b, "path"), _str(b, "new_path")),
+    "/api/folder/delete": lambda app, b: app.delete_folder(_str(b, "path")),
+    "/api/item/move": lambda app, b: app.move_item(_str(b, "path"), _str(b, "new_path")),
+    "/api/item/delete": lambda app, b: app.delete_item(_str(b, "path")),
     "/api/config": lambda app, b: public_config(app.update_config(b)),
     "/api/config/test": api_config_test,
     "/api/ai/ask": lambda app, b: app.ai.ask(_str(b, "question"), _str(b, "path") or None,
@@ -223,7 +236,7 @@ def make_handler(app: MycelApp):
                     if o.scheme != "http" or (o.hostname or "").lower() not in {"127.0.0.1", "localhost", "::1"}:
                         raise ApiError("この要求は許可されていません（Origin）", 403)
                 ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
-                if ctype == "application/octet-stream" and urlparse(self.path).path == "/api/ingest/upload":
+                if ctype == "application/octet-stream" and urlparse(self.path).path in UPLOAD_PATHS:
                     return                     # 単純リクエストにならない型なので、別サイトからは送れない
                 if ctype != "application/json":
                     raise ApiError("Content-Type は application/json にしてください", 415)
@@ -305,8 +318,8 @@ def make_handler(app: MycelApp):
             url = urlparse(self.path)
             try:
                 self._guard(write=True)
-                if url.path == "/api/ingest/upload":
-                    self._json(self._upload())
+                if url.path in UPLOAD_PATHS:
+                    self._json(self._upload(url.path))
                     return
                 body = self._body()
                 if url.path.startswith("/api/plugins/"):
@@ -319,7 +332,7 @@ def make_handler(app: MycelApp):
             except Exception as e:  # noqa: BLE001
                 self._error(e)
 
-        def _upload(self) -> dict:
+        def _upload(self, path: str) -> dict:
             from urllib.parse import unquote
             if (self.headers.get("Content-Type") or "").split(";")[0].strip().lower() != "application/octet-stream":
                 raise ApiError("Content-Type は application/octet-stream にしてください", 415)
@@ -330,6 +343,8 @@ def make_handler(app: MycelApp):
             data = self.rfile.read(length) if length else b""
             if not data:
                 raise ApiError("ファイルが空です")
+            if path == "/api/file/upload":
+                return app.upload_file(unquote(self.headers.get("X-Folder") or ""), name, data)
             return app.ingest.upload(name, data)
 
         def _plugin_call(self, path: str, params: dict, method: str) -> dict:

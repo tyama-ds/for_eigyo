@@ -36,6 +36,7 @@
   const titleOf = (p) => p.split("/").pop().replace(/\.md$/i, "");
   const isDoc = (p) => p.startsWith("@") || !/\.(md|markdown)$/i.test(p);
   const FT = { word: "W", excel: "X", powerpoint: "P", pdf: "PDF", email: "✉", csv: "CSV", html: "HTML", text: "TXT", code: "{ }", note: "MD" };
+  const GRP_NAME = { word: "Word", excel: "Excel", powerpoint: "PowerPoint", pdf: "PDF", email: "メール", csv: "CSV", html: "HTML", text: "テキスト", code: "データ" };
   const ftBadge = (grp) => `<span class="ft ft-${esc(grp || "text")}">${esc(FT[grp] || "?")}</span>`;
   const fmtSize = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : n >= 1024 ? Math.round(n / 1024) + " KB" : n + " B");
   const fmtTime = (t) => { if (!t) return "—"; const d = new Date(t * 1000); return d.toLocaleDateString("ja-JP", { month: "numeric", day: "numeric" }) + " " + d.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" }); };
@@ -48,6 +49,7 @@
     cur: null, mode: store.get("mode", "prev"), dirty: false, saving: null, saveTimer: 0, conflict: null,
     rtab: store.get("rtab", "links"), panel: "files", closed: new Set(store.get("closed", [])), selFolder: "",
     hist: [], histPos: -1, chat: [], depth: store.get("depth", 1), graph: null, tag: "",
+    folderView: null, treeKind: store.get("treeKind", "all"),
     sources: [], index: null, jobSeen: null, aiScope: store.get("aiScope", "all"), gDocs: store.get("gDocs", false),
   };
 
@@ -83,21 +85,26 @@
   function renderTree() {
     const el = $("#tree");
     const q = $("#filter").value.trim().toLowerCase();
+    const kind = S.treeKind;
+    const want = (n) => kind === "all" || (kind === "note" ? n.kind === "note" : n.kind !== "note");
+    $$("#treeKind button").forEach((b) => b.classList.toggle("on", b.dataset.k === kind));
     if (q) {
-      const hits = S.tree.filter((n) => n.path.toLowerCase().includes(q));
-      el.innerHTML = hits.length ? hits.map((n) => fileBtn(n, 0, true)).join("") : '<div class="empty">該当するノートはありません</div>';
+      const hits = S.tree.filter((n) => want(n) && n.path.toLowerCase().includes(q));
+      el.innerHTML = hits.length ? hits.map((n) => fileBtn(n, 0, true)).join("") : '<div class="empty">該当するノート・資料はありません</div>';
       return;
     }
     const root = { folders: {}, notes: [] };
     const node = (path) => {
       let cur = root;
       if (!path) return cur;
-      for (const part of path.split("/")) cur = cur.folders[part] ||= { folders: {}, notes: [] };
+      for (const part of path.split("/")) cur = cur.folders[part] ||= { folders: {}, notes: [], n: 0 };
       return cur;
     };
     S.folders.forEach((f) => node(f));
     S.sources.forEach((s) => { if (s.prefix) node(s.prefix); });
-    S.tree.forEach((n) => node(n.folder).notes.push(n));
+    S.tree.forEach((n) => { if (want(n)) node(n.folder).notes.push(n); });
+    const count = (nd) => (nd.n = nd.notes.length + Object.values(nd.folders).reduce((a, f) => a + count(f), 0));
+    count(root);
     const srcLabel = Object.fromEntries(S.sources.map((s) => [s.prefix, s.label]));
     const coll = (a, b) => a.localeCompare(b, "ja", { numeric: true });
     const walk = (nd, path, depth) => {
@@ -105,61 +112,179 @@
       const names = Object.keys(nd.folders).sort((a, b) => (a.startsWith("@") ? 1 : 0) - (b.startsWith("@") ? 1 : 0) || coll(a, b));
       for (const name of names) {
         const fp = path ? path + "/" + name : name;
+        const sub = nd.folders[name];
+        if (kind !== "all" && !sub.n) continue;                       // 絞り込み中は空のフォルダを隠す
         const closed = S.closed.has(fp);
         const src = !path && name.startsWith("@");
-        h += `<button class="folder${closed ? " closed" : ""}${src ? " src" : ""}" data-folder="${esc(fp)}" style="padding-left:${6 + depth * 14}px" draggable="false" title="${src ? "外部フォルダ（読み取り専用）" : esc(fp)}"><span class="car">▾</span>${src ? icon('<path d="M3 6.5h7l2 2h9V19H3z"/><path d="M14 13h5M16.5 10.5l2.5 2.5-2.5 2.5"/>') : ""}${esc(src ? srcLabel[name] || name : name)}</button>`;
-        if (!closed) h += walk(nd.folders[name], fp, depth + 1);
+        const ext = fp.startsWith("@");
+        h += `<div class="folder${closed ? " closed" : ""}${src ? " src" : ""}${S.folderView === fp ? " on" : ""}" data-folder="${esc(fp)}" style="padding-left:${6 + depth * 14}px" draggable="${ext ? "false" : "true"}" title="${src ? "外部フォルダ（読み取り専用）" : esc(fp)}" role="button" tabindex="0"><span class="car">▾</span>${src ? icon('<path d="M3 6.5h7l2 2h9V19H3z"/><path d="M14 13h5M16.5 10.5l2.5 2.5-2.5 2.5"/>') : ""}<span class="fname">${esc(src ? srcLabel[name] || name : name)}</span><span class="fcount">${sub.n || ""}</span><button class="fmore" data-fmore="${esc(fp)}" title="フォルダの操作" tabindex="-1">⋯</button></div>`;
+        if (!closed) h += walk(sub, fp, depth + 1);
       }
-      nd.notes.sort((a, b) => coll(a.title, b.title)).forEach((n) => (h += fileBtn(n, depth)));
+      nd.notes.sort((a, b) => (a.kind === "note" ? 0 : 1) - (b.kind === "note" ? 0 : 1) || coll(a.title, b.title)).forEach((n) => (h += fileBtn(n, depth)));
       return h;
     };
-    el.innerHTML = walk(root, "", 0) || '<div class="empty">ノートがありません。右上の＋で作成します。</div>';
+    el.innerHTML = walk(root, "", 0) || `<div class="empty">${kind === "doc" ? "資料がありません。フォルダにファイルをドロップすると追加できます。" : "ノートがありません。右上の＋で作成します。"}</div>`;
   }
   function fileBtn(n, depth, showFolder = false) {
     const on = S.cur && S.cur.path === n.path ? " on" : "";
     const doc = n.kind && n.kind !== "note";
     const err = n.status && n.status !== "ok";
-    return `<button class="file${on}${doc ? " doc" : ""}${err ? " err" : ""}" data-open="${esc(n.path)}" draggable="${doc ? "false" : "true"}" title="${esc(n.path)}${err ? "（読み込みエラー）" : ""}" style="padding-left:${20 + depth * 14}px">${doc ? ftBadge(n.grp) : ""}${esc(n.title)}${showFolder && n.folder ? ` <small style="color:var(--muted)">${esc(n.folder)}</small>` : ""}</button>`;
+    const movable = !n.path.startsWith("@");
+    return `<button class="file${on}${doc ? " doc" : ""}${err ? " err" : ""}" data-open="${esc(n.path)}" draggable="${movable ? "true" : "false"}" title="${esc(n.path)}${err ? "（読み込みエラー）" : ""}" style="padding-left:${20 + depth * 14}px">${doc ? ftBadge(n.grp) : ""}${esc(n.title)}${showFolder && n.folder ? ` <small style="color:var(--muted)">${esc(docLabel(n.folder))}</small>` : ""}</button>`;
   }
 
   $("#tree").addEventListener("click", (e) => {
+    const more = e.target.closest("[data-fmore]");
+    if (more) { e.stopPropagation(); const r = more.getBoundingClientRect(); folderMenu(r.left, r.bottom + 2, more.dataset.fmore); return; }
     const f = e.target.closest("[data-folder]");
     if (f) {
       const fp = f.dataset.folder; S.selFolder = fp;
-      S.closed.has(fp) ? S.closed.delete(fp) : S.closed.add(fp);
+      if (!e.target.closest(".car") && !(S.folderView === fp && !S.closed.has(fp))) { openFolder(fp); return; }   // 名前 → 一覧を開く
+      S.closed.has(fp) ? S.closed.delete(fp) : S.closed.add(fp);                                               // ▾ → 開閉だけ
       store.set("closed", [...S.closed]); renderTree();
     }
   });
+  $("#tree").addEventListener("keydown", (e) => { const f = e.target.closest("[data-folder]"); if (f && e.key === "Enter") openFolder(f.dataset.folder); });
   $("#tree").addEventListener("contextmenu", (e) => {
     const b = e.target.closest("[data-open]");
     const f = e.target.closest("[data-folder]");
     if (b) { e.preventDefault(); noteMenu(e.clientX, e.clientY, b.dataset.open); }
     else if (f) { e.preventDefault(); folderMenu(e.clientX, e.clientY, f.dataset.folder); }
   });
-  // ドラッグでフォルダへ移動
-  $("#tree").addEventListener("dragstart", (e) => { const b = e.target.closest("[data-open]"); if (b) e.dataTransfer.setData("text/mycel-path", b.dataset.open); });
-  $("#tree").addEventListener("dragover", (e) => { if ([...e.dataTransfer.types].includes("text/mycel-path")) { e.preventDefault(); $$(".drop").forEach((x) => x.classList.remove("drop")); (e.target.closest("[data-folder]") || $("#tree")).classList.add("drop"); } });
-  $("#tree").addEventListener("dragleave", (e) => { if (e.target.classList) e.target.classList.remove("drop"); });
+  // ドラッグ: ノート・資料・フォルダをフォルダへ移動。パソコンのファイルをフォルダに落とすと資料として追加
+  const dropTarget = (e) => e.target.closest("[data-folder]");
+  const clearDrop = () => $$(".dropt").forEach((x) => x.classList.remove("dropt"));
+  $("#tree").addEventListener("dragstart", (e) => {
+    const b = e.target.closest("[data-open]"), f = e.target.closest("[data-folder]");
+    if (b) e.dataTransfer.setData("text/mycel-path", b.dataset.open);
+    else if (f) e.dataTransfer.setData("text/mycel-folder", f.dataset.folder);
+  });
+  $("#tree").addEventListener("dragover", (e) => {
+    const types = [...e.dataTransfer.types];
+    if (!types.some((t) => t === "text/mycel-path" || t === "text/mycel-folder" || t === "Files")) return;
+    e.preventDefault(); e.stopPropagation();
+    clearDrop(); (dropTarget(e) || $("#tree")).classList.add("dropt");
+  });
+  $("#tree").addEventListener("dragleave", (e) => { if (e.target.classList) e.target.classList.remove("dropt"); });
   $("#tree").addEventListener("drop", async (e) => {
-    const path = e.dataTransfer.getData("text/mycel-path");
-    $$(".drop").forEach((x) => x.classList.remove("drop"));
-    if (!path) return;
-    e.preventDefault();
-    const f = e.target.closest("[data-folder]");
+    const types = [...e.dataTransfer.types];
+    clearDrop();
+    const f = dropTarget(e);
     const folder = f ? f.dataset.folder : "";
-    if (folderOf(path) === folder) return;
-    if (folder.startsWith("@")) { toast("外部フォルダにはノートを移動できません", true); return; }
-    await renameNote(path, (folder ? folder + "/" : "") + titleOf(path));
+    if (types.includes("Files")) {
+      e.preventDefault(); e.stopPropagation();                        // AI 取り込みではなく、このフォルダへ追加
+      await addFiles(folder, [...e.dataTransfer.files]);
+      return;
+    }
+    const path = e.dataTransfer.getData("text/mycel-path"), fold = e.dataTransfer.getData("text/mycel-folder");
+    if (!path && !fold) return;
+    e.preventDefault();
+    if (folder.startsWith("@")) { toast("外部フォルダは読み取り専用です（Vault 内のフォルダに移動してください）", true); return; }
+    if (path) { if (folderOf(path) !== folder) await moveTo(path, folder); }
+    else if (fold && fold !== folder && folderOf(fold) !== folder) await renameFolder(fold, (folder ? folder + "/" : "") + fold.split("/").pop());
   });
   $("#filter").addEventListener("input", renderTree);
-  $("#btnCollapse").onclick = () => { S.folders.forEach((f) => S.closed.add(f)); store.set("closed", [...S.closed]); renderTree(); };
+  $("#treeKind").addEventListener("click", (e) => { const b = e.target.closest("[data-k]"); if (b) { S.treeKind = b.dataset.k; store.set("treeKind", S.treeKind); renderTree(); } });
+  $("#btnCollapse").onclick = () => { S.folders.forEach((f) => S.closed.add(f)); S.sources.forEach((s) => s.prefix && S.closed.add(s.prefix)); store.set("closed", [...S.closed]); renderTree(); };
+
+  // ------------------------------------------------------------ フォルダ・資料の整理
+  async function addFiles(folder, files) {
+    if (folder.startsWith("@")) { toast("外部フォルダには追加できません（読み取り専用）", true); return; }
+    let ok = 0, last = null;
+    for (const f of files) {
+      try {
+        const res = await fetch("/api/file/upload", { method: "POST", headers: { "Content-Type": "application/octet-stream", "X-Filename": encodeURIComponent(f.name), "X-Folder": encodeURIComponent(folder) }, body: f });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `エラー (${res.status})`);
+        if (data.status === "error") toast(`${f.name}: 追加しましたが読み込めませんでした（${data.error}）`, true);
+        ok++; last = data.path;
+      } catch (e) { toast(`${f.name}: ${e.message}`, true); }
+    }
+    if (ok) {
+      S.closed.delete(folder); store.set("closed", [...S.closed]);
+      await loadTree(); refreshFolder();
+      toast(`${ok} 件を「${folder ? docLabel(folder) : "Vault 直下"}」に追加しました`);
+      if (ok === 1 && S.folderView === null && last) openNote(last);
+    }
+  }
+  function pickFiles(folder) {
+    const inp = document.createElement("input");
+    inp.type = "file"; inp.multiple = true; inp.accept = IG_ACCEPT + ",.md";
+    inp.onchange = () => addFiles(folder, [...inp.files]);
+    inp.click();
+  }
+  /** ノート・資料をフォルダへ移動（資料は拡張子を保つ）。 */
+  async function moveTo(path, folder) {
+    const name = path.split("/").pop();
+    if (!isDoc(path)) return renameNote(path, (folder ? folder + "/" : "") + titleOf(path));
+    return moveItem(path, (folder ? folder + "/" : "") + name);
+  }
+  async function moveItem(path, newPath) {
+    try {
+      const r = await api.post("/api/item/move", { path, new_path: newPath });
+      await loadTree();
+      if (S.cur && S.cur.path === path) await openNote(r.path, { push: false });
+      else if (S.cur && r.updated.includes(S.cur.path)) await openNote(S.cur.path, { push: false });
+      refreshFolder();
+      toast(r.updated.length ? `移動し、${r.updated.length} 件のノートのリンクを更新しました` : "移動しました");
+      return r.path;
+    } catch (e) { fail(e); return null; }
+  }
+  async function deleteItem(path) {
+    if (!isDoc(path)) return deleteNote(path);
+    const ok = await confirmBox("資料を削除", `「${esc(path.split("/").pop())}」を削除しますか？<br><span class="hint">Vault 内の .mycel/trash に移動します。つながりも外れます。</span>`, "削除する", true);
+    if (!ok) return;
+    try {
+      await api.post("/api/item/delete", { path });
+      await loadTree();
+      if (S.cur && S.cur.path === path) { S.cur = null; renderMain(); renderRight(); }
+      refreshFolder();
+      toast("削除しました");
+    } catch (e) { fail(e); }
+  }
+  async function newFolder(parent = "") {
+    const name = await promptBox("新しいフォルダ", "フォルダ名（/ で階層）", parent && !parent.startsWith("@") ? parent + "/" : "");
+    if (!name || !name.trim()) return;
+    try {
+      const r = await api.post("/api/folder/create", { path: name.trim() });
+      await loadTree(); S.closed.delete(folderOf(r.path)); refreshFolder();
+      toast(`フォルダ「${r.path}」を作りました`);
+    } catch (e) { fail(e); }
+  }
+  async function renameFolder(path, newPath = null) {
+    if (newPath === null) {
+      newPath = await promptBox("フォルダの名前を変更・移動", "新しい場所（/ で階層）", path);
+      if (!newPath || newPath.trim() === path) return;
+    }
+    try {
+      const r = await api.post("/api/folder/rename", { path, new_path: newPath.trim() });
+      if (S.closed.delete(path)) S.closed.add(r.path);
+      await loadTree();
+      if (S.folderView !== null && (S.folderView === path || S.folderView.startsWith(path + "/"))) S.folderView = r.path + S.folderView.slice(path.length);
+      if (S.cur && (S.cur.path.startsWith(path + "/") || r.updated.includes(S.cur.path))) await openNote(S.cur.path.startsWith(path + "/") ? r.path + S.cur.path.slice(path.length) : S.cur.path, { push: false });
+      refreshFolder();
+      toast(`${r.moved} 件を移動しました${r.updated.length ? `（${r.updated.length} 件のノートのリンクを更新）` : ""}`);
+    } catch (e) { fail(e); }
+  }
+  async function deleteFolder(path) {
+    const n = S.tree.filter((x) => x.path.startsWith(path + "/")).length;
+    const ok = await confirmBox("フォルダを削除", `「${esc(path)}」${n ? `と中の ${n} 件` : ""}を削除しますか？<br><span class="hint">フォルダごと Vault 内の .mycel/trash に移動します。</span>`, "削除する", true);
+    if (!ok) return;
+    try {
+      await api.post("/api/folder/delete", { path });
+      await loadTree();
+      if (S.cur && S.cur.path.startsWith(path + "/")) { S.cur = null; renderMain(); renderRight(); }
+      if (S.folderView !== null && (S.folderView === path || S.folderView.startsWith(path + "/"))) openFolder(folderOf(path));
+      toast("削除しました");
+    } catch (e) { fail(e); }
+  }
 
   // ------------------------------------------------------------ ノートを開く
   async function openNote(path, { heading = "", push = true, mode = null } = {}) {
     await flushSave();
     let data;
     try { data = await api.get("/api/note", { path }); } catch (e) { fail(e); return; }
-    S.cur = data; S.dirty = false; S.conflict = null;
+    S.cur = data; S.dirty = false; S.conflict = null; S.folderView = null;
     if (mode && !data.readonly) setMode(mode, false);
     if (push) { S.hist = S.hist.slice(0, S.histPos + 1); if (S.hist[S.histPos] !== path) S.hist.push(path); S.histPos = S.hist.length - 1; }
     store.set("last", path);
@@ -196,8 +321,9 @@
 
   // ------------------------------------------------------------ 本文
   function renderMain() {
+    if (S.folderView !== null) { renderFolderView(); $("#conflict").hidden = true; return; }
     const c = S.cur;
-    $("#titleIn").disabled = !c || c.readonly;
+    $("#titleIn").disabled = !c || (c.readonly && !c.editable);
     $("#mEdit").disabled = !!(c && c.readonly);
     $("#titleIn").value = c ? c.title : "";
     $("#crumb").textContent = c && c.folder ? docLabel(c.folder) + " /" : "";
@@ -417,6 +543,7 @@
     else if (job.state === "error") toast(`${JOB_DONE[job.kind] || "処理"}に失敗しました: ${job.message}`, true);
     if (scopeUI) scopeUI.refresh();
     if (ingestUI) ingestUI.refresh();
+    if (job.kind === "update") refreshFolder();
   }
 
   function renderIndexChip() {
@@ -448,13 +575,23 @@
 
   function folderMenu(x, y, folder) {
     const src = S.sources.find((s) => s.prefix && (folder === s.prefix));
+    const ext = folder.startsWith("@");
     popMenu(x, y, [
+      { label: "一覧で開く", run: () => openFolder(folder) },
+      ...(ext ? [] : [
+        { label: "資料を追加（ファイルを選ぶ）…", run: () => pickFiles(folder) },
+        { label: "ここに新しいノート", run: () => newNote(folder) },
+        { label: "ここに新しいフォルダ…", run: () => newFolder(folder) },
+      ]),
+      { label: "資料のつながりを AI で提案…", run: () => proposeRelations(folder) },
+      "-",
       { label: "このフォルダを更新", run: () => updateIndex([folder]) },
       { label: "変更を確認", run: () => checkIndex([folder]) },
       ...(src ? [] : [{ label: "読み込み範囲から外す", run: () => excludeFolder(folder) }]),
-      "-",
-      { label: "読み込み範囲を開く…", run: () => openScope() },
-      ...(folder.startsWith("@") ? [] : [{ label: "ここに新しいノート", run: () => newNote(folder) }]),
+      ...(ext ? [] : ["-",
+        { label: "名前を変更・移動…", run: () => renameFolder(folder) },
+        { label: "フォルダを削除", danger: true, run: () => deleteFolder(folder) },
+      ]),
     ]);
   }
   async function excludeFolder(folder) {
@@ -508,6 +645,7 @@
     if (!S.cur) return;
     const v = e.target.value.trim();
     if (!v || v === S.cur.title) { e.target.value = S.cur.title; return; }
+    if (S.cur.readonly) { await moveItem(S.cur.path, (S.cur.folder ? S.cur.folder + "/" : "") + v); return; }
     await renameNote(S.cur.path, (S.cur.folder ? S.cur.folder + "/" : "") + v);
   });
 
@@ -533,10 +671,8 @@
     } catch (e) { fail(e); }
   }
   $("#btnNewNote").onclick = () => newNote();
-  $("#btnNewFolder").onclick = async () => {
-    const name = await promptBox("新しいフォルダ", "フォルダ名（/ で階層）", S.selFolder ? S.selFolder + "/" : "");
-    if (name && name.trim()) newNote(name.trim().replace(/^\/+|\/+$/g, ""));
-  };
+  $("#btnFolderView").onclick = () => openFolder(S.selFolder || "");
+  $("#btnNewFolder").onclick = () => newFolder(S.folderView !== null ? S.folderView : S.selFolder);
   async function daily() {
     try { const r = await api.post("/api/daily"); if (r.created) await loadTree(); await openNote(r.path); } catch (e) { fail(e); }
   }
@@ -547,7 +683,7 @@
     const m = modal({
       title: "フォルダへ移動",
       body: `<div class="form"><label for="mvSel">移動先</label><select id="mvSel">${opts}</select><label for="mvNew">新しいフォルダ</label><input id="mvNew" type="text" placeholder="（入力すると優先）"></div>`,
-      buttons: [{ label: "キャンセル" }, { label: "移動", primary: true, onClick: () => { const f = ($("#mvNew").value.trim() || $("#mvSel").value).replace(/^\/+|\/+$/g, ""); renameNote(path, (f ? f + "/" : "") + titleOf(path)); } }],
+      buttons: [{ label: "キャンセル" }, { label: "移動", primary: true, onClick: () => { const f = ($("#mvNew").value.trim() || $("#mvSel").value).replace(/^\/+|\/+$/g, ""); moveTo(path, f); } }],
     });
     return m;
   }
@@ -584,6 +720,11 @@
         { label: "AI でノート化…", run: () => openIngest({ paths: [path], autoRun: true }) },
         { label: "本文をノートに取り込む", run: async () => { try { const r = await api.post("/api/note/import", { path }); await loadTree(); openNote(r.path); } catch (e) { fail(e); } } },
         { label: "リンク用の名前をコピー", run: () => copyText(`[[${path}]]`) },
+        ...(path.startsWith("@") ? [] : ["-",
+          { label: "名前を変更…", run: async () => { const cur = path.split("/").pop(); const v = await promptBox("資料の名前を変更", "新しい名前（拡張子は変わりません）", cur.replace(/\.[^.]+$/, "")); if (v && v.trim()) moveItem(path, (folderOf(path) ? folderOf(path) + "/" : "") + v.trim()); } },
+          { label: "フォルダへ移動…", run: () => moveNote(path) },
+          { label: "削除", danger: true, run: () => deleteItem(path) },
+        ]),
       ]);
       return;
     }
@@ -746,6 +887,7 @@
     $$(".rtabs button").forEach((b) => b.classList.toggle("on", b.dataset.r === S.rtab));
     if (S.graph && S.rtab !== "graph") { S.graph.destroy(); S.graph = null; }
     const p = $("#rpane");
+    if (!S.cur && S.folderView !== null) { p.innerHTML = '<div class="hint" style="padding:8px 2px">フォルダの一覧を表示しています。<br><br>・ファイルをドロップ → このフォルダに資料を追加<br>・行を選ぶ → まとめて移動・AI でノート化・削除<br>・2 件選ぶ → つなぐ<br>・「つながりを提案」→ 内容の近い資料の組をまとめてつなぐ<br>・右クリック → 名前の変更など</div>'; return; }
     if (!S.cur) { p.innerHTML = '<div class="hint" style="padding:8px 2px">ノートを開くと、ここにリンクやグラフ、AI の結果が出ます。</div>'; return; }
     if (S.rtab === "links") renderLinks(p);
     else if (S.rtab === "graph") renderGraphPane(p);
@@ -762,7 +904,8 @@
   function renderLinks(p) {
     const c = S.cur;
     const bl = c.backlinks || [], un = c.unlinked || [], out = c.outgoing || [];
-    let h = `<div class="rh"><span>バックリンク</span><span>${bl.length}</span></div>`;
+    let h = c.readonly ? relationsHtml(c) : "";
+    h += `<div class="rh"><span>バックリンク</span><span>${bl.length}</span></div>`;
     h += bl.length ? bl.map((b) => `<button class="card" data-open="${esc(b.path)}"><b>${esc(b.title)}</b><span>${markTitle(b.context.replace(/\[\[([^\]|#]+)(#[^\]|]*)?(\|([^\]]*))?\]\]/g, (m, t, hh, a, al) => al || t), c.title)}</span></button>`).join("") : '<div class="hint">まだどこからもリンクされていません。</div>';
     h += `<div class="rh"><span>未リンクの言及</span><span>${un.length}</span></div>`;
     h += un.length ? un.map((u) => `<div class="card" data-open="${esc(u.path)}"><b>${esc(u.title)}</b><span>${markTitle(u.context, c.title)}</span><div class="acts"><button class="btn sm" data-act="link" data-path="${esc(u.path)}">リンクにする</button></div></div>`).join("") : '<div class="hint">ありません。</div>';
@@ -775,7 +918,9 @@
       const min = Math.min(...heads.map((x) => x.level));
       h += `<div class="rh"><span>アウトライン</span></div><div class="outline">${heads.map((x) => `<a class="wl-h" data-h="${esc(x.text)}" style="padding-left:${(x.level - min) * 12}px">${esc(x.text)}</a>`).join("")}</div>`;
     }
+    if (!c.readonly) h += relationsHtml(c);
     p.innerHTML = h;
+    bindRelations(p);
     $$(".wl-h", p).forEach((a) => (a.onclick = () => scrollToHeading(a.dataset.h)));
     $$('[data-act="link"]', p).forEach((b) => (b.onclick = (e) => { e.stopPropagation(); linkMention(b.dataset.path); }));
   }
@@ -1035,6 +1180,9 @@
       { label: "テンプレートを挿入…", run: insertTemplate },
       { label: "設定", run: () => openSettings() },
       { label: "AI 取り込み（文書をノートにする）…", run: () => openIngest() },
+      { label: "新しいフォルダ…", run: () => newFolder(S.selFolder) },
+      { label: "フォルダの一覧を開く（Vault）", run: () => openFolder("") },
+      { label: "資料のつながりを提案（Vault 全体）…", run: () => proposeRelations("") },
       { label: "読み込み範囲…", run: () => openScope() },
       { label: "更新（変更されたファイルを読み込む）", run: () => updateIndex(null) },
       { label: "変更を確認（読み込みはしない）", run: () => checkIndex(null) },
@@ -1275,6 +1423,150 @@
     $("#brGo", body).onclick = () => go($("#brPath", body).value.trim());
     $("#brPath", body).addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); go(e.target.value.trim()); } });
     go("");
+  }
+
+  // ------------------------------------------------------------ フォルダの一覧表示
+  async function openFolder(path) {
+    await flushSave();
+    S.folderView = path; S.cur = null;
+    S.closed.delete(path); store.set("closed", [...S.closed]);
+    renderTree(); renderRight();
+    await refreshFolder(true);
+  }
+  let fvSel = new Set(), fvData = null;
+  async function refreshFolder(reset = false) {
+    if (S.folderView === null) return;
+    try { fvData = await api.get("/api/folder", { path: S.folderView }); } catch (e) { fail(e); return; }
+    if (reset) fvSel = new Set();
+    [...fvSel].forEach((p) => { if (!fvData.items.some((i) => i.path === p)) fvSel.delete(p); });
+    renderMain();
+  }
+  function renderFolderView() {
+    const d = fvData, ed = d && d.editable;
+    $("#titleIn").disabled = true; $("#mEdit").disabled = true;
+    $("#titleIn").value = d ? (d.path ? (d.path.includes("/") || !d.path.startsWith("@") ? d.path.split("/").pop() : d.label) : "Vault") : "";
+    $("#crumb").textContent = "フォルダ /";
+    document.title = `${d ? d.label : "フォルダ"} — Mycel`;
+    $("#stInfo").textContent = d ? `フォルダ ${d.folders.length} ・ ノート ${d.items.filter((i) => i.kind === "note").length} ・ 資料 ${d.items.filter((i) => i.kind !== "note").length}` : "";
+    $("#stWords").textContent = "";
+    if (!d) { $("#body").innerHTML = '<div class="welcome"><span class="spin"></span></div>'; return; }
+    const parts = d.path ? d.path.split("/") : [];
+    const crumbs = [`<a data-fv="">Vault</a>`].concat(parts.map((p, i) => {
+      const fp = parts.slice(0, i + 1).join("/");
+      return `<a data-fv="${esc(fp)}">${esc(i === 0 && p.startsWith("@") ? docLabel(p) : p)}</a>`;
+    })).join(" / ");
+    const rows = d.folders.map((f) => `<tr class="fvf" data-fv="${esc(f.path)}"><td></td><td>${icon(f.source ? '<path d="M3 6.5h7l2 2h9V19H3z"/><path d="M14 13h5M16.5 10.5l2.5 2.5-2.5 2.5"/>' : '<path d="M3 6.5h7l2 2h9V19H3z"/>')} ${esc(f.name)}</td><td>フォルダ</td><td>${f.count} 件</td><td></td><td></td></tr>`).join("")
+      + d.items.map((n) => `<tr class="${fvSel.has(n.path) ? "sel" : ""}${n.status !== "ok" ? " err" : ""}" data-row="${esc(n.path)}" draggable="${n.path.startsWith("@") ? "false" : "true"}"><td><input type="checkbox" data-fsel="${esc(n.path)}"${fvSel.has(n.path) ? " checked" : ""} aria-label="選択"></td><td><a data-open="${esc(n.path)}">${n.kind === "note" ? ftBadge("note") : ftBadge(n.grp)}${esc(n.title)}</a>${n.status !== "ok" ? ' <small class="ng">読み込みエラー</small>' : ""}</td><td>${n.kind === "note" ? "ノート" : esc(GRP_NAME[n.grp] || "資料")}</td><td>${fmtSize(n.size || 0)}</td><td>${n.mtime_ns ? esc(fmtTime(n.mtime_ns / 1e9)) : ""}</td><td>${n.relations ? `<span class="sb">${n.relations}</span>` : ""}</td></tr>`).join("");
+    const n = fvSel.size, docsSel = [...fvSel].filter(isDoc);
+    $("#body").innerHTML = `<div class="fview">
+      <div class="fvhead"><div class="crumbs">${crumbs}</div><span class="sp"></span>
+        ${ed ? `<button class="btn sm pri" id="fvAdd">＋ 資料を追加</button><button class="btn sm" id="fvNote">新しいノート</button><button class="btn sm" id="fvFolder">新しいフォルダ</button>` : '<span class="hint">外部フォルダ（読み取り専用）</span>'}
+        <button class="btn sm" id="fvProp" title="内容の近い資料の組を探して、まとめてつなぎます">つながりを提案</button><button class="ibtn" id="fvMore" title="フォルダの操作">⋯</button></div>
+      ${ed ? '<div class="fvdrop" id="fvDrop">パソコンのファイルをここにドロップすると、このフォルダに資料として追加します（AI で要約したノートにしたいときは受信箱ボタンの「AI 取り込み」）</div>' : ""}
+      <div class="fvbar"${n ? "" : " hidden"}><b>${n} 件を選択</b>
+        ${ed ? '<button class="btn sm" data-fva="move">フォルダへ移動…</button>' : ""}
+        ${docsSel.length ? `<button class="btn sm" data-fva="ingest">AI でノート化（${docsSel.length}）</button>` : ""}
+        ${n === 2 ? '<button class="btn sm" data-fva="relate">この 2 件をつなぐ…</button>' : ""}
+        ${ed ? '<button class="btn sm danger" data-fva="delete">削除</button>' : ""}
+        <button class="btn sm" data-fva="clear">選択を解除</button></div>
+      <table class="ftable"><thead><tr><th><input type="checkbox" id="fvAll" aria-label="すべて選択"${d.items.length && n === d.items.length ? " checked" : ""}></th><th>名前</th><th>種類</th><th>サイズ</th><th>更新</th><th title="資料同士のつながり">つながり</th></tr></thead>
+      <tbody>${rows || '<tr><td></td><td colspan="5" class="hint">空のフォルダです。</td></tr>'}</tbody></table></div>`;
+    const b = $("#body");
+    $$("[data-fv]", b).forEach((a) => (a.onclick = () => openFolder(a.dataset.fv)));
+    if (ed) { $("#fvAdd").onclick = () => pickFiles(d.path); $("#fvNote").onclick = () => newNote(d.path); $("#fvFolder").onclick = () => newFolder(d.path); }
+    $("#fvProp").onclick = () => proposeRelations(d.path);
+    $("#fvMore").onclick = (e) => { const r = e.currentTarget.getBoundingClientRect(); folderMenu(r.right - 240, r.bottom + 4, d.path); };
+    $("#fvAll").onchange = (e) => { fvSel = e.target.checked ? new Set(d.items.map((i) => i.path)) : new Set(); renderFolderView(); };
+    b.querySelector("tbody").addEventListener("change", (e) => { const c = e.target.closest("[data-fsel]"); if (c) { c.checked ? fvSel.add(c.dataset.fsel) : fvSel.delete(c.dataset.fsel); renderFolderView(); } });
+    b.querySelector("tbody").addEventListener("contextmenu", (e) => { const r = e.target.closest("[data-row]"); if (r) { e.preventDefault(); noteMenu(e.clientX, e.clientY, r.dataset.row); } });
+    b.querySelector("tbody").addEventListener("dragstart", (e) => { const r = e.target.closest("[data-row]"); if (r) e.dataTransfer.setData("text/mycel-path", r.dataset.row); });
+    $$("[data-fva]", b).forEach((x) => (x.onclick = () => folderBulk(x.dataset.fva)));
+    const fv = $(".fview", b);
+    fv.addEventListener("dragover", (e) => { if ([...e.dataTransfer.types].includes("Files") && ed) { e.preventDefault(); e.stopPropagation(); fv.classList.add("over"); } });
+    fv.addEventListener("dragleave", (e) => { if (e.target === fv) fv.classList.remove("over"); });
+    fv.addEventListener("drop", (e) => { if ([...e.dataTransfer.types].includes("Files") && ed) { e.preventDefault(); e.stopPropagation(); fv.classList.remove("over"); addFiles(d.path, [...e.dataTransfer.files]); } });
+  }
+  async function folderBulk(act) {
+    const paths = [...fvSel];
+    if (act === "clear") { fvSel.clear(); renderFolderView(); return; }
+    if (act === "ingest") { openIngest({ paths: paths.filter(isDoc) }); return; }
+    if (act === "relate") { relateDialog(paths[0], paths[1]); return; }
+    if (act === "move") {
+      const opts = ["", ...S.folders].map((f) => `<option value="${esc(f)}"${f === S.folderView ? " selected" : ""}>${f ? esc(f) : "（Vault 直下）"}</option>`).join("");
+      modal({ title: `${paths.length} 件をフォルダへ移動`, body: `<div class="form"><label for="mvSel2">移動先</label><select id="mvSel2">${opts}</select><label for="mvNew2">新しいフォルダ</label><input id="mvNew2" type="text" placeholder="（入力すると優先）"></div>`,
+        buttons: [{ label: "キャンセル" }, { label: "移動", primary: true, onClick: async () => {
+          const f = ($("#mvNew2").value.trim() || $("#mvSel2").value).replace(/^\/+|\/+$/g, "");
+          for (const p of paths) if (folderOf(p) !== f) await moveTo(p, f);
+          fvSel.clear(); refreshFolder();
+        } }] });
+      return;
+    }
+    if (act === "delete") {
+      if (!(await confirmBox("まとめて削除", `${paths.length} 件を削除しますか？<br><span class="hint">Vault 内の .mycel/trash に移動します。</span>`, "削除する", true))) return;
+      for (const p of paths) { try { await api.post("/api/item/delete", { path: p }); } catch (e) { fail(e); } }
+      fvSel.clear(); await loadTree(); refreshFolder(); toast("削除しました");
+    }
+  }
+
+  // ------------------------------------------------------------ 資料同士のつながり
+  async function relateDialog(a, b = null) {
+    const done = async (target) => {
+      const label = await promptBox("つながりの説明（任意）", "例: 改訂版 / 添付資料 / 前提となる仕様", "");
+      if (label === null) return;
+      try {
+        await api.post("/api/relations/add", { a, b: target, label });
+        toast("つなぎました");
+        afterRelationChange();
+      } catch (e) { fail(e); }
+    };
+    if (b) return done(b);
+    openPalette(S.tree.filter((n) => n.path !== a).map((n) => ({ label: n.title, hint: (n.kind === "note" ? "ノート ・ " : "資料 ・ ") + docLabel(n.folder), run: () => done(n.path) })), "つなぐノート・資料を選ぶ");
+  }
+  async function afterRelationChange() {
+    if (S.cur) { try { const d = await api.get("/api/note", { path: S.cur.path }); S.cur.relations = d.relations; } catch { /* 無視 */ } renderRight(); }
+    refreshFolder();
+  }
+  function relationsHtml(c) {
+    const rels = c.relations || [];
+    let h = `<div class="rh"><span>つながり</span><span>${rels.length}</span></div>`;
+    h += rels.length ? rels.map((r) => `<div class="card rel${r.exists ? "" : " gone"}" data-open="${r.exists ? esc(r.path) : ""}"><b>${r.kind === "note" ? "" : ftBadge(r.grp)}${esc(r.title)}${r.origin === "ai" ? ' <small class="sb">AI</small>' : ""}</b>${r.label ? `<span>${esc(r.label)}</span>` : ""}${r.exists ? "" : '<span class="ng">見つかりません（移動・削除された可能性）</span>'}<button class="rx" data-unrel="${esc(r.path)}" title="つながりを外す">×</button></div>`).join("")
+      : `<div class="hint">${c.readonly ? "資料には [[リンク]] を書けないので、ここで他の資料・ノートとつなげます。" : "資料やノートとのつながりを追加できます。"}</div>`;
+    h += `<div class="relbtns"><button class="btn sm" id="relAdd">＋ つなぐ…</button><button class="btn sm" id="relSug" title="内容の近いノート・資料を探し、ローカル LLM が関係を判断します">似ているものを探す（AI）</button></div><div id="relOut"></div>`;
+    return h;
+  }
+  function bindRelations(p) {
+    const c = S.cur;
+    $$("[data-unrel]", p).forEach((b) => (b.onclick = async (e) => {
+      e.stopPropagation();
+      try { await api.post("/api/relations/remove", { a: c.path, b: b.dataset.unrel }); afterRelationChange(); } catch (err) { fail(err); }
+    }));
+    $("#relAdd", p).onclick = () => relateDialog(c.path);
+    $("#relSug", p).onclick = async () => {
+      const out = $("#relOut", p); out.innerHTML = '<span class="spin"></span> 探しています…';
+      try {
+        const r = await api.get("/api/relations/suggest", { path: c.path });
+        out.innerHTML = r.suggestions.length ? r.suggestions.map((s) => `<div class="card" data-open="${esc(s.path)}"><b>${s.kind === "note" ? "" : ftBadge(s.grp)}${esc(s.title)}</b><span>${esc(s.reason || s.snippet)}</span><div class="acts"><button class="btn sm" data-relto="${esc(s.path)}" data-label="${esc(s.reason || "")}">つなぐ</button></div></div>`).join("") : '<div class="hint">候補は見つかりませんでした。</div>';
+        $$("[data-relto]", out).forEach((b) => (b.onclick = async (e) => {
+          e.stopPropagation();
+          try { await api.post("/api/relations/add", { a: c.path, b: b.dataset.relto, label: b.dataset.label, origin: "ai" }); b.closest(".card").remove(); afterRelationChange(); } catch (err) { fail(err); }
+        }));
+      } catch (e) { out.innerHTML = `<div class="notice">${esc(e.message)}</div>`; }
+    };
+  }
+  async function proposeRelations(prefix) {
+    const m = modal({ title: `資料のつながりを提案（${prefix ? docLabel(prefix) : "Vault"}）`, body: '<span class="spin"></span> 内容の近い資料を探しています…', wide: false, buttons: [] });
+    let pairs;
+    try { pairs = (await api.post("/api/relations/propose", { prefix })).pairs; } catch (e) { m.close(); fail(e); return; }
+    m.close();
+    const body = document.createElement("div");
+    body.innerHTML = pairs.length ? `<p class="hint" style="margin-top:0">キーワード索引で内容の近さを測った候補です（100% ＝ ほぼ同じ内容）。つなぐ組を選んでください。1 件ずつ AI に理由を判断させたいときは、資料を開いて「似ているものを探す（AI）」を使います。</p>
+      <div class="proplist">${pairs.map((p, i) => `<label class="prow"><input type="checkbox" data-pi="${i}"${p.score >= 0.5 ? " checked" : ""}><span class="pa">${ftBadge(p.a_grp)}${esc(p.a_title)}</span><span class="pm"><i style="width:${Math.round(p.score * 100)}%"></i><small>${Math.round(p.score * 100)}%</small></span><span class="pa">${ftBadge(p.b_grp)}${esc(p.b_title)}</span></label>`).join("")}</div>`
+      : '<p class="hint">つなぐ候補は見つかりませんでした（資料が少ないか、内容が離れています）。</p>';
+    modal({ title: `資料のつながりを提案（${pairs.length} 組）`, body, wide: false, buttons: [{ label: "閉じる" }, ...(pairs.length ? [{ label: "選んだ組をつなぐ", primary: true, onClick: async () => {
+      const sel = $$("[data-pi]:checked", body).map((c) => pairs[+c.dataset.pi]);
+      if (!sel.length) return false;
+      try { const r = await api.post("/api/relations/many", { pairs: sel.map((p) => ({ a: p.a, b: p.b })), origin: "ai" }); toast(`${r.added} 組をつなぎました`); afterRelationChange(); } catch (e) { fail(e); return false; }
+    } }] : [])] });
   }
 
   // ------------------------------------------------------------ AI 取り込み（記法の無い文書 → つながったノート）

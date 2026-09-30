@@ -365,36 +365,14 @@ class Ingestor:
             if h["path"] not in cands and h["path"] not in exclude:
                 cands[h["path"]] = {"path": h["path"], "title": h["title"], "kind": h.get("kind", "note"),
                                     "snippet": h["text"][:160].replace("\n", " "), "score": h["score"], "reason": ""}
-        cands = dict(list(cands.items())[:8])
+        cands = list(cands.values())[:8]
         if not cands:
             return []
         if client is None:
-            return list(cands.values())[:5]
-        lst = "\n".join(f"{i}. 「{c['title']}」 {c['snippet']}" for i, c in enumerate(cands.values(), 1))
-        try:
-            raw = client.chat(
-                "[TASK:ingest_links]\n新しく取り込む文書と、既存のノート・資料の候補があります。"
-                "本当に関係がある候補だけを選び、関係を 20 字程度で説明してください。関係が薄いものは選ばないでください。\n"
-                '出力は JSON 配列だけ: [{"n": 候補番号, "reason": "関係"}]\n'
-                f"# 新しい文書\nタイトル: {info.get('title', '')}\n要約: {info.get('summary', '')[:800]}\n"
-                f"登場する名前: {', '.join(names) or '（なし）'}\n# 候補\n{lst}",
-                temperature=0.0)
-        except LLMError:
-            return list(cands.values())[:5]
-        data = _json(raw)
-        if isinstance(data, dict):
-            data = data.get("links") or data.get("items") or []
-        vals = list(cands.values())
-        out = []
-        for it in data if isinstance(data, list) else []:
-            try:
-                c = vals[int(it.get("n")) - 1]
-            except (TypeError, ValueError, IndexError, AttributeError):
-                continue
-            if c not in out:
-                c["reason"] = str(it.get("reason") or "").strip()[:60]
-                out.append(c)
-        return out[:8]
+            return cands[:5]
+        subject = (f"タイトル: {info.get('title', '')}\n要約: {info.get('summary', '')[:800]}\n"
+                   f"登場する名前: {', '.join(names) or '（なし）'}")
+        return self.app.ai.pick_related(subject, cands, client)[:8]
 
     # ---- 下書きの Markdown
     def compose(self, d: dict, info: dict, related: list[dict], text: str, original: str,

@@ -37,7 +37,7 @@ def chat_response(messages: list[dict]) -> str:
                 ' "summary": "A社向けの概算見積。初期費用は1,200万円。", "points": ["初期費用 1,200万円", "保守 月額30万円"],'
                 ' "entities": {"customers": ["A社"], "people": ["田中部長"], "products": ["生産管理システム"],'
                 ' "projects": [], "others": ["保守"]}, "tags": ["見積", "A社"]}\n```')
-    if task == "ingest_links":
+    if task in ("ingest_links", "relate"):
         return '[{"n": 1, "reason": "同じ顧客の案件"}]'
     if task == "transform":
         return "- 整えた文章"

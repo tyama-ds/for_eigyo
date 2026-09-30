@@ -29,7 +29,7 @@
         return Object.assign({ x: p ? p.x : Math.cos(a) * r, y: p ? p.y : Math.sin(a) * r, vx: 0, vy: 0 }, n);
       });
       const idx = Object.fromEntries(this.nodes.map((n, i) => [n.id, i]));
-      this.edges = data.edges.map(([a, b]) => [idx[a], idx[b]]).filter(([a, b]) => a !== undefined && b !== undefined);
+      this.edges = data.edges.map(([a, b, t]) => [idx[a], idx[b], t]).filter(([a, b]) => a !== undefined && b !== undefined);
       this.nb = new Set();
       if (center) this.edges.forEach(([a, b]) => { if (this.nodes[a].id === center) this.nb.add(b); if (this.nodes[b].id === center) this.nb.add(a); });
       const folders = [...new Set(this.nodes.map((n) => (n.folder || "").split("/")[0]).filter(Boolean))].sort();
@@ -106,14 +106,16 @@
       g.save(); g.translate(v.x, v.y); g.scale(v.k, v.k);
       const line = this.color("--line"), acc = this.color("--accent"), muted = this.color("--muted"), ink = this.color("--ink"), bg = this.color("--bg");
       const focus = this.hover ?? (this.center ? this.nodes.findIndex((n) => n.id === this.center) : -1);
-      for (const [i, j] of this.edges) {
+      const warn = this.color("--warn");
+      for (const [i, j, t] of this.edges) {
         const p = this.nodes[i], q = this.nodes[j];
         const hot = focus >= 0 && (i === focus || j === focus);
-        g.strokeStyle = hot ? acc : line; g.lineWidth = (hot ? 1.6 : 1) / Math.sqrt(v.k);
+        g.strokeStyle = hot ? acc : t === "rel" ? warn : line; g.lineWidth = (hot ? 1.6 : 1) / Math.sqrt(v.k);
+        g.setLineDash(t === "rel" ? [4 / v.k, 3 / v.k] : []);   // 資料同士のつながりは点線
         g.globalAlpha = focus >= 0 && !hot ? 0.7 : 1;
         g.beginPath(); g.moveTo(p.x, p.y); g.lineTo(q.x, q.y); g.stroke();
       }
-      g.globalAlpha = 1;
+      g.globalAlpha = 1; g.setLineDash([]);
       g.font = `${11 / Math.sqrt(v.k)}px ${getComputedStyle(document.body).fontFamily}`;
       g.textAlign = "center";
       const nbs = new Set();

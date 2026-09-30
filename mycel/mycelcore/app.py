@@ -10,12 +10,13 @@ from pathlib import Path
 from . import links as L
 from .ai import AIService
 from .config import embed_configured, load_config, save_config, vault_path
-from .extract import EXT_GROUP, KINDS, TYPE_GROUPS, pdf_available
+from .extract import EXT_GROUP, KINDS, TYPE_GROUPS, is_supported, pdf_available
 from .index import Index, open_index
 from .ingest import Ingestor
 from .jobs import JobRunner
 from .plugins import NoteEvent, PluginContext, PluginManager
-from .scope import Scope, ScopeError, browse, split_id
+from .relations import Relations
+from .scope import Scope, ScopeError, browse, is_under, split_id
 from .vault import Vault, VaultError, folder_of, normalize_rel, title_of, version_of
 
 BASE = Path(__file__).resolve().parent.parent
@@ -71,6 +72,8 @@ class MycelApp:
             self.vault = Vault(root)
             self.scope = Scope(self.vault.root, self.vault.internal)
             self.index = open_index(self.vault, self.scope)
+            self.relations = Relations(self.vault.internal)
+            self.index.relations = self.relations
             self.ai = AIService(self.index, self.config)
             self.plugins.load(cfg["plugins"], PluginContext(self))
             self.plugins.emit("on_vault_opened")
@@ -121,6 +124,7 @@ class MycelApp:
             "headings": L.extract_headings(text), "tags": L.extract_tags(text),
             "outgoing": self.index.outgoing(path), "backlinks": self.index.backlinks(path),
             "unlinked": self.index.unlinked_mentions(path),
+            "relations": self.relations_of(path),
         }
 
     def _doc(self, path: str) -> dict:
@@ -144,6 +148,7 @@ class MycelApp:
             "outgoing": [], "backlinks": self.index.backlinks(path),
             "unlinked": self.index.unlinked_mentions(path),
             "source_path": str(abs_p), "indexed_at": item.get("indexed_at"),
+            "relations": self.relations_of(path), "editable": not path.startswith("@"),
         }
 
     def note_version(self, path: str) -> dict:
@@ -226,6 +231,7 @@ class MycelApp:
             self.vault.move(old, new)
             self.index.refresh(old)
             self.index.refresh(new)
+            self.relations.rename(old, new)
             if self.index.resolve(new_title) != new:
                 link_to = new[:-3]
             updated = []
@@ -252,6 +258,7 @@ class MycelApp:
         with self._lock:
             where = self.vault.delete(rel)
             self.index.refresh(rel)
+            self.relations.drop(rel)
         self.plugins.emit("on_deleted", NoteEvent("deleted", rel, self._author()))
         return {"path": rel, "trash": where}
 
@@ -275,6 +282,272 @@ class MycelApp:
         if not body.lstrip().startswith("# "):
             body = f"# {stem}\n\n{body}"
         return self.create(f"{folder}/{name}" if folder else name, text=head + body + "\n")
+
+    # ------------------------------------------------------------ つながり
+    def relations_of(self, path: str) -> list[dict]:
+        out = []
+        for r in self.relations.for_path(path):
+            it = self.index.get(r["path"])
+            out.append({**r, "title": it["title"] if it else r["path"].rsplit("/", 1)[-1],
+                        "kind": it["kind"] if it else ("note" if not self._is_doc(r["path"]) else "doc"),
+                        "grp": it["grp"] if it else "", "exists": it is not None})
+        return out
+
+    def relate(self, a: str, b: str, label: str = "", origin: str = "user") -> dict:
+        a, b = self._path(a), self._path(b)
+        for p in (a, b):
+            if self.index.get(p) is None:
+                raise VaultError(f"読み込まれていないファイルです: {p}", 404)
+        if origin not in ("user", "ai"):
+            origin = "user"
+        try:
+            self.relations.add(a, b, label, origin)
+        except ValueError as e:
+            raise VaultError(str(e)) from e
+        self.index.rev += 1
+        return {"relations": self.relations_of(a)}
+
+    def relate_many(self, pairs: list, origin: str = "ai") -> dict:
+        n = 0
+        for p in pairs:
+            if isinstance(p, dict) and isinstance(p.get("a"), str) and isinstance(p.get("b"), str):
+                self.relate(p["a"], p["b"], str(p.get("label") or ""), origin)
+                n += 1
+        return {"added": n}
+
+    def unrelate(self, a: str, b: str) -> dict:
+        a, b = self._path(a), self._path(b)
+        self.relations.remove(a, b)
+        self.index.rev += 1
+        return {"relations": self.relations_of(a)}
+
+    # ------------------------------------------------------------ フォルダと資料の整理（Vault 内だけ）
+    def _vault_folder(self, path: str, allow_root: bool = False) -> str:
+        path = (path or "").replace("\\", "/").strip().strip("/")
+        if not path:
+            if allow_root:
+                return ""
+            raise VaultError("フォルダ名を入力してください")
+        if path.startswith("@"):
+            raise VaultError("外部フォルダは読み取り専用です（Vault 内のフォルダだけ整理できます）", 403)
+        folder = normalize_rel(path + "/_")[:-len("/_.md")]
+        if folder.split("/")[0] == ".mycel":
+            raise VaultError("使えないフォルダ名です")
+        return folder
+
+    def _vault_doc(self, path: str) -> str:
+        path = self._path(path)
+        if not self._is_doc(path):
+            return path
+        if path.startswith("@"):
+            raise VaultError("外部フォルダの資料は読み取り専用です（移動・削除はできません）", 403)
+        return path
+
+    def _emit_renamed(self, old: str, new: str) -> None:
+        self.plugins.emit("on_renamed", NoteEvent("renamed", new, self._author(), old_path=old))
+
+    def _rewrite_referrers(self, referrers: set[str], fn) -> list[str]:
+        """リンク元のノートを fn(text) で書き換えて保存する。"""
+        updated = []
+        for src in sorted(referrers):
+            if self._is_doc(src) or not self.vault.exists(src):
+                continue
+            text, ver = self.vault.read(src)
+            out = fn(text)
+            if out != text:
+                ev = NoteEvent("saved", src, self._author(), text=out)
+                ev.version = self.vault.write(src, out, ver)
+                self.index.refresh(src)
+                self.plugins.emit("on_saved", ev)
+                updated.append(src)
+        return updated
+
+    def create_folder(self, path: str) -> dict:
+        folder = self._vault_folder(path)
+        p = self.vault.root / folder
+        if p.exists():
+            raise VaultError(f"同じ名前のフォルダがあります: {folder}", 409)
+        p.mkdir(parents=True)
+        return {"path": folder}
+
+    def move_item(self, path: str, new_path: str) -> dict:
+        """ノート・資料の移動と名前変更。資料は拡張子を保ち、リンクしているノートも書き換える。"""
+        path = self._vault_doc(path)
+        if not self._is_doc(path):
+            return self.rename(path, new_path)
+        ext = Path(path).suffix
+        new_path = (new_path or "").replace("\\", "/").strip().strip("/")
+        if not new_path.lower().endswith(ext.lower()):
+            new_path += ext
+        folder = self._vault_folder(folder_of(new_path), allow_root=True)
+        name = Path(new_path).name
+        normalize_rel(Path(name).stem)                   # 名前の検証
+        new_path = f"{folder}/{name}" if folder else name
+        if new_path == path:
+            return {"path": path, "updated": []}
+        src, dst = self.vault.root / path, self.vault.root / new_path
+        if not src.is_file():
+            raise VaultError(f"ファイルが見つかりません: {path}", 404)
+        if dst.exists() and os.path.normcase(str(dst)) != os.path.normcase(str(src)):
+            raise VaultError(f"同じ名前のファイルがあります: {new_path}", 409)
+        with self._lock:
+            referrers = {b["path"] for b in self.index.backlinks(path)}
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(src, dst)
+            self.vault._prune_empty(src.parent)
+            self.index.rename_path(path, new_path)
+            self.relations.rename(path, new_path)
+            old_name, new_name = Path(path).name, name
+
+            def fix(text: str) -> str:
+                text, _ = L.rewrite_links(text, path, new_path)
+                if old_name != new_name:
+                    for n in (old_name, Path(old_name).stem):
+                        text, _ = L.rewrite_links(text, n, new_name)
+                return text
+            updated = self._rewrite_referrers(referrers, fix)
+        self._emit_renamed(path, new_path)
+        return {"path": new_path, "updated": updated}
+
+    def delete_item(self, path: str) -> dict:
+        path = self._vault_doc(path)
+        if not self._is_doc(path):
+            return self.delete(path)
+        src = self.vault.root / path
+        if not src.is_file():
+            raise VaultError(f"ファイルが見つかりません: {path}", 404)
+        trash = self.vault.internal / "trash" / time.strftime("%Y%m%d-%H%M%S")
+        dst = trash / path
+        n = 2
+        while dst.exists():
+            dst = trash / f"{Path(path).stem} ({n}){Path(path).suffix}"
+            n += 1
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock:
+            shutil.move(str(src), str(dst))
+            self.vault._prune_empty(src.parent)
+            self.index.refresh(path)
+            self.relations.drop(path)
+        self.plugins.emit("on_deleted", NoteEvent("deleted", path, self._author()))
+        return {"path": path, "trash": dst.relative_to(self.vault.root).as_posix()}
+
+    def rename_folder(self, old: str, new: str) -> dict:
+        """フォルダの移動・名前変更。中のファイルは読み直さず付け替え、[[フォルダ/…]] のリンクも書き換える。"""
+        old, new = self._vault_folder(old), self._vault_folder(new)
+        if old == new:
+            return {"path": new, "moved": 0, "updated": []}
+        if is_under(new, old):
+            raise VaultError("フォルダを自分の中には移動できません")
+        src, dst = self.vault.root / old, self.vault.root / new
+        if not src.is_dir():
+            raise VaultError(f"フォルダが見つかりません: {old}", 404)
+        if dst.exists() and os.path.normcase(str(dst)) != os.path.normcase(str(src)):
+            raise VaultError(f"同じ名前のフォルダがあります: {new}", 409)
+        with self._lock:
+            before = [n["path"] for n in self.index.notes() if is_under(n["path"], old)]
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(src, dst)
+            self.vault._prune_empty(src.parent)
+            moved = self.index.rename_prefix(old, new)
+            self.relations.rename(old, new)
+            ex = [new + e[len(old):] if is_under(e, old) else e for e in self.scope.data["exclude"]]
+            if ex != self.scope.data["exclude"]:
+                self.scope.save({"exclude": ex})
+            referrers = set(self.index.link_sources_with_prefix(old))
+            updated = self._rewrite_referrers(referrers, lambda t: L.rewrite_link_prefix(t, old, new)[0])
+        for p in before:
+            self._emit_renamed(p, new + p[len(old):])
+        return {"path": new, "moved": moved, "updated": updated}
+
+    def delete_folder(self, path: str) -> dict:
+        folder = self._vault_folder(path)
+        src = self.vault.root / folder
+        if not src.is_dir():
+            raise VaultError(f"フォルダが見つかりません: {folder}", 404)
+        trash = self.vault.internal / "trash" / time.strftime("%Y%m%d-%H%M%S") / folder
+        n = 2
+        while trash.exists():
+            trash = trash.with_name(f"{Path(folder).name} ({n})")
+            n += 1
+        trash.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock:
+            gone = [n["path"] for n in self.index.notes() if is_under(n["path"], folder)]
+            shutil.move(str(src), str(trash))
+            self.vault._prune_empty(src.parent)
+            removed = self.index.remove_prefix(folder)
+            self.relations.drop(folder)
+        for p in gone:
+            self.plugins.emit("on_deleted", NoteEvent("deleted", p, self._author()))
+        return {"path": folder, "removed": removed, "trash": trash.relative_to(self.vault.root).as_posix()}
+
+    def upload_file(self, folder: str, name: str, data: bytes) -> dict:
+        """ファイルを Vault のフォルダに資料として追加する（AI は使わない）。"""
+        folder = self._vault_folder(folder, allow_root=True)
+        name = Path((name or "").replace("\\", "/")).name
+        ext = Path(name).suffix.lower()
+        if not name or name.startswith(".") or not is_supported(name):
+            raise VaultError(f"この形式は追加できません: {name}（画像などは対象外です）")
+        if len(data) > self.scope.max_bytes():
+            raise VaultError(f"ファイルが大きすぎます（上限 {self.scope.data['max_mb']} MB）", 413)
+        normalize_rel(Path(name).stem)
+        stem, n = Path(name).stem, 2
+        rel = f"{folder}/{name}" if folder else name
+        while (self.vault.root / rel).exists():
+            rel = f"{folder}/{stem} ({n}){ext}" if folder else f"{stem} ({n}){ext}"
+            n += 1
+        target = self.vault.root / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if ext in (".md", ".markdown"):
+            target.write_bytes(data)
+            self.index.refresh(rel)
+            self.plugins.emit("on_created", NoteEvent("created", rel, self._author(), text=data.decode("utf-8", "replace")))
+        else:
+            target.write_bytes(data)
+            self.index.refresh(rel)
+            self.plugins.emit("on_created", NoteEvent("created", rel, self._author()))
+        it = self.index.get(rel)
+        return {"path": rel, "status": it["status"] if it else "out_of_scope", "error": it["error"] if it else ""}
+
+    def folder_view(self, path: str) -> dict:
+        """フォルダの中身の一覧（サブフォルダ・ノート・資料）。"""
+        path = (path or "").replace("\\", "/").strip().strip("/")
+        items = self.index.notes()
+        folders: set[str] = set(self.vault.list_folders())
+        for n in items:
+            f = n["folder"]
+            while f:
+                folders.add(f)
+                f = folder_of(f)
+        for s in self.scope.sources():
+            if s.id != "vault":
+                folders.add(f"@{s.id}")
+        subs = []
+        for f in sorted(folders):
+            if folder_of(f) == path and f != path:
+                cnt = sum(1 for n in items if is_under(n["path"], f))
+                subs.append({"path": f, "name": f.rsplit("/", 1)[-1], "count": cnt})
+        rows = []
+        for n in items:
+            if n["folder"] == path:
+                rows.append({**n, "relations": self.relations.count(n["path"])})
+        label = path
+        if path.startswith("@"):
+            sid = path[1:].split("/", 1)[0]
+            try:
+                src = self.scope.source(sid)
+                label = src.label + path[len(sid) + 1:].replace("/", " / ")
+            except Exception:  # noqa: BLE001
+                pass
+        for sub in subs:
+            if sub["path"].startswith("@") and "/" not in sub["path"]:
+                try:
+                    sub["name"] = self.scope.source(sub["path"][1:]).label
+                    sub["source"] = True
+                except Exception:  # noqa: BLE001
+                    pass
+        return {"path": path, "label": label or "Vault", "editable": not path.startswith("@"),
+                "exists": (self.vault.root / path).is_dir() if path and not path.startswith("@") else True,
+                "folders": subs, "items": sorted(rows, key=lambda r: (r["kind"] != "note", r["title"]))}
 
     # ------------------------------------------------------------ デイリーノートとテンプレート
     def daily(self, date: str | None = None) -> dict:

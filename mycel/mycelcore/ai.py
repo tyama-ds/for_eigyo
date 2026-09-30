@@ -169,6 +169,108 @@ class AIService:
                                   "score": h["score"]}
         return list(out.values())[:k]
 
+    # ------------------------------------------------------------ つながり（資料同士）
+    def pick_related(self, subject: str, cands: list[dict], client: LLMClient | None = None) -> list[dict]:
+        """RAG で集めた候補から、LLM に本当に関係するものを選ばせて理由を付ける。
+        LLM が無い・失敗したときは検索順のまま返す。"""
+        cfg = self.get_config()
+        if not cands:
+            return []
+        if client is None:
+            if not chat_configured(cfg):
+                return cands
+            client = LLMClient(cfg)
+        lst = "\n".join(f"{i}. 「{c['title']}」 {c.get('snippet', '')[:160]}" for i, c in enumerate(cands, 1))
+        try:
+            raw = client.chat(
+                "[TASK:relate]\n対象の文書と、既存のノート・資料の候補があります。"
+                "本当に関係がある候補だけを選び、関係を 20 字程度で説明してください"
+                "（例: 同じ顧客の案件 / この見積の改訂版 / 前提となる仕様）。関係が薄いものは選ばないでください。\n"
+                '出力は JSON 配列だけ: [{"n": 候補番号, "reason": "関係"}]\n'
+                f"# 対象の文書\n{subject[:1500]}\n# 候補\n{lst}", temperature=0.0)
+        except LLMError:
+            return cands
+        m = re.search(r"\[.*\]", raw, re.DOTALL)
+        try:
+            data = json.loads(m.group(0)) if m else None
+        except ValueError:
+            data = None
+        if not isinstance(data, list):
+            return cands
+        out = []
+        for it in data:
+            try:
+                c = cands[int(it.get("n")) - 1]
+            except (TypeError, ValueError, IndexError, AttributeError):
+                continue
+            if c not in out:
+                out.append({**c, "reason": str(it.get("reason") or "").strip()[:60]})
+        return out
+
+    def _subject(self, item: dict) -> str:
+        _, body, _ = L.split_frontmatter(item["text"] or "")
+        return f"{item['title']}\n{body[:1500]}"
+
+    def suggest_related(self, path: str, k: int = 6, use_llm: bool = True) -> list[dict]:
+        """この資料（ノート）とつながりそうなノート・資料。既につながっているものは除く。"""
+        item = self.index.get(path)
+        if not item or item["status"] != "ok":
+            return []
+        rel = self.index.relations
+        skip = {path} | ({r["path"] for r in rel.for_path(path)} if rel else set())
+        skip |= {o["path"] for o in self.index.outgoing(path) if o["path"]}
+        hits = self.retrieve(self._subject(item), k=k * 4, exclude=skip)
+        cands: dict[str, dict] = {}
+        for h in hits:
+            if h["path"] not in cands:
+                it = self.index.get(h["path"]) or {}
+                cands[h["path"]] = {"path": h["path"], "title": h["title"], "kind": h.get("kind", "note"),
+                                    "grp": it.get("grp", ""), "snippet": h["text"][:160].replace("\n", " "),
+                                    "score": h["score"], "reason": ""}
+        cands_l = list(cands.values())[:max(k + 2, 8)]
+        return (self.pick_related(self._subject(item), cands_l) if use_llm else cands_l)[:k]
+
+    def propose_relations(self, prefix: str, per_item: int = 2, limit: int = 300,
+                          min_ratio: float = 0.3) -> list[dict]:
+        """フォルダ内の資料について、内容の近い資料の組をまとめて提案する（キーワード索引だけで速く）。
+        近さは「自分自身との一致度」を 1 とした比で表す。"""
+        rel = self.index.relations
+        docs = [n for n in self.index.notes() if n["kind"] == "doc" and n["status"] == "ok"
+                and self.index._under(n["path"], prefix)][:limit]
+        seen: set[frozenset] = set()
+        out = []
+        for d in docs:
+            item = self.index.get(d["path"])
+            q = self._subject(item)[:800]
+            hits = self.index.search_chunks(q, 40)
+            chunks = self.index.get_chunks([cid for cid, _ in hits])
+            best: dict[str, float] = {}
+            for cid, sc in hits:
+                c = chunks.get(cid)
+                if c and sc > best.get(c["path"], 0):
+                    best[c["path"]] = sc
+            base = best.get(d["path"]) or max(best.values(), default=0)
+            if not base:
+                continue
+            ranked = sorted(((p, sc / base) for p, sc in best.items() if p != d["path"]), key=lambda x: -x[1])
+            n = 0
+            for p, ratio in ranked:
+                other = self.index.get(p)
+                if not other or other["kind"] != "doc" or ratio < min_ratio:
+                    continue
+                pair = frozenset((d["path"], p))
+                if pair in seen or (rel and rel.exists(d["path"], p)):
+                    continue
+                seen.add(pair)
+                out.append({"a": d["path"], "a_title": d["title"], "a_grp": d["grp"],
+                            "b": p, "b_title": other["title"], "b_grp": other["grp"],
+                            "score": round(min(ratio, 1.0), 3)})
+                n += 1
+                if n >= per_item:
+                    break
+        out.sort(key=lambda x: -x["score"])
+        return out[:200]
+
     # ------------------------------------------------------------ 書き換え
     PRESETS = {
         "tidy": "誤字を直し、読みやすい箇条書きに整えてください。事実や数字は変えないでください。",

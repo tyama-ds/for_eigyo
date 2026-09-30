@@ -77,7 +77,7 @@ class IngestTest(unittest.TestCase):
         self.assertIn("#取り込み #見積 #A社", md)
         self.assertNotIn("## 本文", md)                               # 原本を保存するので本文は省く
         # RAG: 既存ノートの抜粋を候補として LLM に渡している
-        link_req = [r for r in self.reqs if "[TASK:ingest_links]" in r["body"]["messages"][-1]["content"]]
+        link_req = [r for r in self.reqs if "[TASK:relate]" in r["body"]["messages"][-1]["content"]]
         self.assertTrue(link_req)
         res = self.app.ingest_save([d["id"]])
         self.assertEqual(res["errors"], [])

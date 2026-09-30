@@ -77,6 +77,7 @@ class Index:
         self.rev = 0                                   # 変わるたびに増える（キャッシュ無効化用）
         self.pending: dict[str, str] = {}              # パス → added / modified / deleted（最後の確認結果）
         self.last_scan: float | None = None
+        self.relations = None                          # 資料同士のつながり（app が設定する）
         self.conn = self._open()
         self.has_fts = self._init_schema()
 
@@ -243,6 +244,61 @@ class Index:
             self.pending.pop(path, None)
             self.conn.commit()
             self.rev += 1
+
+    def rename_path(self, old: str, new: str) -> None:
+        """ファイルの移動・名前変更を、本文を読み直さずに反映する（大きな PDF でも速い）。"""
+        with self._lock:
+            self._rename(old, new)
+            self.conn.commit()
+            self.rev += 1
+
+    def rename_prefix(self, old: str, new: str) -> int:
+        """フォルダの移動・名前変更。配下のファイルをまとめて付け替える。"""
+        with self._lock:
+            paths = [r["path"] for r in self.conn.execute("SELECT path FROM items")
+                     if is_under(r["path"], old)]
+            for p in paths:
+                self._rename(p, new + p[len(old):])
+            self.conn.commit()
+            self.rev += 1
+            return len(paths)
+
+    def remove_prefix(self, prefix: str) -> int:
+        with self._lock:
+            paths = [r["path"] for r in self.conn.execute("SELECT path FROM items") if is_under(r["path"], prefix)]
+            for p in paths:
+                self._remove(p)
+                self.pending.pop(p, None)
+            self.conn.commit()
+            self.rev += 1
+            return len(paths)
+
+    def _rename(self, old: str, new: str) -> None:
+        c = self.conn
+        if c.execute("SELECT 1 FROM items WHERE path=?", (old,)).fetchone() is None:
+            return
+        self._remove(new)
+        note = self._is_note(new)
+        title = stem_of(new) if note else name_of(new)
+        sid, _ = split_id(new)
+        path_key = _key(new[:-3] if note and new.lower().endswith(".md") else new)
+        c.execute("UPDATE items SET path=?, title=?, title_key=?, stem_key=?, path_key=?, folder=?, source=? "
+                  "WHERE path=?", (new, title, _key(title), _key(stem_of(new)), path_key, folder_of(new), sid, old))
+        c.execute("UPDATE chunks SET path=? WHERE path=?", (new, old))
+        c.execute("UPDATE links SET src=? WHERE src=?", (new, old))
+        c.execute("UPDATE tags SET path=? WHERE path=?", (new, old))
+        if self.has_fts:
+            c.execute("UPDATE fts SET path=?, title=? WHERE path=?", (new, title, old))
+        if old in self.pending:
+            self.pending[new] = self.pending.pop(old)
+
+    def link_sources_with_prefix(self, prefix: str) -> list[str]:
+        """[[フォルダ/…]] の形でフォルダ配下を指しているノート。"""
+        key = _key(prefix).rstrip("/") + "/"
+        with self._lock:
+            rows = self.conn.execute("SELECT DISTINCT src FROM links WHERE substr(target_key, 1, ?)=?",
+                                     (len(key), key)).fetchall()
+        return [r["src"] for r in rows]
 
     def rebuild(self, cancel=None, progress=None) -> dict:
         with self._lock:
@@ -490,14 +546,18 @@ class Index:
                 dst = uid
             if dst != r["src"]:
                 edges.add((r["src"], dst))
-        linked = {a for e in edges for a in e}
+        rel_edges: set[tuple[str, str]] = set()
+        for a, b in (self.relations.pairs() if self.relations else []):
+            if a in items and b in items and (b, a) not in rel_edges:
+                rel_edges.add((a, b))
+        linked = {a for e in edges | rel_edges for a in e}
         nodes_set = {p for p, (_, kind, _) in items.items() if kind == "note" or all_docs or p in linked}
         nodes_set |= set(unresolved)
         if center:
             keep, frontier = {center}, {center}
             for _ in range(max(1, min(depth, 4))):
                 nxt = set()
-                for a, b in edges:
+                for a, b in edges | rel_edges:
                     if a in frontier and b not in keep:
                         nxt.add(b)
                     if b in frontier and a not in keep:
@@ -506,7 +566,7 @@ class Index:
                 frontier = nxt
             nodes_set &= keep
         deg: dict[str, int] = {}
-        for a, b in edges:
+        for a, b in edges | rel_edges:
             if a in nodes_set and b in nodes_set:
                 deg[a] = deg.get(a, 0) + 1
                 deg[b] = deg.get(b, 0) + 1
@@ -515,8 +575,10 @@ class Index:
             title, kind, grp = items.get(n, (unresolved.get(n, n), "", ""))
             nodes.append({"id": n, "title": title, "exists": n in items, "kind": kind or "missing",
                           "grp": grp, "folder": folder_of(n) if n in items else "", "degree": deg.get(n, 0)})
-        return {"nodes": nodes,
-                "edges": [[a, b] for a, b in sorted(edges) if a in nodes_set and b in nodes_set]}
+        out_edges = [[a, b] for a, b in sorted(edges) if a in nodes_set and b in nodes_set]
+        out_edges += [[a, b, "rel"] for a, b in sorted(rel_edges - edges)
+                      if a in nodes_set and b in nodes_set and (b, a) not in edges]
+        return {"nodes": nodes, "edges": out_edges}
 
     # ------------------------------------------------------------ AI 用の検索（転置インデックス）
     def search_chunks(self, query: str, k: int = 50, prefixes: list[str] | None = None,
