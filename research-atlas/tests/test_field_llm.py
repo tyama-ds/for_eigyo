@@ -73,6 +73,8 @@ def test_local_ollama_generates_json_without_openai(report, monkeypatch, configu
             return httpx.Response(200, json={"models": [{"name": "local-test:1"}]})
         if request.url.path == "/api/show":
             return httpx.Response(200, json={"details": {"family": "test"}})
+        if request.url.path == "/api/ps":
+            return httpx.Response(200, json={"models": []})
         body = json.loads(request.content)
         assert request.url.path == "/api/chat"
         assert body["stream"] is True and body["format"]["type"] == "object"
@@ -84,7 +86,7 @@ def test_local_ollama_generates_json_without_openai(report, monkeypatch, configu
     transport(monkeypatch, handler)
     value = field_llm.generate(report, "local")
     assert value["mode"] == "local_llm" and value["model"] == "local-test:1"
-    assert len(calls) == 3
+    assert len(calls) == 4
     assert all(request.url.host == host.strip("[]") for request in calls)
 
 
@@ -129,6 +131,8 @@ def test_local_qwen_thinking_envelope_preserves_final_narrative_and_evidence(rep
 
     def handler(request):
         paths.append(request.url.path)
+        if request.url.path in {"/api/v1/models", "/api/v0/models"}:
+            return httpx.Response(404)
         if request.method == "GET":
             assert request.url.path == "/v1/models"
             return httpx.Response(200, json={"data": [{"id": "qwen-local-test"}]})
@@ -153,7 +157,7 @@ def test_local_qwen_thinking_envelope_preserves_final_narrative_and_evidence(rep
     serialized = json.dumps(value, ensure_ascii=False)
     assert "private-thought" not in serialized and "unshared-paper" not in serialized
     assert "<think>" not in serialized and "```" not in serialized
-    assert paths == ["/v1/models", "/v1/chat/completions"]
+    assert paths == ["/v1/models", "/api/v1/models", "/api/v0/models", "/v1/chat/completions"]
 
 
 @pytest.mark.parametrize("base_url", ["http://127.0.0.1:1234/v1", "http://192.168.10.20:1234/v1",
@@ -179,7 +183,8 @@ def test_local_stream_preserves_browser_auth_direct_routing_and_progress(report,
     assert value["mode"] == "local_llm"
     assert all(request.headers["Authorization"] == "Bearer local-secret" for request in requests)
     assert all("cloud-secret" not in str(request.headers) for request in requests)
-    assert all(str(request.url).startswith(base_url + "/") for request in requests)
+    assert all(str(request.url).startswith(base_url.rsplit("/v1", 1)[0] + "/") for request in requests)
+    assert all(request.url.path in {"/v1/models", "/api/v1/models", "/api/v0/models", "/v1/chat/completions"} for request in requests)
     assert all(client["proxy"] is None and client["trust_env"] is False and client["follow_redirects"] is False for client in clients)
     assert clients[-1]["timeout"].read == 600
     assert progress[0]["received_chars"] == 0 and progress[-1]["received_chars"] > 0

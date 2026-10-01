@@ -86,7 +86,7 @@ def test_rejects_wrong_movement_projection_and_missing_source_ids(fixture):
 def test_optional_llm_uses_selected_evidence_and_preserves_metrics(fixture, monkeypatch, provider):
     report = report_for(fixture)
     before = deepcopy(report)
-    def structured(payload, schema, instructions, actual_provider, model, *, progress=None, allow_text=False):
+    def structured(payload, schema, instructions, actual_provider, model, *, progress=None, allow_text=False, input_context=None):
         assert actual_provider == provider and model == "test-model"
         assert len(payload["papers"]) == 12
         assert allow_text is True
@@ -250,7 +250,7 @@ def test_api_numeric_warning_keeps_generated_critique_and_success_status(fixture
 
 def test_api_worker_receives_browser_context_without_persisting_connections(fixture, monkeypatch, tmp_path):
     seen = []
-    def structured(payload, schema, instructions, provider, model, *, progress=None, allow_text=False):
+    def structured(payload, schema, instructions, provider, model, *, progress=None, allow_text=False, input_context=None):
         settings = connection_settings.current_settings()
         seen.append((settings.local.url, settings.local.api_key.get_secret_value(), settings.proxy.password.get_secret_value()))
         progress({"elapsed_seconds": 67, "received_chars": 500})

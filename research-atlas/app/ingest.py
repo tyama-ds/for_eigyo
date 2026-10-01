@@ -726,7 +726,13 @@ def demo_papers() -> list[dict]:
     rng = random.Random(20260911)
     surnames = ["Aster", "Boreal", "Citrine", "Dovetail", "Ember", "Fable", "Glimmer", "Harbor", "Islet", "Juniper", "Kestrel", "Lumen", "Morrow", "Nimbus", "Opal", "Prism"]
     given_names = ["Nora", "Eli", "Mira", "Theo", "Lina", "Arlo", "Sora", "Vera"]
-    author_pool = [{"id": f"synthetic-author-{index + 1:03d}", "name": f"{surnames[index % 16]}, {given_names[index // 16]} [Synthetic]"} for index in range(128)]
+    # Explicit fictional author affiliations make institution grouping explorable
+    # without assigning paper-level affiliations to unrelated authors.
+    institutions = [f"Synthetic {name} University [Fictional]" for name in
+                    ("Aurora", "Boreal", "Citrine", "Delta", "Ember", "Fable", "Glimmer", "Harbor")]
+    author_pool = [{"id": f"synthetic-author-{index + 1:03d}",
+                    "name": f"{surnames[index % 16]}, {given_names[index // 16]} [Synthetic]",
+                    "affiliations": [institutions[index // 16]]} for index in range(128)]
     qualifiers = ["Comparative evaluation", "Mechanistic study", "Robust optimization", "Experimental validation", "Scalable design", "Performance assessment", "Multiscale analysis", "Reliability investigation"]
     results = ["The results identify a reproducible operating window and expose a trade-off between performance and robustness.", "Controlled comparisons show improved performance relative to the reference configuration, while long-duration validation remains necessary.", "Sensitivity analysis identifies the dominant loss mechanisms and highlights conditions where the improvement does not generalize.", "Repeated measurements support the proposed mechanism, although variation between devices limits immediate scale-up."]
     papers = []

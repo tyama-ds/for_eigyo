@@ -357,3 +357,25 @@ def test_single_year_success_is_generated_without_inventing_endpoint_change(save
     assert report["generation_status"] == "generated" and report["transitions"] == []
     assert report["progress"]["llm_calls"] == report["progress"]["planned_llm_calls"] == 1
     assert report["overview"]["count_change"] is None and report["overview"]["term_comparison_available"] is False
+
+def test_annual_chapters_record_separate_actual_input_and_survive_context_failure(saved, monkeypatch):
+    report = prepare(saved, provider="local")
+    metrics = deepcopy(report["annual_rows"])
+    seen=[]
+    def output(payload, schema, instructions, provider, model, *, input_context, **kwargs):
+        year=payload["centroid"]["period_id"]
+        seen.append((year, {p['year'] for p in payload['papers']}))
+        input_context.update(payload=deepcopy(payload),metadata={"context_window":4096,"reduced":True,
+            "status":"failed" if year=="2020" else "completed","request_attempts":1,"warnings":["入力上限に合わせて抜粋。"]})
+        if year=="2020":
+            raise LocalStreamError("raw secret",kind="context_budget")
+        return {"headline":"抄録の解釈","sections":[{"title":"研究対象","text":"レーザーセンサーを用いた計測を報告。","evidence_ids":["p25"]}],"caveats":[]},"local_llm","test"
+    monkeypatch.setattr(field_llm,"structured_output",output)
+    reports.generate_children(report)
+    assert seen==[("2020",{2020}),("2025",{2025})]
+    assert report["generation_status"]=="partial" and report["annual_rows"]==metrics
+    assert report["years"][0]["report"]["llm_input"]["status"]=="failed"
+    assert report["years"][-1]["report"]["llm_input"]["status"]=="completed"
+    exported=reports.export_csv(report)
+    assert '/years/0/report/llm_input/context_window' in exported
+    assert 'raw secret' not in exported

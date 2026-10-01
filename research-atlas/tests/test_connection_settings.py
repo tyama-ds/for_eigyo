@@ -36,6 +36,42 @@ def test_browser_header_roundtrip_and_secret_repr_redaction():
     assert not insights.configured()
 
 
+def test_old_browser_headers_keep_credentials_and_receive_token_defaults():
+    value = settings.parse_header(header({"version": 1,
+        "openai": {"api_key": "cloud-key", "model": "cloud-model"},
+        "local": {"model": "local-model", "api_key": "local-key"},
+        "proxy": {"username": "proxy-user", "password": "proxy-key"}}))
+    assert value.local.context_window is None and value.local.max_output_tokens == 4000
+    assert value.openai.api_key.get_secret_value() == "cloud-key"
+    assert value.proxy.password.get_secret_value() == "proxy-key"
+    with settings.settings_context(value):
+        assert settings.local_headers() == {"Authorization": "Bearer local-key"}
+
+
+@pytest.mark.parametrize("budget", [{"context_window": 2047}, {"context_window": 262145},
+    {"context_window": "8192"}, {"context_window": True}, {"max_output_tokens": 511},
+    {"max_output_tokens": 32769}, {"max_output_tokens": None}, {"max_output_tokens": "2000"},
+    {"max_output_tokens": 1024.5}])
+def test_invalid_local_token_budgets_are_rejected_without_echoing_secrets(budget):
+    with pytest.raises(ValueError, match="ブラウザの接続設定") as error:
+        settings.parse_header(header({"local": {"api_key": "local-secret", **budget}}))
+    assert "local-secret" not in str(error.value)
+
+
+@pytest.mark.parametrize("context,output", [(None, 4000), (2048, 512), (4096, 4000), (8192, 4000), (262144, 32768)])
+def test_browser_token_settings_are_request_scoped_and_status_is_redacted(context, output):
+    value = settings.parse_header(header({"local": {"context_window": context,
+        "max_output_tokens": output, "api_key": "local-secret"}}))
+    with settings.settings_context(value):
+        assert settings.current_settings().local.context_window == context
+        assert settings.current_settings().local.max_output_tokens == output
+        status = settings.connection_status()
+        assert status["local"]["context_window"] == context
+        assert status["local"]["max_output_tokens"] == output
+        assert "local-secret" not in json.dumps(status)
+    assert settings.current_settings().local.context_window is None
+
+
 @pytest.mark.parametrize("value", ["", "not-base64-secret", "a" * 16385,
     base64.b64encode(b"\xffsecret").decode(), header([]), header({"version": True}),
     header({"version": 2}), header({"openai": {"api_key": 123}}),

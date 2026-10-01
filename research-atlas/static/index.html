@@ -14,12 +14,14 @@
   <link rel="stylesheet" href="/static/map-layers.css">
   <link rel="stylesheet" href="/static/citation-flow.css">
   <link rel="stylesheet" href="/static/annual-landscape.css">
+  <link rel="stylesheet" href="/static/author-network.css">
   <script defer src="/static/connection-settings.js"></script>
   <script defer src="/static/map-terrain.js"></script>
   <script defer src="/static/map-layers.js"></script>
   <script defer src="/static/annual-landscape.js"></script>
   <script defer src="/static/landscape.js"></script>
   <script defer src="/static/citation-flow.js"></script>
+  <script defer src="/static/author-network.js"></script>
   <script defer src="/static/app.js"></script>
   <script defer src="/static/foresight.js"></script>
 </head>
@@ -95,6 +97,9 @@
           <label>LLMサーバー URL<input id="connection-local-url" type="url" required maxlength="2048" spellcheck="false" placeholder="http://192.168.1.50:1234/v1"></label>
           <label>ローカルモデル<input id="connection-local-model" type="text" maxlength="160" spellcheck="false" placeholder="インストール済みモデルID"></label>
           <label>ローカルAPIキー（必要な場合）<input id="connection-local-key" type="password" maxlength="2048" autocomplete="new-password" spellcheck="false"></label>
+          <label>コンテキスト長（トークン）<input id="connection-local-context" type="number" min="2048" max="262144" step="1" placeholder="空欄：自動" aria-describedby="connection-local-budget-help"></label>
+          <label>回答上限（トークン）<input id="connection-local-output" type="number" min="512" max="32768" step="1" required value="4000" aria-describedby="connection-local-budget-help"></label>
+          <p id="connection-local-budget-help" class="field-help connections-wide">コンテキスト長はLM Studio・Ollamaで読み込んだモデルの実際の設定に合わせてください。空欄では取得できた実行中の設定を使用し、不明な場合は控えめな値で調整します。アプリ側の指定でサーバーの容量は増えません。回答上限はコンテキスト長の1/3以下に自動調整し、入力は回答用の余地を確保して各論文から抜粋します。長い抄録は一部省略されます。重心分析・年次レポートなどのローカルLLM生成に共通で適用します。</p>
         </div><div class="connections-test-row"><p class="field-help">Research Atlasから到達できる別PCのIP・ホスト名も指定できます。LM Studioの例：http://192.168.1.50:1234/v1（IPは接続先に置き換え）。別PCでは「Serve on Local Network」を有効にしてください。localhostはResearch AtlasのPythonが動くPCを指します。LLMへはプロキシを使わず直接接続します。</p><button type="button" class="button button-quiet button-small" data-connection-test="local">LLM接続を確認</button></div></section>
         <section class="connections-section"><span class="eyebrow">OUTBOUND NETWORK</span><h3>プロキシ</h3><label class="connections-checkbox"><input id="connection-proxy-enabled" type="checkbox">Pythonからの外部API通信にプロキシを使う</label><fieldset id="connection-proxy-fields" disabled><div class="form-grid">
           <label class="connections-wide">プロキシURL<input id="connection-proxy-url" type="url" maxlength="2048" spellcheck="false" placeholder="http://proxy.example:8080"></label>
