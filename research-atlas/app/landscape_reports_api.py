@@ -15,6 +15,8 @@ router = APIRouter()
 
 
 _GENERATION_ERRORS = {
+    "context_length": "ローカルLLMの入力上限超過が、根拠を縮小した再試行でも解消しませんでした。接続設定のコンテキスト長を実際のモデル設定に合わせるか、より大きいコンテキストでモデルを読み込んでください。",
+    "context_budget": "入力上限に収まりません。期間・計測値・最小限の根拠を残して縮小できる限界です。接続設定の回答上限を下げるか、より大きいコンテキストでモデルを読み込んでください。",
     "malformed_json": "LLMの最終回答をJSONとして読み取れませんでした。構造化出力の設定・対応モデルを確認してください。",
     "incomplete": "LLMの最終回答が完了前に途切れました。サーバーのログと接続状態を確認して再試行してください。",
     "token_limit": "LLMの出力がトークン上限に達し、最終回答が完成しませんでした。出力上限や思考モードの設定を確認してください。",
@@ -84,7 +86,7 @@ def run_landscape_report(job_id: str, options: dict):
             _progress(job_id, stage="LLMで話題の変化を解釈")
             def on_generation(event):
                 seconds, count = max(0, int(event["elapsed_seconds"])), max(0, int(event["received_chars"]))
-                _progress(job_id, stage=f"話題の変化を解釈：{seconds // 60}分{seconds % 60:02d}秒・{count:,}文字受信（検証前）")
+                _progress(job_id, stage=event.get("stage") or f"話題の変化を解釈：{seconds // 60}分{seconds % 60:02d}秒・{count:,}文字受信（検証前）")
             try:
                 report["narrative"] = landscape_reports.generate(report, options["provider"], options.get("model"), progress=on_generation)
                 report["generation_status"] = "generated"

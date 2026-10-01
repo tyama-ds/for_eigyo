@@ -35,6 +35,8 @@ def report_csv(report: dict) -> str:
                 for text in dict.fromkeys([*narrative.get("caveats", []), *report.get("limitations", [])]))
     if report.get("llm_error"):
         rows.append(context + ["LLM生成エラー", report["llm_error"], "", "定型レポートを保存"])
+    if report.get("llm_input"):
+        rows.append(context + ["LLM入力容量と根拠", "", "", _json(report["llm_input"])])
     return _csv(["Report ID", "Analysis ID", "Focus field", "Neighbor field", "Report mode", "LLM model",
                  "Section", "Text", "Evidence paper IDs (JSON)", "Scope / note"], rows)
 

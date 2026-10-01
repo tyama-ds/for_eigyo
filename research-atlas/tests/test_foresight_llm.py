@@ -124,7 +124,7 @@ def test_generate_two_stage_bounded_scope_immutable(monkeypatch):
     a={"papers":PAPERS,"meta":{"base_paper_ids":[f"secret{i}" for i in range(10000)],"base_paper_years":{"hidden":2025},"paper_count":10000},
        "candidates":[{"id":"t1","label":"steel","paper_ids":["p1"],"growth":{"available":False},"readiness":{"stage":"unassessed"}}]}
     before=copy.deepcopy(a);calls=[]
-    def generate(payload,schema,prompt,provider,model=None):
+    def generate(payload,schema,prompt,provider,model=None,**kwargs):
         calls.append(payload)
         if "papers" in payload: return {"facts":[selection(payload)]},"local_llm","test"
         assert "base_paper_ids" not in payload["scope"] and "base_paper_years" not in payload["scope"]
@@ -174,7 +174,7 @@ def test_local_stream_progress_covers_both_phases_without_changing_metrics(monke
                 "growth":{"available":False},"readiness":{"stage":"unassessed"}}]}
     before=copy.deepcopy(assessment)
     stages=[]
-    def generate(payload,schema,prompt,provider,model=None,*,progress=None):
+    def generate(payload,schema,prompt,provider,model=None,*,progress=None,**kwargs):
         progress({"elapsed_seconds":181.2,"received_chars":1000})
         if "papers" in payload:
             assert schema.model_json_schema()["properties"]["facts"]["maxItems"]==6
@@ -201,3 +201,109 @@ def test_local_extraction_over_budget_is_not_silently_truncated(monkeypatch):
         module.generate(assessment,"t1","local")
     assert len(calls)==1
     assert "content_facts" not in assessment["candidates"][0]
+
+
+def budget_assessment():
+    papers = [{**PAPERS[0], "abstract": PAPERS[0]["abstract"] + " Original source context." * 150},
+              {**PAPERS[0], "id": "p2", "title": "Fatigue follow-up"}]
+    return {"papers": papers, "meta": {}, "candidates": [{"id": "t1", "paper_ids": ["p1", "p2"],
+        "growth": {"score": 42}, "readiness": {"stage": "unassessed"}}]}
+
+
+def local_blocks(fid):
+    return {section["kind"]: {key: section[key] for key in ("text", "fact_ids")}
+            for section in critique(fid)["sections"]}
+
+
+def test_budgeted_local_extraction_validates_original_source_and_records_actual_inputs(monkeypatch):
+    assessment = budget_assessment()
+    before, sent, audit, stages = copy.deepcopy(assessment), [], {}, []
+    def structured(payload, schema, prompt, provider, model=None, *, input_context, progress=None):
+        actual = copy.deepcopy(payload)
+        if "papers" in actual:
+            actual["papers"] = actual["papers"][:1]
+            actual["papers"][0]["excerpts"] = actual["papers"][0]["excerpts"][:1]
+            result = {"facts": [selection(actual)]}
+        else:
+            result = local_blocks(actual["facts"][0]["id"])
+        sent.append(actual)
+        input_context.update(payload=actual, metadata={"reduced": actual != payload, "context_window": 8192,
+                                                      "status": "completed", "omitted_paper_ids": ["p2"] if "papers" in actual else []})
+        if progress:
+            progress({"stage": "入力を縮小して再試行しています"})
+        return result, "local_llm", "fixture"
+    monkeypatch.setattr(field_llm, "structured_output", structured)
+    result = module.generate(assessment, "t1", "local", input_context=audit, progress=stages.append)
+    candidate = result["candidates"][0]
+    assert assessment == before
+    assert candidate["growth"] == before["candidates"][0]["growth"]
+    source = before["papers"][0]["abstract"]
+    saved_fact = candidate["content_facts"][0]
+    assert saved_fact["source_hash"] == module.hashlib.sha256(source.encode()).hexdigest()
+    assert source[saved_fact["start"]:saved_fact["end"]] == saved_fact["quote"]
+    narrative = candidate["narrative"]
+    assert narrative["input_hash"] == module.digest(sent[1])
+    assert narrative["extraction_input_hash"] == module.digest(sent[0])
+    assert narrative["input_paper_ids"] == ["p1"]
+    assert narrative["input_fact_ids"] == [saved_fact["id"]]
+    assert any("入力上限" in caveat for caveat in narrative["caveats"])
+    assert candidate["llm_input"] == audit and set(audit) == {"extraction", "critique"}
+    assert "abstract" not in module.json.dumps(audit)
+    assert any("入力を縮小して再試行" in stage for stage in stages)
+
+
+def test_local_extraction_cannot_select_ids_omitted_by_budget_even_if_schema_contains_them(monkeypatch):
+    assessment = budget_assessment()
+    before, audit = copy.deepcopy(assessment), {}
+    def structured(payload, schema, prompt, provider, model=None, *, input_context, **kwargs):
+        actual = copy.deepcopy(payload)
+        omitted = actual["papers"].pop()
+        input_context.update(payload=actual, metadata={"reduced": True, "status": "completed", "omitted_paper_ids": ["p2"]})
+        return {"facts": [selection({"papers": [omitted]})]}, "local_llm", "fixture"
+    monkeypatch.setattr(field_llm, "structured_output", structured)
+    with pytest.raises(RuntimeError, match="送信対象から外れた原文抜粋"):
+        module.generate(assessment, "t1", "local", input_context=audit)
+    assert assessment == before
+    assert audit == {"extraction": {"reduced": True, "status": "completed", "omitted_paper_ids": ["p2"]}}
+
+
+@pytest.mark.parametrize("cite_omitted", [False, True])
+def test_local_critique_references_only_facts_sent_after_budgeting(monkeypatch, cite_omitted):
+    assessment = budget_assessment()
+    before, actual_critique, audit = copy.deepcopy(assessment), {}, {}
+    def structured(payload, schema, prompt, provider, model=None, *, input_context, **kwargs):
+        actual = copy.deepcopy(payload)
+        if "papers" in payload:
+            result = {"facts": [selection({"papers": [paper]}) for paper in payload["papers"]]}
+        else:
+            omitted = actual["facts"].pop()
+            actual_critique.update(actual)
+            result = local_blocks(omitted["id"] if cite_omitted else actual["facts"][0]["id"])
+        input_context.update(payload=actual, metadata={"reduced": actual != payload, "status": "completed"})
+        return result, "local_llm", "fixture"
+    monkeypatch.setattr(field_llm, "structured_output", structured)
+    if cite_omitted:
+        with pytest.raises(RuntimeError, match="提供していない根拠ID"):
+            module.generate(assessment, "t1", "local", input_context=audit)
+    else:
+        result = module.generate(assessment, "t1", "local", input_context=audit)
+        candidate = result["candidates"][0]
+        assert len(candidate["content_facts"]) == 2
+        assert candidate["narrative"]["input_fact_ids"] == [actual_critique["facts"][0]["id"]]
+        assert candidate["narrative"]["input_hash"] == module.digest(actual_critique)
+        assert any("入力上限" in caveat for caveat in candidate["narrative"]["caveats"])
+    assert assessment == before and audit["critique"]["reduced"]
+
+
+def test_local_failed_request_returns_accounting_without_storing_raw_payload(monkeypatch):
+    assessment = budget_assessment()
+    before, audit = copy.deepcopy(assessment), {}
+    def structured(payload, schema, prompt, provider, model=None, *, input_context, **kwargs):
+        input_context.update(payload=payload, metadata={"reduced": True, "status": "failed", "fits": False,
+                                                      "context_window": 2048})
+        raise RuntimeError("ローカルLLMの入力上限に収まりません。")
+    monkeypatch.setattr(field_llm, "structured_output", structured)
+    with pytest.raises(RuntimeError, match="入力上限"):
+        module.generate(assessment, "t1", "local", input_context=audit)
+    assert assessment == before
+    assert audit == {"extraction": {"reduced": True, "status": "failed", "fits": False, "context_window": 2048}}

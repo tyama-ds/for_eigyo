@@ -293,9 +293,23 @@ def generate(report: dict, provider: str = "none", model: str | None = None, *, 
     if report.get("kind") == "centroid":
         from .centroid_reports import INSTRUCTIONS as centroid_instructions
         instructions = centroid_instructions
-    value, mode, chosen = field_llm.structured_output(payload, field_llm.NarrativeOutput, instructions, provider, model,
-                                                    progress=progress, allow_text=True)
-    return validate_narrative(value, payload, mode, chosen)
+    context = {}
+    try:
+        value, mode, chosen = field_llm.structured_output(payload, field_llm.NarrativeOutput, instructions, provider, model,
+                                                        progress=progress, allow_text=True, input_context=context)
+    finally:
+        # Persist the request evidence even when generation fails. Prepared source
+        # excerpts and measured statistics remain unchanged for reproducibility.
+        if context.get("metadata"):
+            actual = context.get("payload", payload)
+            report["llm_input"] = {**deepcopy(context["metadata"]), "papers": deepcopy(actual["papers"]),
+                                   "input_summary": deepcopy(actual.get("input_summary") or input_summary(actual["papers"]))}
+    actual = context.get("payload", payload)
+    narrative = validate_narrative(value, actual, mode, chosen)
+    if context.get("metadata"):
+        narrative["input_context"] = deepcopy(context["metadata"])
+        narrative["caveats"] = _unique_text([*narrative["caveats"], *context["metadata"].get("warnings", [])])
+    return narrative
 
 
 def export_csv(report: dict) -> str:
@@ -308,6 +322,11 @@ def export_csv(report: dict) -> str:
     rows.extend(["unverified_evidence_ids", section["title"], json.dumps(section["unverified_evidence_ids"], ensure_ascii=False)]
                 for section in report["narrative"]["sections"] if section.get("unverified_evidence_ids"))
     rows.append(["input_summary", "abstracts", json.dumps(report.get("input_summary", {}), ensure_ascii=False)])
+    if report.get("llm_input"):
+        rows.extend(["llm_input", key, json.dumps(value, ensure_ascii=False)]
+                    for key, value in report["llm_input"].items() if key != "papers")
+        rows.extend(["llm_input_paper", p["id"], json.dumps(p, ensure_ascii=False)]
+                    for p in report["llm_input"].get("papers", []))
     rows.append(["scope", "meta", json.dumps(report["meta"], ensure_ascii=False, allow_nan=False)])
     rows.append(["narrative_metadata", "mode", report["narrative"]["mode"]])
     rows.append(["narrative_metadata", "model", report["narrative"].get("model") or ""])

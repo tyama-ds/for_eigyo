@@ -71,7 +71,8 @@ def run_annual_report(job_id, report_id, options, cancel_event):
         seconds = max(0, int(event.get("elapsed_seconds", 0)))
         count = max(0, int(event.get("received_chars", 0)))
         suffix = " · 中止要求済み（現在の生成完了後に停止）" if cancel_event.is_set() else ""
-        _progress(job_id, stage=f"{label}の評論：{seconds // 60}分{seconds % 60:02d}秒・{count:,}文字受信（検証前）{suffix}")
+        detail = event.get("stage") or f"{seconds // 60}分{seconds % 60:02d}秒・{count:,}文字受信（検証前）"
+        _progress(job_id, stage=f"{label}の評論：{detail}{suffix}")
     try:
         if cancel_event.is_set():
             raise reports.AnnualCancelled()

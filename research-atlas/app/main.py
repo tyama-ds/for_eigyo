@@ -33,7 +33,7 @@ from app.cluster_models import cluster_model_catalog
 
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
-app = FastAPI(title="Research Atlas", version="2.3.0", description="Multi-source bibliometrics & evidence-grounded technology foresight")
+app = FastAPI(title="Research Atlas", version="2.3.1", description="Multi-source bibliometrics & evidence-grounded technology foresight")
 MAX_NON_UPLOAD_REQUEST_BYTES = 256 * 1024 * 1024
 EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="atlas-analysis")
 SOURCE_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="atlas-discovery")
@@ -533,7 +533,7 @@ def run_field_report(job_id: str, result: dict | str, options: dict):
                 seconds = max(0, int(event["elapsed_seconds"]))
                 count = max(0, int(event["received_chars"]))
                 with JOBS_LOCK:
-                    JOBS[job_id]["stage"] = f"比較レポートを生成：{seconds // 60}分{seconds % 60:02d}秒・{count:,}文字受信（検証前）"
+                    JOBS[job_id]["stage"] = event.get("stage") or f"比較レポートを生成：{seconds // 60}分{seconds % 60:02d}秒・{count:,}文字受信（検証前）"
             report["narrative"] = field_llm.generate(report, options["provider"], options.get("model"), progress=generation_progress)
             storage.save("field_reports", report)
         with JOBS_LOCK:

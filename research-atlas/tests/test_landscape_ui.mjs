@@ -136,7 +136,7 @@ test('submitted abstract coverage and exact input excerpts are inspectable witho
   const html=h.internals.reportHTML(h.context);
   assert.match(html,/抄録あり 2 \/ 3論文（前期 1 \/ 2論文 · 後期 1 \/ 1論文）/);
   assert.match(html,/抄録なし 1論文 · 長さを調整した抄録 1件/);
-  assert.match(html,/<details><summary>入力した論文・抄録を確認/);assert.doesNotMatch(html,/<details open/);
+  assert.match(html,/<details><summary>準備した論文・抄録を確認/);assert.doesNotMatch(html,/<details open/);
   assert.match(html,/入力 2400文字 \/ 元の抄録 8000文字（長さを調整）/);
   assert.match(html,/Actual &lt;script>abstract/);assert.match(html,/Observed electrode durability/);assert.match(html,/抄録は取得されていません/);
   assert.doesNotMatch(html,/<img|<script>/);
@@ -171,4 +171,22 @@ test('legacy saved failure receives explicit fallback label while selected calcu
   const html=h.internals.reportHTML(h.context);
   assert.match(html,/CALCULATED OBSERVATIONS/);
   assert.doesNotMatch(html,/失敗|代替表示|<details/);
+});
+
+test('input capacity audit shows actual request excerpts and preserves prepared source separately',()=>{
+  const h=harness();
+  h.internals.report.data={input_summary:{paper_count:12,abstract_count:12},evidence_papers:[{id:'original',abstract:'OMITTED SECRET EXCERPT'}],llm_input:{status:'completed',context_window:4096,context_source:'server',input_tokens_estimate:2100,output_tokens:1365,requested_output_tokens:4000,safety_tokens:512,reduced:true,retries:1,input_summary:{paper_count:1,abstract_count:1,missing_abstract_count:0},papers:[{id:'sent',title:'<sent>',abstract:'ACTUAL EXCERPT'}],omitted_paper_ids:['original']}};
+  const html=h.internals.reportHTML(h.context);
+  assert.match(html,/実際に送信した入力資料/);assert.match(html,/ACTUAL EXCERPT/);
+  assert.doesNotMatch(html,/OMITTED SECRET EXCERPT/);assert.match(html,/&lt;sent>/);
+  assert.match(html,/4096/);assert.match(html,/2100/);assert.match(html,/1365/);assert.match(html,/縮小再試行 1回/);
+  h.internals.report.data.llm_input.status='failed';h.internals.report.data.llm_input.request_attempts=0;
+  const failed=h.internals.reportHTML(h.context);
+  assert.match(failed,/送信前のリクエスト候補/);assert.doesNotMatch(failed,/実際に送信した/);
+});
+
+test('foresight audit renders extraction and critique independently with escaped labels',()=>{
+  const h=harness(),audit={context_window:4096,context_source:'<bad>',input_tokens_estimate:1000,output_tokens:512,safety_tokens:512,status:'completed'};
+  const html=h.ui.renderInputBudget({extraction:audit,critique:{...audit,reduced:true}},h.context.e,String);
+  assert.match(html,/根拠抽出/);assert.match(html,/評論生成/);assert.match(html,/抜粋・選択/);assert.doesNotMatch(html,/<bad>/);
 });
