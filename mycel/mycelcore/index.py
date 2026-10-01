@@ -530,8 +530,10 @@ class Index:
                 "WHERE t.tag=? OR t.tag LIKE ? ORDER BY n.path_key", (tag, tag + "/%")).fetchall()
         return [dict(r) for r in rows]
 
-    def graph(self, center: str | None = None, depth: int = 1, all_docs: bool = False) -> dict:
-        """ノードとエッジ。資料はリンクされているものだけ（all_docs=True で全部）。"""
+    def graph(self, center: str | None = None, depth: int = 1, all_docs: bool = False,
+              extra: dict | None = None) -> dict:
+        """ノードとエッジ。資料はリンクされているものだけ（all_docs=True で全部）。
+        extra = {"nodes": {id: (title, kind, grp)}, "edges": [(path, id)]} で人物・組織のノードを足せる。"""
         with self._lock:
             items = {r["path"]: (r["title"], r["kind"], r["grp"])
                      for r in self.conn.execute("SELECT path, title, kind, grp FROM items")}
@@ -550,14 +552,19 @@ class Index:
         for a, b in (self.relations.pairs() if self.relations else []):
             if a in items and b in items and (b, a) not in rel_edges:
                 rel_edges.add((a, b))
+        ent_nodes = (extra or {}).get("nodes", {})
+        ent_edges = {(a, b) for a, b in (extra or {}).get("edges", []) if a in items and b in ent_nodes}
         linked = {a for e in edges | rel_edges for a in e}
         nodes_set = {p for p, (_, kind, _) in items.items() if kind == "note" or all_docs or p in linked}
         nodes_set |= set(unresolved)
+        if ent_edges:
+            nodes_set |= {b for _, b in ent_edges} | {a for a, _ in ent_edges}
+        all_edges = edges | rel_edges | ent_edges
         if center:
             keep, frontier = {center}, {center}
             for _ in range(max(1, min(depth, 4))):
                 nxt = set()
-                for a, b in edges | rel_edges:
+                for a, b in all_edges:
                     if a in frontier and b not in keep:
                         nxt.add(b)
                     if b in frontier and a not in keep:
@@ -566,18 +573,24 @@ class Index:
                 frontier = nxt
             nodes_set &= keep
         deg: dict[str, int] = {}
-        for a, b in edges | rel_edges:
+        for a, b in all_edges:
             if a in nodes_set and b in nodes_set:
                 deg[a] = deg.get(a, 0) + 1
                 deg[b] = deg.get(b, 0) + 1
         nodes = []
         for n in sorted(nodes_set):
+            if n in ent_nodes:
+                title, kind, grp = ent_nodes[n]
+                nodes.append({"id": n, "title": title, "exists": True, "kind": kind, "grp": grp, "folder": "",
+                              "degree": deg.get(n, 0)})
+                continue
             title, kind, grp = items.get(n, (unresolved.get(n, n), "", ""))
             nodes.append({"id": n, "title": title, "exists": n in items, "kind": kind or "missing",
                           "grp": grp, "folder": folder_of(n) if n in items else "", "degree": deg.get(n, 0)})
         out_edges = [[a, b] for a, b in sorted(edges) if a in nodes_set and b in nodes_set]
         out_edges += [[a, b, "rel"] for a, b in sorted(rel_edges - edges)
                       if a in nodes_set and b in nodes_set and (b, a) not in edges]
+        out_edges += [[a, b, "ent"] for a, b in sorted(ent_edges) if a in nodes_set and b in nodes_set]
         return {"nodes": nodes, "edges": out_edges}
 
     # ------------------------------------------------------------ AI 用の検索（転置インデックス）

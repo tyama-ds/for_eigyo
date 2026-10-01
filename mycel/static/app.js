@@ -50,6 +50,7 @@
     rtab: store.get("rtab", "links"), panel: "files", closed: new Set(store.get("closed", [])), selFolder: "",
     hist: [], histPos: -1, chat: [], depth: store.get("depth", 1), graph: null, tag: "",
     folderView: null, treeKind: store.get("treeKind", "all"),
+    entityView: null, entityData: null, profile: null, peopleKind: store.get("peopleKind", "person"), gPeople: store.get("gPeople", false),
     sources: [], index: null, jobSeen: null, aiScope: store.get("aiScope", "all"), gDocs: store.get("gDocs", false),
   };
 
@@ -284,7 +285,7 @@
     await flushSave();
     let data;
     try { data = await api.get("/api/note", { path }); } catch (e) { fail(e); return; }
-    S.cur = data; S.dirty = false; S.conflict = null; S.folderView = null;
+    S.cur = data; S.dirty = false; S.conflict = null; S.folderView = null; S.entityView = null;
     if (mode && !data.readonly) setMode(mode, false);
     if (push) { S.hist = S.hist.slice(0, S.histPos + 1); if (S.hist[S.histPos] !== path) S.hist.push(path); S.histPos = S.hist.length - 1; }
     store.set("last", path);
@@ -321,6 +322,7 @@
 
   // ------------------------------------------------------------ 本文
   function renderMain() {
+    if (S.entityView) { renderEntityView(); $("#conflict").hidden = true; return; }
     if (S.folderView !== null) { renderFolderView(); $("#conflict").hidden = true; return; }
     const c = S.cur;
     $("#titleIn").disabled = !c || (c.readonly && !c.editable);
@@ -514,7 +516,7 @@
   }
 
   // ------------------------------------------------------------ 読み込み（インデックス）の状態と更新
-  const JOB_DONE = { update: "読み込み", scan: "確認", ingest: "AI 取り込み" };
+  const JOB_DONE = { update: "読み込み", scan: "確認", ingest: "AI 取り込み", people: "人物・組織の AI 抽出" };
   async function applyIndexStatus(st) {
     S.index = st;
     renderIndexChip();
@@ -544,6 +546,8 @@
     if (scopeUI) scopeUI.refresh();
     if (ingestUI) ingestUI.refresh();
     if (job.kind === "update") refreshFolder();
+    if ((job.kind === "update" || job.kind === "people") && S.panel === "people") loadPeople();
+    if (job.kind === "people" && job.state === "done") { toast(`人物・組織の AI 抽出: ${r.extracted || 0} 件${r.errors ? `（失敗 ${r.errors} 件）` : ""}`); refreshEntity(); }
   }
 
   function renderIndexChip() {
@@ -887,6 +891,7 @@
     $$(".rtabs button").forEach((b) => b.classList.toggle("on", b.dataset.r === S.rtab));
     if (S.graph && S.rtab !== "graph") { S.graph.destroy(); S.graph = null; }
     const p = $("#rpane");
+    if (!S.cur && S.entityView) { p.innerHTML = '<div class="hint" style="padding:8px 2px">人物・組織のページです。<br><br>・登場する文書の × → その文書から外す（抽出し直しても外したまま）<br>・⋯ → 同一人物としてまとめる／人名ではない<br>・「別の呼び方」の × → まとめを外す<br>・「AI で人物像を推定」→ 登場する文書からローカル LLM が所属・案件・関係者を推定</div>'; return; }
     if (!S.cur && S.folderView !== null) { p.innerHTML = '<div class="hint" style="padding:8px 2px">フォルダの一覧を表示しています。<br><br>・ファイルをドロップ → このフォルダに資料を追加<br>・行を選ぶ → まとめて移動・AI でノート化・削除<br>・2 件選ぶ → つなぐ<br>・「つながりを提案」→ 内容の近い資料の組をまとめてつなぐ<br>・右クリック → 名前の変更など</div>'; return; }
     if (!S.cur) { p.innerHTML = '<div class="hint" style="padding:8px 2px">ノートを開くと、ここにリンクやグラフ、AI の結果が出ます。</div>'; return; }
     if (S.rtab === "links") renderLinks(p);
@@ -919,8 +924,10 @@
       h += `<div class="rh"><span>アウトライン</span></div><div class="outline">${heads.map((x) => `<a class="wl-h" data-h="${esc(x.text)}" style="padding-left:${(x.level - min) * 12}px">${esc(x.text)}</a>`).join("")}</div>`;
     }
     if (!c.readonly) h += relationsHtml(c);
+    h += `<div class="rh"><span>登場する人物・組織</span></div><div id="docPeople" class="srcs"><span class="spin"></span></div>`;
     p.innerHTML = h;
     bindRelations(p);
+    loadDocPeople(p, c.path);
     $$(".wl-h", p).forEach((a) => (a.onclick = () => scrollToHeading(a.dataset.h)));
     $$('[data-act="link"]', p).forEach((b) => (b.onclick = (e) => { e.stopPropagation(); linkMention(b.dataset.path); }));
   }
@@ -951,8 +958,9 @@
   }
 
   async function renderGraphPane(p) {
-    p.innerHTML = `<div class="gctl"><span>範囲</span><div class="seg">${[1, 2, 0].map((d) => `<button data-d="${d}" class="${S.depth === d ? "on" : ""}">${d ? d + " ホップ" : "全体"}</button>`).join("")}</div><label title="リンクされていない資料も表示"><input type="checkbox" id="gDocs"${S.gDocs ? " checked" : ""}> 資料</label><span style="flex:1"></span><button class="btn sm" id="gBig">拡大</button></div><canvas class="graph" id="gSmall" aria-label="ノートのつながり。ノードをクリックで開く"></canvas><div class="hint" style="margin-top:8px">ドラッグで移動、ホイールで拡大縮小。薄い輪は未作成のリンク、四角は資料（Word・PDF など）。色はフォルダごと。</div>`;
+    p.innerHTML = `<div class="gctl"><span>範囲</span><div class="seg">${[1, 2, 0].map((d) => `<button data-d="${d}" class="${S.depth === d ? "on" : ""}">${d ? d + " ホップ" : "全体"}</button>`).join("")}</div><label title="リンクされていない資料も表示"><input type="checkbox" id="gDocs"${S.gDocs ? " checked" : ""}> 資料</label><label title="人物・組織を介したつながりも表示"><input type="checkbox" id="gPeople"${S.gPeople ? " checked" : ""}> 人物</label><span style="flex:1"></span><button class="btn sm" id="gBig">拡大</button></div><canvas class="graph" id="gSmall" aria-label="ノートのつながり。ノードをクリックで開く"></canvas><div class="hint" style="margin-top:8px">ドラッグで移動、ホイールで拡大縮小。薄い輪は未作成のリンク、四角は資料、◆ は人物、▲ は組織（「人物」をオン）。色はフォルダごと。</div>`;
     $("#gDocs").onchange = (e) => { S.gDocs = e.target.checked; store.set("gDocs", S.gDocs); renderGraphPane(p); };
+    $("#gPeople").onchange = (e) => { S.gPeople = e.target.checked; store.set("gPeople", S.gPeople); renderGraphPane(p); };
     $$("[data-d]", p).forEach((b) => (b.onclick = () => { S.depth = +b.dataset.d; store.set("depth", S.depth); renderGraphPane(p); }));
     $("#gBig").onclick = () => bigGraph(S.cur ? S.cur.path : null);
     if (S.graph) S.graph.destroy();
@@ -960,16 +968,22 @@
     try {
       const q = S.depth ? { path: S.cur.path, depth: S.depth } : {};
       if (S.gDocs) q.docs = "1";
+      if (S.gPeople) q.people = "1";
       const data = await api.get("/api/graph", q);
       if (S.graph) S.graph.setData(data, S.cur.path);
     } catch (e) { fail(e); }
   }
-  function graphOpen(path, title) { if (path) openNote(path); else openTarget(title); }
+  function graphOpen(path, title) {
+    const m = path && path.match(/^~([po]):(.*)$/);
+    if (m) return openEntity(m[1] === "p" ? "person" : "org", m[2]);
+    if (path) openNote(path); else openTarget(title);
+  }
   async function bigGraph(center) {
     const m = modal({ title: "グラフ（Vault 全体）", body: '<canvas class="graph big" id="gBigC" aria-label="Vault 全体のグラフ"></canvas>', buttons: [], wide: true, onClose: () => g.destroy() });
     m.body.style.padding = "0"; m.body.style.overflow = "hidden";
     const g = new ForceGraph($("#gBigC"), { onOpen: (p, t) => { m.close(); graphOpen(p, t); } });
-    try { g.setData(await api.get("/api/graph", S.gDocs ? { docs: "1" } : {}), center); } catch (e) { fail(e); }
+    const q = {}; if (S.gDocs) q.docs = "1"; if (S.gPeople) q.people = "1";
+    try { g.setData(await api.get("/api/graph", q), center); } catch (e) { fail(e); }
   }
   $("#btnGraph").onclick = () => bigGraph(S.cur ? S.cur.path : null);
 
@@ -1110,6 +1124,7 @@
     if (name === "search") { const i = $("#searchIn"); i.focus(); i.select(); }
     if (name === "tags") loadTags();
     if (name === "recent") loadRecent();
+    if (name === "people") { loadPeople(); setTimeout(() => $("#peopleQ").focus(), 0); }
   }
   $$(".rail [data-panel]").forEach((b) => (b.onclick = () => {
     if (S.panel === b.dataset.panel && !app.classList.contains("no-side")) { app.classList.add("no-side"); b.classList.remove("on"); return; }
@@ -1181,6 +1196,8 @@
       { label: "設定", run: () => openSettings() },
       { label: "AI 取り込み（文書をノートにする）…", run: () => openIngest() },
       { label: "新しいフォルダ…", run: () => newFolder(S.selFolder) },
+      { label: "人物・組織の一覧", run: () => showPanel("people") },
+      { label: "人物・組織を AI で詳しく抽出", run: async () => { try { await api.post("/api/people/extract", {}); setTimeout(poll, 300); } catch (e) { fail(e); } } },
       { label: "フォルダの一覧を開く（Vault）", run: () => openFolder("") },
       { label: "資料のつながりを提案（Vault 全体）…", run: () => proposeRelations("") },
       { label: "読み込み範囲…", run: () => openScope() },
@@ -1425,10 +1442,161 @@
     go("");
   }
 
+  // ------------------------------------------------------------ 人物・組織（文書に出てくる人と会社で文書をつなぐ）
+  const PICON = { person: '<circle cx="12" cy="8" r="3.5"/><path d="M5 20c.8-3.6 3.6-5.5 7-5.5s6.2 1.9 7 5.5"/>', org: '<path d="M4 20V6l8-3v17M12 9h8v11M7 9h2M7 13h2M15 13h2M15 16h2M7 16h2"/>' };
+  const pIcon = (t) => `<span class="picon ${t}">${icon(PICON[t] || PICON.person)}</span>`;
+  async function loadPeople() {
+    const el = $("#peopleList");
+    try {
+      const r = await api.get("/api/people", { type: S.peopleKind, q: $("#peopleQ").value.trim() });
+      S.peopleStatus = r.status;
+      $$("#peopleKind button").forEach((b) => b.classList.toggle("on", b.dataset.k === S.peopleKind));
+      el.innerHTML = r.entities.length ? r.entities.map((e) => `<button class="res prow2${S.entityView && S.entityView.key === e.key && S.entityView.type === e.type ? " on" : ""}" data-ent="${esc(e.type)}" data-key="${esc(e.key)}"><b>${pIcon(e.type)}${esc(e.name)}<span class="n">${e.docs}</span></b><small>${esc([e.org, e.title, e.role].filter(Boolean).join(" ・ ")) || "&nbsp;"}</small></button>`).join("")
+        : `<div class="empty">${$("#peopleQ").value ? "見つかりません。" : "まだ見つかっていません。ノートや資料に「田中部長」「鈴木様」「株式会社○○」のように書かれていると、自動で拾います。"}</div>`;
+      const st = r.status;
+      $("#peopleFoot").innerHTML = `<div>人物 ${st.people} ・ 組織 ${st.orgs}<br>AI で抽出済み ${st.ai_extracted} / ${st.documents} 件</div>
+        <button class="btn sm" id="peopleAI" title="ローカル LLM が文書ごとに人物・組織・所属・立場を読み取ります（まだ読んでいない文書だけ）"${st.llm ? "" : " disabled"}>AI で詳しく抽出</button>
+        ${r.ignored.length ? `<button class="btn sm" id="peopleIgn">除外した名前（${r.ignored.length}）</button>` : ""}`;
+      $("#peopleAI").onclick = async () => { try { await api.post("/api/people/extract", {}); toast("人物・組織を AI で抽出しています（ステータスバーで進み具合を確認できます）"); setTimeout(poll, 300); } catch (e) { fail(e); } };
+      if ($("#peopleIgn")) $("#peopleIgn").onclick = () => ignoredDialog(r.ignored);
+    } catch (e) { el.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  }
+  function ignoredDialog(list) {
+    const body = document.createElement("div");
+    body.innerHTML = `<p class="hint" style="margin-top:0">「人名（組織名）ではない」にした名前です。戻すと、また一覧に出ます。</p>` + list.map((x) => `<div class="srcrow"><div><b>${pIcon(x.type)}${esc(x.key)}</b></div><button class="btn sm" data-unign="${esc(x.key)}" data-t="${esc(x.type)}">戻す</button></div>`).join("");
+    const m = modal({ title: "除外した名前", body });
+    $$("[data-unign]", body).forEach((b) => (b.onclick = async () => { try { await api.post("/api/people/unignore", { type: b.dataset.t, key: b.dataset.unign }); b.closest(".srcrow").remove(); loadPeople(); } catch (e) { fail(e); } }));
+    return m;
+  }
+  $("#peopleList").addEventListener("click", (e) => { const b = e.target.closest("[data-ent]"); if (b) openEntity(b.dataset.ent, b.dataset.key); });
+  $("#peopleKind").addEventListener("click", (e) => { const b = e.target.closest("[data-k]"); if (b) { S.peopleKind = b.dataset.k; store.set("peopleKind", S.peopleKind); loadPeople(); } });
+  let peopleTimer;
+  $("#peopleQ").addEventListener("input", () => { clearTimeout(peopleTimer); peopleTimer = setTimeout(loadPeople, 200); });
+
+  async function openEntity(type, key) {
+    await flushSave();
+    S.entityView = { type, key }; S.folderView = null; S.cur = null; S.entityData = null; S.profile = null;
+    renderTree(); renderRight(); renderMain();
+    try { S.entityData = await api.get("/api/people/entity", { type, key }); } catch (e) { fail(e); S.entityView = null; renderMain(); return; }
+    renderMain();
+    if (S.panel === "people") loadPeople();
+  }
+  async function refreshEntity() {
+    if (!S.entityView) return;
+    try { S.entityData = await api.get("/api/people/entity", S.entityView); } catch (e) { S.entityView = null; S.entityData = null; toast(e.message, true); }
+    renderMain(); if (S.panel === "people") loadPeople();
+  }
+  function renderEntityView() {
+    const d = S.entityData;
+    $("#titleIn").disabled = true; $("#mEdit").disabled = true;
+    $("#crumb").textContent = S.entityView.type === "org" ? "組織 /" : "人物 /";
+    $("#titleIn").value = d ? d.name : "";
+    document.title = `${d ? d.name : "人物"} — Mycel`;
+    $("#stInfo").textContent = d ? `${d.appearances.length} 件の文書に登場` : ""; $("#stWords").textContent = "";
+    if (!d) { $("#body").innerHTML = '<div class="welcome"><span class="spin"></span></div>'; return; }
+    const chips = (xs, cls = "") => xs.map((x) => `<span class="chip ${cls}">${esc(x.name)}${x.count ? ` <small>${x.count}</small>` : ""}</span>`).join("");
+    const entChips = (xs) => xs.map((x) => `<button class="chip" data-ent="${esc(x.type)}" data-key="${esc(x.key)}">${esc(x.name)} <small>${x.count}</small></button>`).join("");
+    const aff = d.type === "person" ? `<div class="ehrow"><span class="lbl">所属</span>${d.affiliations.length ? d.affiliations.map((x) => `<button class="chip" data-ent="org" data-key="${esc(x.key)}">${esc(x.name)} <small>${x.count}</small></button>`).join("") : d.affiliations_inferred.length ? d.affiliations_inferred.map((x) => `<button class="chip unres" data-ent="org" data-key="${esc(x.key)}" title="一緒に出てくる組織からの推定">${esc(x.name)}?</button>`).join("") + ' <small class="hint">（一緒に出てくる組織からの推定）</small>' : '<span class="hint">不明</span>'}${d.ambiguous ? ' <small class="pend" title="同じ名前の別人が混ざっている可能性があります。違う場合は文書ごとに外してください">所属が複数</small>' : ""}</div>` : "";
+    const apps = d.appearances.map((a) => `<tr><td><a data-open="${esc(a.path)}">${a.kind === "note" ? ftBadge("note") : ftBadge(a.grp)}${esc(a.title)}</a><div class="ctx">${esc(a.context)}</div></td><td>${a.roles.map((r) => `<span class="chip">${esc(r)}</span>`).join("") || '<span class="hint">—</span>'}${a.titles.length ? `<small class="hint"> ${esc(a.titles.join("・"))}</small>` : ""}</td><td class="hint">${a.mtime_ns ? esc(fmtTime(a.mtime_ns / 1e9)) : ""}${a.method === "llm" ? ' <span class="sb">AI</span>' : a.manual ? ' <span class="sb">手動</span>' : ""}</td><td><button class="rx" data-hide="${esc(a.path)}" title="この文書からこの${d.type === "org" ? "組織" : "人"}を外す（抽出し直しても外したまま）">×</button></td></tr>`).join("");
+    $("#body").innerHTML = `<div class="eview">
+      <div class="ehead">${pIcon(d.type)}<h1>${esc(d.name)}</h1><span class="hint">${esc(d.kind_label)}</span><span class="sp"></span>
+        <button class="btn sm pri" id="evProfile" title="ローカル LLM が、登場する文書から所属・関わっている案件・関係者を推定します">AI で${d.type === "org" ? "組織像" : "人物像"}を推定</button>
+        ${d.note ? `<button class="btn sm" data-open="${esc(d.note)}">ノートを開く</button>` : '<button class="btn sm" id="evNote">ノートを作る</button>'}
+        <button class="ibtn" id="evMore" title="名前を直す">⋯</button></div>
+      ${aff}
+      ${d.titles.length ? `<div class="ehrow"><span class="lbl">肩書</span>${chips(d.titles)}</div>` : ""}
+      ${d.roles.length ? `<div class="ehrow"><span class="lbl">立場</span>${chips(d.roles)}</div>` : ""}
+      ${d.aliases.length ? `<div class="ehrow"><span class="lbl">別の呼び方</span>${d.aliases.map((a) => `<span class="chip">${esc(a.key)}${a.user ? ` <button class="cx" data-unmerge="${esc(a.key)}" title="まとめを外す">×</button>` : ' <small title="同じ組織のフルネームに自動でまとめました">自動</small>'}</span>`).join("")}</div>` : ""}
+      <div id="evOut"></div>
+      <h3>登場する文書 <small>${d.appearances.length}</small></h3>
+      <table class="ftable etable"><thead><tr><th>文書</th><th>立場</th><th>更新</th><th></th></tr></thead><tbody>${apps}</tbody></table>
+      <div class="egrid">
+        <div><h3>一緒に出てくる人</h3>${d.co_people.length ? entChips(d.co_people) : '<span class="hint">なし</span>'}</div>
+        <div><h3>${d.type === "org" ? "所属している人" : "一緒に出てくる組織"}</h3>${d.type === "org" ? (d.members.length ? entChips(d.members) : '<span class="hint">なし</span>') : (d.co_orgs.length ? entChips(d.co_orgs) : '<span class="hint">なし</span>')}</div>
+      </div>
+      <h3>関係がありそうな文書 <small class="hint">名前は出てこないが、所属・一緒に出てくる人・案件の言葉から推定</small></h3>
+      ${d.related.length ? d.related.map((r) => `<div class="card" data-open="${esc(r.path)}"><b>${r.kind === "note" ? "" : ftBadge(r.grp)}${esc(r.title)}</b><span>${esc(r.snippet)}</span></div>`).join("") : '<div class="hint">見つかりませんでした。</div>'}
+    </div>`;
+    const b = $("#body");
+    $$("[data-ent]", b).forEach((x) => (x.onclick = () => openEntity(x.dataset.ent, x.dataset.key)));
+    $$("[data-hide]", b).forEach((x) => (x.onclick = async () => {
+      try { await api.post("/api/people/hide", { path: x.dataset.hide, type: d.type, key: d.key }); toast(`「${d.name}」をこの文書から外しました（右パネルの「外した人を戻す」で戻せます）`); refreshEntity(); } catch (e) { fail(e); }
+    }));
+    $$("[data-unmerge]", b).forEach((x) => (x.onclick = async () => { try { await api.post("/api/people/unmerge", { type: d.type, key: x.dataset.unmerge }); toast("まとめを外しました"); refreshEntity(); } catch (e) { fail(e); } }));
+    $("#evProfile").onclick = () => entityProfile(d);
+    if ($("#evNote")) $("#evNote").onclick = async () => {
+      const org = d.affiliations && d.affiliations[0] ? `（${d.affiliations[0].name}）` : "";
+      const title = d.type === "person" ? `${d.name}${(d.titles[0] || {}).name || ""}${org}` : d.name;
+      try {
+        const r = await api.post("/api/note/create", { folder: d.type === "person" ? "人物" : "組織", title, text: `# ${title}\n\n- 所属: ${(d.affiliations || []).map((x) => `[[${x.name}]]`).join("、")}\n- 立場: ${d.roles.map((x) => x.name).join("、")}\n\n## メモ\n\n#${d.type === "person" ? "人物" : "組織"}\n` });
+        await loadTree(); openNote(r.path, { mode: "edit" });
+      } catch (e) { fail(e); }
+    };
+    $("#evMore").onclick = (e) => {
+      const r = e.currentTarget.getBoundingClientRect();
+      popMenu(r.right - 260, r.bottom + 4, [
+        { label: d.type === "org" ? "同じ組織としてまとめる…" : "同一人物としてまとめる…", run: () => mergeEntity(d) },
+        { label: d.type === "org" ? "組織名ではない（一覧から除く）" : "人名ではない（一覧から除く）", danger: true, run: async () => {
+          if (!(await confirmBox("一覧から除く", `「${esc(d.name)}」を${d.type === "org" ? "組織名" : "人名"}ではないとして一覧から除きますか？<br><span class="hint">人物パネルの「除外した名前」から戻せます。</span>`, "除く"))) return;
+          try { await api.post("/api/people/ignore", { type: d.type, key: d.key }); S.entityView = null; S.entityData = null; renderMain(); loadPeople(); toast("一覧から除きました"); } catch (err) { fail(err); }
+        } },
+      ]);
+    };
+    if (S.profile && S.profile.key === d.key) drawProfile(S.profile.data);
+  }
+  function mergeEntity(d) {
+    api.get("/api/people", { type: d.type }).then((r) => {
+      openPalette(r.entities.filter((x) => x.key !== d.key).map((x) => ({ label: x.name, hint: [x.org, `${x.docs} 件`].filter(Boolean).join(" ・ "), run: async () => {
+        if (!(await confirmBox("まとめる", `「${esc(d.name)}」を「${esc(x.name)}」にまとめますか？<br><span class="hint">まとめた後も「別の呼び方」の × で外せます。</span>`, "まとめる"))) return;
+        try { await api.post("/api/people/merge", { type: d.type, key: d.key, into: x.key }); openEntity(d.type, x.key); toast("まとめました"); } catch (e) { fail(e); }
+      } })), d.type === "org" ? "まとめ先の組織を選ぶ" : "まとめ先の人物を選ぶ");
+    }).catch(fail);
+  }
+  async function entityProfile(d) {
+    const out = $("#evOut"); out.innerHTML = '<div class="eprof"><span class="spin"></span> 登場する文書から推定しています…</div>';
+    try { const r = await api.post("/api/people/profile", { type: d.type, key: d.key }); S.profile = { key: d.key, data: r }; drawProfile(r); }
+    catch (e) { out.innerHTML = `<div class="notice">${esc(e.message)}</div>`; }
+  }
+  function drawProfile(r) {
+    const out = $("#evOut"); if (!out) return;
+    out.innerHTML = `<div class="eprof">${r.answer ? `<div class="md">${MD.render(r.answer, { resolve })}</div>` : `<div class="hint">${esc(r.message || "")}</div><ul>${r.facts.map((f) => `<li>${esc(f)}</li>`).join("")}</ul>`}
+      ${r.sources.length ? `<div class="srcs">${r.sources.map((s) => `<button class="chip" data-open="${esc(s.path)}">[${s.n}] ${esc(s.title)}</button>`).join("")}</div>` : ""}</div>`;
+  }
+
+  /** 右パネル: この文書に出てくる人物・組織（外す・足す・戻す）。 */
+  async function loadDocPeople(p, path) {
+    const box = $("#docPeople", p); if (!box) return;
+    try {
+      const r = await api.get("/api/people/of", { path });
+      if (!S.cur || S.cur.path !== path) return;
+      box.innerHTML = (r.entities.length ? r.entities.map((e) => `<span class="chip ent ${e.type}" data-ent="${esc(e.type)}" data-key="${esc(e.key)}" title="${e.docs} 件の文書に登場${e.method === "llm" ? "（AI で抽出）" : e.manual ? "（手で追加）" : ""}">${pIcon(e.type)}${esc(e.name)}${e.roles.length ? `<small>${esc(e.roles.join("・"))}</small>` : ""}<button class="cx" data-hidep="${esc(e.key)}" data-t="${esc(e.type)}" title="この文書から外す">×</button></span>`).join("")
+        : '<div class="hint">見つかっていません。</div>')
+        + `<div class="relbtns"><button class="btn sm" id="pplAdd">＋ 人物・組織を追加</button>${r.hidden.length ? `<button class="btn sm" id="pplRestore">外した人を戻す（${r.hidden.length}）</button>` : ""}</div>`;
+      $$("[data-ent]", box).forEach((x) => (x.onclick = (ev) => { if (!ev.target.closest(".cx")) openEntity(x.dataset.ent, x.dataset.key); }));
+      $$("[data-hidep]", box).forEach((x) => (x.onclick = async (ev) => { ev.stopPropagation(); try { await api.post("/api/people/hide", { path, type: x.dataset.t, key: x.dataset.hidep }); loadDocPeople(p, path); } catch (e) { fail(e); } }));
+      $("#pplAdd", box).onclick = () => addPersonDialog(path, () => loadDocPeople(p, path));
+      if ($("#pplRestore", box)) $("#pplRestore", box).onclick = async () => {
+        for (const h of r.hidden) { try { await api.post("/api/people/unhide", { path, type: h.type, key: h.key }); } catch (e) { fail(e); } }
+        loadDocPeople(p, path);
+      };
+    } catch (e) { box.innerHTML = `<div class="hint">${esc(e.message)}</div>`; }
+  }
+  function addPersonDialog(path, done) {
+    const body = document.createElement("div");
+    body.innerHTML = `<div class="form"><label for="apType">種類</label><select id="apType"><option value="person">人物</option><option value="org">組織</option></select>
+      <label for="apName">名前</label><input id="apName" type="text" placeholder="例: 田中部長（A社） ・ 株式会社○○">
+      <label for="apRole">立場（任意）</label><input id="apRole" type="text" placeholder="例: 決裁者・窓口・出席者・競合"></div>
+      <p class="hint">抽出されなかった人を、この文書に手で結びつけます。（A社）のように書くと所属も記録します。</p>`;
+    modal({ title: "人物・組織を追加", body, buttons: [{ label: "キャンセル" }, { label: "追加", primary: true, onClick: async () => {
+      const name = $("#apName", body).value.trim(); if (!name) return false;
+      try { await api.post("/api/people/add", { path, type: $("#apType", body).value, name, role: $("#apRole", body).value }); done(); } catch (e) { fail(e); return false; }
+    } }] });
+  }
+
   // ------------------------------------------------------------ フォルダの一覧表示
   async function openFolder(path) {
     await flushSave();
-    S.folderView = path; S.cur = null;
+    S.folderView = path; S.cur = null; S.entityView = null;
     S.closed.delete(path); store.set("closed", [...S.closed]);
     renderTree(); renderRight();
     await refreshFolder(true);
@@ -1636,7 +1804,7 @@
         <label></label><label class="ck"><input type="checkbox" id="igKeep"${o.keep_original ? " checked" : ""}> 原本を Vault に保存する（ノートから原本へリンク）</label>
         <label for="igOrig">原本の保存先</label><input id="igOrig" type="text" value="${esc(o.original_folder || "")}" placeholder="（Vault 直下）">
         <label></label><label class="ck"><input type="checkbox" id="igBody"${o.include_body ? " checked" : ""}> ノートに本文も入れる（原本を保存しないときは常に入れます）</label>
-        <label></label><label class="ck"><input type="checkbox" id="igNew"${o.link_new_names ? " checked" : ""}> まだノートの無い顧客名・人名も [[リンク]] にする</label>
+        <label></label><label class="ck"><input type="checkbox" id="igNew"${o.link_new_names ? " checked" : ""}> まだノートの無い顧客名・人名も [[リンク]] にする（オフでも人物・組織としてつながります）</label>
         <label></label><label class="ck"><input type="checkbox" id="igLlmUse"${o.use_llm ? " checked" : ""}> AI（LLM）で要約・名前・タグ・関連を作る</label>`;
     }
     const options = () => ({ dest_folder: $("#igDest", body).value, keep_original: $("#igKeep", body).checked, original_folder: $("#igOrig", body).value,

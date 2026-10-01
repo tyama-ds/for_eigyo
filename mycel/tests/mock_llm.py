@@ -39,6 +39,13 @@ def chat_response(messages: list[dict]) -> str:
                 ' "projects": [], "others": ["保守"]}, "tags": ["見積", "A社"]}\n```')
     if task in ("ingest_links", "relate"):
         return '[{"n": 1, "reason": "同じ顧客の案件"}]'
+    if task == "entities":
+        return ('```json\n[{"name": "田中", "type": "person", "title": "部長", "org": "A社", "role": "決裁者",'
+                ' "evidence": "田中部長が決裁"}, {"name": "山本 一郎", "type": "person", "org": "B社", "role": "窓口",'
+                ' "evidence": "B社の山本さん"}, {"name": "A社", "type": "org", "role": "顧客"}]\n```')
+    if task == "profile":
+        refs = re.findall(r"^\[(\d+)\]", prompt, re.M)
+        return "## 所属と立場\nA社の部長で決裁者（推定）。" + "".join(f"[{r}]" for r in refs[:2])
     if task == "transform":
         return "- 整えた文章"
     return "接続OK"

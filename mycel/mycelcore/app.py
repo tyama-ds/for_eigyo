@@ -15,6 +15,8 @@ from .index import Index, open_index
 from .ingest import Ingestor
 from .jobs import JobRunner
 from .plugins import NoteEvent, PluginContext, PluginManager
+from .entities import EntityStore
+from .people import People
 from .relations import Relations
 from .scope import Scope, ScopeError, browse, is_under, split_id
 from .vault import Vault, VaultError, folder_of, normalize_rel, title_of, version_of
@@ -69,10 +71,14 @@ class MycelApp:
                 shutil.copytree(SAMPLE_DIR, root, dirs_exist_ok=True)
             if getattr(self, "index", None):
                 self.index.close()
+            if getattr(self, "entities", None):
+                self.entities.close()
             self.vault = Vault(root)
             self.scope = Scope(self.vault.root, self.vault.internal)
             self.index = open_index(self.vault, self.scope)
             self.relations = Relations(self.vault.internal)
+            self.entities = EntityStore(self.vault.internal)
+            self.people = People(self, self.entities)
             self.index.relations = self.relations
             self.ai = AIService(self.index, self.config)
             self.plugins.load(cfg["plugins"], PluginContext(self))
@@ -232,6 +238,7 @@ class MycelApp:
             self.index.refresh(old)
             self.index.refresh(new)
             self.relations.rename(old, new)
+            self.entities.rename(old, new)
             if self.index.resolve(new_title) != new:
                 link_to = new[:-3]
             updated = []
@@ -397,6 +404,7 @@ class MycelApp:
             self.vault._prune_empty(src.parent)
             self.index.rename_path(path, new_path)
             self.relations.rename(path, new_path)
+            self.entities.rename(path, new_path)
             old_name, new_name = Path(path).name, name
 
             def fix(text: str) -> str:
@@ -450,6 +458,7 @@ class MycelApp:
             self.vault._prune_empty(src.parent)
             moved = self.index.rename_prefix(old, new)
             self.relations.rename(old, new)
+            self.entities.rename(old, new)
             ex = [new + e[len(old):] if is_under(e, old) else e for e in self.scope.data["exclude"]]
             if ex != self.scope.data["exclude"]:
                 self.scope.save({"exclude": ex})
@@ -639,6 +648,8 @@ class MycelApp:
 
         def run(job):
             res = index.update(prefixes, cancel=job.cancel, progress=job.progress)
+            job.progress("人物・組織の抽出", 0, 0, "")
+            res["people"] = self.people.sync(force=True)
             res["embedded"] = 0
             if embed_configured(self.config()):
                 job.progress("意味検索の索引", 0, 0, "")
@@ -682,6 +693,15 @@ class MycelApp:
         return st
 
     # ------------------------------------------------------------ AI 取り込み
+    def graph(self, center: str | None, depth: int = 1, docs: bool = False, people: bool = False) -> dict:
+        extra = self.people.graph_extra(center) if people else None
+        return self.index.graph(center, depth, docs, extra)
+
+    def extract_people(self, prefixes=None) -> dict:
+        prefixes = self._prefixes(prefixes)
+        return self.jobs.start("people", f"人物・組織を AI で抽出（{self._label(prefixes)}）", prefixes,
+                               lambda job: self.people.extract_ai(prefixes, job))
+
     def ingest_save(self, ids: list[str]) -> dict:
         """下書きをノートとして保存する。埋め込みモデルがあれば、保存したものだけ意味検索に登録する。"""
         res = self.ingest.save(ids)

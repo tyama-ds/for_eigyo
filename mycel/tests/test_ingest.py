@@ -71,7 +71,7 @@ class IngestTest(unittest.TestCase):
         self.assertIn("> **要約** A社向けの概算見積", md)
         self.assertIn("- 初期費用 1,200万円", md)
         self.assertIn("[[田中部長（A社）|田中部長]]", md)            # 既存ノートの名前に合わせてリンク
-        self.assertIn("[[A社]]", md)                                  # 未作成の名前もリンク
+        self.assertIn("- 顧客・取引先: A社", md)                      # 未作成の名前は [[ ]] にしない（人物・組織でつなぐ）
         self.assertIn("## 関連ノート", md)
         self.assertIn("— 同じ顧客の案件", md)
         self.assertIn("#取り込み #見積 #A社", md)
@@ -88,6 +88,10 @@ class IngestTest(unittest.TestCase):
         self.assertIn("資料/見積書.docx", [o["path"] for o in note["outgoing"]])
         self.assertIn(path, [b["path"] for b in self.app.index.backlinks("人物/田中部長（A社）.md")])
         self.assertEqual(self.app.ingest.get(d["id"])["status"], "saved")
+        people = {(e["type"], e["key"]) for e in self.app.people.of(path)}         # LLM の名前を人物・組織として登録
+        self.assertIn(("person", "田中"), people)
+        self.assertIn(("org", "a"), people)
+        self.assertIn(("org", "a"), {(e["type"], e["key"]) for e in self.app.people.of("資料/見積書.docx")})
         with self.assertRaises(VaultError):
             self.app.ingest.edit(d["id"], markdown="x")
 
