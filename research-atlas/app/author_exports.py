@@ -7,14 +7,17 @@ def network_csv(network: dict, kind: str) -> str:
     headers = ["Network ID", "Analysis ID", "Grouping"]
     exported = network.get("export_data", {})
     clusters = {row["id"]: row for row in network.get("clusters", [])}
-    metadata = _json({key: network.get(key) for key in ("scope", "stats", "warnings", "methodology")})
+    metadata = _json({key: network.get(key) for key in ("scope", "stats", "warnings", "methodology", "metrics_scope", "metric_definitions")})
     if kind == "authors":
         headers += ["Author ID", "Name", "Original IDs (JSON)", "Names (JSON)", "Identity basis",
                     "Affiliations (JSON)", "Original affiliations (JSON)", "Paper count", "Cumulative citations",
                     "Papers with known citation count", "Years (JSON)", "Paper IDs (JSON)", "Cluster ID",
-                    "Cluster", "X", "Y", "Author metadata (JSON)", "Scope and methodology (JSON)"]
+                    "Cluster", "X", "Y", "Metrics computed", "Degree", "Coauthorship strength",
+                    "Betweenness centrality (normalized)", "PageRank (weighted)", "Local clustering coefficient",
+                    "External primary institutions", "Neighbor IDs (JSON)", "Author metadata (JSON)", "Scope and methodology (JSON)"]
         rows = []
         for node in exported.get("authors", network.get("nodes", [])):
+            metrics = node.get("metrics") or {}
             rows.append(context + [node["id"], node["label"], _json(node.get("original_ids", [])),
                         _json(node.get("names", [])), node.get("identity_basis"), _json(node.get("affiliations", [])),
                         _json(node.get("original_affiliations", [])), node["count"],
@@ -22,6 +25,9 @@ def network_csv(network: dict, kind: str) -> str:
                         node.get("citation_known_papers", 0), _json(node.get("years", [])),
                         _json(node.get("paper_ids", [])), node.get("cluster_id"),
                         clusters.get(node.get("cluster_id"), {}).get("label") or node.get("cluster_label", ""), node.get("x"), node.get("y"),
+                        node.get("metrics_computed", False), metrics.get("degree"), metrics.get("strength"),
+                        metrics.get("betweenness"), metrics.get("pagerank"), metrics.get("local_clustering"),
+                        metrics.get("institution_bridge"), _json(node.get("neighbor_ids")),
                         _json(node), metadata])
     elif kind == "edges":
         headers += ["Source author ID", "Target author ID", "Coauthored papers", "Paper IDs (JSON)",

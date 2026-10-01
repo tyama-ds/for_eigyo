@@ -33,7 +33,7 @@ from app.cluster_models import cluster_model_catalog
 
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
-app = FastAPI(title="Research Atlas", version="2.2.0", description="Multi-source bibliometrics & evidence-grounded technology foresight")
+app = FastAPI(title="Research Atlas", version="2.3.0", description="Multi-source bibliometrics & evidence-grounded technology foresight")
 MAX_NON_UPLOAD_REQUEST_BYTES = 256 * 1024 * 1024
 EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="atlas-analysis")
 SOURCE_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="atlas-discovery")
@@ -594,7 +594,7 @@ def export_field_report(report_id: str, kind: Literal["data", "report", "papers"
 
 class AuthorNetworkRequest(BaseModel):
     result_id: str = Field(pattern=r"^[a-f0-9]{32}$")
-    group_by: Literal["id", "name", "institution", "community", "topic"] = "community"
+    group_by: Literal["id", "name", "institution", "community", "topic"] = "institution"
 
 
 def run_author_network(job_id: str, result: dict | str, group_by: str):
@@ -603,7 +603,7 @@ def run_author_network(job_id: str, result: dict | str, group_by: str):
             result = storage.read("results", result)
         from app.author_network import build_author_network
         with JOBS_LOCK:
-            JOBS[job_id].update(status="running", stage="著者の照合・所属の集計・共著クラスタを計算")
+            JOBS[job_id].update(status="running", stage="著者の照合・所属の集計・共著クラスタと中心性指標を計算")
         network = build_author_network(result["papers"], group_by=group_by, topics=result.get("topics", []))
         network.update(id=storage.new_id(), result_id=result["id"], created_at=storage.now())
         network["scope"] = {"dataset_id": result.get("dataset_id"), "dataset_name": result.get("dataset_name"),

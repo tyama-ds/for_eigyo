@@ -2,6 +2,14 @@
 
 Local FastAPI + plain HTML/CSS/JS application. All labels/help are Japanese with restrained English design accents. No external frontend CDN. Python does numerical analysis. `data/` persisted locally and ignored by git.
 
+## Interactive coauthor exploration (v2.3)
+
+- The author UI and POST /api/author-networks default to institution grouping; conservative author identity and explicit author-affiliation rules remain unchanged. Missing institutions stay unknown. Synthetic demo authors have explicitly fictional institutions.
+- Compute six metrics on the full undirected induced graph of the publication-count-ranked display authors (currently max120), before the240edge drawing cap: degree, strength, normalized unweighted Brandes betweenness, weighted PageRank(alpha0.85 with uniform teleportation/dangling redistribution), unweighted local_clustering, institution_bridge(distinct known external primary institutions among direct coauthors). Unknown own institution yields null bridge count; unknown neighbors are excluded. The primary institution is the most frequent explicit affiliation in the corpus, not a current employment or migration inference.
+- Each displayed node has metrics, metrics_computed:true, complete neighbor_ids and neighbor_weights(author ID to coauthored-paper count). This compact adjacency survives large-store display trimming so selected edges can be restored without relying on export_data. Outside-population authors retain metrics with null values and metrics_computed:false. Preserve nulls through JSON and CSV, never zero-fill uncomputed metrics. network.metric_definitions and metrics_scope document formulas, population, weighting, convergence and limits.
+- UI selects metric and highlighted candidate count without recomputing metrics on search or cluster filters. Betweenness is the initial metric. Show metric meaning, tied ranks and calculation scope; high local transitivity means cohesive neighbors, not a bridge. Pan/zoom, node dragging and reset affect display only. Node selection reveals its direct neighbors; dragging must not accidentally open details. Preserve existing evidence/detail dialogs, grouping, search and CSV exports; remove interaction listeners on rerender/view change.
+- CSV adds six explicit metric columns, computed state and true neighbor IDs. Large indexed storage preserves metrics and scope in display payloads and full exports. No LLM prompt or connection setting changes.
+
 ## Annual landscape report (v2.2)
 
 - One selected topic and calendar-year range produce a separately saved annual_landscape_reports bundle. It shares one yearly landscape snapshot across all child reports. Existing centroid and movement LLM instruction strings are unchanged; each child uses the existing excerpt preparation and final-answer validation. No synthesized all-year LLM conclusion is presented as generated output.
