@@ -121,8 +121,9 @@ def _prune_references(payload: dict, removed_ids: set[str]):
         return
     def visit(value):
         if isinstance(value, dict):
-            if isinstance(value.get("evidence_ids"), list):
-                value["evidence_ids"] = [pid for pid in value["evidence_ids"] if pid not in removed_ids]
+            for key in ("evidence_ids", "evidence_before", "evidence_after"):
+                if isinstance(value.get(key), list):
+                    value[key] = [pid for pid in value[key] if pid not in removed_ids]
             if isinstance(value.get("mentions"), list):
                 value["mentions"] = [row for row in value["mentions"] if row.get("paper_id") not in removed_ids]
             if isinstance(value.get("citation_links"), list):

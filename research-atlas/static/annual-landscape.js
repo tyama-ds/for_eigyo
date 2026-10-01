@@ -9,9 +9,12 @@
   const yearOf = value => /^\d{4}(?:$|[-Q])/.test(String(value)) ? Number(String(value).slice(0, 4)) : null;
   const finalStatuses = new Set(['generated','not_requested','not_generated','partial','failed','cancelled']);
   const annualCache = new Map();
-  const state = {key:null, context:null, landscape:null, preferences:null, version:0, start:null, end:null, transitions:false, busy:false, cancelling:false, report:null, reportId:null, jobId:null, error:'', stage:'', timer:null, waitResolve:null, abort:null};
+  const selectionMethods={centroid:'重心に近い',diverse:'内容の多様性',cited:'被引用数の多い順',recent:'新しい順'};
+  const selectionValues=value=>({papers_per_period:Number(value?.papers_per_period??6),selection_method:value?.selection_method??'centroid',abstract_only:!!value?.abstract_only});
+  const selectionKey=value=>{const s=selectionValues(value);return JSON.stringify([s.papers_per_period,s.selection_method,s.abstract_only]);};
+  const state = {key:null, context:null, landscape:null, preferences:null, version:0, start:null, end:null, transitions:false, selection:selectionValues(), busy:false, cancelling:false, report:null, reportId:null, jobId:null, error:'', stage:'', timer:null, waitResolve:null, abort:null};
 
-  function identity(context, preferences) { return [context?.result?.id,preferences?.topic,preferences?.projection,preferences?.scope,preferences?.interval].join('|'); }
+  function identity(context, preferences) { return [context?.result?.id,preferences?.topic,preferences?.projection,preferences?.scope,preferences?.interval,selectionKey(preferences)].join('|'); }
   function stopWaiting() {
     if (state.timer != null) global.clearTimeout(state.timer);
     state.timer = null; const resolve = state.waitResolve; state.waitResolve = null; resolve?.();
@@ -22,7 +25,7 @@
   }
   function sync(context, preferences) {
     const key = identity(context, preferences);
-    if (key !== state.key) { invalidate(); state.key = key; state.start = null; state.end = null; state.transitions = false; state.landscape = null; state.annualEntry = null; }
+    if (key !== state.key) { invalidate(); state.key = key; state.start = null; state.end = null; state.transitions = false; state.selection=selectionValues(preferences); state.landscape = null; state.annualEntry = null; }
     state.context = context; state.preferences = preferences;
   }
   function annualSource() { return state.preferences?.interval==='year'?state.landscape:state.annualEntry?.data; }
@@ -55,16 +58,21 @@
     if (state.end - state.start >= 50) return '一度に作成できるのは50年以内です。';
     return '';
   }
+  function selectionError(){if(!state.transitions)return '';const s=selectionValues(state.selection);if(!Number.isInteger(s.papers_per_period)||s.papers_per_period<1||s.papers_per_period>20)return '期間比較に使う論文数を各期間1〜20件の整数で指定してください。';if(!Object.hasOwn(selectionMethods,s.selection_method))return '期間比較の論文の選び方を選択してください。';return '';}
+  function selectionControlsHTML(){
+    const s=state.selection;return `<fieldset class="al-selection-controls" ${state.busy||!state.transitions?'disabled':''}><legend>年と年の比較に使う論文</legend><label>各期間の論文数<input type="number" data-al-control="papers_per_period" min="1" max="20" step="1" value="${esc(s.papers_per_period)}"></label><label>論文の選び方<select data-al-control="selection_method">${Object.entries(selectionMethods).map(([key,label])=>`<option value="${key}" ${key===s.selection_method?'selected':''}>${label}</option>`).join('')}</select></label><label class="al-selection-checkbox"><input type="checkbox" data-al-control="abstract_only" ${s.abstract_only?'checked':''}>抄録のある論文だけ</label></fieldset>`;
+  }
   function estimate() {
     const prefs = state.preferences || {}, years = new Set(array(annualSource()?.centroids).filter(row => row.topic_id === prefs.topic && row.count > 0).map(row => yearOf(row.period_id)).filter(year => year != null && year >= state.start && year <= state.end));
     const n = years.size, comparisons = state.transitions ? Math.max(0,n - 1) : 0;
     return {years:n,comparisons,calls:prefs.provider === 'none' ? 0 : n + comparisons};
   }
   function payload() {
-    const prefs = state.preferences || {}, error = rangeError();
+    const prefs = state.preferences || {}, error = rangeError()||selectionError();
     if (!state.context?.result?.id || !prefs.topic || prefs.topic === 'all') throw new Error('重心を追う話題を1つ選んでください。');
     if (error) throw new Error(error);
     const value = {result_id:state.context.result.id,projection:prefs.projection || 'auto',scope:prefs.scope || 'sample',topic_id:prefs.topic,start_year:state.start,end_year:state.end,provider:['local','openai'].includes(prefs.provider) ? prefs.provider : 'none',include_transitions:state.transitions,interval:'year'};
+    if(state.transitions)Object.assign(value,selectionValues(state.selection));
     // This is always the annual snapshot, never the monthly/quarterly map's ID.
     if (annualSource()?.projection_id) value.projection_id = annualSource().projection_id;
     return value;
@@ -73,9 +81,9 @@
   function statusLabel(value) { return ({preparing:'年ごとの根拠を準備中',generating:'評論を生成中',pending:'順番待ち',generated:'評論を作成済み',not_requested:'計算結果',not_generated:'評論未生成（根拠不足）',partial:'一部の評論が未完了',failed:'評論の生成に失敗',cancelled:'生成を停止',skipped:'評論なし'})[value] || '準備中'; }
   function topicLabel() { return array(state.landscape?.topics || state.context?.result?.topics).find(topic => topic.id === state.preferences?.topic)?.label || '話題を選択'; }
   function controlsHTML() {
-    const bounds = availableYears(state.context,state.landscape), planned = estimate(), provider = state.preferences?.provider || 'none', error = rangeError(), all = !state.preferences?.topic || state.preferences.topic === 'all';
+    const bounds = availableYears(state.context,state.landscape), planned = estimate(), provider = state.preferences?.provider || 'none', error = rangeError()||selectionError(), all = !state.preferences?.topic || state.preferences.topic === 'all';
     const progress = state.report?.progress;
-    return `<div class="al-controls"><label>開始年<select data-al-control="start" ${state.busy?'disabled':''} aria-label="年次レポートの開始年">${yearOptions(bounds,state.start)}</select></label><span class="al-range-arrow">→</span><label>終了年<select data-al-control="end" ${state.busy?'disabled':''} aria-label="年次レポートの終了年">${yearOptions(bounds,state.end)}</select></label><label class="al-transition-option"><input type="checkbox" data-al-control="transitions" ${state.transitions?'checked':''} ${state.busy?'disabled':''}><span>年と年の変化も評論<small>各年の評論に、期間間の比較を追加</small></span></label><button type="button" class="button button-primary" data-al-action="generate" ${state.busy||error||all?'disabled':''}>${state.busy?'年ごとに作成中…':'年次レポートを作成'}</button></div><div class="al-run-plan"><span><b>${esc(topicLabel())}</b> · ${state.preferences?.scope==='full'?'全対象論文':'表示標本'} · 年別</span><span>${esc(providerName(provider))}${provider!=='none'?` / 最大 ${count(planned.calls)}回（各年 ${count(planned.years)} ＋ 比較 ${count(planned.comparisons)}）`: ' / LLM呼び出しなし'}</span></div><p class="al-help">各年は重心付近の最大6論文の抄録から、既存の評論形式で詳しく読み解きます。${provider!=='none'?'評論は1章ずつ生成するため、年数に応じて時間がかかります。抄録のない章は呼び出しません。回数は章の生成単位です。ローカルLLMの入力超過時は、各生成で最大2回再試行します。':'全期間のまとめ・論文数・構成比は計算結果として表示します。'}${state.transitions?'比較は実際に分析できた期間の組だけを対象とします。':''}${state.preferences?.interval!=='year'?'月・四半期表示でも、年だけが分かる論文を含めて年別に再集計します。年別の観測範囲を読み込み、呼び出し回数の上限を見積もっています。':''}</p>${all?'<p class="al-warning">「重心を追う話題」で1つの話題を選ぶと作成できます。</p>':error?`<p class="al-warning">${esc(error)}${state.annualEntry?.error?' <button type="button" class="text-link" data-al-action="retry-snapshot">年別範囲を再取得</button>':''}</p>`:''}${state.busy?`<div class="al-progress" role="status"><div><strong>${esc(state.stage||statusLabel(state.report?.generation_status))}</strong><span>${count(progress?.completed??0)} / ${progress?.total!=null?count(progress.total):'—'}章${progress?.planned_llm_calls!=null?` · LLM ${count(progress.llm_calls??0)} / ${count(progress.planned_llm_calls)}回`:''}</span></div><button type="button" data-al-action="cancel" ${!state.reportId||state.cancelling?'disabled':''}>${state.cancelling?'停止を予約しました':'以降の生成を停止'}</button>${state.cancelling?'<p>現在の処理が終わったところで停止します。作成済みの章は残ります。</p>':''}</div>`:''}${state.error?`<p class="al-warning" role="alert">${esc(state.error)}${state.report?' 作成済みの内容は下に保持しています。':''}</p>`:''}`;
+    return `<div class="al-controls"><label>開始年<select data-al-control="start" ${state.busy?'disabled':''} aria-label="年次レポートの開始年">${yearOptions(bounds,state.start)}</select></label><span class="al-range-arrow">→</span><label>終了年<select data-al-control="end" ${state.busy?'disabled':''} aria-label="年次レポートの終了年">${yearOptions(bounds,state.end)}</select></label><label class="al-transition-option"><input type="checkbox" data-al-control="transitions" ${state.transitions?'checked':''} ${state.busy?'disabled':''}><span>年と年の変化も評論<small>各年の評論に、期間間の比較を追加</small></span></label><button type="button" class="button button-primary" data-al-action="generate" ${state.busy||error||all?'disabled':''}>${state.busy?'年ごとに作成中…':'年次レポートを作成'}</button></div>${selectionControlsHTML()}<div class="al-run-plan"><span><b>${esc(topicLabel())}</b> · ${state.preferences?.scope==='full'?'全対象論文':'表示標本'} · 年別</span><span>${esc(providerName(provider))}${provider!=='none'?` / 最大 ${count(planned.calls)}回（各年 ${count(planned.years)} ＋ 比較 ${count(planned.comparisons)}）`: ' / LLM呼び出しなし'}</span></div><p class="al-help">各年は重心付近の最大6論文の抄録から、既存の評論形式で詳しく読み解きます。上の論文選択は「年と年の変化も評論」の期間比較だけに適用し、各年の代表論文数や計算済みの重心・件数は変えません。比較は前期・後期それぞれ指定数まで選び、入力上限に応じてさらに抜粋します。${provider!=='none'?'評論は1章ずつ生成するため、年数に応じて時間がかかります。抄録のない章は呼び出しません。回数は章の生成単位です。ローカルLLMの入力超過時は、各生成で最大2回再試行します。':'全期間のまとめ・論文数・構成比は計算結果として表示します。'}${state.transitions?'比較は実際に分析できた期間の組だけを対象とします。':''}${state.preferences?.interval!=='year'?'月・四半期表示でも、年だけが分かる論文を含めて年別に再集計します。年別の観測範囲を読み込み、呼び出し回数の上限を見積もっています。':''}</p>${all?'<p class="al-warning">「重心を追う話題」で1つの話題を選ぶと作成できます。</p>':error?`<p class="al-warning">${esc(error)}${state.annualEntry?.error?' <button type="button" class="text-link" data-al-action="retry-snapshot">年別範囲を再取得</button>':''}</p>`:''}${state.busy?`<div class="al-progress" role="status"><div><strong>${esc(state.stage||statusLabel(state.report?.generation_status))}</strong><span>${count(progress?.completed??0)} / ${progress?.total!=null?count(progress.total):'—'}章${progress?.planned_llm_calls!=null?` · LLM ${count(progress.llm_calls??0)} / ${count(progress.planned_llm_calls)}回`:''}</span></div><button type="button" data-al-action="cancel" ${!state.reportId||state.cancelling?'disabled':''}>${state.cancelling?'停止を予約しました':'以降の生成を停止'}</button>${state.cancelling?'<p>現在の処理が終わったところで停止します。作成済みの章は残ります。</p>':''}</div>`:''}${state.error?`<p class="al-warning" role="alert">${esc(state.error)}${state.report?' 作成済みの内容は下に保持しています。':''}</p>`:''}`;
   }
   function yearOptions(bounds, selected) {
     if (bounds.min == null || bounds.max == null) return '<option value="">年不明</option>';
@@ -116,7 +124,7 @@
     const years=[...timeline].sort((a,b)=>Number(a.year)-Number(b.year)),transitions=[...array(report.transitions)].sort((a,b)=>(yearOf(a.from_period)||0)-(yearOf(b.from_period)||0));
     const total=report.progress?.total,completed=report.progress?.completed;
     const exportURL=`/api/landscape-annual-reports/${encodeURIComponent(report.id)}/export?format=csv`;
-    return `<div class="al-report" id="annual-landscape-report"><header class="al-report-header"><div><span class="al-eyebrow">ANNUAL RESEARCH REVIEW</span><h2>${esc(report.topic?.label||topicLabel())}</h2><p>${esc(report.start_year)} — ${esc(report.end_year)} <span>· ${report.scope==='full'?'全対象論文':'表示標本'} · ${esc(providerName(report.provider))}</span></p></div><div class="al-report-actions"><button type="button" data-al-action="print">印刷 / PDF保存</button><a href="${exportURL}" download>CSV ↓</a></div></header><div class="al-report-status"><span>${esc(statusLabel(report.generation_status))}</span><span>${completed!=null&&total!=null?`${count(completed)} / ${count(total)}章`:''}${report.progress?.llm_calls!=null?` · LLM ${count(report.progress.llm_calls)}回`:''}</span></div>${report.overview?.text?`<section class="al-overview"><span class="al-eyebrow">CALCULATED OVERVIEW · 計算結果のまとめ</span><h3>${esc(report.overview.title||'期間全体の観測')}</h3><p>${esc(report.overview.text)}</p><small>年間の件数・構成比・語の変化を計算したまとめです。LLMによる全期間の総合評論ではありません。</small></section>`:''}${years.length||array(report.annual_rows).length?tableHTML(report):'<p class="al-chapter-note">年別の論文数と根拠を準備しています。</p>'}${years.length?`<nav class="al-year-index" aria-label="年次レポートの目次">${years.map(row=>`<a href="#annual-year-${esc(row.year)}">${esc(row.year)}<small>${row.coverage_status==='no_corpus_observation'?'観測なし':`${count(row.count)}論文`}</small></a>`).join('')}</nav>`:''}<div class="al-chapters">${years.map(row=>yearHTML(row)+transitions.filter(item=>yearOf(item.from_period)===Number(row.year)).map(transitionHTML).join('')).join('')}</div>${array(report.limitations).length?`<details class="al-limitations"><summary>分析範囲と留意点</summary>${array(report.limitations).map(item=>`<p>${esc(item)}</p>`).join('')}</details>`:''}</div>`;
+    return `<div class="al-report" id="annual-landscape-report"><header class="al-report-header"><div><span class="al-eyebrow">ANNUAL RESEARCH REVIEW</span><h2>${esc(report.topic?.label||topicLabel())}</h2><p>${esc(report.start_year)} — ${esc(report.end_year)} <span>· ${report.scope==='full'?'全対象論文':'表示標本'} · ${esc(providerName(report.provider))}</span></p></div><div class="al-report-actions"><button type="button" data-al-action="print">印刷 / PDF保存</button><a href="${exportURL}" download>CSV ↓</a></div></header><div class="al-report-status"><span>${esc(statusLabel(report.generation_status))}</span><span>${completed!=null&&total!=null?`${count(completed)} / ${count(total)}章`:''}${report.progress?.llm_calls!=null?` · LLM ${count(report.progress.llm_calls)}回`:''}</span></div>${report.include_transitions&&report.selection&&global.AtlasLandscape?.renderEvidenceSelection?global.AtlasLandscape.renderEvidenceSelection(state.context,report.selection):''}${report.overview?.text?`<section class="al-overview"><span class="al-eyebrow">CALCULATED OVERVIEW · 計算結果のまとめ</span><h3>${esc(report.overview.title||'期間全体の観測')}</h3><p>${esc(report.overview.text)}</p><small>年間の件数・構成比・語の変化を計算したまとめです。LLMによる全期間の総合評論ではありません。</small></section>`:''}${years.length||array(report.annual_rows).length?tableHTML(report):'<p class="al-chapter-note">年別の論文数と根拠を準備しています。</p>'}${years.length?`<nav class="al-year-index" aria-label="年次レポートの目次">${years.map(row=>`<a href="#annual-year-${esc(row.year)}">${esc(row.year)}<small>${row.coverage_status==='no_corpus_observation'?'観測なし':`${count(row.count)}論文`}</small></a>`).join('')}</nav>`:''}<div class="al-chapters">${years.map(row=>yearHTML(row)+transitions.filter(item=>yearOf(item.from_period)===Number(row.year)).map(transitionHTML).join('')).join('')}</div>${array(report.limitations).length?`<details class="al-limitations"><summary>分析範囲と留意点</summary>${array(report.limitations).map(item=>`<p>${esc(item)}</p>`).join('')}</details>`:''}</div>`;
   }
   function html() {
     return `<section class="annual-landscape" id="annual-landscape-panel" data-al-key="${esc(state.key)}"><header class="al-panel-heading"><div><span class="al-eyebrow">READ THE FIELD, YEAR BY YEAR</span><h2>年ごとに研究を読み、変化をたどる。</h2><p>年次グラフと、その年の代表論文の評論を1つのレポートにまとめます。</p></div><span class="al-year-symbol" aria-hidden="true">01<span>—</span>12</span></header>${controlsHTML()}${state.report?reportHTML(state.report):'<div class="al-before-run"><span>年次推移</span><i>→</i><span>各年の論文評論</span><i>→</i><span>印刷・保存</span></div>'}</section>`;
@@ -134,10 +142,11 @@
     if (state.start==null) state.start=bounds.min; if (state.end==null) state.end=bounds.max;
     return html();
   }
-  function requestSignature() { return [state.key,state.start,state.end,state.transitions].join('|'); }
+  function requestSignature() { return [state.key,state.start,state.end,state.transitions,selectionKey(state.selection)].join('|'); }
   function current(token,signature) { return token===state.version&&signature===requestSignature(); }
   function checkReport(report,request) {
     if (!report||report.result_id!==request.result_id||report.topic?.id!==request.topic_id||report.scope!==request.scope||Number(report.start_year)!==request.start_year||Number(report.end_year)!==request.end_year||report.include_transitions!=null&&report.include_transitions!==request.include_transitions||report.interval&&report.interval!=='year'||report.projection&&report.projection!==request.projection||request.projection_id&&report.projection_id&&report.projection_id!==request.projection_id) throw new Error('別の話題・期間・分析範囲のレポートが返されたため、表示を中止しました。');
+    if(request.include_transitions&&selectionKey(report.selection)!==selectionKey(request))throw new Error('異なる論文選択条件の年次レポートが返されたため、表示を中止しました。');
     return report;
   }
   function wait() { return new Promise(resolve=>{state.waitResolve=resolve;state.timer=global.setTimeout(()=>{state.timer=null;state.waitResolve=null;resolve();},900);}); }
@@ -178,11 +187,26 @@
   }
   function handleChange(event) {
     const control=event.target.dataset?.alControl;if(!control)return;
+    if(state.busy&&['papers_per_period','selection_method','abstract_only'].includes(control))return;
     ++state.version;state.abort?.abort();stopWaiting();state.busy=false;state.cancelling=false;state.report=null;state.reportId=null;state.error='';
     if(control==='start')state.start=Number(event.target.value);
     if(control==='end')state.end=Number(event.target.value);
     if(control==='transitions')state.transitions=!!event.target.checked;
+    if(control==='papers_per_period')state.selection.papers_per_period=Number(event.target.value);
+    if(control==='selection_method')state.selection.selection_method=event.target.value;
+    if(control==='abstract_only')state.selection.abstract_only=!!event.target.checked;
     render();
+  }
+  function handleInput(event) {
+    if(event.target.dataset?.alControl!=='papers_per_period'||state.busy)return;
+    ++state.version;state.abort?.abort();stopWaiting();state.report=null;state.reportId=null;state.jobId=null;state.error='';
+    state.selection.papers_per_period=Number(event.target.value);
+    // Update the request draft on every keystroke without replacing the focused number input.
+    document.querySelector('#annual-landscape-report')?.remove();
+    const root=document.querySelector('#annual-landscape-panel');
+    root?.querySelector('.al-warning[role="alert"]')?.remove();
+    const button=root?.querySelector('[data-al-action="generate"]');
+    if(button)button.disabled=Boolean(rangeError()||selectionError()||!state.preferences?.topic||state.preferences.topic==='all');
   }
   function handleClick(event) {
     const target=event.target.closest?.('[data-al-action]');if(!target)return;
@@ -196,9 +220,9 @@
     }
   }
   function cleanupPrint(){document.querySelector('#annual-landscape-print')?.remove();document.body.classList.remove('annual-printing');}
-  document.addEventListener('click',handleClick);document.addEventListener('change',handleChange);
+  document.addEventListener('click',handleClick);document.addEventListener('change',handleChange);document.addEventListener('input',handleInput);
   global.addEventListener('afterprint',cleanupPrint);
   global.addEventListener('atlas:result',event=>{if(!event.detail||event.detail.id!==state.context?.result?.id)invalidate();});
   global.AtlasAnnualLandscape=Object.freeze({panel,sync,invalidate,setProvider:()=>render()});
-  if(global.__ATLAS_UI_TEST__)global.__annualLandscapeTest={state,panel,sync,invalidate,payload,estimate,availableYears,rangeError,reportHTML,tableHTML,yearHTML,transitionHTML,checkReport,generate,cancel,handleChange,handleClick,html};
+  if(global.__ATLAS_UI_TEST__)global.__annualLandscapeTest={state,panel,sync,invalidate,payload,estimate,availableYears,rangeError,reportHTML,tableHTML,yearHTML,transitionHTML,checkReport,generate,cancel,handleChange,handleInput,handleClick,html};
 })(window);

@@ -34,6 +34,9 @@ class AnnualLandscapeRequest(BaseModel):
     provider: Literal["none", "local", "openai"] = "none"
     model: str | None = Field(default=None, min_length=1, max_length=160)
     include_transitions: bool = False
+    papers_per_period: int = Field(default=6, strict=True, ge=1, le=20)
+    selection_method: Literal["centroid", "diverse", "cited", "recent"] = "centroid"
+    abstract_only: bool = Field(default=False, strict=True)
 
     @model_validator(mode="after")
     def valid_range(self):
@@ -80,6 +83,8 @@ def run_annual_report(job_id, report_id, options, cancel_event):
         report = reports.prepare_report(options["result_id"], options["projection"], options["scope"],
             options["topic_id"], options["start_year"], options["end_year"], projection_id=options.get("projection_id"),
             provider=options["provider"], include_transitions=options["include_transitions"],
+            papers_per_period=options.get("papers_per_period", 6),
+            selection_method=options.get("selection_method", "centroid"), abstract_only=options.get("abstract_only", False),
             report_id=report_id, on_prepare=persist, cancelled=cancel_event.is_set)
         persist(report)
         report = reports.generate_children(report, model=options.get("model"), cancelled=cancel_event.is_set,

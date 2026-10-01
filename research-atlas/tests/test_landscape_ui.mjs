@@ -190,3 +190,25 @@ test('foresight audit renders extraction and critique independently with escaped
   const html=h.ui.renderInputBudget({extraction:audit,critique:{...audit,reduced:true}},h.context.e,String);
   assert.match(html,/根拠抽出/);assert.match(html,/評論生成/);assert.match(html,/抜粋・選択/);assert.doesNotMatch(html,/<bad>/);
 });
+
+
+test('saved selection summary remains distinct from current preferences and actually transmitted evidence',()=>{
+  const h=harness();h.internals.preferences.papers_per_period=6;
+  const data={selection:{papers_per_period:20,selection_method:'cited',method_label:'<unsafe method>',abstract_only:true,before:{candidate_count:100,eligible_count:75,selected_count:20},after:{candidate_count:10,eligible_count:4,selected_count:4}},input_summary:{paper_count:24,abstract_count:24},llm_input:{status:'completed',input_summary:{paper_count:2,abstract_count:2,before:{paper_count:1,abstract_count:1},after:{paper_count:1,abstract_count:1}},papers:[{id:'p1',side:'before',title:'Selected',abstract:'Actual evidence',selection_rank:3,citations:25,centroid_distance:.123}]} };
+  const html=h.ui.renderReport(h.context,data);
+  assert.match(html,/各期間 最大20件/);assert.match(html,/前期 20件を選択（対象 100件/);assert.match(html,/後期 4件を選択（対象 10件/);
+  assert.match(html,/実際に送信した入力資料：抄録あり 2 \/ 2論文/);assert.match(html,/&lt;unsafe method>/);assert.doesNotMatch(html,/<unsafe method>/);
+  assert.match(html,/選択順位 3/);assert.match(html,/被引用数 25/);assert.match(html,/投影前の重心とのコサイン距離 0.123/);
+});
+
+test('all cited evidence remains clickable when a commentary cites more than six papers',()=>{
+  const h=harness(),ids=Array.from({length:12},(_,i)=>`selected-${i}`);
+  const html=h.ui.renderReport(h.context,{evidence_papers:ids.map(id=>({id,title:id})),narrative:{mode:'local_llm',headline:'Comparison',sections:[{text:'Detailed comparison',evidence_ids:ids}]}});
+  for(const id of ids)assert.match(html,new RegExp(`data-paper="${id}"`));
+});
+
+
+test('saved selection records provide rank and original-space distance without requiring LLM payload metadata',()=>{
+  const h=harness(),html=h.ui.renderReport(h.context,{selection:{before:{selected_records:[{id:'p1',selection_rank:7,cosine_distance:.275,citations:10}]}},input_summary:{paper_count:1,abstract_count:1},evidence_papers:[{id:'p1',abstract:'Evidence'}]});
+  assert.match(html,/選択順位 7/);assert.match(html,/投影前の重心とのコサイン距離 0.275/);assert.match(html,/被引用数 10/);
+});

@@ -8,7 +8,7 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import date
 
-from . import centroid_reports, landscape, landscape_reports, storage
+from . import centroid_reports, landscape, landscape_reports, landscape_selection, storage
 from .field_exports import _csv
 from .landscape_reports_api import _generation_failure
 from .limits import MAX_ANALYSIS_YEARS
@@ -38,11 +38,15 @@ def validate_selection(result, topic_id, start_year, end_year):
 
 def initial_report(options, result):
     topic = validate_selection(result, options["topic_id"], options["start_year"], options["end_year"])
+    selection = landscape_selection.validate_options(options.get("papers_per_period", 6),
+        options.get("selection_method", "centroid"), options.get("abstract_only", False))
     return {"id": storage.new_id(), "kind": "annual", "result_id": options["result_id"],
             "created_at": storage.now(), "projection": options["projection"],
             "projection_id": options.get("projection_id"), "interval": "year", "scope": options["scope"],
             "topic": topic, "meta": {}, "start_year": options["start_year"], "end_year": options["end_year"],
             "include_transitions": options.get("include_transitions", False), "provider": options["provider"],
+            "selection": {**selection, "method_label": landscape_selection.METHOD_LABELS[selection["selection_method"]],
+                          "applies_to": "transitions"},
             "generation_status": "preparing", "cancel_requested": False,
             "annual_rows": [], "years": [], "transitions": [],
             "overview": {"mode": "deterministic", "title": f"{topic['label']}：年次レポート", "text": "年別の計測値と根拠論文を確認しています。"},
@@ -81,6 +85,10 @@ def _child_state(child, provider):
         child["generation_status"] = "skipped"
         child["generation_error_kind"], child["llm_error"] = _generation_failure(
             landscape_reports.NarrativeValidationError("", kind="missing_abstracts"))
+    elif landscape_reports.missing_comparison_evidence(child):
+        child["generation_status"] = "skipped"
+        child["generation_error_kind"], child["llm_error"] = _generation_failure(
+            landscape_reports.NarrativeValidationError("", kind="selection_missing_period"))
     else:
         child["generation_status"] = "pending"
     return {key: child[key] for key in ("generation_status", "generation_error_kind", "llm_error") if key in child}
@@ -142,12 +150,14 @@ def overview(report):
 
 
 def prepare_report(result_id, projection, scope, topic_id, start_year, end_year, *, projection_id=None,
-                   provider="none", include_transitions=False, report_id=None, on_prepare=None, cancelled=None):
+                   provider="none", include_transitions=False, report_id=None, on_prepare=None, cancelled=None,
+                   papers_per_period=6, selection_method="centroid", abstract_only=False):
     _check_cancel(cancelled)
     result = storage.read("results", result_id, include_papers=False)
     options = dict(result_id=result_id, projection=projection, scope=scope, topic_id=topic_id,
                    start_year=start_year, end_year=end_year, projection_id=projection_id,
-                   provider=provider, include_transitions=include_transitions)
+                   provider=provider, include_transitions=include_transitions, papers_per_period=papers_per_period,
+                   selection_method=selection_method, abstract_only=abstract_only)
     report = initial_report(options, result)
     if report_id:
         report["id"] = report_id
@@ -178,6 +188,7 @@ def prepare_report(result_id, projection, scope, topic_id, start_year, end_year,
         "特徴語の変化は保存済み上位語リストへの出入りです。技術の初出、消滅、採用率を意味しません。",
         "観測のない年と、他トピックの論文はあるが当該トピックが0件の年を区別します。分野全体の0件を推定しません。",
         "全期間の概観は計測値の定型要約です。年別評論と任意の期間比較には既存の生成指示をそのまま使用し、全期間をまとめる追加LLM呼出しは行いません。",
+        "論文数・選択方法・抄録の有無の設定は、任意で追加する前後期間の比較評論に適用します。年別の重心付近の評論は従来の代表論文を使います。",
         "中止は子レポートの間で反映されます。生成中の回答が完了するまで待つ場合があり、保存済みの計測値・評論は残ります。"])
     if report["meta"]["is_demo"]:
         report["limitations"].insert(0, "合成・テストデータを含む架空のデモです。実際の研究動向の判断には使えません。")
@@ -210,6 +221,9 @@ def prepare_report(result_id, projection, scope, topic_id, start_year, end_year,
                     _preparation_failure(row, exc)
         report["years"].append(row)
         publish()
+    selection_options = {key: report["selection"][key] for key in ("papers_per_period", "selection_method", "abstract_only")}
+    custom_selection = selection_options != landscape_selection.validate_options()
+    selection_context, selection_error, selection_attempted = None, None, False
     for movement in movements:
         _check_cancel(cancelled)
         row = {"from_period": movement["from_period"], "to_period": movement["to_period"],
@@ -217,8 +231,19 @@ def prepare_report(result_id, projection, scope, topic_id, start_year, end_year,
                "gap_note": movement.get("explanation", "") if movement.get("gap_periods") else "",
                "report": None, "generation_status": "pending"}
         try:
+            movement_options = {}
+            if custom_selection:
+                if not selection_attempted:
+                    selection_attempted = True
+                    try:
+                        selection_context = landscape_selection.SelectionContext(result_id, scope)
+                    except Exception as exc:
+                        selection_error = exc
+                if selection_error is not None:
+                    raise selection_error
+                movement_options = {**selection_options, "selection_context": selection_context}
             child = landscape_reports.prepare_report(result_id, projection, "year", movement["id"],
-                snapshot["projection_id"], scope, landscape_snapshot=snapshot)
+                snapshot["projection_id"], scope, landscape_snapshot=snapshot, **movement_options)
             row.update(report=child, **_child_state(child, provider))
         except Exception as exc:
             _preparation_failure(row, exc)
