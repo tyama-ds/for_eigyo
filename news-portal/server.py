@@ -24,6 +24,7 @@ import json
 import os
 import re
 import socket
+import sqlite3
 import ssl
 import sys
 import threading
@@ -43,7 +44,8 @@ import xml.etree.ElementTree as ET
 BASE = Path(__file__).resolve().parent
 FEEDS_FILE = BASE / "feeds.json"
 UI_FILE = BASE / "index.html"
-ARCHIVE_FILE = BASE / "archive.jsonl"   # 過去記事の自動保存先（1行1記事のJSON）
+ARCHIVE_DB = BASE / "archive.sqlite3"   # 過去記事の自動保存先（SQLite・条件検索用の索引つき）
+ARCHIVE_FILE = BASE / "archive.jsonl"   # 旧形式。存在すれば初回起動時に SQLite へ取り込む
 
 DEFAULT_PORT = 8780
 HOST = "127.0.0.1"
@@ -142,8 +144,8 @@ _cache_lock = threading.Lock()      # _cache の読み書きを保護
 _refresh_lock = threading.Lock()    # 取得(refresh)を直列化しスタンピードを防ぐ
 _sources_lock = threading.Lock()    # feeds.json の read-modify-write を保護
 _settings_lock = threading.Lock()   # settings.json の read-modify-write を保護
-_archive_lock = threading.Lock()    # archive.jsonl とメモリ索引を保護
-_archive: dict | None = None        # id → 記事 のメモリ索引（遅延ロード）
+_archive_lock = threading.Lock()    # archive.sqlite3 への書き込み/初期化を直列化
+_archive_ready = False              # テーブル作成・旧JSONL取り込み済みフラグ
 _cache: dict = {"articles": [], "errors": {}, "offline": None, "updated": None, "ts": 0.0}
 DEMO = False                        # --demo 起動時 True（常にデモ記事を返す）
 
@@ -693,26 +695,13 @@ def _merge_articles(articles: list[dict]) -> list[dict]:
     return keep
 
 
-# ------------------------------------------------------------------ 過去ログ（自動アーカイブ）
+# ------------------------------------------------------------------ 過去ログ（自動アーカイブ・SQLite）
 
-def _archive_load_locked() -> dict:
-    """archive.jsonl をメモリ索引(id→記事)へ遅延ロードする。_archive_lock 内で呼ぶこと。"""
-    global _archive
-    if _archive is None:
-        m: dict[str, dict] = {}
-        try:
-            with open(ARCHIVE_FILE, encoding="utf-8") as f:
-                for line in f:
-                    try:
-                        a = json.loads(line)
-                    except ValueError:
-                        continue   # 壊れた行は読み飛ばす（クラッシュ耐性）
-                    if isinstance(a, dict) and a.get("id"):
-                        m[a["id"]] = a
-        except OSError:
-            pass
-        _archive = m
-    return _archive
+def _db():
+    """archive.sqlite3 への接続（呼び出し側で close する）。"""
+    conn = sqlite3.connect(ARCHIVE_DB, timeout=10)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
 def _archive_key(a: dict) -> float:
@@ -720,76 +709,148 @@ def _archive_key(a: dict) -> float:
     return a.get("published_ts") or a.get("archived_at") or 0.0
 
 
+def _archive_row(a: dict, now: float) -> tuple:
+    at = a.get("archived_at") or now
+    return (a.get("id"), a.get("source_id"), a.get("source"), a.get("category"),
+            a.get("title"), a.get("link"), a.get("summary"), a.get("published"),
+            a.get("published_ts"), at, a.get("published_ts") or at)
+
+
+def _archive_init_locked() -> None:
+    """テーブル作成と、旧形式 archive.jsonl の1回限りの取り込み。_archive_lock 内で呼ぶ。"""
+    global _archive_ready
+    if _archive_ready:
+        return
+    conn = _db()
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("""CREATE TABLE IF NOT EXISTS articles(
+            id TEXT PRIMARY KEY, source_id TEXT, source TEXT, category TEXT,
+            title TEXT, link TEXT, summary TEXT, published TEXT,
+            published_ts REAL, archived_at REAL, sort_ts REAL)""")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_articles_sort ON articles(sort_ts DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_articles_src ON articles(source_id, sort_ts DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_articles_cat ON articles(category, sort_ts DESC)")
+        if ARCHIVE_FILE.exists():   # 旧 JSONL → SQLite 取り込み（取り込み後は .imported に退避）
+            rows = []
+            try:
+                with open(ARCHIVE_FILE, encoding="utf-8") as f:
+                    for line in f:
+                        try:
+                            a = json.loads(line)
+                        except ValueError:
+                            continue
+                        if isinstance(a, dict) and a.get("id"):
+                            rows.append(_archive_row(a, time.time()))
+            except OSError:
+                rows = []
+            if rows:
+                conn.executemany("INSERT OR IGNORE INTO articles VALUES (?,?,?,?,?,?,?,?,?,?,?)", rows)
+            conn.commit()
+            try:
+                os.replace(ARCHIVE_FILE, ARCHIVE_FILE.with_name(ARCHIVE_FILE.name + ".imported"))
+            except OSError:
+                pass
+        conn.commit()
+    finally:
+        conn.close()
+    _archive_ready = True
+
+
 def archive_add(articles: list[dict]) -> int:
-    """取得した記事を過去ログへ自動保存する。id で重複排除し、通常は追記のみ。
-    上限 ARCHIVE_MAX 超過時は新しい順に間引いて全書き直し。デモ記事は保存しない。"""
+    """取得した記事を過去ログ(SQLite)へ自動保存する。id で重複排除（INSERT OR IGNORE）。
+    上限 ARCHIVE_MAX 超過時は古い順に削除。デモ記事は保存しない。戻り値は新規追加件数。"""
     now = time.time()
     fresh = [a for a in articles if a.get("id") and a.get("source_id") != "demo"]
     if not fresh:
         return 0
     with _archive_lock:
-        m = _archive_load_locked()
-        new: list[dict] = []
-        for a in fresh:
-            if a["id"] in m:
-                continue
-            rec = {k: a.get(k) for k in ("id", "source", "source_id", "category",
-                                         "title", "link", "summary",
-                                         "published", "published_ts")}
-            rec["archived_at"] = now
-            m[a["id"]] = rec
-            new.append(rec)
-        if not new:
-            return 0
-        if len(m) > ARCHIVE_MAX:
-            keep = sorted(m.values(), key=_archive_key, reverse=True)[:ARCHIVE_MAX]
-            m.clear()
-            m.update({r["id"]: r for r in keep})
-            tmp = ARCHIVE_FILE.with_name(ARCHIVE_FILE.name + ".tmp")
-            with open(tmp, "w", encoding="utf-8") as f:
-                for r in m.values():
-                    f.write(json.dumps(r, ensure_ascii=False) + "\n")
-            os.replace(tmp, ARCHIVE_FILE)
-        else:
-            with open(ARCHIVE_FILE, "a", encoding="utf-8") as f:
-                for r in new:
-                    f.write(json.dumps(r, ensure_ascii=False) + "\n")
-        return len(new)
+        _archive_init_locked()
+        conn = _db()
+        try:
+            cur = conn.executemany("INSERT OR IGNORE INTO articles VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                                   [_archive_row(a, now) for a in fresh])
+            added = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+            cnt = conn.execute("SELECT COUNT(*) FROM articles").fetchone()[0]
+            if cnt > ARCHIVE_MAX:
+                conn.execute("DELETE FROM articles WHERE id NOT IN "
+                             "(SELECT id FROM articles ORDER BY sort_ts DESC LIMIT ?)", (ARCHIVE_MAX,))
+            conn.commit()
+            return added
+        finally:
+            conn.close()
 
 
 def archive_stats() -> dict:
+    """件数・期間に加え、フィルタUI用に情報源別/カテゴリ別の件数を返す。"""
     with _archive_lock:
-        m = _archive_load_locked()
-        ts = [t for t in (_archive_key(a) for a in m.values()) if t]
-    return {"count": len(m),
-            "oldest": min(ts) if ts else None,
-            "newest": max(ts) if ts else None}
+        _archive_init_locked()
+        conn = _db()
+        try:
+            n, lo, hi = conn.execute("SELECT COUNT(*), MIN(sort_ts), MAX(sort_ts) FROM articles").fetchone()
+            srcs = [{"id": r[0] or "", "name": r[1] or "", "count": r[2]} for r in conn.execute(
+                "SELECT source_id, MAX(source), COUNT(*) AS n FROM articles "
+                "GROUP BY source_id ORDER BY n DESC, source_id")]
+            cats = [{"name": r[0] or "", "count": r[1]} for r in conn.execute(
+                "SELECT category, COUNT(*) AS n FROM articles GROUP BY category ORDER BY n DESC")]
+        finally:
+            conn.close()
+    return {"count": n, "oldest": lo, "newest": hi, "sources": srcs, "categories": cats}
 
 
-def archive_search(q: str, limit: int = 60) -> list[dict]:
-    """現在表示中のキャッシュ＋過去ログを横断検索する。
-    空白区切りの語をすべて含む記事（タイトル/要約/情報源、AND・大小無視）を新着順で返す。
-    q が空なら新着順の一覧（ブラウズ用途）。"""
+def archive_search(q: str, limit: int = 60, sources: list[str] | None = None,
+                   since_ts: float | None = None, until_ts: float | None = None,
+                   category: str | None = None) -> list[dict]:
+    """過去ログを条件検索する（新着順）。条件はすべて AND:
+    - q: 空白区切りの語をすべて含む（タイトル/要約/情報源、ASCII は大小無視）
+    - sources: source_id のリスト（いずれかに一致）
+    - since_ts / until_ts: sort_ts（公開日時、無ければ保存日時）の範囲 [since, until)
+    - category: カテゴリ名の完全一致
+    q が空かつ他条件無しなら新着順の一覧（ブラウズ用途）。"""
     terms = [t.lower() for t in (q or "").split() if t.strip()]
-    with _archive_lock:
-        m = dict(_archive_load_locked())
-    with _cache_lock:
-        cur = list(_cache["articles"]) if _cache["ts"] else []
-    for a in cur:   # 直近取得分はアーカイブ書き込み前でも検索対象に含める
-        if a.get("id") and a.get("source_id") != "demo":
-            m[a["id"]] = a
-    out = []
-    for a in m.values():
-        hay = ((a.get("title") or "") + " " + (a.get("summary") or "")
-               + " " + (a.get("source") or "")).lower()
-        if all(t in hay for t in terms):
-            out.append(a)
-    out.sort(key=_archive_key, reverse=True)
+    where, params = [], []
+    for t in terms:
+        where.append("instr(lower(coalesce(title,'')||' '||coalesce(summary,'')||' '"
+                     "||coalesce(source,'')), ?) > 0")
+        params.append(t)
+    srcs = [s for s in (sources or []) if isinstance(s, str) and s][:100]
+    if srcs:
+        where.append("source_id IN (%s)" % ",".join("?" * len(srcs)))
+        params.extend(srcs)
+    if category:
+        where.append("category = ?")
+        params.append(category)
+    if since_ts is not None:
+        where.append("sort_ts >= ?")
+        params.append(float(since_ts))
+    if until_ts is not None:
+        where.append("sort_ts < ?")
+        params.append(float(until_ts))
     try:
-        n = max(1, min(int(limit), 200))
+        n = max(1, min(int(limit), 300))
     except (TypeError, ValueError):
         n = 60
-    return out[:n]
+    sql = "SELECT * FROM articles" + (" WHERE " + " AND ".join(where) if where else "") \
+          + " ORDER BY sort_ts DESC LIMIT ?"
+    params.append(n)
+    with _archive_lock:
+        _archive_init_locked()
+        conn = _db()
+        try:
+            rows = [dict(r) for r in conn.execute(sql, params)]
+        finally:
+            conn.close()
+    return rows
+
+
+def _parse_day(s: str | None) -> float | None:
+    """YYYY-MM-DD を UTC 0時の epoch に。不正なら None。"""
+    if not s:
+        return None
+    try:
+        return datetime.strptime(s.strip()[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        return None
 
 
 def refresh(sources: list[dict]) -> dict:
@@ -1301,8 +1362,32 @@ def ai_chat(payload: dict) -> dict:
             parts.append(f"{i}. [{a.get('category','')}] {a.get('title','')}（{a.get('source','')}）"
                          + (f" — {a.get('summary','')}" if a.get("summary") else ""))
     elif ctx.get("kind") == "research":   # リサーチ画面: 検索でヒットした記事群
-        parts.append("【検索でヒットした記事（現在＋過去ログ）】")
-        for i, a in enumerate((ctx.get("items") or [])[:30], 1):
+        # 検索条件（情報源×期間×キーワード）を明示して、LLMが対象範囲を踏まえて答えられるようにする
+        f = ctx.get("filters") if isinstance(ctx.get("filters"), dict) else {}
+        conds = []
+        if f.get("q"):
+            conds.append(f"キーワード「{str(f['q'])[:100]}」")
+        srcn = ([str(x)[:40] for x in f.get("sources") if x][:20]
+                if isinstance(f.get("sources"), list) else [])
+        if srcn:
+            conds.append("情報源: " + "・".join(srcn))
+        if f.get("category"):
+            conds.append(f"カテゴリ: {str(f['category'])[:20]}")
+        if f.get("from") or f.get("to"):
+            conds.append(f"期間: {str(f.get('from') or '')[:10]}〜{str(f.get('to') or '')[:10]}")
+        elif f.get("days"):
+            try:
+                conds.append(f"期間: 直近{int(f['days'])}日")
+            except (TypeError, ValueError):
+                pass
+        items = (ctx.get("items") or [])[:30]
+        if conds:
+            parts.append("【検索条件】" + " ／ ".join(conds))
+        hit = f.get("hit")
+        parts.append("【検索でヒットした記事（過去ログ）】"
+                     + (f"（該当 {hit} 件のうち {len(items)} 件を選択）"
+                        if isinstance(hit, int) and hit >= len(items) else ""))
+        for i, a in enumerate(items, 1):
             d = str(a.get("published") or "")[:10]
             parts.append(f"{i}. [{a.get('category','')}] {a.get('title','')}"
                          f"（{a.get('source','')}{' ' + d if d else ''}）"
@@ -1516,11 +1601,24 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok": True, "diag": diagnose_source(src)})
             return
 
-        if u.path == "/api/archive/search":   # 現在＋過去ログの横断検索
+        if u.path == "/api/archive/search":   # 過去ログの条件検索（キーワード×情報源×期間×カテゴリ）
             q = parse_qs(u.query)
-            arts = archive_search((q.get("q") or [""])[0], (q.get("limit") or ["60"])[0])
-            self._json({"ok": True, "count": len(arts), "articles": arts,
-                        "stats": archive_stats()})
+            g = lambda k, d="": (q.get(k) or [d])[0]
+            sources = [s for s in g("sources").split(",") if s.strip()]
+            category = g("category") if g("category") in CATEGORIES else None
+            since, until = _parse_day(g("from")), _parse_day(g("to"))
+            if until is not None:
+                until += 86400   # to は当日を含む
+            try:
+                days = int(g("days") or 0)
+            except ValueError:
+                days = 0
+            if days > 0 and since is None:
+                since = time.time() - days * 86400
+            arts = archive_search(g("q"), g("limit", "60"), sources, since, until, category)
+            self._json({"ok": True, "count": len(arts), "articles": arts, "stats": archive_stats(),
+                        "filters": {"q": g("q"), "sources": sources, "category": category,
+                                    "from": g("from"), "to": g("to"), "days": days}})
             return
 
         if u.path == "/api/archive/stats":

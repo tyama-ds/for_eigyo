@@ -401,6 +401,9 @@ main{max-width:1360px; margin:0 auto; padding:16px 22px 80px}
 .btn:hover{filter:brightness(1.08); transform:translateY(-1px)}
 .btn.ghost{background:transparent; border-color:var(--line-2); color:var(--text-2)}
 .btn.ghost:hover{color:var(--text); border-color:var(--text-3)}
+/* ライトテーマ用の .btn{color:#fff} より詳細度を上げて、透明背景の ghost が白文字で消えないようにする */
+:root[data-theme="light"] .btn.ghost{color:var(--text-2)}
+:root[data-theme="light"] .btn.ghost:hover{color:var(--text)}
 
 .kbd-list{display:grid; grid-template-columns:1fr 1fr; gap:10px 22px}
 .kbd-row{display:flex; align-items:center; gap:10px; font-size:13.5px; color:var(--text-2)}
@@ -411,9 +414,28 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
 .search-modal{width:min(860px,95vw); max-height:88vh}
 /* リサーチ: 左=検索/選択、右=AI会話。各ペインが独立スクロール */
 .research-modal{width:min(1060px,96vw); height:min(760px,90vh); max-height:90vh}
-.rs{flex:1; min-height:0; display:grid; grid-template-columns:minmax(340px,46%) 1fr}
+.rs{flex:1; min-height:0; display:grid; grid-template-columns:minmax(340px,46%) 1fr;
+  grid-template-rows:minmax(0,1fr)}   /* 行高さをモーダル内に固定（内容で伸びて下端からはみ出さない） */
 .rs__search{display:flex; flex-direction:column; min-height:0; border-right:1px solid var(--line); padding:14px 16px; gap:9px}
 .rs__bar{display:flex; align-items:center; gap:8px}
+/* リサーチの絞り込み（期間 × カテゴリ × 情報源） */
+.rs__filters{display:flex; flex-wrap:wrap; gap:6px; align-items:center}
+.rs__filters select, .rs__filters input[type=date]{padding:5px 8px; border-radius:8px; background:var(--surface-2);
+  border:1px solid var(--line); color:var(--text); font-size:12px; outline:none; font:inherit}
+.rs__filters select:focus, .rs__filters input[type=date]:focus{border-color:var(--accent)}
+.rs__range{display:inline-flex; align-items:center; gap:4px}
+.rs__range[hidden]{display:none}   /* display 指定が hidden 属性を打ち消さないように */
+.rs__tilde{font-size:12px; color:var(--text-3)}
+.rs__src{position:relative}
+.rs__srcpanel{position:absolute; z-index:6; top:calc(100% + 4px); left:0; min-width:280px; max-height:280px; overflow:auto;
+  background:var(--surface); border:1px solid var(--line); border-radius:11px; padding:8px; box-shadow:var(--shadow)}
+.rs__srcrow{display:flex; gap:8px; align-items:center; font-size:12.5px; padding:4px 6px; border-radius:7px; cursor:pointer}
+.rs__srcrow:hover{background:var(--surface-2)}
+.rs__srcrow input{accent-color:var(--accent)}
+.rs__srcrow .n{flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.rs__srcrow .c{font-size:11px; color:var(--text-3)}
+.rs__srchead{display:flex; justify-content:space-between; align-items:center; font-size:11.5px; color:var(--text-3); padding:2px 6px 6px}
+.rs__srchead button{font-size:11.5px; color:var(--accent); background:none; border:none; cursor:pointer}
 .rs__count{font-size:12px; color:var(--text-3)}
 .rs__list{flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain; display:flex; flex-direction:column; gap:2px}
 .rrow{display:flex; gap:9px; align-items:flex-start; padding:8px 9px; border-radius:10px; cursor:pointer; border:1px solid transparent}
@@ -776,6 +798,24 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
         <svg class="gsearch__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3" stroke-linecap="round"/></svg>
         <input id="rsQ" type="search" placeholder="キーワードで検索（空なら新着順・スペース区切りでAND）…" autocomplete="off" spellcheck="false" aria-label="リサーチ検索">
       </div>
+      <div class="rs__filters">
+        <select id="rsPeriod" aria-label="期間">
+          <option value="">期間: すべて</option>
+          <option value="1">直近24時間</option>
+          <option value="7">直近7日</option>
+          <option value="30">直近30日</option>
+          <option value="90">直近90日</option>
+          <option value="custom">期間を指定…</option>
+        </select>
+        <span class="rs__range" id="rsRange" hidden>
+          <input type="date" id="rsFrom" aria-label="開始日"><span class="rs__tilde">〜</span><input type="date" id="rsTo" aria-label="終了日">
+        </span>
+        <select id="rsCat" aria-label="カテゴリ"><option value="">カテゴリ: すべて</option></select>
+        <div class="rs__src">
+          <button type="button" class="btn ghost sm" id="rsSrcBtn" aria-haspopup="true" aria-expanded="false">情報源: すべて ▾</button>
+          <div class="rs__srcpanel" id="rsSrcPanel" hidden></div>
+        </div>
+      </div>
       <div class="rs__bar">
         <span class="rs__count" id="rsCount"></span>
         <span style="flex:1"></span>
@@ -786,6 +826,7 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
     </div>
     <div class="rs__chat">
       <div class="ai__log" id="rsLog"></div>
+      <div class="ai__quick" id="rsQuick"></div>
       <div class="ai__input">
         <textarea id="rsInput" aria-label="AIへの依頼" placeholder="選択した記事について依頼…（例: 鉄鋼関連の動きを時系列で要約して）" rows="1"></textarea>
         <button class="ai__send" id="rsSend" title="送信" aria-label="送信">
@@ -1817,30 +1858,79 @@ $("#proxyTestBtn").onclick=async()=>{
 };
 
 // ============================================================ リサーチ（過去ログ×AI）
-const RS={results:[], sel:new Set(), msgs:[], busy:false, stats:null};
+// 情報源（複数）× 期間 × カテゴリ × キーワード で過去ログを絞り込み、選んだ記事をAIに渡す
+const RS={results:[], sel:new Set(), srcSel:new Set(), msgs:[], busy:false, stats:null, filters:null, seq:0};
+const RS_QUICK=["期間内の動きを時系列で要約","情報源ごとに要点を整理","共通するテーマと相違点を比較","重要トピック3つと根拠"];
 function openResearch(){
   openOverlay($("#researchModal"));
+  fillRsCats();
   if(!RS.results.length) researchSearch();
-  renderRsLog();
+  renderRsLog(); renderRsQuick();
   setTimeout(()=>{ try{ $("#rsQ").focus(); }catch(e){} }, 90);
 }
-async function researchSearch(){
+function fillRsCats(){
+  const sel=$("#rsCat"); if(sel.dataset.filled) return; sel.dataset.filled="1";
+  (S.categories && S.categories.length ? S.categories : ALL_CATS).forEach(c=>sel.append(el("option",{value:c,text:c})));
+}
+function rsFilterParams(){   // 現在のフィルタ → APIクエリ と 表示/AI用の条件オブジェクト
   const q=($("#rsQ").value||"").trim();
+  const per=$("#rsPeriod").value; let days=0, from="", to="";
+  if(per==="custom"){ from=$("#rsFrom").value||""; to=$("#rsTo").value||""; }
+  else if(per){ days=parseInt(per,10)||0; }
+  const cat=$("#rsCat").value||"";
+  const srcs=[...RS.srcSel];
+  const p=new URLSearchParams({q, limit:"120"});
+  if(days) p.set("days",String(days));
+  if(from) p.set("from",from);
+  if(to) p.set("to",to);
+  if(cat) p.set("category",cat);
+  if(srcs.length) p.set("sources",srcs.join(","));
+  return {p, q, days, from, to, cat, srcs};
+}
+async function researchSearch(){
+  const f=rsFilterParams();
+  const seq=++RS.seq;   // 連続操作で古い応答が新しい結果を上書きしないよう、最新リクエストのみ採用
   try{
-    const d=await api("/api/archive/search?q="+encodeURIComponent(q)+"&limit=80");
-    RS.results=d.articles||[]; RS.stats=d.stats||null;
+    const d=await api("/api/archive/search?"+f.p.toString());
+    if(seq!==RS.seq) return;
+    RS.results=d.articles||[]; RS.stats=d.stats||null; RS.filters=f;
     RS.sel=new Set(RS.results.slice(0,20).map(a=>a.id));   // 上位20件を既定で選択
-    renderRsList();
+    renderRsList(); renderRsSrcPanel();
   }catch(e){ $("#rsCount").textContent="検索に失敗しました"; }
 }
 function syncRsCount(){
   $("#rsCount").textContent = RS.results.length+"件ヒット / "+RS.sel.size+"件選択（AIに渡すのは上から最大30件）";
 }
+function rsSrcName(id){ const s=(RS.stats&&RS.stats.sources||[]).find(x=>x.id===id); return s ? s.name : id; }
+function renderRsSrcPanel(){
+  const panel=$("#rsSrcPanel"); panel.innerHTML="";
+  const srcs=(RS.stats&&RS.stats.sources)||[];
+  const head=el("div",{class:"rs__srchead"});
+  head.append(el("span",{text: RS.srcSel.size ? RS.srcSel.size+"件を選択中" : "すべての情報源"}));
+  const clr=el("button",{type:"button",text:"すべて解除"}); clr.onclick=(e)=>{ e.stopPropagation(); RS.srcSel.clear(); syncRsSrcBtn(); researchSearch(); };
+  head.append(clr); panel.append(head);
+  if(!srcs.length){ panel.append(el("div",{class:"rs__srcrow",text:"過去ログに情報源がありません"})); }
+  srcs.forEach(s=>{
+    const row=el("label",{class:"rs__srcrow"});
+    const cb=el("input",{type:"checkbox"}); cb.checked=RS.srcSel.has(s.id);
+    cb.onchange=()=>{ if(cb.checked) RS.srcSel.add(s.id); else RS.srcSel.delete(s.id); syncRsSrcBtn(); researchSearch(); };
+    row.append(cb, el("span",{class:"n",text:s.name||s.id}), el("span",{class:"c",text:s.count+"件"}));
+    panel.append(row);
+  });
+  syncRsSrcBtn();
+}
+function syncRsSrcBtn(){
+  const n=RS.srcSel.size;
+  $("#rsSrcBtn").textContent = n ? ("情報源: "+(n===1 ? rsSrcName([...RS.srcSel][0]) : n+"件選択")+" ▾") : "情報源: すべて ▾";
+}
 function renderRsList(){
   const box=$("#rsList"); box.innerHTML="";
-  if(RS.stats) $("#rsStats").textContent="過去ログ "+RS.stats.count+"件＋現在表示分を横断検索";
+  if(RS.stats){
+    const fmt=t=>t?new Date(t*1000).toISOString().slice(0,10):"";
+    $("#rsStats").textContent="過去ログ "+RS.stats.count+"件"+(RS.stats.oldest?"（"+fmt(RS.stats.oldest)+"〜"+fmt(RS.stats.newest)+"）":"")+"を条件検索";
+  }
   syncRsCount();
-  if(!RS.results.length){ box.append(el("div",{class:"gempty",text:"該当する記事がありません（記事を取得すると過去ログに自動保存されます）"})); return; }
+  if(!RS.results.length){ box.append(el("div",{class:"gempty",text:"該当する記事がありません（条件を緩めるか、記事を取得すると過去ログに自動保存されます）"})); return; }
   RS.results.forEach(a=>{
     const row=el("label",{class:"rrow"+(RS.sel.has(a.id)?" on":"")});
     const cb=el("input",{type:"checkbox"}); cb.checked=RS.sel.has(a.id);
@@ -1855,12 +1945,16 @@ function renderRsList(){
     c.append(m); row.append(cb,c); box.append(row);
   });
 }
+function renderRsQuick(){
+  const box=$("#rsQuick"); if(!box) return; box.innerHTML="";
+  RS_QUICK.forEach(t=>{ const b=el("button",{class:"qchip",type:"button",text:t}); b.onclick=()=>sendRs(t); box.append(b); });
+}
 function renderRsLog(){
   const log=$("#rsLog"); if(!log) return; log.innerHTML="";
   if(!RS.msgs.length){
     const h=el("div",{class:"ai__hello"});
     h.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5.5" rx="8" ry="2.5"/><path d="M4 5.5v6c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5v-6"/><path d="M4 11.5v6c0 1.4 3.6 2.5 8 2.5 1.2 0 2.4-.08 3.4-.23"/></svg>';
-    h.append(el("div",{text:"左で記事を検索・選択して、要約・比較・時系列整理などを依頼できます。"}));
+    h.append(el("div",{text:"左で 期間・情報源・カテゴリ・キーワード を組み合わせて絞り込み、選んだ記事について依頼できます。"}));
     log.append(h);
   }
   RS.msgs.forEach(m=>log.append(bubbleEl(m)));
@@ -1874,6 +1968,8 @@ async function sendRs(text){
   const items=RS.results.filter(a=>RS.sel.has(a.id)).slice(0,30)
     .map(a=>({title:a.title, source:a.source, category:a.category, published:a.published, summary:a.summary}));
   if(!items.length){ toast("記事を1件以上選択してください","err"); return; }
+  const f=RS.filters||rsFilterParams();
+  const filters={ q:f.q, sources:f.srcs.map(rsSrcName), category:f.cat, from:f.from, to:f.to, days:f.days, hit:RS.results.length };
   const ta=$("#rsInput"); if(ta){ ta.value=""; ta.style.height="auto"; }
   const ua=RS.msgs.filter(m=>m.role==="user"||m.role==="assistant");
   let end=ua.length; while(end>0 && ua[end-1].role==="user") end--;
@@ -1882,7 +1978,7 @@ async function sendRs(text){
   let res;
   try{
     const d=await api("/api/ai/chat",{method:"POST", headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({question:text, history, context:{kind:"research", items}})});
+      body:JSON.stringify({question:text, history, context:{kind:"research", items, filters}})});
     res = d.ok ? {role:"assistant", text:d.answer, reasoning:(d.reasoning||"")}
                : {role:"error", text:"⚠ "+(d.error||"エラーが発生しました")};
   }catch(e){ res={role:"error", text:"⚠ "+(e.server?e.message:"通信に失敗しました")}; }
@@ -1890,7 +1986,15 @@ async function sendRs(text){
 }
 $("#researchBtn").onclick=openResearch;
 let rsT=null;
-$("#rsQ").addEventListener("input",()=>{ clearTimeout(rsT); rsT=setTimeout(researchSearch,250); });
+const rsDebounced=()=>{ clearTimeout(rsT); rsT=setTimeout(researchSearch,250); };
+$("#rsQ").addEventListener("input", rsDebounced);
+$("#rsPeriod").addEventListener("change",()=>{ $("#rsRange").hidden = $("#rsPeriod").value!=="custom"; researchSearch(); });
+$("#rsFrom").addEventListener("change", researchSearch);
+$("#rsTo").addEventListener("change", researchSearch);
+$("#rsCat").addEventListener("change", researchSearch);
+$("#rsSrcBtn").onclick=(e)=>{ e.stopPropagation(); const p=$("#rsSrcPanel"); p.hidden=!p.hidden; $("#rsSrcBtn").setAttribute("aria-expanded", String(!p.hidden)); };
+$("#rsSrcPanel").addEventListener("click",(e)=>e.stopPropagation());
+document.addEventListener("click",()=>{ const p=$("#rsSrcPanel"); if(p && !p.hidden){ p.hidden=true; $("#rsSrcBtn").setAttribute("aria-expanded","false"); } });
 $("#rsSelAll").onclick=()=>{ RS.results.forEach(a=>RS.sel.add(a.id)); renderRsList(); };
 $("#rsSelNone").onclick=()=>{ RS.sel.clear(); renderRsList(); };
 $("#rsInput").addEventListener("keydown",(e)=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); sendRs($("#rsInput").value); } });
