@@ -65,6 +65,18 @@ App Portal（`launcher/`）にも `Prism ニュースポータル` として登�
   範囲外の番号は自動除去。生成は非同期ジョブで進捗バー表示（ローカルLLMでも画面を
   閉じて待てる）。結果は SQLite に**保存**され、「保存済みレポート」から再表示・削除、
   **Markdown コピー／.md／Word(.docx) で書き出し**（.docx は標準ライブラリのみで生成）。
+- **テーマ（保存した検索条件）・新着差分・週次ブリーフ** — リサーチの「テーマ ▾」で
+  現在の条件（キーワード×情報源×期間×カテゴリ）に名前を付けて保存。テーマを開くと条件が
+  復元され、**前回「既読」にしてから過去ログへ入った記事の件数（新着）**がバッジ表示・
+  「新着のみ表示」で差分だけを確認できる。**「週次ブリーフ」**は直近7日の該当記事で要点
+  ブリーフを一発生成（**「前回以降でブリーフ」**は前回ブリーフのあとに入った記事だけ）。
+  生成したブリーフはテーマに紐づき、「前回のブリーフを開く」で再表示。
+- **本文一括取得（キャッシュつき）** — 「本文を取得」で選択記事（新しい順に最大80件）の
+  ページ本文をまとめて取得（直接取得を並列 → 失敗分は上限件数までヘッドレスブラウザで
+  再試行、進捗バー表示）。結果は SQLite にキャッシュされ、一覧に **「本文」バッジ**が付く。
+  レポート生成で**「本文も取得して要約する」**を選ぶと、要約だけでなくページ本文の抜粋を
+  根拠に部分要約する（取得フェーズも進捗表示）。会話では「会話に本文を使う」で取得済みの
+  本文抜粋（上から最大10件）を依頼に添える。
 - **トレンド** — 見出しから多く出現する語を抽出してチップ表示。クリックで即フィルタ。
 - **保存（ブックマーク）** — 記事を保存してドロワーで一覧。ブラウザの localStorage に
   永続化されるのでフィードが入れ替わっても残る。
@@ -244,10 +256,16 @@ UI の「情報源」から自由に 追加 / 無効化 / 削除でき、URL も
 | GET | `/api/settings` | AI 設定（プロバイダ / base_url / model / キー登録有無。**キー本体は返さない**） |
 | POST | `/api/settings` | AI 設定の保存（JSON: `provider`, `base_url`, `model`, `api_key?`, `clear_key?`） |
 | POST | `/api/proxy/test` | プロキシ接続テスト（JSON: `use_proxy`, `proxy_url`, `ca_bundle`, `url?`。**保存せず**その設定で1回取得を試し、状態/件数/所要時間を返す） |
-| GET | `/api/archive/search?q=&sources=&days=&from=&to=&category=&limit=` | 過去ログの条件検索（キーワードAND・情報源(カンマ区切りid)・直近N日 or 日付範囲・カテゴリ、新着順） |
+| GET | `/api/archive/search?q=&sources=&days=&from=&to=&category=&archived=&limit=` | 過去ログの条件検索（キーワードAND・情報源(カンマ区切りid)・直近N日 or 日付範囲・カテゴリ・`archived`=この時刻(epoch)より後に保存された記事のみ、新着順。各記事に `has_text`=本文キャッシュ有無） |
 | GET | `/api/archive/stats` | 過去ログの件数・期間・情報源別/カテゴリ別件数 |
-| POST | `/api/research/report` | レポート生成ジョブの開始（JSON: `ids[]`, `question?`, `template?`=overview/timeline/brief, `filters?`）→ `job_id` |
-| GET | `/api/research/report/status?id=` | 生成ジョブの進捗（state=queued/mapping/reducing/done/error, done/total） |
+| POST | `/api/research/report` | レポート生成ジョブの開始（JSON: `ids[]`, `question?`, `template?`=overview/timeline/brief, `filters?`, `fulltext?`=本文も取得）→ `job_id` |
+| GET | `/api/research/report/status?id=` | ジョブの進捗（state=queued/fetching/mapping/reducing/done/error, done/total, sub。本文取得ジョブも同じ） |
+| POST | `/api/research/fulltext` | 選択記事の本文一括取得ジョブ（JSON: `ids[]`、最大80件）→ `job_id`。完了時に `summary{ok,partial,failed,cached,selenium}` と記事ごとの可否 |
+| GET | `/api/research/themes` | テーマ一覧（条件 `filters`・条件文 `conds`・該当件数 `total`・新着件数 `new`・前回ブリーフ） |
+| POST | `/api/research/themes` | テーマの保存（JSON: `name`, `filters{q,sources[],category,days,from,to}`, `id?`=上書き） |
+| POST | `/api/research/themes/seen` | 既読にする（JSON: `id`。新着差分の基準時刻を今に更新） |
+| POST | `/api/research/themes/brief` | ブリーフ生成ジョブ（JSON: `id`, `days?`=7, `since?`="last"=前回ブリーフ以降, `template?`=brief, `fulltext?`）→ `job_id` |
+| DELETE | `/api/research/themes?id=` | テーマ削除 |
 | GET | `/api/research/reports` | 保存済みレポート一覧 |
 | GET | `/api/research/report?id=` | レポート1件（Markdown・出典・統計） |
 | GET | `/api/research/report/export?id=&fmt=md\|docx` | Markdown / Word で書き出し（ダウンロード） |

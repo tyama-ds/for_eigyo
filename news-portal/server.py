@@ -738,6 +738,12 @@ def _archive_init_locked() -> None:
             id TEXT PRIMARY KEY, created_at REAL, title TEXT, question TEXT, template TEXT,
             filters_json TEXT, article_ids_json TEXT, markdown TEXT, sources_json TEXT,
             model TEXT, stats_json TEXT)""")   # リサーチのレポート（生成結果の保存）
+        conn.execute("""CREATE TABLE IF NOT EXISTS themes(
+            id TEXT PRIMARY KEY, name TEXT, filters_json TEXT, created_at REAL, updated_at REAL,
+            last_seen_at REAL, last_brief_at REAL, last_brief_id TEXT)""")   # 保存した検索条件（テーマ）
+        conn.execute("""CREATE TABLE IF NOT EXISTS pages(
+            article_id TEXT PRIMARY KEY, link TEXT, text TEXT, via TEXT, error TEXT,
+            fetched_at REAL, chars INTEGER)""")   # 記事本文のキャッシュ（一括取得の結果）
         if ARCHIVE_FILE.exists():   # 旧 JSONL → SQLite 取り込み（取り込み後は .imported に退避）
             rows = []
             try:
@@ -782,6 +788,7 @@ def archive_add(articles: list[dict]) -> int:
             if cnt > ARCHIVE_MAX:
                 conn.execute("DELETE FROM articles WHERE id NOT IN "
                              "(SELECT id FROM articles ORDER BY sort_ts DESC LIMIT ?)", (ARCHIVE_MAX,))
+                conn.execute("DELETE FROM pages WHERE article_id NOT IN (SELECT id FROM articles)")
             conn.commit()
             return added
         finally:
@@ -805,40 +812,53 @@ def archive_stats() -> dict:
     return {"count": n, "oldest": lo, "newest": hi, "sources": srcs, "categories": cats}
 
 
+def _search_where(q: str, sources: list[str] | None, since_ts: float | None, until_ts: float | None,
+                  category: str | None, archived_since: float | None = None) -> tuple[str, list]:
+    """archive_search / テーマの新着件数 で共用する WHERE 句（articles の別名は a）。"""
+    terms = [t.lower() for t in (q or "").split() if t.strip()][:20]
+    where, params = [], []
+    for t in terms:
+        where.append("instr(lower(coalesce(a.title,'')||' '||coalesce(a.summary,'')||' '"
+                     "||coalesce(a.source,'')), ?) > 0")
+        params.append(t)
+    srcs = [s for s in (sources or []) if isinstance(s, str) and s][:100]
+    if srcs:
+        where.append("a.source_id IN (%s)" % ",".join("?" * len(srcs)))
+        params.extend(srcs)
+    if category:
+        where.append("a.category = ?")
+        params.append(category)
+    if since_ts is not None:
+        where.append("a.sort_ts >= ?")
+        params.append(float(since_ts))
+    if until_ts is not None:
+        where.append("a.sort_ts < ?")
+        params.append(float(until_ts))
+    if archived_since is not None:   # 新着差分: 前回確認以降に過去ログへ入った記事
+        where.append("a.archived_at > ?")
+        params.append(float(archived_since))
+    return (" WHERE " + " AND ".join(where)) if where else "", params
+
+
 def archive_search(q: str, limit: int = 60, sources: list[str] | None = None,
                    since_ts: float | None = None, until_ts: float | None = None,
-                   category: str | None = None) -> list[dict]:
+                   category: str | None = None, archived_since: float | None = None) -> list[dict]:
     """過去ログを条件検索する（新着順）。条件はすべて AND:
     - q: 空白区切りの語をすべて含む（タイトル/要約/情報源、ASCII は大小無視）
     - sources: source_id のリスト（いずれかに一致）
     - since_ts / until_ts: sort_ts（公開日時、無ければ保存日時）の範囲 [since, until)
     - category: カテゴリ名の完全一致
-    q が空かつ他条件無しなら新着順の一覧（ブラウズ用途）。"""
-    terms = [t.lower() for t in (q or "").split() if t.strip()]
-    where, params = [], []
-    for t in terms:
-        where.append("instr(lower(coalesce(title,'')||' '||coalesce(summary,'')||' '"
-                     "||coalesce(source,'')), ?) > 0")
-        params.append(t)
-    srcs = [s for s in (sources or []) if isinstance(s, str) and s][:100]
-    if srcs:
-        where.append("source_id IN (%s)" % ",".join("?" * len(srcs)))
-        params.extend(srcs)
-    if category:
-        where.append("category = ?")
-        params.append(category)
-    if since_ts is not None:
-        where.append("sort_ts >= ?")
-        params.append(float(since_ts))
-    if until_ts is not None:
-        where.append("sort_ts < ?")
-        params.append(float(until_ts))
+    - archived_since: 保存日時（archived_at）がこれより後の記事だけ（テーマの「新着のみ」）
+    q が空かつ他条件無しなら新着順の一覧（ブラウズ用途）。
+    各行に has_text（本文キャッシュあり=1）を付けて返す。"""
+    where, params = _search_where(q, sources, since_ts, until_ts, category, archived_since)
     try:
         n = max(1, min(int(limit), 300))
     except (TypeError, ValueError):
         n = 60
-    sql = "SELECT * FROM articles" + (" WHERE " + " AND ".join(where) if where else "") \
-          + " ORDER BY sort_ts DESC LIMIT ?"
+    sql = ("SELECT a.*, (p.article_id IS NOT NULL AND coalesce(p.chars,0) > 0) AS has_text "
+           "FROM articles a LEFT JOIN pages p ON p.article_id = a.id"
+           + where + " ORDER BY a.sort_ts DESC LIMIT ?")
     params.append(n)
     with _archive_lock:
         _archive_init_locked()
@@ -847,7 +867,24 @@ def archive_search(q: str, limit: int = 60, sources: list[str] | None = None,
             rows = [dict(r) for r in conn.execute(sql, params)]
         finally:
             conn.close()
+    for r in rows:
+        r["has_text"] = bool(r.get("has_text"))
     return rows
+
+
+def _filters_window(f: dict, now: float | None = None) -> tuple[float | None, float | None]:
+    """検索条件の期間（from/to の日付範囲、無ければ直近 days 日）を [since, until) の epoch に。"""
+    since = _parse_day(f.get("from")) if isinstance(f.get("from"), str) else None
+    until = _parse_day(f.get("to")) if isinstance(f.get("to"), str) else None
+    if until is not None:
+        until += 86400   # to は当日を含む
+    try:
+        days = int(f.get("days") or 0)
+    except (TypeError, ValueError):
+        days = 0
+    if since is None and days > 0:
+        since = (now or time.time()) - days * 86400
+    return since, until
 
 
 def _parse_day(s: str | None) -> float | None:
@@ -1381,11 +1418,22 @@ def ai_chat(payload: dict) -> dict:
         parts.append("【検索でヒットした記事（過去ログ）】"
                      + (f"（該当 {hit} 件のうち {len(items)} 件を選択）"
                         if isinstance(hit, int) and hit >= len(items) else ""))
+        pages: dict[str, dict] = {}
+        if payload.get("fulltext"):   # 取得済み（キャッシュ）の本文抜粋を添える。会話では新規取得はしない
+            ids = [str(a.get("id")) for a in items if a.get("id")][:FULLTEXT_CHAT_MAX]
+            pages = {k: v for k, v in pages_cached(ids).items() if v.get("text")}
+        per = FULLTEXT_CHAT_LOCAL if cfg["provider"] == "local" else FULLTEXT_CHAT_CLOUD
         for i, a in enumerate(items, 1):
             d = str(a.get("published") or "")[:10]
             parts.append(f"{i}. [{a.get('category','')}] {a.get('title','')}"
                          f"（{a.get('source','')}{' ' + d if d else ''}）"
                          + (f" — {a.get('summary','')}" if a.get("summary") else ""))
+            pg = pages.get(str(a.get("id")))
+            if pg:
+                parts.append("   本文抜粋: " + re.sub(r"\s+", " ", pg["text"])[:per])
+        if payload.get("fulltext"):
+            page_note = (f"本文抜粋を {len(pages)} 件に添付（取得済みの記事のみ・各{per}字まで）" if pages else
+                         "⚠ 取得済みの本文がありません（左の「本文を取得」で先に取得してください）。要約のみに基づく回答です")
     else:
         parts.append("【対象の記事】")
         for f in ("title", "source", "category", "published", "summary", "link"):
@@ -1465,6 +1513,8 @@ def _filters_conds(f: dict) -> list[str]:
     conds: list[str] = []
     if not isinstance(f, dict):
         return conds
+    if f.get("theme"):
+        conds.append(f"テーマ「{str(f['theme'])[:40]}」")
     if f.get("q"):
         conds.append(f"キーワード「{str(f['q'])[:100]}」")
     srcn = ([str(x)[:40] for x in f.get("sources") if x][:20]
@@ -1505,11 +1555,13 @@ def _report_fetch(ids: list) -> list[dict]:
     return arts
 
 
-def _article_line(n: int, a: dict) -> str:
+def _article_line(n: int, a: dict, text: str | None = None, per: int = 0) -> str:
     d = str(a.get("published") or "")[:10]
     s = f"[{n}] {d} {a.get('source') or ''}｜{a.get('title') or ''}"
     if a.get("summary"):
         s += "\n   " + str(a["summary"])[:300]
+    if text and per > 0:   # 本文一括取得で得たページ本文（抜粋）
+        s += "\n   本文抜粋: " + re.sub(r"\s+", " ", text)[:per]
     return s
 
 
@@ -1539,8 +1591,9 @@ def _report_system(local: bool) -> str:
     return s
 
 
-def _map_prompt(question: str, chunk_text: str) -> str:
-    return (f"【問い】{question}\n\n【記事（[番号] 日付 媒体｜見出し／要約）】\n{chunk_text}\n\n"
+def _map_prompt(question: str, chunk_text: str, fulltext: bool = False) -> str:
+    kind = "見出し／要約／本文抜粋" if fulltext else "見出し／要約"
+    return (f"【問い】{question}\n\n【記事（[番号] 日付 媒体｜{kind}）】\n{chunk_text}\n\n"
             "【指示】上の記事から、問いに関係する事実・数値・論点を箇条書きで抽出してください。\n"
             "- 各項目は「YYYY-MM-DD 媒体: 内容 [n]」の形で、末尾に必ず出典番号を付ける（複数可 [1][3]）\n"
             "- 関係の薄い記事は省いてよい。推測・一般論・感想は書かない\n"
@@ -1658,8 +1711,9 @@ def delete_report(rid: str) -> bool:
             conn.close()
 
 
-def _run_report(job_id: str, question: str, template: str, ids: list, filters: dict) -> None:
-    """ワーカースレッド: 部分要約(map) → 統合(reduce) → 保存。進捗は _jobs に書く。"""
+def _run_report(job_id: str, question: str, template: str, ids: list, filters: dict,
+                fulltext: bool = False, theme_id: str | None = None, title: str | None = None) -> None:
+    """ワーカースレッド: (本文一括取得) → 部分要約(map) → 統合(reduce) → 保存。進捗は _jobs に書く。"""
     def upd(**kw):
         with _jobs_lock:
             _jobs[job_id].update(kw)
@@ -1674,12 +1728,21 @@ def _run_report(job_id: str, question: str, template: str, ids: list, filters: d
         budget = REPORT_CHUNK_CHARS_LOCAL if local else REPORT_CHUNK_CHARS_CLOUD
         par = REPORT_PARALLEL_LOCAL if local else REPORT_PARALLEL_CLOUD
         system = _report_system(local)
-        lines = [_article_line(i + 1, a) for i, a in enumerate(arts)]
+        pages: dict[str, dict] = {}
+        n_target = 0
+        if fulltext:   # 本文一括取得（キャッシュ優先・urllib→ブラウザ）。新しい記事から上限件数まで
+            targets = arts[:FULLTEXT_MAX_ARTICLES]
+            n_target = len(targets)
+            upd(state="fetching", total=n_target, done=0, articles=len(arts), sub="")
+            pages = fetch_pages(targets, progress=lambda d, t, sub: upd(total=t, done=d, sub=sub))
+        per = FULLTEXT_PER_ARTICLE_LOCAL if local else FULLTEXT_PER_ARTICLE_CLOUD
+        lines = [_article_line(i + 1, a, (pages.get(a["id"]) or {}).get("text"), per)
+                 for i, a in enumerate(arts)]
         chunks = _chunk_lines(lines, budget)
-        upd(state="mapping", total=len(chunks), done=0, articles=len(arts))
+        upd(state="mapping", total=len(chunks), done=0, articles=len(arts), sub="")
 
         def do_map(ch: list[str]) -> str:
-            txt = call_ai(cfg, system, _map_prompt(question, "\n".join(ch)), [],
+            txt = call_ai(cfg, system, _map_prompt(question, "\n".join(ch), bool(pages)), [],
                           max_tokens=REPORT_MAX_TOKENS)
             ans, _ = _split_reasoning(txt)
             with _jobs_lock:
@@ -1703,9 +1766,10 @@ def _run_report(job_id: str, question: str, template: str, ids: list, filters: d
         body, _ = _split_reasoning(body)
         body = re.sub(r"^\s*#\s[^\n]*\n", "", body, count=1)   # 念のため先頭のタイトル行を除去
         body, bad = _strip_bad_cites(body, len(arts))
+        n_text = sum(1 for p in pages.values() if p.get("text"))
         rep = {
             "id": job_id, "created_at": time.time(),
-            "title": _report_title(question, filters, tname),
+            "title": (title or "").strip()[:80] or _report_title(question, filters, tname),
             "question": question, "template": template if template in REPORT_TEMPLATES else "overview",
             "filters": filters, "article_ids": [a["id"] for a in arts],
             "markdown": body.strip(),
@@ -1713,12 +1777,28 @@ def _run_report(job_id: str, question: str, template: str, ids: list, filters: d
                          "published": str(a.get("published") or "")[:10], "link": a.get("link")}
                         for i, a in enumerate(arts)],
             "model": f"{cfg['provider']}:{cfg['model'] or 'default'}",
-            "stats": {"articles": len(arts), "chunks": len(chunks), "bad_cites": bad},
+            "stats": {"articles": len(arts), "chunks": len(chunks), "bad_cites": bad,
+                      "fulltext": n_text, "fulltext_failed": max(0, n_target - n_text)},
         }
         _save_report(rep)
+        if theme_id:
+            _theme_set_brief(theme_id, rep["id"], rep["created_at"])
         upd(state="done", report_id=rep["id"], title=rep["title"])
     except Exception as e:
         upd(state="error", error=f"{type(e).__name__}: {str(e)[:200]}")
+
+
+def _new_job(kind: str, **fields) -> str:
+    """ジョブ登録（レポート生成・本文一括取得で共用）。古いジョブは完了・失敗から1時間で掃除。"""
+    job_id = secrets.token_hex(8)
+    with _jobs_lock:
+        now = time.time()
+        for k in [k for k, j in _jobs.items()
+                  if j.get("state") in ("done", "error") and now - j.get("created", now) > 3600]:
+            _jobs.pop(k, None)
+        _jobs[job_id] = {"id": job_id, "kind": kind, "state": "queued", "total": 0, "done": 0,
+                         "created": now, **fields}
+    return job_id
 
 
 def start_report_job(body: dict) -> dict:
@@ -1729,16 +1809,11 @@ def start_report_job(body: dict) -> dict:
     filters = body.get("filters") if isinstance(body.get("filters"), dict) else {}
     question = (str(body.get("question") or "")).strip()[:300] or _default_question(filters)
     template = body.get("template") if body.get("template") in REPORT_TEMPLATES else "overview"
-    job_id = secrets.token_hex(8)
-    with _jobs_lock:
-        # 古いジョブの掃除（完了・失敗から1時間）
-        now = time.time()
-        for k in [k for k, j in _jobs.items()
-                  if j.get("state") in ("done", "error") and now - j.get("created", now) > 3600]:
-            _jobs.pop(k, None)
-        _jobs[job_id] = {"id": job_id, "state": "queued", "total": 0, "done": 0,
-                         "articles": len(ids), "created": now}
-    threading.Thread(target=_run_report, args=(job_id, question, template, ids, filters),
+    fulltext = bool(body.get("fulltext"))
+    theme_id = body.get("theme_id") if isinstance(body.get("theme_id"), str) and _ID_RE.fullmatch(body["theme_id"]) else None
+    title = str(body.get("title") or "")[:80]
+    job_id = _new_job("report", articles=len(ids), fulltext=fulltext)
+    threading.Thread(target=_run_report, args=(job_id, question, template, ids, filters, fulltext, theme_id, title),
                      daemon=True).start()
     return {"ok": True, "job_id": job_id}
 
@@ -1747,6 +1822,375 @@ def report_job_status(job_id: str) -> dict:
     with _jobs_lock:
         j = _jobs.get(job_id)
         return {"ok": True, **j} if j else {"ok": False, "error": "unknown job"}
+
+
+# ------------------------------------------------------------------ リサーチ: テーマ（保存した検索条件）・新着差分・本文一括取得
+
+THEME_MAX = 100                    # 保存できるテーマ数
+FULLTEXT_MAX_ARTICLES = 80         # 1回の本文一括取得の上限（ページ取得は遅いので新しい記事から）
+FULLTEXT_PARALLEL = 4              # 直接取得（urllib）の並列数
+FULLTEXT_SELENIUM_MAX = 12         # 直接取得に失敗した記事のうちヘッドレスブラウザで再試行する上限
+FULLTEXT_RETRY_AFTER = 86400       # 失敗キャッシュを再試行するまでの秒数
+FULLTEXT_PER_ARTICLE_LOCAL = 1200  # レポートの部分要約に含める本文抜粋の文字数（ローカルLLM）
+FULLTEXT_PER_ARTICLE_CLOUD = 2500
+FULLTEXT_CHAT_LOCAL = 700          # 会話（リサーチ）で記事ごとに添える本文抜粋の文字数
+FULLTEXT_CHAT_CLOUD = 1500
+FULLTEXT_CHAT_MAX = 10             # 会話で本文を添える記事数の上限
+_selenium_lock = threading.Lock()  # ヘッドレスブラウザは同時に1つだけ起動する
+_ID_RE = re.compile(r"[0-9a-f]{16}")
+
+
+# ---- 本文キャッシュ（pages）と一括取得
+
+def _pages_get(conn, ids: list[str]) -> dict[str, dict]:
+    out: dict[str, dict] = {}
+    for i in range(0, len(ids), 400):
+        part = ids[i:i + 400]
+        for r in conn.execute("SELECT * FROM pages WHERE article_id IN (%s)"
+                              % ",".join("?" * len(part)), part):
+            out[r["article_id"]] = dict(r)
+    return out
+
+
+def pages_cached(ids: list[str]) -> dict[str, dict]:
+    """記事 id → キャッシュ済み本文（成功・失敗とも）。"""
+    ids = [i for i in ids if isinstance(i, str) and i]
+    if not ids:
+        return {}
+    with _archive_lock:
+        _archive_init_locked()
+        conn = _db()
+        try:
+            return _pages_get(conn, ids)
+        finally:
+            conn.close()
+
+
+def _pages_put(rows: list[tuple]) -> None:
+    if not rows:
+        return
+    with _archive_lock:
+        _archive_init_locked()
+        conn = _db()
+        try:
+            conn.executemany("INSERT OR REPLACE INTO pages VALUES (?,?,?,?,?,?,?)", rows)
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def fetch_pages(arts: list[dict], progress=None) -> dict[str, dict]:
+    """記事群の本文を一括取得する（キャッシュ優先）。
+
+    1) キャッシュ（本文あり、または失敗から FULLTEXT_RETRY_AFTER 秒以内）はそのまま使う
+    2) 残りを urllib で並列に直接取得
+    3) それでも取れないものは FULLTEXT_SELENIUM_MAX 件までヘッドレスブラウザで直列に再試行
+       （selenium 未導入・起動不可なら最初の1件で打ち切る）
+    結果は pages にキャッシュ。progress(done, total, 段階の説明) で進捗を通知する。
+    戻り値 {article_id: {"text", "via", "error", "cached"}}（本文が無い記事も error つきで含む）。
+    記事リンクは第三者由来のため、内部アドレスは SSRF 対策として取得しない。"""
+    arts = [a for a in arts if a.get("id")][:FULLTEXT_MAX_ARTICLES]
+    if not arts:
+        return {}
+    now = time.time()
+    cached = pages_cached([a["id"] for a in arts])
+    out: dict[str, dict] = {}
+    todo: list[dict] = []
+    for a in arts:
+        c = cached.get(a["id"])
+        if c and (c.get("text") or now - (c.get("fetched_at") or 0) < FULLTEXT_RETRY_AFTER):
+            out[a["id"]] = {"text": c.get("text") or "", "via": c.get("via") or "",
+                            "error": c.get("error") or "", "cached": True}
+        else:
+            todo.append(a)
+    total = len(todo)
+    state = {"done": 0}
+
+    def tick(sub: str) -> None:
+        if progress:
+            try:
+                progress(state["done"], total, sub)
+            except Exception:
+                pass
+
+    tick("キャッシュ確認")
+    if not todo:
+        return out
+
+    def direct(a: dict) -> tuple[dict, dict]:
+        u = safe_url(a.get("link"))
+        if not u or _host_is_internal(u):
+            return a, {"text": "", "via": "", "error": "URLが不正か内部アドレス", "final": True}
+        text, err = _fetch_page_urllib(u)
+        if text and not err:
+            return a, {"text": text, "via": "urllib", "error": "", "final": True}
+        return a, {"text": text, "via": "urllib" if text else "",
+                   "error": err or "本文が取れませんでした", "final": False}
+
+    pending: list[tuple[dict, dict]] = []
+    with ThreadPoolExecutor(max_workers=max(1, min(FULLTEXT_PARALLEL, len(todo)))) as ex:
+        for a, res in ex.map(direct, todo):
+            if res["final"]:
+                out[a["id"]] = {"text": res["text"], "via": res["via"], "error": res["error"], "cached": False}
+                state["done"] += 1
+                tick("直接取得")
+            else:
+                pending.append((a, res))
+    # 直接取得できなかったものをヘッドレスブラウザで再試行（上限あり・直列）
+    retry = pending[:FULLTEXT_SELENIUM_MAX]
+    skipped = pending[FULLTEXT_SELENIUM_MAX:]
+    browser_dead = ""
+    for k, (a, res) in enumerate(retry, 1):
+        if browser_dead:
+            skipped.append((a, res))
+            continue
+        tick(f"ブラウザで再試行 {k}/{len(retry)}")
+        with _selenium_lock:
+            s_text, s_err = _fetch_page_selenium(safe_url(a.get("link")) or "")
+        if s_text and not s_err:
+            res = {"text": s_text, "via": "selenium", "error": ""}
+        else:
+            if s_err.startswith(("selenium未インストール", "ブラウザ起動失敗", "設定の")):
+                browser_dead = s_err
+            best = s_text or res["text"]
+            res = {"text": best, "via": "selenium" if s_text else res["via"],
+                   "error": (f"本文が不完全な可能性（直接取得: {res['error']} / ブラウザ: {s_err or 'OK'}）"
+                             if best else f"直接取得: {res['error']} / ブラウザ: {s_err}")}
+        out[a["id"]] = {**res, "cached": False}
+        state["done"] += 1
+    for a, res in skipped:   # ブラウザ再試行の上限超過・ブラウザ不可
+        note = browser_dead or f"ブラウザ再試行は1回あたり{FULLTEXT_SELENIUM_MAX}件まで"
+        out[a["id"]] = {"text": res["text"], "via": res["via"],
+                        "error": f"{res['error']}（{note}）", "cached": False}
+        state["done"] += 1
+    tick("完了")
+    _pages_put([(a["id"], a.get("link"), out[a["id"]]["text"][:MAX_PAGE_TEXT], out[a["id"]]["via"],
+                 out[a["id"]]["error"][:300], now, len(out[a["id"]]["text"][:MAX_PAGE_TEXT]))
+                for a in todo if a["id"] in out])
+    return out
+
+
+def _run_fulltext(job_id: str, ids: list[str]) -> None:
+    """ワーカースレッド: 本文一括取得のみ（結果はキャッシュへ。UI には件数と記事ごとの可否を返す）。"""
+    def upd(**kw):
+        with _jobs_lock:
+            _jobs[job_id].update(kw)
+    try:
+        arts = _report_fetch(ids)[:FULLTEXT_MAX_ARTICLES]
+        if not arts:
+            raise RuntimeError("対象記事が過去ログに見つかりません")
+        upd(state="fetching", total=len(arts), done=0, sub="")
+        res = fetch_pages(arts, progress=lambda d, t, sub: upd(total=t, done=d, sub=sub))
+        summary = {"ok": sum(1 for r in res.values() if r["text"] and not r["error"]),
+                   "partial": sum(1 for r in res.values() if r["text"] and r["error"]),
+                   "failed": sum(1 for r in res.values() if not r["text"]),
+                   "cached": sum(1 for r in res.values() if r["cached"]),
+                   "selenium": sum(1 for r in res.values() if r["via"] == "selenium")}
+        upd(state="done", summary=summary,
+            results={k: {"ok": bool(v["text"]), "via": v["via"], "chars": len(v["text"]),
+                         "error": (v["error"] or "")[:160]} for k, v in res.items()})
+    except Exception as e:
+        upd(state="error", error=f"{type(e).__name__}: {str(e)[:200]}")
+
+
+def start_fulltext_job(body: dict) -> dict:
+    ids = body.get("ids") if isinstance(body.get("ids"), list) else []
+    ids = [str(i) for i in ids if i][:FULLTEXT_MAX_ARTICLES]
+    if not ids:
+        return {"ok": False, "error": "記事を1件以上選択してください"}
+    job_id = _new_job("fulltext", articles=len(ids))
+    threading.Thread(target=_run_fulltext, args=(job_id, ids), daemon=True).start()
+    return {"ok": True, "job_id": job_id, "articles": len(ids)}
+
+
+# ---- テーマ（保存した検索条件）・新着差分・ブリーフ
+
+def _clean_filters(f) -> dict:
+    """UI から来た検索条件を保存用に正規化する（情報源は id・不正値は捨てる）。"""
+    f = f if isinstance(f, dict) else {}
+    srcs = f.get("sources") if isinstance(f.get("sources"), list) else []
+    try:
+        days = max(0, min(int(f.get("days") or 0), 3650))
+    except (TypeError, ValueError):
+        days = 0
+    fr, to = f.get("from"), f.get("to")
+    return {"q": str(f.get("q") or "").strip()[:100],
+            "sources": [s.strip()[:60] for s in srcs if isinstance(s, str) and s.strip()][:50],
+            "category": f.get("category") if f.get("category") in CATEGORIES else "",
+            "days": days,
+            "from": fr.strip()[:10] if isinstance(fr, str) and _parse_day(fr) is not None else "",
+            "to": to.strip()[:10] if isinstance(to, str) and _parse_day(to) is not None else ""}
+
+
+def _source_names_conn(conn, ids: list[str]) -> list[str]:
+    ids = [i for i in ids if isinstance(i, str) and i][:50]
+    if not ids:
+        return []
+    names = {r[0]: r[1] for r in conn.execute(
+        "SELECT source_id, MAX(source) FROM articles WHERE source_id IN (%s) GROUP BY source_id"
+        % ",".join("?" * len(ids)), ids)}
+    return [names.get(i) or i for i in ids]
+
+
+def _source_names(ids: list[str]) -> list[str]:
+    """source_id → 表示名（過去ログに記録された名前。無ければ id のまま）。"""
+    with _archive_lock:
+        _archive_init_locked()
+        conn = _db()
+        try:
+            return _source_names_conn(conn, ids)
+        finally:
+            conn.close()
+
+
+def _theme_row(conn, r) -> dict:
+    f = json.loads(r["filters_json"] or "{}")
+    t = {"id": r["id"], "name": r["name"], "filters": f,
+         "created_at": r["created_at"], "updated_at": r["updated_at"],
+         "last_seen_at": r["last_seen_at"], "last_brief_at": r["last_brief_at"],
+         "last_brief_id": r["last_brief_id"]}
+    t["conds"] = _filters_conds({**f, "sources": _source_names_conn(conn, f.get("sources") or [])})
+    since, until = _filters_window(f)
+    where, params = _search_where(f.get("q", ""), f.get("sources"), since, until,
+                                  f.get("category") or None, None)
+    t["total"] = conn.execute("SELECT COUNT(*) FROM articles a" + where, params).fetchone()[0]
+    where, params = _search_where(f.get("q", ""), f.get("sources"), since, until,
+                                  f.get("category") or None, t["last_seen_at"] or 0.0)
+    t["new"] = conn.execute("SELECT COUNT(*) FROM articles a" + where, params).fetchone()[0]
+    return t
+
+
+def list_themes() -> list[dict]:
+    """テーマ一覧。new = 前回「既読」以降に過去ログへ入った該当記事の件数（archived_at 基準）。"""
+    with _archive_lock:
+        _archive_init_locked()
+        conn = _db()
+        try:
+            return [_theme_row(conn, r) for r in conn.execute("SELECT * FROM themes ORDER BY updated_at DESC")]
+        finally:
+            conn.close()
+
+
+def get_theme(tid: str) -> dict | None:
+    if not (isinstance(tid, str) and _ID_RE.fullmatch(tid)):
+        return None
+    with _archive_lock:
+        _archive_init_locked()
+        conn = _db()
+        try:
+            r = conn.execute("SELECT * FROM themes WHERE id = ?", (tid,)).fetchone()
+            return _theme_row(conn, r) if r else None
+        finally:
+            conn.close()
+
+
+def save_theme(body: dict) -> dict:
+    """現在の検索条件をテーマとして保存（id 指定があれば名前・条件を上書き）。"""
+    name = str(body.get("name") or "").strip()[:60]
+    if not name:
+        return {"ok": False, "error": "テーマ名を入力してください"}
+    filters = _clean_filters(body.get("filters"))
+    if not (filters["q"] or filters["sources"] or filters["category"]):
+        return {"ok": False, "error": "キーワード・情報源・カテゴリのいずれかを指定してください"}
+    tid = body.get("id") if isinstance(body.get("id"), str) and _ID_RE.fullmatch(body["id"]) else None
+    now = time.time()
+    with _archive_lock:
+        _archive_init_locked()
+        conn = _db()
+        try:
+            if tid and conn.execute("SELECT 1 FROM themes WHERE id = ?", (tid,)).fetchone():
+                conn.execute("UPDATE themes SET name = ?, filters_json = ?, updated_at = ? WHERE id = ?",
+                             (name, json.dumps(filters, ensure_ascii=False), now, tid))
+            else:
+                if conn.execute("SELECT COUNT(*) FROM themes").fetchone()[0] >= THEME_MAX:
+                    return {"ok": False, "error": f"テーマは最大 {THEME_MAX} 件までです"}
+                tid = secrets.token_hex(8)
+                conn.execute("INSERT INTO themes VALUES (?,?,?,?,?,?,?,?)",
+                             (tid, name, json.dumps(filters, ensure_ascii=False), now, now, now, None, None))
+            conn.commit()
+            t = _theme_row(conn, conn.execute("SELECT * FROM themes WHERE id = ?", (tid,)).fetchone())
+        finally:
+            conn.close()
+    return {"ok": True, "theme": t}
+
+
+def theme_seen(tid: str) -> dict:
+    """「既読にする」: 新着差分の基準時刻を今に更新。"""
+    if not (isinstance(tid, str) and _ID_RE.fullmatch(tid)):
+        return {"ok": False, "error": "unknown theme"}
+    with _archive_lock:
+        _archive_init_locked()
+        conn = _db()
+        try:
+            cur = conn.execute("UPDATE themes SET last_seen_at = ? WHERE id = ?", (time.time(), tid))
+            conn.commit()
+            if cur.rowcount <= 0:
+                return {"ok": False, "error": "unknown theme"}
+            t = _theme_row(conn, conn.execute("SELECT * FROM themes WHERE id = ?", (tid,)).fetchone())
+        finally:
+            conn.close()
+    return {"ok": True, "theme": t}
+
+
+def delete_theme(tid: str) -> bool:
+    if not (isinstance(tid, str) and _ID_RE.fullmatch(tid)):
+        return False
+    with _archive_lock:
+        _archive_init_locked()
+        conn = _db()
+        try:
+            cur = conn.execute("DELETE FROM themes WHERE id = ?", (tid,))
+            conn.commit()
+            return cur.rowcount > 0
+        finally:
+            conn.close()
+
+
+def _theme_set_brief(tid: str, report_id: str, at: float) -> None:
+    with _archive_lock:
+        _archive_init_locked()
+        conn = _db()
+        try:
+            conn.execute("UPDATE themes SET last_brief_at = ?, last_brief_id = ? WHERE id = ?", (at, report_id, tid))
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def start_theme_brief(body: dict) -> dict:
+    """テーマの「ブリーフ」: 直近N日（既定7日＝週次）または前回ブリーフ以降に入った該当記事で
+    レポート生成ジョブ（既定は要点ブリーフ）を開始する。完了時にテーマへ last_brief を記録。"""
+    t = get_theme(str(body.get("id") or ""))
+    if not t:
+        return {"ok": False, "error": "unknown theme"}
+    f = t["filters"]
+    try:
+        days = max(1, min(int(body.get("days") or 7), 365))
+    except (TypeError, ValueError):
+        days = 7
+    now = time.time()
+    use_last = body.get("since") == "last" and bool(t.get("last_brief_at"))
+    since = float(t["last_brief_at"]) if use_last else now - days * 86400
+    d0 = datetime.fromtimestamp(since, timezone.utc).astimezone().strftime("%Y-%m-%d")
+    d1 = datetime.fromtimestamp(now, timezone.utc).astimezone().strftime("%Y-%m-%d")
+    period = f"前回ブリーフ（{d0}）以降" if use_last else f"直近{days}日"
+    # 「前回以降」は保存日時（archived_at）基準＝前回のあと過去ログに入った記事。「直近N日」は公開日時基準
+    arts = archive_search(f.get("q", ""), REPORT_MAX_ARTICLES, f.get("sources"),
+                          None if use_last else since, None, f.get("category") or None,
+                          since if use_last else None)
+    if not arts:
+        return {"ok": False, "error": f"{period}に該当する記事がありません"}
+    template = body.get("template") if body.get("template") in REPORT_TEMPLATES else "brief"
+    filters = {"theme": t["name"], "q": f.get("q", ""), "sources": _source_names(f.get("sources") or []),
+               "category": f.get("category", ""), "hit": len(arts),
+               **({"from": d0, "to": d1, "days": 0} if use_last else {"days": days, "from": "", "to": ""})}
+    question = f"テーマ「{t['name']}」の{period}の動き（新しい事実・変化・注目点）を整理する"
+    r = start_report_job({"ids": [a["id"] for a in arts], "question": question, "template": template,
+                          "filters": filters, "fulltext": bool(body.get("fulltext")), "theme_id": t["id"],
+                          "title": f"ブリーフ: {t['name']}（{period}）"})
+    if r.get("ok"):
+        r.update(articles=len(arts), period=period)
+    return r
 
 
 # ---- 書き出し（Markdown / Word）
@@ -2044,19 +2488,19 @@ class Handler(BaseHTTPRequestHandler):
             g = lambda k, d="": (q.get(k) or [d])[0]
             sources = [s for s in g("sources").split(",") if s.strip()]
             category = g("category") if g("category") in CATEGORIES else None
-            since, until = _parse_day(g("from")), _parse_day(g("to"))
-            if until is not None:
-                until += 86400   # to は当日を含む
             try:
                 days = int(g("days") or 0)
             except ValueError:
                 days = 0
-            if days > 0 and since is None:
-                since = time.time() - days * 86400
-            arts = archive_search(g("q"), g("limit", "60"), sources, since, until, category)
+            since, until = _filters_window({"from": g("from"), "to": g("to"), "days": days})
+            try:   # テーマの「新着のみ」: 前回確認(epoch)より後に保存された記事だけ
+                archived = float(g("archived")) if g("archived") else None
+            except ValueError:
+                archived = None
+            arts = archive_search(g("q"), g("limit", "60"), sources, since, until, category, archived)
             self._json({"ok": True, "count": len(arts), "articles": arts, "stats": archive_stats(),
                         "filters": {"q": g("q"), "sources": sources, "category": category,
-                                    "from": g("from"), "to": g("to"), "days": days}})
+                                    "from": g("from"), "to": g("to"), "days": days, "archived": archived}})
             return
 
         if u.path == "/api/archive/stats":
@@ -2065,6 +2509,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if u.path == "/api/research/reports":   # 保存済みレポート一覧
             self._json({"ok": True, "reports": list_reports()})
+            return
+
+        if u.path == "/api/research/themes":   # 保存したテーマ（検索条件）一覧。新着件数つき
+            self._json({"ok": True, "themes": list_themes()})
             return
 
         if u.path == "/api/research/report":    # レポート1件
@@ -2202,7 +2650,28 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if u.path == "/api/research/report":  # レポート生成ジョブの開始（非同期・進捗は status で）
-            self._json(start_report_job(self._read_body()))
+            r = start_report_job(self._read_body())
+            self._json(r, 200 if r.get("ok") else 400)
+            return
+
+        if u.path == "/api/research/fulltext":  # 選択記事の本文一括取得ジョブ（進捗は report/status で）
+            r = start_fulltext_job(self._read_body())
+            self._json(r, 200 if r.get("ok") else 400)
+            return
+
+        if u.path == "/api/research/themes":  # テーマの保存（id があれば上書き）
+            r = save_theme(self._read_body())
+            self._json(r, 200 if r.get("ok") else 400)
+            return
+
+        if u.path == "/api/research/themes/seen":  # テーマを既読に（新着差分の基準時刻を更新）
+            r = theme_seen(str(self._read_body().get("id") or ""))
+            self._json(r, 200 if r.get("ok") else 404)
+            return
+
+        if u.path == "/api/research/themes/brief":  # テーマのブリーフ生成（直近N日 or 前回以降）
+            r = start_theme_brief(self._read_body())
+            self._json(r, 200 if r.get("ok") else 400)
             return
 
         if u.path == "/api/ai/chat":  # 生成AIへの質問
@@ -2221,6 +2690,11 @@ class Handler(BaseHTTPRequestHandler):
             rid = (parse_qs(u.query).get("id") or [""])[0]
             ok = delete_report(rid)
             self._json({"ok": ok} if ok else {"ok": False, "error": "unknown report"}, 200 if ok else 404)
+            return
+
+        if u.path == "/api/research/themes":   # テーマの削除
+            ok = delete_theme((parse_qs(u.query).get("id") or [""])[0])
+            self._json({"ok": ok} if ok else {"ok": False, "error": "unknown theme"}, 200 if ok else 404)
             return
 
         if u.path == "/api/sources":
