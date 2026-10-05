@@ -54,11 +54,17 @@ App Portal（`launcher/`）にも `Prism ニュースポータル` として登�
   記事を条件検索できる。
 - **リサーチ（過去ログ×AI）** — 上部のリサーチボタンで専用ウィンドウを起動。
   **情報源（複数選択）× 期間（直近N日 or 日付範囲）× カテゴリ × キーワード（AND）**
-  を組み合わせて過去ログを絞り込み、ヒットした記事をチェックボックスで選択（既定は上位
-  20件・最大30件をAIへ）。右ペインでローカルLLM等に「期間内の動きを時系列で要約」
-  「情報源ごとに要点を整理」等を依頼でき（クイック依頼ボタンつき）、**検索条件（情報源・
-  期間・キーワード・該当件数）が依頼文に明示**されるので、LLM は対象範囲を踏まえて答える。
-  推論モデルの思考過程は折りたたみ表示。
+  を組み合わせて過去ログを絞り込み、ヒットした記事をチェックボックスで選択。右ペインで
+  ローカルLLM等に質問でき（クイック依頼ボタンつき、会話は上位30件が対象）、**検索条件
+  （情報源・期間・キーワード・該当件数）が依頼文に明示**される。推論モデルの思考過程は
+  折りたたみ表示。
+- **調査レポート生成（map-reduce・出典番号つき）** — 「レポート生成」で、**選択した
+  記事すべて**（最大300件）を対象に、部分要約（記事をチャンク分割して並列に要点抽出）→
+  多段統合 → 構成テンプレート（概況レポート／時系列レポート／要点ブリーフ）に沿った
+  Markdown レポートを作る。各文に **[n] 形式の出典番号**が付き、クリックで元記事へ。
+  範囲外の番号は自動除去。生成は非同期ジョブで進捗バー表示（ローカルLLMでも画面を
+  閉じて待てる）。結果は SQLite に**保存**され、「保存済みレポート」から再表示・削除、
+  **Markdown コピー／.md／Word(.docx) で書き出し**（.docx は標準ライブラリのみで生成）。
 - **トレンド** — 見出しから多く出現する語を抽出してチップ表示。クリックで即フィルタ。
 - **保存（ブックマーク）** — 記事を保存してドロワーで一覧。ブラウザの localStorage に
   永続化されるのでフィードが入れ替わっても残る。
@@ -240,6 +246,12 @@ UI の「情報源」から自由に 追加 / 無効化 / 削除でき、URL も
 | POST | `/api/proxy/test` | プロキシ接続テスト（JSON: `use_proxy`, `proxy_url`, `ca_bundle`, `url?`。**保存せず**その設定で1回取得を試し、状態/件数/所要時間を返す） |
 | GET | `/api/archive/search?q=&sources=&days=&from=&to=&category=&limit=` | 過去ログの条件検索（キーワードAND・情報源(カンマ区切りid)・直近N日 or 日付範囲・カテゴリ、新着順） |
 | GET | `/api/archive/stats` | 過去ログの件数・期間・情報源別/カテゴリ別件数 |
+| POST | `/api/research/report` | レポート生成ジョブの開始（JSON: `ids[]`, `question?`, `template?`=overview/timeline/brief, `filters?`）→ `job_id` |
+| GET | `/api/research/report/status?id=` | 生成ジョブの進捗（state=queued/mapping/reducing/done/error, done/total） |
+| GET | `/api/research/reports` | 保存済みレポート一覧 |
+| GET | `/api/research/report?id=` | レポート1件（Markdown・出典・統計） |
+| GET | `/api/research/report/export?id=&fmt=md\|docx` | Markdown / Word で書き出し（ダウンロード） |
+| DELETE | `/api/research/report?id=` | レポート削除 |
 | POST | `/api/ai/chat` | AIへの質問（JSON: `question`, `history`, `context`, `fetch_page?`） |
 
 > 書き込み系（POST/DELETE）は Origin/Referer を検証し、ブラウザからのクロスサイト

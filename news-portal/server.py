@@ -19,10 +19,12 @@ import argparse
 import gzip
 import hashlib
 import html
+import io
 import ipaddress
 import json
 import os
 import re
+import secrets
 import socket
 import sqlite3
 import ssl
@@ -30,6 +32,7 @@ import sys
 import threading
 import time
 import webbrowser
+import zipfile
 import zlib
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -731,6 +734,10 @@ def _archive_init_locked() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS ix_articles_sort ON articles(sort_ts DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS ix_articles_src ON articles(source_id, sort_ts DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS ix_articles_cat ON articles(category, sort_ts DESC)")
+        conn.execute("""CREATE TABLE IF NOT EXISTS reports(
+            id TEXT PRIMARY KEY, created_at REAL, title TEXT, question TEXT, template TEXT,
+            filters_json TEXT, article_ids_json TEXT, markdown TEXT, sources_json TEXT,
+            model TEXT, stats_json TEXT)""")   # リサーチのレポート（生成結果の保存）
         if ARCHIVE_FILE.exists():   # 旧 JSONL → SQLite 取り込み（取り込み後は .imported に退避）
             rows = []
             try:
@@ -1277,8 +1284,10 @@ def _split_reasoning(text: str) -> tuple[str, str]:
     return answer, reasoning
 
 
-def call_ai(cfg: dict, system: str, user_content: str, history: list[dict]) -> str:
-    """provider に応じて生成AIを呼び出し、本文テキストを返す。"""
+def call_ai(cfg: dict, system: str, user_content: str, history: list[dict],
+            max_tokens: int | None = None) -> str:
+    """provider に応じて生成AIを呼び出し、本文テキストを返す。
+    max_tokens はクラウド向けの応答上限（省略時 AI_MAX_TOKENS。ローカルは常に上限なし）。"""
     provider, key, model = cfg["provider"], cfg["api_key"], cfg["model"]
     base = cfg["base_url"].rstrip("/")
     # history は [{role, content(str)}]（user/assistant のみ想定）
@@ -1289,7 +1298,7 @@ def call_ai(cfg: dict, system: str, user_content: str, history: list[dict]) -> s
     if provider == "anthropic":
         url = (base or "https://api.anthropic.com") + "/v1/messages"
         body = {"model": model or "claude-opus-4-8",
-                "max_tokens": AI_MAX_TOKENS, "messages": msgs}
+                "max_tokens": max_tokens or AI_MAX_TOKENS, "messages": msgs}
         if system:
             body["system"] = system
         data = _http_json(url, body, {
@@ -1314,7 +1323,7 @@ def call_ai(cfg: dict, system: str, user_content: str, history: list[dict]) -> s
         # 生の思考が漏れるため、上限を課さない（サーバー既定=EOSまで）。時間も長めに
         timeout = AI_TIMEOUT_LOCAL
     else:
-        body["max_tokens"] = AI_MAX_TOKENS
+        body["max_tokens"] = max_tokens or AI_MAX_TOKENS
         timeout = AI_TIMEOUT
     headers = {"Authorization": "Bearer " + key} if key else {}   # ローカルはキー任意
     data = _http_json(url, body, headers, no_proxy=no_proxy, timeout=timeout)
@@ -1364,22 +1373,7 @@ def ai_chat(payload: dict) -> dict:
     elif ctx.get("kind") == "research":   # リサーチ画面: 検索でヒットした記事群
         # 検索条件（情報源×期間×キーワード）を明示して、LLMが対象範囲を踏まえて答えられるようにする
         f = ctx.get("filters") if isinstance(ctx.get("filters"), dict) else {}
-        conds = []
-        if f.get("q"):
-            conds.append(f"キーワード「{str(f['q'])[:100]}」")
-        srcn = ([str(x)[:40] for x in f.get("sources") if x][:20]
-                if isinstance(f.get("sources"), list) else [])
-        if srcn:
-            conds.append("情報源: " + "・".join(srcn))
-        if f.get("category"):
-            conds.append(f"カテゴリ: {str(f['category'])[:20]}")
-        if f.get("from") or f.get("to"):
-            conds.append(f"期間: {str(f.get('from') or '')[:10]}〜{str(f.get('to') or '')[:10]}")
-        elif f.get("days"):
-            try:
-                conds.append(f"期間: 直近{int(f['days'])}日")
-            except (TypeError, ValueError):
-                pass
+        conds = _filters_conds(f)
         items = (ctx.get("items") or [])[:30]
         if conds:
             parts.append("【検索条件】" + " ／ ".join(conds))
@@ -1432,6 +1426,440 @@ def ai_chat(payload: dict) -> dict:
         return {"ok": False, "error": str(e)}
     except Exception as e:   # 想定外も UI に見せる
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+# ------------------------------------------------------------------ リサーチ: レポート生成（map-reduce・出典番号つき）
+
+REPORT_MAX_ARTICLES = 300       # 1レポートの対象記事上限
+REPORT_CHUNK_CHARS_LOCAL = 3500 # 部分要約1回に渡す記事テキストの文字数（ローカルLLM）
+REPORT_CHUNK_CHARS_CLOUD = 12000
+REPORT_PARALLEL_LOCAL = 2       # 部分要約の並列数（ローカルサーバーは直列化されることが多い）
+REPORT_PARALLEL_CLOUD = 4
+REPORT_MAX_TOKENS = 4000        # クラウド向けの応答上限（ローカルは上限を課さない）
+REPORT_TEMPLATES = {
+    "overview": ("概況レポート", [
+        "概況（3〜5文で全体像）",
+        "主要トピック（3〜6項目。項目ごとに小見出し＋2〜4文）",
+        "時系列の流れ（日付順の箇条書き）",
+        "情報源ごとの視点の違い（あれば）",
+        "示唆・次に注目すべき点",
+    ]),
+    "timeline": ("時系列レポート", [
+        "期間の概況（2〜3文）",
+        "時系列（日付順。1行1出来事「YYYY-MM-DD 媒体: 内容 [n]」）",
+        "転換点・変化（あれば）",
+        "今後の注目点",
+    ]),
+    "brief": ("要点ブリーフ", [
+        "要点（5項目以内。各項目1〜2文＋出典番号）",
+        "ひとこと所感（1〜2文）",
+    ]),
+}
+_jobs: dict[str, dict] = {}       # レポート生成ジョブ（メモリ上。完了結果は SQLite の reports に保存）
+_jobs_lock = threading.Lock()
+_CITE_RE = re.compile(r"\[(\d{1,3})\]")
+
+
+def _filters_conds(f: dict) -> list[str]:
+    """リサーチの検索条件（情報源×期間×カテゴリ×キーワード）を日本語の条件文に。"""
+    conds: list[str] = []
+    if not isinstance(f, dict):
+        return conds
+    if f.get("q"):
+        conds.append(f"キーワード「{str(f['q'])[:100]}」")
+    srcn = ([str(x)[:40] for x in f.get("sources") if x][:20]
+            if isinstance(f.get("sources"), list) else [])
+    if srcn:
+        conds.append("情報源: " + "・".join(srcn))
+    if f.get("category"):
+        conds.append(f"カテゴリ: {str(f['category'])[:20]}")
+    if f.get("from") or f.get("to"):
+        conds.append(f"期間: {str(f.get('from') or '')[:10]}〜{str(f.get('to') or '')[:10]}")
+    elif f.get("days"):
+        try:
+            conds.append(f"期間: 直近{int(f['days'])}日")
+        except (TypeError, ValueError):
+            pass
+    return conds
+
+
+def _report_fetch(ids: list) -> list[dict]:
+    """過去ログから id で記事を引く（新着順・上限 REPORT_MAX_ARTICLES）。"""
+    ids = [i for i in ids if isinstance(i, str) and i][:REPORT_MAX_ARTICLES]
+    if not ids:
+        return []
+    found: dict[str, dict] = {}
+    with _archive_lock:
+        _archive_init_locked()
+        conn = _db()
+        try:
+            for i in range(0, len(ids), 400):
+                part = ids[i:i + 400]
+                for r in conn.execute("SELECT * FROM articles WHERE id IN (%s)"
+                                      % ",".join("?" * len(part)), part):
+                    found[r["id"]] = dict(r)
+        finally:
+            conn.close()
+    arts = list(found.values())
+    arts.sort(key=lambda a: a.get("sort_ts") or 0.0, reverse=True)
+    return arts
+
+
+def _article_line(n: int, a: dict) -> str:
+    d = str(a.get("published") or "")[:10]
+    s = f"[{n}] {d} {a.get('source') or ''}｜{a.get('title') or ''}"
+    if a.get("summary"):
+        s += "\n   " + str(a["summary"])[:300]
+    return s
+
+
+def _chunk_lines(lines: list[str], budget: int) -> list[list[str]]:
+    """文字数の予算で行を貪欲にまとめる（1行が予算超でも単独で1チャンク）。"""
+    chunks: list[list[str]] = []
+    cur: list[str] = []
+    size = 0
+    for ln in lines:
+        if cur and size + len(ln) > budget:
+            chunks.append(cur)
+            cur, size = [], 0
+        cur.append(ln)
+        size += len(ln) + 1
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+
+def _report_system(local: bool) -> str:
+    s = ("あなたは産業ニュースの調査アナリストです。与えられた記事情報のみに基づき、"
+         "日本語で正確・簡潔に書いてください。事実や数値には必ず出典番号 [n]（与えられた"
+         "番号のみ）を付け、記事に無い事実・推測・一般論を加えないでください。")
+    if local:
+        s += ("\n出力規律: 思考過程・下書き・途中の検討は出力せず、求められた本文だけを"
+              "書いてください。思考を書く必要がある場合は必ず <think> と </think> で囲んでください。")
+    return s
+
+
+def _map_prompt(question: str, chunk_text: str) -> str:
+    return (f"【問い】{question}\n\n【記事（[番号] 日付 媒体｜見出し／要約）】\n{chunk_text}\n\n"
+            "【指示】上の記事から、問いに関係する事実・数値・論点を箇条書きで抽出してください。\n"
+            "- 各項目は「YYYY-MM-DD 媒体: 内容 [n]」の形で、末尾に必ず出典番号を付ける（複数可 [1][3]）\n"
+            "- 関係の薄い記事は省いてよい。推測・一般論・感想は書かない\n"
+            "- 最大12項目。箇条書きのみを出力する")
+
+
+def _merge_prompt(question: str, notes: str) -> str:
+    return (f"【問い】{question}\n\n【部分メモ】\n{notes}\n\n"
+            "【指示】部分メモの重複を統合し、問いに関係する事実を日付順の箇条書きにまとめ直してください。"
+            "各項目の末尾の出典番号 [n] は必ず残す（統合した項目は番号を併記）。新しい事実を加えない。"
+            "最大20項目。箇条書きのみを出力する")
+
+
+def _reduce_prompt(question: str, tname: str, sections: list[str], notes: str,
+                   n_articles: int, filters: dict) -> str:
+    conds = _filters_conds(filters)
+    heads = "\n".join(f"{i}. ## {s}" for i, s in enumerate(sections, 1))
+    return (f"【問い】{question}\n"
+            + (f"【検索条件】{' ／ '.join(conds)}\n" if conds else "")
+            + f"【対象】記事 {n_articles} 件（出典番号 [1]〜[{n_articles}]）\n\n"
+            f"【部分メモ】\n{notes}\n\n"
+            f"【指示】部分メモを統合し、Markdown で「{tname}」を書いてください。構成は次の見出し（## で始める）を順に:\n{heads}\n"
+            "- 各文・各箇条書きの末尾に根拠の出典番号 [n] を付ける（与えられた番号のみ使う）\n"
+            "- 重複は統合し、矛盾があれば両論を併記する。新しい事実を加えない\n"
+            "- 日付は YYYY-MM-DD で書く。「# 」のタイトル行は不要（こちらで付けます）")
+
+
+def _strip_bad_cites(text: str, n: int) -> tuple[str, int]:
+    """範囲外の出典番号 [k] を取り除く。戻り値 (text, 除去数)。"""
+    bad = 0
+    def _sub(m):
+        nonlocal bad
+        k = int(m.group(1))
+        if 1 <= k <= n:
+            return m.group(0)
+        bad += 1
+        return ""
+    return _CITE_RE.sub(_sub, text), bad
+
+
+def _report_title(question: str, filters: dict, tname: str) -> str:
+    conds = _filters_conds(filters)
+    core = question.strip()
+    if not core or core == _default_question(filters):
+        core = " × ".join(c.split(": ", 1)[-1].replace("キーワード", "").strip("「」")
+                          for c in conds) or "過去ログ"
+    return f"{tname}: {core[:60]}"
+
+
+def _default_question(filters: dict) -> str:
+    conds = _filters_conds(filters)
+    return ("選択した記事群（" + " ／ ".join(conds) + "）の動向を整理する") if conds \
+        else "選択した記事群の動向を整理する"
+
+
+def _save_report(rep: dict) -> None:
+    with _archive_lock:
+        _archive_init_locked()
+        conn = _db()
+        try:
+            conn.execute("INSERT OR REPLACE INTO reports VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                         (rep["id"], rep["created_at"], rep["title"], rep["question"], rep["template"],
+                          json.dumps(rep["filters"], ensure_ascii=False),
+                          json.dumps(rep["article_ids"], ensure_ascii=False),
+                          rep["markdown"], json.dumps(rep["sources"], ensure_ascii=False),
+                          rep["model"], json.dumps(rep["stats"], ensure_ascii=False)))
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def _row_to_report(r) -> dict:
+    return {"id": r["id"], "created_at": r["created_at"], "title": r["title"],
+            "question": r["question"], "template": r["template"],
+            "filters": json.loads(r["filters_json"] or "{}"),
+            "article_ids": json.loads(r["article_ids_json"] or "[]"),
+            "markdown": r["markdown"], "sources": json.loads(r["sources_json"] or "[]"),
+            "model": r["model"], "stats": json.loads(r["stats_json"] or "{}")}
+
+
+def list_reports(limit: int = 100) -> list[dict]:
+    with _archive_lock:
+        _archive_init_locked()
+        conn = _db()
+        try:
+            rows = conn.execute("SELECT id, created_at, title, template, article_ids_json FROM reports "
+                                "ORDER BY created_at DESC LIMIT ?", (max(1, min(int(limit), 500)),))
+            return [{"id": r["id"], "created_at": r["created_at"], "title": r["title"],
+                     "template": r["template"],
+                     "articles": len(json.loads(r["article_ids_json"] or "[]"))} for r in rows]
+        finally:
+            conn.close()
+
+
+def get_report(rid: str) -> dict | None:
+    with _archive_lock:
+        _archive_init_locked()
+        conn = _db()
+        try:
+            r = conn.execute("SELECT * FROM reports WHERE id = ?", (rid,)).fetchone()
+            return _row_to_report(r) if r else None
+        finally:
+            conn.close()
+
+
+def delete_report(rid: str) -> bool:
+    with _archive_lock:
+        _archive_init_locked()
+        conn = _db()
+        try:
+            cur = conn.execute("DELETE FROM reports WHERE id = ?", (rid,))
+            conn.commit()
+            return cur.rowcount > 0
+        finally:
+            conn.close()
+
+
+def _run_report(job_id: str, question: str, template: str, ids: list, filters: dict) -> None:
+    """ワーカースレッド: 部分要約(map) → 統合(reduce) → 保存。進捗は _jobs に書く。"""
+    def upd(**kw):
+        with _jobs_lock:
+            _jobs[job_id].update(kw)
+    try:
+        cfg = ai_config()
+        if cfg["provider"] != "local" and not cfg["api_key"]:
+            raise RuntimeError("生成AI APIが未設定です")
+        arts = _report_fetch(ids)
+        if not arts:
+            raise RuntimeError("対象記事が過去ログに見つかりません")
+        local = cfg["provider"] == "local"
+        budget = REPORT_CHUNK_CHARS_LOCAL if local else REPORT_CHUNK_CHARS_CLOUD
+        par = REPORT_PARALLEL_LOCAL if local else REPORT_PARALLEL_CLOUD
+        system = _report_system(local)
+        lines = [_article_line(i + 1, a) for i, a in enumerate(arts)]
+        chunks = _chunk_lines(lines, budget)
+        upd(state="mapping", total=len(chunks), done=0, articles=len(arts))
+
+        def do_map(ch: list[str]) -> str:
+            txt = call_ai(cfg, system, _map_prompt(question, "\n".join(ch)), [],
+                          max_tokens=REPORT_MAX_TOKENS)
+            ans, _ = _split_reasoning(txt)
+            with _jobs_lock:
+                _jobs[job_id]["done"] += 1
+            return ans
+
+        with ThreadPoolExecutor(max_workers=max(1, min(par, len(chunks)))) as ex:
+            notes = [n for n in ex.map(do_map, chunks) if n]
+        upd(state="reducing")
+        notes_text = "\n\n".join(notes)
+        if len(notes) > 1 and len(notes_text) > budget * 2:   # 多段統合（メモが長すぎる場合）
+            mids = []
+            for g in _chunk_lines(notes_text.split("\n"), budget * 2):
+                t = call_ai(cfg, system, _merge_prompt(question, "\n".join(g)), [],
+                            max_tokens=REPORT_MAX_TOKENS)
+                mids.append(_split_reasoning(t)[0])
+            notes_text = "\n\n".join(m for m in mids if m)
+        tname, sections = REPORT_TEMPLATES.get(template) or REPORT_TEMPLATES["overview"]
+        body = call_ai(cfg, system, _reduce_prompt(question, tname, sections, notes_text, len(arts), filters),
+                       [], max_tokens=REPORT_MAX_TOKENS)
+        body, _ = _split_reasoning(body)
+        body = re.sub(r"^\s*#\s[^\n]*\n", "", body, count=1)   # 念のため先頭のタイトル行を除去
+        body, bad = _strip_bad_cites(body, len(arts))
+        rep = {
+            "id": job_id, "created_at": time.time(),
+            "title": _report_title(question, filters, tname),
+            "question": question, "template": template if template in REPORT_TEMPLATES else "overview",
+            "filters": filters, "article_ids": [a["id"] for a in arts],
+            "markdown": body.strip(),
+            "sources": [{"n": i + 1, "id": a["id"], "title": a.get("title"), "source": a.get("source"),
+                         "published": str(a.get("published") or "")[:10], "link": a.get("link")}
+                        for i, a in enumerate(arts)],
+            "model": f"{cfg['provider']}:{cfg['model'] or 'default'}",
+            "stats": {"articles": len(arts), "chunks": len(chunks), "bad_cites": bad},
+        }
+        _save_report(rep)
+        upd(state="done", report_id=rep["id"], title=rep["title"])
+    except Exception as e:
+        upd(state="error", error=f"{type(e).__name__}: {str(e)[:200]}")
+
+
+def start_report_job(body: dict) -> dict:
+    ids = body.get("ids") if isinstance(body.get("ids"), list) else []
+    ids = [str(i) for i in ids if i][:REPORT_MAX_ARTICLES]
+    if not ids:
+        return {"ok": False, "error": "記事を1件以上選択してください"}
+    filters = body.get("filters") if isinstance(body.get("filters"), dict) else {}
+    question = (str(body.get("question") or "")).strip()[:300] or _default_question(filters)
+    template = body.get("template") if body.get("template") in REPORT_TEMPLATES else "overview"
+    job_id = secrets.token_hex(8)
+    with _jobs_lock:
+        # 古いジョブの掃除（完了・失敗から1時間）
+        now = time.time()
+        for k in [k for k, j in _jobs.items()
+                  if j.get("state") in ("done", "error") and now - j.get("created", now) > 3600]:
+            _jobs.pop(k, None)
+        _jobs[job_id] = {"id": job_id, "state": "queued", "total": 0, "done": 0,
+                         "articles": len(ids), "created": now}
+    threading.Thread(target=_run_report, args=(job_id, question, template, ids, filters),
+                     daemon=True).start()
+    return {"ok": True, "job_id": job_id}
+
+
+def report_job_status(job_id: str) -> dict:
+    with _jobs_lock:
+        j = _jobs.get(job_id)
+        return {"ok": True, **j} if j else {"ok": False, "error": "unknown job"}
+
+
+# ---- 書き出し（Markdown / Word）
+
+def report_markdown(rep: dict) -> str:
+    conds = _filters_conds(rep.get("filters") or {})
+    d = datetime.fromtimestamp(rep["created_at"], timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
+    head = [f"# {rep['title']}", "",
+            f"- 作成: {d}", f"- 問い: {rep['question']}",
+            f"- 対象記事: {len(rep.get('sources') or [])} 件"]
+    if conds:
+        head.append("- 検索条件: " + " ／ ".join(conds))
+    out = "\n".join(head) + "\n\n" + rep["markdown"].strip() + "\n\n## 出典\n"
+    for s in rep.get("sources") or []:
+        out += f"- [{s['n']}] {s.get('published') or ''} {s.get('source') or ''}｜{s.get('title') or ''}"
+        if s.get("link"):
+            out += f" <{s['link']}>"
+        out += "\n"
+    return out
+
+
+def _xml(s: str) -> str:
+    return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            .replace('"', "&quot;"))
+
+
+def _docx_runs(text: str) -> str:
+    """**太字** を w:b の run に分ける。それ以外は平文 run。"""
+    out = []
+    for i, part in enumerate(text.split("**")):
+        if not part:
+            continue
+        rpr = "<w:rPr><w:b/></w:rPr>" if i % 2 == 1 else ""
+        out.append(f'<w:r>{rpr}<w:t xml:space="preserve">{_xml(part)}</w:t></w:r>')
+    return "".join(out)
+
+
+def report_docx(rep: dict) -> bytes:
+    """標準ライブラリ(zipfile)だけで最小構成の .docx を生成する。"""
+    conds = _filters_conds(rep.get("filters") or {})
+    d = datetime.fromtimestamp(rep["created_at"], timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
+    paras: list[tuple[str, str]] = [("Title", rep["title"]),
+                                    ("Meta", f"作成: {d}　対象記事: {len(rep.get('sources') or [])} 件"),
+                                    ("Meta", f"問い: {rep['question']}")]
+    if conds:
+        paras.append(("Meta", "検索条件: " + " ／ ".join(conds)))
+    for line in rep["markdown"].splitlines():
+        s = line.rstrip()
+        if not s.strip():
+            continue
+        if s.startswith("### "):
+            paras.append(("Heading3", s[4:]))
+        elif s.startswith("## "):
+            paras.append(("Heading2", s[3:]))
+        elif s.startswith("# "):
+            paras.append(("Heading1", s[2:]))
+        elif re.match(r"^\s*[-*・] ", s):
+            paras.append(("Bullet", "• " + re.sub(r"^\s*[-*・] ", "", s)))
+        elif re.match(r"^\s*\d+[.)] ", s):
+            paras.append(("Bullet", s.strip()))
+        else:
+            paras.append(("Normal", s.strip()))
+    paras.append(("Heading2", "出典"))
+    for src in rep.get("sources") or []:
+        t = f"[{src['n']}] {src.get('published') or ''} {src.get('source') or ''}｜{src.get('title') or ''}"
+        if src.get("link"):
+            t += f"  {src['link']}"
+        paras.append(("Source", t))
+    body = "".join(f'<w:p><w:pPr><w:pStyle w:val="{st}"/></w:pPr>{_docx_runs(tx)}</w:p>' for st, tx in paras)
+    W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+    document = (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document {W}><w:body>{body}'
+                '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/>'
+                '<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>')
+    def style(sid, name, size, bold=False, color=None, before=0, after=120, indent=0):
+        rpr = f'<w:sz w:val="{size}"/>' + ('<w:b/>' if bold else '') + (f'<w:color w:val="{color}"/>' if color else '')
+        ppr = f'<w:spacing w:before="{before}" w:after="{after}"/>' + (f'<w:ind w:left="{indent}"/>' if indent else '')
+        return (f'<w:style w:type="paragraph" w:styleId="{sid}"><w:name w:val="{name}"/>'
+                f'<w:pPr>{ppr}</w:pPr><w:rPr>{rpr}</w:rPr></w:style>')
+    styles = (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles {W}>'
+              '<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Yu Gothic" w:hAnsi="Yu Gothic" '
+              'w:eastAsia="Yu Gothic"/><w:sz w:val="21"/></w:rPr></w:rPrDefault></w:docDefaults>'
+              + style("Normal", "Normal", 21)
+              + style("Title", "Title", 36, True, before=0, after=200)
+              + style("Meta", "Meta", 18, color="666666", after=60)
+              + style("Heading1", "heading 1", 30, True, before=360, after=120)
+              + style("Heading2", "heading 2", 26, True, color="1F3864", before=320, after=120)
+              + style("Heading3", "heading 3", 23, True, before=240, after=80)
+              + style("Bullet", "Bullet", 21, indent=360, after=60)
+              + style("Source", "Source", 17, color="444444", after=40)
+              + '</w:styles>')
+    content_types = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                     '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+                     '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+                     '<Default Extension="xml" ContentType="application/xml"/>'
+                     '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+                     '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>'
+                     '</Types>')
+    rels = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
+            '</Relationships>')
+    doc_rels = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
+                '</Relationships>')
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", content_types)
+        z.writestr("_rels/.rels", rels)
+        z.writestr("word/document.xml", document)
+        z.writestr("word/styles.xml", styles)
+        z.writestr("word/_rels/document.xml.rels", doc_rels)
+    return buf.getvalue()
 
 
 # ------------------------------------------------------------------ デモ記事（オフライン時）
@@ -1524,6 +1952,16 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _send_bytes(self, data: bytes, ctype: str, filename: str) -> None:
+        """ファイルダウンロード応答（Content-Disposition は RFC 5987 で UTF-8 名を渡す）。"""
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Disposition", "attachment; filename*=UTF-8''" + quote(filename))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
     def _same_origin(self) -> bool:
         """ブラウザからのクロスサイト書き込み(CSRF)を弾く。
@@ -1623,6 +2061,37 @@ class Handler(BaseHTTPRequestHandler):
 
         if u.path == "/api/archive/stats":
             self._json({"ok": True, **archive_stats()})
+            return
+
+        if u.path == "/api/research/reports":   # 保存済みレポート一覧
+            self._json({"ok": True, "reports": list_reports()})
+            return
+
+        if u.path == "/api/research/report":    # レポート1件
+            rep = get_report((parse_qs(u.query).get("id") or [""])[0])
+            self._json({"ok": True, "report": rep} if rep else {"ok": False, "error": "unknown report"},
+                       200 if rep else 404)
+            return
+
+        if u.path == "/api/research/report/status":   # 生成ジョブの進捗
+            self._json(report_job_status((parse_qs(u.query).get("id") or [""])[0]))
+            return
+
+        if u.path == "/api/research/report/export":   # Markdown / Word で書き出し
+            q = parse_qs(u.query)
+            rep = get_report((q.get("id") or [""])[0])
+            if not rep:
+                self._json({"ok": False, "error": "unknown report"}, 404)
+                return
+            fmt = (q.get("fmt") or ["md"])[0]
+            safe = re.sub(r"[\\/:*?\"<>|\r\n]+", "_", rep["title"])[:60] or "report"
+            if fmt == "docx":
+                self._send_bytes(report_docx(rep),
+                                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                 safe + ".docx")
+            else:
+                self._send_bytes(report_markdown(rep).encode("utf-8"),
+                                 "text/markdown; charset=utf-8", safe + ".md")
             return
 
         if u.path == "/api/settings":
@@ -1732,6 +2201,10 @@ class Handler(BaseHTTPRequestHandler):
             self._json(proxy_test(self._read_body()))
             return
 
+        if u.path == "/api/research/report":  # レポート生成ジョブの開始（非同期・進捗は status で）
+            self._json(start_report_job(self._read_body()))
+            return
+
         if u.path == "/api/ai/chat":  # 生成AIへの質問
             self._json(ai_chat(self._read_body()))
             return
@@ -1744,6 +2217,12 @@ class Handler(BaseHTTPRequestHandler):
         if not self._same_origin():
             self._json({"error": "cross-origin request refused"}, 403)
             return
+        if u.path == "/api/research/report":   # 保存済みレポートの削除
+            rid = (parse_qs(u.query).get("id") or [""])[0]
+            ok = delete_report(rid)
+            self._json({"ok": ok} if ok else {"ok": False, "error": "unknown report"}, 200 if ok else 404)
+            return
+
         if u.path == "/api/sources":
             sid = (parse_qs(u.query).get("id") or [""])[0]
             remain, changed = delete_source(sid)

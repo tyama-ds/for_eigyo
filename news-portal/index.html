@@ -436,6 +436,36 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
 .rs__srcrow .c{font-size:11px; color:var(--text-3)}
 .rs__srchead{display:flex; justify-content:space-between; align-items:center; font-size:11.5px; color:var(--text-3); padding:2px 6px 6px}
 .rs__srchead button{font-size:11.5px; color:var(--accent); background:none; border:none; cursor:pointer}
+/* リサーチ: レポート生成UI */
+.rs__tools{display:flex; align-items:center; gap:8px; padding:10px 14px 0; flex-wrap:wrap}
+.rs__form{display:flex; flex-direction:column; gap:7px; margin:8px 14px 0; padding:10px 12px; border:1px solid var(--line);
+  border-radius:11px; background:var(--surface-2)}
+.rs__form input{padding:7px 10px; border-radius:8px; border:1px solid var(--line); background:var(--surface); color:var(--text);
+  font:inherit; font-size:13px; outline:none}
+.rs__form[hidden]{display:none}   /* display 指定が hidden 属性を打ち消さないように */
+.rs__form input:focus{border-color:var(--accent)}
+.rs__bar .btn{white-space:nowrap}
+.rs__formrow{display:flex; align-items:center; gap:8px; flex-wrap:wrap}
+.rs__formrow select{padding:5px 8px; border-radius:8px; background:var(--surface); border:1px solid var(--line); color:var(--text); font:inherit; font-size:12px}
+.rs__savedpanel{min-width:320px; max-width:440px}
+.rs__rep{width:100%; text-align:left; background:none; border:none; color:var(--text); font:inherit}
+.bubble.rpt, .bubble.rpt-progress{max-width:100%; width:100%; white-space:normal}
+.rpt__title{font-family:var(--font-serif); font-weight:700; font-size:16px; margin-bottom:3px}
+.rpt__meta, .rpt__q{font-size:11.5px; color:var(--text-3)} .rpt__q{margin-bottom:8px}
+.rpt__body h3.rpt__h{font-size:14px; margin:12px 0 4px; font-weight:700; color:var(--accent)}
+.rpt__body h4.rpt__h{font-size:13px; margin:10px 0 3px; font-weight:700}
+.rpt__body p{margin:4px 0}
+.rpt__body ul, .rpt__body ol{margin:4px 0 4px 18px; padding:0}
+.rpt__body li{margin:2px 0}
+.cite{font-size:10.5px; vertical-align:super; color:var(--accent); text-decoration:none; margin-left:1px}
+.cite:hover{text-decoration:underline}
+.rpt__src{margin-top:10px; font-size:12px; color:var(--text-2)} .rpt__src summary{cursor:pointer; font-weight:600}
+.rpt__src ol{margin:6px 0 0 18px; padding:0} .rpt__src li{margin:2px 0; word-break:break-all} .rpt__src .n{color:var(--text-3)}
+.rpt__acts{display:flex; gap:6px; flex-wrap:wrap; margin-top:10px}
+.rpt__acts a.btn{text-decoration:none; display:inline-flex; align-items:center}
+.rpt-progress__t{font-weight:600; font-size:13px; margin-bottom:6px}
+.pbar{height:6px; border-radius:99px; background:var(--surface-2); border:1px solid var(--line); overflow:hidden; margin-bottom:6px}
+.pbar i{display:block; height:100%; background:var(--accent); transition:width .4s}
 .rs__count{font-size:12px; color:var(--text-3)}
 .rs__list{flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain; display:flex; flex-direction:column; gap:2px}
 .rrow{display:flex; gap:9px; align-items:flex-start; padding:8px 9px; border-radius:10px; cursor:pointer; border:1px solid transparent}
@@ -825,6 +855,28 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
       <div class="rs__list" id="rsList"></div>
     </div>
     <div class="rs__chat">
+      <div class="rs__tools">
+        <button class="btn sm" type="button" id="rsReportBtn">レポート生成</button>
+        <div class="rs__src">
+          <button class="btn ghost sm" type="button" id="rsSavedBtn">保存済みレポート <span id="rsSavedN"></span></button>
+          <div class="rs__srcpanel rs__savedpanel" id="rsSavedPanel" hidden></div>
+        </div>
+        <span class="rs__count">選択した記事すべてを部分要約→統合し、出典番号つきのレポートに</span>
+      </div>
+      <div class="rs__form" id="rsReportForm" hidden>
+        <input id="rsRQ" type="text" placeholder="調査の問い（例: 高炉の水素還元に関する直近の動き）" aria-label="調査の問い" autocomplete="off">
+        <div class="rs__formrow">
+          <select id="rsRT" aria-label="レポート形式">
+            <option value="overview">概況レポート</option>
+            <option value="timeline">時系列レポート</option>
+            <option value="brief">要点ブリーフ</option>
+          </select>
+          <span class="hint">対象: 選択中 <b id="rsRCount">0</b> 件</span>
+          <span style="flex:1"></span>
+          <button class="btn ghost sm" type="button" id="rsRCancel">閉じる</button>
+          <button class="btn sm" type="button" id="rsRStart">開始</button>
+        </div>
+      </div>
       <div class="ai__log" id="rsLog"></div>
       <div class="ai__quick" id="rsQuick"></div>
       <div class="ai__input">
@@ -1858,14 +1910,16 @@ $("#proxyTestBtn").onclick=async()=>{
 };
 
 // ============================================================ リサーチ（過去ログ×AI）
-// 情報源（複数）× 期間 × カテゴリ × キーワード で過去ログを絞り込み、選んだ記事をAIに渡す
-const RS={results:[], sel:new Set(), srcSel:new Set(), msgs:[], busy:false, stats:null, filters:null, seq:0};
+// 情報源（複数）× 期間 × カテゴリ × キーワード で過去ログを絞り込み、選んだ記事をAIに渡す。
+// レポート生成（部分要約→統合、出典番号つき）・保存・書き出しもここ。
+const RS={results:[], sel:new Set(), srcSel:new Set(), msgs:[], busy:false, stats:null, filters:null, seq:0,
+          job:null, jobTimer:null, reports:[]};
 const RS_QUICK=["期間内の動きを時系列で要約","情報源ごとに要点を整理","共通するテーマと相違点を比較","重要トピック3つと根拠"];
 function openResearch(){
   openOverlay($("#researchModal"));
   fillRsCats();
   if(!RS.results.length) researchSearch();
-  renderRsLog(); renderRsQuick();
+  renderRsLog(); renderRsQuick(); loadReports();
   setTimeout(()=>{ try{ $("#rsQ").focus(); }catch(e){} }, 90);
 }
 function fillRsCats(){
@@ -1879,13 +1933,17 @@ function rsFilterParams(){   // 現在のフィルタ → APIクエリ と 表�
   else if(per){ days=parseInt(per,10)||0; }
   const cat=$("#rsCat").value||"";
   const srcs=[...RS.srcSel];
-  const p=new URLSearchParams({q, limit:"120"});
+  const p=new URLSearchParams({q, limit:"200"});
   if(days) p.set("days",String(days));
   if(from) p.set("from",from);
   if(to) p.set("to",to);
   if(cat) p.set("category",cat);
   if(srcs.length) p.set("sources",srcs.join(","));
   return {p, q, days, from, to, cat, srcs};
+}
+function rsFiltersPayload(){   // AI/レポートへ渡す検索条件（表示名ベース）
+  const f=RS.filters||rsFilterParams();
+  return { q:f.q, sources:f.srcs.map(rsSrcName), category:f.cat, from:f.from, to:f.to, days:f.days, hit:RS.results.length };
 }
 async function researchSearch(){
   const f=rsFilterParams();
@@ -1899,7 +1957,8 @@ async function researchSearch(){
   }catch(e){ $("#rsCount").textContent="検索に失敗しました"; }
 }
 function syncRsCount(){
-  $("#rsCount").textContent = RS.results.length+"件ヒット / "+RS.sel.size+"件選択（AIに渡すのは上から最大30件）";
+  $("#rsCount").textContent = RS.results.length+"件ヒット / "+RS.sel.size+"件選択（会話は上から最大30件・レポートは選択全件）";
+  const rc=$("#rsRCount"); if(rc) rc.textContent=String(RS.sel.size);
 }
 function rsSrcName(id){ const s=(RS.stats&&RS.stats.sources||[]).find(x=>x.id===id); return s ? s.name : id; }
 function renderRsSrcPanel(){
@@ -1954,10 +2013,10 @@ function renderRsLog(){
   if(!RS.msgs.length){
     const h=el("div",{class:"ai__hello"});
     h.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5.5" rx="8" ry="2.5"/><path d="M4 5.5v6c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5v-6"/><path d="M4 11.5v6c0 1.4 3.6 2.5 8 2.5 1.2 0 2.4-.08 3.4-.23"/></svg>';
-    h.append(el("div",{text:"左で 期間・情報源・カテゴリ・キーワード を組み合わせて絞り込み、選んだ記事について依頼できます。"}));
+    h.append(el("div",{text:"左で 期間・情報源・カテゴリ・キーワード を組み合わせて絞り込み、「レポート生成」で出典つきの調査レポートを作るか、下の欄で質問できます。"}));
     log.append(h);
   }
-  RS.msgs.forEach(m=>log.append(bubbleEl(m)));
+  RS.msgs.forEach(m=>log.append(m.role==="report" ? reportEl(m.report) : m.role==="progress" ? progressEl() : bubbleEl(m)));
   if(RS.busy) log.append(el("div",{class:"bubble think", html:'<span class="dots"><span></span><span></span><span></span></span>'}));
   const sb=$("#rsSend"); if(sb) sb.disabled=RS.busy;
   log.scrollTop=log.scrollHeight;
@@ -1968,8 +2027,7 @@ async function sendRs(text){
   const items=RS.results.filter(a=>RS.sel.has(a.id)).slice(0,30)
     .map(a=>({title:a.title, source:a.source, category:a.category, published:a.published, summary:a.summary}));
   if(!items.length){ toast("記事を1件以上選択してください","err"); return; }
-  const f=RS.filters||rsFilterParams();
-  const filters={ q:f.q, sources:f.srcs.map(rsSrcName), category:f.cat, from:f.from, to:f.to, days:f.days, hit:RS.results.length };
+  const filters=rsFiltersPayload();
   const ta=$("#rsInput"); if(ta){ ta.value=""; ta.style.height="auto"; }
   const ua=RS.msgs.filter(m=>m.role==="user"||m.role==="assistant");
   let end=ua.length; while(end>0 && ua[end-1].role==="user") end--;
@@ -1984,6 +2042,151 @@ async function sendRs(text){
   }catch(e){ res={role:"error", text:"⚠ "+(e.server?e.message:"通信に失敗しました")}; }
   RS.busy=false; RS.msgs.push(res); renderRsLog();
 }
+
+// ---- レポート生成（map-reduce・出典番号つき） ----
+function defaultQuestion(){
+  const f=RS.filters||rsFilterParams(); const parts=[];
+  if(f.q) parts.push("「"+f.q+"」");
+  if(f.srcs.length) parts.push(f.srcs.map(rsSrcName).join("・"));
+  if(f.days) parts.push("直近"+f.days+"日"); else if(f.from||f.to) parts.push((f.from||"")+"〜"+(f.to||""));
+  return (parts.length ? parts.join(" × ")+"の" : "選択した記事の")+"動向を整理する";
+}
+function toggleReportForm(show){
+  const f=$("#rsReportForm"); f.hidden=!show;
+  if(show){ const q=$("#rsRQ"); if(!q.value.trim()) q.value=defaultQuestion(); $("#rsRCount").textContent=String(RS.sel.size); q.focus(); q.select(); }
+}
+async function startReport(){
+  if(RS.job && !["done","error"].includes(RS.job.state)){ toast("生成中のレポートがあります。完了をお待ちください","err"); return; }
+  if(!aiReady()){ RS.msgs.push({role:"error",text:"⚠ 生成AIが未設定です。設定（トップバーの設定ボタン）から登録してください。"}); renderRsLog(); return; }
+  const ids=RS.results.filter(a=>RS.sel.has(a.id)).map(a=>a.id);
+  if(!ids.length){ toast("記事を1件以上選択してください","err"); return; }
+  const question=($("#rsRQ").value||"").trim(), template=$("#rsRT").value;
+  try{
+    const d=await api("/api/research/report",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({ids, question, template, filters:rsFiltersPayload()})});
+    RS.job={id:d.job_id, state:"queued", total:0, done:0, articles:ids.length};
+    toggleReportForm(false);
+    RS.msgs.push({role:"progress"}); renderRsLog();
+    pollReport();
+  }catch(e){ toast(e.server?e.message:"レポート生成を開始できませんでした","err"); }
+}
+async function pollReport(){
+  clearTimeout(RS.jobTimer); if(!RS.job) return;
+  try{
+    const s=await api("/api/research/report/status?id="+encodeURIComponent(RS.job.id));
+    RS.job=Object.assign(RS.job, s);
+    if(s.state==="done"){
+      const r=await api("/api/research/report?id="+encodeURIComponent(s.report_id));
+      replaceProgress({role:"report", report:r.report}); loadReports(); return;
+    }
+    if(s.state==="error"){ replaceProgress({role:"error", text:"⚠ レポート生成に失敗しました: "+(s.error||"")}); return; }
+    renderRsLog();
+  }catch(e){ replaceProgress({role:"error", text:"⚠ 進捗の取得に失敗しました（サーバーが再起動した可能性）。保存済みレポートを確認してください"}); return; }
+  RS.jobTimer=setTimeout(pollReport, 1500);
+}
+function replaceProgress(msg){
+  const i=RS.msgs.findIndex(m=>m.role==="progress");
+  if(i>=0) RS.msgs.splice(i,1,msg); else RS.msgs.push(msg);
+  renderRsLog();
+}
+function progressEl(){
+  const j=RS.job||{}; const w=el("div",{class:"bubble ai rpt-progress"});
+  const stage = j.state==="queued" ? "準備中…"
+              : j.state==="mapping" ? ("部分要約 "+(j.done||0)+" / "+(j.total||"?")+" チャンク")
+              : j.state==="reducing" ? "統合レポートを作成中…" : "処理中…";
+  const pct = j.state==="mapping" && j.total ? Math.round(5+85*(j.done||0)/j.total) : j.state==="reducing" ? 95 : 3;
+  w.append(el("div",{class:"rpt-progress__t",text:"レポート生成中（記事 "+(j.articles||0)+" 件）— "+stage}));
+  const bar=el("div",{class:"pbar"}); const fill=el("i"); fill.style.width=pct+"%"; bar.append(fill); w.append(bar);
+  w.append(el("div",{class:"hint",text:"ローカルLLMでは数分かかることがあります。この画面を閉じても生成は続き、完了後は「保存済みレポート」から開けます。"}));
+  return w;
+}
+function mdLite(md, sources){   // Markdown の見出し/箇条書き/太字/出典番号だけを安全にDOM化（textContent描画）
+  const root=el("div",{class:"rpt__body"});
+  const byN=new Map((sources||[]).map(s=>[s.n,s]));
+  const inline=(text)=>{
+    const frag=document.createDocumentFragment(); const re=/(\*\*[^*]+\*\*|\[\d{1,3}\])/g; let last=0, m;
+    while((m=re.exec(text))){
+      if(m.index>last) frag.append(document.createTextNode(text.slice(last,m.index)));
+      const tok=m[0];
+      if(tok.startsWith("**")) frag.append(el("b",{text:tok.slice(2,-2)}));
+      else{
+        const s=byN.get(parseInt(tok.slice(1,-1),10));
+        if(s){ const a=el("a",{class:"cite",href:s.link||"#",title:(s.published||"")+" "+(s.source||"")+"｜"+(s.title||""),text:tok});
+               if(s.link){ a.target="_blank"; a.rel="noopener noreferrer"; } else a.onclick=(e)=>e.preventDefault();
+               frag.append(a); }
+        else frag.append(document.createTextNode(tok));
+      }
+      last=m.index+tok.length;
+    }
+    if(last<text.length) frag.append(document.createTextNode(text.slice(last)));
+    return frag;
+  };
+  let list=null, listTag=null, para=[];
+  const flushP=()=>{ if(para.length){ const p=el("p"); p.append(inline(para.join(" "))); root.append(p); para=[]; } };
+  const flushL=()=>{ list=null; listTag=null; };
+  (md||"").split("\n").forEach(raw=>{
+    const line=raw.replace(/\s+$/,""); let m;
+    if(!line.trim()){ flushP(); flushL(); return; }
+    if((m=line.match(/^(#{1,3})\s+(.*)$/))){ flushP(); flushL(); const h=el(m[1].length>=3?"h4":"h3",{class:"rpt__h"}); h.append(inline(m[2])); root.append(h); return; }
+    if((m=line.match(/^\s*[-*・]\s+(.*)$/))){ flushP(); if(listTag!=="ul"){ list=el("ul"); listTag="ul"; root.append(list); } const li=el("li"); li.append(inline(m[1])); list.append(li); return; }
+    if((m=line.match(/^\s*\d+[.)]\s+(.*)$/))){ flushP(); if(listTag!=="ol"){ list=el("ol"); listTag="ol"; root.append(list); } const li=el("li"); li.append(inline(m[1])); list.append(li); return; }
+    flushL(); para.push(line.trim());
+  });
+  flushP();
+  return root;
+}
+function reportEl(rep){
+  const w=el("div",{class:"bubble ai rpt"});
+  w.append(el("div",{class:"rpt__title",text:rep.title||"レポート"}));
+  const d=new Date((rep.created_at||0)*1000);
+  const st=rep.stats||{}; const meta=[d.toLocaleString("ja-JP"), "記事 "+(rep.sources||[]).length+"件"];
+  if(st.chunks) meta.push("部分要約 "+st.chunks+"回"); if(rep.model) meta.push(rep.model);
+  w.append(el("div",{class:"rpt__meta",text:meta.join(" ／ ")}));
+  w.append(el("div",{class:"rpt__q",text:"問い: "+(rep.question||"")}));
+  w.append(mdLite(rep.markdown||"", rep.sources||[]));
+  const det=el("details",{class:"rpt__src"}); det.append(el("summary",{text:"出典 "+(rep.sources||[]).length+"件"}));
+  const ol=el("ol");
+  (rep.sources||[]).forEach(s=>{
+    const li=el("li"); li.append(el("span",{class:"n",text:"["+s.n+"] "}), el("span",{text:(s.published||"")+" "+(s.source||"")+"｜"}));
+    if(s.link) li.append(el("a",{href:s.link,target:"_blank",rel:"noopener noreferrer",text:s.title||s.link}));
+    else li.append(el("span",{text:s.title||""}));
+    ol.append(li);
+  });
+  det.append(ol); w.append(det);
+  const acts=el("div",{class:"rpt__acts"});
+  const exp=(fmt)=>"/api/research/report/export?id="+encodeURIComponent(rep.id)+"&fmt="+fmt;
+  const cp=el("button",{class:"btn ghost sm",type:"button",text:"Markdownをコピー"});
+  cp.onclick=async()=>{ try{ const t=await fetch(exp("md")).then(r=>r.text()); await copyText(t); toast("Markdownをコピーしました"); }catch(e){ toast("コピーに失敗しました","err"); } };
+  const md=el("a",{class:"btn ghost sm",href:exp("md"),text:".md 保存"});
+  const dx=el("a",{class:"btn ghost sm",href:exp("docx"),text:"Word(.docx) 保存"});
+  const del=el("button",{class:"btn ghost sm",type:"button",text:"削除"});
+  del.onclick=async()=>{ if(!confirm("このレポートを削除しますか？")) return;
+    try{ await api("/api/research/report?id="+encodeURIComponent(rep.id),{method:"DELETE"});
+         RS.msgs=RS.msgs.filter(m=>!(m.role==="report"&&m.report.id===rep.id)); renderRsLog(); loadReports(); toast("削除しました"); }
+    catch(e){ toast("削除に失敗しました","err"); } };
+  acts.append(cp,md,dx,del); w.append(acts);
+  return w;
+}
+async function loadReports(){
+  try{ const d=await api("/api/research/reports"); RS.reports=d.reports||[];
+       $("#rsSavedN").textContent = RS.reports.length ? "("+RS.reports.length+")" : ""; renderSavedPanel(); }catch(e){}
+}
+function renderSavedPanel(){
+  const p=$("#rsSavedPanel"); p.innerHTML="";
+  if(!RS.reports.length){ p.append(el("div",{class:"rs__srcrow",text:"保存済みレポートはありません"})); return; }
+  RS.reports.forEach(r=>{
+    const row=el("button",{type:"button",class:"rs__srcrow rs__rep"});
+    row.append(el("span",{class:"n",text:r.title}), el("span",{class:"c",text:new Date(r.created_at*1000).toLocaleDateString("ja-JP")+"・"+r.articles+"件"}));
+    row.onclick=async()=>{ try{ const x=await api("/api/research/report?id="+encodeURIComponent(r.id));
+        if(!RS.msgs.some(m=>m.role==="report"&&m.report.id===r.id)) RS.msgs.push({role:"report",report:x.report});
+        renderRsLog(); p.hidden=true; }catch(e){ toast("レポートの読み込みに失敗しました","err"); } };
+    p.append(row);
+  });
+}
+function closeRsPanels(){
+  for(const id of ["#rsSrcPanel","#rsSavedPanel"]){ const p=$(id); if(p && !p.hidden) p.hidden=true; }
+  $("#rsSrcBtn").setAttribute("aria-expanded","false");
+}
 $("#researchBtn").onclick=openResearch;
 let rsT=null;
 const rsDebounced=()=>{ clearTimeout(rsT); rsT=setTimeout(researchSearch,250); };
@@ -1992,11 +2195,17 @@ $("#rsPeriod").addEventListener("change",()=>{ $("#rsRange").hidden = $("#rsPeri
 $("#rsFrom").addEventListener("change", researchSearch);
 $("#rsTo").addEventListener("change", researchSearch);
 $("#rsCat").addEventListener("change", researchSearch);
-$("#rsSrcBtn").onclick=(e)=>{ e.stopPropagation(); const p=$("#rsSrcPanel"); p.hidden=!p.hidden; $("#rsSrcBtn").setAttribute("aria-expanded", String(!p.hidden)); };
+$("#rsSrcBtn").onclick=(e)=>{ e.stopPropagation(); const p=$("#rsSrcPanel"); const open=p.hidden; closeRsPanels(); p.hidden=!open; $("#rsSrcBtn").setAttribute("aria-expanded", String(!p.hidden)); };
+$("#rsSavedBtn").onclick=(e)=>{ e.stopPropagation(); const p=$("#rsSavedPanel"); const open=p.hidden; closeRsPanels(); p.hidden=!open; };
 $("#rsSrcPanel").addEventListener("click",(e)=>e.stopPropagation());
-document.addEventListener("click",()=>{ const p=$("#rsSrcPanel"); if(p && !p.hidden){ p.hidden=true; $("#rsSrcBtn").setAttribute("aria-expanded","false"); } });
+$("#rsSavedPanel").addEventListener("click",(e)=>e.stopPropagation());
+document.addEventListener("click", closeRsPanels);
 $("#rsSelAll").onclick=()=>{ RS.results.forEach(a=>RS.sel.add(a.id)); renderRsList(); };
 $("#rsSelNone").onclick=()=>{ RS.sel.clear(); renderRsList(); };
+$("#rsReportBtn").onclick=()=>toggleReportForm($("#rsReportForm").hidden);
+$("#rsRCancel").onclick=()=>toggleReportForm(false);
+$("#rsRStart").onclick=startReport;
+$("#rsRQ").addEventListener("keydown",(e)=>{ if(e.key==="Enter"){ e.preventDefault(); startReport(); } });
 $("#rsInput").addEventListener("keydown",(e)=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); sendRs($("#rsInput").value); } });
 $("#rsInput").addEventListener("input",()=>{ const t=$("#rsInput"); t.style.height="auto"; t.style.height=Math.min(t.scrollHeight,120)+"px"; });
 $("#rsSend").onclick=()=>sendRs($("#rsInput").value);
