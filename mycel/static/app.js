@@ -50,6 +50,7 @@
     rtab: store.get("rtab", "links"), panel: "files", closed: new Set(store.get("closed", [])), selFolder: "",
     hist: [], histPos: -1, chat: [], depth: store.get("depth", 1), graph: null, tag: "",
     folderView: null, treeKind: store.get("treeKind", "all"),
+    libraryView: false, lib: { q: "", tag: "", year: "", status: "", sort: store.get("libSort", "added"), semantic: store.get("libSem", true), sel: new Set(), cur: null, data: null, results: null, detail: null, graphGroup: store.get("libGroup", "tag"), graphExpanded: new Set(), chat: [] },
     entityView: null, entityData: null, profile: null, peopleKind: store.get("peopleKind", "person"), gPeople: store.get("gPeople", false),
     sources: [], index: null, jobSeen: null, aiScope: store.get("aiScope", "all"), gDocs: store.get("gDocs", false),
   };
@@ -190,28 +191,29 @@
 
   // ------------------------------------------------------------ フォルダ・資料の整理
   async function addFiles(folder, files) {
-    if (folder.startsWith("@")) { toast("外部フォルダには追加できません（読み取り専用）", true); return; }
-    let ok = 0, last = null;
+    if (folder.startsWith("@")) { toast("外部フォルダには追加できません（読み取り専用）", true); return []; }
+    let ok = 0, last = null; const added = [];
     for (const f of files) {
       try {
         const res = await fetch("/api/file/upload", { method: "POST", headers: { "Content-Type": "application/octet-stream", "X-Filename": encodeURIComponent(f.name), "X-Folder": encodeURIComponent(folder) }, body: f });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || `エラー (${res.status})`);
         if (data.status === "error") toast(`${f.name}: 追加しましたが読み込めませんでした（${data.error}）`, true);
-        ok++; last = data.path;
+        ok++; last = data.path; if (data.status === "ok") added.push(data.path);
       } catch (e) { toast(`${f.name}: ${e.message}`, true); }
     }
     if (ok) {
       S.closed.delete(folder); store.set("closed", [...S.closed]);
       await loadTree(); refreshFolder();
       toast(`${ok} 件を「${folder ? docLabel(folder) : "Vault 直下"}」に追加しました`);
-      if (ok === 1 && S.folderView === null && last) openNote(last);
+      if (ok === 1 && S.folderView === null && !S.libraryView && last) openNote(last);
     }
+    return added;
   }
-  function pickFiles(folder) {
+  function pickFiles(folder, then = null) {
     const inp = document.createElement("input");
     inp.type = "file"; inp.multiple = true; inp.accept = IG_ACCEPT + ",.md";
-    inp.onchange = () => addFiles(folder, [...inp.files]);
+    inp.onchange = async () => { const paths = await addFiles(folder, [...inp.files]); if (then && paths.length) then(paths); };
     inp.click();
   }
   /** ノート・資料をフォルダへ移動（資料は拡張子を保つ）。 */
@@ -285,7 +287,7 @@
     await flushSave();
     let data;
     try { data = await api.get("/api/note", { path }); } catch (e) { fail(e); return; }
-    S.cur = data; S.dirty = false; S.conflict = null; S.folderView = null; S.entityView = null;
+    S.cur = data; S.dirty = false; S.conflict = null; S.folderView = null; S.entityView = null; S.libraryView = false;
     if (mode && !data.readonly) setMode(mode, false);
     if (push) { S.hist = S.hist.slice(0, S.histPos + 1); if (S.hist[S.histPos] !== path) S.hist.push(path); S.histPos = S.hist.length - 1; }
     store.set("last", path);
@@ -322,6 +324,7 @@
 
   // ------------------------------------------------------------ 本文
   function renderMain() {
+    if (S.libraryView) { renderLibraryView(); $("#conflict").hidden = true; return; }
     if (S.entityView) { renderEntityView(); $("#conflict").hidden = true; return; }
     if (S.folderView !== null) { renderFolderView(); $("#conflict").hidden = true; return; }
     const c = S.cur;
@@ -358,6 +361,7 @@
         <a class="btn sm" href="/api/file?path=${encodeURIComponent(c.path)}" download>ダウンロード</a>
         <button class="btn sm pri" data-docact="ai"${c.status === "ok" ? "" : " disabled"} title="ローカル LLM が要約・名前・タグ・関連ノートを付けたノートの下書きを作ります">AI でノート化</button>
         <button class="btn sm" data-docact="import"${c.status === "ok" ? "" : " disabled"} title="本文をそのまま Markdown ノートとして Vault に保存します">本文をノートに</button>
+        <button class="btn sm" data-docact="ref"${c.status === "ok" ? "" : " disabled"} title="文献管理モードに登録します（論文・報告書など）">文献に登録</button>
         <button class="btn sm" data-docact="update" title="この資料だけ読み込み直します">再読込</button></div>
       ${gone}${stale}${status}
       <article class="preview md docview">${plain ? `<pre class="doctext">${esc(c.text)}</pre>` : MD.render(c.text, { resolve })}</article>`;
@@ -369,6 +373,7 @@
       if (act === "open") { await api.post("/api/file/open", { path: c.path }); toast("既定のアプリで開きました"); }
       else if (act === "update") { await updateIndex([c.path], `「${c.title}」を読み込み直しています`); }
       else if (act === "ai") { await openIngest({ paths: [c.path], autoRun: true }); }
+      else if (act === "ref") { await registerAsRef(c.path); }
       else if (act === "import") {
         const r = await api.post("/api/note/import", { path: c.path });
         await loadTree(); await openNote(r.path); toast(`ノート「${titleOf(r.path)}」として取り込みました`);
@@ -516,7 +521,7 @@
   }
 
   // ------------------------------------------------------------ 読み込み（インデックス）の状態と更新
-  const JOB_DONE = { update: "読み込み", scan: "確認", ingest: "AI 取り込み", people: "人物・組織の AI 抽出" };
+  const JOB_DONE = { update: "読み込み", scan: "確認", ingest: "AI 取り込み", people: "人物・組織の AI 抽出", library: "文献の AI 処理" };
   async function applyIndexStatus(st) {
     S.index = st;
     renderIndexChip();
@@ -547,6 +552,8 @@
     if (ingestUI) ingestUI.refresh();
     if (job.kind === "update") refreshFolder();
     if ((job.kind === "update" || job.kind === "people") && S.panel === "people") loadPeople();
+    if ((job.kind === "library" || job.kind === "update") && S.libraryView) loadLibrary();
+    if (job.kind === "library" && job.state === "done") toast(`${job.label}: ${r.done || 0} 件完了${r.errors ? `（失敗 ${r.errors} 件）` : ""}`, !!r.errors);
     if (job.kind === "people" && job.state === "done") { toast(`人物・組織の AI 抽出: ${r.extracted || 0} 件${r.errors ? `（失敗 ${r.errors} 件）` : ""}`); refreshEntity(); }
   }
 
@@ -722,6 +729,7 @@
         { label: "アプリで開く", run: () => api.post("/api/file/open", { path }).catch(fail) },
         { label: "この資料を再読込", run: () => updateIndex([path]) },
         { label: "AI でノート化…", run: () => openIngest({ paths: [path], autoRun: true }) },
+        { label: "文献に登録", run: () => registerAsRef(path) },
         { label: "本文をノートに取り込む", run: async () => { try { const r = await api.post("/api/note/import", { path }); await loadTree(); openNote(r.path); } catch (e) { fail(e); } } },
         { label: "リンク用の名前をコピー", run: () => copyText(`[[${path}]]`) },
         ...(path.startsWith("@") ? [] : ["-",
@@ -891,6 +899,12 @@
     $$(".rtabs button").forEach((b) => b.classList.toggle("on", b.dataset.r === S.rtab));
     if (S.graph && S.rtab !== "graph") { S.graph.destroy(); S.graph = null; }
     const p = $("#rpane");
+    if (!S.cur && S.libraryView) {
+      if (S.rtab === "graph") renderLibraryGraph(p);
+      else if (S.rtab === "ai") renderLibraryAI(p);
+      else p.innerHTML = '<div class="hint" style="padding:8px 2px">文献管理モードです。<br><br>・一覧の行をクリック → 書誌情報・要約・引用・関連文献<br>・「グラフ」タブ → タグ → 文献 → 章 → 段落 と開ける分解グラフ<br>・「AI」タブ → 登録した文献だけを根拠に質問<br>・検索欄 → 文献の本文を意味で検索（Enter）</div>';
+      return;
+    }
     if (!S.cur && S.entityView) { p.innerHTML = '<div class="hint" style="padding:8px 2px">人物・組織のページです。<br><br>・登場する文書の × → その文書から外す（抽出し直しても外したまま）<br>・⋯ → 同一人物としてまとめる／人名ではない<br>・「別の呼び方」の × → まとめを外す<br>・「AI で人物像を推定」→ 登場する文書からローカル LLM が所属・案件・関係者を推定</div>'; return; }
     if (!S.cur && S.folderView !== null) { p.innerHTML = '<div class="hint" style="padding:8px 2px">フォルダの一覧を表示しています。<br><br>・ファイルをドロップ → このフォルダに資料を追加<br>・行を選ぶ → まとめて移動・AI でノート化・削除<br>・2 件選ぶ → つなぐ<br>・「つながりを提案」→ 内容の近い資料の組をまとめてつなぐ<br>・右クリック → 名前の変更など</div>'; return; }
     if (!S.cur) { p.innerHTML = '<div class="hint" style="padding:8px 2px">ノートを開くと、ここにリンクやグラフ、AI の結果が出ます。</div>'; return; }
@@ -1196,6 +1210,7 @@
       { label: "設定", run: () => openSettings() },
       { label: "AI 取り込み（文書をノートにする）…", run: () => openIngest() },
       { label: "新しいフォルダ…", run: () => newFolder(S.selFolder) },
+      { label: "文献管理モード", run: () => openLibrary() },
       { label: "人物・組織の一覧", run: () => showPanel("people") },
       { label: "人物・組織を AI で詳しく抽出", run: async () => { try { await api.post("/api/people/extract", {}); setTimeout(poll, 300); } catch (e) { fail(e); } } },
       { label: "フォルダの一覧を開く（Vault）", run: () => openFolder("") },
@@ -1442,6 +1457,294 @@
     go("");
   }
 
+  // ------------------------------------------------------------ 文献管理モード
+  const LIB_STATUS = { unread: "未読", reading: "読書中", read: "読了" };
+  const SUM_LABELS = { one_line: "一言で", purpose: "目的・課題", method: "手法・対象", results: "結果・主張", limitations: "限界・課題" };
+  const stars = (n) => "★".repeat(n) + "☆".repeat(5 - n);
+  const libTypes = () => (S.lib.data && S.lib.data.types) || {};
+  async function openLibrary(selectId = null) {
+    await flushSave();
+    S.libraryView = true; S.cur = null; S.folderView = null; S.entityView = null;
+    if (selectId) S.lib.cur = selectId;
+    renderTree(); renderRight(); renderMain();
+    await loadLibrary();
+  }
+  async function loadLibrary(keepDetail = true) {
+    const L = S.lib;
+    try {
+      const params = { q: L.q && !L.semantic ? L.q : "", tag: L.tag, year: L.year, status: L.status, sort: L.sort };
+      const [data, res] = await Promise.all([api.get("/api/library", params),
+        L.q && L.semantic ? api.get("/api/library/search", { q: L.q, tag: L.tag, year: L.year, status: L.status }) : Promise.resolve(null)]);
+      L.data = data; L.results = res;
+      const rows = res ? res.results : data.refs;
+      if (!rows.some((r) => r.id === L.cur)) L.cur = rows.length && !keepDetail ? rows[0].id : (rows.some((r) => r.id === L.cur) ? L.cur : null);
+      [...L.sel].forEach((id) => { if (!data.refs.some((r) => r.id === id)) L.sel.delete(id); });
+    } catch (e) { fail(e); return; }
+    if (!S.libraryView) return;
+    renderMain();
+    if (L.cur) loadRefDetail(L.cur);
+    if (S.rtab === "graph") renderRight();
+  }
+  async function loadRefDetail(id) {
+    try { const d = await api.get("/api/library/ref", { id }); if (S.lib.cur === id) { S.lib.detail = d; renderLibDetail(); } }
+    catch (e) { if (e.status === 404) { S.lib.cur = null; S.lib.detail = null; renderMain(); } else fail(e); }
+  }
+  function renderLibraryView() {
+    const L = S.lib, d = L.data;
+    $("#titleIn").disabled = true; $("#mEdit").disabled = true;
+    $("#titleIn").value = "文献"; $("#crumb").textContent = "";
+    document.title = "文献 — Mycel";
+    if (!d) { $("#body").innerHTML = '<div class="welcome"><span class="spin"></span></div>'; return; }
+    const rows = L.results ? L.results.results : d.refs;
+    const f = d.facets, emb = d.embed;
+    $("#stInfo").textContent = `文献 ${d.count} 件 ・ 未読 ${f.status.unread || 0} ・ 読書中 ${f.status.reading || 0} ・ 読了 ${f.status.read || 0}`;
+    $("#stWords").textContent = "";
+    const embChip = !emb.embed ? `<button class="chip unres" id="libEmbSet" title="Embed モデルを登録すると意味検索になります。今はキーワード検索です">意味検索: 未設定（キーワード検索）</button>`
+      : emb.pending ? `<button class="chip" id="libEmbGo" title="文献のファイルだけを対象に埋め込みを作ります">意味検索: 未作成 ${emb.pending} 区画 → 索引を更新</button>`
+        : `<span class="chip ok" title="${esc(emb.model)}">意味検索: 準備済み（${emb.chunks} 区画）</span>`;
+    const opt = (list, cur, label) => `<option value="">${label}</option>` + list.map(([v, n]) => `<option value="${esc(v)}"${v === cur ? " selected" : ""}>${esc(v)}${n !== undefined ? ` (${n})` : ""}</option>`).join("");
+    const n = L.sel.size;
+    const listRows = rows.map((r) => {
+      const sc = L.results ? `<span class="lsc" title="一致度">${r.mode === "both" ? "意味＋語" : r.mode === "vector" ? "意味" : "語"}</span>` : "";
+      const pas = L.results && r.passages ? `<div class="lpas">${r.passages.slice(0, 2).map((p) => `<div>${p.heading ? `<small>${esc(p.heading)}</small> ` : ""}${markTitle(p.text, L.q)}</div>`).join("")}</div>` : "";
+      return `<div class="lrow${L.cur === r.id ? " on" : ""}${r.file_missing ? " err" : ""}" data-lid="${esc(r.id)}">
+        <input type="checkbox" data-lsel="${esc(r.id)}"${L.sel.has(r.id) ? " checked" : ""} aria-label="選択">
+        <div class="lmain"><b>${esc(r.title)}</b>${sc}
+          <small>${esc([r.authors.slice(0, 3).join("、") + (r.authors.length > 3 ? " ほか" : ""), r.year, r.venue].filter(Boolean).join(" ・ "))}</small>
+          ${pas}
+          <div class="ltags">${r.tags.map((t) => `<span class="chip tag" data-ltag="${esc(t)}">#${esc(t)}</span>`).join("")}${r.has_summary ? '<span class="sb">要約あり</span>' : ""}${r.file ? ftBadge(r.file_grp || "text") : '<span class="sb off" title="本文ファイルなし">書誌のみ</span>'}${r.file_missing ? '<span class="sb ng">ファイル未読込</span>' : ""}</div></div>
+        <div class="lside"><span class="lst ${esc(r.status)}">${LIB_STATUS[r.status]}</span><span class="lrate" title="評価">${stars(r.rating)}</span></div></div>`;
+    }).join("");
+    $("#body").innerHTML = `<div class="lib">
+      <div class="libhead"><h1>文献</h1><span class="hint">${d.count} 件</span>${embChip}<span class="sp"></span>
+        <button class="btn sm pri" id="libAdd">＋ 追加</button><button class="btn sm" id="libExport">エクスポート</button><button class="ibtn" id="libMore" title="その他">⋯</button></div>
+      <div class="libbar"><input id="libQ" type="search" placeholder="文献を検索（本文の意味で探します。Enter）" value="${esc(L.q)}">
+        <label class="ck" title="オフにすると書誌情報の文字一致だけで絞り込みます"><input type="checkbox" id="libSem"${L.semantic ? " checked" : ""}> 本文を検索</label>
+        <select id="libStatus">${opt(Object.entries(LIB_STATUS).map(([k, v]) => [k, f.status[k] || 0]), L.status, "状態")}</select>
+        <select id="libTag">${opt(f.tags, L.tag, "タグ")}</select>
+        <select id="libYear">${opt(f.years, L.year, "年")}</select>
+        <select id="libSort">${[["added", "追加順"], ["year", "年"], ["title", "題名"], ["author", "著者"], ["rating", "評価"], ["updated", "更新順"]].map(([k, v]) => `<option value="${k}"${L.sort === k ? " selected" : ""}>${v}</option>`).join("")}</select>
+        ${L.q || L.tag || L.year || L.status ? '<button class="btn xs" id="libClear">絞り込みを解除</button>' : ""}</div>
+      ${n ? `<div class="fvbar"><b>${n} 件を選択</b><button class="btn sm" data-lact="meta">AI で書誌情報を補完</button><button class="btn sm" data-lact="summary">AI で要約</button><button class="btn sm" data-lact="tag">タグを付ける…</button><button class="btn sm" data-lact="status">状態を変える…</button><button class="btn sm" data-lact="export">選択をエクスポート</button><button class="btn sm danger" data-lact="remove">登録を外す</button><button class="btn sm" data-lact="clear">選択を解除</button></div>` : ""}
+      <div class="libgrid"><div class="liblist" id="libList">${listRows || `<div class="empty">${L.q ? "一致する文献はありません。" : "まだ文献がありません。「＋ 追加」から、PDF などのファイル・BibTeX/RIS・手入力で登録できます。"}</div>`}</div>
+        <div class="libdetail" id="libDetail"></div></div></div>`;
+    const b = $("#body");
+    $("#libAdd", b).onclick = (e) => { const r = e.currentTarget.getBoundingClientRect(); popMenu(r.left, r.bottom + 4, [
+      { label: "読み込み済みの資料から選ぶ…", run: () => pickDocs(async (paths) => { try { const res = await api.post("/api/library/register", { paths, ai: !!(S.state.llm || {}).chat }); res.errors.forEach((x) => toast(`${x.path}: ${x.error}`, true)); if (res.duplicates.length) toast(`登録済み: ${res.duplicates.join("、")}`); toast(`${res.added.length} 件を文献に登録しました`); if (res.added.length) S.lib.cur = res.added[0].id; loadLibrary(); } catch (err) { fail(err); } }) },
+      { label: "ファイルをアップロードして登録…", run: () => pickFiles("文献", async (paths) => { try { const res = await api.post("/api/library/register", { paths, ai: !!(S.state.llm || {}).chat }); if (res.added.length) S.lib.cur = res.added[0].id; toast(`${res.added.length} 件を文献に登録しました`); loadLibrary(); } catch (err) { fail(err); } }) },
+      { label: "BibTeX / RIS を貼り付け…", run: libImportDialog },
+      { label: "手入力…", run: () => libEditDialog(null) },
+    ]); };
+    $("#libExport", b).onclick = (e) => libExportMenu(e.currentTarget, null);
+    $("#libMore", b).onclick = (e) => { const r = e.currentTarget.getBoundingClientRect(); popMenu(r.right - 260, r.bottom + 4, [
+      { label: "文献の索引を更新（埋め込みを作る）", run: async () => { try { await api.post("/api/library/embed", {}); toast("文献のファイルを読み直しています"); setTimeout(poll, 300); } catch (err) { fail(err); } } },
+      { label: "すべてに AI で書誌情報を補完", run: () => libBatch(d.refs.map((r) => r.id), "meta") },
+      { label: "要約の無い文献すべてに AI で要約", run: () => libBatch(d.refs.filter((r) => !r.has_summary).map((r) => r.id), "summary") },
+      "-",
+      { label: "文献に質問（AI タブ）", run: () => { S.rtab = "ai"; app.classList.remove("no-right"); renderRight(); } },
+      { label: "分解グラフ（グラフタブ）", run: () => { S.rtab = "graph"; app.classList.remove("no-right"); renderRight(); } },
+    ]); };
+    if ($("#libEmbSet", b)) $("#libEmbSet", b).onclick = () => openSettings("llm");
+    if ($("#libEmbGo", b)) $("#libEmbGo", b).onclick = async () => { try { await api.post("/api/library/embed", {}); toast("文献の埋め込みを作っています（ステータスバーで進み具合を確認できます）"); setTimeout(poll, 300); } catch (err) { fail(err); } };
+    const q = $("#libQ", b);
+    q.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) { L.q = q.value.trim(); loadLibrary(false); } });
+    q.addEventListener("input", () => { if (!q.value.trim() && L.q) { L.q = ""; loadLibrary(); } });
+    $("#libSem", b).onchange = (e) => { L.semantic = e.target.checked; store.set("libSem", L.semantic); if (L.q) loadLibrary(false); };
+    $("#libStatus", b).onchange = (e) => { L.status = e.target.value; loadLibrary(); };
+    $("#libTag", b).onchange = (e) => { L.tag = e.target.value; loadLibrary(); };
+    $("#libYear", b).onchange = (e) => { L.year = e.target.value; loadLibrary(); };
+    $("#libSort", b).onchange = (e) => { L.sort = e.target.value; store.set("libSort", L.sort); loadLibrary(); };
+    if ($("#libClear", b)) $("#libClear", b).onclick = () => { Object.assign(L, { q: "", tag: "", year: "", status: "" }); loadLibrary(); };
+    $("#libList", b).addEventListener("click", (e) => {
+      const ck = e.target.closest("[data-lsel]"); if (ck) { ck.checked ? L.sel.add(ck.dataset.lsel) : L.sel.delete(ck.dataset.lsel); renderLibraryView(); return; }
+      const tg = e.target.closest("[data-ltag]"); if (tg) { L.tag = tg.dataset.ltag; loadLibrary(); return; }
+      const row = e.target.closest("[data-lid]"); if (row) { L.cur = row.dataset.lid; L.detail = null; renderLibraryView(); loadRefDetail(L.cur); }
+    });
+    $$("[data-lact]", b).forEach((x) => (x.onclick = () => libBulk(x.dataset.lact)));
+    renderLibDetail();
+    setTimeout(() => { if (!L.detail && !L.cur) q.focus(); }, 0);
+  }
+  function renderLibDetail() {
+    const el = $("#libDetail"); if (!el) return;
+    const L = S.lib, d = L.detail;
+    if (!L.cur) { el.innerHTML = `<div class="ing-help"><h3>文献管理モード</h3><ol>
+      <li><b>登録</b> — PDF・Word などの資料、BibTeX/RIS、手入力。ローカル LLM があれば題名・著者・年・要旨を自動で補完</li>
+      <li><b>検索</b> — 登録した文献の本文だけを対象に、意味で探します（Embed モデル未設定ならキーワード）。一致した段落も表示</li>
+      <li><b>読む</b> — 状態（未読／読書中／読了）・評価・タグ、AI の構造化要約（目的・手法・結果・限界）、読書ノート</li>
+      <li><b>つなぐ</b> — グラフタブで「タグ → 文献 → 章 → 段落」と開いていけます。内容の近い要素は別の文献の章・段落とも点線で結ばれます</li>
+      <li><b>聞く</b> — AI タブで、文献だけを根拠に質問。引用文（APA / IEEE / BibTeX）のコピーも</li></ol></div>`; return; }
+    if (!d) { el.innerHTML = '<div class="hint"><span class="spin"></span></div>'; return; }
+    const field = (k, label, ph = "", type = "text") => `<label for="lf_${k}">${label}</label><input id="lf_${k}" data-lf="${k}" type="${type}" value="${esc(Array.isArray(d[k]) ? d[k].join("; ") : d[k] || "")}" placeholder="${esc(ph)}">`;
+    const sum = d.summary || {};
+    const hasSum = Object.values(sum).some(Boolean);
+    const llm = !!(S.state.llm || {}).chat;
+    el.innerHTML = `<div class="ldhead"><h2>${esc(d.title)}</h2><button class="ibtn" id="ldMore" title="操作">⋯</button></div>
+      <div class="ldmeta"><span class="lst ${esc(d.status)}">${LIB_STATUS[d.status]}</span><select id="ldStatus">${Object.entries(LIB_STATUS).map(([k, v]) => `<option value="${k}"${d.status === k ? " selected" : ""}>${v}</option>`).join("")}</select>
+        <span class="lrate big" id="ldRate" title="クリックで評価">${[1, 2, 3, 4, 5].map((i) => `<button data-rate="${i}" class="${i <= d.rating ? "on" : ""}">★</button>`).join("")}</span>
+        <code class="hint" title="引用キー">@${esc(d.key)}</code></div>
+      <div class="ldfiles">${d.file ? `<button class="chip" data-open="${esc(d.file)}">${ftBadge(d.file_grp || "text")}${esc(d.file.split("/").pop())}</button>` : `<button class="chip unres" id="ldFile">＋ 本文ファイルを結びつける</button>`}
+        ${d.note ? `<button class="chip" data-open="${esc(d.note)}">${ftBadge("note")}読書ノート</button>` : `<button class="chip" id="ldNote">＋ 読書ノートを作る</button>`}
+        ${d.doi ? `<a class="chip" href="https://doi.org/${encodeURIComponent(d.doi)}" target="_blank" rel="noopener">DOI</a>` : ""}${d.url ? `<a class="chip" href="${esc(d.url)}" target="_blank" rel="noopener">URL</a>` : ""}</div>
+      <div class="ldai"><button class="btn sm" id="ldMeta"${llm ? "" : " disabled"} title="本文の冒頭から題名・著者・年・掲載誌・DOI・要旨を補います">AI で書誌情報を補完</button><button class="btn sm${hasSum ? "" : " pri"}" id="ldSum"${llm ? "" : " disabled"} title="目的・手法・結果・限界に分けて要約します">AI で要約${hasSum ? "を作り直す" : ""}</button>${llm ? "" : '<span class="hint">LLM が未設定</span>'}</div>
+      <div id="ldOut"></div>
+      ${hasSum ? `<div class="ldsum">${["one_line", "purpose", "method", "results", "limitations"].filter((k) => sum[k]).map((k) => `<div><b>${SUM_LABELS[k]}</b><p>${esc(sum[k])}</p></div>`).join("")}</div>` : ""}
+      <details class="ldform" open><summary>書誌情報 <small class="hint">欄を直すと保存されます</small></summary><div class="form">
+        <label for="lf_type">種類</label><select id="lf_type" data-lf="type">${Object.entries(libTypes()).map(([k, v]) => `<option value="${k}"${d.type === k ? " selected" : ""}>${v}</option>`).join("")}</select>
+        ${field("title", "題名")}${field("authors", "著者", "「;」区切り（例: 山田 太郎; Smith, John）")}${field("year", "年")}${field("venue", "掲載誌・会議・出版社")}
+        ${field("volume", "巻")}${field("issue", "号")}${field("pages", "ページ")}${field("doi", "DOI")}${field("url", "URL")}${field("tags", "タグ", "「;」区切り")}${field("keywords", "キーワード", "「;」区切り")}${field("key", "引用キー")}
+        <label for="lf_abstract">要旨</label><textarea id="lf_abstract" data-lf="abstract" rows="4">${esc(d.abstract)}</textarea></div></details>
+      <div class="ldsec"><h3>引用</h3><div class="cite">${esc(d.citations.apa)}</div><div class="relbtns"><button class="btn xs" data-copy="${esc(d.citations.apa)}">APA をコピー</button><button class="btn xs" data-copy="${esc(d.citations.ieee)}">IEEE をコピー</button><button class="btn xs" data-copy="${esc(d.bibtex)}">BibTeX をコピー</button><button class="btn xs" data-copy="[[${esc(d.note || d.file || d.title)}]]">ノート用リンクをコピー</button></div></div>
+      ${d.structure.length ? `<div class="ldsec"><h3>章立て <small class="hint">${d.structure.length} 区分 ・ グラフタブで段落まで開けます</small></h3><div class="ldstruct">${d.structure.slice(0, 40).map((s) => `<span class="chip" data-sec="${s.n}" title="${s.chunks} 段落">${esc(s.heading)}</span>`).join("")}${d.structure.length > 40 ? `<span class="hint">ほか ${d.structure.length - 40}</span>` : ""}</div></div>` : ""}
+      <div class="ldsec"><h3>関連する文献</h3>${d.related.length ? d.related.map((r) => `<div class="card" data-lref="${esc(r.id)}"><b>${esc(r.title)}</b><span>${esc(r.reasons.join(" ・ "))}${r.passage ? " — " + esc(r.passage) : ""}</span></div>`).join("") : '<div class="hint">まだありません（本文ファイルのある文献が増えると出ます）</div>'}</div>`;
+    const saveField = async (k, v) => { try { const r = await api.post("/api/library/update", { id: d.id, ref: { [k]: v } }); L.detail = { ...L.detail, ...r }; toast("保存しました"); loadLibrary(); } catch (e) { fail(e); } };
+    $$("[data-lf]", el).forEach((inp) => inp.addEventListener("change", () => saveField(inp.dataset.lf, inp.value)));
+    $("#ldStatus", el).onchange = (e) => saveField("status", e.target.value);
+    $$("[data-rate]", el).forEach((b) => (b.onclick = () => saveField("rating", d.rating === +b.dataset.rate ? 0 : +b.dataset.rate)));
+    $$("[data-copy]", el).forEach((b) => (b.onclick = () => copyText(b.dataset.copy)));
+    $$("[data-lref]", el).forEach((c) => (c.onclick = () => { L.cur = c.dataset.lref; L.detail = null; renderLibraryView(); loadRefDetail(L.cur); }));
+    $$("[data-sec]", el).forEach((c) => (c.onclick = () => { S.lib.graphExpanded.add(`r:${d.id}`); S.lib.graphExpanded.add(`s:${d.id}:${c.dataset.sec}`); S.lib.graphGroup = "none"; S.rtab = "graph"; app.classList.remove("no-right"); renderRight(); }));
+    if ($("#ldFile", el)) $("#ldFile", el).onclick = () => pickDocs(async (paths) => { if (paths[0]) saveField("file", paths[0]); });
+    if ($("#ldNote", el)) $("#ldNote", el).onclick = async () => { try { const r = await api.post("/api/library/note", { id: d.id }); await loadTree(); toast("読書ノートを作りました"); openNote(r.path, { mode: "edit" }); } catch (e) { fail(e); } };
+    $("#ldMeta", el).onclick = async () => {
+      const out = $("#ldOut", el); out.innerHTML = '<div class="hint"><span class="spin"></span> 本文の冒頭から書誌情報を読み取っています…</div>';
+      try { const r = await api.post("/api/library/ai_meta", { id: d.id, overwrite: d.source === "file" }); L.detail = { ...L.detail, ...r }; loadLibrary(); toast("書誌情報を補完しました（空欄だった項目を埋めました）"); }
+      catch (e) { out.innerHTML = `<div class="notice">${esc(e.message)}</div>`; }
+    };
+    $("#ldSum", el).onclick = async () => {
+      const out = $("#ldOut", el); out.innerHTML = '<div class="hint"><span class="spin"></span> 要約しています（長い文献は数分かかります）…</div>';
+      try { const r = await api.post("/api/library/ai_summary", { id: d.id }); L.detail = { ...L.detail, ...r }; renderLibDetail(); loadLibrary(); }
+      catch (e) { out.innerHTML = `<div class="notice">${esc(e.message)}</div>`; }
+    };
+    $("#ldMore", el).onclick = (e) => { const r = e.currentTarget.getBoundingClientRect(); popMenu(r.right - 240, r.bottom + 4, [
+      { label: "本文ファイルを変更…", run: () => pickDocs(async (paths) => { if (paths[0]) saveField("file", paths[0]); }) },
+      { label: "本文ファイルを外す", run: () => saveField("file", "") },
+      { label: "グラフで分解する", run: () => { S.lib.graphExpanded.add(`r:${d.id}`); S.lib.graphGroup = "none"; S.rtab = "graph"; app.classList.remove("no-right"); renderRight(); } },
+      "-",
+      { label: "登録を外す", danger: true, run: async () => { if (!(await confirmBox("文献の登録を外す", `「${esc(d.title)}」を文献から外しますか？<br><span class="hint">本文ファイルやノートは消えません。</span>`, "外す", true))) return; try { await api.post("/api/library/remove", { ids: [d.id] }); L.cur = null; L.detail = null; loadLibrary(); } catch (err) { fail(err); } } },
+    ]); };
+  }
+  async function libBulk(act) {
+    const L = S.lib, ids = [...L.sel];
+    if (act === "clear") { L.sel.clear(); renderLibraryView(); return; }
+    if (act === "meta" || act === "summary") return libBatch(ids, act);
+    if (act === "export") return libExportMenu($("[data-lact=export]"), ids);
+    if (act === "tag") {
+      const t = await promptBox("タグを付ける", "タグ（「;」で複数）", ""); if (!t) return;
+      const add = t.split(/[;；、,，]/).map((x) => x.trim()).filter(Boolean);
+      for (const id of ids) { const r = L.data.refs.find((x) => x.id === id); if (r) { try { await api.post("/api/library/update", { id, ref: { tags: [...new Set([...r.tags, ...add])] } }); } catch (e) { fail(e); } } }
+      loadLibrary(); return;
+    }
+    if (act === "status") {
+      const body = document.createElement("div");
+      body.innerHTML = `<div class="form"><label for="bsSt">状態</label><select id="bsSt">${Object.entries(LIB_STATUS).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select></div>`;
+      modal({ title: `${ids.length} 件の状態を変える`, body, buttons: [{ label: "キャンセル" }, { label: "変更", primary: true, onClick: async () => { for (const id of ids) { try { await api.post("/api/library/update", { id, ref: { status: $("#bsSt", body).value } }); } catch (e) { fail(e); } } loadLibrary(); } }] });
+      return;
+    }
+    if (act === "remove") {
+      if (!(await confirmBox("登録を外す", `${ids.length} 件を文献から外しますか？<br><span class="hint">本文ファイルやノートは消えません。</span>`, "外す", true))) return;
+      try { await api.post("/api/library/remove", { ids }); L.sel.clear(); if (ids.includes(L.cur)) { L.cur = null; L.detail = null; } loadLibrary(); } catch (e) { fail(e); }
+    }
+  }
+  async function libBatch(ids, what) {
+    if (!ids.length) { toast("対象の文献がありません"); return; }
+    try { await api.post("/api/library/ai_batch", { ids, what }); toast(`${ids.length} 件の${what === "meta" ? "書誌情報の補完" : "要約"}を始めました（ステータスバーで進み具合を確認できます）`); setTimeout(poll, 300); } catch (e) { fail(e); }
+  }
+  function libExportMenu(anchor, ids) {
+    const r = anchor.getBoundingClientRect();
+    const go = async (fmt) => { try { const res = await api.get("/api/library/export", { format: fmt, ids: (ids || []).join(",") }); modal({ title: `エクスポート（${fmt.toUpperCase()}）`, body: `<textarea class="editor" style="height:50vh" readonly>${esc(res.text)}</textarea>`, buttons: [{ label: "閉じる" }, { label: "コピー", primary: true, onClick: () => { copyText(res.text); return false; } }] }); } catch (e) { fail(e); } };
+    popMenu(r.left, r.bottom + 4, [["bibtex", "BibTeX"], ["ris", "RIS"], ["csv", "CSV（表）"], ["md", "引用一覧（Markdown）"]].map(([f, l]) => ({ label: l, run: () => go(f) })));
+  }
+  function libImportDialog() {
+    const body = document.createElement("div");
+    body.innerHTML = `<p class="hint" style="margin-top:0">文献管理ソフトや論文サイトからコピーした BibTeX または RIS を貼り付けてください。DOI や題名が同じものは重複として飛ばします。</p><textarea id="imText" class="editor" style="height:40vh" placeholder="@article{key, title = {...}, ...}  または  TY  - JOUR ..."></textarea><div class="form" style="margin-top:8px"><label for="imTags">タグ</label><input id="imTags" type="text" placeholder="任意（「;」で複数）"></div>`;
+    modal({ title: "BibTeX / RIS を取り込む", body, wide: false, buttons: [{ label: "キャンセル" }, { label: "取り込む", primary: true, onClick: async () => {
+      try { const r = await api.post("/api/library/import", { text: $("#imText", body).value, tags: $("#imTags", body).value.split(/[;；、,，]/).map((x) => x.trim()).filter(Boolean) }); toast(`${r.added.length} 件を登録しました${r.duplicates.length ? `（重複 ${r.duplicates.length} 件は飛ばしました）` : ""}`); if (r.added.length) S.lib.cur = r.added[0].id; loadLibrary(); } catch (e) { fail(e); return false; }
+    } }] });
+    $("#imText", body).focus();
+  }
+  function libEditDialog() {
+    const body = document.createElement("div");
+    const f = (k, l, ph = "") => `<label for="ne_${k}">${l}</label><input id="ne_${k}" type="text" placeholder="${esc(ph)}">`;
+    body.innerHTML = `<div class="form"><label for="ne_type">種類</label><select id="ne_type">${Object.entries(libTypes()).map(([k, v]) => `<option value="${k}"${k === "article" ? " selected" : ""}>${v}</option>`).join("")}</select>${f("title", "題名")}${f("authors", "著者", "「;」区切り")}${f("year", "年")}${f("venue", "掲載誌・会議・出版社")}${f("doi", "DOI")}${f("url", "URL")}${f("tags", "タグ", "「;」区切り")}<label for="ne_abstract">要旨</label><textarea id="ne_abstract" rows="3"></textarea></div>`;
+    modal({ title: "文献を手入力で登録", body, buttons: [{ label: "キャンセル" }, { label: "登録", primary: true, onClick: async () => {
+      const g = (k) => $(`#ne_${k}`, body).value;
+      try { const r = await api.post("/api/library/add", { type: g("type"), title: g("title"), authors: g("authors"), year: g("year"), venue: g("venue"), doi: g("doi"), url: g("url"), tags: g("tags"), abstract: g("abstract") }); S.lib.cur = r.id; toast("登録しました"); loadLibrary(); } catch (e) { fail(e); return false; }
+    } }] });
+    $("#ne_title", body).focus();
+  }
+  /** 資料を文献として登録（資料画面・右クリックから）。 */
+  async function registerAsRef(path) {
+    try {
+      const res = await api.post("/api/library/register", { paths: [path], ai: !!(S.state.llm || {}).chat });
+      if (res.errors.length) { toast(res.errors[0].error, true); return; }
+      if (res.duplicates.length) { const bp = await api.get("/api/library/by_path", { path }); toast("すでに文献として登録されています"); openLibrary(bp.ref ? bp.ref.id : null); return; }
+      toast("文献に登録しました"); openLibrary(res.added[0].id);
+    } catch (e) { fail(e); }
+  }
+
+  // ---- 分解グラフ（トピック → 文献 → 章 → 段落）
+  async function renderLibraryGraph(p) {
+    const L = S.lib;
+    p.innerHTML = `<div class="gctl"><span>分類</span><select id="lgGroup">${Object.entries((L.data && L.data.groups) || { tag: "タグ", author: "著者", year: "年", type: "種類", status: "読了状態", none: "分類なし" }).map(([k, v]) => `<option value="${k}"${L.graphGroup === k ? " selected" : ""}>${v}</option>`).join("")}</select><button class="btn xs" id="lgCollapse" title="開いた要素をすべて閉じる">すべて閉じる</button><span style="flex:1"></span><button class="btn sm" id="lgBig">拡大</button></div>
+      <canvas class="graph" id="gLib" aria-label="文献の分解グラフ。クリックで開閉、Shift+クリックで開く"></canvas>
+      <div class="hint" style="margin-top:8px">● 分類 → ● 文献 → ● 章・ページ → ● 段落 の順に、クリックで大きい要素から小さい要素へ開けます（＋／−）。Shift+クリックで文献・ファイルを開きます。点線は内容の近さで、別の文献の章・段落ともつながります。</div>
+      <div id="lgInfo" class="lginfo"></div>`;
+    $("#lgGroup", p).onchange = (e) => { L.graphGroup = e.target.value; store.set("libGroup", L.graphGroup); L.graphExpanded.clear(); renderLibraryGraph(p); };
+    $("#lgCollapse", p).onclick = () => { L.graphExpanded.clear(); loadLibGraph(); };
+    $("#lgBig", p).onclick = () => bigLibGraph();
+    if (S.graph) S.graph.destroy();
+    S.graph = new ForceGraph($("#gLib", p), { onOpen: libGraphOpen, onExpand: (n) => { L.graphExpanded.has(n.id) ? L.graphExpanded.delete(n.id) : L.graphExpanded.add(n.id); if (n.kind === "ref") { L.cur = n.id.slice(2); L.detail = null; if (S.libraryView) { renderLibraryView(); loadRefDetail(L.cur); } } loadLibGraph(); }, labels: "near" });
+    loadLibGraph();
+  }
+  async function loadLibGraph(g = S.graph) {
+    const L = S.lib;
+    try {
+      const data = await api.get("/api/library/graph", { group: L.graphGroup, expanded: [...L.graphExpanded].join("\n"), center: L.cur ? `r:${L.cur}` : "" });
+      if (g) g.setData(data, L.cur ? `r:${L.cur}` : null);
+      const info = $("#lgInfo"); if (info) info.textContent = `${data.nodes.filter((n) => n.kind === "group").length} 分類 ・ ${data.nodes.filter((n) => n.kind === "ref").length} 文献 ・ ${data.nodes.filter((n) => n.kind === "section").length} 章 ・ ${data.nodes.filter((n) => n.kind === "passage").length} 段落 を表示中`;
+    } catch (e) { fail(e); }
+  }
+  function libGraphOpen(id, title, n) {
+    if (!n) return;
+    if (n.kind === "ref") { openLibrary(n.id.slice(2)); return; }
+    if (n.kind === "section" || n.kind === "passage") { if (n.path) openNote(n.path, { heading: n.kind === "section" ? n.title : n.heading || "" }); return; }
+    if (n.kind === "group") { S.lib.graphExpanded.add(n.id); loadLibGraph(); }
+  }
+  async function bigLibGraph() {
+    const m = modal({ title: "文献の分解グラフ", body: '<canvas class="graph big" id="gLibBig" aria-label="文献の分解グラフ"></canvas>', buttons: [], wide: true, onClose: () => { g.destroy(); if (S.graph) loadLibGraph(); } });
+    m.body.style.padding = "0"; m.body.style.overflow = "hidden";
+    const g = new ForceGraph($("#gLibBig"), { onOpen: (id, t, n) => { m.close(); libGraphOpen(id, t, n); }, onExpand: (n) => { S.lib.graphExpanded.has(n.id) ? S.lib.graphExpanded.delete(n.id) : S.lib.graphExpanded.add(n.id); loadLibGraph(g); }, labels: "near" });
+    loadLibGraph(g);
+  }
+
+  // ---- 文献に質問
+  function renderLibraryAI(p) {
+    const L = S.lib, st = S.state.llm || {};
+    p.innerHTML = `<div class="rh"><span>文献に質問</span><span class="hint">${L.tag || L.year || L.status ? "絞り込み中の文献だけ" : "登録した文献すべて"}</span></div>
+      ${st.chat ? "" : `<div class="notice">LLM が未設定です。関連する文献と段落の検索だけ動きます。<br><button class="btn sm" style="margin-top:6px" id="aiSetup">LLM を設定する</button></div>`}
+      <div class="chat" id="libChat"></div>
+      <div class="askbox"><textarea id="libAsk" placeholder="例: 安全在庫の削減率はどの文献でどれくらい？（Ctrl+Enter で送信）"></textarea>
+        <div class="row"><span class="hint">根拠は登録した文献の本文だけ</span><span><button class="btn sm" id="libChatClear">クリア</button> <button class="btn sm pri" id="libAskGo">質問</button></span></div></div>`;
+    const chat = $("#libChat", p);
+    const draw = () => { chat.innerHTML = L.chat.map((m) => m.role === "user" ? `<div class="msg-q">${esc(m.content)}</div>` :
+      `<div class="msg-a">${m.pending ? '<span class="spin"></span> 文献を読んでいます…' : `<div class="md">${m.content ? MD.render(m.content, { resolve }) : `<span class="hint">${esc(m.message || "")}</span>`}</div>`}${(m.sources || []).length ? `<div class="srcs">${m.sources.map((s) => `<button class="chip" data-lsrc="${esc(s.ref_id || "")}" data-path="${esc(s.path)}" title="${esc(s.citation || s.path)}">[${s.n}] ${esc(s.title)}</button>`).join("")}</div>` : ""}</div>`).join("");
+      $$("[data-lsrc]", chat).forEach((b) => (b.onclick = () => (b.dataset.lsrc ? openLibrary(b.dataset.lsrc) : openNote(b.dataset.path)))); };
+    draw();
+    const ask = async () => {
+      const q = $("#libAsk", p).value.trim(); if (!q) return;
+      $("#libAsk", p).value = "";
+      const history = L.chat.filter((m) => !m.pending && m.content).map((m) => ({ role: m.role, content: m.content }));
+      L.chat.push({ role: "user", content: q }); const a = { role: "assistant", pending: true }; L.chat.push(a); draw();
+      try { const r = await api.post("/api/library/ask", { question: q, history, tag: L.tag, year: L.year, status: L.status }); Object.assign(a, { pending: false, content: r.answer, sources: r.sources, message: r.message }); }
+      catch (e) { Object.assign(a, { pending: false, content: "", message: e.message }); }
+      draw(); p.scrollTop = chat.offsetTop + chat.scrollHeight;
+    };
+    $("#libAskGo", p).onclick = ask;
+    $("#libAsk", p).addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); ask(); } });
+    $("#libChatClear", p).onclick = () => { L.chat = []; draw(); };
+    if ($("#aiSetup", p)) $("#aiSetup", p).onclick = () => openSettings("llm");
+  }
+
   // ------------------------------------------------------------ 人物・組織（文書に出てくる人と会社で文書をつなぐ）
   const PICON = { person: '<circle cx="12" cy="8" r="3.5"/><path d="M5 20c.8-3.6 3.6-5.5 7-5.5s6.2 1.9 7 5.5"/>', org: '<path d="M4 20V6l8-3v17M12 9h8v11M7 9h2M7 13h2M15 13h2M15 16h2M7 16h2"/>' };
   const pIcon = (t) => `<span class="picon ${t}">${icon(PICON[t] || PICON.person)}</span>`;
@@ -1475,7 +1778,7 @@
 
   async function openEntity(type, key) {
     await flushSave();
-    S.entityView = { type, key }; S.folderView = null; S.cur = null; S.entityData = null; S.profile = null;
+    S.entityView = { type, key }; S.folderView = null; S.cur = null; S.entityData = null; S.profile = null; S.libraryView = false;
     renderTree(); renderRight(); renderMain();
     try { S.entityData = await api.get("/api/people/entity", { type, key }); } catch (e) { fail(e); S.entityView = null; renderMain(); return; }
     renderMain();
@@ -1596,7 +1899,7 @@
   // ------------------------------------------------------------ フォルダの一覧表示
   async function openFolder(path) {
     await flushSave();
-    S.folderView = path; S.cur = null; S.entityView = null;
+    S.folderView = path; S.cur = null; S.entityView = null; S.libraryView = false;
     S.closed.delete(path); store.set("closed", [...S.closed]);
     renderTree(); renderRight();
     await refreshFolder(true);
@@ -2075,6 +2378,7 @@
   $("#btnSettings").onclick = () => openSettings();
   $("#btnScope").onclick = () => openScope();
   $("#btnIngest").onclick = () => openIngest();
+  $("#btnLibrary").onclick = () => openLibrary();
 
   // ------------------------------------------------------------ テーマ・レイアウト
   function applyTheme(t) { if (t === "light") document.documentElement.dataset.theme = "light"; else delete document.documentElement.dataset.theme; if (S.graph) S.graph.draw(); }

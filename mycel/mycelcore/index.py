@@ -595,9 +595,10 @@ class Index:
 
     # ------------------------------------------------------------ AI 用の検索（転置インデックス）
     def search_chunks(self, query: str, k: int = 50, prefixes: list[str] | None = None,
-                      exclude_prefixes: list[str] | None = None) -> list[tuple[int, float]]:
-        """BM25 で上位のチャンク (id, スコア) を返す。"""
-        q = list(dict.fromkeys(bigrams(query)))
+                      exclude_prefixes: list[str] | None = None, paths: set[str] | None = None) -> list[tuple[int, float]]:
+        """BM25 で上位のチャンク (id, スコア) を返す。paths を渡すとそのファイルだけを対象にする。"""
+        qtf = Counter(bigrams(query))
+        q = list(qtf)
         if not q:
             return []
         with self._lock:
@@ -614,26 +615,30 @@ class Index:
                     dfs[r["term"]] = r["c"]
             if not dfs:
                 return []
-            # どこにでも出る語（「します」など）は除き、珍しい語から最大 64 個を使う
+            # どこにでも出る語（「します」など）は除く。長い問い（文書そのもの）では、問いの中で繰り返される
+            # 主題の語（tf×idf が高い語）を優先して最大 128 個を使う（珍しいだけの語に偏らないように）
             limit_df = max(30, int(n * 0.3))
+            idf_all = {t: math.log(1 + (n - dfs[t] + 0.5) / (dfs[t] + 0.5)) for t in dfs}
             useful = [t for t in dfs if dfs[t] <= limit_df] or sorted(dfs, key=dfs.get)[:8]
-            useful = sorted(useful, key=lambda t: dfs[t])[:64]
-            idf = {t: math.log(1 + (n - dfs[t] + 0.5) / (dfs[t] + 0.5)) for t in useful}
+            useful = sorted(useful, key=lambda t: -qtf[t] * idf_all[t])[:128]
+            idf = {t: idf_all[t] for t in useful}
             rows = self.conn.execute(
                 f"SELECT t.chunk_id, t.term, t.tf, c.len, c.path FROM terms t JOIN chunks c ON c.id=t.chunk_id "
                 f"WHERE t.term IN ({','.join('?' * len(useful))})", useful).fetchall()
         k1, b = 1.4, 0.75
         scores: dict[int, float] = {}
-        paths: dict[int, str] = {}
+        chunk_path: dict[int, str] = {}
         for r in rows:
             f = r["tf"]
             s = idf[r["term"]] * f * (k1 + 1) / (f + k1 * (1 - b + b * (r["len"] or 1) / avgdl))
             scores[r["chunk_id"]] = scores.get(r["chunk_id"], 0.0) + s
-            paths[r["chunk_id"]] = r["path"]
+            chunk_path[r["chunk_id"]] = r["path"]
         out = []
         for cid, s in sorted(scores.items(), key=lambda x: -x[1]):
-            p = paths[cid]
+            p = chunk_path[cid]
             if prefixes is not None and not any(self._under(p, x) for x in prefixes):
+                continue
+            if paths is not None and p not in paths:
                 continue
             if exclude_prefixes and any(x and is_under(p, x) for x in exclude_prefixes):
                 continue
@@ -645,6 +650,12 @@ class Index:
     def chunk_refs(self) -> list[dict]:
         with self._lock:
             return [dict(r) for r in self.conn.execute("SELECT id, path, hash FROM chunks")]
+
+    def chunks_of(self, path: str) -> list[dict]:
+        """1 ファイルのチャンクを順に返す（文献の章立て・段落の分解に使う）。"""
+        with self._lock:
+            return [dict(r) for r in self.conn.execute(
+                "SELECT id, path, ord, heading, text, hash, len FROM chunks WHERE path=? ORDER BY ord", (path,))]
 
     def get_chunks(self, ids: list[int]) -> dict[int, dict]:
         if not ids:
@@ -665,7 +676,8 @@ class Index:
                 "SELECT count(*) FROM chunks c WHERE EXISTS (SELECT 1 FROM embeddings e "
                 "WHERE e.hash=c.hash AND e.model=?)", (model,)).fetchone()[0]
 
-    def chunks_without_embedding(self, model: str, prefixes: list[str] | None = None) -> list[dict]:
+    def chunks_without_embedding(self, model: str, prefixes: list[str] | None = None,
+                                 paths: set[str] | None = None) -> list[dict]:
         with self._lock:
             rows = self.conn.execute(
                 "SELECT c.hash, c.path, c.heading, c.text, n.title FROM chunks c JOIN items n ON n.path=c.path "
@@ -676,6 +688,8 @@ class Index:
             if r["hash"] in seen:
                 continue
             if prefixes is not None and not any(self._under(r["path"], p) for p in prefixes):
+                continue
+            if paths is not None and r["path"] not in paths:
                 continue
             seen.add(r["hash"])
             out.append(dict(r))

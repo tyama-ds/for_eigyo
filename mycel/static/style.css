@@ -414,3 +414,59 @@ canvas.graph.big{height:100%;border:0;border-radius:0}
 #docPeople{gap:4px}
 @media (max-width:900px){.egrid{grid-template-columns:1fr}}
 #docPeople .relbtns{flex-basis:100%;margin-top:4px}#docPeople{align-items:center}
+
+/* 文献管理モード */
+.lib{display:flex;flex-direction:column;height:100%;min-height:0;padding:16px 20px 0}
+.libhead{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+.libhead h1{margin:0;font-size:22px}
+.libhead .sp{flex:1}
+.libbar{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+.libbar input[type=search]{flex:1 1 240px;min-width:0;background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:6px 10px;font-size:13px}
+.libbar select{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:4px 6px;font-size:12px;max-width:160px}
+.libbar .ck{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:3px;white-space:nowrap}
+.chip.ok{color:var(--ok);border-color:var(--ok)}
+.libgrid{display:grid;grid-template-columns:minmax(300px,5fr) minmax(320px,6fr);gap:16px;flex:1;min-height:0}
+.liblist{overflow:auto;border:1px solid var(--line);border-radius:10px;background:var(--surface);padding:4px 0}
+.lrow{display:flex;gap:8px;padding:8px 10px;border-bottom:1px solid var(--line);cursor:pointer;align-items:flex-start}
+.lrow:hover{background:var(--surface2)}
+.lrow.on{background:var(--mark)}
+.lrow.err b{color:var(--muted)}
+.lrow input{margin-top:3px}
+.lmain{flex:1;min-width:0}
+.lmain b{display:block;font-weight:500;font-size:13.5px;line-height:1.4}
+.lmain small{display:block;color:var(--muted);font-size:11.5px;margin-top:2px}
+.lsc{display:inline-block;font-size:10px;color:var(--accent);border:1px solid var(--accent);border-radius:99px;padding:0 6px;margin-left:6px;vertical-align:1px}
+.lpas{font-size:12px;color:var(--ink-2,var(--ink));margin:4px 0;border-left:2px solid var(--line);padding-left:8px}
+.lpas small{color:var(--muted)}
+.lpas mark{background:var(--mark);color:var(--ink);border-radius:2px}
+.ltags{display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;align-items:center}
+.ltags .chip{font-size:10.5px;padding:0 7px}
+.lside{display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex:none}
+.lst{font-size:10.5px;border-radius:99px;padding:0 7px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+.lst.reading{color:var(--warn);border-color:var(--warn)}
+.lst.read{color:var(--ok);border-color:var(--ok)}
+.lrate{font-size:11px;color:var(--warn);letter-spacing:1px}
+.lrate.big button{border:0;background:transparent;color:var(--line);font-size:16px;padding:0 1px;cursor:pointer;line-height:1}
+.lrate.big button.on{color:var(--warn)}
+.libdetail{overflow:auto;padding:4px 4px 30px}
+.ldhead{display:flex;align-items:flex-start;gap:6px}
+.ldhead h2{margin:0;font-size:17px;line-height:1.4;flex:1}
+.ldmeta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:8px 0}
+.ldmeta select{background:var(--surface);border:1px solid var(--line);border-radius:5px;font-size:12px;padding:1px 4px}
+.ldfiles,.ldai{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0;align-items:center}
+.ldfiles a.chip{text-decoration:none}
+.ldsum{border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin:10px 0;background:var(--surface);display:grid;gap:8px}
+.ldsum b{display:block;font-size:11.5px;color:var(--muted);letter-spacing:.06em}
+.ldsum p{margin:2px 0 0;font-size:13px}
+.ldform summary{cursor:pointer;color:var(--muted);font-size:12.5px;margin:12px 0 6px}
+.ldform .form{grid-template-columns:auto 1fr;gap:6px 10px}
+.ldform .form label{font-size:12px}
+.ldform input,.ldform textarea,.ldform select{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12.5px}
+.ldsec{margin-top:14px}
+.ldsec h3{font-size:12px;font-weight:500;color:var(--muted);letter-spacing:.06em;margin:0 0 6px}
+.cite{font-size:12.5px;border:1px dashed var(--line);border-radius:8px;padding:8px 10px;color:var(--ink)}
+.ldstruct{display:flex;gap:4px;flex-wrap:wrap}
+.ldstruct .chip{cursor:pointer}
+.lginfo{font-size:11px;color:var(--muted);margin-top:4px}
+.gctl select{background:var(--surface);border:1px solid var(--line);border-radius:5px;font-size:12px;padding:1px 4px}
+@media (max-width:1100px){.libgrid{grid-template-columns:1fr}.liblist{max-height:45vh}}

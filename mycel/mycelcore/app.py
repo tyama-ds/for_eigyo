@@ -9,13 +9,15 @@ from pathlib import Path
 
 from . import links as L
 from .ai import AIService
-from .config import embed_configured, load_config, save_config, vault_path
+from .config import chat_configured, embed_configured, load_config, save_config, vault_path
 from .extract import EXT_GROUP, KINDS, TYPE_GROUPS, is_supported, pdf_available
-from .index import Index, open_index
+from .index import Cancelled, Index, open_index
+from .llm import LLMError
 from .ingest import Ingestor
 from .jobs import JobRunner
 from .plugins import NoteEvent, PluginContext, PluginManager
 from .entities import EntityStore
+from .library import Library
 from .people import People
 from .relations import Relations
 from .scope import Scope, ScopeError, browse, is_under, split_id
@@ -79,6 +81,7 @@ class MycelApp:
             self.relations = Relations(self.vault.internal)
             self.entities = EntityStore(self.vault.internal)
             self.people = People(self, self.entities)
+            self.library = Library(self)
             self.index.relations = self.relations
             self.ai = AIService(self.index, self.config)
             self.plugins.load(cfg["plugins"], PluginContext(self))
@@ -239,6 +242,7 @@ class MycelApp:
             self.index.refresh(new)
             self.relations.rename(old, new)
             self.entities.rename(old, new)
+            self.library.rename_path(old, new)
             if self.index.resolve(new_title) != new:
                 link_to = new[:-3]
             updated = []
@@ -405,6 +409,7 @@ class MycelApp:
             self.index.rename_path(path, new_path)
             self.relations.rename(path, new_path)
             self.entities.rename(path, new_path)
+            self.library.rename_path(path, new_path)
             old_name, new_name = Path(path).name, name
 
             def fix(text: str) -> str:
@@ -459,6 +464,7 @@ class MycelApp:
             moved = self.index.rename_prefix(old, new)
             self.relations.rename(old, new)
             self.entities.rename(old, new)
+            self.library.rename_path(old, new)
             ex = [new + e[len(old):] if is_under(e, old) else e for e in self.scope.data["exclude"]]
             if ex != self.scope.data["exclude"]:
                 self.scope.save({"exclude": ex})
@@ -696,6 +702,41 @@ class MycelApp:
     def graph(self, center: str | None, depth: int = 1, docs: bool = False, people: bool = False) -> dict:
         extra = self.people.graph_extra(center) if people else None
         return self.index.graph(center, depth, docs, extra)
+
+    def library_embed(self) -> dict:
+        """文献のファイルだけを読み直し、埋め込みを作る（「更新」と同じ処理を文献に限って行う）。"""
+        paths = sorted({p for r in self.library.refs for p in (r["file"], r["note"]) if p})
+        if not paths:
+            raise VaultError("本文ファイルのある文献がありません")
+        return self.update_index(paths, label="文献の索引を更新")
+
+    def library_ai_batch(self, ids: list[str], what: str) -> dict:
+        """選んだ文献の書誌情報の補完（meta）または構造化要約（summary）をまとめて行う。"""
+        lib = self.library
+        if not chat_configured(self.config()):
+            raise LLMError("LLM が未設定です（設定の「LLM」でローカル LLM を登録してください）")
+        targets = [i for i in ids if any(r["id"] == i for r in lib.refs)]
+        if not targets:
+            raise VaultError("対象の文献がありません")
+        label = "書誌情報の補完" if what == "meta" else "構造化要約"
+
+        def run(job):
+            done = errors = 0
+            for i, rid in enumerate(targets):
+                if job.cancel.is_set():
+                    raise Cancelled()
+                r = lib.get(rid)
+                job.progress(f"AI: {label}", i, len(targets), r["title"][:40])
+                try:
+                    (lib.ai_metadata if what == "meta" else lib.ai_summary)(rid)
+                    done += 1
+                except LLMError as e:
+                    errors += 1
+                    if errors >= 3 and errors > i // 2:
+                        raise VaultError(f"{label}に失敗しました: {e}") from e
+            return {"done": done, "errors": errors}
+
+        return self.jobs.start("library", f"文献の AI {label}（{len(targets)} 件）", None, run)
 
     def extract_people(self, prefixes=None) -> dict:
         prefixes = self._prefixes(prefixes)
