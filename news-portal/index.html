@@ -450,6 +450,7 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
 .rs__formrow{display:flex; align-items:center; gap:8px; flex-wrap:wrap}
 .rs__formrow select{padding:5px 8px; border-radius:8px; background:var(--surface); border:1px solid var(--line); color:var(--text); font:inherit; font-size:12px}
 .rs__savedpanel{min-width:320px; max-width:440px}
+.rs__srcpanel.right{left:auto; right:0}   /* 右端のボタンから開くパネルは右寄せ（モーダルからはみ出さない） */
 .rs__rep{width:100%; text-align:left; background:none; border:none; color:var(--text); font:inherit}
 .bubble.rpt, .bubble.rpt-progress{max-width:100%; width:100%; white-space:normal}
 .rpt__title{font-family:var(--font-serif); font-weight:700; font-size:16px; margin-bottom:3px}
@@ -543,6 +544,16 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
 .spark{display:inline-flex; align-items:flex-end; gap:1px; height:18px; width:72px; flex:0 0 auto}
 .spark i{flex:1; background:var(--accent); opacity:.7; border-radius:1px; min-height:1px}
 .spark i.last{opacity:1}
+/* 文書生成（Phase 4） */
+#rsExSlides{width:56px; padding:3px 6px; border-radius:6px; border:1px solid var(--line); background:var(--surface); color:var(--text); font:inherit; font-size:12px}
+#rsExSlidesWrap[hidden]{display:none}
+.bubble.exp{max-width:100%; width:100%; white-space:normal}
+.exp__head{display:flex; align-items:center; gap:8px; flex-wrap:wrap}
+.exp__badge{font-size:11px; font-weight:700; color:#fff; border-radius:6px; padding:2px 8px; background:var(--accent)}
+.exp__badge.docx{background:#2B5C8F} .exp__badge.xlsx{background:#1F8A4C} .exp__badge.pptx{background:#C2410C} .exp__badge.pdf{background:#B91C1C}
+.exp__title{font-family:var(--font-serif); font-weight:700; font-size:15px}
+.exp__meta{font-size:11.5px; color:var(--text-3); margin:4px 0 8px}
+.rs__rep .k{font-size:10px; color:#fff; border-radius:4px; padding:0 5px; margin-right:6px; background:var(--accent)}
 /* 比較ビュー・タイムライン（Phase 3-G） */
 .bubble.cmp{max-width:100%; width:100%; white-space:normal}
 .cmp__head{font-family:var(--font-serif); font-weight:700; font-size:15px; margin-bottom:6px}
@@ -984,8 +995,32 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
           <div class="rs__srcpanel rs__savedpanel" id="rsSavedPanel" hidden></div>
         </div>
         <button class="btn ghost sm" type="button" id="rsCmpBtn" title="現在の条件〔A〕と、テーマ／ウォッチ／前の期間〔B〕を比較（件数・情報源・固有名詞・報道量。AI 比較レポートも）">比較</button>
+        <button class="btn ghost sm" type="button" id="rsExportBtn" title="レポートや選択記事から Word / Excel / PowerPoint / PDF を作成（内容の構成はローカルLLM、ファイルは標準ライブラリで生成）">書き出し</button>
+        <div class="rs__src">
+          <button class="btn ghost sm" type="button" id="rsExpBtn">書き出し済み <span id="rsExpN"></span></button>
+          <div class="rs__srcpanel rs__savedpanel right" id="rsExpPanel" hidden></div>
+        </div>
         <label class="rs__chk" title="左の「本文を取得」で取得済みの本文抜粋を会話に添えます（上から最大10件）"><input type="checkbox" id="rsUseFull"> 会話に本文を使う</label>
         <span class="rs__count">選択した記事すべてを部分要約→統合し、出典番号つきのレポートに</span>
+      </div>
+      <div class="rs__form" id="rsExportForm" hidden>
+        <div class="rs__formrow">
+          <select id="rsExKind" aria-label="形式">
+            <option value="docx">Word（.docx）: 要約＋本文＋事実・数値表＋出典</option>
+            <option value="pptx">PowerPoint（.pptx）: 要点スライド＋情報源グラフ＋出典</option>
+            <option value="xlsx">Excel（.xlsx）: 記事一覧＋事実・数値＋集計＋出典</option>
+            <option value="pdf">PDF: Word と同じ構成（日本語フォント埋め込み）</option>
+          </select>
+          <select id="rsExSrc" aria-label="対象"></select>
+        </div>
+        <input id="rsExInst" type="text" placeholder="指示（任意。例: 経営層向けに5枚で／数値中心で／技術者向けに詳しく）" aria-label="書き出しの指示" autocomplete="off">
+        <div class="rs__formrow">
+          <label class="rs__chk" id="rsExSlidesWrap">枚数 <input type="number" id="rsExSlides" min="2" max="20" value="8" aria-label="スライド枚数"></label>
+          <span class="hint" id="rsExHint">内容の構成・要約・数値抽出はローカルLLM、ファイルは標準ライブラリで組み立てます</span>
+          <span style="flex:1"></span>
+          <button class="btn ghost sm" type="button" id="rsExCancel">閉じる</button>
+          <button class="btn sm" type="button" id="rsExStart">作成</button>
+        </div>
       </div>
       <div class="rs__form" id="rsCmpForm" hidden>
         <div class="rs__formrow">
@@ -1103,6 +1138,12 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
         <input id="brDriver" type="text" autocomplete="off" spellcheck="false"
                placeholder="例: C:\tools\chromedriver.exe（空=Selenium Managerが自動解決）">
         <span class="hint">urllib で本文が取れないとき、ヘッドレスブラウザで再取得します（<code>pip install selenium</code> が必要）。通常は両方とも<b>空でOK</b>（インストール済みの Chrome/Edge とドライバ自動解決を使用）。ドライバの自動ダウンロードがプロキシで失敗する環境では、手動配置した WebDriver のパスをここに指定してください。</span>
+      </div>
+      <div class="field">
+        <label for="pdfFont">PDF 書き出し用の日本語フォント（TrueType）のパス</label>
+        <input id="pdfFont" type="text" autocomplete="off" spellcheck="false"
+               placeholder="例: C:\Windows\Fonts\YuGothM.ttc（空=自動検出: Yu Gothic / Meiryo / MS ゴシック / IPA ゴシック）">
+        <span class="hint">リサーチの「書き出し」で PDF を作るときにサブセット化して埋め込みます。通常は<b>空でOK</b>。<span id="pdfFontState"></span></span>
       </div>
       <div class="setnote">AI 呼び出しと RSS 取得はいずれも<b>サーバー側の <code>urllib</code></b>で行われ、上のプロキシ設定に従います（他のアプリ／llmlab と同じ流儀）。取得できない情報源は「情報源」画面の各行の<b>診断ボタン</b>（脈波アイコン）で原因を切り分けられます。APIキーはこの端末の <code>settings.json</code> にのみ保存され、画面には再表示されません。</div>
       <div class="mrow" style="display:flex; gap:9px; justify-content:flex-end">
@@ -1851,7 +1892,7 @@ const PROVIDER_DEFAULTS = {
     modelHint:"ローカルにあるモデル名。例: llama3.1 / qwen2.5 / gpt-oss" },
 };
 
-async function loadAiSettings(){ try{ const d=await api("/api/settings"); AI.config=d.ai; AI.proxy=d.proxy; AI.browser=d.browser; }catch(e){ AI.config=null; } }
+async function loadAiSettings(){ try{ const d=await api("/api/settings"); AI.config=d.ai; AI.proxy=d.proxy; AI.browser=d.browser; AI.pdfFont=d.pdf_font||""; AI.pdfFontFound=!!d.pdf_font_found; }catch(e){ AI.config=null; } }
 function aiReady(){ return !!(AI.config && (AI.config.has_key || AI.config.provider==="local")); }
 
 function setAiContext(a){
@@ -1992,10 +2033,12 @@ function fillAiForm(){
   $("#aiCaBundle").value = p.ca_bundle||"";
   const br=AI.browser||{binary:"", driver:""};
   $("#brBinary").value = br.binary||""; $("#brDriver").value = br.driver||"";
+  const pf=$("#pdfFont"); if(pf) pf.value=AI.pdfFont||"";
+  const ps=$("#pdfFontState"); if(ps) ps.textContent = AI.pdfFontFound ? "現在: 日本語フォントを検出済みです。" : "現在: フォントが見つかりません。パスを指定してください。";
   toggleProxyUrl(); applyProviderHints();
 }
 function proxyPayload(){ const on=$("#aiUseProxy").checked; return { use_proxy:on, proxy_url: on ? $("#aiProxyUrl").value.trim() : "", ca_bundle: $("#aiCaBundle").value.trim(),
-  browser_binary: $("#brBinary").value.trim(), driver_path: $("#brDriver").value.trim() }; }
+  browser_binary: $("#brBinary").value.trim(), driver_path: $("#brDriver").value.trim(), pdf_font: ($("#pdfFont")?$("#pdfFont").value.trim():"") }; }
 function openAiSettings(){ fillAiForm(); openOverlay($("#aiSettings")); }
 $("#aiProvider").addEventListener("change", applyProviderHints);
 $("#aiUseProxy").addEventListener("change", toggleProxyUrl);
@@ -2006,7 +2049,7 @@ $("#aiForm").addEventListener("submit", async (e)=>{
   const key=$("#aiKey").value.trim(); if(key) payload.api_key=key;
   try{
     const d=await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
-    if(d.ok){ AI.config=d.ai; AI.proxy=d.proxy; AI.browser=d.browser; toast("AI・プロキシ設定を保存しました"); closeOverlays(); openAI(); }
+    if(d.ok){ AI.config=d.ai; AI.proxy=d.proxy; AI.browser=d.browser; AI.pdfFont=d.pdf_font||""; AI.pdfFontFound=!!d.pdf_font_found; toast("AI・プロキシ設定を保存しました"); closeOverlays(); openAI(); }
     else toast(d.error||"保存に失敗しました","err");
   }catch(e){ toast(e.server ? e.message : "保存に失敗しました","err"); }
 });
@@ -2053,13 +2096,14 @@ const RS={results:[], sel:new Set(), srcSel:new Set(), msgs:[], busy:false, stat
           job:null, jobTimer:null, reports:[],
           theme:null, newOnly:false, themes:[], fetchJob:null, fetchTimer:null,   // テーマ・本文取得
           hist:null, histOpen:true, openDups:new Set(), expanded:[], dupGroups:0, fts:false, synLoaded:false,   // 分布・類似束・同義語
-          watchTrends:null, cands:null, candsAi:null, candsBusy:false};   // 企業・製品ウォッチ
+          watchTrends:null, cands:null, candsAi:null, candsBusy:false,   // 企業・製品ウォッチ
+          exports:[]};   // 文書生成（Word/Excel/PowerPoint/PDF）
 const RS_QUICK=["期間内の動きを時系列で要約","情報源ごとに要点を整理","共通するテーマと相違点を比較","重要トピック3つと根拠"];
 function openResearch(){
   openOverlay($("#researchModal"));
   fillRsCats();
   if(!RS.results.length) researchSearch();
-  renderRsLog(); renderRsQuick(); loadReports(); loadThemes(); loadSynonyms();
+  renderRsLog(); renderRsQuick(); loadReports(); loadThemes(); loadSynonyms(); loadExports();
   setTimeout(()=>{ try{ $("#rsQ").focus(); }catch(e){} }, 90);
 }
 function fillRsCats(){
@@ -2180,7 +2224,7 @@ function renderRsLog(){
     h.append(el("div",{text:"左で 期間・情報源・カテゴリ・キーワード を組み合わせて絞り込み、「レポート生成」で出典つきの調査レポートを作るか、下の欄で質問できます。"}));
     log.append(h);
   }
-  RS.msgs.forEach(m=>log.append(m.role==="report" ? reportEl(m.report) : m.role==="progress" ? progressEl() : m.role==="compare" ? compareEl(m.data) : bubbleEl(m)));
+  RS.msgs.forEach(m=>log.append(m.role==="report" ? reportEl(m.report) : m.role==="progress" ? progressEl() : m.role==="compare" ? compareEl(m.data) : m.role==="export" ? exportEl(m.data) : bubbleEl(m)));
   if(RS.busy) log.append(el("div",{class:"bubble think", html:'<span class="dots"><span></span><span></span><span></span></span>'}));
   const sb=$("#rsSend"); if(sb) sb.disabled=RS.busy;
   log.scrollTop=log.scrollHeight;
@@ -2191,6 +2235,12 @@ async function sendRs(text){
   const items=RS.results.filter(a=>RS.sel.has(a.id)).slice(0,30)
     .map(a=>({id:a.id, title:a.title, source:a.source, category:a.category, published:a.published, summary:a.summary}));
   if(!items.length){ toast("記事を1件以上選択してください","err"); return; }
+  const intent=detectExportIntent(text);   // 「pptx にして」などは LLM に投げず、書き出しフォームを開く
+  if(intent){
+    const ta0=$("#rsInput"); if(ta0){ ta0.value=""; ta0.style.height="auto"; }
+    RS.msgs.push({role:"user", text}); RS.msgs.push({role:"assistant", text:"「"+EXPORT_NAMES[intent.kind]+"」で書き出しますね。下のフォームで対象（レポート／選択記事）と指示を確認して「作成」を押してください。"});
+    renderRsLog(); toggleExportForm(true,{kind:intent.kind, instructions:text}); return;
+  }
   const filters=rsFiltersPayload();
   const fulltext=!!($("#rsUseFull")&&$("#rsUseFull").checked);   // 取得済み本文の抜粋を添える（サーバー側はキャッシュのみ参照）
   const ta=$("#rsInput"); if(ta){ ta.value=""; ta.style.height="auto"; }
@@ -2240,13 +2290,16 @@ async function pollReport(){
   try{
     const s=await api("/api/research/report/status?id="+encodeURIComponent(RS.job.id));
     RS.job=Object.assign(RS.job, s);
+    if(s.state==="done" && s.kind==="export"){   // 文書生成ジョブ
+      replaceProgress({role:"export", data:s.export}); loadExports(); if(s.report_id) loadReports(); return;
+    }
     if(s.state==="done"){
       const r=await api("/api/research/report?id="+encodeURIComponent(s.report_id));
       replaceProgress({role:"report", report:r.report}); loadReports(); loadThemes();   // ブリーフならテーマの「前回ブリーフ」も更新
       if(RS.job.fulltext) researchSearch(true);   // 本文を取得したので一覧の「本文」バッジを反映（選択は維持）
       return;
     }
-    if(s.state==="error"){ replaceProgress({role:"error", text:"⚠ レポート生成に失敗しました: "+(s.error||"")}); return; }
+    if(s.state==="error"){ replaceProgress({role:"error", text:"⚠ "+(s.kind==="export"?"文書の作成":"レポート生成")+"に失敗しました: "+(s.error||"")}); return; }
     renderRsLog();
   }catch(e){ replaceProgress({role:"error", text:"⚠ 進捗の取得に失敗しました（サーバーが再起動した可能性）。保存済みレポートを確認してください"}); return; }
   RS.jobTimer=setTimeout(pollReport, 1500);
@@ -2258,6 +2311,16 @@ function replaceProgress(msg){
 }
 function progressEl(){
   const j=RS.job||{}; const w=el("div",{class:"bubble ai rpt-progress"});
+  if(j.kind==="export"){   // 文書生成: 準備（レポート生成）→ 構成（LLM）→ 組み立て
+    const detail = j.state==="fetching" ? "本文取得 "+(j.done||0)+"/"+(j.total||"?") : j.state==="mapping" ? "部分要約 "+(j.done||0)+"/"+(j.total||"?")
+                 : j.state==="reducing" ? "統合中" : (j.state==="composing" && j.total) ? (j.done||0)+"/"+j.total : "";
+    const pct = j.state==="building" ? 92 : j.state==="composing" ? (j.total ? Math.round(50+35*(j.done||0)/j.total) : 55)
+              : ["fetching","mapping","reducing","preparing"].includes(j.state) ? (j.total ? Math.round(8+38*(j.done||0)/j.total) : 8) : 3;
+    w.append(el("div",{class:"rpt-progress__t",text:"文書を作成中（"+(EXPORT_NAMES[j.export_kind]||j.export_kind||"")+"）— "+(j.label||"準備中")+(detail?"（"+detail+"）":"")}));
+    const bar=el("div",{class:"pbar"}); const fill=el("i"); fill.style.width=pct+"%"; bar.append(fill); w.append(bar);
+    w.append(el("div",{class:"hint",text:"内容の構成・要約・数値抽出はローカルLLMが担当します。完了したファイルは「書き出し済み」からいつでも再ダウンロードできます。"}));
+    return w;
+  }
   const stage = j.state==="queued" ? "準備中…"
               : j.state==="fetching" ? ("本文取得 "+(j.done||0)+" / "+(j.total||"?")+" 件"+(j.sub?"（"+j.sub+"）":""))
               : j.state==="mapping" ? ("部分要約 "+(j.done||0)+" / "+(j.total||"?")+" チャンク")
@@ -2360,9 +2423,93 @@ function reportEl(rep){
     try{ await api("/api/research/report?id="+encodeURIComponent(rep.id),{method:"DELETE"});
          RS.msgs=RS.msgs.filter(m=>!(m.role==="report"&&m.report.id===rep.id)); renderRsLog(); loadReports(); toast("削除しました"); }
     catch(e){ toast("削除に失敗しました","err"); } };
+  const ex=el("button",{class:"btn sm",type:"button",text:"書き出し（Word / Excel / PowerPoint / PDF）"}); ex.onclick=()=>toggleExportForm(true,{report_id:rep.id});
   if(tlBtn) acts.append(tlBtn);
-  acts.append(cp,md,dx,del); w.append(acts);
+  acts.append(ex,cp,md,dx,del); w.append(acts);
   return w;
+}
+
+// ---- 文書生成（Word / Excel / PowerPoint / PDF × ローカルLLM） ----
+const EXPORT_NAMES={docx:"Word", xlsx:"Excel", pptx:"PowerPoint", pdf:"PDF"};
+function detectExportIntent(text){   // サーバー側 detect_export_intent と同じ規則
+  const t=String(text||"");
+  if(!/にして|に変換|で出力|で書き出|書き出し|作って|作成|生成|エクスポート|出して|化して|にまとめ/i.test(t)) return null;
+  const kinds=[["pptx",/pptx|パワポ|パワーポイント|powerpoint|スライド|プレゼン/i],["xlsx",/xlsx|excel|エクセル|スプレッドシート|表計算/i],["docx",/docx|word|ワード(?!プレス)/i],["pdf",/pdf/i]];
+  for(const [k,re] of kinds) if(re.test(t)) return {kind:k, instructions:t.slice(0,300)};
+  return null;
+}
+function toggleExportForm(show, preset){
+  const fm=$("#rsExportForm"); fm.hidden=!show; if(!show) return;
+  toggleReportForm(false); toggleCmpForm(false);
+  preset=preset||{};
+  if(preset.kind) $("#rsExKind").value=preset.kind;
+  if(preset.instructions!==undefined) $("#rsExInst").value=preset.instructions;
+  const sel=$("#rsExSrc"); sel.innerHTML="";
+  const reps=RS.msgs.filter(m=>m.role==="report").map(m=>m.report).reverse();   // 画面に出ているレポート（新しい順）
+  reps.forEach(r=>sel.append(el("option",{value:"report:"+r.id, text:"レポート: "+r.title})));
+  RS.reports.filter(r=>!reps.some(x=>x.id===r.id)).slice(0,20).forEach(r=>sel.append(el("option",{value:"report:"+r.id, text:"保存済み: "+r.title})));
+  if(RS.sel.size) sel.append(el("option",{value:"ids", text:"選択中の記事 "+RS.sel.size+"件（Word/PowerPoint/PDF は先にレポートを生成）"}));
+  if(RS.theme) sel.append(el("option",{value:"theme:"+RS.theme.id, text:(RS.theme.kind==="watch"?"ウォッチ: ":"テーマ: ")+RS.theme.name+"（該当記事すべて）"}));
+  if(!sel.options.length) sel.append(el("option",{value:"", text:"（レポートを生成するか、記事を選択してください）"}));
+  if(preset.report_id && [...sel.options].some(o=>o.value==="report:"+preset.report_id)) sel.value="report:"+preset.report_id;
+  syncExportForm();
+  setTimeout(()=>$("#rsExInst").focus(),30);
+}
+function syncExportForm(){
+  const k=$("#rsExKind").value; $("#rsExSlidesWrap").hidden = k!=="pptx";
+  const h=$("#rsExHint");
+  h.textContent = k==="pdf" ? "日本語 TrueType フォント（Windows: Yu Gothic / Meiryo）を自動検出して埋め込みます。見つからない場合は設定の「PDF フォント」で指定"
+                : k==="xlsx" ? "記事一覧・情報源別／日付別の集計に加え、ローカルLLMが見出し・要約から抽出した事実・数値表（出典番号つき）を入れます"
+                : k==="pptx" ? "ローカルLLMがレポートからスライド構成（見出し・要点・発表者ノート）を作り、情報源グラフと出典スライドを自動で付けます"
+                : "ローカルLLMがエグゼクティブサマリーと事実・数値表を作り、レポート本文・出典（リンクつき）・目次・ページ番号と一緒に Word 化します";
+}
+async function startExport(){
+  if(RS.job && !["done","error"].includes(RS.job.state)){ toast("実行中のジョブがあります。完了をお待ちください","err"); return; }
+  if(!aiReady()){ RS.msgs.push({role:"error",text:"⚠ 生成AIが未設定です。設定（トップバーの設定ボタン）から登録してください。"}); renderRsLog(); return; }
+  const kind=$("#rsExKind").value, src=$("#rsExSrc").value; if(!src){ toast("対象を選んでください","err"); return; }
+  const body={kind, instructions:$("#rsExInst").value.trim(), slides:parseInt($("#rsExSlides").value,10)||8, fulltext:$("#rsRFull").checked};
+  if(src.startsWith("report:")) body.report_id=src.slice(7);
+  else if(src.startsWith("theme:")) body.theme_id=src.slice(6);
+  else { body.ids=RS.results.filter(a=>RS.sel.has(a.id)).map(a=>a.id); body.filters=rsFiltersPayload(); body.question=defaultQuestion(); }
+  try{
+    const d=await api("/api/research/export",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    RS.job={id:d.job_id, kind:"export", export_kind:kind, state:"queued", label:"準備中", total:0, done:0};
+    toggleExportForm(false); RS.msgs.push({role:"progress"}); renderRsLog(); pollReport();
+  }catch(e){ toast(e.server?e.message:"文書の作成を開始できませんでした","err"); }
+}
+function exportEl(x){
+  const w=el("div",{class:"bubble ai exp"});
+  const head=el("div",{class:"exp__head"}); head.append(el("span",{class:"exp__badge "+x.kind,text:x.kind_name||EXPORT_NAMES[x.kind]||x.kind}), el("span",{class:"exp__title",text:x.title||""})); w.append(head);
+  const m=x.meta||{}; const parts=[new Date((x.created_at||0)*1000).toLocaleString("ja-JP"), Math.max(1,Math.round((x.bytes||0)/1024))+" KB"];
+  if(m.articles) parts.push("記事 "+m.articles+"件"); if(m.slides) parts.push("スライド "+m.slides+"枚（＋表紙・情報源・出典）"); if(m.facts) parts.push("事実・数値 "+m.facts+"行"); if(m.summary) parts.push("要約 "+m.summary+"文"); if(m.font) parts.push("フォント "+m.font);
+  if(x.instructions) parts.push("指示: "+x.instructions);
+  w.append(el("div",{class:"exp__meta",text:parts.join(" ／ ")}));
+  const acts=el("div",{class:"rpt__acts"});
+  const dl=el("a",{class:"btn sm",href:"/api/research/export/file?id="+encodeURIComponent(x.id),text:"ダウンロード（"+(x.filename||"").replace(/^.*\./,".")+"）"});
+  const del=el("button",{class:"btn ghost sm",type:"button",text:"削除"});
+  del.onclick=async()=>{ if(!confirm("このファイルを削除しますか？")) return;
+    try{ await api("/api/research/export?id="+encodeURIComponent(x.id),{method:"DELETE"}); RS.msgs=RS.msgs.filter(mm=>!(mm.role==="export"&&mm.data.id===x.id)); renderRsLog(); loadExports(); toast("削除しました"); }
+    catch(e){ toast("削除に失敗しました","err"); } };
+  acts.append(dl,del); w.append(acts);
+  w.append(el("div",{class:"hint",text:"ファイルは news-portal/exports に保存されています。「書き出し済み」からいつでも再ダウンロードできます。"}));
+  return w;
+}
+async function loadExports(){
+  try{ const d=await api("/api/research/exports"); RS.exports=d.exports||[]; $("#rsExpN").textContent=RS.exports.length?"("+RS.exports.length+")":""; renderExpPanel(); }catch(e){}
+}
+function renderExpPanel(){
+  const p=$("#rsExpPanel"); if(!p) return; p.innerHTML="";
+  if(!(RS.exports||[]).length){ p.append(el("div",{class:"rs__srcrow",text:"書き出した文書はまだありません。レポートの「書き出し」や右上の「書き出し」から作成できます"})); return; }
+  RS.exports.forEach(x=>{
+    const row=el("div",{class:"rs__srcrow rs__rep"}); row.style.cursor="default";
+    const k=el("span",{class:"k",text:x.kind_name||x.kind}); k.style.background = {docx:"#2B5C8F",xlsx:"#1F8A4C",pptx:"#C2410C",pdf:"#B91C1C"}[x.kind]||"var(--accent)";
+    const a=el("a",{class:"n",href:"/api/research/export/file?id="+encodeURIComponent(x.id),text:x.title,title:"ダウンロード"}); a.style.color="var(--text)";
+    row.append(k, a, el("span",{class:"c",text:new Date(x.created_at*1000).toLocaleDateString("ja-JP")+"・"+Math.max(1,Math.round((x.bytes||0)/1024))+"KB"}));
+    const del=el("button",{type:"button",class:"lnkbtn danger",text:"削除"});
+    del.onclick=async(e)=>{ e.stopPropagation(); if(!confirm("「"+x.title+"」（"+(x.kind_name||x.kind)+"）を削除しますか？")) return;
+      try{ await api("/api/research/export?id="+encodeURIComponent(x.id),{method:"DELETE"}); RS.msgs=RS.msgs.filter(mm=>!(mm.role==="export"&&mm.data.id===x.id)); renderRsLog(); loadExports(); }catch(err){ toast("削除に失敗しました","err"); } };
+    row.append(del); p.append(row);
+  });
 }
 
 // ---- 比較ビュー（〔A〕現在の条件 vs 〔B〕テーマ／ウォッチ／前の期間） ----
@@ -2749,7 +2896,7 @@ function renderFetchBar(){
   bar.append(fill); b.append(bar);
 }
 function closeRsPanels(){
-  for(const id of ["#rsSrcPanel","#rsSavedPanel","#rsThemePanel","#rsSynPanel","#rsWatchPanel"]){ const p=$(id); if(p && !p.hidden) p.hidden=true; }
+  for(const id of ["#rsSrcPanel","#rsSavedPanel","#rsThemePanel","#rsSynPanel","#rsWatchPanel","#rsExpPanel"]){ const p=$(id); if(p && !p.hidden) p.hidden=true; }
   for(const id of ["#rsSrcBtn","#rsThemeBtn","#rsSynBtn","#rsWatchBtn"]) $(id).setAttribute("aria-expanded","false");
 }
 $("#researchBtn").onclick=openResearch;
@@ -2767,8 +2914,15 @@ $("#rsSavedPanel").addEventListener("click",(e)=>e.stopPropagation());
 document.addEventListener("click", closeRsPanels);
 $("#rsSelAll").onclick=()=>{ RS.results.forEach(a=>RS.sel.add(a.id)); renderRsList(); };
 $("#rsSelNone").onclick=()=>{ RS.sel.clear(); renderRsList(); };
-$("#rsReportBtn").onclick=()=>{ toggleCmpForm(false); toggleReportForm($("#rsReportForm").hidden); };
-$("#rsCmpBtn").onclick=()=>{ const open=$("#rsCmpForm").hidden; toggleReportForm(false); toggleCmpForm(open); };
+$("#rsReportBtn").onclick=()=>{ toggleCmpForm(false); toggleExportForm(false); toggleReportForm($("#rsReportForm").hidden); };
+$("#rsCmpBtn").onclick=()=>{ const open=$("#rsCmpForm").hidden; toggleReportForm(false); toggleExportForm(false); toggleCmpForm(open); };
+$("#rsExportBtn").onclick=()=>{ const open=$("#rsExportForm").hidden; toggleExportForm(open); };
+$("#rsExCancel").onclick=()=>toggleExportForm(false);
+$("#rsExStart").onclick=startExport;
+$("#rsExKind").addEventListener("change", syncExportForm);
+$("#rsExInst").addEventListener("keydown",(e)=>{ if(e.key==="Enter"){ e.preventDefault(); startExport(); } });
+$("#rsExpBtn").onclick=(e)=>{ e.stopPropagation(); const p=$("#rsExpPanel"); const open=p.hidden; closeRsPanels(); p.hidden=!open; if(!p.hidden) loadExports(); };
+$("#rsExpPanel").addEventListener("click",(e)=>e.stopPropagation());
 $("#rsCmpCancel").onclick=()=>toggleCmpForm(false);
 $("#rsCmpStart").onclick=startCompare;
 $("#rsRCancel").onclick=()=>toggleReportForm(false);

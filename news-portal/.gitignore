@@ -9,3 +9,4 @@ archive.jsonl.imported
 archive.sqlite3
 archive.sqlite3-wal
 archive.sqlite3-shm
+exports/

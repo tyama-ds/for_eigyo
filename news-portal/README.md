@@ -100,8 +100,19 @@ App Portal（`launcher/`）にも `Prism ニュースポータル` として登�
   月ごとの見出しつきの縦タイムラインに切り替えられる（出典リンクは維持）。
 - **検索語の引用符** — `"Nippon Steel"` のように `"..."` で囲むと空白を含む1語として扱う
   （企業名の別表記を `日本製鉄|日鉄|"Nippon Steel"` と並べられる）。
-- **ロードマップ** — リサーチ機能の計画（Phase 4: ローカルLLMによる Word / PowerPoint / PDF / Excel 生成）は
-  [ROADMAP.md](ROADMAP.md) を参照。
+- **文書生成（Word / Excel / PowerPoint / PDF）× ローカルLLM** — 右ペインの「書き出し」、レポートの
+  「書き出し」ボタン、または会話で「この結果を pptx にして」と頼むとフォームが開く。対象は保存済み
+  レポート／選択中の記事／テーマで、指示（「経営層向けに5枚で」「数値中心で」等）を添えられる。
+  **内容の構成・要約・数値抽出はローカルLLM**（エグゼクティブサマリー、事実・数値表、スライド構成）、
+  **ファイルの組み立ては標準ライブラリ**（`docgen.py`: OOXML を zipfile で、PDF は自前ライターで）。
+  - Word: 要約＋本文＋事実・数値表＋出典（ハイパーリンク）、ヘッダー／フッター（ページ番号）、目次フィールド
+  - Excel: 概要／記事一覧／事実・数値（出典番号・URL）／情報源別／日付別／出典（先頭行固定・フィルタ・リンク）
+  - PowerPoint: 表紙＋LLM の要点スライド（発表者ノートつき）＋情報源別件数の棒グラフ＋出典スライド（16:9）
+  - PDF: Word と同じ構成。Windows の Yu Gothic / Meiryo 等の **TrueType を自動検出してサブセット埋め込み**
+    （設定の「PDF フォント」で指定も可。環境変数 `PRISM_PDF_FONT`）。出典はリンク注釈つき
+  - 記事だけを選んで Word / PowerPoint / PDF にした場合は先にレポートを自動生成する。生成物は
+    `exports/` に保存され、「書き出し済み」から再ダウンロード・削除（最大200件）
+- **ロードマップ** — 全フェーズの計画と完了状況は [ROADMAP.md](ROADMAP.md) を参照。
 - **トレンド** — 見出しから多く出現する語を抽出してチップ表示。クリックで即フィルタ。
 - **保存（ブックマーク）** — 記事を保存してドロワーで一覧。ブラウザの localStorage に
   永続化されるのでフィードが入れ替わっても残る。
@@ -300,6 +311,11 @@ UI の「情報源」から自由に 追加 / 無効化 / 削除でき、URL も
 | GET | `/api/research/reports` | 保存済みレポート一覧 |
 | GET | `/api/research/report?id=` | レポート1件（Markdown・出典・統計） |
 | GET | `/api/research/report/export?id=&fmt=md\|docx` | Markdown / Word で書き出し（ダウンロード） |
+| POST | `/api/research/export` | 文書生成ジョブ（JSON: `kind`=docx/xlsx/pptx/pdf, 対象 `report_id` / `ids[]` / `theme_id`, `instructions?`, `slides?`, `fulltext?`, `question?`）→ `job_id`（進捗は report/status。state=preparing/composing/building, `label`） |
+| GET | `/api/research/exports` | 生成した文書の一覧（種類・タイトル・サイズ・元レポート・meta） |
+| GET | `/api/research/export/file?id=` | 生成した文書のダウンロード |
+| DELETE | `/api/research/export?id=` | 生成した文書の削除 |
+| POST | `/api/research/export/intent` | 会話文から書き出し意図（形式）を判定（JSON: `text`） |
 | DELETE | `/api/research/report?id=` | レポート削除 |
 | POST | `/api/ai/chat` | AIへの質問（JSON: `question`, `history`, `context`, `fetch_page?`） |
 

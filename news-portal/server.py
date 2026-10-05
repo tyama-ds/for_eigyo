@@ -45,6 +45,8 @@ import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 
+import docgen   # 標準ライブラリだけの Word/Excel/PowerPoint/PDF 生成（同じフォルダ）
+
 BASE = Path(__file__).resolve().parent
 FEEDS_FILE = BASE / "feeds.json"
 UI_FILE = BASE / "index.html"
@@ -803,6 +805,9 @@ def _archive_init_locked() -> None:
         conn.execute("""CREATE TABLE IF NOT EXISTS pages(
             article_id TEXT PRIMARY KEY, link TEXT, text TEXT, via TEXT, error TEXT,
             fetched_at REAL, chars INTEGER)""")   # 記事本文のキャッシュ（一括取得の結果）
+        conn.execute("""CREATE TABLE IF NOT EXISTS exports(
+            id TEXT PRIMARY KEY, created_at REAL, kind TEXT, title TEXT, filename TEXT, bytes INTEGER,
+            report_id TEXT, instructions TEXT, meta_json TEXT)""")   # 生成した文書ファイル（Word/Excel/PowerPoint/PDF）
         if ARCHIVE_FILE.exists():   # 旧 JSONL → SQLite 取り込み（取り込み後は .imported に退避）
             rows = []
             try:
@@ -2033,16 +2038,87 @@ def delete_report(rid: str) -> bool:
             conn.close()
 
 
-def _run_report(job_id: str, question: str, template: str, ids: list, filters: dict,
-                fulltext: bool = False, theme_id: str | None = None, title: str | None = None,
-                groups: list[dict] | None = None) -> None:
-    """ワーカースレッド: (本文一括取得) → 部分要約(map) → 統合(reduce) → 保存。進捗は _jobs に書く。
+def _build_report(cfg: dict, question: str, template: str, ids: list, filters: dict, fulltext: bool = False,
+                  groups: list[dict] | None = None, progress=None, title: str | None = None) -> dict:
+    """レポートを生成して dict で返す（保存はしない）。(本文一括取得) → 部分要約(map) → 統合(reduce)。
+    progress(**kw) で進捗（state / total / done / sub / articles）を通知する。
     groups（比較レポート）があれば記事行に〔A〕〔B〕のタグを付け、群の定義をプロンプトに添える。"""
+    def upd(**kw):
+        if progress:
+            progress(**kw)
     tag_of: dict[str, str] = {}
     for gi, g in enumerate((groups or [])[:3]):
         for i in (g.get("ids") or []):
             tag_of.setdefault(str(i), f"〔{chr(65 + gi)}〕")
     note = _groups_note(groups)
+    arts = _report_fetch(ids)
+    if not arts:
+        raise RuntimeError("対象記事が過去ログに見つかりません")
+    local = cfg["provider"] == "local"
+    budget = REPORT_CHUNK_CHARS_LOCAL if local else REPORT_CHUNK_CHARS_CLOUD
+    par = REPORT_PARALLEL_LOCAL if local else REPORT_PARALLEL_CLOUD
+    system = _report_system(local)
+    pages: dict[str, dict] = {}
+    n_target = 0
+    if fulltext:   # 本文一括取得（キャッシュ優先・urllib→ブラウザ）。新しい記事から上限件数まで
+        targets = arts[:FULLTEXT_MAX_ARTICLES]
+        n_target = len(targets)
+        upd(state="fetching", total=n_target, done=0, articles=len(arts), sub="")
+        pages = fetch_pages(targets, progress=lambda d, t, sub: upd(total=t, done=d, sub=sub))
+    per = FULLTEXT_PER_ARTICLE_LOCAL if local else FULLTEXT_PER_ARTICLE_CLOUD
+    lines = [_article_line(i + 1, a, (pages.get(a["id"]) or {}).get("text"), per, tag_of.get(a["id"], ""))
+             for i, a in enumerate(arts)]
+    chunks = _chunk_lines(lines, budget)
+    upd(state="mapping", total=len(chunks), done=0, articles=len(arts), sub="")
+    done = [0]
+    lock = threading.Lock()
+
+    def do_map(ch: list[str]) -> str:
+        txt = call_ai(cfg, system, _map_prompt(question, "\n".join(ch), bool(pages), note), [],
+                      max_tokens=REPORT_MAX_TOKENS)
+        ans, _ = _split_reasoning(txt)
+        with lock:
+            done[0] += 1
+            upd(done=done[0])
+        return ans
+
+    with ThreadPoolExecutor(max_workers=max(1, min(par, len(chunks)))) as ex:
+        notes = [n for n in ex.map(do_map, chunks) if n]
+    upd(state="reducing")
+    notes_text = "\n\n".join(notes)
+    if len(notes) > 1 and len(notes_text) > budget * 2:   # 多段統合（メモが長すぎる場合）
+        mids = []
+        for g in _chunk_lines(notes_text.split("\n"), budget * 2):
+            t = call_ai(cfg, system, _merge_prompt(question, "\n".join(g)), [],
+                        max_tokens=REPORT_MAX_TOKENS)
+            mids.append(_split_reasoning(t)[0])
+        notes_text = "\n\n".join(m for m in mids if m)
+    tname, sections = REPORT_TEMPLATES.get(template) or REPORT_TEMPLATES["overview"]
+    body = call_ai(cfg, system, _reduce_prompt(question, tname, sections, notes_text, len(arts), filters, note),
+                   [], max_tokens=REPORT_MAX_TOKENS)
+    body, _ = _split_reasoning(body)
+    body = re.sub(r"^\s*#\s[^\n]*\n", "", body, count=1)   # 念のため先頭のタイトル行を除去
+    body, bad = _strip_bad_cites(body, len(arts))
+    n_text = sum(1 for p in pages.values() if p.get("text"))
+    return {
+        "id": secrets.token_hex(8), "created_at": time.time(),
+        "title": (title or "").strip()[:80] or _report_title(question, filters, tname),
+        "question": question, "template": template if template in REPORT_TEMPLATES else "overview",
+        "filters": filters, "article_ids": [a["id"] for a in arts],
+        "markdown": body.strip(),
+        "sources": [{"n": i + 1, "id": a["id"], "title": a.get("title"), "source": a.get("source"),
+                     "published": str(a.get("published") or "")[:10], "link": a.get("link")}
+                    for i, a in enumerate(arts)],
+        "model": f"{cfg['provider']}:{cfg['model'] or 'default'}",
+        "stats": {"articles": len(arts), "chunks": len(chunks), "bad_cites": bad,
+                  "fulltext": n_text, "fulltext_failed": max(0, n_target - n_text)},
+    }
+
+
+def _run_report(job_id: str, question: str, template: str, ids: list, filters: dict,
+                fulltext: bool = False, theme_id: str | None = None, title: str | None = None,
+                groups: list[dict] | None = None) -> None:
+    """ワーカースレッド: _build_report → 保存（レポート id = ジョブ id）。進捗は _jobs に書く。"""
     def upd(**kw):
         with _jobs_lock:
             _jobs[job_id].update(kw)
@@ -2050,65 +2126,8 @@ def _run_report(job_id: str, question: str, template: str, ids: list, filters: d
         cfg = ai_config()
         if cfg["provider"] != "local" and not cfg["api_key"]:
             raise RuntimeError("生成AI APIが未設定です")
-        arts = _report_fetch(ids)
-        if not arts:
-            raise RuntimeError("対象記事が過去ログに見つかりません")
-        local = cfg["provider"] == "local"
-        budget = REPORT_CHUNK_CHARS_LOCAL if local else REPORT_CHUNK_CHARS_CLOUD
-        par = REPORT_PARALLEL_LOCAL if local else REPORT_PARALLEL_CLOUD
-        system = _report_system(local)
-        pages: dict[str, dict] = {}
-        n_target = 0
-        if fulltext:   # 本文一括取得（キャッシュ優先・urllib→ブラウザ）。新しい記事から上限件数まで
-            targets = arts[:FULLTEXT_MAX_ARTICLES]
-            n_target = len(targets)
-            upd(state="fetching", total=n_target, done=0, articles=len(arts), sub="")
-            pages = fetch_pages(targets, progress=lambda d, t, sub: upd(total=t, done=d, sub=sub))
-        per = FULLTEXT_PER_ARTICLE_LOCAL if local else FULLTEXT_PER_ARTICLE_CLOUD
-        lines = [_article_line(i + 1, a, (pages.get(a["id"]) or {}).get("text"), per, tag_of.get(a["id"], ""))
-                 for i, a in enumerate(arts)]
-        chunks = _chunk_lines(lines, budget)
-        upd(state="mapping", total=len(chunks), done=0, articles=len(arts), sub="")
-
-        def do_map(ch: list[str]) -> str:
-            txt = call_ai(cfg, system, _map_prompt(question, "\n".join(ch), bool(pages), note), [],
-                          max_tokens=REPORT_MAX_TOKENS)
-            ans, _ = _split_reasoning(txt)
-            with _jobs_lock:
-                _jobs[job_id]["done"] += 1
-            return ans
-
-        with ThreadPoolExecutor(max_workers=max(1, min(par, len(chunks)))) as ex:
-            notes = [n for n in ex.map(do_map, chunks) if n]
-        upd(state="reducing")
-        notes_text = "\n\n".join(notes)
-        if len(notes) > 1 and len(notes_text) > budget * 2:   # 多段統合（メモが長すぎる場合）
-            mids = []
-            for g in _chunk_lines(notes_text.split("\n"), budget * 2):
-                t = call_ai(cfg, system, _merge_prompt(question, "\n".join(g)), [],
-                            max_tokens=REPORT_MAX_TOKENS)
-                mids.append(_split_reasoning(t)[0])
-            notes_text = "\n\n".join(m for m in mids if m)
-        tname, sections = REPORT_TEMPLATES.get(template) or REPORT_TEMPLATES["overview"]
-        body = call_ai(cfg, system, _reduce_prompt(question, tname, sections, notes_text, len(arts), filters, note),
-                       [], max_tokens=REPORT_MAX_TOKENS)
-        body, _ = _split_reasoning(body)
-        body = re.sub(r"^\s*#\s[^\n]*\n", "", body, count=1)   # 念のため先頭のタイトル行を除去
-        body, bad = _strip_bad_cites(body, len(arts))
-        n_text = sum(1 for p in pages.values() if p.get("text"))
-        rep = {
-            "id": job_id, "created_at": time.time(),
-            "title": (title or "").strip()[:80] or _report_title(question, filters, tname),
-            "question": question, "template": template if template in REPORT_TEMPLATES else "overview",
-            "filters": filters, "article_ids": [a["id"] for a in arts],
-            "markdown": body.strip(),
-            "sources": [{"n": i + 1, "id": a["id"], "title": a.get("title"), "source": a.get("source"),
-                         "published": str(a.get("published") or "")[:10], "link": a.get("link")}
-                        for i, a in enumerate(arts)],
-            "model": f"{cfg['provider']}:{cfg['model'] or 'default'}",
-            "stats": {"articles": len(arts), "chunks": len(chunks), "bad_cites": bad,
-                      "fulltext": n_text, "fulltext_failed": max(0, n_target - n_text)},
-        }
+        rep = _build_report(cfg, question, template, ids, filters, fulltext, groups, upd, title)
+        rep["id"] = job_id
         _save_report(rep)
         if theme_id:
             _theme_set_brief(theme_id, rep["id"], rep["created_at"])
@@ -2782,98 +2801,431 @@ def report_markdown(rep: dict) -> str:
     return out
 
 
-def _xml(s: str) -> str:
-    return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-            .replace('"', "&quot;"))
+# ------------------------------------------------------------------ リサーチ: 文書生成（Word / Excel / PowerPoint / PDF）× ローカルLLM
+# 内容の構成・抽出・要約は LLM、ファイルの組み立ては docgen（標準ライブラリ）。生成物は exports/ に保存し一覧・再DL・削除できる。
+
+EXPORT_DIR = BASE / "exports"
+EXPORT_KINDS = {
+    "docx": ("Word", ".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+    "xlsx": ("Excel", ".xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+    "pptx": ("PowerPoint", ".pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"),
+    "pdf": ("PDF", ".pdf", "application/pdf"),
+}
+EXPORT_MAX = 200               # 保存する生成物の上限（古いものから削除）
+FACTS_CHUNK_LOCAL = 3000       # 事実・数値の抽出で1回に渡す記事テキスト（文字）
+FACTS_CHUNK_CLOUD = 10000
+FACTS_MAX_ROWS = 120
+SLIDES_DEFAULT = 8
+SLIDES_MAX = 20
 
 
-def _docx_runs(text: str) -> str:
-    """**太字** を w:b の run に分ける。それ以外は平文 run。"""
-    out = []
-    for i, part in enumerate(text.split("**")):
-        if not part:
+def _parse_json_object(text: str) -> dict:
+    t = re.sub(r"```(?:json)?", "", text or "").strip()
+    i, j = t.find("{"), t.rfind("}")
+    if i < 0 or j <= i:
+        return {}
+    for attempt in (t[i:j + 1], re.sub(r",\s*([\]}])", r"\1", t[i:j + 1])):
+        try:
+            v = json.loads(attempt)
+            return v if isinstance(v, dict) else {}
+        except ValueError:
+            pass
+    return {}
+
+
+def _json_system(local: bool) -> str:
+    s = ("あなたは産業ニュースの調査アナリストです。与えられた資料のみに基づき、指示された JSON だけを出力してください。"
+         "説明文・前置き・コードフェンスは不要です。資料に無い事実・推測を加えないでください。")
+    if local:
+        s += "\n思考過程を書く必要がある場合は必ず <think> と </think> で囲み、その後に JSON だけを書いてください。"
+    return s
+
+
+def compose_facts(cfg: dict, arts: list[dict], question: str, progress=None) -> list[dict]:
+    """記事群から 事実・数値表（日付・企業・項目・値・単位・補足・出典番号）を LLM で抽出する（記事チャンクごと）。"""
+    local = cfg["provider"] == "local"
+    budget = FACTS_CHUNK_LOCAL if local else FACTS_CHUNK_CLOUD
+    lines = [_article_line(i + 1, a) for i, a in enumerate(arts)]
+    chunks = _chunk_lines(lines, budget)
+    system = _json_system(local)
+    rows: list[dict] = []
+    for k, ch in enumerate(chunks, 1):
+        if progress:
+            progress(done=k - 1, total=len(chunks))
+        prompt = (f"【問い】{question}\n\n【記事（[番号] 日付 媒体｜見出し／要約）】\n" + "\n".join(ch) +
+                  "\n\n【指示】上の記事から、数値や固有の事実（投資額・生産能力・時期・数量・比率・価格など）を抽出し、JSON 配列だけを出力してください。\n"
+                  "各要素は {\"date\": \"YYYY-MM-DD\", \"entity\": \"企業・組織\", \"topic\": \"何についての値か\", \"value\": \"数値\", "
+                  "\"unit\": \"単位\", \"note\": \"補足（30字以内）\", \"cite\": 出典番号(整数)} の形。\n"
+                  "数値や具体的事実が無い記事は省く。推測しない。最大15件。")
+        try:
+            txt, _ = _split_reasoning(call_ai(cfg, system, prompt, [], max_tokens=2500))
+        except Exception:
             continue
-        rpr = "<w:rPr><w:b/></w:rPr>" if i % 2 == 1 else ""
-        out.append(f'<w:r>{rpr}<w:t xml:space="preserve">{_xml(part)}</w:t></w:r>')
-    return "".join(out)
+        for it in _parse_json_array(txt):
+            if not isinstance(it, dict):
+                continue
+            try:
+                cite = int(it.get("cite") or 0)
+            except (TypeError, ValueError):
+                cite = 0
+            if not (1 <= cite <= len(arts)):
+                continue
+            row = {"date": str(it.get("date") or "")[:10], "entity": str(it.get("entity") or "")[:40],
+                   "topic": str(it.get("topic") or "")[:60], "value": str(it.get("value") or "")[:30],
+                   "unit": str(it.get("unit") or "")[:16], "note": str(it.get("note") or "")[:60], "cite": cite}
+            if row["topic"] or row["value"]:
+                rows.append(row)
+        if len(rows) >= FACTS_MAX_ROWS:
+            break
+    if progress:
+        progress(done=len(chunks), total=len(chunks))
+    rows.sort(key=lambda r: (r["date"] or "9999", r["cite"]))
+    return rows[:FACTS_MAX_ROWS]
+
+
+def compose_summary(cfg: dict, rep: dict, instructions: str) -> dict:
+    """レポートからエグゼクティブサマリー（3〜5文・出典番号つき）とキーワードを LLM で作る。"""
+    local = cfg["provider"] == "local"
+    n = len(rep.get("sources") or [])
+    prompt = (f"【レポート】\n{rep['markdown'][:12000 if not local else 6000]}\n\n【出典番号】[1]〜[{n}]\n\n"
+              "【指示】上のレポートのエグゼクティブサマリーを JSON オブジェクトだけで出力してください: "
+              "{\"summary\": [\"1文（60字以内）。末尾に出典番号 [n]\", ...（3〜5件）], \"keywords\": [\"キーワード\", ...（5件以内）]}"
+              + (f"\n想定読者・体裁の指示: {instructions}" if instructions else ""))
+    try:
+        txt, _ = _split_reasoning(call_ai(cfg, _json_system(local), prompt, [], max_tokens=1200))
+    except Exception:
+        return {}
+    obj = _parse_json_object(txt)
+    summ = [str(x)[:120] for x in (obj.get("summary") or []) if isinstance(x, (str, int, float)) and str(x).strip()][:5]
+    summ = [_strip_bad_cites(s, n)[0] for s in summ]
+    kws = [str(x)[:30] for x in (obj.get("keywords") or []) if isinstance(x, (str, int, float)) and str(x).strip()][:8]
+    return {"summary": summ, "keywords": kws}
+
+
+def compose_slides(cfg: dict, rep: dict, instructions: str, n_slides: int) -> list[dict]:
+    """レポートからスライド構成（見出し・箇条書き・発表者ノート）を LLM で作る。表紙・出典は Python 側で付ける。"""
+    local = cfg["provider"] == "local"
+    n = len(rep.get("sources") or [])
+    n_slides = max(2, min(int(n_slides or SLIDES_DEFAULT), SLIDES_MAX))
+    prompt = (f"【レポート】\n{rep['markdown'][:12000 if not local else 6000]}\n\n【出典番号】[1]〜[{n}]\n\n"
+              f"【指示】上のレポートからプレゼン資料のスライド構成を作り、JSON 配列だけを出力してください。スライドは {n_slides} 枚以内。\n"
+              "各要素は {\"title\": \"スライド見出し（20字以内）\", \"bullets\": [\"要点（45字以内。末尾に出典番号 [n]）\", ...（3〜5件）], "
+              "\"notes\": \"発表者ノート（2〜3文）\"} の形。\n"
+              "1枚目は全体像（要点）、最後は示唆・次に注目すべき点にする。表紙と出典一覧はこちらで付けるので含めない。レポートに無い事実を加えない。"
+              + (f"\n想定読者・体裁の指示: {instructions}" if instructions else ""))
+    try:
+        txt, _ = _split_reasoning(call_ai(cfg, _json_system(local), prompt, [], max_tokens=3000))
+    except Exception:
+        return []
+    out: list[dict] = []
+    for it in _parse_json_array(txt):
+        if not isinstance(it, dict):
+            continue
+        title = str(it.get("title") or "").strip()[:40]
+        bullets = [_strip_bad_cites(str(b).strip(), n)[0][:120] for b in (it.get("bullets") or []) if isinstance(b, (str, int, float)) and str(b).strip()][:6]
+        if not title and not bullets:
+            continue
+        out.append({"title": title or "要点", "bullets": bullets, "notes": str(it.get("notes") or "")[:400]})
+    return out[:n_slides]
+
+
+def _fmt_dt(ts: float) -> str:
+    return datetime.fromtimestamp(ts, timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
+
+
+def report_doc_model(rep: dict, summary: dict | None = None, facts: list[dict] | None = None) -> dict:
+    """レポート → docgen の文書モデル（Word / PDF 共通）。"""
+    conds = _filters_conds(rep.get("filters") or {})
+    meta = [f"作成: {_fmt_dt(rep['created_at'])}", f"対象記事: {len(rep.get('sources') or [])} 件"]
+    if conds:
+        meta.append("検索条件: " + " ／ ".join(conds))
+    if rep.get("model"):
+        meta.append(f"生成モデル: {rep['model']}")
+    blocks: list[dict] = []
+    if summary and summary.get("summary"):
+        blocks.append({"t": "h", "level": 2, "text": "エグゼクティブサマリー"})
+        blocks.append({"t": "ul", "items": summary["summary"]})
+        if summary.get("keywords"):
+            blocks.append({"t": "p", "text": "キーワード: " + "・".join(summary["keywords"])})
+    blocks.extend(docgen.md_to_blocks(rep.get("markdown") or ""))
+    if facts:
+        blocks.append({"t": "h", "level": 2, "text": "事実・数値表"})
+        blocks.append({"t": "table", "header": ["日付", "企業・組織", "項目", "値", "単位", "補足", "出典"],
+                       "rows": [[f["date"], f["entity"], f["topic"], f["value"], f["unit"], f["note"], f"[{f['cite']}]"] for f in facts[:60]]})
+    return {"title": rep["title"], "subtitle": f"問い: {rep.get('question') or ''}", "meta": meta, "blocks": blocks,
+            "sources": rep.get("sources") or [], "header": "Prism リサーチ", "footer": rep["title"][:40], "toc": True}
 
 
 def report_docx(rep: dict) -> bytes:
-    """標準ライブラリ(zipfile)だけで最小構成の .docx を生成する。"""
+    """Word（.docx）。見出し・箇条書き・表・出典リンク・ヘッダー/フッター・目次フィールド（docgen）。"""
+    return docgen.build_docx(report_doc_model(rep))
+
+
+def _articles_sheet_rows(arts: list[dict]) -> list[list]:
+    return [[str(a.get("published") or "")[:10], a.get("source") or "", a.get("category") or "", a.get("title") or "",
+             {"v": a.get("link") or "", "link": a.get("link") or ""} if a.get("link") else "", (a.get("summary") or "")[:300]] for a in arts]
+
+
+def build_export_xlsx(title: str, question: str, conds: list[str], arts: list[dict], facts: list[dict]) -> bytes:
+    """Excel: 概要 / 記事一覧 / 事実・数値 / 情報源別 / 日付別 / 出典。"""
+    by_src: dict[str, int] = {}
+    by_day: dict[str, int] = {}
+    for a in arts:
+        by_src[a.get("source") or ""] = by_src.get(a.get("source") or "", 0) + 1
+        d = str(a.get("published") or "")[:10]
+        by_day[d] = by_day.get(d, 0) + 1
+    idx = {a["id"]: i + 1 for i, a in enumerate(arts)}
+    link_of = {i + 1: a.get("link") or "" for i, a in enumerate(arts)}
+    sheets = [
+        {"name": "概要", "columns": [{"title": "項目", "width": 16}, {"title": "内容", "width": 80}], "filter": False,
+         "rows": [["タイトル", title], ["問い", question], ["作成", _fmt_dt(time.time())], ["対象記事", len(arts)],
+                  ["検索条件", " ／ ".join(conds) if conds else "—"], ["事実・数値の行数", len(facts)],
+                  ["備考", "事実・数値はローカルLLMが記事の見出し・要約から抽出した値です。出典番号は『出典』シートの番号です"]]},
+        {"name": "記事一覧", "columns": [{"title": "日付", "width": 12}, {"title": "媒体", "width": 16}, {"title": "カテゴリ", "width": 10},
+                                      {"title": "見出し", "width": 60}, {"title": "URL", "width": 40}, {"title": "要約", "width": 70}],
+         "rows": _articles_sheet_rows(arts)},
+        {"name": "事実・数値", "columns": [{"title": "日付", "width": 12}, {"title": "企業・組織", "width": 20}, {"title": "項目", "width": 30},
+                                        {"title": "値", "width": 14}, {"title": "単位", "width": 10}, {"title": "補足", "width": 36},
+                                        {"title": "出典番号", "width": 9}, {"title": "出典URL", "width": 40}],
+         "rows": [[f["date"], f["entity"], f["topic"], _num_or_str(f["value"]), f["unit"], f["note"], f["cite"],
+                   {"v": link_of.get(f["cite"], ""), "link": link_of.get(f["cite"], "")} if link_of.get(f["cite"]) else ""] for f in facts]},
+        {"name": "情報源別", "columns": [{"title": "媒体", "width": 20}, {"title": "件数", "width": 10}],
+         "rows": [[k, v] for k, v in sorted(by_src.items(), key=lambda x: (-x[1], x[0]))]},
+        {"name": "日付別", "columns": [{"title": "日付", "width": 12}, {"title": "件数", "width": 10}],
+         "rows": [[k, v] for k, v in sorted(by_day.items())]},
+        {"name": "出典", "columns": [{"title": "番号", "width": 7}, {"title": "日付", "width": 12}, {"title": "媒体", "width": 16},
+                                  {"title": "見出し", "width": 60}, {"title": "URL", "width": 40}],
+         "rows": [[idx[a["id"]], str(a.get("published") or "")[:10], a.get("source") or "", a.get("title") or "",
+                   {"v": a.get("link") or "", "link": a.get("link") or ""} if a.get("link") else ""] for a in arts]},
+    ]
+    return docgen.build_xlsx(sheets)
+
+
+def _num_or_str(v: str):
+    s = str(v or "").replace(",", "").strip()
+    try:
+        f = float(s)
+        return int(f) if f.is_integer() and "." not in s else f
+    except ValueError:
+        return v
+
+
+def build_export_pptx(rep: dict, slides: list[dict], arts: list[dict]) -> bytes:
+    """PowerPoint: 表紙 → LLM のスライド → 情報源別の件数（簡易棒グラフ）→ 出典。"""
     conds = _filters_conds(rep.get("filters") or {})
-    d = datetime.fromtimestamp(rep["created_at"], timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
-    paras: list[tuple[str, str]] = [("Title", rep["title"]),
-                                    ("Meta", f"作成: {d}　対象記事: {len(rep.get('sources') or [])} 件"),
-                                    ("Meta", f"問い: {rep['question']}")]
-    if conds:
-        paras.append(("Meta", "検索条件: " + " ／ ".join(conds)))
-    for line in rep["markdown"].splitlines():
-        s = line.rstrip()
-        if not s.strip():
-            continue
-        if s.startswith("### "):
-            paras.append(("Heading3", s[4:]))
-        elif s.startswith("## "):
-            paras.append(("Heading2", s[3:]))
-        elif s.startswith("# "):
-            paras.append(("Heading1", s[2:]))
-        elif re.match(r"^\s*[-*・] ", s):
-            paras.append(("Bullet", "• " + re.sub(r"^\s*[-*・] ", "", s)))
-        elif re.match(r"^\s*\d+[.)] ", s):
-            paras.append(("Bullet", s.strip()))
+    by_src: dict[str, int] = {}
+    for a in arts:
+        by_src[a.get("source") or ""] = by_src.get(a.get("source") or "", 0) + 1
+    top = sorted(by_src.items(), key=lambda x: (-x[1], x[0]))[:8]
+    deck_slides = list(slides) or [{"title": "要点", "bullets": [ln.strip("-・ ") for ln in rep["markdown"].splitlines() if ln.strip().startswith(("-", "・"))][:5], "notes": ""}]
+    if top:
+        deck_slides.append({"title": "情報源別の記事件数", "chart": {"title": f"対象記事 {len(arts)} 件の内訳", "labels": [k for k, _ in top], "values": [v for _, v in top]},
+                            "bullets": [f"最多は {top[0][0]}（{top[0][1]}件）" + (f"、次いで {top[1][0]}（{top[1][1]}件）" if len(top) > 1 else "")],
+                            "notes": "情報源ごとの報道量。媒体による視点の違いを見るときの参考。"})
+    srcs = rep.get("sources") or []
+    per = 10
+    for k in range(0, len(srcs), per):
+        chunk = srcs[k:k + per]
+        deck_slides.append({"title": "出典" + (f"（{k // per + 1}/{(len(srcs) + per - 1) // per}）" if len(srcs) > per else ""),
+                            "bullets": [f"[{s['n']}] {s.get('published') or ''} {s.get('source') or ''}｜{(s.get('title') or '')[:48]}" for s in chunk],
+                            "notes": "\n".join(f"[{s['n']}] {s.get('link') or ''}" for s in chunk)})
+    deck = {"title": rep["title"], "subtitle": f"問い: {rep.get('question') or ''}" + (f"　／　{' ／ '.join(conds)}" if conds else ""),
+            "footer": f"Prism リサーチ　{_fmt_dt(rep['created_at'])}　記事 {len(arts)} 件", "slides": deck_slides,
+            "cover_notes": "このスライドはローカルLLMがレポートから構成し、Prism が組み立てました。各要点の [n] は出典番号です。"}
+    return docgen.build_pptx(deck)
+
+
+def _pdf_font_path() -> str | None:
+    s = load_settings()
+    pref = str(s.get("pdf_font") or "").strip() or None
+    return docgen.find_jp_font(pref)
+
+
+def _exports_prune(conn) -> None:
+    rows = conn.execute("SELECT id, filename FROM exports ORDER BY created_at DESC").fetchall()
+    for r in rows[EXPORT_MAX:]:
+        try:
+            (EXPORT_DIR / r["filename"]).unlink(missing_ok=True)
+        except OSError:
+            pass
+        conn.execute("DELETE FROM exports WHERE id = ?", (r["id"],))
+
+
+def _save_export(row: dict, data: bytes) -> None:
+    EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+    (EXPORT_DIR / row["filename"]).write_bytes(data)
+    with _archive_lock:
+        _archive_init_locked()
+        conn = _db()
+        try:
+            conn.execute("INSERT OR REPLACE INTO exports VALUES (?,?,?,?,?,?,?,?,?)",
+                         (row["id"], row["created_at"], row["kind"], row["title"], row["filename"], row["bytes"],
+                          row.get("report_id") or "", row.get("instructions") or "", json.dumps(row.get("meta") or {}, ensure_ascii=False)))
+            _exports_prune(conn)
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def _row_to_export(r) -> dict:
+    return {"id": r["id"], "created_at": r["created_at"], "kind": r["kind"], "kind_name": EXPORT_KINDS.get(r["kind"], ("?",))[0],
+            "title": r["title"], "filename": r["filename"], "bytes": r["bytes"], "report_id": r["report_id"],
+            "instructions": r["instructions"], "meta": json.loads(r["meta_json"] or "{}")}
+
+
+def list_exports(limit: int = 100) -> list[dict]:
+    with _archive_lock:
+        _archive_init_locked()
+        conn = _db()
+        try:
+            return [_row_to_export(r) for r in conn.execute("SELECT * FROM exports ORDER BY created_at DESC LIMIT ?",
+                                                             (max(1, min(int(limit), 500)),))]
+        finally:
+            conn.close()
+
+
+def get_export(eid: str) -> dict | None:
+    if not (isinstance(eid, str) and _ID_RE.fullmatch(eid)):
+        return None
+    with _archive_lock:
+        _archive_init_locked()
+        conn = _db()
+        try:
+            r = conn.execute("SELECT * FROM exports WHERE id = ?", (eid,)).fetchone()
+            return _row_to_export(r) if r else None
+        finally:
+            conn.close()
+
+
+def export_file(eid: str) -> tuple[bytes, str, str] | None:
+    """(bytes, content-type, 表示用ファイル名)。"""
+    e = get_export(eid)
+    if not e:
+        return None
+    p = EXPORT_DIR / e["filename"]
+    if not p.is_file():
+        return None
+    _, ext, ctype = EXPORT_KINDS.get(e["kind"], ("", "", "application/octet-stream"))
+    safe = re.sub(r"[\\/:*?\"<>|\r\n]+", "_", e["title"])[:60] or "export"
+    return p.read_bytes(), ctype, safe + ext
+
+
+def delete_export(eid: str) -> bool:
+    e = get_export(eid)
+    if not e:
+        return False
+    try:
+        (EXPORT_DIR / e["filename"]).unlink(missing_ok=True)
+    except OSError:
+        pass
+    with _archive_lock:
+        conn = _db()
+        try:
+            conn.execute("DELETE FROM exports WHERE id = ?", (eid,))
+            conn.commit()
+        finally:
+            conn.close()
+    return True
+
+
+def _run_export(job_id: str, kind: str, body: dict) -> None:
+    """ワーカースレッド: 対象の解決（レポート or 記事）→ LLM で構成・抽出 → ファイル組み立て → 保存。"""
+    def upd(**kw):
+        with _jobs_lock:
+            _jobs[job_id].update(kw)
+    try:
+        cfg = ai_config()
+        if cfg["provider"] != "local" and not cfg["api_key"]:
+            raise RuntimeError("生成AI APIが未設定です")
+        instructions = str(body.get("instructions") or "").strip()[:300]
+        rep = get_report(str(body.get("report_id") or "")) if body.get("report_id") else None
+        ids = [str(i) for i in (body.get("ids") if isinstance(body.get("ids"), list) else []) if i][:REPORT_MAX_ARTICLES]
+        filters = body.get("filters") if isinstance(body.get("filters"), dict) else {}
+        if rep is None and body.get("theme_id"):
+            t = get_theme(str(body["theme_id"]))
+            if t:
+                f = t["filters"]
+                since, until = _filters_window(f)
+                ids = [a["id"] for a in archive_search(f.get("q", ""), REPORT_MAX_ARTICLES, f.get("sources"), since, until, f.get("category") or None)]
+                filters = {**f, "sources": _source_names(f.get("sources") or []), "theme": t["name"]}
+        if rep is None and not ids:
+            raise RuntimeError("対象（保存済みレポート、または記事）を指定してください")
+        if rep is None and kind != "xlsx":   # Word / PowerPoint / PDF はレポートが土台。無ければ先に作る
+            upd(state="preparing", label="レポートを生成中")
+            question = str(body.get("question") or "").strip()[:300] or _default_question(filters)
+            rep = _build_report(cfg, question, "overview", ids, filters, bool(body.get("fulltext")), None, upd)
+            rep["id"] = secrets.token_hex(8)
+            _save_report(rep)
+        arts = _report_fetch(rep["article_ids"] if rep else ids)
+        if not arts:
+            raise RuntimeError("対象記事が過去ログに見つかりません")
+        question = rep["question"] if rep else (str(body.get("question") or "").strip()[:300] or _default_question(filters))
+        title = (rep["title"] if rep else _report_title(question, filters, "記事一覧"))[:80]
+        conds = _filters_conds((rep or {}).get("filters") or filters)
+        facts: list[dict] = []
+        summary: dict = {}
+        slides: list[dict] = []
+        if kind in ("docx", "pdf", "xlsx"):
+            upd(state="composing", label="事実・数値を抽出中", total=0, done=0)
+            facts = compose_facts(cfg, arts, question, progress=lambda **kw: upd(**kw))
+        if kind in ("docx", "pdf") and rep:
+            upd(state="composing", label="エグゼクティブサマリーを作成中", total=0, done=0)
+            summary = compose_summary(cfg, rep, instructions)
+        if kind == "pptx" and rep:
+            try:
+                n_slides = int(body.get("slides") or SLIDES_DEFAULT)
+            except (TypeError, ValueError):
+                n_slides = SLIDES_DEFAULT
+            upd(state="composing", label="スライド構成を作成中", total=0, done=0)
+            slides = compose_slides(cfg, rep, instructions, n_slides)
+        upd(state="building", label="ファイルを組み立て中")
+        meta = {"facts": len(facts), "summary": len(summary.get("summary") or []), "slides": len(slides), "articles": len(arts)}
+        if kind == "docx":
+            data = docgen.build_docx(report_doc_model(rep, summary, facts))
+        elif kind == "pdf":
+            fp = _pdf_font_path()
+            if not fp:
+                raise RuntimeError("PDF 用の日本語 TrueType フォントが見つかりません。設定の「PDF フォント」にフォントファイル（例: C:\\Windows\\Fonts\\YuGothM.ttc）を指定してください")
+            data = docgen.build_pdf(report_doc_model(rep, summary, facts), fp)
+            meta["font"] = os.path.basename(fp)
+        elif kind == "xlsx":
+            data = build_export_xlsx(title, question, conds, arts, facts)
         else:
-            paras.append(("Normal", s.strip()))
-    paras.append(("Heading2", "出典"))
-    for src in rep.get("sources") or []:
-        t = f"[{src['n']}] {src.get('published') or ''} {src.get('source') or ''}｜{src.get('title') or ''}"
-        if src.get("link"):
-            t += f"  {src['link']}"
-        paras.append(("Source", t))
-    body = "".join(f'<w:p><w:pPr><w:pStyle w:val="{st}"/></w:pPr>{_docx_runs(tx)}</w:p>' for st, tx in paras)
-    W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
-    document = (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document {W}><w:body>{body}'
-                '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/>'
-                '<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>')
-    def style(sid, name, size, bold=False, color=None, before=0, after=120, indent=0):
-        rpr = f'<w:sz w:val="{size}"/>' + ('<w:b/>' if bold else '') + (f'<w:color w:val="{color}"/>' if color else '')
-        ppr = f'<w:spacing w:before="{before}" w:after="{after}"/>' + (f'<w:ind w:left="{indent}"/>' if indent else '')
-        return (f'<w:style w:type="paragraph" w:styleId="{sid}"><w:name w:val="{name}"/>'
-                f'<w:pPr>{ppr}</w:pPr><w:rPr>{rpr}</w:rPr></w:style>')
-    styles = (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles {W}>'
-              '<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Yu Gothic" w:hAnsi="Yu Gothic" '
-              'w:eastAsia="Yu Gothic"/><w:sz w:val="21"/></w:rPr></w:rPrDefault></w:docDefaults>'
-              + style("Normal", "Normal", 21)
-              + style("Title", "Title", 36, True, before=0, after=200)
-              + style("Meta", "Meta", 18, color="666666", after=60)
-              + style("Heading1", "heading 1", 30, True, before=360, after=120)
-              + style("Heading2", "heading 2", 26, True, color="1F3864", before=320, after=120)
-              + style("Heading3", "heading 3", 23, True, before=240, after=80)
-              + style("Bullet", "Bullet", 21, indent=360, after=60)
-              + style("Source", "Source", 17, color="444444", after=40)
-              + '</w:styles>')
-    content_types = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-                     '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
-                     '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
-                     '<Default Extension="xml" ContentType="application/xml"/>'
-                     '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
-                     '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>'
-                     '</Types>')
-    rels = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
-            '</Relationships>')
-    doc_rels = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-                '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-                '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
-                '</Relationships>')
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        z.writestr("[Content_Types].xml", content_types)
-        z.writestr("_rels/.rels", rels)
-        z.writestr("word/document.xml", document)
-        z.writestr("word/styles.xml", styles)
-        z.writestr("word/_rels/document.xml.rels", doc_rels)
-    return buf.getvalue()
+            data = build_export_pptx(rep, slides, arts)
+        _, ext, _ = EXPORT_KINDS[kind]
+        row = {"id": job_id, "created_at": time.time(), "kind": kind, "title": title, "filename": job_id + ext, "bytes": len(data),
+               "report_id": rep["id"] if rep else "", "instructions": instructions, "meta": meta}
+        _save_export(row, data)
+        upd(state="done", export={**row, "kind_name": EXPORT_KINDS[kind][0]}, report_id=row["report_id"])
+    except Exception as e:
+        upd(state="error", error=f"{type(e).__name__}: {str(e)[:200]}")
+
+
+def start_export_job(body: dict) -> dict:
+    kind = body.get("kind")
+    if kind not in EXPORT_KINDS:
+        return {"ok": False, "error": "kind は docx / xlsx / pptx / pdf のいずれかです"}
+    has_src = bool(body.get("report_id") or (isinstance(body.get("ids"), list) and body["ids"]) or body.get("theme_id"))
+    if not has_src:
+        return {"ok": False, "error": "対象（保存済みレポート・選択記事・テーマ）を指定してください"}
+    if kind == "pdf" and not _pdf_font_path():
+        return {"ok": False, "error": "PDF 用の日本語 TrueType フォントが見つかりません（Windows: Yu Gothic / Meiryo、Linux: IPA ゴシック等）。設定でフォントのパスを指定してください"}
+    job_id = _new_job("export", export_kind=kind, label="準備中")
+    threading.Thread(target=_run_export, args=(job_id, kind, body), daemon=True).start()
+    return {"ok": True, "job_id": job_id, "kind": kind}
+
+
+def detect_export_intent(text: str) -> dict | None:
+    """会話文から「〜を pptx にして」のような書き出し意図を拾う（形式と指示）。該当しなければ None。"""
+    t = str(text or "")
+    kinds = [("pptx", r"pptx|パワポ|パワーポイント|powerpoint|スライド|プレゼン"), ("xlsx", r"xlsx|excel|エクセル|スプレッドシート|表計算"),
+             ("docx", r"docx|word|ワード(?!プレス)"), ("pdf", r"pdf")]
+    if not re.search(r"にして|に変換|で出力|で書き出|書き出し|作って|作成|生成|エクスポート|出して|化して|にまとめ", t, re.I):
+        return None
+    for k, pat in kinds:
+        if re.search(pat, t, re.I):
+            return {"kind": k, "instructions": t[:300]}
+    return None
 
 
 # ------------------------------------------------------------------ デモ記事（オフライン時）
@@ -3137,6 +3489,19 @@ class Handler(BaseHTTPRequestHandler):
             self._json(report_job_status((parse_qs(u.query).get("id") or [""])[0]))
             return
 
+        if u.path == "/api/research/exports":   # 生成した文書ファイルの一覧
+            self._json({"ok": True, "exports": list_exports()})
+            return
+
+        if u.path == "/api/research/export/file":   # 生成した文書ファイルのダウンロード
+            r = export_file((parse_qs(u.query).get("id") or [""])[0])
+            if not r:
+                self._json({"ok": False, "error": "unknown export"}, 404)
+                return
+            data, ctype, fname = r
+            self._send_bytes(data, ctype, fname)
+            return
+
         if u.path == "/api/research/report/export":   # Markdown / Word で書き出し
             q = parse_qs(u.query)
             rep = get_report((q.get("id") or [""])[0])
@@ -3156,7 +3521,8 @@ class Handler(BaseHTTPRequestHandler):
 
         if u.path == "/api/settings":
             self._json({"ai": ai_status(), "proxy": proxy_config(),
-                        "browser": browser_settings_raw()})
+                        "browser": browser_settings_raw(),
+                        "pdf_font": str(load_settings().get("pdf_font") or ""), "pdf_font_found": bool(_pdf_font_path())})
             return
 
         self._json({"error": "not found"}, 404)
@@ -3252,9 +3618,12 @@ class Handler(BaseHTTPRequestHandler):
             # 本文取得のヘッドレスブラウザ設定（いずれも任意・空=自動検出）
             settings["browser"] = {"binary": (body.get("browser_binary") or "").strip(),
                                    "driver": (body.get("driver_path") or "").strip()}
+            if "pdf_font" in body:   # PDF 書き出し用の日本語 TrueType フォント（任意・空=自動検出）
+                settings["pdf_font"] = str(body.get("pdf_font") or "").strip()
             save_settings(settings)
             self._json({"ok": True, "ai": ai_status(), "proxy": proxy_config(),
-                        "browser": browser_settings_raw()})
+                        "browser": browser_settings_raw(), "pdf_font": settings.get("pdf_font", ""),
+                        "pdf_font_found": bool(_pdf_font_path())})
             return
 
         if u.path == "/api/proxy/test":  # 接続テスト（フォーム値で試すだけ・保存しない）
@@ -3290,6 +3659,15 @@ class Handler(BaseHTTPRequestHandler):
             self._json(save_synonyms(str(self._read_body().get("text") or "")))
             return
 
+        if u.path == "/api/research/export":  # 文書生成ジョブ（Word / Excel / PowerPoint / PDF × ローカルLLM）
+            r = start_export_job(self._read_body())
+            self._json(r, 200 if r.get("ok") else 400)
+            return
+
+        if u.path == "/api/research/export/intent":  # 会話文から書き出し意図（形式）を判定
+            self._json({"ok": True, "intent": detect_export_intent(str(self._read_body().get("text") or ""))})
+            return
+
         if u.path == "/api/research/compare":  # 比較ビュー: A（現在の条件）と B（テーマ／前の期間／条件）
             r = compare_conditions(self._read_body())
             self._json(r, 200 if r.get("ok") else 400)
@@ -3323,6 +3701,11 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/research/themes":   # テーマの削除
             ok = delete_theme((parse_qs(u.query).get("id") or [""])[0])
             self._json({"ok": ok} if ok else {"ok": False, "error": "unknown theme"}, 200 if ok else 404)
+            return
+
+        if u.path == "/api/research/export":   # 生成した文書ファイルの削除
+            ok = delete_export((parse_qs(u.query).get("id") or [""])[0])
+            self._json({"ok": ok} if ok else {"ok": False, "error": "unknown export"}, 200 if ok else 404)
             return
 
         if u.path == "/api/sources":
