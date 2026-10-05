@@ -533,7 +533,8 @@ class Index:
     def graph(self, center: str | None = None, depth: int = 1, all_docs: bool = False,
               extra: dict | None = None) -> dict:
         """ノードとエッジ。資料はリンクされているものだけ（all_docs=True で全部）。
-        extra = {"nodes": {id: (title, kind, grp)}, "edges": [(path, id)]} で人物・組織のノードを足せる。"""
+        extra = {"nodes": {id: (title, kind, grp)}, "edges": [(path, id)], "links": [(id, id, label)]} で
+        人物・組織や知識グラフの実体ノード（と実体同士の関係）を足せる。"""
         with self._lock:
             items = {r["path"]: (r["title"], r["kind"], r["grp"])
                      for r in self.conn.execute("SELECT path, title, kind, grp FROM items")}
@@ -554,12 +555,13 @@ class Index:
                 rel_edges.add((a, b))
         ent_nodes = (extra or {}).get("nodes", {})
         ent_edges = {(a, b) for a, b in (extra or {}).get("edges", []) if a in items and b in ent_nodes}
+        kg_links = {(a, b): lab for a, b, lab in (extra or {}).get("links", []) if a in ent_nodes and b in ent_nodes and a != b}
         linked = {a for e in edges | rel_edges for a in e}
         nodes_set = {p for p, (_, kind, _) in items.items() if kind == "note" or all_docs or p in linked}
         nodes_set |= set(unresolved)
         if ent_edges:
             nodes_set |= {b for _, b in ent_edges} | {a for a, _ in ent_edges}
-        all_edges = edges | rel_edges | ent_edges
+        all_edges = edges | rel_edges | ent_edges | set(kg_links)
         if center:
             keep, frontier = {center}, {center}
             for _ in range(max(1, min(depth, 4))):
@@ -591,6 +593,7 @@ class Index:
         out_edges += [[a, b, "rel"] for a, b in sorted(rel_edges - edges)
                       if a in nodes_set and b in nodes_set and (b, a) not in edges]
         out_edges += [[a, b, "ent"] for a, b in sorted(ent_edges) if a in nodes_set and b in nodes_set]
+        out_edges += [[a, b, "kg", lab] for (a, b), lab in sorted(kg_links.items()) if a in nodes_set and b in nodes_set]
         return {"nodes": nodes, "edges": out_edges}
 
     # ------------------------------------------------------------ AI 用の検索（転置インデックス）

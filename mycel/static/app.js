@@ -52,7 +52,7 @@
     folderView: null, treeKind: store.get("treeKind", "all"),
     libraryView: false, lib: { q: "", tag: "", year: "", status: "", sort: store.get("libSort", "added"), semantic: store.get("libSem", true), sel: new Set(), cur: null, data: null, results: null, detail: null, graphGroup: store.get("libGroup", "tag"), graphExpanded: new Set(), chat: [] },
     entityView: null, entityData: null, profile: null, peopleKind: store.get("peopleKind", "person"), gPeople: store.get("gPeople", false),
-    sources: [], index: null, jobSeen: null, aiScope: store.get("aiScope", "all"), aiRag: null, gDocs: store.get("gDocs", false),
+    sources: [], index: null, jobSeen: null, aiScope: store.get("aiScope", "all"), aiRag: null, gDocs: store.get("gDocs", false), gKG: store.get("gKG", false),
   };
 
   // ------------------------------------------------------------ ツリー
@@ -974,9 +974,11 @@
   }
 
   async function renderGraphPane(p) {
-    p.innerHTML = `<div class="gctl"><span>範囲</span><div class="seg">${[1, 2, 0].map((d) => `<button data-d="${d}" class="${S.depth === d ? "on" : ""}">${d ? d + " ホップ" : "全体"}</button>`).join("")}</div><label title="リンクされていない資料も表示"><input type="checkbox" id="gDocs"${S.gDocs ? " checked" : ""}> 資料</label><label title="人物・組織を介したつながりも表示"><input type="checkbox" id="gPeople"${S.gPeople ? " checked" : ""}> 人物</label><span style="flex:1"></span><button class="btn sm" id="gBig">拡大</button></div><canvas class="graph" id="gSmall" aria-label="ノートのつながり。ノードをクリックで開く"></canvas><div class="hint" style="margin-top:8px">ドラッグで移動、ホイールで拡大縮小。薄い輪は未作成のリンク、四角は資料、◆ は人物、▲ は組織（「人物」をオン）。色はフォルダごと。</div>`;
+    p.innerHTML = `<div class="gctl"><span>範囲</span><div class="seg">${[1, 2, 0].map((d) => `<button data-d="${d}" class="${S.depth === d ? "on" : ""}">${d ? d + " ホップ" : "全体"}</button>`).join("")}</div><label title="リンクされていない資料も表示"><input type="checkbox" id="gDocs"${S.gDocs ? " checked" : ""}> 資料</label><label title="人物・組織を介したつながりも表示"><input type="checkbox" id="gPeople"${S.gPeople ? " checked" : ""}> 人物</label><label title="GraphRAG の知識グラフ（文書から抽出した実体と関係）を重ねて表示。AI タブで索引を作っておく必要があります"><input type="checkbox" id="gKG"${S.gKG ? " checked" : ""}> 知識グラフ</label><span style="flex:1"></span><button class="btn sm" id="gBig">拡大</button></div><canvas class="graph" id="gSmall" aria-label="ノートのつながり。ノードをクリックで開く"></canvas><div class="hint" style="margin-top:8px">ドラッグで移動、ホイールで拡大縮小。薄い輪は未作成のリンク、四角は資料、◆ は人物、▲ は組織（「人物」をオン）、六角形は知識グラフの実体（「知識グラフ」をオン。クリックで登場する文書とつなぎ方）。色はフォルダごと。</div><div id="gKGNote"></div>`;
     $("#gDocs").onchange = (e) => { S.gDocs = e.target.checked; store.set("gDocs", S.gDocs); renderGraphPane(p); };
     $("#gPeople").onchange = (e) => { S.gPeople = e.target.checked; store.set("gPeople", S.gPeople); renderGraphPane(p); };
+    $("#gKG").onchange = (e) => { S.gKG = e.target.checked; store.set("gKG", S.gKG); renderGraphPane(p); };
+    if (S.gKG) api.get("/api/ai/status").then((s) => { const g = s.graphrag || {}; const el = $("#gKGNote"); if (!el) return; if (!g.ready) el.innerHTML = `<div class="notice">知識グラフの索引がまだありません。<button class="btn sm" id="gKGBuild">GraphRAG の索引を作る</button></div>`; else if (g.pending) el.innerHTML = `<div class="hint">知識グラフに未反映の文書が ${g.pending} 件あります（AI タブの「GraphRAG の索引を更新」）。</div>`; const b = $("#gKGBuild"); if (b) b.onclick = async () => { try { await api.post("/api/graphrag/build", {}); toast("GraphRAG の索引を作っています"); b.disabled = true; } catch (err) { fail(err); } }; }).catch(() => {});
     $$("[data-d]", p).forEach((b) => (b.onclick = () => { S.depth = +b.dataset.d; store.set("depth", S.depth); renderGraphPane(p); }));
     $("#gBig").onclick = () => bigGraph(S.cur ? S.cur.path : null);
     if (S.graph) S.graph.destroy();
@@ -985,12 +987,14 @@
       const q = S.depth ? { path: S.cur.path, depth: S.depth } : {};
       if (S.gDocs) q.docs = "1";
       if (S.gPeople) q.people = "1";
+      if (S.gKG) q.kg = "1";
       const data = await api.get("/api/graph", q);
       if (S.graph) S.graph.setData(data, S.cur.path);
     } catch (e) { fail(e); }
   }
   function graphOpen(path, title) {
-    const m = path && path.match(/^~([po]):(.*)$/);
+    const m = path && path.match(/^~([pok]):(.*)$/);
+    if (m && m[1] === "k") return openKGEntity(m[2]);
     if (m) return openEntity(m[1] === "p" ? "person" : "org", m[2]);
     if (path) openNote(path); else openTarget(title);
   }
@@ -998,8 +1002,35 @@
     const m = modal({ title: "グラフ（Vault 全体）", body: '<canvas class="graph big" id="gBigC" aria-label="Vault 全体のグラフ"></canvas>', buttons: [], wide: true, onClose: () => g.destroy() });
     m.body.style.padding = "0"; m.body.style.overflow = "hidden";
     const g = new ForceGraph($("#gBigC"), { onOpen: (p, t) => { m.close(); graphOpen(p, t); } });
-    const q = {}; if (S.gDocs) q.docs = "1"; if (S.gPeople) q.people = "1";
+    const q = {}; if (S.gDocs) q.docs = "1"; if (S.gPeople) q.people = "1"; if (S.gKG) q.kg = "1";
     try { g.setData(await api.get("/api/graph", q), center); } catch (e) { fail(e); }
+  }
+  /** 知識グラフの実体: 説明・関係・登場する文書を出し、その文書同士を「つながり」として保存できる。 */
+  async function openKGEntity(key) {
+    let e;
+    try { e = await api.get("/api/graphrag/entity", { key }); } catch (err) { fail(err); return; }
+    if (!e || !e.name) { toast("この実体は索引にありません（索引を更新してください）", true); return; }
+    const rels = (e.relations || []).slice(0, 12);
+    const body = `<div style="display:grid;gap:10px">
+      <div><span class="chip kg-${esc(e.type)}" style="color:var(--ink)">${esc(e.type_label || "")}</span> ${e.descr ? `<span style="color:var(--ink)">${esc(e.descr)}</span>` : '<span class="hint">説明はまだありません</span>'}</div>
+      ${rels.length ? `<div><div class="rh"><span>関係</span></div><ul class="kg-rel">${rels.map((r) => `<li>${esc(e.name)} — ${esc(r.other)}<span>${esc(r.descr || "")}</span>${r.path ? ` <button class="chip" data-open="${esc(r.path)}" title="${esc(r.path)}">出典</button>` : ""}</li>`).join("")}</ul></div>` : ""}
+      <div><div class="rh"><span>登場する文書（${e.docs.length}）</span></div>
+        ${e.docs.length ? `<div class="kg-docs">${e.docs.map((d) => `<label><input type="checkbox" data-p="${esc(d.path)}" checked> ${d.kind === "doc" ? "▪ " : ""}<a href="#" data-open="${esc(d.path)}">${esc(d.title)}</a></label>`).join("")}</div>` : '<div class="hint">なし</div>'}
+        ${e.docs.length >= 2 ? `<div class="hint" style="margin-top:6px">チェックした文書同士を「つながり」として保存します（説明は「共通: ${esc(e.name)}」。既にあるつながりは飛ばします。資料の「つながり」やグラフの点線に出ます）。</div>` : ""}
+      </div></div>`;
+    const m = modal({ title: `実体: ${e.name}`, body, wide: false, buttons: e.docs.length >= 2
+      ? [{ label: "チェックした文書をつなぐ", primary: true, keep: true, onClick: async () => {
+          const ps = $$("input[data-p]:checked", m.body).map((x) => x.dataset.p);
+          const have = new Set(e.unlinked_pairs.map(([a, b]) => a + "\u0000" + b));
+          const pairs = [];
+          for (let i = 0; i < ps.length; i++) for (let j = i + 1; j < ps.length; j++) {
+            if (have.has(ps[i] + "\u0000" + ps[j]) || have.has(ps[j] + "\u0000" + ps[i])) pairs.push({ a: ps[i], b: ps[j], label: `共通: ${e.name}` });
+          }
+          if (!pairs.length) { toast("新しくつなぐ組はありません（2 件以上チェックしてください。既にあるつながりは飛ばします）"); return false; }
+          if (pairs.length > 30 && !confirm(`${pairs.length} 組のつながりを作ります。よろしいですか？`)) return false;
+          try { const r = await api.post("/api/relations/many", { pairs, origin: "user" }); toast(`${r.added} 組をつなぎました`); if (S.rtab === "graph") renderRight(); if (S.cur) openNote(S.cur.path, { push: false }).catch(() => {}); } catch (err) { fail(err); return false; }
+        } }, { label: "閉じる" }] : [{ label: "閉じる" }] });
+    $$("[data-open]", m.body).forEach((a) => (a.onclick = (ev) => { ev.preventDefault(); m.close(); openNote(a.dataset.open); }));
   }
   $("#btnGraph").onclick = () => bigGraph(S.cur ? S.cur.path : null);
 

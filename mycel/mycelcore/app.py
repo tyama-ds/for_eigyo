@@ -717,8 +717,14 @@ class MycelApp:
         return st
 
     # ------------------------------------------------------------ AI 取り込み
-    def graph(self, center: str | None, depth: int = 1, docs: bool = False, people: bool = False) -> dict:
+    def graph(self, center: str | None, depth: int = 1, docs: bool = False, people: bool = False, kg: bool = False) -> dict:
         extra = self.people.graph_extra(center) if people else None
+        if kg and self.graphrag.status()["ready"]:
+            k = self.graphrag.graph_extra(center)
+            if extra:
+                extra = {"nodes": {**extra["nodes"], **k["nodes"]}, "edges": list(extra["edges"]) + k["edges"], "links": k["links"]}
+            else:
+                extra = k
         return self.index.graph(center, depth, docs, extra)
 
     def ask(self, question: str, path: str | None = None, history=None, prefixes=None, mode: str = "") -> dict:

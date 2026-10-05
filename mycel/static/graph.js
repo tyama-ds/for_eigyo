@@ -105,6 +105,10 @@
       if (n.kind === "passage") return document.documentElement.dataset.theme === "light" ? "hsl(190 25% 60%)" : "hsl(190 25% 60%)";
       if (n.kind === "person") return document.documentElement.dataset.theme === "light" ? "hsl(285 45% 48%)" : "hsl(285 55% 72%)";
       if (n.kind === "org") return document.documentElement.dataset.theme === "light" ? "hsl(205 55% 42%)" : "hsl(205 60% 68%)";
+      if (n.kind === "entity") {                                 // 知識グラフの実体: 種類ごとに色
+        const h = { product: 30, concept: 150, place: 95, event: 350 }[n.grp] ?? 45;
+        return document.documentElement.dataset.theme === "light" ? `hsl(${h} 50% 42%)` : `hsl(${h} 55% 66%)`;
+      }
       const hue = this.folderHue[(n.folder || "").split("/")[0]];
       const light = document.documentElement.dataset.theme === "light";
       if (hue === undefined) return light ? "hsl(160 8% 50%)" : "hsl(160 8% 62%)";
@@ -123,13 +127,13 @@
       for (const [i, j, t, label, directed] of this.edges) {
         const p = this.nodes[i], q = this.nodes[j];
         const hot = focus >= 0 && (i === focus || j === focus);
-        g.strokeStyle = hot ? acc : t === "rel" ? warn : t === "link" ? linkCol : line; g.lineWidth = (hot ? 1.6 : t === "link" ? 1.4 : 1) / Math.sqrt(v.k);
+        g.strokeStyle = hot ? acc : t === "rel" ? warn : t === "link" || t === "kg" ? linkCol : line; g.lineWidth = (hot ? 1.6 : t === "link" ? 1.4 : 1) / Math.sqrt(v.k);
         g.setLineDash(t === "rel" || t === "sim" ? [4 / v.k, 3 / v.k] : t === "ent" ? [1.5 / v.k, 2.5 / v.k] : []);   // つながり・内容の近さは点線、人物は細かい点線
         if (t === "sim" && !hot) g.strokeStyle = warn;
         g.globalAlpha = focus >= 0 && !hot ? 0.7 : 1;
         if ((t === "ent" || t === "sim") && !hot) g.globalAlpha = focus >= 0 ? 0.35 : 0.6;
         g.beginPath(); g.moveTo(p.x, p.y); g.lineTo(q.x, q.y); g.stroke();
-        if (t === "link") {                                   // 文献同士のつながり: 向きがあれば矢印、近づけば種類を表示
+        if (t === "link" || t === "kg") {                     // 文献同士のつながり・実体同士の関係: 向きがあれば矢印、近づけば種類を表示
           const dx = q.x - p.x, dy = q.y - p.y, len = Math.hypot(dx, dy) || 1, ux = dx / len, uy = dy / len;
           if (directed) {
             const r = (q.r || 6) + 1, ax = q.x - ux * r, ay = q.y - uy * r, s = 5 / Math.sqrt(v.k);
@@ -158,6 +162,7 @@
         if (n.kind === "doc") { const a = r * 0.95; g.rect(n.x - a, n.y - a, a * 2, a * 2); }   // 資料は四角
         else if (n.kind === "person") { const a = r * 1.25; g.moveTo(n.x, n.y - a); g.lineTo(n.x + a, n.y); g.lineTo(n.x, n.y + a); g.lineTo(n.x - a, n.y); g.closePath(); }   // 人物は◆
         else if (n.kind === "org") { const a = r * 1.3; g.moveTo(n.x, n.y - a); g.lineTo(n.x + a, n.y + a * 0.8); g.lineTo(n.x - a, n.y + a * 0.8); g.closePath(); }   // 組織は▲
+        else if (n.kind === "entity") { const a = r * 1.15; for (let k = 0; k < 6; k++) { const t = Math.PI / 3 * k - Math.PI / 6; k ? g.lineTo(n.x + a * Math.cos(t), n.y + a * Math.sin(t)) : g.moveTo(n.x + a * Math.cos(t), n.y + a * Math.sin(t)); } g.closePath(); }   // 知識グラフの実体は六角形
         else g.arc(n.x, n.y, r, 0, Math.PI * 2);
         const col = this.nodeColor(n, i);
         if (col) { g.fillStyle = col; g.fill(); } else { g.fillStyle = bg; g.fill(); g.strokeStyle = muted; g.lineWidth = 1; g.stroke(); }
@@ -211,7 +216,7 @@
           c.onpointermove = (ev) => { const h = this.pick(ev); if (h !== (this.hover ?? -1)) { this.hover = h >= 0 ? h : null; c.style.cursor = h >= 0 ? "pointer" : ""; this.draw(); } };
         };
       };
-      c.onpointermove = (ev) => { const h = this.pick(ev); if (h !== (this.hover ?? -1)) { this.hover = h >= 0 ? h : null; c.style.cursor = h >= 0 ? "pointer" : ""; this.draw(); } };
+      c.onpointermove = (ev) => { const h = this.pick(ev); if (h !== (this.hover ?? -1)) { this.hover = h >= 0 ? h : null; c.style.cursor = h >= 0 ? "pointer" : ""; c.title = h >= 0 ? this.nodes[h].title : ""; this.draw(); } };   // 省略された名前はツールチップで
       c.onpointerleave = () => { if (this.hover !== null) { this.hover = null; this.draw(); } };
       c.onwheel = (e) => {
         e.preventDefault();
