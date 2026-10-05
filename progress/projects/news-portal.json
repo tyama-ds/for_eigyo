@@ -63,12 +63,17 @@
       "state": "doing"
     },
     {
+      "title": "リサーチ Phase 4: ドキュメント生成 × ローカルLLM（Word 強化・Excel・PowerPoint・PDF、会話からの書き出し）",
+      "state": "todo"
+    },
+    {
       "title": "自動テスト・CI",
       "state": "todo"
     }
   ],
   "next": [
     "リサーチ Phase 3（FTS5 全文検索・同義語辞書・日付×情報源ヒストグラム → 企業・製品ウォッチ・比較ビュー）",
+    "リサーチ Phase 4（ローカルLLMが内容を構成し、標準ライブラリで Word / Excel / PowerPoint / PDF を生成。計画は news-portal/ROADMAP.md）",
     "自動テストと CI の追加",
     "0件になる情報源の定期点検"
   ],
@@ -77,6 +82,10 @@
     "フィード URL の変更・廃止で取得できなくなる"
   ],
   "log": [
+    {
+      "date": "2026-10-05",
+      "summary": "計画に Phase 4（ローカルLLMによる Word / Excel / PowerPoint / PDF 生成）を追加し、リサーチ機能のロードマップを news-portal/ROADMAP.md に記録"
+    },
     {
       "date": "2026-10-05",
       "summary": "リサーチ Phase 2: 検索条件のテーマ保存、既読基準の新着差分（新着のみ表示）、週次ブリーフ／前回以降ブリーフの一発生成、本文一括取得（urllib→ブラウザ・SQLiteキャッシュ・進捗表示）をレポート生成と会話に統合"
