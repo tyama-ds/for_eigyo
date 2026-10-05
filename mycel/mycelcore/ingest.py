@@ -35,7 +35,7 @@ DEFAULT_OPTIONS = {
     "keep_original": True,             # アップロードした原本を Vault に保存する
     "original_folder": "資料",          # 原本の保存先
     "include_body": False,             # ノートに本文も入れる（原本を保存しないときは常に入れる）
-    "link_new_names": True,            # まだノートの無い名前も [[リンク]] にする
+    "link_new_names": False,           # まだノートの無い名前も [[リンク]] にする（オフでも人物・組織としてつながる）
     "use_llm": True,
 }
 ENTITY_LABELS = [("customers", "顧客・取引先"), ("people", "人物"), ("products", "製品・サービス"),
@@ -300,6 +300,7 @@ class Ingestor:
         md = self.compose(d, info, related, text, original, opts, cfg.get("model", "") if use_llm else "")
         return self._update(did, status="ready", phase="", markdown=md, title=title, note_path=note_path,
                             related=related, llm=use_llm, model=cfg.get("model", "") if use_llm else "",
+                            entities=info.get("entities") or {},
                             chars=len(text), original_path=original,
                             error=f"LLM を使えなかったため、本文とキーワード検索だけで作りました: {llm_error}" if llm_error else "")
 
@@ -490,6 +491,10 @@ class Ingestor:
         if self.app.vault.exists(note):
             note = self._free_note(note)
         r = self.app.create(note, text=md)
+        if d.get("entities"):                            # LLM が見つけた名前を人物・組織として登録
+            self.app.people.put_from_ingest(r["path"], d["entities"], md)
+            if original and d["origin"] == "upload":
+                self.app.people.put_from_ingest(original, d["entities"], md)
         self._update(d["id"], status="saved", saved_path=r["path"], markdown=md, original_path=original)
         shutil.rmtree(self.dir / "files" / d["id"], ignore_errors=True)
         return {"id": d["id"], "path": r["path"], "original": original if d["origin"] == "upload" else ""}

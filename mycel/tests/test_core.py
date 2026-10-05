@@ -120,8 +120,7 @@ class AppTest(unittest.TestCase):
         self.events = self.app.plugins.loaded["recorder"].events
 
     def tearDown(self):
-        self.app.plugins.unload()
-        self.app.index.close()
+        self.app.close()
         self.tmp.cleanup()
 
     def test_sample_vault_seeded_and_links(self):

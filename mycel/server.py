@@ -29,7 +29,9 @@ from mycelcore import __version__  # noqa: E402
 from mycelcore.app import MycelApp  # noqa: E402
 from mycelcore.config import chat_configured, embed_configured, public_config  # noqa: E402
 from mycelcore.llm import LLMClient, LLMError  # noqa: E402
+from mycelcore.graphrag import MODES  # noqa: E402
 from mycelcore.jobs import JobBusy  # noqa: E402
+from mycelcore.library import LINK_TYPES, STATUSES, TYPES, citation, to_bibtex  # noqa: E402
 from mycelcore.plugins import PluginVeto  # noqa: E402
 from mycelcore.scope import ScopeError  # noqa: E402
 from mycelcore.vault import ConflictError, VaultError  # noqa: E402
@@ -60,7 +62,7 @@ def _str(params: dict, key: str, default: str = "") -> str:
 def api_state(app: MycelApp, _p: dict) -> dict:
     cfg = app.config()
     return {"version": __version__, "vault": str(app.vault.root), "user": cfg["user_name"],
-            "llm": {"chat": chat_configured(cfg), "embed": embed_configured(cfg)},
+            "llm": {"chat": chat_configured(cfg), "embed": embed_configured(cfg), "rag_mode": cfg.get("rag_mode", "standard")},
             "daily_folder": cfg["daily_folder"], "template_folder": cfg["template_folder"],
             "fts": app.index.has_fts, "index": app.index_status()}
 
@@ -122,15 +124,40 @@ GET_ROUTES = {
     "/api/resolve": lambda app, p: {"path": app.index.resolve(_str(p, "target"))},
     "/api/search": lambda app, p: {"results": app.index.search(_str(p, "q"))},
     "/api/note/version": lambda app, p: app.note_version(_str(p, "path")),
-    "/api/graph": lambda app, p: app.index.graph(_str(p, "path") or None,
-                                                 int(_str(p, "depth", "1") or 1),
-                                                 _str(p, "docs") == "1"),
+    "/api/graph": lambda app, p: app.graph(_str(p, "path") or None, int(_str(p, "depth", "1") or 1),
+                                           _str(p, "docs") == "1", _str(p, "people") == "1"),
+    "/api/people": lambda app, p: {"entities": app.people.list(_str(p, "type"), _str(p, "q")),
+                                   "status": app.people.status(), "ignored": app.people.ignored()},
+    "/api/people/entity": lambda app, p: app.people.detail(_str(p, "type"), _str(p, "key")),
+    "/api/library": lambda app, p: {**app.library.list(_str(p, "q"), _str(p, "tag"), _str(p, "year"), _str(p, "status"),
+                                                        _str(p, "author"), _str(p, "type"), _str(p, "sort", "added")),
+                                    "embed": app.library.embed_status(), "llm": chat_configured(app.config()),
+                                    "types": TYPES, "statuses": STATUSES},
+    "/api/library/ref": lambda app, p: {**app.library._row(app.library.get(_str(p, "id"))),
+                                        "related": app.library.related(_str(p, "id")),
+                                        "links": app.library.links_of(_str(p, "id")), "link_types": {k: v["label"] for k, v in LINK_TYPES.items()},
+                                        "structure": [{"n": s["n"], "heading": s["heading"], "chunks": len(s["chunks"])}
+                                                      for s in app.library.structure(_str(p, "id"))],
+                                        "bibtex": to_bibtex(app.library.get(_str(p, "id"))),
+                                        "citations": {st: citation(app.library.get(_str(p, "id")), st) for st in ("apa", "ieee")}},
+    "/api/library/search": lambda app, p: app.library.search(_str(p, "q"), int(_str(p, "k", "20") or 20), _str(p, "tag"),
+                                                             _str(p, "year"), _str(p, "status"), _str(p, "author")),
+    "/api/library/graph": lambda app, p: app.library.graph(_str(p, "group", "tag"),
+                                                           [x for x in _str(p, "expanded").split("\n") if x], _str(p, "center") or None),
+    "/api/library/export": lambda app, p: {"text": app.library.export(
+        [x for x in _str(p, "ids").split(",") if x] or None, _str(p, "format", "bibtex"))},
+    "/api/library/by_path": lambda app, p: {"ref": app.library.by_path(app._path(_str(p, "path")))},
+    "/api/people/of": lambda app, p: {"entities": app.people.of(app._path(_str(p, "path"))),
+                                      "hidden": [h for h in app.entities.hidden_list() if h["path"] == app._path(_str(p, "path"))]},
     "/api/tags": lambda app, p: {"tags": app.index.tags()},
     "/api/tag": lambda app, p: {"notes": app.index.notes_with_tag(_str(p, "name"))},
     "/api/templates": lambda app, p: {"templates": app.templates()},
     "/api/config": lambda app, p: public_config(app.config()),
     "/api/plugins": lambda app, p: {"plugins": app.plugins.available()},
-    "/api/ai/status": lambda app, p: app.ai.status(),
+    "/api/ai/status": lambda app, p: {**app.ai.status(), "graphrag": app.graphrag.status(),
+                                      "rag_mode": app.config().get("rag_mode", "standard"), "modes": MODES},
+    "/api/graphrag/communities": lambda app, p: {"communities": app.graphrag.communities()},
+    "/api/graphrag/entity": lambda app, p: app.graphrag.entity(_str(p, "key")),
     "/api/ai/suggest": lambda app, p: {"suggestions": app.ai.suggest_links(_str(p, "path"))},
     "/api/index/status": lambda app, p: app.index_status(),
     "/api/scope": lambda app, p: app.scope_info(),
@@ -166,6 +193,35 @@ POST_ROUTES = {
     "/api/ingest/save": lambda app, b: app.ingest_save(_list(b, "ids") or []),
     "/api/ingest/discard": lambda app, b: {"discarded": app.ingest.discard(_list(b, "ids") or [])},
     "/api/llm/models": api_llm_models,
+    "/api/people/extract": lambda app, b: app.extract_people(_list(b, "prefixes")),
+    "/api/library/add": lambda app, b: app.library._row(app.library.add(b.get("ref") if isinstance(b.get("ref"), dict) else b)),
+    "/api/library/update": lambda app, b: app.library.update(_str(b, "id"), b.get("ref") if isinstance(b.get("ref"), dict) else b),
+    "/api/library/remove": lambda app, b: {"removed": app.library.remove(_list(b, "ids") or [])},
+    "/api/library/import": lambda app, b: app.library.import_text(_str(b, "text"), _list(b, "tags")),
+    "/api/library/register": lambda app, b: app.library.register_files(_list(b, "paths") or [], bool(b.get("ai")), _list(b, "tags")),
+    "/api/library/ai_meta": lambda app, b: app.library._row(app.library.ai_metadata(_str(b, "id"), bool(b.get("overwrite")))),
+    "/api/library/ai_summary": lambda app, b: app.library.ai_summary(_str(b, "id")),
+    "/api/library/ai_batch": lambda app, b: app.library_ai_batch(_list(b, "ids") or [], _str(b, "what", "meta")),
+    "/api/library/embed": lambda app, b: app.library_embed(),
+    "/api/library/ask": lambda app, b: app.library.ask(_str(b, "question"), _list(b, "history"), _str(b, "tag"),
+                                                         _str(b, "year"), _str(b, "status")),
+    "/api/library/note": lambda app, b: app.library.create_note(_str(b, "id")),
+    "/api/library/link": lambda app, b: app.library.link(_str(b, "a"), _str(b, "b"), _str(b, "type", "related"), _str(b, "note"), _str(b, "origin", "user"))
+        and {"links": app.library.links_of(_str(b, "a"))},
+    "/api/library/unlink": lambda app, b: {"removed": app.library.unlink(_str(b, "a"), _str(b, "b"), _str(b, "type")),
+                                           "links": app.library.links_of(_str(b, "a"))},
+    "/api/library/links/suggest": lambda app, b: {"suggestions": app.library.suggest_links(_str(b, "id"))},
+    "/api/library/links/detect": lambda app, b: app.library.detect_citations(_list(b, "ids")),
+    "/api/people/profile": lambda app, b: app.people.profile(_str(b, "type"), _str(b, "key")),
+    "/api/people/merge": lambda app, b: app.people.merge(_str(b, "type"), _str(b, "key"), _str(b, "into")),
+    "/api/people/unmerge": lambda app, b: app.people.unmerge(_str(b, "type"), _str(b, "key")) or {"ok": True},
+    "/api/people/ignore": lambda app, b: app.people.ignore(_str(b, "type"), _str(b, "key")) or {"ok": True},
+    "/api/people/unignore": lambda app, b: app.people.unmerge(_str(b, "type"), _str(b, "key")) or {"ok": True},
+    "/api/people/hide": lambda app, b: app.entities.hide(app._path(_str(b, "path")), _str(b, "type"), _str(b, "key"))
+        or {"entities": app.people.of(app._path(_str(b, "path")))},
+    "/api/people/unhide": lambda app, b: app.entities.unhide(app._path(_str(b, "path")), _str(b, "type"), _str(b, "key"))
+        or {"entities": app.people.of(app._path(_str(b, "path")))},
+    "/api/people/add": lambda app, b: app.people.add(app._path(_str(b, "path")), _str(b, "type"), _str(b, "name"), _str(b, "role")),
     "/api/relations/add": lambda app, b: app.relate(_str(b, "a"), _str(b, "b"), _str(b, "label"), _str(b, "origin", "user")),
     "/api/relations/remove": lambda app, b: app.unrelate(_str(b, "a"), _str(b, "b")),
     "/api/relations/many": lambda app, b: app.relate_many(_list(b, "pairs") or [], _str(b, "origin", "ai")),
@@ -177,8 +233,9 @@ POST_ROUTES = {
     "/api/item/delete": lambda app, b: app.delete_item(_str(b, "path")),
     "/api/config": lambda app, b: public_config(app.update_config(b)),
     "/api/config/test": api_config_test,
-    "/api/ai/ask": lambda app, b: app.ai.ask(_str(b, "question"), _str(b, "path") or None,
-                                            _list(b, "history"), _list(b, "prefixes")),
+    "/api/ai/ask": lambda app, b: app.ask(_str(b, "question"), _str(b, "path") or None,
+                                         _list(b, "history"), _list(b, "prefixes"), _str(b, "mode")),
+    "/api/graphrag/build": lambda app, b: app.graphrag_build(_list(b, "prefixes")),
     "/api/ai/summarize": lambda app, b: app.ai.summarize(_str(b, "path")),
     "/api/ai/transform": lambda app, b: {"text": app.ai.transform(_str(b, "text"), _str(b, "preset"),
                                                                   _str(b, "instruction"))},
@@ -387,7 +444,7 @@ def main(argv: list[str] | None = None) -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        app.plugins.unload()
+        app.close()
         httpd.server_close()
 
 

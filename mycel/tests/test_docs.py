@@ -166,8 +166,7 @@ class ManualUpdateTest(unittest.TestCase):
         self.app = MycelApp(config_path=root / "cfg.json", vault_override=str(self.vault), initial_load="sync")
 
     def tearDown(self):
-        self.app.plugins.unload()
-        self.app.index.close()
+        self.app.close()
         self.tmp.cleanup()
 
     def test_initial_load_reads_docs(self):
@@ -275,8 +274,7 @@ class DocsApiTest(unittest.TestCase):
         cls.httpd.shutdown()
         cls.httpd.server_close()
         cls.llm.shutdown()
-        cls.app.plugins.unload()
-        cls.app.index.close()
+        cls.app.close()
         cls.tmp.cleanup()
 
     def call(self, method, path, body=None):
