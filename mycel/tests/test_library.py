@@ -93,8 +93,7 @@ class LibraryTest(unittest.TestCase):
 
     def tearDown(self):
         self.llm.shutdown()
-        self.app.plugins.unload()
-        self.app.index.close()
+        self.app.close()
         self.tmp.cleanup()
 
     def test_register_import_dup_and_persist(self):
@@ -267,8 +266,7 @@ class LibraryApiTest(unittest.TestCase):
     def tearDownClass(cls):
         cls.httpd.shutdown()
         cls.httpd.server_close()
-        cls.app.plugins.unload()
-        cls.app.index.close()
+        cls.app.close()
         cls.tmp.cleanup()
 
     def call(self, method, path, obj=None):

@@ -84,9 +84,7 @@ class PeopleAppTest(unittest.TestCase):
 
     def tearDown(self):
         self.llm.shutdown()
-        self.app.plugins.unload()
-        self.app.index.close()
-        self.app.entities.close()
+        self.app.close()
         self.tmp.cleanup()
 
     def test_person_detail_without_links(self):
@@ -196,8 +194,7 @@ class PeopleApiTest(unittest.TestCase):
     def tearDownClass(cls):
         cls.httpd.shutdown()
         cls.httpd.server_close()
-        cls.app.plugins.unload()
-        cls.app.index.close()
+        cls.app.close()
         cls.tmp.cleanup()
 
     def call(self, method, path, obj=None):

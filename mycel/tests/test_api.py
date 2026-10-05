@@ -36,8 +36,7 @@ class ApiTest(unittest.TestCase):
         cls.httpd.shutdown()
         cls.httpd.server_close()
         cls.llm.shutdown()
-        cls.app.plugins.unload()
-        cls.app.index.close()
+        cls.app.close()
         cls.tmp.cleanup()
 
     def call(self, method, path, body=None, headers=None, raw=None):

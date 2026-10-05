@@ -93,6 +93,20 @@ class MycelApp:
             # 起動時は「変更の確認」だけ（日時とサイズを見るだけで本文は読まない）
             self.check_index(None)
 
+    def close(self) -> None:
+        """終了処理。開いている SQLite（インデックス・人物）を閉じる（Windows では閉じないと一時フォルダを消せない）。"""
+        if self.jobs.running():
+            self.jobs.cancel()
+            self.jobs.wait(30)
+        self.plugins.unload()
+        for name in ("index", "entities"):
+            obj = getattr(self, name, None)
+            if obj is not None:
+                try:
+                    obj.close()
+                except Exception:  # noqa: BLE001 - 二重に閉じても落とさない
+                    pass
+
     def _author(self) -> str:
         return self.config()["user_name"]
 

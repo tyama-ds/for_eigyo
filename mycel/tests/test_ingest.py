@@ -43,8 +43,7 @@ class IngestTest(unittest.TestCase):
 
     def tearDown(self):
         self.llm.shutdown()
-        self.app.plugins.unload()
-        self.app.index.close()
+        self.app.close()
         self.tmp.cleanup()
 
     def llm_on(self, **extra):
@@ -189,8 +188,7 @@ class IngestApiTest(unittest.TestCase):
         cls.httpd.shutdown()
         cls.httpd.server_close()
         cls.llm.shutdown()
-        cls.app.plugins.unload()
-        cls.app.index.close()
+        cls.app.close()
         cls.tmp.cleanup()
 
     def call(self, method, path, data=None, headers=None):

@@ -439,7 +439,7 @@ def main(argv: list[str] | None = None) -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        app.plugins.unload()
+        app.close()
         httpd.server_close()
 
 
