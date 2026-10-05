@@ -929,15 +929,29 @@ def _synonym_map(groups: list | None = None) -> dict[str, list[str]]:
     return m
 
 
+def _query_tokens(q_norm: str) -> list[str]:
+    """空白で語に分ける。ただし "..." で囲んだ部分（"nippon steel" など）は空白を含めて1語として扱う。"""
+    parts = re.split(r'("[^"]*")', q_norm)
+    joined = "".join(p.replace(" ", "\x00") if p.startswith('"') else p for p in parts)
+    return [t.replace("\x00", " ") for t in joined.split(" ") if t.strip()]
+
+
+def quote_term(w: str) -> str:
+    """空白を含む語を検索構文用に引用符で囲む（企業名の別表記などを | で並べるとき用）。"""
+    w = str(w or "").strip().replace('"', "")
+    return f'"{w}"' if " " in w else w
+
+
 def parse_query(q: str, syn: dict | None = None) -> dict:
-    """検索語を解釈する。スペース区切り=AND、語の中の | =OR、先頭の - =除外。同義語辞書で OR を自動展開。
+    """検索語を解釈する。スペース区切り=AND、語の中の | =OR、先頭の - =除外、"..." =空白を含む1語。
+    同義語辞書で OR を自動展開。
     戻り値 {"groups": [[正規化語, ...], ...], "excludes": [正規化語, ...],
             "expanded": [{"term": 語, "to": [展開された原語, ...]}, ...]}"""
     syn = _synonym_map() if syn is None else syn
     groups: list[list[str]] = []
     excludes: list[str] = []
     expanded: list[dict] = []
-    for tok in _norm(q).split(" "):
+    for tok in _query_tokens(_norm(q)):
         tok = tok.strip()
         if not tok or not tok.strip('-|"'):   # 記号だけの語（"-" "|" など）は無視
             continue
@@ -1048,7 +1062,11 @@ def archive_search(q: str, limit: int = 60, sources: list[str] | None = None,
 
 
 def _filters_window(f: dict, now: float | None = None) -> tuple[float | None, float | None]:
-    """検索条件の期間（from/to の日付範囲、無ければ直近 days 日）を [since, until) の epoch に。"""
+    """検索条件の期間（from/to の日付範囲、無ければ直近 days 日）を [since, until) の epoch に。
+    since_ts / until_ts（epoch）が直接あればそれを優先（比較ビューの「前の期間」など秒単位の範囲）。"""
+    if isinstance(f.get("since_ts"), (int, float)) or isinstance(f.get("until_ts"), (int, float)):
+        return (float(f["since_ts"]) if isinstance(f.get("since_ts"), (int, float)) else None,
+                float(f["until_ts"]) if isinstance(f.get("until_ts"), (int, float)) else None)
     since = _parse_day(f.get("from")) if isinstance(f.get("from"), str) else None
     until = _parse_day(f.get("to")) if isinstance(f.get("to"), str) else None
     if until is not None:
@@ -1111,11 +1129,13 @@ def group_duplicates(rows: list[dict], window: float = 3 * 86400, threshold: flo
 # ---- 日付×情報源のヒストグラム
 
 def archive_histogram(q: str, sources: list[str] | None, category: str | None,
-                      parsed: dict | None = None) -> dict:
-    """検索条件（期間以外）に合う記事の、日付×情報源の件数分布。期間の選択に使う。
+                      parsed: dict | None = None, since_ts: float | None = None,
+                      until_ts: float | None = None) -> dict:
+    """検索条件に合う記事の、日付×情報源の件数分布。既定では期間を無視して全期間を集計し
+    （期間の選択に使う）、since/until を与えればその範囲だけ（比較ビュー用）。
     期間の長さに応じて 日／週／月 単位にまとめる（区間は最大 ~120）。日付はローカル時刻。
     情報源は件数上位6つ＋その他（other）。"""
-    where, params, _ = _search_where(q, sources, None, None, category, None, parsed)
+    where, params, _ = _search_where(q, sources, since_ts, until_ts, category, None, parsed)
     with _archive_lock:
         _archive_init_locked()
         conn = _db()
@@ -1786,6 +1806,14 @@ REPORT_TEMPLATES = {
         "要点（5項目以内。各項目1〜2文＋出典番号）",
         "ひとこと所感（1〜2文）",
     ]),
+    "compare": ("比較レポート", [
+        "比較の概況（2〜3文。件数や時期の違いにも触れる）",
+        "〔A〕の主な動き（3〜5項目）",
+        "〔B〕の主な動き（3〜5項目）",
+        "共通点（両方に見られる論点）",
+        "相違点・温度差（片方だけの論点、扱いの違い）",
+        "示唆・次に注目すべき点",
+    ]),
 }
 _jobs: dict[str, dict] = {}       # レポート生成ジョブ（メモリ上。完了結果は SQLite の reports に保存）
 _jobs_lock = threading.Lock()
@@ -1799,6 +1827,8 @@ def _filters_conds(f: dict) -> list[str]:
         return conds
     if f.get("theme"):
         conds.append(f"テーマ「{str(f['theme'])[:40]}」")
+    if isinstance(f.get("compare"), dict):
+        conds.append(f"比較: 〔A〕{str(f['compare'].get('a') or '')[:40]} ／ 〔B〕{str(f['compare'].get('b') or '')[:40]}")
     if f.get("q"):
         conds.append(f"キーワード「{str(f['q'])[:100]}」")
     srcn = ([str(x)[:40] for x in f.get("sources") if x][:20]
@@ -1839,9 +1869,9 @@ def _report_fetch(ids: list) -> list[dict]:
     return arts
 
 
-def _article_line(n: int, a: dict, text: str | None = None, per: int = 0) -> str:
+def _article_line(n: int, a: dict, text: str | None = None, per: int = 0, tag: str = "") -> str:
     d = str(a.get("published") or "")[:10]
-    s = f"[{n}] {d} {a.get('source') or ''}｜{a.get('title') or ''}"
+    s = f"[{n}] {tag}{d} {a.get('source') or ''}｜{a.get('title') or ''}"
     if a.get("summary"):
         s += "\n   " + str(a["summary"])[:300]
     if text and per > 0:   # 本文一括取得で得たページ本文（抜粋）
@@ -1875,9 +1905,17 @@ def _report_system(local: bool) -> str:
     return s
 
 
-def _map_prompt(question: str, chunk_text: str, fulltext: bool = False) -> str:
+def _groups_note(groups: list[dict] | None) -> str:
+    """比較レポート用: 記事行の〔A〕〔B〕タグの意味。"""
+    if not groups:
+        return ""
+    return ("【群の定義】" + " ／ ".join(f"〔{chr(65 + i)}〕= {str(g.get('label') or '')[:60]}" for i, g in enumerate(groups[:3]))
+            + "（各記事行の先頭タグがどの群かを示す。項目にはどの群の話かを明記する）\n")
+
+
+def _map_prompt(question: str, chunk_text: str, fulltext: bool = False, note: str = "") -> str:
     kind = "見出し／要約／本文抜粋" if fulltext else "見出し／要約"
-    return (f"【問い】{question}\n\n【記事（[番号] 日付 媒体｜{kind}）】\n{chunk_text}\n\n"
+    return (f"【問い】{question}\n{note}\n【記事（[番号] 日付 媒体｜{kind}）】\n{chunk_text}\n\n"
             "【指示】上の記事から、問いに関係する事実・数値・論点を箇条書きで抽出してください。\n"
             "- 各項目は「YYYY-MM-DD 媒体: 内容 [n]」の形で、末尾に必ず出典番号を付ける（複数可 [1][3]）\n"
             "- 関係の薄い記事は省いてよい。推測・一般論・感想は書かない\n"
@@ -1892,10 +1930,10 @@ def _merge_prompt(question: str, notes: str) -> str:
 
 
 def _reduce_prompt(question: str, tname: str, sections: list[str], notes: str,
-                   n_articles: int, filters: dict) -> str:
+                   n_articles: int, filters: dict, note: str = "") -> str:
     conds = _filters_conds(filters)
     heads = "\n".join(f"{i}. ## {s}" for i, s in enumerate(sections, 1))
-    return (f"【問い】{question}\n"
+    return (f"【問い】{question}\n" + note
             + (f"【検索条件】{' ／ '.join(conds)}\n" if conds else "")
             + f"【対象】記事 {n_articles} 件（出典番号 [1]〜[{n_articles}]）\n\n"
             f"【部分メモ】\n{notes}\n\n"
@@ -1996,8 +2034,15 @@ def delete_report(rid: str) -> bool:
 
 
 def _run_report(job_id: str, question: str, template: str, ids: list, filters: dict,
-                fulltext: bool = False, theme_id: str | None = None, title: str | None = None) -> None:
-    """ワーカースレッド: (本文一括取得) → 部分要約(map) → 統合(reduce) → 保存。進捗は _jobs に書く。"""
+                fulltext: bool = False, theme_id: str | None = None, title: str | None = None,
+                groups: list[dict] | None = None) -> None:
+    """ワーカースレッド: (本文一括取得) → 部分要約(map) → 統合(reduce) → 保存。進捗は _jobs に書く。
+    groups（比較レポート）があれば記事行に〔A〕〔B〕のタグを付け、群の定義をプロンプトに添える。"""
+    tag_of: dict[str, str] = {}
+    for gi, g in enumerate((groups or [])[:3]):
+        for i in (g.get("ids") or []):
+            tag_of.setdefault(str(i), f"〔{chr(65 + gi)}〕")
+    note = _groups_note(groups)
     def upd(**kw):
         with _jobs_lock:
             _jobs[job_id].update(kw)
@@ -2020,13 +2065,13 @@ def _run_report(job_id: str, question: str, template: str, ids: list, filters: d
             upd(state="fetching", total=n_target, done=0, articles=len(arts), sub="")
             pages = fetch_pages(targets, progress=lambda d, t, sub: upd(total=t, done=d, sub=sub))
         per = FULLTEXT_PER_ARTICLE_LOCAL if local else FULLTEXT_PER_ARTICLE_CLOUD
-        lines = [_article_line(i + 1, a, (pages.get(a["id"]) or {}).get("text"), per)
+        lines = [_article_line(i + 1, a, (pages.get(a["id"]) or {}).get("text"), per, tag_of.get(a["id"], ""))
                  for i, a in enumerate(arts)]
         chunks = _chunk_lines(lines, budget)
         upd(state="mapping", total=len(chunks), done=0, articles=len(arts), sub="")
 
         def do_map(ch: list[str]) -> str:
-            txt = call_ai(cfg, system, _map_prompt(question, "\n".join(ch), bool(pages)), [],
+            txt = call_ai(cfg, system, _map_prompt(question, "\n".join(ch), bool(pages), note), [],
                           max_tokens=REPORT_MAX_TOKENS)
             ans, _ = _split_reasoning(txt)
             with _jobs_lock:
@@ -2045,7 +2090,7 @@ def _run_report(job_id: str, question: str, template: str, ids: list, filters: d
                 mids.append(_split_reasoning(t)[0])
             notes_text = "\n\n".join(m for m in mids if m)
         tname, sections = REPORT_TEMPLATES.get(template) or REPORT_TEMPLATES["overview"]
-        body = call_ai(cfg, system, _reduce_prompt(question, tname, sections, notes_text, len(arts), filters),
+        body = call_ai(cfg, system, _reduce_prompt(question, tname, sections, notes_text, len(arts), filters, note),
                        [], max_tokens=REPORT_MAX_TOKENS)
         body, _ = _split_reasoning(body)
         body = re.sub(r"^\s*#\s[^\n]*\n", "", body, count=1)   # 念のため先頭のタイトル行を除去
@@ -2087,19 +2132,26 @@ def _new_job(kind: str, **fields) -> str:
 
 def start_report_job(body: dict) -> dict:
     ids = body.get("ids") if isinstance(body.get("ids"), list) else []
-    ids = [str(i) for i in ids if i][:REPORT_MAX_ARTICLES]
+    ids = [str(i) for i in ids if i]
+    groups: list[dict] = []
+    for g in (body.get("groups") if isinstance(body.get("groups"), list) else [])[:3]:   # 比較レポート: 群ごとの記事
+        if isinstance(g, dict) and isinstance(g.get("ids"), list):
+            gids = [str(i) for i in g["ids"] if i][:REPORT_MAX_ARTICLES]
+            groups.append({"label": str(g.get("label") or "")[:60], "ids": gids})
+            ids.extend(i for i in gids if i not in ids)
+    ids = list(dict.fromkeys(ids))[:REPORT_MAX_ARTICLES]
     if not ids:
         return {"ok": False, "error": "記事を1件以上選択してください"}
     filters = body.get("filters") if isinstance(body.get("filters"), dict) else {}
     question = (str(body.get("question") or "")).strip()[:300] or _default_question(filters)
-    template = body.get("template") if body.get("template") in REPORT_TEMPLATES else "overview"
+    template = body.get("template") if body.get("template") in REPORT_TEMPLATES else ("compare" if groups else "overview")
     fulltext = bool(body.get("fulltext"))
     theme_id = body.get("theme_id") if isinstance(body.get("theme_id"), str) and _ID_RE.fullmatch(body["theme_id"]) else None
     title = str(body.get("title") or "")[:80]
     job_id = _new_job("report", articles=len(ids), fulltext=fulltext)
-    threading.Thread(target=_run_report, args=(job_id, question, template, ids, filters, fulltext, theme_id, title),
+    threading.Thread(target=_run_report, args=(job_id, question, template, ids, filters, fulltext, theme_id, title, groups or None),
                      daemon=True).start()
-    return {"ok": True, "job_id": job_id}
+    return {"ok": True, "job_id": job_id, "articles": len(ids)}
 
 
 def report_job_status(job_id: str) -> dict:
@@ -2539,7 +2591,7 @@ def extract_entities(rows: list[dict]) -> list[dict]:
             counts[k] = counts.get(k, 0) + 1
             surface.setdefault(k, w)
             kinds.setdefault(k, kind)
-    out = [{"name": surface[k], "kind": kinds[k], "count": n} for k, n in counts.items()]
+    out = [{"name": surface[k], "kind": kinds[k], "count": n, "q": quote_term(surface[k])} for k, n in counts.items()]
     out.sort(key=lambda e: (-e["count"], e["name"]))
     return out[:ENTITY_MAX]
 
@@ -2602,7 +2654,7 @@ def extract_entities_ai(rows: list[dict]) -> dict:
         keys = [_norm(name)] + [_norm(x) for x in aliases]
         n = sum(1 for t in texts if any(k and k in t for k in keys))
         out.append({"name": name, "kind": str(it.get("kind") or "")[:10], "aliases": aliases, "count": n,
-                    "q": "|".join([name] + aliases)})
+                    "q": "|".join(quote_term(x) for x in [name] + aliases)})
     out.sort(key=lambda e: (-e["count"], e["name"]))
     return {"ok": True, "entities": out[:ENTITY_MAX], "titles": len(rows), "raw_items": len(items)}
 
@@ -2634,6 +2686,81 @@ def watch_trends(weeks: int = 8) -> dict:
         finally:
             conn.close()
     return {"labels": labels, "trends": out}
+
+
+# ------------------------------------------------------------------ リサーチ: 比較ビュー（2つの条件の件数・情報源・固有名詞・報道量）
+
+COMPARE_IDS = 60   # AI 比較レポートに渡す各群の記事上限
+
+
+def _side_summary(label: str, f: dict) -> dict:
+    """1つの条件（q / sources / category / 期間 / archived）を集計する。"""
+    since, until = _filters_window(f)
+    parsed = parse_query(f.get("q", ""))
+    rows = archive_search(f.get("q", ""), 300, f.get("sources"), since, until, f.get("category") or None,
+                          f.get("archived"), "new", parsed)
+    srcs: dict[str, int] = {}
+    for a in rows:
+        k = a.get("source") or a.get("source_id") or ""
+        srcs[k] = srcs.get(k, 0) + 1
+    hist = archive_histogram(f.get("q", ""), f.get("sources"), f.get("category") or None, parsed, since, until)
+    return {"label": label, "total": len(rows), "conds": _filters_conds({**f, "sources": _source_names(f.get("sources") or [])}),
+            "sources": [{"name": k, "count": v} for k, v in sorted(srcs.items(), key=lambda x: (-x[1], x[0]))[:6]],
+            "entities": extract_entities(rows)[:10],
+            "hist": {"unit": hist["unit"], "buckets": hist["buckets"], "total": hist["total"]},
+            "ids": [a["id"] for a in rows[:COMPARE_IDS]],
+            "newest": str(rows[0].get("published") or "")[:10] if rows else "",
+            "oldest": str(rows[-1].get("published") or "")[:10] if rows else ""}
+
+
+def _prev_window(f: dict) -> dict:
+    """同じ条件で「1つ前の期間」の条件を作る（直近N日 → その前のN日、from〜to → 同じ長さの直前）。"""
+    since, until = _filters_window(f)
+    now = time.time()
+    if since is None:
+        return {}
+    until = until if until is not None else now
+    length = max(86400.0, until - since)
+    d0 = datetime.fromtimestamp(since - length).date().isoformat()
+    d1 = datetime.fromtimestamp(since - 1).date().isoformat()
+    return {"q": f.get("q", ""), "sources": f.get("sources") or [], "category": f.get("category") or "",
+            "days": 0, "from": d0, "to": d1,                      # from/to は表示用（条件文）
+            "since_ts": since - length, "until_ts": since}        # 実際の範囲は秒単位で直前の同じ長さ
+
+
+def compare_conditions(body: dict) -> dict:
+    """A（現在の条件）と B（テーマ／ウォッチ、同条件の前の期間、または任意の条件）を比較する。"""
+    a = _clean_filters(body.get("a"))
+    try:
+        a["archived"] = float(body.get("a", {}).get("archived")) if isinstance(body.get("a"), dict) and body["a"].get("archived") else None
+    except (TypeError, ValueError):
+        a["archived"] = None
+    bspec = body.get("b") if isinstance(body.get("b"), dict) else {}
+    if bspec.get("theme_id"):
+        t = get_theme(str(bspec.get("theme_id")))
+        if not t:
+            return {"ok": False, "error": "unknown theme"}
+        b = dict(t["filters"])
+        blabel = ("ウォッチ: " if t.get("kind") == "watch" else "テーマ: ") + t["name"]
+    elif bspec.get("prev"):
+        b = _prev_window(a)
+        if not b:
+            return {"ok": False, "error": "期間（直近N日 または 日付範囲）を指定すると「前の期間」と比較できます"}
+        blabel = f"前の期間（{b['from']}〜{b['to']}）"
+    else:
+        b = _clean_filters(bspec)
+        if not (b["q"] or b["sources"] or b["category"] or b["days"] or b["from"] or b["to"]):
+            return {"ok": False, "error": "比較相手（テーマ・前の期間・条件）を指定してください"}
+        blabel = str(bspec.get("label") or "条件B")[:60]
+    alabel = str(body.get("a", {}).get("label") or "現在の条件")[:60] if isinstance(body.get("a"), dict) else "現在の条件"
+    A = _side_summary(alabel, a)
+    B = _side_summary(blabel, b)
+    ea = {_norm(e["name"]): e["name"] for e in A["entities"]}
+    eb = {_norm(e["name"]): e["name"] for e in B["entities"]}
+    common = [ea[k] for k in ea if k in eb]
+    return {"ok": True, "a": A, "b": B, "common": common,
+            "only_a": [ea[k] for k in ea if k not in eb], "only_b": [eb[k] for k in eb if k not in ea],
+            "filters_b": b}
 
 
 # ---- 書き出し（Markdown / Word）
@@ -3161,6 +3288,11 @@ class Handler(BaseHTTPRequestHandler):
 
         if u.path == "/api/research/synonyms":  # 同義語辞書の保存
             self._json(save_synonyms(str(self._read_body().get("text") or "")))
+            return
+
+        if u.path == "/api/research/compare":  # 比較ビュー: A（現在の条件）と B（テーマ／前の期間／条件）
+            r = compare_conditions(self._read_body())
+            self._json(r, 200 if r.get("ok") else 400)
             return
 
         if u.path == "/api/research/entities/ai":  # ローカルLLM で 企業・組織・製品 を抽出（別表記つき）

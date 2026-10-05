@@ -92,8 +92,16 @@ App Portal（`launcher/`）にも `Prism ニュースポータル` として登�
   別表記つきで抽出し、`日本製鉄|日鉄|Nippon Steel` のような OR 条件になる）。「＋ウォッチ」で
   保存すると、テーマと同じく**新着差分・週次ブリーフ**が使え、**直近8週の件数スパークライン**で
   報道量の推移が分かる。
-- **ロードマップ** — リサーチ機能の計画（Phase 3 残り: 比較・時系列ビュー、
-  Phase 4: ローカルLLMによる Word / PowerPoint / PDF / Excel 生成）は [ROADMAP.md](ROADMAP.md) を参照。
+- **比較ビュー** — 右ペインの「比較」で、〔A〕現在の条件と〔B〕テーマ／ウォッチ／**前の期間**
+  （同じ条件で直前の同じ長さ）を並べて比較。件数・期間内の報道量（棒グラフ）・情報源の内訳・
+  よく出る企業・製品、共通／片方だけの固有名詞を表示。「AIに比較させる」で両群の記事に
+  〔A〕〔B〕タグを付けて部分要約→統合する**比較レポート**（共通点・相違点・温度差、出典つき）を生成。
+- **タイムライン表示** — レポート本文に「YYYY-MM-DD 媒体: 内容 [n]」の行が3つ以上あれば、
+  月ごとの見出しつきの縦タイムラインに切り替えられる（出典リンクは維持）。
+- **検索語の引用符** — `"Nippon Steel"` のように `"..."` で囲むと空白を含む1語として扱う
+  （企業名の別表記を `日本製鉄|日鉄|"Nippon Steel"` と並べられる）。
+- **ロードマップ** — リサーチ機能の計画（Phase 4: ローカルLLMによる Word / PowerPoint / PDF / Excel 生成）は
+  [ROADMAP.md](ROADMAP.md) を参照。
 - **トレンド** — 見出しから多く出現する語を抽出してチップ表示。クリックで即フィルタ。
 - **保存（ブックマーク）** — 記事を保存してドロワーで一覧。ブラウザの localStorage に
   永続化されるのでフィードが入れ替わっても残る。
@@ -280,7 +288,8 @@ UI の「情報源」から自由に 追加 / 無効化 / 削除でき、URL も
 | POST | `/api/research/entities/ai` | ローカルLLM で見出しから固有名詞を抽出（JSON: `ids[]`、最大80件）。`aliases` と OR 条件 `q` つき |
 | GET | `/api/research/watch/trends?weeks=` | ウォッチ（`kind=watch` のテーマ）ごとの週別件数（既定8週・月曜始まり） |
 | GET | `/api/archive/stats` | 過去ログの件数・期間・情報源別/カテゴリ別件数 |
-| POST | `/api/research/report` | レポート生成ジョブの開始（JSON: `ids[]`, `question?`, `template?`=overview/timeline/brief, `filters?`, `fulltext?`=本文も取得）→ `job_id` |
+| POST | `/api/research/report` | レポート生成ジョブの開始（JSON: `ids[]`, `question?`, `template?`=overview/timeline/brief/compare, `filters?`, `fulltext?`=本文も取得, `groups?`=[{label, ids[]}]（比較レポート: 記事行に〔A〕〔B〕タグ）, `title?`）→ `job_id` |
+| POST | `/api/research/compare` | 比較ビュー（JSON: `a`={q,sources[],category,days,from,to,archived?,label?}, `b`={theme_id} / {prev:true} / 条件）→ 両側の件数・条件文・情報源・固有名詞・期間内ヒストグラム・記事id、共通／片方だけの固有名詞 |
 | GET | `/api/research/report/status?id=` | ジョブの進捗（state=queued/fetching/mapping/reducing/done/error, done/total, sub。本文取得ジョブも同じ） |
 | POST | `/api/research/fulltext` | 選択記事の本文一括取得ジョブ（JSON: `ids[]`、最大80件）→ `job_id`。完了時に `summary{ok,partial,failed,cached,selenium}` と記事ごとの可否 |
 | GET | `/api/research/themes` | テーマ一覧（条件 `filters`・条件文 `conds`・該当件数 `total`・新着件数 `new`・前回ブリーフ） |
