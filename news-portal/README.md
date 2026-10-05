@@ -77,9 +77,18 @@ App Portal（`launcher/`）にも `Prism ニュースポータル` として登�
   レポート生成で**「本文も取得して要約する」**を選ぶと、要約だけでなくページ本文の抜粋を
   根拠に部分要約する（取得フェーズも進捗表示）。会話では「会話に本文を使う」で取得済みの
   本文抜粋（上から最大10件）を依頼に添える。
-- **ロードマップ** — リサーチ機能の計画（Phase 3: FTS5・同義語・ヒストグラム・企業ウォッチ・
-  比較ビュー、Phase 4: ローカルLLMによる Word / PowerPoint / PDF / Excel 生成）は
-  [ROADMAP.md](ROADMAP.md) を参照。
+- **検索の高度化（FTS5・検索構文・同義語辞書）** — 過去ログの検索は SQLite **FTS5（trigram）**
+  の全文索引を使い（FTS5 の無い環境では自動で部分一致に切替）、**全角/半角・大小文字を区別しない**
+  （NFKC 正規化）。検索語は **スペース=AND、`|`=OR、先頭 `-`=除外**（例: `高炉|電炉 水素 -株価`）。
+  **同義語辞書**（リサーチの「同義語」ボタン、1行1グループ）に載っている語は OR で自動展開され、
+  展開内容が検索欄の下に表示される。3文字以上の語で検索したときは**関連順**（bm25）も選べる。
+- **類似記事の束ね** — タイトルが似ていて日付が近い記事（別媒体の同じニュース等）を代表1件に
+  まとめ、「+N 類似」で展開。既定の選択は代表のみ。「類似をまとめる」で解除できる。
+- **報道量ヒストグラム** — 検索条件（期間以外）に合う記事の **日付×情報源** の積み上げ棒を一覧の
+  上に表示（期間の長さで日／週／月に自動切替）。棒をクリックするとその期間に絞り込み、凡例を
+  クリックすると情報源で絞り込み。選択中の期間の外は薄く表示。
+- **ロードマップ** — リサーチ機能の計画（Phase 3 残り: 企業・製品ウォッチ・比較ビュー、
+  Phase 4: ローカルLLMによる Word / PowerPoint / PDF / Excel 生成）は [ROADMAP.md](ROADMAP.md) を参照。
 - **トレンド** — 見出しから多く出現する語を抽出してチップ表示。クリックで即フィルタ。
 - **保存（ブックマーク）** — 記事を保存してドロワーで一覧。ブラウザの localStorage に
   永続化されるのでフィードが入れ替わっても残る。
@@ -259,7 +268,9 @@ UI の「情報源」から自由に 追加 / 無効化 / 削除でき、URL も
 | GET | `/api/settings` | AI 設定（プロバイダ / base_url / model / キー登録有無。**キー本体は返さない**） |
 | POST | `/api/settings` | AI 設定の保存（JSON: `provider`, `base_url`, `model`, `api_key?`, `clear_key?`） |
 | POST | `/api/proxy/test` | プロキシ接続テスト（JSON: `use_proxy`, `proxy_url`, `ca_bundle`, `url?`。**保存せず**その設定で1回取得を試し、状態/件数/所要時間を返す） |
-| GET | `/api/archive/search?q=&sources=&days=&from=&to=&category=&archived=&limit=` | 過去ログの条件検索（キーワードAND・情報源(カンマ区切りid)・直近N日 or 日付範囲・カテゴリ・`archived`=この時刻(epoch)より後に保存された記事のみ、新着順。各記事に `has_text`=本文キャッシュ有無） |
+| GET | `/api/archive/search?q=&sources=&days=&from=&to=&category=&archived=&order=&dedup=&limit=` | 過去ログの条件検索（`q`: スペース=AND・`\|`=OR・`-`=除外、同義語辞書で展開。情報源(カンマ区切りid)・直近N日 or 日付範囲・カテゴリ・`archived`=この時刻(epoch)より後に保存された記事のみ。`order`=new/rel、`dedup`=1 で類似記事を束ねる（代表に `dups[]`、他に `dup_of`）。応答に `fts`・`expanded`・`dup_groups`、各記事に `has_text`） |
+| GET | `/api/archive/histogram?q=&sources=&category=` | 日付×情報源の件数分布（期間以外の条件。`unit`=day/week/month、`buckets[{from,to,total,src{}}]`、`sources` 上位6） |
+| GET/POST | `/api/research/synonyms` | 同義語辞書の取得／保存（POST JSON: `text` = 1行1グループ・カンマ区切り） |
 | GET | `/api/archive/stats` | 過去ログの件数・期間・情報源別/カテゴリ別件数 |
 | POST | `/api/research/report` | レポート生成ジョブの開始（JSON: `ids[]`, `question?`, `template?`=overview/timeline/brief, `filters?`, `fulltext?`=本文も取得）→ `job_id` |
 | GET | `/api/research/report/status?id=` | ジョブの進捗（state=queued/fetching/mapping/reducing/done/error, done/total, sub。本文取得ジョブも同じ） |

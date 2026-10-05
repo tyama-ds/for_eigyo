@@ -31,11 +31,12 @@ import ssl
 import sys
 import threading
 import time
+import unicodedata
 import webbrowser
 import zipfile
 import zlib
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -719,6 +720,62 @@ def _archive_row(a: dict, now: float) -> tuple:
             a.get("published_ts"), at, a.get("published_ts") or at)
 
 
+def _norm(s) -> str:
+    """検索用の正規化: NFKC（全角/半角・互換文字の統一）＋小文字化＋空白の畳み込み。"""
+    return _WS_RE.sub(" ", unicodedata.normalize("NFKC", str(s or ""))).strip().lower()
+
+
+def _fts_text(title, summary, source) -> str:
+    """索引に入れる文字列: タイトル・要約・媒体名を正規化して連結。"""
+    return _norm(f"{title or ''} \n {summary or ''} \n {source or ''}")
+
+
+_fts_ok = False   # SQLite の FTS5（trigram）が使えるか。_fts_setup() で判定する
+
+
+def _fts_available(conn) -> bool:
+    try:
+        conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS _fts_probe USING fts5(x, tokenize='trigram')")
+        conn.execute("DROP TABLE IF EXISTS _fts_probe")
+        return True
+    except sqlite3.OperationalError:
+        return False
+
+
+def _fts_rows(rows) -> list[tuple]:
+    return [(r[0], _fts_text(r[1], r[2], r[3])) for r in rows]
+
+
+def _fts_rebuild(conn) -> None:
+    conn.execute("DELETE FROM articles_fts")
+    rows = conn.execute("SELECT rowid, title, summary, source FROM articles").fetchall()
+    for i in range(0, len(rows), 2000):
+        conn.executemany("INSERT INTO articles_fts(rowid, text) VALUES (?,?)", _fts_rows(rows[i:i + 2000]))
+
+
+def _fts_setup(conn) -> None:
+    """正規化テキストの索引テーブル articles_fts を用意する。FTS5(trigram) が使えれば仮想テーブル、
+    無ければ通常テーブル。どちらも rowid=articles.rowid と text 列を持ち、instr() の部分一致に使える。
+    件数が articles と合わなければ（旧DB・FTS5 の有無が変わった）作り直す。"""
+    global _fts_ok
+    row = conn.execute("SELECT sql FROM sqlite_master WHERE name = 'articles_fts'").fetchone()
+    existing = (row[0] or "") if row else None
+    want = _fts_available(conn)
+    if existing is not None and (("fts5" in existing.lower()) != want):
+        conn.execute("DROP TABLE articles_fts")
+        existing = None
+    if existing is None:
+        if want:
+            conn.execute("CREATE VIRTUAL TABLE articles_fts USING fts5(text, tokenize='trigram')")
+        else:
+            conn.execute("CREATE TABLE articles_fts(id INTEGER PRIMARY KEY, text TEXT)")
+    _fts_ok = want
+    n_a = conn.execute("SELECT COUNT(*) FROM articles").fetchone()[0]
+    n_f = conn.execute("SELECT COUNT(*) FROM articles_fts").fetchone()[0]
+    if n_a != n_f:
+        _fts_rebuild(conn)
+
+
 def _archive_init_locked() -> None:
     """テーブル作成と、旧形式 archive.jsonl の1回限りの取り込み。_archive_lock 内で呼ぶ。"""
     global _archive_ready
@@ -741,6 +798,8 @@ def _archive_init_locked() -> None:
         conn.execute("""CREATE TABLE IF NOT EXISTS themes(
             id TEXT PRIMARY KEY, name TEXT, filters_json TEXT, created_at REAL, updated_at REAL,
             last_seen_at REAL, last_brief_at REAL, last_brief_id TEXT)""")   # 保存した検索条件（テーマ）
+        if "kind" not in {r[1] for r in conn.execute("PRAGMA table_info(themes)")}:
+            conn.execute("ALTER TABLE themes ADD COLUMN kind TEXT DEFAULT 'theme'")   # theme / watch（企業・製品ウォッチ）
         conn.execute("""CREATE TABLE IF NOT EXISTS pages(
             article_id TEXT PRIMARY KEY, link TEXT, text TEXT, via TEXT, error TEXT,
             fetched_at REAL, chars INTEGER)""")   # 記事本文のキャッシュ（一括取得の結果）
@@ -764,6 +823,7 @@ def _archive_init_locked() -> None:
                 os.replace(ARCHIVE_FILE, ARCHIVE_FILE.with_name(ARCHIVE_FILE.name + ".imported"))
             except OSError:
                 pass
+        _fts_setup(conn)   # 全文索引（件数が合わなければ再構築）
         conn.commit()
     finally:
         conn.close()
@@ -772,7 +832,8 @@ def _archive_init_locked() -> None:
 
 def archive_add(articles: list[dict]) -> int:
     """取得した記事を過去ログ(SQLite)へ自動保存する。id で重複排除（INSERT OR IGNORE）。
-    上限 ARCHIVE_MAX 超過時は古い順に削除。デモ記事は保存しない。戻り値は新規追加件数。"""
+    新規行は全文索引にも入れる。上限 ARCHIVE_MAX 超過時は古い順に削除（索引・本文キャッシュも掃除）。
+    デモ記事は保存しない。戻り値は新規追加件数。"""
     now = time.time()
     fresh = [a for a in articles if a.get("id") and a.get("source_id") != "demo"]
     if not fresh:
@@ -781,16 +842,21 @@ def archive_add(articles: list[dict]) -> int:
         _archive_init_locked()
         conn = _db()
         try:
-            cur = conn.executemany("INSERT OR IGNORE INTO articles VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                                   [_archive_row(a, now) for a in fresh])
-            added = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+            max_rowid = conn.execute("SELECT coalesce(MAX(rowid), 0) FROM articles").fetchone()[0]
+            conn.executemany("INSERT OR IGNORE INTO articles VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                             [_archive_row(a, now) for a in fresh])
+            new_rows = conn.execute("SELECT rowid, title, summary, source FROM articles WHERE rowid > ?",
+                                    (max_rowid,)).fetchall()
+            if new_rows:
+                conn.executemany("INSERT INTO articles_fts(rowid, text) VALUES (?,?)", _fts_rows(new_rows))
             cnt = conn.execute("SELECT COUNT(*) FROM articles").fetchone()[0]
             if cnt > ARCHIVE_MAX:
                 conn.execute("DELETE FROM articles WHERE id NOT IN "
                              "(SELECT id FROM articles ORDER BY sort_ts DESC LIMIT ?)", (ARCHIVE_MAX,))
+                conn.execute("DELETE FROM articles_fts WHERE rowid NOT IN (SELECT rowid FROM articles)")
                 conn.execute("DELETE FROM pages WHERE article_id NOT IN (SELECT id FROM articles)")
             conn.commit()
-            return added
+            return len(new_rows)
         finally:
             conn.close()
 
@@ -809,18 +875,125 @@ def archive_stats() -> dict:
                 "SELECT category, COUNT(*) AS n FROM articles GROUP BY category ORDER BY n DESC")]
         finally:
             conn.close()
-    return {"count": n, "oldest": lo, "newest": hi, "sources": srcs, "categories": cats}
+    return {"count": n, "oldest": lo, "newest": hi, "sources": srcs, "categories": cats, "fts": _fts_ok}
+
+
+# ---- 検索語の解釈（AND / OR / 除外 / 同義語辞書）
+
+DEFAULT_SYNONYMS = [["高炉", "ブラストファーネス"], ["電炉", "電気炉"], ["EV", "電気自動車"],
+                    ["脱炭素", "カーボンニュートラル"], ["CCUS", "CCS"]]
+_SYN_SPLIT_RE = re.compile(r"[,、，|｜/／\t]+")
+MAX_QUERY_GROUPS = 10
+
+
+def synonym_groups() -> list[list[str]]:
+    g = load_settings().get("synonyms")
+    return g if isinstance(g, list) else [list(x) for x in DEFAULT_SYNONYMS]
+
+
+def parse_synonyms_text(text: str) -> list[list[str]]:
+    """「高炉, ブラストファーネス」のような 1行1グループ のテキストを同義語グループにする。"""
+    groups: list[list[str]] = []
+    for line in str(text or "").splitlines():
+        words: list[str] = []
+        for w in _SYN_SPLIT_RE.split(line):
+            w = w.strip()[:40]
+            if w and _norm(w) not in [_norm(x) for x in words]:
+                words.append(w)
+        if len(words) >= 2:
+            groups.append(words[:20])
+        if len(groups) >= 200:
+            break
+    return groups
+
+
+def synonyms_text(groups: list[list[str]] | None = None) -> str:
+    return "\n".join(", ".join(g) for g in (groups if groups is not None else synonym_groups()))
+
+
+def save_synonyms(text: str) -> dict:
+    groups = parse_synonyms_text(text)
+    s = load_settings()
+    s["synonyms"] = groups
+    save_settings(s)
+    return {"ok": True, "groups": groups, "text": synonyms_text(groups), "fts": _fts_ok}
+
+
+def _synonym_map(groups: list | None = None) -> dict[str, list[str]]:
+    """正規化した語 → その同義語グループ（原語のリスト）。"""
+    m: dict[str, list[str]] = {}
+    for g in (groups if groups is not None else synonym_groups()):
+        if isinstance(g, list) and len(g) >= 2:
+            for w in g:
+                m.setdefault(_norm(w), [str(x) for x in g])
+    return m
+
+
+def parse_query(q: str, syn: dict | None = None) -> dict:
+    """検索語を解釈する。スペース区切り=AND、語の中の | =OR、先頭の - =除外。同義語辞書で OR を自動展開。
+    戻り値 {"groups": [[正規化語, ...], ...], "excludes": [正規化語, ...],
+            "expanded": [{"term": 語, "to": [展開された原語, ...]}, ...]}"""
+    syn = _synonym_map() if syn is None else syn
+    groups: list[list[str]] = []
+    excludes: list[str] = []
+    expanded: list[dict] = []
+    for tok in _norm(q).split(" "):
+        tok = tok.strip()
+        if not tok or not tok.strip('-|"'):   # 記号だけの語（"-" "|" など）は無視
+            continue
+        if tok.startswith("-"):
+            w = tok[1:].strip('"')
+            if w:
+                excludes.append(w)
+            continue
+        alts = [a.strip().strip('"') for a in tok.split("|")]
+        out: list[str] = []
+        for a in alts:
+            if not a:
+                continue
+            out.append(a)
+            g = syn.get(a)
+            if g:
+                adds = [w for w in g if _norm(w) != a]
+                if adds:
+                    expanded.append({"term": a, "to": adds})
+                    out.extend(_norm(w) for w in adds)
+        out = list(dict.fromkeys(out))[:20]
+        if out:
+            groups.append(out)
+    return {"groups": groups[:MAX_QUERY_GROUPS], "excludes": excludes[:MAX_QUERY_GROUPS], "expanded": expanded}
+
+
+def _fts_phrase(w: str) -> str:
+    return '"' + w.replace('"', '""') + '"'
+
+
+_SEARCH_FROM = "FROM articles a JOIN articles_fts ON articles_fts.rowid = a.rowid"
 
 
 def _search_where(q: str, sources: list[str] | None, since_ts: float | None, until_ts: float | None,
-                  category: str | None, archived_since: float | None = None) -> tuple[str, list]:
-    """archive_search / テーマの新着件数 で共用する WHERE 句（articles の別名は a）。"""
-    terms = [t.lower() for t in (q or "").split() if t.strip()][:20]
-    where, params = [], []
-    for t in terms:
-        where.append("instr(lower(coalesce(a.title,'')||' '||coalesce(a.summary,'')||' '"
-                     "||coalesce(a.source,'')), ?) > 0")
-        params.append(t)
+                  category: str | None, archived_since: float | None = None,
+                  parsed: dict | None = None) -> tuple[str, list, bool]:
+    """archive_search / ヒストグラム / テーマの件数 で共用する WHERE 句（_SEARCH_FROM を前提）。
+    3文字以上の語だけから成る OR グループは FTS5 の MATCH（trigram）、2文字以下を含むグループと
+    除外語は正規化テキストへの instr() で評価する。戻り値 (where_sql, params, MATCH を使ったか)。"""
+    p = parsed if parsed is not None else parse_query(q)
+    where: list[str] = []
+    params: list = []
+    match_parts: list[str] = []
+    for g in p["groups"]:
+        if _fts_ok and all(len(w) >= 3 for w in g):
+            match_parts.append("(" + " OR ".join(_fts_phrase(w) for w in g) + ")")
+        else:
+            where.append("(" + " OR ".join("instr(articles_fts.text, ?) > 0" for _ in g) + ")")
+            params.extend(g)
+    uses_match = bool(match_parts)
+    if uses_match:
+        where.insert(0, "articles_fts MATCH ?")
+        params.insert(0, " AND ".join(match_parts))
+    for w in p["excludes"]:
+        where.append("instr(articles_fts.text, ?) = 0")
+        params.append(w)
     srcs = [s for s in (sources or []) if isinstance(s, str) and s][:100]
     if srcs:
         where.append("a.source_id IN (%s)" % ",".join("?" * len(srcs)))
@@ -837,28 +1010,30 @@ def _search_where(q: str, sources: list[str] | None, since_ts: float | None, unt
     if archived_since is not None:   # 新着差分: 前回確認以降に過去ログへ入った記事
         where.append("a.archived_at > ?")
         params.append(float(archived_since))
-    return (" WHERE " + " AND ".join(where)) if where else "", params
+    return (" WHERE " + " AND ".join(where)) if where else "", params, uses_match
 
 
 def archive_search(q: str, limit: int = 60, sources: list[str] | None = None,
                    since_ts: float | None = None, until_ts: float | None = None,
-                   category: str | None = None, archived_since: float | None = None) -> list[dict]:
-    """過去ログを条件検索する（新着順）。条件はすべて AND:
-    - q: 空白区切りの語をすべて含む（タイトル/要約/情報源、ASCII は大小無視）
+                   category: str | None = None, archived_since: float | None = None,
+                   order: str = "new", parsed: dict | None = None) -> list[dict]:
+    """過去ログを条件検索する。条件はすべて AND:
+    - q: 検索語（parse_query の構文。全角/半角・大小文字は区別しない。同義語辞書で展開）
     - sources: source_id のリスト（いずれかに一致）
     - since_ts / until_ts: sort_ts（公開日時、無ければ保存日時）の範囲 [since, until)
     - category: カテゴリ名の完全一致
     - archived_since: 保存日時（archived_at）がこれより後の記事だけ（テーマの「新着のみ」）
-    q が空かつ他条件無しなら新着順の一覧（ブラウズ用途）。
-    各行に has_text（本文キャッシュあり=1）を付けて返す。"""
-    where, params = _search_where(q, sources, since_ts, until_ts, category, archived_since)
+    order="rel" かつ FTS の MATCH を使えた場合は関連順（bm25）、それ以外は新着順。
+    各行に has_text（本文キャッシュあり）を付けて返す。"""
+    where, params, uses_match = _search_where(q, sources, since_ts, until_ts, category, archived_since, parsed)
     try:
         n = max(1, min(int(limit), 300))
     except (TypeError, ValueError):
         n = 60
+    order_sql = ("articles_fts.rank, a.sort_ts DESC" if (order == "rel" and uses_match) else "a.sort_ts DESC")
     sql = ("SELECT a.*, (p.article_id IS NOT NULL AND coalesce(p.chars,0) > 0) AS has_text "
-           "FROM articles a LEFT JOIN pages p ON p.article_id = a.id"
-           + where + " ORDER BY a.sort_ts DESC LIMIT ?")
+           + _SEARCH_FROM + " LEFT JOIN pages p ON p.article_id = a.id"
+           + where + " ORDER BY " + order_sql + " LIMIT ?")
     params.append(n)
     with _archive_lock:
         _archive_init_locked()
@@ -887,12 +1062,121 @@ def _filters_window(f: dict, now: float | None = None) -> tuple[float | None, fl
     return since, until
 
 
+# ---- 類似記事の束ね（別媒体の同じニュース等）
+
+_BRACKET_RE = re.compile(r"[【\[（(［〔].*?[】\]）)］〕]")
+_TITLE_SPLIT_RE = re.compile(r"\s[-|—–]\s|｜|\s\|\s")
+_TITLE_STRIP_RE = re.compile(r"[\W_]+")
+
+
+def _title_key(t: str) -> str:
+    t = _BRACKET_RE.sub(" ", _norm(t))
+    t = _TITLE_SPLIT_RE.split(t)[0]   # 「… - 媒体名」「…｜媒体名」の後置きを落とす
+    return _TITLE_STRIP_RE.sub("", t)
+
+
+def _bigrams(s: str) -> set:
+    return {s[i:i + 2] for i in range(len(s) - 1)} if len(s) > 1 else ({s} if s else set())
+
+
+def group_duplicates(rows: list[dict], window: float = 3 * 86400, threshold: float = 0.6) -> int:
+    """タイトルが似ていて日付が近い記事を束ねる。先に出る方（新しい方）を代表にし、代表には dups=[id...]、
+    他には dup_of=代表id を付ける。判定: 正規化タイトルが一致／片方を含む（10字以上）／文字バイグラムの
+    Jaccard が threshold 以上（8字以上）。戻り値は 2件以上の束の数。"""
+    heads: list[tuple[str, set, float, dict]] = []
+    for r in rows:
+        k = _title_key(r.get("title") or "")
+        bg = _bigrams(k)
+        ts = float(r.get("sort_ts") or 0)
+        hit = None
+        for hk, hbg, hts, hr in heads:
+            if abs(hts - ts) > window or not k or not hk:
+                continue
+            if k == hk or (len(k) >= 10 and len(hk) >= 10 and (k in hk or hk in k)):
+                hit = hr
+                break
+            if min(len(k), len(hk)) >= 8:
+                inter = len(bg & hbg)
+                if inter and inter / len(bg | hbg) >= threshold:
+                    hit = hr
+                    break
+        if hit is not None:
+            hit.setdefault("dups", []).append(r["id"])
+            r["dup_of"] = hit["id"]
+        else:
+            heads.append((k, bg, ts, r))
+    return sum(1 for _, _, _, r in heads if r.get("dups"))
+
+
+# ---- 日付×情報源のヒストグラム
+
+def archive_histogram(q: str, sources: list[str] | None, category: str | None,
+                      parsed: dict | None = None) -> dict:
+    """検索条件（期間以外）に合う記事の、日付×情報源の件数分布。期間の選択に使う。
+    期間の長さに応じて 日／週／月 単位にまとめる（区間は最大 ~120）。日付はローカル時刻。
+    情報源は件数上位6つ＋その他（other）。"""
+    where, params, _ = _search_where(q, sources, None, None, category, None, parsed)
+    with _archive_lock:
+        _archive_init_locked()
+        conn = _db()
+        try:
+            rows = conn.execute("SELECT a.sort_ts, a.source_id, a.source " + _SEARCH_FROM + where,
+                                params).fetchall()
+        finally:
+            conn.close()
+    if not rows:
+        return {"unit": "day", "total": 0, "sources": [], "buckets": []}
+    tss = [float(r[0] or 0) for r in rows]
+    lo, hi = min(tss), max(max(tss), time.time())
+    span = (hi - lo) / 86400
+    unit = "day" if span <= 120 else "week" if span <= 840 else "month"
+
+    def bstart(t: float) -> date:
+        d = datetime.fromtimestamp(t).date()
+        if unit == "week":
+            return d - timedelta(days=d.weekday())
+        if unit == "month":
+            return d.replace(day=1)
+        return d
+
+    def bnext(d: date) -> date:
+        if unit == "week":
+            return d + timedelta(days=7)
+        if unit == "month":
+            return (d.replace(day=28) + timedelta(days=4)).replace(day=1)
+        return d + timedelta(days=1)
+
+    src_total: dict[str, int] = {}
+    names: dict[str, str] = {}
+    for _, sid, sname in rows:
+        sid = sid or ""
+        src_total[sid] = src_total.get(sid, 0) + 1
+        names.setdefault(sid, sname or sid)
+    top = [s for s, _ in sorted(src_total.items(), key=lambda x: (-x[1], x[0]))[:6]]
+    buckets: dict[date, dict[str, int]] = {}
+    for t, sid, _ in zip(tss, (r[1] or "" for r in rows), rows):
+        c = buckets.setdefault(bstart(t), {})
+        k = sid if sid in top else "other"
+        c[k] = c.get(k, 0) + 1
+    out: list[dict] = []
+    d, last = min(buckets), max(buckets)
+    while d <= last and len(out) < 400:
+        c = buckets.get(d, {})
+        out.append({"from": d.isoformat(), "to": (bnext(d) - timedelta(days=1)).isoformat(),
+                    "total": sum(c.values()), "src": c})
+        d = bnext(d)
+    return {"unit": unit, "total": len(rows),
+            "sources": [{"id": s, "name": names.get(s, s), "count": src_total[s]} for s in top],
+            "other": sum(v for s, v in src_total.items() if s not in top), "buckets": out}
+
+
 def _parse_day(s: str | None) -> float | None:
-    """YYYY-MM-DD を UTC 0時の epoch に。不正なら None。"""
-    if not s:
+    """YYYY-MM-DD を その日のローカル時刻 0時 の epoch に（画面の日付・ヒストグラムの区間と揃える）。
+    不正なら None。"""
+    if not s or not isinstance(s, str):
         return None
     try:
-        return datetime.strptime(s.strip()[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp()
+        return datetime.strptime(s.strip()[:10], "%Y-%m-%d").timestamp()
     except ValueError:
         return None
 
@@ -2043,30 +2327,33 @@ def _source_names(ids: list[str]) -> list[str]:
             conn.close()
 
 
-def _theme_row(conn, r) -> dict:
+def _theme_row(conn, r, syn: dict | None = None) -> dict:
     f = json.loads(r["filters_json"] or "{}")
     t = {"id": r["id"], "name": r["name"], "filters": f,
          "created_at": r["created_at"], "updated_at": r["updated_at"],
          "last_seen_at": r["last_seen_at"], "last_brief_at": r["last_brief_at"],
-         "last_brief_id": r["last_brief_id"]}
+         "last_brief_id": r["last_brief_id"],
+         "kind": (r["kind"] if "kind" in r.keys() else None) or "theme"}
     t["conds"] = _filters_conds({**f, "sources": _source_names_conn(conn, f.get("sources") or [])})
     since, until = _filters_window(f)
-    where, params = _search_where(f.get("q", ""), f.get("sources"), since, until,
-                                  f.get("category") or None, None)
-    t["total"] = conn.execute("SELECT COUNT(*) FROM articles a" + where, params).fetchone()[0]
-    where, params = _search_where(f.get("q", ""), f.get("sources"), since, until,
-                                  f.get("category") or None, t["last_seen_at"] or 0.0)
-    t["new"] = conn.execute("SELECT COUNT(*) FROM articles a" + where, params).fetchone()[0]
+    parsed = parse_query(f.get("q", ""), syn)
+    where, params, _ = _search_where(f.get("q", ""), f.get("sources"), since, until,
+                                     f.get("category") or None, None, parsed)
+    t["total"] = conn.execute("SELECT COUNT(*) " + _SEARCH_FROM + where, params).fetchone()[0]
+    where, params, _ = _search_where(f.get("q", ""), f.get("sources"), since, until,
+                                     f.get("category") or None, t["last_seen_at"] or 0.0, parsed)
+    t["new"] = conn.execute("SELECT COUNT(*) " + _SEARCH_FROM + where, params).fetchone()[0]
     return t
 
 
 def list_themes() -> list[dict]:
     """テーマ一覧。new = 前回「既読」以降に過去ログへ入った該当記事の件数（archived_at 基準）。"""
+    syn = _synonym_map()
     with _archive_lock:
         _archive_init_locked()
         conn = _db()
         try:
-            return [_theme_row(conn, r) for r in conn.execute("SELECT * FROM themes ORDER BY updated_at DESC")]
+            return [_theme_row(conn, r, syn) for r in conn.execute("SELECT * FROM themes ORDER BY updated_at DESC")]
         finally:
             conn.close()
 
@@ -2093,6 +2380,7 @@ def save_theme(body: dict) -> dict:
     if not (filters["q"] or filters["sources"] or filters["category"]):
         return {"ok": False, "error": "キーワード・情報源・カテゴリのいずれかを指定してください"}
     tid = body.get("id") if isinstance(body.get("id"), str) and _ID_RE.fullmatch(body["id"]) else None
+    kind = "watch" if body.get("kind") == "watch" else ("theme" if body.get("kind") == "theme" else None)
     now = time.time()
     with _archive_lock:
         _archive_init_locked()
@@ -2101,12 +2389,16 @@ def save_theme(body: dict) -> dict:
             if tid and conn.execute("SELECT 1 FROM themes WHERE id = ?", (tid,)).fetchone():
                 conn.execute("UPDATE themes SET name = ?, filters_json = ?, updated_at = ? WHERE id = ?",
                              (name, json.dumps(filters, ensure_ascii=False), now, tid))
+                if kind:
+                    conn.execute("UPDATE themes SET kind = ? WHERE id = ?", (kind, tid))
             else:
                 if conn.execute("SELECT COUNT(*) FROM themes").fetchone()[0] >= THEME_MAX:
                     return {"ok": False, "error": f"テーマは最大 {THEME_MAX} 件までです"}
                 tid = secrets.token_hex(8)
-                conn.execute("INSERT INTO themes VALUES (?,?,?,?,?,?,?,?)",
-                             (tid, name, json.dumps(filters, ensure_ascii=False), now, now, now, None, None))
+                conn.execute("INSERT INTO themes(id, name, filters_json, created_at, updated_at, last_seen_at, "
+                             "last_brief_at, last_brief_id, kind) VALUES (?,?,?,?,?,?,?,?,?)",
+                             (tid, name, json.dumps(filters, ensure_ascii=False), now, now, now, None, None,
+                              kind or "theme"))
             conn.commit()
             t = _theme_row(conn, conn.execute("SELECT * FROM themes WHERE id = ?", (tid,)).fetchone())
         finally:
@@ -2497,14 +2789,30 @@ class Handler(BaseHTTPRequestHandler):
                 archived = float(g("archived")) if g("archived") else None
             except ValueError:
                 archived = None
-            arts = archive_search(g("q"), g("limit", "60"), sources, since, until, category, archived)
+            parsed = parse_query(g("q"))
+            order = "rel" if g("order") == "rel" else "new"
+            arts = archive_search(g("q"), g("limit", "60"), sources, since, until, category, archived, order, parsed)
+            groups = group_duplicates(arts) if g("dedup", "1") not in ("0", "false") else 0
             self._json({"ok": True, "count": len(arts), "articles": arts, "stats": archive_stats(),
+                        "fts": _fts_ok, "order": order, "expanded": parsed["expanded"], "dup_groups": groups,
                         "filters": {"q": g("q"), "sources": sources, "category": category,
                                     "from": g("from"), "to": g("to"), "days": days, "archived": archived}})
             return
 
+        if u.path == "/api/archive/histogram":   # 日付×情報源の件数分布（期間以外の条件で）
+            q = parse_qs(u.query)
+            g = lambda k, d="": (q.get(k) or [d])[0]
+            sources = [s for s in g("sources").split(",") if s.strip()]
+            category = g("category") if g("category") in CATEGORIES else None
+            self._json({"ok": True, **archive_histogram(g("q"), sources, category)})
+            return
+
         if u.path == "/api/archive/stats":
             self._json({"ok": True, **archive_stats()})
+            return
+
+        if u.path == "/api/research/synonyms":   # 同義語辞書（1行1グループのテキスト）
+            self._json({"ok": True, "groups": synonym_groups(), "text": synonyms_text(), "fts": _fts_ok})
             return
 
         if u.path == "/api/research/reports":   # 保存済みレポート一覧
@@ -2672,6 +2980,10 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/research/themes/brief":  # テーマのブリーフ生成（直近N日 or 前回以降）
             r = start_theme_brief(self._read_body())
             self._json(r, 200 if r.get("ok") else 400)
+            return
+
+        if u.path == "/api/research/synonyms":  # 同義語辞書の保存
+            self._json(save_synonyms(str(self._read_body().get("text") or "")))
             return
 
         if u.path == "/api/ai/chat":  # 生成AIへの質問
