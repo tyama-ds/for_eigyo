@@ -56,6 +56,10 @@ DEFAULT_CONFIG: dict = {
     "ingest_chunk_chars": 3000,
     "ingest_max_chunks": 24,
     "ingest": {},                      # 取り込み画面で最後に使ったオプション
+    # ---- GraphRAG（任意）。rag_mode は質問の既定の方式: standard / auto / local / global
+    "rag_mode": "standard",
+    "graphrag_max_communities": 12,    # 全体質問で読むコミュニティ要約の数（多いほど遅い）
+    "graphrag_max_chunks": 40,         # 1 文書あたり抽出する段落の上限
 }
 
 _SECRET_KEYS = ("api_key", "embed_api_key")
@@ -94,6 +98,8 @@ def save_config(update: dict, path: Path | None = None) -> dict:
     for key in _STR_KEYS:
         if isinstance(update.get(key), str):
             cfg[key] = update[key].strip()
+    if update.get("rag_mode") in ("standard", "auto", "local", "global"):
+        cfg["rag_mode"] = update["rag_mode"]
     if update.get("provider") in ("openai", "azure"):
         cfg["provider"] = update["provider"]
     # API キーは空文字なら「変更なし」（UI に平文を返さないため）。clear_* で消去
@@ -113,7 +119,9 @@ def save_config(update: dict, path: Path | None = None) -> dict:
                               ("max_tokens", 64, 65536, int),
                               ("request_timeout", 5.0, 3600.0, float),
                               ("ingest_chunk_chars", 500, 50000, int),
-                              ("ingest_max_chunks", 1, 200, int)):
+                              ("ingest_max_chunks", 1, 200, int),
+                              ("graphrag_max_communities", 1, 100, int),
+                              ("graphrag_max_chunks", 1, 500, int)):
         if key in update:
             try:
                 cfg[key] = cast(max(lo, min(hi, float(update[key]))))

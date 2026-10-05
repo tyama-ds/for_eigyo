@@ -29,6 +29,7 @@ from mycelcore import __version__  # noqa: E402
 from mycelcore.app import MycelApp  # noqa: E402
 from mycelcore.config import chat_configured, embed_configured, public_config  # noqa: E402
 from mycelcore.llm import LLMClient, LLMError  # noqa: E402
+from mycelcore.graphrag import MODES  # noqa: E402
 from mycelcore.jobs import JobBusy  # noqa: E402
 from mycelcore.library import LINK_TYPES, STATUSES, TYPES, citation, to_bibtex  # noqa: E402
 from mycelcore.plugins import PluginVeto  # noqa: E402
@@ -61,7 +62,7 @@ def _str(params: dict, key: str, default: str = "") -> str:
 def api_state(app: MycelApp, _p: dict) -> dict:
     cfg = app.config()
     return {"version": __version__, "vault": str(app.vault.root), "user": cfg["user_name"],
-            "llm": {"chat": chat_configured(cfg), "embed": embed_configured(cfg)},
+            "llm": {"chat": chat_configured(cfg), "embed": embed_configured(cfg), "rag_mode": cfg.get("rag_mode", "standard")},
             "daily_folder": cfg["daily_folder"], "template_folder": cfg["template_folder"],
             "fts": app.index.has_fts, "index": app.index_status()}
 
@@ -153,7 +154,10 @@ GET_ROUTES = {
     "/api/templates": lambda app, p: {"templates": app.templates()},
     "/api/config": lambda app, p: public_config(app.config()),
     "/api/plugins": lambda app, p: {"plugins": app.plugins.available()},
-    "/api/ai/status": lambda app, p: app.ai.status(),
+    "/api/ai/status": lambda app, p: {**app.ai.status(), "graphrag": app.graphrag.status(),
+                                      "rag_mode": app.config().get("rag_mode", "standard"), "modes": MODES},
+    "/api/graphrag/communities": lambda app, p: {"communities": app.graphrag.communities()},
+    "/api/graphrag/entity": lambda app, p: app.graphrag.entity(_str(p, "key")),
     "/api/ai/suggest": lambda app, p: {"suggestions": app.ai.suggest_links(_str(p, "path"))},
     "/api/index/status": lambda app, p: app.index_status(),
     "/api/scope": lambda app, p: app.scope_info(),
@@ -229,8 +233,9 @@ POST_ROUTES = {
     "/api/item/delete": lambda app, b: app.delete_item(_str(b, "path")),
     "/api/config": lambda app, b: public_config(app.update_config(b)),
     "/api/config/test": api_config_test,
-    "/api/ai/ask": lambda app, b: app.ai.ask(_str(b, "question"), _str(b, "path") or None,
-                                            _list(b, "history"), _list(b, "prefixes")),
+    "/api/ai/ask": lambda app, b: app.ask(_str(b, "question"), _str(b, "path") or None,
+                                         _list(b, "history"), _list(b, "prefixes"), _str(b, "mode")),
+    "/api/graphrag/build": lambda app, b: app.graphrag_build(_list(b, "prefixes")),
     "/api/ai/summarize": lambda app, b: app.ai.summarize(_str(b, "path")),
     "/api/ai/transform": lambda app, b: {"text": app.ai.transform(_str(b, "text"), _str(b, "preset"),
                                                                   _str(b, "instruction"))},

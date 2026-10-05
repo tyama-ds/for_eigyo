@@ -39,6 +39,21 @@ def chat_response(messages: list[dict]) -> str:
                 ' "projects": [], "others": ["保守"]}, "tags": ["見積", "A社"]}\n```')
     if task in ("ingest_links", "relate"):
         return '[{"n": 1, "reason": "同じ顧客の案件"}]'
+    if task == "kg":
+        names = [n for n in ("A社", "田中部長", "田中", "鈴木", "生産管理システム", "B社", "物流DX", "山本") if n in prompt]
+        ents = [{"name": n, "type": "org" if n.endswith("社") else "person" if n in ("田中部長", "田中", "鈴木", "山本") else "product",
+                 "descr": f"{n} の説明"} for n in names]
+        rels = [{"source": names[i], "target": names[i + 1], "descr": f"{names[i]} と {names[i + 1]} の関係", "weight": 5}
+                for i in range(len(names) - 1)]
+        return json.dumps({"entities": ents, "relations": rels}, ensure_ascii=False)
+    if task == "kg_community":
+        return '{"title": "A社 更改案件", "summary": "A社の生産管理システム更改。田中部長が決裁者で稼働率を重視する。"}'
+    if task == "kg_local":
+        return "田中部長は稼働率を重視しています（推定）。[[A社 生産管理システム更改]]"
+    if task == "kg_map":
+        return '{"answer": "A社案件では稼働率が重視されている", "score": 80}' if "A社" in prompt else '{"answer": "", "score": 0}'
+    if task == "kg_reduce":
+        return "全体として、稼働率の重視が共通しています [1]。"
     if task == "libmeta":
         return ('{"title": "在庫最適化のための需要予測手法", "authors": ["山田 太郎", "Smith, John"], "year": "2024",'
                 ' "venue": "日本経営工学会論文誌", "volume": "75", "issue": "2", "pages": "100-110", "doi": "10.1234/jima.2024.001",'

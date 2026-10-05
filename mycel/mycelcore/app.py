@@ -11,6 +11,7 @@ from . import links as L
 from .ai import AIService
 from .config import chat_configured, embed_configured, load_config, save_config, vault_path
 from .extract import EXT_GROUP, KINDS, TYPE_GROUPS, is_supported, pdf_available
+from .graphrag import GraphRAG
 from .index import Cancelled, Index, open_index
 from .llm import LLMError
 from .ingest import Ingestor
@@ -75,6 +76,8 @@ class MycelApp:
                 self.index.close()
             if getattr(self, "entities", None):
                 self.entities.close()
+            if getattr(self, "graphrag", None):
+                self.graphrag.close()
             self.vault = Vault(root)
             self.scope = Scope(self.vault.root, self.vault.internal)
             self.index = open_index(self.vault, self.scope)
@@ -82,6 +85,7 @@ class MycelApp:
             self.entities = EntityStore(self.vault.internal)
             self.people = People(self, self.entities)
             self.library = Library(self)
+            self.graphrag = GraphRAG(self)
             self.index.relations = self.relations
             self.ai = AIService(self.index, self.config)
             self.plugins.load(cfg["plugins"], PluginContext(self))
@@ -99,7 +103,7 @@ class MycelApp:
             self.jobs.cancel()
             self.jobs.wait(30)
         self.plugins.unload()
-        for name in ("index", "entities"):
+        for name in ("index", "entities", "graphrag"):
             obj = getattr(self, name, None)
             if obj is not None:
                 try:
@@ -716,6 +720,21 @@ class MycelApp:
     def graph(self, center: str | None, depth: int = 1, docs: bool = False, people: bool = False) -> dict:
         extra = self.people.graph_extra(center) if people else None
         return self.index.graph(center, depth, docs, extra)
+
+    def ask(self, question: str, path: str | None = None, history=None, prefixes=None, mode: str = "") -> dict:
+        """質問。mode が standard（既定）なら段落検索の RAG、それ以外なら GraphRAG。"""
+        mode = mode or self.config().get("rag_mode", "standard")
+        if mode == "standard" or mode not in ("auto", "local", "global"):
+            res = self.ai.ask(question, path, history, prefixes)
+            res["mode"] = "standard"
+            return res
+        return self.graphrag.ask(question, mode, history, prefixes)
+
+    def graphrag_build(self, prefixes=None) -> dict:
+        prefixes = self._prefixes(prefixes)
+        gr = self.graphrag
+        return self.jobs.start("graphrag", f"GraphRAG の索引（{self._label(prefixes)}）", prefixes,
+                               lambda job: gr.build(prefixes, job))
 
     def library_embed(self) -> dict:
         """文献のファイルだけを読み直し、埋め込みを作る（「更新」と同じ処理を文献に限って行う）。"""
