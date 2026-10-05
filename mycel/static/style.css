@@ -230,6 +230,12 @@ canvas.graph.big{height:100%;border:0;border-radius:0}
 .docbar a.btn{text-decoration:none;color:var(--ink)}
 .body > .notice{max-width:860px;margin:10px auto 0}
 .notice .btn{margin-left:8px}
+.kg{margin-top:6px;border-top:1px dashed var(--line);padding-top:5px;font-size:12px;color:var(--muted)}
+.kg summary{cursor:pointer;list-style:none}.kg summary::-webkit-details-marker{display:none}
+.kg-h{display:inline-block;background:var(--accent-bg,rgba(90,140,90,.14));color:var(--ink);border-radius:4px;padding:0 6px;font-size:11px;margin-right:6px}
+.kg-rel{margin:4px 0 0;padding-left:14px;line-height:1.6}.kg-rel span{color:var(--muted);margin-left:6px;font-size:11.5px}
+.kg .chip{color:var(--ink)}.kg .chip.kg-person{border-color:#c98}.kg .chip.kg-org{border-color:#7a9}.kg .chip.kg-product{border-color:#89c}
+.kgidx{margin-top:8px;padding-top:6px;border-top:1px dashed var(--line)}.kgidx.dim{opacity:.75}
 .notice.err{color:var(--danger);border-color:var(--danger)}
 .preview.docview{padding-top:18px}
 .doctext{white-space:pre-wrap;word-break:break-word;font-family:var(--mono);font-size:12.5px;line-height:1.6;background:transparent;border:0;padding:0}

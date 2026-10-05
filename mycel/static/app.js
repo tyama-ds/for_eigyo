@@ -52,7 +52,7 @@
     folderView: null, treeKind: store.get("treeKind", "all"),
     libraryView: false, lib: { q: "", tag: "", year: "", status: "", sort: store.get("libSort", "added"), semantic: store.get("libSem", true), sel: new Set(), cur: null, data: null, results: null, detail: null, graphGroup: store.get("libGroup", "tag"), graphExpanded: new Set(), chat: [] },
     entityView: null, entityData: null, profile: null, peopleKind: store.get("peopleKind", "person"), gPeople: store.get("gPeople", false),
-    sources: [], index: null, jobSeen: null, aiScope: store.get("aiScope", "all"), gDocs: store.get("gDocs", false),
+    sources: [], index: null, jobSeen: null, aiScope: store.get("aiScope", "all"), aiRag: null, gDocs: store.get("gDocs", false),
   };
 
   // ------------------------------------------------------------ ツリー
@@ -521,7 +521,7 @@
   }
 
   // ------------------------------------------------------------ 読み込み（インデックス）の状態と更新
-  const JOB_DONE = { update: "読み込み", scan: "確認", ingest: "AI 取り込み", people: "人物・組織の AI 抽出", library: "文献の AI 処理" };
+  const JOB_DONE = { update: "読み込み", scan: "確認", ingest: "AI 取り込み", people: "人物・組織の AI 抽出", library: "文献の AI 処理", graphrag: "GraphRAG の索引" };
   async function applyIndexStatus(st) {
     S.index = st;
     renderIndexChip();
@@ -554,6 +554,8 @@
     if ((job.kind === "update" || job.kind === "people") && S.panel === "people") loadPeople();
     if ((job.kind === "library" || job.kind === "update") && S.libraryView) loadLibrary();
     if (job.kind === "library" && job.state === "done") toast(`${job.label}: ${r.done || 0} 件完了${r.errors ? `（失敗 ${r.errors} 件）` : ""}`, !!r.errors);
+    if (job.kind === "graphrag" && job.state === "done") { toast(`${job.label}: 実体 ${r.nodes || 0} ・ 関係 ${r.edges || 0} ・ コミュニティ ${r.communities || 0}${r.errors ? `（抽出失敗 ${r.errors} 件）` : ""}`, !!r.errors); }
+    if (job.kind === "graphrag") renderAIStatusOnly();
     if (job.kind === "people" && job.state === "done") { toast(`人物・組織の AI 抽出: ${r.extracted || 0} 件${r.errors ? `（失敗 ${r.errors} 件）` : ""}`); refreshEntity(); }
   }
 
@@ -1007,11 +1009,13 @@
     const scopes = [["all", "すべて（読み込み済みの全体）"], ["vault", "Vault"], ...S.sources.filter((s) => s.prefix).map((s) => ["src:" + s.prefix, "外部: " + s.label])];
     if (S.cur.folder) scopes.push(["folder", `このフォルダ（${S.cur.folder.split("/").pop()}）`]);
     if (!scopes.some(([k]) => k === S.aiScope)) S.aiScope = "all";
+    const ragMode = S.aiRag || st.rag_mode || "standard";
     p.innerHTML = `<div class="rh"><span>ノート・資料に質問</span><span id="aiMode"></span></div>
       ${st.chat ? "" : `<div class="notice">LLM が未設定です。関連ノートの検索だけ動きます。<br><button class="btn sm" style="margin-top:6px" id="aiSetup">LLM を設定する</button></div>`}
       <div class="chat" id="chat"></div>
       <div class="askbox"><textarea id="askIn" placeholder="例: A社の決裁者が気にしていることは？（Ctrl+Enter で送信）"></textarea>
         <div class="row"><label title="検索する範囲。読み込み済みの内容から探します（その場で読み直しはしません）">対象 <select id="askScope">${scopes.map(([k, l]) => `<option value="${esc(k)}"${k === S.aiScope ? " selected" : ""}>${esc(l)}</option>`).join("")}</select></label></div>
+        <div class="row"><label title="標準: 関連する段落を検索して答えます（速い）。GraphRAG: 実体・関係のグラフとコミュニティ要約をたどって答えます（索引を別に作る必要があり、時間がかかります）">方式 <select id="askMode">${Object.entries(RAG_MODES).map(([k, l]) => `<option value="${esc(k)}"${k === ragMode ? " selected" : ""}>${esc(l)}</option>`).join("")}</select></label></div>
         <div class="row"><label><input type="checkbox" id="askCur" checked> 開いているファイルを含める</label><span><button class="btn sm" id="chatClear" title="会話を消す">クリア</button> <button class="btn sm pri" id="askGo">質問</button></span></div></div>
       <div class="rh"><span>このノート</span></div>
       <div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn sm" id="aiSum"${st.chat ? "" : " disabled"}>要約とタグ提案</button><button class="btn sm" id="aiSug">リンク候補を探す</button></div>
@@ -1020,7 +1024,18 @@
     const chat = $("#chat");
     const drawChat = () => {
       chat.innerHTML = S.chat.map((m) => m.role === "user" ? `<div class="msg-q">${esc(m.content)}</div>` :
-        `<div class="msg-a">${m.pending ? '<span class="spin"></span> 考えています…' : `<div class="md">${m.content ? MD.render(m.content, { resolve }) : `<span class="hint">${esc(m.message || "")}</span>`}</div>`}${(m.sources || []).length ? `<div class="srcs">${m.sources.map((s) => `<button class="chip" data-open="${esc(s.path)}" data-heading="${esc(s.heading && s.heading !== s.title ? s.heading : "")}" title="${esc(s.path)}">[${s.n}] ${esc(s.title)}${s.heading && s.heading !== s.title ? " › " + esc(s.heading) : ""}</button>`).join("")}</div>` : ""}</div>`).join("");
+        `<div class="msg-a">${m.pending ? '<span class="spin"></span> 考えています…' : `<div class="md">${m.content ? MD.render(m.content, { resolve }) : `<span class="hint">${esc(m.message || "")}</span>`}${m.content && m.message ? `<div class="hint">${esc(m.message)}</div>` : ""}</div>`}${(m.sources || []).length ? `<div class="srcs">${m.sources.map((s) => s.path ? `<button class="chip" data-open="${esc(s.path)}" data-heading="${esc(s.heading && s.heading !== s.title ? s.heading : "")}" title="${esc(s.path)}">[${s.n}] ${esc(s.title)}${s.heading && s.heading !== s.title ? " › " + esc(s.heading) : ""}</button>` : `<span class="chip" title="コミュニティ要約">[${s.n}] ◎ ${esc(s.title)}</span>`).join("")}</div>` : ""}${m.graph ? drawGraphEvidence(m) : ""}</div>`).join("");
+    };
+    const drawGraphEvidence = (m) => {
+      const g = m.graph || {}, label = (RAG_MODES[m.mode] || m.mode || "").replace(/^GraphRAG（|）$/g, "");
+      const ents = (g.entities || []).slice(0, 12), rels = (g.relations || []).slice(0, 10), comms = (g.used || g.communities || []).slice(0, 8);
+      if (!ents.length && !rels.length && !comms.length) return `<div class="kg"><span class="kg-h">GraphRAG ${esc(label)}</span><span class="hint">グラフ上に一致する実体はありませんでした。</span></div>`;
+      return `<details class="kg"><summary><span class="kg-h">GraphRAG ${esc(label)}</span> ${[["実体", ents.length], ["関係", rels.length], ["コミュニティ", comms.length]].filter(([, n]) => n).map(([l, n]) => `${l} ${n}`).join(" ・ ")}</summary>
+        ${ents.length ? `<div class="srcs">${ents.map((e) => `<span class="chip kg-${esc(e.type || "other")}" title="${esc(e.descr || "")}">${esc(e.name)}</span>`).join("")}</div>` : ""}
+        ${rels.length ? `<ul class="kg-rel">${rels.map((r) => `<li>${esc(r.source)} → ${esc(r.target)}<span>${esc(r.descr || "")}</span></li>`).join("")}</ul>` : ""}
+        ${comms.length ? `<ul class="kg-rel">${comms.map((c) => `<li>◎ ${esc(c.title)}${c.score != null ? `<span>関連度 ${Math.round(c.score)}</span>` : ""}</li>`).join("")}</ul>` : ""}
+        ${m.index && m.index.pending ? `<div class="hint">未反映の文書が ${m.index.pending} 件あります（「GraphRAG の索引を更新」で反映）。</div>` : ""}
+      </details>`;
     };
     drawChat();
     const ask = async () => {
@@ -1031,14 +1046,20 @@
       try {
         const sc = $("#askScope").value;
         const prefixes = sc === "all" ? null : sc === "vault" ? [""] : sc === "folder" ? [S.cur.folder] : [sc.slice(4)];
-        const r = await api.post("/api/ai/ask", { question: q, path: $("#askCur").checked ? S.cur.path : "", history, prefixes });
-        Object.assign(a, { pending: false, content: r.answer, sources: r.sources, message: r.message });
+        const mode = $("#askMode").value;
+        const r = await api.post("/api/ai/ask", { question: q, path: $("#askCur").checked ? S.cur.path : "", history, prefixes, mode });
+        Object.assign(a, { pending: false, content: r.answer, sources: r.sources, message: r.message, mode: r.mode, graph: r.graph, index: r.index });
       } catch (e) { Object.assign(a, { pending: false, content: "", message: e.message }); }
       drawChat();
       p.scrollTop = chat.offsetTop + chat.scrollHeight;
     };
     $("#askGo").onclick = ask;
     $("#askScope").onchange = (e) => { S.aiScope = e.target.value; store.set("aiScope", S.aiScope); };
+    $("#askMode").onchange = async (e) => {
+      S.aiRag = e.target.value;
+      try { await api.post("/api/config", { rag_mode: S.aiRag }); if (S.state.llm) S.state.llm.rag_mode = S.aiRag; } catch { /* 無視 */ }
+      drawIdx();
+    };
     $("#askIn").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); ask(); } });
     $("#chatClear").onclick = () => { S.chat = []; drawChat(); };
     if ($("#aiSetup")) $("#aiSetup").onclick = () => openSettings("llm");
@@ -1063,12 +1084,30 @@
     try {
       const s = await api.get("/api/ai/status");
       $("#aiMode").textContent = s.retrieval === "hybrid" ? "意味＋キーワード検索" : "キーワード検索";
-      const idx = $("#aiIdx"); if (!idx) return;
-      const emb = s.embed ? `意味検索: ${s.embedded} / ${s.chunks} 区画。` : "意味検索: 未設定（設定の「LLM」で Embed モデルを登録すると併用します）。";
-      idx.innerHTML = `キーワード索引: ${s.chunks} 区画。${emb}<br>索引は「更新」を押したときだけ作ります（質問のたびに読み直しません）。 <button class="btn sm" id="embBuild">範囲と更新…</button>`;
-      $("#embBuild").onclick = () => openScope();
+      S.aiStatus = s;
+      if (!S.aiRag && s.rag_mode && $("#askMode")) { $("#askMode").value = s.rag_mode; }
+      drawIdx();
     } catch { /* 無視 */ }
+    function drawIdx() {
+      const s = S.aiStatus, idx = $("#aiIdx"); if (!s || !idx) return;
+      const emb = s.embed ? `意味検索: ${s.embedded} / ${s.chunks} 区画。` : "意味検索: 未設定（設定の「LLM」で Embed モデルを登録すると併用します）。";
+      const g = s.graphrag || {}, mode = ($("#askMode") || {}).value || "standard", running = S.index && S.index.job && S.index.job.state === "running" && S.index.job.kind === "graphrag";
+      const gline = !g.ready ? `GraphRAG の索引: 未作成（${g.documents || 0} 文書）。` :
+        `GraphRAG の索引: 実体 ${g.nodes} ・ 関係 ${g.edges} ・ コミュニティ ${g.communities}（要約 ${g.summarized}）・ ${g.extracted} / ${g.documents} 文書${g.pending ? `・ <b>未反映 ${g.pending}</b>` : ""}${g.llm_docs < g.extracted ? `・ 規則抽出 ${g.extracted - g.llm_docs}` : ""}。`;
+      const gnote = mode === "standard" ? "GraphRAG を使うには上の「方式」で選び、索引を作ります（文書数に応じて時間がかかります。既定の標準方式はそのまま使えます）。" :
+        !g.llm ? "LLM が未設定のため、実体の抽出とコミュニティ要約は規則ベースの簡易版になります。" : "";
+      idx.innerHTML = `キーワード索引: ${s.chunks} 区画。${emb}<br>索引は「更新」を押したときだけ作ります（質問のたびに読み直しません）。 <button class="btn sm" id="embBuild">範囲と更新…</button>
+        <div class="kgidx${mode === "standard" ? " dim" : ""}">${gline}${gnote ? `<br>${gnote}` : ""} <button class="btn sm${mode !== "standard" && (!g.ready || g.pending) ? " pri" : ""}" id="kgBuild"${running ? " disabled" : ""}>${running ? "作成中…" : g.ready ? "GraphRAG の索引を更新" : "GraphRAG の索引を作る"}</button></div>`;
+      $("#embBuild").onclick = () => openScope();
+      $("#kgBuild").onclick = async () => {
+        const sc = $("#askScope").value;
+        const prefixes = sc === "all" ? null : sc === "vault" ? [""] : sc === "folder" ? [S.cur.folder] : [sc.slice(4)];
+        try { await api.post("/api/graphrag/build", { prefixes }); toast("GraphRAG の索引を作っています（変わった文書だけ抽出します）"); $("#kgBuild").disabled = true; $("#kgBuild").textContent = "作成中…"; }
+        catch (e) { toast(e.message, true); }
+      };
+    }
   }
+  const RAG_MODES = { standard: "標準（段落の検索）", auto: "GraphRAG（自動）", local: "GraphRAG（局所：実体をたどる）", global: "GraphRAG（全体：コミュニティ要約）" };
   function renderAIStatusOnly() { if (S.rtab === "ai") renderAI($("#rpane")); }
 
   function insertAfterTitle(text, line) {
