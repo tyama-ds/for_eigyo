@@ -87,7 +87,12 @@ App Portal（`launcher/`）にも `Prism ニュースポータル` として登�
 - **報道量ヒストグラム** — 検索条件（期間以外）に合う記事の **日付×情報源** の積み上げ棒を一覧の
   上に表示（期間の長さで日／週／月に自動切替）。棒をクリックするとその期間に絞り込み、凡例を
   クリックすると情報源で絞り込み。選択中の期間の外は薄く表示。
-- **ロードマップ** — リサーチ機能の計画（Phase 3 残り: 企業・製品ウォッチ・比較ビュー、
+- **企業・製品ウォッチ** — リサーチの「ウォッチ」で、検索結果の見出しから **企業・組織・製品らしい
+  固有名詞の候補**を抽出（経験則: 組織名の接尾辞・カタカナ語・英字名。「AIで抽出」ならローカルLLMが
+  別表記つきで抽出し、`日本製鉄|日鉄|Nippon Steel` のような OR 条件になる）。「＋ウォッチ」で
+  保存すると、テーマと同じく**新着差分・週次ブリーフ**が使え、**直近8週の件数スパークライン**で
+  報道量の推移が分かる。
+- **ロードマップ** — リサーチ機能の計画（Phase 3 残り: 比較・時系列ビュー、
   Phase 4: ローカルLLMによる Word / PowerPoint / PDF / Excel 生成）は [ROADMAP.md](ROADMAP.md) を参照。
 - **トレンド** — 見出しから多く出現する語を抽出してチップ表示。クリックで即フィルタ。
 - **保存（ブックマーク）** — 記事を保存してドロワーで一覧。ブラウザの localStorage に
@@ -271,12 +276,15 @@ UI の「情報源」から自由に 追加 / 無効化 / 削除でき、URL も
 | GET | `/api/archive/search?q=&sources=&days=&from=&to=&category=&archived=&order=&dedup=&limit=` | 過去ログの条件検索（`q`: スペース=AND・`\|`=OR・`-`=除外、同義語辞書で展開。情報源(カンマ区切りid)・直近N日 or 日付範囲・カテゴリ・`archived`=この時刻(epoch)より後に保存された記事のみ。`order`=new/rel、`dedup`=1 で類似記事を束ねる（代表に `dups[]`、他に `dup_of`）。応答に `fts`・`expanded`・`dup_groups`、各記事に `has_text`） |
 | GET | `/api/archive/histogram?q=&sources=&category=` | 日付×情報源の件数分布（期間以外の条件。`unit`=day/week/month、`buckets[{from,to,total,src{}}]`、`sources` 上位6） |
 | GET/POST | `/api/research/synonyms` | 同義語辞書の取得／保存（POST JSON: `text` = 1行1グループ・カンマ区切り） |
+| GET | `/api/archive/entities?q=&sources=&category=&days=&from=&to=&archived=` | 検索結果（最大300件）に出てくる企業・組織・製品らしい固有名詞の候補（`name`/`kind`/`count`） |
+| POST | `/api/research/entities/ai` | ローカルLLM で見出しから固有名詞を抽出（JSON: `ids[]`、最大80件）。`aliases` と OR 条件 `q` つき |
+| GET | `/api/research/watch/trends?weeks=` | ウォッチ（`kind=watch` のテーマ）ごとの週別件数（既定8週・月曜始まり） |
 | GET | `/api/archive/stats` | 過去ログの件数・期間・情報源別/カテゴリ別件数 |
 | POST | `/api/research/report` | レポート生成ジョブの開始（JSON: `ids[]`, `question?`, `template?`=overview/timeline/brief, `filters?`, `fulltext?`=本文も取得）→ `job_id` |
 | GET | `/api/research/report/status?id=` | ジョブの進捗（state=queued/fetching/mapping/reducing/done/error, done/total, sub。本文取得ジョブも同じ） |
 | POST | `/api/research/fulltext` | 選択記事の本文一括取得ジョブ（JSON: `ids[]`、最大80件）→ `job_id`。完了時に `summary{ok,partial,failed,cached,selenium}` と記事ごとの可否 |
 | GET | `/api/research/themes` | テーマ一覧（条件 `filters`・条件文 `conds`・該当件数 `total`・新着件数 `new`・前回ブリーフ） |
-| POST | `/api/research/themes` | テーマの保存（JSON: `name`, `filters{q,sources[],category,days,from,to}`, `id?`=上書き） |
+| POST | `/api/research/themes` | テーマの保存（JSON: `name`, `filters{q,sources[],category,days,from,to}`, `id?`=上書き, `kind?`=theme/watch） |
 | POST | `/api/research/themes/seen` | 既読にする（JSON: `id`。新着差分の基準時刻を今に更新） |
 | POST | `/api/research/themes/brief` | ブリーフ生成ジョブ（JSON: `id`, `days?`=7, `since?`="last"=前回ブリーフ以降, `template?`=brief, `fulltext?`）→ `job_id` |
 | DELETE | `/api/research/themes?id=` | テーマ削除 |

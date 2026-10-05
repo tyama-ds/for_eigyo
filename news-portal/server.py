@@ -2485,6 +2485,157 @@ def start_theme_brief(body: dict) -> dict:
     return r
 
 
+# ------------------------------------------------------------------ リサーチ: 企業・製品ウォッチ（固有名詞の候補抽出・週別推移）
+
+ENTITY_MAX = 40                     # 候補の上限
+ENTITY_AI_TITLES = 80               # AI 抽出に渡す見出しの上限
+_ENT_KATAKANA_RE = re.compile(r"[A-Z]{2,6}[ァ-ヴー]{2,}|[ァ-ヴー]{3,}")                  # JFEスチール / トヨタ
+_ENT_ASCII_RE = re.compile(r"(?<![A-Za-z0-9])(?:[A-Z][A-Za-z0-9&.\-]+(?: (?:[A-Z][A-Za-z0-9&.\-]+|of|and|de))*|[A-Z]{2,6}[0-9]{0,3})(?![A-Za-z0-9])")
+_ENT_ORG_RE = re.compile(r"[一-龥々〆ァ-ヴーA-Za-z0-9]{2,12}(?:製鉄所|製鉄|製鋼|製作所|重工業|重工|電機|電工|電子|機械|産業|技研|自動車|工業|商事|物産|"
+                         r"化学|化成|金属|製薬|食品|電力|ガス|銀行|証券|保険|不動産|建設|運輸|航空|鉄道|通信|精機|精工|"
+                         r"エンジニアリング|スチール|マテリアルズ|テクノロジーズ|ソリューションズ|システムズ|ホールディングス|HD|グループ|大学|研究所|機構)")
+_ENT_STOP = set("ニュース サービス システム プロジェクト エネルギー ビジネス デジタル メーカー ユーザー データ ソリューション リリース "
+                "インタビュー ランキング コラム シリーズ レポート プラットフォーム テクノロジー マーケット リスク コスト シェア トップ "
+                "ポイント スタート セミナー イベント オンライン グローバル サプライチェーン カーボンニュートラル リサイクル グリーン "
+                "ベース レベル モデル タイプ ケース プラン ビジョン ニーズ トレンド シフト ブーム ショック ステンレス アルミ アルミニウム バッテリー "
+                "電気自動車 燃料電池自動車 商用車 乗用車 鉄鋼業 製造業 自動車業界 電力会社 ガス会社 大手銀行 地方銀行".split())
+_ENT_STOP_ASCII = set("RSS PR NEW TOP NEWS THE AND FOR WITH FROM JP CO LTD INC CEO CTO CFO Q A IT EV AI IoT DX GX SDGs ESG M&A".split())
+
+
+def extract_entities(rows: list[dict]) -> list[dict]:
+    """見出し（と要約の先頭）から 企業・組織・製品 らしい固有名詞の候補を抽出し、出現記事数で並べる。
+    形態素解析なしの経験則: カタカナ語（3文字以上・英字＋カタカナ）、英字の固有名詞・略語、
+    組織名の接尾辞（製鉄・自動車・HD など）。一般語は除外リストで落とす。"""
+    counts: dict[str, int] = {}
+    surface: dict[str, str] = {}
+    kinds: dict[str, str] = {}
+    for a in rows:
+        text = f"{a.get('title') or ''} {str(a.get('summary') or '')[:120]}"
+        found: dict[str, tuple[str, str]] = {}
+        for m in _ENT_ORG_RE.finditer(text):
+            w = m.group(0)
+            if w not in _ENT_STOP:
+                found[_norm(w)] = (w, "org")
+        for m in _ENT_KATAKANA_RE.finditer(text):
+            w = m.group(0)
+            if w in _ENT_STOP or len(w) > 20:
+                continue
+            mix = re.match(r"([A-Z]{2,6})([ァ-ヴー]+)$", w)   # 英字＋カタカナ（EVシフト・AIブーム）は一般語を除外
+            if mix and (mix.group(1) in _ENT_STOP_ASCII or mix.group(2) in _ENT_STOP):
+                continue
+            k = _norm(w)
+            if any(k in ok and k != ok for ok in found):   # 組織名の一部（トヨタ自動車 の トヨタ）は重複させない
+                continue
+            found.setdefault(k, (w, "katakana"))
+        for m in _ENT_ASCII_RE.finditer(text):
+            w = m.group(0).strip()
+            if w.upper() in _ENT_STOP_ASCII or len(w) < 2 or len(w) > 30:
+                continue
+            k = _norm(w)
+            if any(k in ok and k != ok for ok in found):
+                continue
+            found.setdefault(k, (w, "ascii"))
+        for k, (w, kind) in found.items():
+            counts[k] = counts.get(k, 0) + 1
+            surface.setdefault(k, w)
+            kinds.setdefault(k, kind)
+    out = [{"name": surface[k], "kind": kinds[k], "count": n} for k, n in counts.items()]
+    out.sort(key=lambda e: (-e["count"], e["name"]))
+    return out[:ENTITY_MAX]
+
+
+def _parse_json_array(text: str) -> list:
+    """LLM の出力から JSON 配列を取り出す（コードフェンス・前置き・末尾切れをなるべく救う）。"""
+    t = re.sub(r"```(?:json)?", "", text or "").strip()
+    i, j = t.find("["), t.rfind("]")
+    if i < 0:
+        return []
+    cands = ([t[i:j + 1]] if j > i else []) + [t[i:]]   # 「最後の ] まで」と「残り全部（末尾切れ）」の順に試す
+    for cand in cands:
+        for attempt in (cand, re.sub(r",\s*([\]}])", r"\1", cand)):   # 末尾カンマの除去
+            try:
+                v = json.loads(attempt)
+                return v if isinstance(v, list) else []
+            except ValueError:
+                pass
+        k = cand.rfind("}")   # 末尾が切れている → 最後の完全な要素まで
+        if k > 0:
+            try:
+                v = json.loads(re.sub(r",\s*$", "", cand[:k + 1].rstrip()) + "]")
+                return v if isinstance(v, list) else []
+            except ValueError:
+                pass
+    return []
+
+
+def extract_entities_ai(rows: list[dict]) -> dict:
+    """ローカルLLM で見出しから 企業・組織・製品 を抽出（別表記つき）。出現記事数は見出し・要約に対して数える。"""
+    cfg = ai_config()
+    if cfg["provider"] != "local" and not cfg["api_key"]:
+        return {"ok": False, "need_setup": True, "error": "生成AI APIが未設定です。設定からAPIキーを登録してください。"}
+    rows = [a for a in rows if a.get("title")][:ENTITY_AI_TITLES]
+    if not rows:
+        return {"ok": False, "error": "対象の記事がありません"}
+    system = ("あなたは産業ニュースの固有名詞抽出器です。指示された JSON だけを出力し、説明文を書かないでください。"
+              + ("\n思考過程を書く場合は必ず <think> と </think> で囲んでください。" if cfg["provider"] == "local" else ""))
+    prompt = ("以下のニュース見出しに登場する 企業・組織・製品・ブランド の固有名詞を抽出してください。\n"
+              "出力は JSON 配列のみ。各要素は {\"name\": \"正式名\", \"kind\": \"企業\"|\"組織\"|\"製品\", \"aliases\": [\"略称や別表記\"]}。\n"
+              "一般名詞（鉄鋼・EV・高炉 など）や地名は含めない。最大25件。見出しに無い名前を作らない。\n\n"
+              + "\n".join(f"- {a['title']}" for a in rows))
+    try:
+        txt, _ = _split_reasoning(call_ai(cfg, system, prompt, [], max_tokens=1500))
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {str(e)[:200]}"}
+    items = _parse_json_array(txt)
+    texts = [_norm(f"{a.get('title') or ''} {str(a.get('summary') or '')[:120]}") for a in rows]
+    out: list[dict] = []
+    seen: set[str] = set()
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        name = str(it.get("name") or "").strip()[:40]
+        if not name or _norm(name) in seen:
+            continue
+        seen.add(_norm(name))
+        aliases = [str(x).strip()[:40] for x in (it.get("aliases") or []) if isinstance(x, (str, int)) and str(x).strip()][:6]
+        aliases = [x for x in aliases if _norm(x) != _norm(name)]
+        keys = [_norm(name)] + [_norm(x) for x in aliases]
+        n = sum(1 for t in texts if any(k and k in t for k in keys))
+        out.append({"name": name, "kind": str(it.get("kind") or "")[:10], "aliases": aliases, "count": n,
+                    "q": "|".join([name] + aliases)})
+    out.sort(key=lambda e: (-e["count"], e["name"]))
+    return {"ok": True, "entities": out[:ENTITY_MAX], "titles": len(rows), "raw_items": len(items)}
+
+
+def watch_trends(weeks: int = 8) -> dict:
+    """ウォッチ（kind=watch のテーマ）ごとの週別件数（直近 weeks 週・月曜始まり・古い順）。"""
+    weeks = max(2, min(int(weeks or 8), 26))
+    today = datetime.now().date()
+    start = today - timedelta(days=today.weekday() + 7 * (weeks - 1))
+    since = datetime(start.year, start.month, start.day).timestamp()
+    labels = [(start + timedelta(days=7 * i)).isoformat() for i in range(weeks)]
+    syn = _synonym_map()
+    out: dict[str, dict] = {}
+    with _archive_lock:
+        _archive_init_locked()
+        conn = _db()
+        try:
+            for r in conn.execute("SELECT * FROM themes WHERE coalesce(kind,'theme') = 'watch'"):
+                f = json.loads(r["filters_json"] or "{}")
+                where, params, _ = _search_where(f.get("q", ""), f.get("sources"), since, None,
+                                                 f.get("category") or None, None, parse_query(f.get("q", ""), syn))
+                counts = [0] * weeks
+                for (ts,) in conn.execute("SELECT a.sort_ts " + _SEARCH_FROM + where, params):
+                    d = datetime.fromtimestamp(float(ts or 0)).date()
+                    i = (d - start).days // 7
+                    if 0 <= i < weeks:
+                        counts[i] += 1
+                out[r["id"]] = {"weeks": counts, "total": sum(counts)}
+        finally:
+            conn.close()
+    return {"labels": labels, "trends": out}
+
+
 # ---- 書き出し（Markdown / Word）
 
 def report_markdown(rep: dict) -> str:
@@ -2799,6 +2950,32 @@ class Handler(BaseHTTPRequestHandler):
                                     "from": g("from"), "to": g("to"), "days": days, "archived": archived}})
             return
 
+        if u.path == "/api/archive/entities":   # 検索結果に出てくる 企業・製品 らしい固有名詞の候補（ウォッチ用）
+            q = parse_qs(u.query)
+            g = lambda k, d="": (q.get(k) or [d])[0]
+            sources = [s for s in g("sources").split(",") if s.strip()]
+            category = g("category") if g("category") in CATEGORIES else None
+            try:
+                days = int(g("days") or 0)
+            except ValueError:
+                days = 0
+            since, until = _filters_window({"from": g("from"), "to": g("to"), "days": days})
+            try:
+                archived = float(g("archived")) if g("archived") else None
+            except ValueError:
+                archived = None
+            rows = archive_search(g("q"), 300, sources, since, until, category, archived)
+            self._json({"ok": True, "entities": extract_entities(rows), "articles": len(rows)})
+            return
+
+        if u.path == "/api/research/watch/trends":   # ウォッチごとの週別件数
+            try:
+                weeks = int((parse_qs(u.query).get("weeks") or ["8"])[0])
+            except ValueError:
+                weeks = 8
+            self._json({"ok": True, **watch_trends(weeks)})
+            return
+
         if u.path == "/api/archive/histogram":   # 日付×情報源の件数分布（期間以外の条件で）
             q = parse_qs(u.query)
             g = lambda k, d="": (q.get(k) or [d])[0]
@@ -2984,6 +3161,13 @@ class Handler(BaseHTTPRequestHandler):
 
         if u.path == "/api/research/synonyms":  # 同義語辞書の保存
             self._json(save_synonyms(str(self._read_body().get("text") or "")))
+            return
+
+        if u.path == "/api/research/entities/ai":  # ローカルLLM で 企業・組織・製品 を抽出（別表記つき）
+            body = self._read_body()
+            ids = body.get("ids") if isinstance(body.get("ids"), list) else []
+            r = extract_entities_ai(_report_fetch([str(i) for i in ids if i][:ENTITY_AI_TITLES]))
+            self._json(r, 200 if r.get("ok") else 400)
             return
 
         if u.path == "/api/ai/chat":  # 生成AIへの質問

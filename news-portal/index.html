@@ -524,6 +524,25 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
 .rs__histlegend span{display:inline-flex; align-items:center; gap:4px; cursor:pointer}
 .rs__histlegend span.on{color:var(--text); font-weight:600}
 .rs__histlegend i{width:8px; height:8px; border-radius:2px; display:inline-block}
+/* 企業・製品ウォッチ（Phase 3-F） */
+.rs__watchpanel{min-width:400px; max-width:540px; max-height:440px}
+.rs__wsec{font-size:11px; color:var(--text-3); letter-spacing:.04em; padding:6px 6px 2px; display:flex; align-items:center; gap:6px}
+.rs__wsec .lnkbtn{margin-left:auto}
+.rs__cands{display:flex; flex-wrap:wrap; gap:4px; padding:2px 6px 8px}
+.cand{display:inline-flex; align-items:center; gap:4px; font-size:11.5px; border:1px solid var(--line); border-radius:99px; padding:2px 4px 2px 8px; background:var(--surface); color:var(--text)}
+.cand .c{color:var(--text-3); font-size:10.5px}
+.cand .k{font-size:9.5px; color:var(--text-3); border:1px solid var(--line); border-radius:4px; padding:0 3px}
+.cand button{font-size:11px; color:var(--accent); background:none; border:none; cursor:pointer; padding:0 4px; font-family:inherit; white-space:nowrap}
+.cand button:hover{text-decoration:underline}
+.rs__watch{display:grid; grid-template-columns:1fr auto; gap:2px 8px; padding:6px; border-radius:8px; align-items:center}
+.rs__watch:hover{background:var(--surface-2)}
+.rs__watch .t{display:flex; align-items:center; gap:6px; font-size:12.5px; font-weight:600; cursor:pointer; background:none; border:none; color:var(--text); font-family:inherit; text-align:left; padding:0; min-width:0}
+.rs__watch .t .n{flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.rs__watch .d{grid-column:1; font-size:11px; color:var(--text-3); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.rs__watch .a{grid-column:1 / -1; display:flex; gap:2px; flex-wrap:wrap}
+.spark{display:inline-flex; align-items:flex-end; gap:1px; height:18px; width:72px; flex:0 0 auto}
+.spark i{flex:1; background:var(--accent); opacity:.7; border-radius:1px; min-height:1px}
+.spark i.last{opacity:1}
 .rrow.dup{margin-left:26px; opacity:.85}
 .rrow__m .dupn{color:var(--text-2); background:var(--surface-2); border:1px solid var(--line); border-radius:99px; padding:0 6px; font-size:10.5px; cursor:pointer; font-family:inherit}
 .rrow__m .dupn:hover{border-color:var(--accent); color:var(--accent)}
@@ -902,6 +921,10 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
         <div class="rs__src">
           <button type="button" class="btn ghost sm" id="rsThemeBtn" aria-haspopup="true" aria-expanded="false" title="検索条件をテーマとして保存。新着差分の確認やブリーフ生成に">テーマ <span id="rsThemeN"></span>▾</button>
           <div class="rs__srcpanel rs__themepanel" id="rsThemePanel" hidden></div>
+        </div>
+        <div class="rs__src">
+          <button type="button" class="btn ghost sm" id="rsWatchBtn" aria-haspopup="true" aria-expanded="false" title="企業・製品ウォッチ: 検索結果から固有名詞の候補を抽出してウォッチ対象に保存（新着・週別推移・ブリーフ）">ウォッチ <span id="rsWatchN"></span>▾</button>
+          <div class="rs__srcpanel rs__watchpanel" id="rsWatchPanel" hidden></div>
         </div>
         <div class="rs__src">
           <button type="button" class="btn ghost sm" id="rsSynBtn" aria-haspopup="true" aria-expanded="false" title="同義語辞書: 検索語がグループに含まれると同じ行の語を OR で自動展開">同義語</button>
@@ -1991,7 +2014,8 @@ $("#proxyTestBtn").onclick=async()=>{
 const RS={results:[], sel:new Set(), srcSel:new Set(), msgs:[], busy:false, stats:null, filters:null, seq:0,
           job:null, jobTimer:null, reports:[],
           theme:null, newOnly:false, themes:[], fetchJob:null, fetchTimer:null,   // テーマ・本文取得
-          hist:null, histOpen:true, openDups:new Set(), expanded:[], dupGroups:0, fts:false, synLoaded:false};   // 分布・類似束・同義語
+          hist:null, histOpen:true, openDups:new Set(), expanded:[], dupGroups:0, fts:false, synLoaded:false,   // 分布・類似束・同義語
+          watchTrends:null, cands:null, candsAi:null, candsBusy:false};   // 企業・製品ウォッチ
 const RS_QUICK=["期間内の動きを時系列で要約","情報源ごとに要点を整理","共通するテーマと相違点を比較","重要トピック3つと根拠"];
 function openResearch(){
   openOverlay($("#researchModal"));
@@ -2044,8 +2068,9 @@ async function researchSearch(keepSel){
   }catch(e){ $("#rsCount").textContent="検索に失敗しました"; }
 }
 function syncRsCount(){
-  $("#rsCount").textContent = RS.results.length+"件ヒット"+((RS.filters&&RS.filters.dedup&&RS.dupGroups)?"（類似 "+RS.dupGroups+"束をまとめ表示）":"")
-                              +" / "+RS.sel.size+"件選択（会話は上から最大30件・レポートは選択全件）";
+  const c=$("#rsCount");
+  c.textContent = RS.results.length+"件ヒット"+((RS.filters&&RS.filters.dedup&&RS.dupGroups)?"（類似 "+RS.dupGroups+"束）":"")+" ／ "+RS.sel.size+"件選択";
+  c.title = "会話は選択の上から最大30件、レポートは選択全件が対象"+((RS.filters&&RS.filters.dedup&&RS.dupGroups)?"。類似記事は代表1件にまとめて表示しています":"");
   const rc=$("#rsRCount"); if(rc) rc.textContent=String(RS.sel.size);
 }
 function rsSrcName(id){ const s=(RS.stats&&RS.stats.sources||[]).find(x=>x.id===id); return s ? s.name : id; }
@@ -2331,12 +2356,13 @@ function renderHist(){   // 日付×情報源の積み上げ棒（SVG を DOM AP
   const ns="http://www.w3.org/2000/svg", mk=(t)=>document.createElementNS(ns,t);
   const svg=mk("svg"); svg.setAttribute("viewBox","0 0 "+W+" "+H); svg.setAttribute("width",W); svg.setAttribute("height",H); svg.setAttribute("role","img"); svg.setAttribute("aria-label","日付別の記事件数");
   const n=h.buckets.length, bw=W/n, max=Math.max(1,...h.buckets.map(b=>b.total));
+  const barW=Math.max(1,Math.min(bw-1,48)), bx=(i)=>i*bw+(bw-barW)/2;   // 区間が少ないときは棒を太くしすぎない
   const sel=rsSelectedWindow(RS.filters); const keys=(h.sources||[]).map(s=>s.id).concat(["other"]);
   h.buckets.forEach((b,i)=>{
     const inSel=!sel || (b.to>=sel.from && b.from<=sel.to); let y=H-padB;
     const label=b.from+(b.to!==b.from?"〜"+b.to:"");
     keys.forEach((k,ki)=>{ const v=(b.src||{})[k]||0; if(!v) return; const hh=(H-padB-padT)*v/max; y-=hh;
-      const r=mk("rect"); r.setAttribute("x",(i*bw+0.5).toFixed(1)); r.setAttribute("y",y.toFixed(1)); r.setAttribute("width",Math.max(1,bw-1).toFixed(1)); r.setAttribute("height",Math.max(0.5,hh).toFixed(1));
+      const r=mk("rect"); r.setAttribute("x",bx(i).toFixed(1)); r.setAttribute("y",y.toFixed(1)); r.setAttribute("width",barW.toFixed(1)); r.setAttribute("height",Math.max(0.5,hh).toFixed(1));
       r.setAttribute("fill",HIST_COLORS[Math.min(ki,HIST_COLORS.length-1)]); r.setAttribute("class","b"); r.style.opacity=inSel?"0.95":"0.35";
       const t=mk("title"); t.textContent=label+"  計 "+b.total+"件（"+rsHistName(k)+" "+v+"）"; r.append(t);
       r.onclick=()=>setPeriodRange(b.from,b.to); svg.append(r); });
@@ -2366,10 +2392,12 @@ async function saveSynonyms(){
 // ---- テーマ（保存した検索条件）・新着差分・ブリーフ ----
 async function loadThemes(){
   try{ const d=await api("/api/research/themes"); RS.themes=d.themes||[]; }catch(e){ RS.themes=RS.themes||[]; }
-  const n=RS.themes.reduce((s,t)=>s+(t.new||0),0);
-  $("#rsThemeN").textContent = RS.themes.length ? "("+RS.themes.length+(n?"・新着"+n:"")+") " : "";
+  const themes=RS.themes.filter(t=>t.kind!=="watch"), watches=RS.themes.filter(t=>t.kind==="watch");
+  const n=themes.reduce((s,t)=>s+(t.new||0),0), wn=watches.reduce((s,t)=>s+(t.new||0),0);
+  $("#rsThemeN").textContent = themes.length ? "("+themes.length+(n?"・新着"+n:"")+") " : "";
+  $("#rsWatchN").textContent = watches.length ? "("+watches.length+(wn?"・新着"+wn:"")+") " : "";
   if(RS.theme){ const t=RS.themes.find(x=>x.id===RS.theme.id); if(t) RS.theme=t; else { RS.theme=null; RS.newOnly=false; } }
-  renderThemePanel(); renderThemeStrip();
+  renderThemePanel(); renderThemeStrip(); renderWatchPanel();
 }
 function themeDesc(t){ return (t.conds||[]).join(" ／ ") || "条件なし"; }
 function renderThemePanel(){
@@ -2379,8 +2407,9 @@ function renderThemePanel(){
   const sb=el("button",{type:"button",class:"btn sm",text:"保存"}); sb.onclick=()=>saveTheme(inp.value);
   inp.addEventListener("keydown",(e)=>{ if(e.key==="Enter"){ e.preventDefault(); saveTheme(inp.value); } });
   save.append(inp,sb); p.append(save);
-  if(!RS.themes.length){ p.append(el("div",{class:"rs__srcrow",text:"保存したテーマはありません。キーワード・情報源・期間を設定して保存すると、新着差分の確認やブリーフ生成ができます"})); return; }
-  RS.themes.forEach(t=>{
+  const themes=RS.themes.filter(t=>t.kind!=="watch");
+  if(!themes.length){ p.append(el("div",{class:"rs__srcrow",text:"保存したテーマはありません。キーワード・情報源・期間を設定して保存すると、新着差分の確認やブリーフ生成ができます"})); return; }
+  themes.forEach(t=>{
     const row=el("div",{class:"rs__theme"});
     const tb=el("button",{type:"button",class:"t",title:"この条件で検索"});
     tb.append(el("span",{class:"n",text:t.name}));
@@ -2430,7 +2459,7 @@ function renderThemeStrip(){
   const t=RS.theme; s.innerHTML="";
   if(!t){ s.hidden=true; return; }
   s.hidden=false;
-  s.append(el("span",{text:"テーマ"}), el("span",{class:"n",text:t.name}));
+  s.append(el("span",{text:t.kind==="watch"?"ウォッチ":"テーマ"}), el("span",{class:"n",text:t.name}));
   s.append(t.new ? el("span",{class:"badge-new",text:"新着 "+t.new}) : el("span",{text:"新着なし"}));
   const lab=el("label"); const cb=el("input",{type:"checkbox",id:"rsNewOnly"}); cb.checked=RS.newOnly; cb.disabled=!t.new && !RS.newOnly;
   cb.onchange=()=>{ RS.newOnly=cb.checked; researchSearch(); };
@@ -2461,6 +2490,87 @@ async function openSavedReport(id){
        if(!RS.msgs.some(m=>m.role==="report"&&m.report.id===id)) RS.msgs.push({role:"report",report:x.report});
        renderRsLog(); closeRsPanels(); }catch(e){ toast("レポートの読み込みに失敗しました","err"); }
 }
+// ---- 企業・製品ウォッチ（固有名詞の候補 → ウォッチ保存・週別推移） ----
+function rsCandParams(){   // 候補抽出は現在の検索条件（期間含む）で
+  const f=RS.filters||rsFilterParams(); const p=new URLSearchParams({q:f.q});
+  if(f.days) p.set("days",String(f.days)); if(f.from) p.set("from",f.from); if(f.to) p.set("to",f.to);
+  if(f.cat) p.set("category",f.cat); if(f.srcs.length) p.set("sources",f.srcs.join(",")); if(f.archived) p.set("archived",String(f.archived));
+  return p;
+}
+async function loadCands(){
+  try{ const d=await api("/api/archive/entities?"+rsCandParams().toString()); RS.cands=d.entities||[]; }catch(e){ RS.cands=[]; }
+  renderWatchPanel();
+}
+async function loadWatchTrends(){
+  try{ const d=await api("/api/research/watch/trends?weeks=8"); RS.watchTrends=d; }catch(e){}
+  renderWatchPanel();
+}
+async function aiCands(){
+  if(RS.candsBusy) return;
+  if(!aiReady()){ toast("生成AIが未設定です。設定から登録してください","err"); return; }
+  const ids=RS.results.slice(0,80).map(a=>a.id); if(!ids.length){ toast("対象の記事がありません","err"); return; }
+  RS.candsBusy=true; renderWatchPanel();
+  try{ const d=await api("/api/research/entities/ai",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ids})});
+       RS.candsAi=d.entities||[]; toast("AIが "+RS.candsAi.length+" 件の候補を抽出しました（見出し "+d.titles+" 件から）"); }
+  catch(e){ toast(e.server?e.message:"AI 抽出に失敗しました","err"); }
+  RS.candsBusy=false; renderWatchPanel();
+}
+async function addWatch(name, q){
+  try{
+    const d=await api("/api/research/themes",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({name, kind:"watch", filters:{q:q||name, sources:[], category:"", days:0, from:"", to:""}})});
+    toast("「"+d.theme.name+"」をウォッチに追加しました"); await loadThemes(); loadWatchTrends();
+  }catch(e){ toast(e.server?e.message:"ウォッチに追加できませんでした","err"); }
+}
+function sparkEl(weeks){
+  const s=el("span",{class:"spark",title:"直近8週の件数: "+(weeks||[]).join(" / ")}); const max=Math.max(1,...(weeks||[0]));
+  (weeks||[]).forEach((v,i)=>{ const b=el("i"); b.style.height=Math.max(1,Math.round(16*v/max))+"px"; if(i===weeks.length-1) b.className="last"; s.append(b); });
+  return s;
+}
+function renderWatchPanel(){
+  const p=$("#rsWatchPanel"); if(!p) return; p.innerHTML="";
+  const watches=RS.themes.filter(t=>t.kind==="watch");
+  const watched=new Set(watches.map(t=>t.name.toLowerCase()));
+  // ウォッチ中
+  p.append(el("div",{class:"rs__wsec",text:"ウォッチ中（"+watches.length+"）"}));
+  if(!watches.length) p.append(el("div",{class:"rs__srcrow",text:"まだありません。下の候補から「＋ウォッチ」で追加すると、新着差分・週別推移・ブリーフが使えます"}));
+  watches.forEach(t=>{
+    const row=el("div",{class:"rs__watch"});
+    const tb=el("button",{type:"button",class:"t",title:"この条件で検索"});
+    tb.append(el("span",{class:"n",text:t.name}));
+    if(t.new) tb.append(el("span",{class:"badge-new",text:"新着 "+t.new}));
+    tb.append(el("span",{class:"c",text:(t.total||0)+"件"}));
+    tb.onclick=()=>{ openTheme(t); p.hidden=true; };
+    const tr=RS.watchTrends&&RS.watchTrends.trends&&RS.watchTrends.trends[t.id];
+    row.append(tb, tr ? sparkEl(tr.weeks) : el("span",{class:"spark"}));
+    row.append(el("div",{class:"d",text:"条件: "+(t.filters&&t.filters.q||"")+(t.last_brief_at?" ／ 前回ブリーフ "+new Date(t.last_brief_at*1000).toLocaleDateString("ja-JP"):"")}));
+    const a=el("div",{class:"a"});
+    const b7=el("button",{type:"button",class:"lnkbtn",text:"週次ブリーフ"}); b7.onclick=()=>startBrief(t,{days:7}); a.append(b7);
+    if(t.last_brief_at){ const bl=el("button",{type:"button",class:"lnkbtn",text:"前回以降でブリーフ"}); bl.onclick=()=>startBrief(t,{since:"last"}); a.append(bl); }
+    if(t.last_brief_id){ const bo=el("button",{type:"button",class:"lnkbtn",text:"前回のブリーフを開く"}); bo.onclick=()=>openSavedReport(t.last_brief_id); a.append(bo); }
+    const bd=el("button",{type:"button",class:"lnkbtn danger",text:"削除"});
+    bd.onclick=async()=>{ if(!confirm("ウォッチ「"+t.name+"」を削除しますか？")) return;
+      try{ await api("/api/research/themes?id="+encodeURIComponent(t.id),{method:"DELETE"});
+           if(RS.theme&&RS.theme.id===t.id){ RS.theme=null; RS.newOnly=false; } await loadThemes(); toast("削除しました"); }
+      catch(e){ toast("削除に失敗しました","err"); } };
+    a.append(bd); row.append(a); p.append(row);
+  });
+  // 候補
+  const head=el("div",{class:"rs__wsec"}); head.append(el("span",{text:"この検索結果に出てくる企業・製品（候補）"}));
+  const ai=el("button",{type:"button",class:"lnkbtn",id:"rsCandAi",text:RS.candsBusy?"AIで抽出中…":"AIで抽出（別表記つき）",title:"ローカルLLMで見出しから企業・組織・製品を抽出"}); ai.disabled=RS.candsBusy; ai.onclick=aiCands;
+  head.append(ai); p.append(head);
+  const box=el("div",{class:"rs__cands"});
+  const seen=new Set();
+  const chip=(c,src)=>{ const k=c.name.toLowerCase(); if(seen.has(k)||watched.has(k)) return; seen.add(k);
+    const s=el("span",{class:"cand"}); s.append(el("span",{text:c.name}));
+    if(src==="ai") s.append(el("span",{class:"k",text:c.kind||"AI"})); else if(c.kind==="org") s.append(el("span",{class:"k",text:"組織"}));
+    s.append(el("span",{class:"c",text:c.count+"件"}));
+    const b=el("button",{type:"button",text:"＋ウォッチ",title:(c.q&&c.q!==c.name)?"条件: "+c.q:"この名前で検索条件を作る"}); b.onclick=()=>addWatch(c.name, c.q||c.name); s.append(b); box.append(s); };
+  (RS.candsAi||[]).forEach(c=>chip(c,"ai")); (RS.cands||[]).forEach(c=>chip(c,"rule"));
+  if(!box.childElementCount) box.append(el("span",{class:"hint",text:RS.cands===null?"読み込み中…":"候補が見つかりません（検索語を変えるか、AIで抽出をお試しください）"}));
+  p.append(box);
+}
+
 // ---- 本文一括取得（選択記事・キャッシュつき・進捗表示） ----
 async function startFetch(){
   if(RS.fetchJob && !["done","error"].includes(RS.fetchJob.state)){ toast("本文取得を実行中です","err"); return; }
@@ -2504,8 +2614,8 @@ function renderFetchBar(){
   bar.append(fill); b.append(bar);
 }
 function closeRsPanels(){
-  for(const id of ["#rsSrcPanel","#rsSavedPanel","#rsThemePanel","#rsSynPanel"]){ const p=$(id); if(p && !p.hidden) p.hidden=true; }
-  for(const id of ["#rsSrcBtn","#rsThemeBtn","#rsSynBtn"]) $(id).setAttribute("aria-expanded","false");
+  for(const id of ["#rsSrcPanel","#rsSavedPanel","#rsThemePanel","#rsSynPanel","#rsWatchPanel"]){ const p=$(id); if(p && !p.hidden) p.hidden=true; }
+  for(const id of ["#rsSrcBtn","#rsThemeBtn","#rsSynBtn","#rsWatchBtn"]) $(id).setAttribute("aria-expanded","false");
 }
 $("#researchBtn").onclick=openResearch;
 let rsT=null;
@@ -2540,6 +2650,9 @@ $("#rsSynBtn").onclick=(e)=>{ e.stopPropagation(); const p=$("#rsSynPanel"); con
   $("#rsSynBtn").setAttribute("aria-expanded", String(!p.hidden)); if(!p.hidden) setTimeout(()=>$("#rsSynText").focus(),30); };
 $("#rsSynPanel").addEventListener("click",(e)=>e.stopPropagation());
 $("#rsSynSave").onclick=saveSynonyms;
+$("#rsWatchBtn").onclick=(e)=>{ e.stopPropagation(); const p=$("#rsWatchPanel"); const open=p.hidden; closeRsPanels(); p.hidden=!open;
+  $("#rsWatchBtn").setAttribute("aria-expanded", String(!p.hidden)); if(!p.hidden){ RS.cands=null; renderWatchPanel(); loadThemes(); loadWatchTrends(); loadCands(); } };
+$("#rsWatchPanel").addEventListener("click",(e)=>e.stopPropagation());
 $("#rsHistToggle").onclick=()=>{ RS.histOpen=!RS.histOpen; renderHist(); };
 let rsHistT=null; window.addEventListener("resize",()=>{ clearTimeout(rsHistT); rsHistT=setTimeout(()=>{ if(RS.hist) renderHist(); },150); });
 
