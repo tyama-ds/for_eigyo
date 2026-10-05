@@ -35,7 +35,7 @@
         return Object.assign({ x, y, vx: 0, vy: 0 }, n);
       });
       const idx = Object.fromEntries(this.nodes.map((n, i) => [n.id, i]));
-      this.edges = data.edges.map(([a, b, t]) => [idx[a], idx[b], t]).filter(([a, b]) => a !== undefined && b !== undefined);
+      this.edges = data.edges.map(([a, b, t, label, directed]) => [idx[a], idx[b], t, label, directed]).filter(([a, b]) => a !== undefined && b !== undefined);
       this.nb = new Set();
       if (center) this.edges.forEach(([a, b]) => { if (this.nodes[a].id === center) this.nb.add(b); if (this.nodes[b].id === center) this.nb.add(a); });
       const folders = [...new Set(this.nodes.map((n) => (n.folder || "").split("/")[0]).filter(Boolean))].sort();
@@ -119,15 +119,28 @@
       const line = this.color("--line"), acc = this.color("--accent"), muted = this.color("--muted"), ink = this.color("--ink"), bg = this.color("--bg");
       const focus = this.hover ?? (this.center ? this.nodes.findIndex((n) => n.id === this.center) : -1);
       const warn = this.color("--warn");
-      for (const [i, j, t] of this.edges) {
+      const linkCol = document.documentElement.dataset.theme === "light" ? "hsl(230 50% 48%)" : "hsl(230 60% 72%)";
+      for (const [i, j, t, label, directed] of this.edges) {
         const p = this.nodes[i], q = this.nodes[j];
         const hot = focus >= 0 && (i === focus || j === focus);
-        g.strokeStyle = hot ? acc : t === "rel" ? warn : line; g.lineWidth = (hot ? 1.6 : 1) / Math.sqrt(v.k);
+        g.strokeStyle = hot ? acc : t === "rel" ? warn : t === "link" ? linkCol : line; g.lineWidth = (hot ? 1.6 : t === "link" ? 1.4 : 1) / Math.sqrt(v.k);
         g.setLineDash(t === "rel" || t === "sim" ? [4 / v.k, 3 / v.k] : t === "ent" ? [1.5 / v.k, 2.5 / v.k] : []);   // つながり・内容の近さは点線、人物は細かい点線
         if (t === "sim" && !hot) g.strokeStyle = warn;
         g.globalAlpha = focus >= 0 && !hot ? 0.7 : 1;
         if ((t === "ent" || t === "sim") && !hot) g.globalAlpha = focus >= 0 ? 0.35 : 0.6;
         g.beginPath(); g.moveTo(p.x, p.y); g.lineTo(q.x, q.y); g.stroke();
+        if (t === "link") {                                   // 文献同士のつながり: 向きがあれば矢印、近づけば種類を表示
+          const dx = q.x - p.x, dy = q.y - p.y, len = Math.hypot(dx, dy) || 1, ux = dx / len, uy = dy / len;
+          if (directed) {
+            const r = (q.r || 6) + 1, ax = q.x - ux * r, ay = q.y - uy * r, s = 5 / Math.sqrt(v.k);
+            g.fillStyle = g.strokeStyle; g.beginPath(); g.moveTo(ax, ay);
+            g.lineTo(ax - ux * s - uy * s * 0.6, ay - uy * s + ux * s * 0.6); g.lineTo(ax - ux * s + uy * s * 0.6, ay - uy * s - ux * s * 0.6); g.closePath(); g.fill();
+          }
+          if (label && (hot || v.k > 1.1 || this.edges.length <= 12)) {
+            g.save(); g.font = `${10 / Math.sqrt(v.k)}px ${getComputedStyle(document.body).fontFamily}`; g.textAlign = "center"; g.fillStyle = g.strokeStyle; g.globalAlpha = hot ? 1 : 0.85;
+            g.fillText(label, (p.x + q.x) / 2, (p.y + q.y) / 2 - 3 / Math.sqrt(v.k)); g.restore();
+          }
+        }
       }
       g.globalAlpha = 1; g.setLineDash([]);
       g.font = `${11 / Math.sqrt(v.k)}px ${getComputedStyle(document.body).fontFamily}`;

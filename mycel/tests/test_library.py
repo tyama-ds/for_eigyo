@@ -156,6 +156,51 @@ class LibraryTest(unittest.TestCase):
         self.assertFalse(ask["llm"])
         self.assertTrue(ask["sources"] and all("ref_id" in s for s in ask["sources"]))
 
+    def test_links_manual_auto_and_ai(self):
+        self.lib.register_files(["論文/需要予測.txt", "論文/倉庫自動化.txt"])
+        a = next(r for r in self.lib.refs if r["year"] == "2024")
+        b = next(r for r in self.lib.refs if r["year"] == "2022")
+        l = self.lib.link(a["id"], b["id"], "extends", "安全在庫の考え方を発展")
+        self.assertEqual(l["origin"], "user")
+        la, lb = self.lib.links_of(a["id"]), self.lib.links_of(b["id"])
+        self.assertEqual((la[0]["label"], la[0]["outgoing"]), ("発展させている", True))
+        self.assertEqual((lb[0]["label"], lb[0]["outgoing"]), ("元になった", False))
+        self.lib.link(b["id"], a["id"], "extends")                                   # 向きが違えば別のつながり
+        self.assertEqual(len(self.lib.links), 2)
+        self.lib.link(b["id"], a["id"], "compares")
+        self.lib.link(a["id"], b["id"], "compares")                                  # 向きの無い種類は同じもの
+        self.assertEqual(len(self.lib.links), 3)
+        self.assertIn("つながり: 発展させている", self.lib.related(a["id"])[0]["reasons"])
+        g = self.lib.graph("none", [])
+        link_edges = [e for e in g["edges"] if e[2] == "link"]
+        self.assertEqual(len(link_edges), 3)
+        self.assertIn(["r:" + a["id"], "r:" + b["id"], "link", "発展させている", True], link_edges)
+        self.assertFalse(any(e[2] == "sim" for e in g["edges"]))                    # 明示的につないだ組は点線を出さない
+        from mycelcore.library import Library
+        self.assertEqual(len(Library(self.app).links), 3)                            # 保存されている
+        self.assertEqual(self.lib.unlink(a["id"], b["id"], "compares"), 1)
+        self.assertEqual(self.lib.unlink(a["id"], b["id"]), 2)
+        # 引用の自動検出: 本文に他の文献の DOI・題名があれば「引用している」
+        (self.app.vault.root / "論文" / "倉庫自動化.txt").write_text(
+            "物流倉庫の自動化と安全在庫\n\n# 本文\n...\n\n# 参考文献\n[1] 山田, 在庫最適化のための需要予測手法, 2024. doi:10.1234/jima.2024.001\n", encoding="utf-8")
+        self.app.update_index(None, wait=True)
+        d = self.lib.detect_citations()
+        self.assertEqual(d["added"], 1)
+        self.assertEqual(self.lib.links_of(b["id"])[0]["label"], "引用している")
+        self.assertEqual(self.lib.links[0]["origin"], "auto")
+        self.assertEqual(self.lib.detect_citations()["added"], 0)
+        # AI の提案（LLM なし → 内容の近さから / あり → 種類と理由）
+        self.lib.unlink(a["id"], b["id"])
+        sug = self.lib.suggest_links(a["id"])
+        self.assertEqual(sug[0]["id"], b["id"])
+        self.assertFalse(sug[0]["ai"])
+        self.app.update_config({"base_url": self.llm_url + "/v1", "model": "mock"})
+        sug = self.lib.suggest_links(a["id"])
+        self.assertEqual((sug[0]["type"], sug[0]["ai"]), ("extends", True))
+        self.assertTrue(sug[0]["reason"])
+        self.lib.remove([b["id"]])
+        self.assertEqual(self.lib.links, [])
+
     def test_graph_expands_from_large_to_small(self):
         self.lib.register_files(["論文/需要予測.txt", "論文/倉庫自動化.txt"], tags=["在庫"])
         a = next(r for r in self.lib.refs if r["year"] == "2024")
@@ -258,6 +303,19 @@ class LibraryApiTest(unittest.TestCase):
         self.assertIn("TY  - ", ex["text"])
         st, bp = self.call("GET", "/api/library/by_path?path=" + quote("論文/a.txt"))
         self.assertEqual(bp["ref"]["id"], rid)
+        other = r["added"][0]["id"]
+        st, lk = self.call("POST", "/api/library/link", {"a": rid, "b": other, "type": "compares", "note": "比較"})
+        self.assertEqual(st, 200, lk)
+        self.assertEqual(lk["links"][0]["label"], "比較対象")
+        st, d2 = self.call("GET", "/api/library/ref?id=" + rid)
+        self.assertEqual(len(d2["links"]), 1)
+        self.assertIn("cites", d2["link_types"])
+        st, sg = self.call("POST", "/api/library/links/suggest", {"id": rid})
+        self.assertEqual(st, 200)
+        st, dt = self.call("POST", "/api/library/links/detect", {})
+        self.assertEqual(st, 200)
+        st, ul = self.call("POST", "/api/library/unlink", {"a": rid, "b": other})
+        self.assertEqual(ul["removed"], 1)
         st, a = self.call("POST", "/api/library/ask", {"question": "在庫は？"})
         self.assertEqual(st, 200)
         self.assertFalse(a["llm"])

@@ -36,6 +36,16 @@ SUMMARY_KEYS = ("one_line", "purpose", "method", "results", "limitations")
 SUMMARY_LABELS = {"one_line": "一言で", "purpose": "目的・課題", "method": "手法・対象", "results": "結果・主張",
                   "limitations": "限界・課題"}
 GROUPS = {"tag": "タグ", "author": "著者", "year": "年", "type": "種類", "status": "読了状態", "none": "分類なし"}
+# 文献同士のつながりの種類。directed=True は a → b の向きを持つ（a が b を引用している、など）
+LINK_TYPES = {
+    "cites": {"label": "引用している", "directed": True, "inverse": "引用されている"},
+    "extends": {"label": "発展させている", "directed": True, "inverse": "元になった"},
+    "supports": {"label": "支持している", "directed": True, "inverse": "支持されている"},
+    "refutes": {"label": "反論している", "directed": True, "inverse": "反論されている"},
+    "compares": {"label": "比較対象", "directed": False, "inverse": "比較対象"},
+    "same_topic": {"label": "同じテーマ", "directed": False, "inverse": "同じテーマ"},
+    "related": {"label": "関連", "directed": False, "inverse": "関連"},
+}
 _lock = threading.RLock()
 _DOI_RE = re.compile(r"\b(10\.\d{4,9}/[^\s\"<>）)\]]+)", re.I)
 _YEAR_RE = re.compile(r"(?<!\d)((?:19|20)\d{2})(?!\d)")
@@ -241,6 +251,7 @@ class Library:
         self.app = app
         self.file = app.vault.internal / "library.json"
         self.refs: list[dict] = self._load()
+        self.links: list[dict] = self._load_links()
         self.rev = 0
         self._sim_cache: dict = {}
 
@@ -253,10 +264,20 @@ class Library:
         except (OSError, ValueError):
             return []
 
+    def _load_links(self) -> list[dict]:
+        try:
+            data = json.loads(self.file.read_text(encoding="utf-8"))
+            links = data.get("links", []) if isinstance(data, dict) else []
+        except (OSError, ValueError):
+            return []
+        ids = {r["id"] for r in self.refs}
+        return [l for l in links if isinstance(l, dict) and l.get("a") in ids and l.get("b") in ids
+                and l.get("type") in LINK_TYPES and l["a"] != l["b"]]
+
     def _save(self) -> None:
         with _lock:
             tmp = self.file.with_suffix(".tmp")
-            tmp.write_text(json.dumps({"refs": self.refs, "updated": time.time()}, ensure_ascii=False, indent=1),
+            tmp.write_text(json.dumps({"refs": self.refs, "links": self.links, "updated": time.time()}, ensure_ascii=False, indent=1),
                            encoding="utf-8")
             tmp.replace(self.file)
             self.rev += 1
@@ -420,9 +441,122 @@ class Library:
     def remove(self, ids: list[str]) -> int:
         n = len(self.refs)
         self.refs = [r for r in self.refs if r["id"] not in set(ids)]
+        self.links = [l for l in self.links if l["a"] not in set(ids) and l["b"] not in set(ids)]
         if len(self.refs) != n:
             self._save()
         return n - len(self.refs)
+
+    # ---- 文献同士のつながり
+    def _same_link(self, l: dict, a: str, b: str, ltype: str) -> bool:
+        if l["type"] != ltype:
+            return False
+        return (l["a"], l["b"]) == (a, b) or (not LINK_TYPES[ltype]["directed"] and (l["a"], l["b"]) == (b, a))
+
+    def link(self, a: str, b: str, ltype: str = "related", note: str = "", origin: str = "user") -> dict:
+        self.get(a), self.get(b)
+        if a == b:
+            raise VaultError("同じ文献同士はつなげません")
+        if ltype not in LINK_TYPES:
+            raise VaultError("つながりの種類が不正です")
+        for l in self.links:
+            if self._same_link(l, a, b, ltype):
+                if note:
+                    l["note"] = note[:200]
+                if origin == "user":
+                    l["origin"] = "user"
+                self._save()
+                return l
+        l = {"a": a, "b": b, "type": ltype, "note": (note or "")[:200], "origin": origin if origin in ("user", "ai", "auto") else "user",
+             "created": time.time()}
+        self.links.append(l)
+        self._save()
+        return l
+
+    def unlink(self, a: str, b: str, ltype: str = "") -> int:
+        n = len(self.links)
+        self.links = [l for l in self.links if not ({l["a"], l["b"]} == {a, b} and (not ltype or l["type"] == ltype))]
+        if len(self.links) != n:
+            self._save()
+        return n - len(self.links)
+
+    def links_of(self, rid: str) -> list[dict]:
+        """この文献から見たつながり（向きを揃えて、相手の情報と説明文を付ける）。"""
+        out = []
+        for l in self.links:
+            if rid not in (l["a"], l["b"]):
+                continue
+            outgoing = l["a"] == rid
+            other_id = l["b"] if outgoing else l["a"]
+            try:
+                other = self.get(other_id)
+            except VaultError:
+                continue
+            t = LINK_TYPES[l["type"]]
+            out.append({"id": other_id, "title": other["title"], "year": other["year"], "authors": other["authors"][:2],
+                        "type": l["type"], "label": t["label"] if outgoing or not t["directed"] else t["inverse"],
+                        "outgoing": outgoing, "directed": t["directed"], "note": l.get("note", ""), "origin": l.get("origin", "user")})
+        out.sort(key=lambda x: (x["type"], x["title"]))
+        return out
+
+    def detect_citations(self, ids: list[str] | None = None) -> dict:
+        """本文（参考文献欄など）に他の登録文献の DOI・題名が出ていれば「引用している」とみなす（自動）。"""
+        targets = [r for r in self.refs if ids is None or r["id"] in set(ids)]
+        others = [(o, o["doi"].lower(), _title_key(o["title"])) for o in self.refs if o["title"]]
+        added, found = 0, []
+        for r in targets:
+            text = self._text_of(r, 3_000_000)
+            if not text:
+                continue
+            low = text.lower()
+            tail = low[int(len(low) * 0.6):]                        # 参考文献は後ろに多いので、後半は題名の一致も許す
+            for o, doi, tk in others:
+                if o["id"] == r["id"]:
+                    continue
+                hit = bool(doi and len(doi) > 8 and doi in low)
+                if not hit and len(tk) >= 12:
+                    hit = tk in _title_key(tail) if len(tail) < 400_000 else tk in _title_key(tail[:400_000])
+                if hit and not any(self._same_link(l, r["id"], o["id"], "cites") for l in self.links):
+                    self.links.append({"a": r["id"], "b": o["id"], "type": "cites", "note": "本文中に DOI・題名が出ている",
+                                       "origin": "auto", "created": time.time()})
+                    added += 1
+                    found.append({"from": r["title"], "to": o["title"]})
+        if added:
+            self._save()
+        return {"added": added, "pairs": found}
+
+    def suggest_links(self, rid: str, k: int = 5) -> list[dict]:
+        """つながりの候補。内容の近い文献を集め、LLM があれば種類と理由を判断させる。"""
+        r = self.get(rid)
+        linked = {l["b"] if l["a"] == rid else l["a"] for l in self.links if rid in (l["a"], l["b"])}
+        cands = [c for c in self.related(rid, k=k + len(linked) + 2) if c["id"] not in linked][:k + 2]
+        if not cands:
+            return []
+        cfg = self.app.config()
+        if not chat_configured(cfg):
+            return [{"id": c["id"], "title": c["title"], "year": c["year"], "type": "same_topic" if any("タグ" in x for x in c["reasons"]) else "related",
+                     "reason": " ・ ".join(c["reasons"]), "ai": False} for c in cands[:k]]
+        me = (f"[0] {r['title']}（{r['year']}）\n"
+              + ((r["summary"] or {}).get("one_line") or r["abstract"][:400] or self._text_of(r, 400)))
+        lst = "\n".join(f"[{i}] {c['title']}（{c['year']}）\n"
+                        + ((c["summary"] or {}).get("one_line") or c["abstract"][:300] or c["passage"])
+                        for i, c in enumerate(cands, 1))
+        raw = LLMClient(cfg).chat(
+            "[TASK:liblinks]\n文献 [0] と候補の文献の関係を判断してください。本当に関係のあるものだけを選び、"
+            "種類を次から選んでください: cites（[0] が候補を引用している）/ extends（[0] が候補を発展させている）/ "
+            "supports（[0] が候補を支持している）/ refutes（[0] が候補に反論している）/ compares（比較対象）/ same_topic（同じテーマ）/ related（関連）。"
+            '\n出力は JSON 配列だけ: [{"n": 候補番号, "type": "種類", "reason": "関係の説明（30 字程度）"}]\n'
+            f"# 対象の文献\n{me}\n# 候補\n{lst}", temperature=0.0)
+        data = _parse_json_list(raw)
+        out = []
+        for it in data:
+            try:
+                c = cands[int(it.get("n")) - 1]
+            except (TypeError, ValueError, IndexError, AttributeError):
+                continue
+            t = str(it.get("type") or "related")
+            out.append({"id": c["id"], "title": c["title"], "year": c["year"], "type": t if t in LINK_TYPES else "related",
+                        "reason": str(it.get("reason") or "").strip()[:80], "ai": True})
+        return out[:k]
 
     def rename_path(self, old: str, new: str) -> None:
         changed = False
@@ -676,6 +810,11 @@ class Library:
                     e["reasons"].add("同じ著者: " + "、".join(sorted(shared_a)[:2]))
                 if shared_t:
                     e["reasons"].add("同じタグ・キーワード: " + "、".join(sorted(shared_t)[:3]))
+        for l in self.links_of(rid):
+            o = self.get(l["id"])
+            e = out.setdefault(o["id"], {"ref": o, "score": 0.0, "reasons": set(), "passage": ""})
+            e["score"] += 0.02
+            e["reasons"].add("つながり: " + l["label"])
         rows = sorted(out.values(), key=lambda e: -e["score"])[:k]
         return [{**self._row(e["ref"]), "score": round(e["score"], 5), "reasons": sorted(e["reasons"]), "passage": e["passage"]} for e in rows]
 
@@ -822,9 +961,15 @@ class Library:
                 t = target_for(cid, chunk_path.get(cid, ""))
                 if t:
                     add_sim(f"c:{chunk_id}", t)
-        edges += [[a, b, "sim"] for a, b in sorted(sim_edges) if a in nodes and b in nodes]
+        linked_pairs = set()
+        for l in self.links:
+            if l["a"] in visible_refs and l["b"] in visible_refs:
+                t = LINK_TYPES[l["type"]]
+                edges.append([f"r:{l['a']}", f"r:{l['b']}", "link", t["label"], t["directed"]])
+                linked_pairs.add(frozenset((f"r:{l['a']}", f"r:{l['b']}")))
+        edges += [[a, b, "sim"] for a, b in sorted(sim_edges) if a in nodes and b in nodes and frozenset((a, b)) not in linked_pairs]
         return {"nodes": list(nodes.values()), "edges": [e for e in edges if e[0] in nodes and e[1] in nodes],
-                "group_by": group_by, "groups": GROUPS}
+                "group_by": group_by, "groups": GROUPS, "link_types": {k: v["label"] for k, v in LINK_TYPES.items()}}
 
     def _ref_similarity(self) -> dict[str, list[tuple[str, float]]]:
         key = (self.app.index.rev, self.rev)
@@ -884,6 +1029,21 @@ class Library:
         res = self.app.create(rel, text="\n".join(fm + body) + "\n")
         self.update(rid, {"note": res["path"]})
         return {"path": res["path"], "created": True}
+
+
+def _parse_json_list(raw: str) -> list:
+    raw = (raw or "").strip()
+    m = re.search(r"```(?:json)?\s*(.*?)```", raw, re.DOTALL)
+    if m:
+        raw = m.group(1)
+    s, e = raw.find("["), raw.rfind("]")
+    if s == -1 or e <= s:
+        return []
+    try:
+        data = json.loads(raw[s:e + 1])
+    except ValueError:
+        return []
+    return data if isinstance(data, list) else []
 
 
 def _parse_json(raw: str):

@@ -1537,6 +1537,7 @@
     ]); };
     $("#libExport", b).onclick = (e) => libExportMenu(e.currentTarget, null);
     $("#libMore", b).onclick = (e) => { const r = e.currentTarget.getBoundingClientRect(); popMenu(r.right - 260, r.bottom + 4, [
+      { label: "引用関係を検出（全文献）", run: async () => { try { const r = await api.post("/api/library/links/detect", {}); toast(r.added ? `${r.added} 件の引用関係を見つけました` : "新しい引用関係は見つかりませんでした"); if (r.added) { loadLibrary(); if (S.graph) loadLibGraph(); } } catch (err) { fail(err); } } },
       { label: "文献の索引を更新（埋め込みを作る）", run: async () => { try { await api.post("/api/library/embed", {}); toast("文献のファイルを読み直しています"); setTimeout(poll, 300); } catch (err) { fail(err); } } },
       { label: "すべてに AI で書誌情報を補完", run: () => libBatch(d.refs.map((r) => r.id), "meta") },
       { label: "要約の無い文献すべてに AI で要約", run: () => libBatch(d.refs.filter((r) => !r.has_summary).map((r) => r.id), "summary") },
@@ -1593,6 +1594,9 @@
         ${field("title", "題名")}${field("authors", "著者", "「;」区切り（例: 山田 太郎; Smith, John）")}${field("year", "年")}${field("venue", "掲載誌・会議・出版社")}
         ${field("volume", "巻")}${field("issue", "号")}${field("pages", "ページ")}${field("doi", "DOI")}${field("url", "URL")}${field("tags", "タグ", "「;」区切り")}${field("keywords", "キーワード", "「;」区切り")}${field("key", "引用キー")}
         <label for="lf_abstract">要旨</label><textarea id="lf_abstract" data-lf="abstract" rows="4">${esc(d.abstract)}</textarea></div></details>
+      <div class="ldsec"><h3>文献同士のつながり <small class="hint">${(d.links || []).length} 件</small></h3>
+        ${(d.links || []).length ? (d.links || []).map((l) => `<div class="card rel llink" data-lref="${esc(l.id)}"><b><span class="ltype${l.directed ? (l.outgoing ? " out" : " in") : ""}">${l.directed ? (l.outgoing ? "→ " : "← ") : "— "}${esc(l.label)}</span>${esc(l.title)}${l.year ? ` <small class="hint">(${esc(l.year)})</small>` : ""}${l.origin !== "user" ? ` <small class="sb">${l.origin === "auto" ? "自動検出" : "AI"}</small>` : ""}</b>${l.note ? `<span>${esc(l.note)}</span>` : ""}<button class="rx" data-unlink="${esc(l.id)}" data-ltype="${esc(l.type)}" title="つながりを外す">×</button></div>`).join("") : '<div class="hint">まだありません。引用・発展・支持・反論・比較などの関係を付けられます。</div>'}
+        <div class="relbtns"><button class="btn sm" id="ldLink">＋ つなぐ…</button><button class="btn sm" id="ldLinkAI" title="内容の近い文献を集め、ローカル LLM が関係の種類と理由を判断します">つながりを提案（AI）</button><button class="btn sm" id="ldCite" title="本文（参考文献欄）に他の登録文献の DOI・題名があれば「引用している」と結びます">引用関係を検出</button></div><div id="ldLinkOut"></div></div>
       <div class="ldsec"><h3>引用</h3><div class="cite">${esc(d.citations.apa)}</div><div class="relbtns"><button class="btn xs" data-copy="${esc(d.citations.apa)}">APA をコピー</button><button class="btn xs" data-copy="${esc(d.citations.ieee)}">IEEE をコピー</button><button class="btn xs" data-copy="${esc(d.bibtex)}">BibTeX をコピー</button><button class="btn xs" data-copy="[[${esc(d.note || d.file || d.title)}]]">ノート用リンクをコピー</button></div></div>
       ${d.structure.length ? `<div class="ldsec"><h3>章立て <small class="hint">${d.structure.length} 区分 ・ グラフタブで段落まで開けます</small></h3><div class="ldstruct">${d.structure.slice(0, 40).map((s) => `<span class="chip" data-sec="${s.n}" title="${s.chunks} 段落">${esc(s.heading)}</span>`).join("")}${d.structure.length > 40 ? `<span class="hint">ほか ${d.structure.length - 40}</span>` : ""}</div></div>` : ""}
       <div class="ldsec"><h3>関連する文献</h3>${d.related.length ? d.related.map((r) => `<div class="card" data-lref="${esc(r.id)}"><b>${esc(r.title)}</b><span>${esc(r.reasons.join(" ・ "))}${r.passage ? " — " + esc(r.passage) : ""}</span></div>`).join("") : '<div class="hint">まだありません（本文ファイルのある文献が増えると出ます）</div>'}</div>`;
@@ -1602,6 +1606,18 @@
     $$("[data-rate]", el).forEach((b) => (b.onclick = () => saveField("rating", d.rating === +b.dataset.rate ? 0 : +b.dataset.rate)));
     $$("[data-copy]", el).forEach((b) => (b.onclick = () => copyText(b.dataset.copy)));
     $$("[data-lref]", el).forEach((c) => (c.onclick = () => { L.cur = c.dataset.lref; L.detail = null; renderLibraryView(); loadRefDetail(L.cur); }));
+    $$("[data-unlink]", el).forEach((b) => (b.onclick = async (e) => { e.stopPropagation(); try { await api.post("/api/library/unlink", { a: d.id, b: b.dataset.unlink, type: b.dataset.ltype }); toast("つながりを外しました"); loadRefDetail(d.id); if (S.graph) loadLibGraph(); } catch (err) { fail(err); } }));
+    $("#ldLink", el).onclick = () => libLinkDialog(d);
+    $("#ldLinkAI", el).onclick = async () => {
+      const out = $("#ldLinkOut", el); out.innerHTML = '<div class="hint"><span class="spin"></span> 関係を調べています…</div>';
+      try {
+        const r = await api.post("/api/library/links/suggest", { id: d.id });
+        const types = d.link_types || {};
+        out.innerHTML = r.suggestions.length ? r.suggestions.map((sg, i) => `<div class="card" style="cursor:default"><b>${esc(sg.title)}${sg.year ? ` <small class="hint">(${esc(sg.year)})</small>` : ""}</b><span>${esc(sg.reason)}${sg.ai ? "" : "（内容の近さから。LLM を設定すると種類も判断します）"}</span><div class="acts"><select data-sgtype="${i}">${Object.entries(types).map(([k, v]) => `<option value="${k}"${k === sg.type ? " selected" : ""}>${v}</option>`).join("")}</select> <button class="btn sm" data-sglink="${i}">つなぐ</button></div></div>`).join("") : '<div class="hint">候補は見つかりませんでした。</div>';
+        $$("[data-sglink]", out).forEach((b) => (b.onclick = async () => { const sg = r.suggestions[+b.dataset.sglink]; try { await api.post("/api/library/link", { a: d.id, b: sg.id, type: $(`[data-sgtype="${b.dataset.sglink}"]`, out).value, note: sg.reason, origin: "ai" }); b.closest(".card").remove(); loadRefDetail(d.id); if (S.graph) loadLibGraph(); } catch (err) { fail(err); } }));
+      } catch (e) { out.innerHTML = `<div class="notice">${esc(e.message)}</div>`; }
+    };
+    $("#ldCite", el).onclick = async () => { try { const r = await api.post("/api/library/links/detect", { ids: [d.id] }); toast(r.added ? `${r.added} 件の引用関係を見つけました` : "本文に他の登録文献の DOI・題名は見つかりませんでした"); if (r.added) { loadRefDetail(d.id); if (S.graph) loadLibGraph(); } } catch (e) { fail(e); } };
     $$("[data-sec]", el).forEach((c) => (c.onclick = () => { S.lib.graphExpanded.add(`r:${d.id}`); S.lib.graphExpanded.add(`s:${d.id}:${c.dataset.sec}`); S.lib.graphGroup = "none"; S.rtab = "graph"; app.classList.remove("no-right"); renderRight(); }));
     if ($("#ldFile", el)) $("#ldFile", el).onclick = () => pickDocs(async (paths) => { if (paths[0]) saveField("file", paths[0]); });
     if ($("#ldNote", el)) $("#ldNote", el).onclick = async () => { try { const r = await api.post("/api/library/note", { id: d.id }); await loadTree(); toast("読書ノートを作りました"); openNote(r.path, { mode: "edit" }); } catch (e) { fail(e); } };
@@ -1622,6 +1638,14 @@
       "-",
       { label: "登録を外す", danger: true, run: async () => { if (!(await confirmBox("文献の登録を外す", `「${esc(d.title)}」を文献から外しますか？<br><span class="hint">本文ファイルやノートは消えません。</span>`, "外す", true))) return; try { await api.post("/api/library/remove", { ids: [d.id] }); L.cur = null; L.detail = null; loadLibrary(); } catch (err) { fail(err); } } },
     ]); };
+  }
+  function libLinkDialog(d) {
+    const refs = (S.lib.data ? S.lib.data.refs : []).filter((r) => r.id !== d.id);
+    openPalette(refs.map((r) => ({ label: r.title, hint: [r.authors[0], r.year].filter(Boolean).join(" ・ "), run: () => {
+      const body = document.createElement("div");
+      body.innerHTML = `<div class="form"><label>この文献</label><div><b>${esc(d.title)}</b></div><label for="lkType">関係</label><select id="lkType">${Object.entries(d.link_types || {}).map(([k, v]) => `<option value="${k}"${k === "related" ? " selected" : ""}>${v}</option>`).join("")}</select><label>相手</label><div><b>${esc(r.title)}</b></div><label for="lkNote">説明（任意）</label><input id="lkNote" type="text" placeholder="例: 第3章の手法を前提にしている"></div><p class="hint">「引用している」「発展させている」などは、この文献 → 相手 の向きです。逆向きにしたいときは相手の文献から付けてください。</p>`;
+      modal({ title: "文献をつなぐ", body, buttons: [{ label: "キャンセル" }, { label: "つなぐ", primary: true, onClick: async () => { try { await api.post("/api/library/link", { a: d.id, b: r.id, type: $("#lkType", body).value, note: $("#lkNote", body).value }); toast("つなぎました"); loadRefDetail(d.id); if (S.graph) loadLibGraph(); } catch (e) { fail(e); return false; } } }] });
+    } })), "つなぐ文献を選ぶ");
   }
   async function libBulk(act) {
     const L = S.lib, ids = [...L.sel];
@@ -1687,7 +1711,7 @@
     const L = S.lib;
     p.innerHTML = `<div class="gctl"><span>分類</span><select id="lgGroup">${Object.entries((L.data && L.data.groups) || { tag: "タグ", author: "著者", year: "年", type: "種類", status: "読了状態", none: "分類なし" }).map(([k, v]) => `<option value="${k}"${L.graphGroup === k ? " selected" : ""}>${v}</option>`).join("")}</select><button class="btn xs" id="lgCollapse" title="開いた要素をすべて閉じる">すべて閉じる</button><span style="flex:1"></span><button class="btn sm" id="lgBig">拡大</button></div>
       <canvas class="graph" id="gLib" aria-label="文献の分解グラフ。クリックで開閉、Shift+クリックで開く"></canvas>
-      <div class="hint" style="margin-top:8px">● 分類 → ● 文献 → ● 章・ページ → ● 段落 の順に、クリックで大きい要素から小さい要素へ開けます（＋／−）。Shift+クリックで文献・ファイルを開きます。点線は内容の近さで、別の文献の章・段落ともつながります。</div>
+      <div class="hint" style="margin-top:8px">● 分類 → ● 文献 → ● 章・ページ → ● 段落 の順に、クリックで大きい要素から小さい要素へ開けます（＋／−）。Shift+クリックで文献・ファイルを開きます。点線は内容の近さで、別の文献の章・段落ともつながります。実線（矢印）は付けたつながり（引用・発展・比較など）です。</div>
       <div id="lgInfo" class="lginfo"></div>`;
     $("#lgGroup", p).onchange = (e) => { L.graphGroup = e.target.value; store.set("libGroup", L.graphGroup); L.graphExpanded.clear(); renderLibraryGraph(p); };
     $("#lgCollapse", p).onclick = () => { L.graphExpanded.clear(); loadLibGraph(); };

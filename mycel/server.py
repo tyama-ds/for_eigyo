@@ -30,7 +30,7 @@ from mycelcore.app import MycelApp  # noqa: E402
 from mycelcore.config import chat_configured, embed_configured, public_config  # noqa: E402
 from mycelcore.llm import LLMClient, LLMError  # noqa: E402
 from mycelcore.jobs import JobBusy  # noqa: E402
-from mycelcore.library import STATUSES, TYPES, citation, to_bibtex  # noqa: E402
+from mycelcore.library import LINK_TYPES, STATUSES, TYPES, citation, to_bibtex  # noqa: E402
 from mycelcore.plugins import PluginVeto  # noqa: E402
 from mycelcore.scope import ScopeError  # noqa: E402
 from mycelcore.vault import ConflictError, VaultError  # noqa: E402
@@ -134,6 +134,7 @@ GET_ROUTES = {
                                     "types": TYPES, "statuses": STATUSES},
     "/api/library/ref": lambda app, p: {**app.library._row(app.library.get(_str(p, "id"))),
                                         "related": app.library.related(_str(p, "id")),
+                                        "links": app.library.links_of(_str(p, "id")), "link_types": {k: v["label"] for k, v in LINK_TYPES.items()},
                                         "structure": [{"n": s["n"], "heading": s["heading"], "chunks": len(s["chunks"])}
                                                       for s in app.library.structure(_str(p, "id"))],
                                         "bibtex": to_bibtex(app.library.get(_str(p, "id"))),
@@ -201,6 +202,12 @@ POST_ROUTES = {
     "/api/library/ask": lambda app, b: app.library.ask(_str(b, "question"), _list(b, "history"), _str(b, "tag"),
                                                          _str(b, "year"), _str(b, "status")),
     "/api/library/note": lambda app, b: app.library.create_note(_str(b, "id")),
+    "/api/library/link": lambda app, b: app.library.link(_str(b, "a"), _str(b, "b"), _str(b, "type", "related"), _str(b, "note"), _str(b, "origin", "user"))
+        and {"links": app.library.links_of(_str(b, "a"))},
+    "/api/library/unlink": lambda app, b: {"removed": app.library.unlink(_str(b, "a"), _str(b, "b"), _str(b, "type")),
+                                           "links": app.library.links_of(_str(b, "a"))},
+    "/api/library/links/suggest": lambda app, b: {"suggestions": app.library.suggest_links(_str(b, "id"))},
+    "/api/library/links/detect": lambda app, b: app.library.detect_citations(_list(b, "ids")),
     "/api/people/profile": lambda app, b: app.people.profile(_str(b, "type"), _str(b, "key")),
     "/api/people/merge": lambda app, b: app.people.merge(_str(b, "type"), _str(b, "key"), _str(b, "into")),
     "/api/people/unmerge": lambda app, b: app.people.unmerge(_str(b, "type"), _str(b, "key")) or {"ok": True},
