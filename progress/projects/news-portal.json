@@ -2,10 +2,10 @@
   "slug": "news-portal",
   "name": "Prism ニュースポータル",
   "path": "news-portal/",
-  "summary": "多数の RSS/Atom をカテゴリ別に束ねて表示するニュース収集ポータル。過去ログ×AIのリサーチ画面つき。",
+  "summary": "多数の RSS/Atom をカテゴリ別に束ねて表示するニュース収集ポータル。過去ログ(SQLite)を情報源×期間×キーワードで検索し、出典番号つきの調査レポートを生成・保存・Word出力できるリサーチ画面つき。",
   "status": "maintenance",
-  "phase": "機能は揃った。運用で改善中",
-  "progress": 85,
+  "phase": "リサーチ機能を本格化中（Phase 1: レポート生成・保存・書き出し 完了）",
+  "progress": 90,
   "started": "2026-07-07",
   "ports": [
     8780
@@ -14,6 +14,7 @@
   "portal": true,
   "stack": [
     "Python 標準ライブラリ",
+    "SQLite（標準）",
     "Selenium（任意）"
   ],
   "milestones": [
@@ -43,11 +44,30 @@
       "date": "2026-08-07"
     },
     {
+      "title": "過去ログの SQLite 永続化・条件検索（情報源×期間×カテゴリ×キーワード）",
+      "state": "done",
+      "date": "2026-10-01"
+    },
+    {
+      "title": "リサーチ Phase 1: map-reduce レポート生成・出典番号・保存・Markdown/Word 書き出し",
+      "state": "done",
+      "date": "2026-10-05"
+    },
+    {
+      "title": "リサーチ Phase 2: テーマ保存・新着差分・本文一括取得の統合",
+      "state": "todo"
+    },
+    {
+      "title": "リサーチ Phase 3: FTS5/同義語/ヒストグラム・企業ウォッチ・比較ビュー",
+      "state": "todo"
+    },
+    {
       "title": "自動テスト・CI",
       "state": "todo"
     }
   ],
   "next": [
+    "リサーチ Phase 2（テーマ保存・新着差分・本文一括取得の統合）",
     "自動テストと CI の追加",
     "0件になる情報源の定期点検"
   ],
@@ -56,6 +76,14 @@
     "フィード URL の変更・廃止で取得できなくなる"
   ],
   "log": [
+    {
+      "date": "2026-10-05",
+      "summary": "リサーチ Phase 1: 選択記事全件を部分要約→統合する出典番号つきレポート生成（非同期・進捗表示）、SQLite 保存、Markdown/Word(.docx) 書き出し"
+    },
+    {
+      "date": "2026-10-01",
+      "summary": "過去ログを SQLite に永続化し、リサーチ画面に情報源×期間×カテゴリ×キーワードの絞り込みと検索条件つきAI依頼を追加。ライトテーマで ghost ボタンの文字が白く消える不具合を修正"
+    },
     {
       "date": "2026-08-07",
       "summary": "本文取得を urllib→Selenium の2段構えに。WebDriver パスを GUI から指定",
@@ -77,5 +105,5 @@
       "ref": "#16"
     }
   ],
-  "updated": "2026-08-07"
+  "updated": "2026-10-05"
 }

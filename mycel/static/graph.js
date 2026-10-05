@@ -6,9 +6,9 @@
   const HUES = [162, 205, 32, 280, 350, 95, 245, 55];
 
   class ForceGraph {
-    constructor(canvas, { onOpen, labels = "near" } = {}) {
+    constructor(canvas, { onOpen, onExpand, labels = "near" } = {}) {
       this.c = canvas; this.g = canvas.getContext("2d");
-      this.onOpen = onOpen; this.labels = labels;
+      this.onOpen = onOpen; this.onExpand = onExpand; this.labels = labels;
       this.nodes = []; this.edges = []; this.center = null;
       this.view = { x: 0, y: 0, k: 1 };
       this.alpha = 0; this.raf = 0; this.hover = null; this.folderHue = {};
@@ -23,13 +23,19 @@
       const prev = Object.fromEntries(this.nodes.map((n) => [n.id, n]));
       const W = this.c.clientWidth || 300, H = this.c.clientHeight || 300;
       this.center = center || null;
+      // 階層グラフ: 新しく開いた子は親のそばに置く（展開が「親からほどける」ように見える）
+      const parentOf = {};
+      data.edges.forEach(([a, b, t]) => { if (t === "tree") parentOf[b] = a; });
       this.nodes = data.nodes.map((n, i) => {
         const p = prev[n.id];
+        const par = prev[parentOf[n.id]];
         const a = i * 2.39996, r = 20 + 9 * Math.sqrt(i);
-        return Object.assign({ x: p ? p.x : Math.cos(a) * r, y: p ? p.y : Math.sin(a) * r, vx: 0, vy: 0 }, n);
+        const x = p ? p.x : par ? par.x + Math.cos(a) * 22 : Math.cos(a) * r;
+        const y = p ? p.y : par ? par.y + Math.sin(a) * 22 : Math.sin(a) * r;
+        return Object.assign({ x, y, vx: 0, vy: 0 }, n);
       });
       const idx = Object.fromEntries(this.nodes.map((n, i) => [n.id, i]));
-      this.edges = data.edges.map(([a, b, t]) => [idx[a], idx[b], t]).filter(([a, b]) => a !== undefined && b !== undefined);
+      this.edges = data.edges.map(([a, b, t, label, directed]) => [idx[a], idx[b], t, label, directed]).filter(([a, b]) => a !== undefined && b !== undefined);
       this.nb = new Set();
       if (center) this.edges.forEach(([a, b]) => { if (this.nodes[a].id === center) this.nb.add(b); if (this.nodes[b].id === center) this.nb.add(a); });
       const folders = [...new Set(this.nodes.map((n) => (n.folder || "").split("/")[0]).filter(Boolean))].sort();
@@ -90,9 +96,15 @@
 
     color(name) { return getComputedStyle(this.c).getPropertyValue(name).trim(); }
     nodeColor(n, i) {
-      if (!n.exists) return null;
+      if (n.exists === false) return null;
       if (n.id === this.center) return this.color("--accent");
       if (n.kind === "doc") return this.color("--warn");
+      if (n.kind === "group") return this.color("--accent");
+      if (n.kind === "ref") return document.documentElement.dataset.theme === "light" ? "hsl(230 50% 48%)" : "hsl(230 60% 72%)";
+      if (n.kind === "section") return document.documentElement.dataset.theme === "light" ? "hsl(200 45% 48%)" : "hsl(200 50% 70%)";
+      if (n.kind === "passage") return document.documentElement.dataset.theme === "light" ? "hsl(190 25% 60%)" : "hsl(190 25% 60%)";
+      if (n.kind === "person") return document.documentElement.dataset.theme === "light" ? "hsl(285 45% 48%)" : "hsl(285 55% 72%)";
+      if (n.kind === "org") return document.documentElement.dataset.theme === "light" ? "hsl(205 55% 42%)" : "hsl(205 60% 68%)";
       const hue = this.folderHue[(n.folder || "").split("/")[0]];
       const light = document.documentElement.dataset.theme === "light";
       if (hue === undefined) return light ? "hsl(160 8% 50%)" : "hsl(160 8% 62%)";
@@ -107,13 +119,28 @@
       const line = this.color("--line"), acc = this.color("--accent"), muted = this.color("--muted"), ink = this.color("--ink"), bg = this.color("--bg");
       const focus = this.hover ?? (this.center ? this.nodes.findIndex((n) => n.id === this.center) : -1);
       const warn = this.color("--warn");
-      for (const [i, j, t] of this.edges) {
+      const linkCol = document.documentElement.dataset.theme === "light" ? "hsl(230 50% 48%)" : "hsl(230 60% 72%)";
+      for (const [i, j, t, label, directed] of this.edges) {
         const p = this.nodes[i], q = this.nodes[j];
         const hot = focus >= 0 && (i === focus || j === focus);
-        g.strokeStyle = hot ? acc : t === "rel" ? warn : line; g.lineWidth = (hot ? 1.6 : 1) / Math.sqrt(v.k);
-        g.setLineDash(t === "rel" ? [4 / v.k, 3 / v.k] : []);   // 資料同士のつながりは点線
+        g.strokeStyle = hot ? acc : t === "rel" ? warn : t === "link" ? linkCol : line; g.lineWidth = (hot ? 1.6 : t === "link" ? 1.4 : 1) / Math.sqrt(v.k);
+        g.setLineDash(t === "rel" || t === "sim" ? [4 / v.k, 3 / v.k] : t === "ent" ? [1.5 / v.k, 2.5 / v.k] : []);   // つながり・内容の近さは点線、人物は細かい点線
+        if (t === "sim" && !hot) g.strokeStyle = warn;
         g.globalAlpha = focus >= 0 && !hot ? 0.7 : 1;
+        if ((t === "ent" || t === "sim") && !hot) g.globalAlpha = focus >= 0 ? 0.35 : 0.6;
         g.beginPath(); g.moveTo(p.x, p.y); g.lineTo(q.x, q.y); g.stroke();
+        if (t === "link") {                                   // 文献同士のつながり: 向きがあれば矢印、近づけば種類を表示
+          const dx = q.x - p.x, dy = q.y - p.y, len = Math.hypot(dx, dy) || 1, ux = dx / len, uy = dy / len;
+          if (directed) {
+            const r = (q.r || 6) + 1, ax = q.x - ux * r, ay = q.y - uy * r, s = 5 / Math.sqrt(v.k);
+            g.fillStyle = g.strokeStyle; g.beginPath(); g.moveTo(ax, ay);
+            g.lineTo(ax - ux * s - uy * s * 0.6, ay - uy * s + ux * s * 0.6); g.lineTo(ax - ux * s + uy * s * 0.6, ay - uy * s - ux * s * 0.6); g.closePath(); g.fill();
+          }
+          if (label && (hot || v.k > 1.1 || this.edges.length <= 12)) {
+            g.save(); g.font = `${10 / Math.sqrt(v.k)}px ${getComputedStyle(document.body).fontFamily}`; g.textAlign = "center"; g.fillStyle = g.strokeStyle; g.globalAlpha = hot ? 1 : 0.85;
+            g.fillText(label, (p.x + q.x) / 2, (p.y + q.y) / 2 - 3 / Math.sqrt(v.k)); g.restore();
+          }
+        }
       }
       g.globalAlpha = 1; g.setLineDash([]);
       g.font = `${11 / Math.sqrt(v.k)}px ${getComputedStyle(document.body).fontFamily}`;
@@ -121,14 +148,29 @@
       const nbs = new Set();
       if (focus >= 0) for (const [a, b] of this.edges) { if (a === focus) nbs.add(b); if (b === focus) nbs.add(a); }
       this.nodes.forEach((n, i) => {
-        const r = 3.5 + Math.sqrt(n.degree) * 1.7; n.r = r;
+        let r = 3.5 + Math.sqrt(n.degree) * 1.7;
+        if (n.kind === "group") r = 9 + Math.min(10, Math.sqrt(n.count || 1) * 2.2);   // 階層: 大きい要素ほど大きく
+        else if (n.kind === "ref") r = 6.5;
+        else if (n.kind === "section") r = 4.5;
+        else if (n.kind === "passage") r = 3;
+        n.r = r;
         g.beginPath();
         if (n.kind === "doc") { const a = r * 0.95; g.rect(n.x - a, n.y - a, a * 2, a * 2); }   // 資料は四角
+        else if (n.kind === "person") { const a = r * 1.25; g.moveTo(n.x, n.y - a); g.lineTo(n.x + a, n.y); g.lineTo(n.x, n.y + a); g.lineTo(n.x - a, n.y); g.closePath(); }   // 人物は◆
+        else if (n.kind === "org") { const a = r * 1.3; g.moveTo(n.x, n.y - a); g.lineTo(n.x + a, n.y + a * 0.8); g.lineTo(n.x - a, n.y + a * 0.8); g.closePath(); }   // 組織は▲
         else g.arc(n.x, n.y, r, 0, Math.PI * 2);
         const col = this.nodeColor(n, i);
         if (col) { g.fillStyle = col; g.fill(); } else { g.fillStyle = bg; g.fill(); g.strokeStyle = muted; g.lineWidth = 1; g.stroke(); }
+        if (n.expandable) {                                 // 開ける要素には ＋／− を描く
+          g.strokeStyle = bg; g.lineWidth = Math.max(1, r / 5);
+          const a = r * 0.5;
+          g.beginPath(); g.moveTo(n.x - a, n.y); g.lineTo(n.x + a, n.y);
+          if (!n.expanded) { g.moveTo(n.x, n.y - a); g.lineTo(n.x, n.y + a); }
+          g.stroke();
+        }
         const neighbor = nbs.has(i);
-        const show = this.labels === "all" || i === focus || neighbor || v.k > 1.3 || this.nodes.length <= 25;
+        const show = this.labels === "all" || i === focus || neighbor || v.k > 1.3 || this.nodes.length <= 25
+          || n.kind === "group" || (n.kind === "ref" && this.nodes.length <= 60);
         if (show) {
           g.fillStyle = i === focus ? ink : muted;
           const t = n.title.length > 16 ? n.title.slice(0, 15) + "…" : n.title;
@@ -160,7 +202,11 @@
         };
         c.onpointerup = () => {
           c.onpointermove = null; c.style.cursor = "";
-          if (!moved && hit >= 0 && this.onOpen) { const n = this.nodes[hit]; this.onOpen(n.exists ? n.id : null, n.title); }
+          if (!moved && hit >= 0) {
+            const n = this.nodes[hit];
+            if (n.expandable && this.onExpand && !e.shiftKey) this.onExpand(n);          // 階層グラフ: クリックで開閉、Shift+クリックで開く
+            else if (this.onOpen) this.onOpen(n.exists ? n.id : null, n.title, n);
+          }
           this.drag = null;
           c.onpointermove = (ev) => { const h = this.pick(ev); if (h !== (this.hover ?? -1)) { this.hover = h >= 0 ? h : null; c.style.cursor = h >= 0 ? "pointer" : ""; this.draw(); } };
         };

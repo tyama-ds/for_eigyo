@@ -39,6 +39,22 @@ def chat_response(messages: list[dict]) -> str:
                 ' "projects": [], "others": ["保守"]}, "tags": ["見積", "A社"]}\n```')
     if task in ("ingest_links", "relate"):
         return '[{"n": 1, "reason": "同じ顧客の案件"}]'
+    if task == "libmeta":
+        return ('{"title": "在庫最適化のための需要予測手法", "authors": ["山田 太郎", "Smith, John"], "year": "2024",'
+                ' "venue": "日本経営工学会論文誌", "volume": "75", "issue": "2", "pages": "100-110", "doi": "10.1234/jima.2024.001",'
+                ' "type": "article", "lang": "ja", "abstract": "需要予測に基づく在庫最適化の手法を提案する。", "keywords": ["在庫最適化", "需要予測"]}')
+    if task == "liblinks":
+        return '[{"n": 1, "type": "extends", "reason": "同じ在庫最適化を需要予測で発展"}]'
+    if task == "libsummary":
+        return ('```json\n{"one_line": "需要予測で在庫を 20% 削減した。", "purpose": "欠品と過剰在庫の削減", "method": "時系列モデルと安全在庫の最適化",'
+                ' "results": "3 拠点で在庫 20% 減", "limitations": "季節性の強い品目では精度が落ちる", "keywords": ["在庫最適化", "安全在庫"]}\n```')
+    if task == "entities":
+        return ('```json\n[{"name": "田中", "type": "person", "title": "部長", "org": "A社", "role": "決裁者",'
+                ' "evidence": "田中部長が決裁"}, {"name": "山本 一郎", "type": "person", "org": "B社", "role": "窓口",'
+                ' "evidence": "B社の山本さん"}, {"name": "A社", "type": "org", "role": "顧客"}]\n```')
+    if task == "profile":
+        refs = re.findall(r"^\[(\d+)\]", prompt, re.M)
+        return "## 所属と立場\nA社の部長で決裁者（推定）。" + "".join(f"[{r}]" for r in refs[:2])
     if task == "transform":
         return "- 整えた文章"
     return "接続OK"

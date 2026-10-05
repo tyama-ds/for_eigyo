@@ -55,19 +55,23 @@ class AIService:
 
     # ------------------------------------------------------------ 検索
     def retrieve(self, query: str, k: int = 6, exclude: set[str] | None = None,
-                 prefixes: list[str] | None = None) -> list[dict]:
-        """関連するチャンクを返す。prefixes で検索対象（フォルダ・外部フォルダ）を絞る。"""
+                 prefixes: list[str] | None = None, paths: set[str] | None = None,
+                 query_vec: list[float] | None = None, pool: int = 60) -> list[dict]:
+        """関連するチャンクを返す。prefixes（フォルダ）や paths（ファイルの集合）で検索対象を絞る。
+        query_vec を渡すと埋め込みの API 呼び出しを省く。戻り値の各行に mode（keyword / vector / both）を付ける。"""
         exclude = exclude or set()
         tpl = self._template_prefix()        # テンプレートは空欄の雛形なので対象外
         ranks: dict[int, float] = {}
-        for r, (cid, _) in enumerate(self.index.search_chunks(query, 60, prefixes, tpl)):
+        modes: dict[int, set] = {}
+        for r, (cid, _) in enumerate(self.index.search_chunks(query, pool, prefixes, tpl, paths)):
             ranks[cid] = ranks.get(cid, 0.0) + 1.0 / (60 + r)
+            modes.setdefault(cid, set()).add("keyword")
         cfg = self.get_config()
         if embed_configured(cfg):
             vecs = self._vectors(cfg["embed_model"])
             if vecs:
                 try:
-                    qv = LLMClient(cfg).embed([query])[0]
+                    qv = query_vec or LLMClient(cfg).embed([query])[0]
                     sims = []
                     for ref in self.index.chunk_refs():
                         v = vecs.get(ref["hash"])
@@ -76,12 +80,15 @@ class AIService:
                         p = ref["path"]
                         if prefixes is not None and not any(self.index._under(p, x) for x in prefixes):
                             continue
+                        if paths is not None and p not in paths:
+                            continue
                         if any(p == t or p.startswith(t + "/") for t in tpl):
                             continue
                         sims.append((cosine(qv, v), ref["id"]))
                     sims.sort(reverse=True)
-                    for r, (_, cid) in enumerate(sims[:60]):
+                    for r, (_, cid) in enumerate(sims[:pool]):
                         ranks[cid] = ranks.get(cid, 0.0) + 1.0 / (60 + r)
+                        modes.setdefault(cid, set()).add("vector")
                 except LLMError:
                     pass                              # 意味検索が落ちてもキーワードで続行
         order = sorted(ranks, key=lambda i: -ranks[i])
@@ -91,19 +98,30 @@ class AIService:
             c = rows.get(cid)
             if not c or c["path"] in exclude:
                 continue
-            out.append({**c, "score": round(ranks[cid], 5)})
+            m = modes.get(cid, set())
+            out.append({**c, "score": round(ranks[cid], 5), "mode": "both" if len(m) > 1 else next(iter(m), "keyword")})
             if len(out) >= k:
                 break
         return out
 
+    def embed_query(self, text: str) -> list[float] | None:
+        cfg = self.get_config()
+        if not embed_configured(cfg):
+            return None
+        try:
+            return LLMClient(cfg).embed([text])[0]
+        except LLMError:
+            return None
+
     # ------------------------------------------------------------ 質問
     def ask(self, question: str, path: str | None = None, history: list | None = None,
-            prefixes: list[str] | None = None) -> dict:
+            prefixes: list[str] | None = None, paths: set[str] | None = None, k: int = 6,
+            system_extra: str = "") -> dict:
         question = (question or "").strip()
         if not question:
             raise LLMError("質問を入力してください")
         cfg = self.get_config()
-        hits = self.retrieve(question, k=6, prefixes=prefixes)
+        hits = self.retrieve(question, k=k, prefixes=prefixes, paths=paths)
         if path:
             note = self.index.get(path)
             if note and all(h["path"] != path for h in hits):
@@ -118,7 +136,7 @@ class AIService:
         if not chat_configured(cfg):
             return {"answer": "", "sources": sources, "llm": False,
                     "message": "LLM が未設定のため、関連するノート・資料だけを表示しています。"}
-        system = ("あなたはユーザーのノートと資料（Word・PDF・メールなど）に基づいて答えるアシスタントです。"
+        system = (system_extra or "あなたはユーザーのノートと資料（Word・PDF・メールなど）に基づいて答えるアシスタントです。"
                   "与えられた抜粋だけを根拠に日本語で簡潔に答えてください。"
                   "根拠にしたノート・資料は [[名前]] の形で本文中に示してください（資料は拡張子付きの名前）。"
                   "書かれていないことは推測せず「ノートや資料には記載がありません」と答えてください。")
