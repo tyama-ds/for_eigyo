@@ -2202,10 +2202,12 @@
         <label for="igOrig">原本の保存先</label><input id="igOrig" type="text" value="${esc(o.original_folder || "")}" placeholder="（Vault 直下）">
         <label></label><label class="ck"><input type="checkbox" id="igBody"${o.include_body ? " checked" : ""}> ノートに本文も入れる（原本を保存しないときは常に入れます）</label>
         <label></label><label class="ck"><input type="checkbox" id="igNew"${o.link_new_names ? " checked" : ""}> まだノートの無い顧客名・人名も [[リンク]] にする（オフでも人物・組織としてつながります）</label>
-        <label></label><label class="ck"><input type="checkbox" id="igLlmUse"${o.use_llm ? " checked" : ""}> AI（LLM）で要約・名前・タグ・関連を作る</label>`;
+        <label></label><label class="ck"><input type="checkbox" id="igLlmUse"${o.use_llm ? " checked" : ""}> AI（LLM）で要約・名前・タグ・関連を作る</label>
+        <label for="igRead">長い文書の読み方</label><select id="igRead"><option value="full"${o.read_mode !== "capped" ? " selected" : ""}>全文を読む（区画ごとの要点を節にまとめる。時間がかかるが抜けがない）</option><option value="capped"${o.read_mode === "capped" ? " selected" : ""}>先頭と末尾だけ（設定の「読む区画の上限」まで。速い）</option></select>
+        <label></label><span class="hint">全文を読むときは、読んだ区画の要点を残すので途中で止めても「続きから」再開できます。本文が 6 万字を超えるノートは「本文 1..n」の別ノートに分けてリンクします。</span>`;
     }
     const options = () => ({ dest_folder: $("#igDest", body).value, keep_original: $("#igKeep", body).checked, original_folder: $("#igOrig", body).value,
-      include_body: $("#igBody", body).checked, link_new_names: $("#igNew", body).checked, use_llm: $("#igLlmUse", body).checked });
+      include_body: $("#igBody", body).checked, link_new_names: $("#igNew", body).checked, use_llm: $("#igLlmUse", body).checked, read_mode: $("#igRead", body).value });
 
     function drawList() {
       const el = $("#igList", body), ds = data.drafts;
@@ -2236,19 +2238,24 @@
         return;
       }
       const head = `<div class="igh">${ftBadge(d.grp)}<b>${esc(d.name)}</b><small>${fmtSize(d.size)}${d.chars ? ` ・ ${d.chars.toLocaleString()} 文字` : ""}${d.model ? ` ・ ${esc(d.model)}` : d.status === "ready" ? " ・ AI なし" : ""}</small></div>`;
+      const partial = d.partial && d.partial.notes && d.partial.notes.length ? d.partial : null;
+      const pbar = partial ? `<div class="igprog"><div class="bar"><i style="width:${Math.round(100 * partial.notes.length / Math.max(1, partial.parts))}%"></i></div><small>${partial.notes.length} / ${partial.parts} 区画を読了${d.status !== "processing" ? "（続きから再開できます）" : ""}</small></div>` : "";
       if (d.status === "queued" || d.status === "processing") {
-        el.innerHTML = head + `<div class="ing-wait">${d.status === "processing" ? `<span class="spin"></span> ${esc(d.phase || "処理中")}` : "待機中です。「AI で下書きを作る」を押すと始まります。"}</div>`;
-        return;
+        el.innerHTML = head + `<div class="ing-wait">${d.status === "processing" ? `<span class="spin"></span> ${esc(d.phase || "処理中")}` : partial ? "途中で止まっています。「AI で下書きを作る」を押すと続きから読みます。" : "待機中です。「AI で下書きを作る」を押すと始まります。"}</div>` + pbar
+          + (d.status === "processing" ? `<button class="btn sm" data-igact="cancel">中止（続きから再開できます）</button>` : "");
+        bindActs(d); return;
       }
       if (d.status === "error") {
-        el.innerHTML = head + `<div class="notice err">${esc(d.error)}</div><button class="btn sm" data-igact="rerun">作り直す</button> <button class="btn sm danger" data-igact="discard">破棄</button>`;
+        el.innerHTML = head + `<div class="notice err">${esc(d.error)}</div>` + pbar + `<button class="btn sm" data-igact="rerun">${partial ? "続きから作る" : "作り直す"}</button> <button class="btn sm danger" data-igact="discard">破棄</button>`;
         bindActs(d); return;
       }
+      const cov = d.coverage || {};
+      const covLine = cov.parts > 1 && d.model ? `<div class="hint igcov">${cov.omitted ? `AI が読んだ範囲: ${cov.read} / ${cov.parts} 区画（先頭と末尾。中ほどの ${cov.omitted} 区画は未読。全文を読むには設定を「全文を読む」にして作り直してください）` : `AI が読んだ範囲: 全 ${cov.parts} 区画${cov.groups ? `（${cov.groups} 節に段階的にまとめ）` : ""}`}${cov.truncated ? " ・ 本文が長すぎるため末尾（約 300 万字以降）は読み込んでいません" : ""}${(d.body_notes || []).length ? ` ・ 本文は ${d.body_notes.length} 件のノートに分けて保存します` : ""}</div>` : (cov.truncated || (d.body_notes || []).length) ? `<div class="hint igcov">${cov.truncated ? "本文が長すぎるため末尾（約 300 万字以降）は読み込んでいません。" : ""}${(d.body_notes || []).length ? `本文は ${d.body_notes.length} 件のノートに分けて保存します。` : ""}</div>` : "";
       if (d.status === "saved") {
-        el.innerHTML = head + `<div class="notice">ノート「${esc(titleOf(d.saved_path))}」として保存しました。${d.original_path && d.origin === "upload" ? `原本は <code>${esc(d.original_path)}</code> にあります。` : ""}</div><button class="btn sm pri" data-igact="open">ノートを開く</button>`;
+        el.innerHTML = head + `<div class="notice">ノート「${esc(titleOf(d.saved_path))}」として保存しました。${d.original_path && d.origin === "upload" ? `原本は <code>${esc(d.original_path)}</code> にあります。` : ""}${(d.body_notes || []).length ? `本文は「本文 1〜${d.body_notes.length}」のノートに分けて保存しました。` : ""}</div><button class="btn sm pri" data-igact="open">ノートを開く</button>`;
         bindActs(d); return;
       }
-      el.innerHTML = head + `${d.error ? `<div class="notice">${esc(d.error)}</div>` : ""}
+      el.innerHTML = head + `${d.error ? `<div class="notice">${esc(d.error)}</div>` : ""}${covLine}
         <div class="form igpath"><label for="igPath">保存するノート</label><input id="igPath" type="text" value="${esc(d.note_path.replace(/\.md$/, ""))}"></div>
         ${d.related.length ? `<div class="srcs igrel"><span class="hint">関連（RAG）:</span>${d.related.map((r) => `<button class="chip" data-open="${esc(r.path)}" title="${esc(r.snippet)}">${esc(r.title)}${r.reason ? " — " + esc(r.reason) : ""}</button>`).join("")}</div>` : ""}
         <div class="seg igtabs"><button data-tab="prev" class="${tab === "prev" ? "on" : ""}">プレビュー</button><button data-tab="edit" class="${tab === "edit" ? "on" : ""}">編集</button></div>
@@ -2276,6 +2283,7 @@
         const act = b.dataset.igact;
         if (act === "save") { await flushEdit(); save([d.id]); }
         else if (act === "rerun") run([d.id]);
+        else if (act === "cancel") { try { await api.post("/api/index/cancel", {}); toast("中止しました。読んだ分は残っているので続きから再開できます"); } catch (err) { fail(err); } }
         else if (act === "discard") discard([d.id], true);
         else if (act === "open") { m.close(); openNote(d.saved_path); }
       }));

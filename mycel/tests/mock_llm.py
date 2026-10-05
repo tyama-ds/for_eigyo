@@ -32,6 +32,9 @@ def chat_response(messages: list[dict]) -> str:
     if task == "ingest_map":
         part = (re.search(r"（(\d+)/(\d+)）", prompt) or [None, "?"])[1]
         return f"- 部分{part}の要点: 初期費用 1,200万円"
+    if task == "ingest_group":
+        n = len(re.findall(r"^## 部分 |^## 節 ", prompt, re.M))
+        return f"- 節の要点（{n} 区画分）: 初期費用 1,200万円、保守 月額30万円"
     if task == "ingest":
         return ('考えた結果です。```json\n{"title": "A社 見積の概要", "doc_type": "見積書", "date": "2026-09-01",'
                 ' "summary": "A社向けの概算見積。初期費用は1,200万円。", "points": ["初期費用 1,200万円", "保守 月額30万円"],'

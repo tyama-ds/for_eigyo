@@ -5,6 +5,9 @@
 1. 本文を取り出す（extract.py）
 2. 長い文書は区切って LLM に要点を書かせ（map）、それをまとめて分析する（reduce）
    → タイトル・要約・要点・登場する名前（顧客・人物・製品など）・タグ
+   区画が多いとき（数百ページの文書など）は、既定では全区画を読み、部分の要点を 10 区画ずつ
+   「節の要点」にまとめる段階を挟む（段階的なまとめ）。読んだ区画の要点は下書きに残すので、
+   途中で止めても「続きから」再開できる。「先頭と末尾だけ」を選ぶと上限までで速く終わる
 3. RAG: 要約と名前で既存のノート・資料を検索し（BM25 ＋ 埋め込み）、
    候補を LLM に見せて本当に関係するものと理由を選ばせる
 4. Markdown の下書きを作る（元の資料へのリンク・要約・要点・[[名前]]・関連ノート・#タグ）
@@ -15,6 +18,7 @@ LLM が未設定・接続できない場合も、本文の取り込みとキー�
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
@@ -37,7 +41,10 @@ DEFAULT_OPTIONS = {
     "include_body": False,             # ノートに本文も入れる（原本を保存しないときは常に入れる）
     "link_new_names": False,           # まだノートの無い名前も [[リンク]] にする（オフでも人物・組織としてつながる）
     "use_llm": True,
+    "read_mode": "full",               # full: 全区画を段階的に読む / capped: 先頭と末尾だけ（ingest_max_chunks まで）
 }
+BODY_NOTE_CHARS = 60000                # ノートに入れる本文がこれを超えたら「本文 1..n」の別ノートに分ける
+GROUP_SIZE = 10                        # 段階的なまとめ: 部分の要点を何区画ずつ節にまとめるか
 ENTITY_LABELS = [("customers", "顧客・取引先"), ("people", "人物"), ("products", "製品・サービス"),
                  ("projects", "案件・プロジェクト"), ("others", "その他")]
 _BAD = re.compile(r'[<>:"|?*\\/\x00-\x1f\[\]#^]')
@@ -228,6 +235,8 @@ class Ingestor:
         opts = {**self.options(), **{k: v for k, v in (options or {}).items() if k in DEFAULT_OPTIONS}}
         for k in ("dest_folder", "original_folder"):
             opts[k] = str(opts[k] or "").replace("\\", "/").strip().strip("/")
+        if opts.get("read_mode") not in ("full", "capped"):
+            opts["read_mode"] = "full"
         self.app.update_config({"ingest": opts})
         targets = [d["id"] for d in self._load()
                    if (ids is None and d["status"] in ("queued", "error")) or (ids is not None and d["id"] in ids)]
@@ -259,10 +268,10 @@ class Ingestor:
 
         return self.app.jobs.start("ingest", f"AI 取り込み（{len(targets)} 件）", None, run)
 
-    def _phase(self, did: str, phase: str, job) -> None:
+    def _phase(self, did: str, phase: str, job, **fields) -> None:
         if job is not None and job.cancel.is_set():
             raise Cancelled()
-        self._update(did, status="processing", phase=phase)
+        self._update(did, status="processing", phase=phase, **fields)
         if job is not None:
             job.phase = phase
 
@@ -278,12 +287,13 @@ class Ingestor:
             raise VaultError("本文を取り出せませんでした（スキャン画像の PDF などは文字がありません）")
         stem = Path(d["name"]).stem
         use_llm = bool(opts.get("use_llm")) and chat_configured(cfg)
-        info = {"title": stem, "summary": "", "points": [], "entities": {}, "tags": [], "doc_type": "", "date": ""}
+        info = {"title": stem, "summary": "", "points": [], "entities": {}, "tags": [], "doc_type": "", "date": "",
+                "coverage": {"chars": len(text), "truncated": text.endswith("（長すぎるため以降を省略）")}}
         llm_error = ""
         client = LLMClient(cfg) if use_llm else None
         if use_llm:
             try:
-                info.update(self._analyze(did, text, stem, client, cfg, job))
+                info.update(self._analyze(did, text, stem, client, cfg, job, opts))
             except LLMError as e:
                 llm_error = str(e)
                 use_llm = False
@@ -297,35 +307,90 @@ class Ingestor:
         if d["origin"] == "upload" and opts.get("keep_original"):
             of = opts["original_folder"]
             original = self._free_file(f"{of}/{d['name']}" if of else d["name"])
-        md = self.compose(d, info, related, text, original, opts, cfg.get("model", "") if use_llm else "")
+        body_notes = self._body_notes(d, note_path, title, text) if (opts.get("include_body") or not original) else []
+        md = self.compose(d, info, related, text, original, opts, cfg.get("model", "") if use_llm else "", body_notes)
         return self._update(did, status="ready", phase="", markdown=md, title=title, note_path=note_path,
                             related=related, llm=use_llm, model=cfg.get("model", "") if use_llm else "",
-                            entities=info.get("entities") or {},
-                            chars=len(text), original_path=original,
+                            entities=info.get("entities") or {}, coverage=info.get("coverage") or {},
+                            body_notes=[{"path": b["path"], "file": b["file"], "chars": b["chars"]} for b in body_notes],
+                            chars=len(text), original_path=original, partial=None,
                             error=f"LLM を使えなかったため、本文とキーワード検索だけで作りました: {llm_error}" if llm_error else "")
 
+    # ---- 長い本文: ノートに全部は入れず「本文 1..n」の別ノートに分けて [[リンク]] でつなぐ
+    def _body_notes(self, d: dict, note_path: str, title: str, text: str) -> list[dict]:
+        if len(text) <= BODY_NOTE_CHARS:
+            return []
+        parts = _split(text, BODY_NOTE_CHARS - 2000)
+        base = note_path[:-3] if note_path.lower().endswith(".md") else note_path
+        folder = self.dir / "files" / d["id"]
+        folder.mkdir(parents=True, exist_ok=True)
+        out = []
+        for i, part in enumerate(parts, 1):
+            # 見出しが親ノートの見出しより上にならないよう 1 段下げる
+            part = re.sub(r"^(#{1,5}) ", lambda m: "#" + m.group(1) + " ", part, flags=re.M)
+            fm = ["---", "種別: 取り込み本文", f"親ノート: [[{Path(base).name}]]", f"部分: {i}/{len(parts)}", "---"]
+            nav = " ・ ".join(([f"← [[{Path(base).name}／本文 {i - 1}|前]]"] if i > 1 else [])
+                              + ([f"[[{Path(base).name}／本文 {i + 1}|次]] →"] if i < len(parts) else []))
+            md = "\n".join(fm) + f"\n# {title} — 本文 ({i}/{len(parts)})\n\n" + (nav + "\n\n" if nav else "") + part.strip() + "\n"
+            f = folder / f"body_{i}.md"
+            f.write_text(md, encoding="utf-8")
+            out.append({"path": f"{base}／本文 {i}.md", "file": f"files/{d['id']}/body_{i}.md", "chars": len(part)})
+        return out
+
     # ---- LLM で読む
-    def _analyze(self, did: str, text: str, stem: str, client: LLMClient, cfg: dict, job) -> dict:
+    def _analyze(self, did: str, text: str, stem: str, client: LLMClient, cfg: dict, job, opts: dict | None = None) -> dict:
         size = int(cfg.get("ingest_chunk_chars") or 3000)
         max_chunks = int(cfg.get("ingest_max_chunks") or 24)
-        parts = _split(text, size)
-        omitted = max(0, len(parts) - max_chunks)
-        if omitted:                              # 長すぎる文書は先頭と末尾を優先
+        full = (opts or {}).get("read_mode", "full") != "capped"
+        all_parts = _split(text, size)
+        total = len(all_parts)
+        omitted = 0 if full else max(0, total - max_chunks)
+        parts = all_parts
+        if omitted:                              # 先頭と末尾だけ: 上限までで速く終わる
             head = max_chunks - max_chunks // 4
-            parts = parts[:head] + parts[-(max_chunks - head):]
+            parts = all_parts[:head] + all_parts[-(max_chunks - head):]
+        coverage = {"parts": total, "read": len(parts), "omitted": omitted, "mode": "full" if full else "capped",
+                    "chunk_chars": size, "groups": 0}
         if len(parts) <= 1:
             material = parts[0] if parts else text[:size]
         else:
-            notes = []
-            for i, part in enumerate(parts, 1):
-                self._phase(did, f"AI が読んでいます {i}/{len(parts)}", job)
+            # 読んだ区画の要点は下書きに残し、途中で止めても続きから再開できるようにする
+            fp = hashlib.sha1(f"{size}:{full}:{len(text)}:{text[:2000]}:{text[-2000:]}".encode("utf-8")).hexdigest()
+            prev = (self.get(did).get("partial") or {})
+            notes = list(prev.get("notes") or []) if prev.get("fp") == fp else []
+            notes = notes[:len(parts)]
+            started, done0 = time.time(), len(notes)
+            for i in range(len(notes) + 1, len(parts) + 1):
+                eta = ""
+                if i - 1 > done0:
+                    per = (time.time() - started) / (i - 1 - done0)
+                    rest = per * (len(parts) - i + 1)
+                    eta = f"（残り約 {int(rest // 60)} 分）" if rest >= 90 else f"（残り約 {int(rest)} 秒）"
+                self._phase(did, f"AI が読んでいます {i}/{len(parts)}{eta}", job,
+                            partial={"fp": fp, "notes": notes, "parts": len(parts)})
                 raw = client.chat(
                     "[TASK:ingest_map]\n次は文書「" + stem + f"」の一部（{i}/{len(parts)}）です。"
                     "この部分の要点を、固有名詞・数字・日付・決定事項を落とさずに箇条書き 3〜8 行で書いてください。"
-                    "書かれていないことは足さないでください。\n\n# 文書の一部\n" + part,
+                    "書かれていないことは足さないでください。\n\n# 文書の一部\n" + parts[i - 1],
                     temperature=0.1)
                 notes.append(f"## 部分 {i}\n{raw.strip()}")
-            material = "\n\n".join(notes)
+            self._update(did, partial={"fp": fp, "notes": notes, "parts": len(parts)})
+            # 段階的なまとめ: 部分の要点が多ければ GROUP_SIZE ずつ「節の要点」にまとめ、収まるまで繰り返す
+            level, items = 0, notes
+            while len(items) > max(GROUP_SIZE, max_chunks):
+                level += 1
+                groups = [items[k:k + GROUP_SIZE] for k in range(0, len(items), GROUP_SIZE)]
+                merged = []
+                for gi, grp in enumerate(groups, 1):
+                    self._phase(did, f"AI が節ごとにまとめています {gi}/{len(groups)}（段階 {level}）", job)
+                    raw = client.chat(
+                        "[TASK:ingest_group]\n次は文書「" + stem + f"」の連続する部分の要点（{gi}/{len(groups)}）です。"
+                        "重複をまとめ、固有名詞・数字・日付・決定事項を落とさずに、この範囲の要点を箇条書き 5〜12 行で書いてください。"
+                        "書かれていないことは足さないでください。\n\n" + "\n\n".join(grp), temperature=0.1)
+                    merged.append(f"## 節 {level}-{gi}\n{raw.strip()}")
+                items = merged
+                coverage["groups"] += len(groups)
+            material = "\n\n".join(items)
             if omitted:
                 material += f"\n\n（長い文書のため中ほどの {omitted} 区画は読んでいません）"
         self._phase(did, "AI がまとめています", job)
@@ -344,9 +409,9 @@ class Ingestor:
             temperature=0.1)
         data = _json(raw)
         if not isinstance(data, dict):
-            return {"summary": raw.strip()[:1500]}
+            return {"summary": raw.strip()[:1500], "coverage": coverage}
         ents = data.get("entities") if isinstance(data.get("entities"), dict) else {}
-        return {"title": str(data.get("title") or stem).strip()[:80] or stem,
+        return {"coverage": coverage, "title": str(data.get("title") or stem).strip()[:80] or stem,
                 "summary": str(data.get("summary") or "").strip(),
                 "points": _strs(data.get("points"), 15),
                 "entities": {k: _strs(ents.get(k), 12) for k, _ in ENTITY_LABELS},
@@ -377,9 +442,17 @@ class Ingestor:
 
     # ---- 下書きの Markdown
     def compose(self, d: dict, info: dict, related: list[dict], text: str, original: str,
-                opts: dict, model: str) -> str:
+                opts: dict, model: str, body_notes: list[dict] | None = None) -> str:
         today = time.strftime("%Y-%m-%d")
         fm = ["---", "種別: 取り込み資料"]
+        cov = info.get("coverage") or {}
+        if cov.get("parts", 0) > 1 and model:
+            if cov.get("omitted"):
+                fm.append(f"AI が読んだ範囲: {cov['read']} / {cov['parts']} 区画（先頭と末尾。中ほどの {cov['omitted']} 区画は未読）")
+            else:
+                fm.append(f"AI が読んだ範囲: 全 {cov['parts']} 区画" + (f"（{cov['groups']} 節に段階的にまとめ）" if cov.get("groups") else ""))
+        if cov.get("truncated"):
+            fm.append("本文の省略: 長すぎるため末尾を読み込んでいません（約 300 万字まで）")
         if info.get("doc_type"):
             fm.append(f"文書の種類: {info['doc_type']}")
         if info.get("date"):
@@ -422,10 +495,12 @@ class Ingestor:
                     target = target[:-3]
                 out.append(f"- [[{target}]]" + (f" — {r['reason']}" if r.get("reason") else ""))
             out.append("")
-        if opts.get("include_body") or not original:
-            body = text if len(text) <= 60000 else text[:60000] + "\n\n（以下省略）"
+        if body_notes:
+            out += ["## 本文", "", f"全文（{len(text):,} 文字）は長いため {len(body_notes)} 件のノートに分けてあります。"]
+            out += [f"- [[{Path(b['path']).name[:-3]}|本文 {i}]]（{b['chars']:,} 文字）" for i, b in enumerate(body_notes, 1)] + [""]
+        elif opts.get("include_body") or not original:
             # 取り込んだ本文の見出しがノートの見出しより上にならないよう 1 段下げる
-            body = re.sub(r"^(#{1,5}) ", lambda m: "#" + m.group(1) + " ", body, flags=re.M)
+            body = re.sub(r"^(#{1,5}) ", lambda m: "#" + m.group(1) + " ", text, flags=re.M)
             out += ["## 本文", "", body, ""]
         tags = info.get("tags") or []
         out.append(" ".join(f"#{t}" for t in ["取り込み"] + [t for t in tags if t != "取り込み"]))
@@ -490,6 +565,22 @@ class Ingestor:
         note = d["note_path"]
         if self.app.vault.exists(note):
             note = self._free_note(note)
+        base = Path(note).name[:-3]
+        for i, b in enumerate(d.get("body_notes") or [], 1):
+            f = (self.dir / b["file"]).resolve()
+            if self.dir.resolve() not in f.parents or not f.is_file():
+                raise VaultError("本文の下書きが見つかりません（作り直してください）")
+            body_md = f.read_text(encoding="utf-8")
+            old_base = Path(b["path"]).name[:-3].rsplit("／本文 ", 1)[0]
+            if old_base != base:                         # 親ノートの名前が変わっていればリンクも合わせる
+                body_md = body_md.replace(f"[[{old_base}", f"[[{base}")
+            target = str(Path(note).parent / f"{base}／本文 {i}.md").replace("\\", "/")
+            if target.startswith("./"):
+                target = target[2:]
+            if self.app.vault.exists(target):
+                target = self._free_note(target)
+            self.app.create(target, text=body_md)
+            md = md.replace(f"[[{old_base}／本文 {i}|", f"[[{Path(target).name[:-3]}|")
         r = self.app.create(note, text=md)
         if d.get("entities"):                            # LLM が見つけた名前を人物・組織として登録
             self.app.people.put_from_ingest(r["path"], d["entities"], md)
