@@ -112,6 +112,15 @@ App Portal（`launcher/`）にも `Prism ニュースポータル` として登�
     （設定の「PDF フォント」で指定も可。環境変数 `PRISM_PDF_FONT`）。出典はリンク注釈つき
   - 記事だけを選んで Word / PowerPoint / PDF にした場合は先にレポートを自動生成する。生成物は
     `exports/` に保存され、「書き出し済み」から再ダウンロード・削除（最大200件）
+- **外部資料（RAG）** — 右ペインの「資料」で PDF（pypdf が必要）/ Word / PowerPoint / Excel /
+  テキストを登録（ファイル、またはテキスト貼り付け）。本文を抜粋に分けて索引化し、レポート生成の
+  「外部資料も使う」や会話の「会話に資料を使う」で、**問い・検索語・主要な固有名詞に関連する抜粋**だけを
+  選んで記事と同じ出典番号で渡す（出典一覧では「外部資料」として表示）。資料だけでレポートを作ることも可能。
+- **大規模レポートの堅牢化** — 設定の「ローカルLLMの処理設定」（文脈長・並列数・タイムアウト）から、
+  1回に渡す記事量・本文の長さ・統合の段数を自動で決める。失敗したチャンクは**再試行→半分に分割→
+  スキップ**して先へ進み、部分メモは文脈長に収まるまで**多段統合**。進捗には経過時間と残り時間の
+  目安・失敗数が出て、レポートには所要時間と失敗チャンク数を記録する。検索結果の表示件数は
+  200／500／1000／2000 件から選べ、レポートは最大 1000 件。
 - **ロードマップ** — 全フェーズの計画と完了状況は [ROADMAP.md](ROADMAP.md) を参照。
 - **トレンド** — 見出しから多く出現する語を抽出してチップ表示。クリックで即フィルタ。
 - **保存（ブックマーク）** — 記事を保存してドロワーで一覧。ブラウザの localStorage に
@@ -316,6 +325,14 @@ UI の「情報源」から自由に 追加 / 無効化 / 削除でき、URL も
 | GET | `/api/research/export/file?id=` | 生成した文書のダウンロード |
 | DELETE | `/api/research/export?id=` | 生成した文書の削除 |
 | POST | `/api/research/export/intent` | 会話文から書き出し意図（形式）を判定（JSON: `text`） |
+| GET | `/api/research/docs` | 外部資料の一覧 |
+| POST | `/api/research/docs/upload?name=` | 外部資料のアップロード（本体は生のバイト列。.pdf/.docx/.pptx/.xlsx/.txt/.md/.csv、最大40MB） |
+| POST | `/api/research/docs` | テキストを外部資料として登録（JSON: `name`, `text`） |
+| DELETE | `/api/research/docs?id=` | 外部資料の削除 |
+
+レポート生成 `POST /api/research/report` は `docs`（"all" または資料 id の配列）と `doc_k`（抜粋件数、既定20）、
+会話 `POST /api/ai/chat` は `use_docs` を受け付ける。`POST /api/settings` の `ctx_tokens` / `parallel` / `timeout_s` が
+ローカルLLMの処理設定（`GET /api/settings` の `ai` に含まれる）。
 | DELETE | `/api/research/report?id=` | レポート削除 |
 | POST | `/api/ai/chat` | AIへの質問（JSON: `question`, `history`, `context`, `fetch_page?`） |
 

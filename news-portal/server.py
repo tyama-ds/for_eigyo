@@ -69,7 +69,8 @@ USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
 
 AI_TIMEOUT = 60           # 生成AI呼び出しのタイムアウト（秒・クラウド）
-AI_TIMEOUT_LOCAL = 300    # ローカルLLMは推論(思考)モデルが長考するため長め（秒）
+AI_TIMEOUT_LOCAL = 600    # ローカルLLMは推論(思考)モデルが長考するため長め（秒・設定で変更可）
+LOCAL_CTX_TOKENS_DEFAULT = 4096   # ローカルLLMの文脈長の既定（Ollama / LM Studio の既定に合わせる。設定で変更可）
 AI_MAX_TOKENS = 1500      # AI応答の最大トークン
 MAX_PAGE_TEXT = 6000      # 記事ページを本文コンテキストに含める最大文字数
 MAX_PAGE_TEXT_LOCAL = 3500  # ローカルLLMは文脈窓が小さく、長い本文で出力が
@@ -808,6 +809,11 @@ def _archive_init_locked() -> None:
         conn.execute("""CREATE TABLE IF NOT EXISTS exports(
             id TEXT PRIMARY KEY, created_at REAL, kind TEXT, title TEXT, filename TEXT, bytes INTEGER,
             report_id TEXT, instructions TEXT, meta_json TEXT)""")   # 生成した文書ファイル（Word/Excel/PowerPoint/PDF）
+        conn.execute("""CREATE TABLE IF NOT EXISTS docs(
+            id TEXT PRIMARY KEY, name TEXT, kind TEXT, chars INTEGER, chunks INTEGER, created_at REAL, note TEXT)""")   # 外部資料（RAG）
+        conn.execute("""CREATE TABLE IF NOT EXISTS doc_chunks(
+            id INTEGER PRIMARY KEY, doc_id TEXT, idx INTEGER, heading TEXT, text TEXT)""")   # 資料の抜粋（チャンク）
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_doc_chunks_doc ON doc_chunks(doc_id, idx)")
         if ARCHIVE_FILE.exists():   # 旧 JSONL → SQLite 取り込み（取り込み後は .imported に退避）
             rows = []
             try:
@@ -829,6 +835,7 @@ def _archive_init_locked() -> None:
             except OSError:
                 pass
         _fts_setup(conn)   # 全文索引（件数が合わなければ再構築）
+        _doc_fts_setup(conn)   # 外部資料の抜粋の索引
         conn.commit()
     finally:
         conn.close()
@@ -1046,7 +1053,7 @@ def archive_search(q: str, limit: int = 60, sources: list[str] | None = None,
     各行に has_text（本文キャッシュあり）を付けて返す。"""
     where, params, uses_match = _search_where(q, sources, since_ts, until_ts, category, archived_since, parsed)
     try:
-        n = max(1, min(int(limit), 300))
+        n = max(1, min(int(limit), 2000))
     except (TypeError, ValueError):
         n = 60
     order_sql = ("articles_fts.rank, a.sort_ts DESC" if (order == "rel" and uses_match) else "a.sort_ts DESC")
@@ -1391,11 +1398,21 @@ def ai_config() -> dict:
     x = load_settings().get("ai")
     ai = x if isinstance(x, dict) else {}   # 壊れた settings.json でも崩れない
     provider = ai.get("provider") if ai.get("provider") in AI_PROVIDERS else "anthropic"
+    def _int(k, lo, hi, default):
+        try:
+            v = int(ai.get(k) or 0)
+        except (TypeError, ValueError):
+            v = 0
+        return v if lo <= v <= hi else default
     return {
         "provider": provider,
         "base_url": (ai.get("base_url") or "").strip(),
         "model": (ai.get("model") or "").strip(),
         "api_key": ai.get("api_key") or "",
+        # ローカルLLMの処理設定: 文脈長（トークン）・並列数・1回のタイムアウト（秒）
+        "ctx_tokens": _int("ctx_tokens", 1024, 2_000_000, LOCAL_CTX_TOKENS_DEFAULT),
+        "parallel": _int("parallel", 1, 8, 1),
+        "timeout_s": _int("timeout_s", 30, 7200, AI_TIMEOUT_LOCAL),
     }
 
 
@@ -1408,6 +1425,7 @@ def ai_status() -> dict:
         "model": cfg["model"],
         "has_key": bool(cfg["api_key"]),
         "providers": list(AI_PROVIDERS),
+        "ctx_tokens": cfg["ctx_tokens"], "parallel": cfg["parallel"], "timeout_s": cfg["timeout_s"],
     }
 
 
@@ -1666,8 +1684,8 @@ def call_ai(cfg: dict, system: str, user_content: str, history: list[dict],
     body = {"model": model or default_model, "messages": full}
     if provider == "local":
         # 推論(思考)モデルは max_tokens=1500 だと </think> の前に打ち切られて
-        # 生の思考が漏れるため、上限を課さない（サーバー既定=EOSまで）。時間も長めに
-        timeout = AI_TIMEOUT_LOCAL
+        # 生の思考が漏れるため、上限を課さない（サーバー既定=EOSまで）。時間は設定値（既定 600 秒）
+        timeout = float(cfg.get("timeout_s") or AI_TIMEOUT_LOCAL)
     else:
         body["max_tokens"] = max_tokens or AI_MAX_TOKENS
         timeout = AI_TIMEOUT
@@ -1743,6 +1761,15 @@ def ai_chat(payload: dict) -> dict:
         if payload.get("fulltext"):
             page_note = (f"本文抜粋を {len(pages)} 件に添付（取得済みの記事のみ・各{per}字まで）" if pages else
                          "⚠ 取得済みの本文がありません（左の「本文を取得」で先に取得してください）。要約のみに基づく回答です")
+        if payload.get("use_docs"):   # 外部資料（RAG）: 問いに関連する抜粋を添える
+            pz = retrieve_passages(_report_terms(question, f, items), None, DOC_CHAT_K)
+            if pz:
+                parts.append("\n【外部資料の抜粋（利用者が登録した資料。記事と同様に根拠として使う）】")
+                for i, p in enumerate(pz, 1):
+                    parts.append(f"{i}. {p['name']}（{p['heading'] or '本文'}）: " + re.sub(r"\s+", " ", p["text"])[:per])
+                page_note = (page_note + " ／ " if page_note else "") + f"外部資料の抜粋 {len(pz)} 件を添付"
+            else:
+                page_note = (page_note + " ／ " if page_note else "") + "⚠ 問いに関連する外部資料の抜粋が見つかりません"
     else:
         parts.append("【対象の記事】")
         for f in ("title", "source", "category", "published", "summary", "link"):
@@ -1756,8 +1783,8 @@ def ai_chat(payload: dict) -> dict:
             if pg["text"]:
                 page = pg["text"]
                 if cfg["provider"] == "local":
-                    # 小さな文脈窓で出力が思考の途中に切れて漏れるのを防ぐ
-                    page = page[:MAX_PAGE_TEXT_LOCAL]
+                    # 小さな文脈窓で出力が思考の途中に切れて漏れるのを防ぐ（設定の文脈長から導く）
+                    page = page[:min(MAX_PAGE_TEXT_LOCAL, _budgets(cfg)["page"])]
                 parts.append("\n【記事ページ本文（抜粋）】\n" + page)
                 if pg["via"] == "selenium":
                     page_note = "本文はヘッドレスブラウザ（selenium）経由で取得しました"
@@ -1787,10 +1814,10 @@ def ai_chat(payload: dict) -> dict:
 
 # ------------------------------------------------------------------ リサーチ: レポート生成（map-reduce・出典番号つき）
 
-REPORT_MAX_ARTICLES = 300       # 1レポートの対象記事上限
+REPORT_MAX_ARTICLES = 1000      # 1レポートの対象記事上限
 REPORT_CHUNK_CHARS_LOCAL = 3500 # 部分要約1回に渡す記事テキストの文字数（ローカルLLM）
 REPORT_CHUNK_CHARS_CLOUD = 12000
-REPORT_PARALLEL_LOCAL = 2       # 部分要約の並列数（ローカルサーバーは直列化されることが多い）
+REPORT_PARALLEL_LOCAL = 1       # 部分要約の並列数の旧既定（現在は設定 ai.parallel を使う。Ollama 等は同時1件）
 REPORT_PARALLEL_CLOUD = 4
 REPORT_MAX_TOKENS = 4000        # クラウド向けの応答上限（ローカルは上限を課さない）
 REPORT_TEMPLATES = {
@@ -1935,13 +1962,16 @@ def _merge_prompt(question: str, notes: str) -> str:
 
 
 def _reduce_prompt(question: str, tname: str, sections: list[str], notes: str,
-                   n_articles: int, filters: dict, note: str = "") -> str:
+                   n_articles: int, filters: dict, note: str = "", n_docs: int = 0) -> str:
     conds = _filters_conds(filters)
     heads = "\n".join(f"{i}. ## {s}" for i, s in enumerate(sections, 1))
+    target = (f"【対象】記事 {n_articles} 件（出典番号 [1]〜[{n_articles}]）\n\n" if not n_docs else
+              f"【対象】記事 {n_articles} 件＋外部資料の抜粋 {n_docs} 件（出典番号 [1]〜[{n_articles + n_docs}]。"
+              f"[{n_articles + 1}] 以降が資料）\n\n")
     return (f"【問い】{question}\n" + note
             + (f"【検索条件】{' ／ '.join(conds)}\n" if conds else "")
-            + f"【対象】記事 {n_articles} 件（出典番号 [1]〜[{n_articles}]）\n\n"
-            f"【部分メモ】\n{notes}\n\n"
+            + target
+            + f"【部分メモ】\n{notes}\n\n"
             f"【指示】部分メモを統合し、Markdown で「{tname}」を書いてください。構成は次の見出し（## で始める）を順に:\n{heads}\n"
             "- 各文・各箇条書きの末尾に根拠の出典番号 [n] を付ける（与えられた番号のみ使う）\n"
             "- 重複は統合し、矛盾があれば両論を併記する。新しい事実を加えない\n"
@@ -2038,11 +2068,46 @@ def delete_report(rid: str) -> bool:
             conn.close()
 
 
+def _budgets(cfg: dict) -> dict:
+    """LLM に渡す文字数の予算。ローカルLLMは設定の文脈長（トークン）から導く（日本語は概ね 1〜1.5 文字/トークン）。
+    chunk=部分要約1回の記事テキスト、merge=統合1回のメモ、reduce_cap=最終統合に渡すメモの上限、
+    per_article=本文抜粋/記事、page=会話の本文、facts=事実抽出1回、parallel=並列数。"""
+    if cfg.get("provider") == "local":
+        ctx = int(cfg.get("ctx_tokens") or LOCAL_CTX_TOKENS_DEFAULT)
+        chunk = max(600, min(REPORT_CHUNK_CHARS_LOCAL, int(ctx * 0.5)))
+        return {"chunk": chunk, "merge": max(800, int(ctx * 0.55)), "reduce_cap": max(800, int(ctx * 0.55)),
+                "per_article": max(300, min(FULLTEXT_PER_ARTICLE_LOCAL, int(ctx * 0.12))),
+                "page": max(1000, min(MAX_PAGE_TEXT, int(ctx * 0.6))), "facts": max(600, min(FACTS_CHUNK_LOCAL, int(ctx * 0.45))),
+                "parallel": max(1, min(8, int(cfg.get("parallel") or 1)))}
+    return {"chunk": REPORT_CHUNK_CHARS_CLOUD, "merge": REPORT_CHUNK_CHARS_CLOUD * 2, "reduce_cap": REPORT_CHUNK_CHARS_CLOUD * 2,
+            "per_article": FULLTEXT_PER_ARTICLE_CLOUD, "page": MAX_PAGE_TEXT, "facts": FACTS_CHUNK_CLOUD,
+            "parallel": REPORT_PARALLEL_CLOUD}
+
+
+def _llm_retry(cfg: dict, system: str, prompt: str, max_tokens: int | None, upd=None, label: str = "") -> tuple[str, str]:
+    """call_ai を 1 回だけ再試行つきで呼ぶ（接続エラー・タイムアウト対策）。戻り値 (本文, エラー文字列)。"""
+    err = ""
+    for attempt in range(2):
+        try:
+            return _split_reasoning(call_ai(cfg, system, prompt, [], max_tokens=max_tokens))[0], ""
+        except Exception as e:
+            err = f"{type(e).__name__}: {str(e)[:160]}"
+            if attempt == 0:
+                if upd:
+                    upd(sub=f"{label}再試行中（{err[:70]}）")
+                time.sleep(1.0)
+    return "", err
+
+
 def _build_report(cfg: dict, question: str, template: str, ids: list, filters: dict, fulltext: bool = False,
-                  groups: list[dict] | None = None, progress=None, title: str | None = None) -> dict:
-    """レポートを生成して dict で返す（保存はしない）。(本文一括取得) → 部分要約(map) → 統合(reduce)。
-    progress(**kw) で進捗（state / total / done / sub / articles）を通知する。
-    groups（比較レポート）があれば記事行に〔A〕〔B〕のタグを付け、群の定義をプロンプトに添える。"""
+                  groups: list[dict] | None = None, progress=None, title: str | None = None,
+                  docs=None, doc_k: int = 0) -> dict:
+    """レポートを生成して dict で返す（保存はしない）。
+    (本文一括取得) → (外部資料から関連抜粋を検索) → 部分要約(map) → 文脈長に収まるまで多段統合 → 最終統合(reduce)。
+    - 失敗したチャンクは再試行→半分に分割して再試行→それでも駄目なら記録して先へ進む（ジョブ全体は止めない）
+    - progress(**kw) で進捗（state / total / done / sub / failed / retries / started）を通知
+    - groups（比較レポート）があれば記事行に〔A〕〔B〕のタグを付け、群の定義をプロンプトに添える
+    - docs（外部資料: "all" または資料 id の配列）があれば、問いに関連する抜粋 doc_k 件を出典に加える"""
     def upd(**kw):
         if progress:
             progress(**kw)
@@ -2052,72 +2117,123 @@ def _build_report(cfg: dict, question: str, template: str, ids: list, filters: d
             tag_of.setdefault(str(i), f"〔{chr(65 + gi)}〕")
     note = _groups_note(groups)
     arts = _report_fetch(ids)
-    if not arts:
+    if not arts and not (docs and doc_k):
         raise RuntimeError("対象記事が過去ログに見つかりません")
     local = cfg["provider"] == "local"
-    budget = REPORT_CHUNK_CHARS_LOCAL if local else REPORT_CHUNK_CHARS_CLOUD
-    par = REPORT_PARALLEL_LOCAL if local else REPORT_PARALLEL_CLOUD
+    B = _budgets(cfg)
+    budget, par = B["chunk"], B["parallel"]
     system = _report_system(local)
     pages: dict[str, dict] = {}
     n_target = 0
-    if fulltext:   # 本文一括取得（キャッシュ優先・urllib→ブラウザ）。新しい記事から上限件数まで
+    if fulltext and arts:   # 本文一括取得（キャッシュ優先・urllib→ブラウザ）。新しい記事から上限件数まで
         targets = arts[:FULLTEXT_MAX_ARTICLES]
         n_target = len(targets)
         upd(state="fetching", total=n_target, done=0, articles=len(arts), sub="")
         pages = fetch_pages(targets, progress=lambda d, t, sub: upd(total=t, done=d, sub=sub))
-    per = FULLTEXT_PER_ARTICLE_LOCAL if local else FULLTEXT_PER_ARTICLE_CLOUD
-    lines = [_article_line(i + 1, a, (pages.get(a["id"]) or {}).get("text"), per, tag_of.get(a["id"], ""))
+    lines = [_article_line(i + 1, a, (pages.get(a["id"]) or {}).get("text"), B["per_article"], tag_of.get(a["id"], ""))
              for i, a in enumerate(arts)]
+    passages: list[dict] = []
+    if docs and doc_k:   # 外部資料（RAG）: 問い・検索語・主要な固有名詞に関連する抜粋を出典として追加
+        upd(state="retrieving", sub="外部資料から関連する抜粋を検索中", articles=len(arts))
+        terms = _report_terms(question, filters, arts)
+        passages = retrieve_passages(terms, None if docs == "all" else list(docs), doc_k)
+        per_doc = max(300, min(DOC_CHUNK_CHARS, budget // 2))
+        for i, pz in enumerate(passages):
+            lines.append(f"[{len(arts) + i + 1}] 資料｜{pz['name']}（{pz['heading'] or '本文'}）: "
+                         + re.sub(r"\s+", " ", pz["text"])[:per_doc])
+        if passages:
+            note += ("【資料】「資料｜」で始まる行は利用者が登録した外部資料（PDF・Word 等）の抜粋。"
+                     "記事と同じく事実の根拠として出典番号で引用する\n")
+    n_src = len(arts) + len(passages)
     chunks = _chunk_lines(lines, budget)
-    upd(state="mapping", total=len(chunks), done=0, articles=len(arts), sub="")
+    t0 = time.time()
+    upd(state="mapping", total=len(chunks), done=0, articles=len(arts), sub="", started=t0, failed=0, retries=0)
     done = [0]
+    retries = [0]
+    failed: list[dict] = []
     lock = threading.Lock()
 
+    def map_one(ch: list[str], depth: int = 0) -> str:
+        txt, err = _llm_retry(cfg, system, _map_prompt(question, "\n".join(ch), bool(pages), note), REPORT_MAX_TOKENS, upd, "部分要約を")
+        if txt:
+            return txt
+        with lock:
+            retries[0] += 1
+        if depth < 1 and len(ch) > 1:   # 文脈長超過・タイムアウトなら半分に割ってもう一度
+            upd(sub=f"チャンクを分割して再試行中（{err[:60]}）")
+            mid = len(ch) // 2
+            return "\n".join(x for x in (map_one(ch[:mid], depth + 1), map_one(ch[mid:], depth + 1)) if x)
+        with lock:
+            failed.append({"lines": len(ch), "error": err})
+        return ""
+
     def do_map(ch: list[str]) -> str:
-        txt = call_ai(cfg, system, _map_prompt(question, "\n".join(ch), bool(pages), note), [],
-                      max_tokens=REPORT_MAX_TOKENS)
-        ans, _ = _split_reasoning(txt)
+        ans = map_one(ch)
         with lock:
             done[0] += 1
-            upd(done=done[0])
+            upd(done=done[0], failed=len(failed), retries=retries[0], sub="")
         return ans
 
     with ThreadPoolExecutor(max_workers=max(1, min(par, len(chunks)))) as ex:
         notes = [n for n in ex.map(do_map, chunks) if n]
-    upd(state="reducing")
+    if not notes:
+        raise RuntimeError("部分要約がすべて失敗しました（" + (failed[0]["error"] if failed else "不明") +
+                           "）。設定の「文脈長」「タイムアウト」「並列数」を見直してください")
+    upd(state="reducing", sub="", mtotal=0, mdone=0)
     notes_text = "\n\n".join(notes)
-    if len(notes) > 1 and len(notes_text) > budget * 2:   # 多段統合（メモが長すぎる場合）
+    merge_rounds = 0
+    while len(notes_text) > B["reduce_cap"] and merge_rounds < 4:   # 最終統合の文脈長に収まるまで多段統合
+        merge_rounds += 1
+        gs = _chunk_lines(notes_text.split("\n"), B["merge"])
+        upd(sub=f"部分メモを統合中（第{merge_rounds}段）", mtotal=len(gs), mdone=0)
         mids = []
-        for g in _chunk_lines(notes_text.split("\n"), budget * 2):
-            t = call_ai(cfg, system, _merge_prompt(question, "\n".join(g)), [],
-                        max_tokens=REPORT_MAX_TOKENS)
-            mids.append(_split_reasoning(t)[0])
-        notes_text = "\n\n".join(m for m in mids if m)
+        for gi, g in enumerate(gs, 1):
+            txt, err = _llm_retry(cfg, system, _merge_prompt(question, "\n".join(g)), REPORT_MAX_TOKENS, upd, "統合を")
+            mids.append(txt if txt else "\n".join(g)[:B["merge"] // 2])   # 失敗時は元メモを切り詰めて残す
+            upd(mdone=gi)
+        new_text = "\n\n".join(m for m in mids if m)
+        if len(new_text) >= len(notes_text):   # 縮まらないなら打ち切り
+            notes_text = new_text
+            break
+        notes_text = new_text
+    truncated = False
+    cap = int(B["reduce_cap"] * 1.5)
+    if len(notes_text) > cap:
+        notes_text = notes_text[:cap] + "\n（以降のメモは文脈長の都合で省略）"
+        truncated = True
+    upd(sub="統合レポートを作成中", mtotal=0, mdone=0)
     tname, sections = REPORT_TEMPLATES.get(template) or REPORT_TEMPLATES["overview"]
-    body = call_ai(cfg, system, _reduce_prompt(question, tname, sections, notes_text, len(arts), filters, note),
-                   [], max_tokens=REPORT_MAX_TOKENS)
-    body, _ = _split_reasoning(body)
+    body, err = _llm_retry(cfg, system, _reduce_prompt(question, tname, sections, notes_text, len(arts), filters, note, len(passages)),
+                           REPORT_MAX_TOKENS, upd, "統合レポートを")
+    if not body:
+        raise RuntimeError("統合レポートの生成に失敗しました（" + err + "）")
     body = re.sub(r"^\s*#\s[^\n]*\n", "", body, count=1)   # 念のため先頭のタイトル行を除去
-    body, bad = _strip_bad_cites(body, len(arts))
+    body, bad = _strip_bad_cites(body, n_src)
     n_text = sum(1 for p in pages.values() if p.get("text"))
+    sources = [{"n": i + 1, "id": a["id"], "title": a.get("title"), "source": a.get("source"),
+                "published": str(a.get("published") or "")[:10], "link": a.get("link")} for i, a in enumerate(arts)]
+    sources += [{"n": len(arts) + i + 1, "id": f"doc:{pz['id']}", "title": f"{pz['name']}（{pz['heading'] or '本文'}）",
+                 "source": "外部資料", "published": "", "link": ""} for i, pz in enumerate(passages)]
     return {
         "id": secrets.token_hex(8), "created_at": time.time(),
         "title": (title or "").strip()[:80] or _report_title(question, filters, tname),
         "question": question, "template": template if template in REPORT_TEMPLATES else "overview",
         "filters": filters, "article_ids": [a["id"] for a in arts],
         "markdown": body.strip(),
-        "sources": [{"n": i + 1, "id": a["id"], "title": a.get("title"), "source": a.get("source"),
-                     "published": str(a.get("published") or "")[:10], "link": a.get("link")}
-                    for i, a in enumerate(arts)],
+        "sources": sources,
         "model": f"{cfg['provider']}:{cfg['model'] or 'default'}",
         "stats": {"articles": len(arts), "chunks": len(chunks), "bad_cites": bad,
-                  "fulltext": n_text, "fulltext_failed": max(0, n_target - n_text)},
+                  "fulltext": n_text, "fulltext_failed": max(0, n_target - n_text),
+                  "docs": len(passages), "failed_chunks": len(failed), "retries": retries[0],
+                  "merge_rounds": merge_rounds, "truncated": truncated,
+                  "elapsed_s": round(time.time() - t0, 1), "chunk_chars": budget, "parallel": par,
+                  "errors": [f["error"] for f in failed[:3]]},
     }
 
 
 def _run_report(job_id: str, question: str, template: str, ids: list, filters: dict,
                 fulltext: bool = False, theme_id: str | None = None, title: str | None = None,
-                groups: list[dict] | None = None) -> None:
+                groups: list[dict] | None = None, docs=None, doc_k: int = 0) -> None:
     """ワーカースレッド: _build_report → 保存（レポート id = ジョブ id）。進捗は _jobs に書く。"""
     def upd(**kw):
         with _jobs_lock:
@@ -2126,7 +2242,7 @@ def _run_report(job_id: str, question: str, template: str, ids: list, filters: d
         cfg = ai_config()
         if cfg["provider"] != "local" and not cfg["api_key"]:
             raise RuntimeError("生成AI APIが未設定です")
-        rep = _build_report(cfg, question, template, ids, filters, fulltext, groups, upd, title)
+        rep = _build_report(cfg, question, template, ids, filters, fulltext, groups, upd, title, docs, doc_k)
         rep["id"] = job_id
         _save_report(rep)
         if theme_id:
@@ -2159,7 +2275,16 @@ def start_report_job(body: dict) -> dict:
             groups.append({"label": str(g.get("label") or "")[:60], "ids": gids})
             ids.extend(i for i in gids if i not in ids)
     ids = list(dict.fromkeys(ids))[:REPORT_MAX_ARTICLES]
-    if not ids:
+    docs = None   # 外部資料（RAG）: "all" または資料 id の配列
+    if body.get("docs") == "all":
+        docs = "all"
+    elif isinstance(body.get("docs"), list):
+        docs = [str(d) for d in body["docs"] if isinstance(d, str) and _ID_RE.fullmatch(d)] or None
+    try:
+        doc_k = max(1, min(int(body.get("doc_k") or DOC_K_DEFAULT), DOC_K_MAX)) if docs else 0
+    except (TypeError, ValueError):
+        doc_k = DOC_K_DEFAULT if docs else 0
+    if not ids and not docs:
         return {"ok": False, "error": "記事を1件以上選択してください"}
     filters = body.get("filters") if isinstance(body.get("filters"), dict) else {}
     question = (str(body.get("question") or "")).strip()[:300] or _default_question(filters)
@@ -2167,8 +2292,8 @@ def start_report_job(body: dict) -> dict:
     fulltext = bool(body.get("fulltext"))
     theme_id = body.get("theme_id") if isinstance(body.get("theme_id"), str) and _ID_RE.fullmatch(body["theme_id"]) else None
     title = str(body.get("title") or "")[:80]
-    job_id = _new_job("report", articles=len(ids), fulltext=fulltext)
-    threading.Thread(target=_run_report, args=(job_id, question, template, ids, filters, fulltext, theme_id, title, groups or None),
+    job_id = _new_job("report", articles=len(ids), fulltext=fulltext, docs=bool(docs))
+    threading.Thread(target=_run_report, args=(job_id, question, template, ids, filters, fulltext, theme_id, title, groups or None, docs, doc_k),
                      daemon=True).start()
     return {"ok": True, "job_id": job_id, "articles": len(ids)}
 
@@ -2176,7 +2301,9 @@ def start_report_job(body: dict) -> dict:
 def report_job_status(job_id: str) -> dict:
     with _jobs_lock:
         j = _jobs.get(job_id)
-        return {"ok": True, **j} if j else {"ok": False, "error": "unknown job"}
+        if not j:
+            return {"ok": False, "error": "unknown job"}
+        return {"ok": True, **j, "elapsed": round(time.time() - float(j.get("created") or time.time()), 1)}
 
 
 # ------------------------------------------------------------------ リサーチ: テーマ（保存した検索条件）・新着差分・本文一括取得
@@ -2801,6 +2928,356 @@ def report_markdown(rep: dict) -> str:
     return out
 
 
+# ------------------------------------------------------------------ リサーチ: 外部資料（RAG）— 登録・本文抽出・分割・関連抜粋の検索
+# PDF / Word / PowerPoint / Excel / テキストを「資料」として登録し、レポート生成や会話のときに
+# 問いに関連する抜粋を記事と同じ出典番号の体系で渡す。抽出は標準ライブラリ（PDF のみ pypdf が必要）。
+
+DOC_MAX_BYTES = 40 * 1024 * 1024   # 1ファイルの上限
+DOC_MAX = 200                      # 登録できる資料数
+DOC_CHUNK_CHARS = 900              # 抜粋（チャンク）の目安文字数
+DOC_K_DEFAULT = 20                 # レポートに渡す抜粋の既定件数
+DOC_K_MAX = 60
+DOC_CHAT_K = 6                     # 会話に添える抜粋の件数
+DOC_EXTS = ("pdf", "docx", "pptx", "xlsx", "txt", "md", "csv", "tsv", "json", "log")
+_DOC_STOP = set("の は を に が と で から まで も や へ について に関する における 動向 整理 まとめ まとめる 整理する 比較 比較し 共通点 相違点 温度差 "
+                "直近 日 件 記事 選択 選択した 群 報道 内容 動き 新しい 事実 変化 注目点 テーマ ウォッチ 以降 前の 期間 すべて こと もの ため など".split())
+_doc_fts_ok = False
+
+
+def _doc_fts_setup(conn) -> None:
+    """資料チャンクの全文索引 doc_fts（FTS5 があれば仮想テーブル、無ければ通常テーブル。rowid=doc_chunks.id）。"""
+    global _doc_fts_ok
+    row = conn.execute("SELECT sql FROM sqlite_master WHERE name = 'doc_fts'").fetchone()
+    existing = (row[0] or "") if row else None
+    want = _fts_available(conn)
+    if existing is not None and (("fts5" in existing.lower()) != want):
+        conn.execute("DROP TABLE doc_fts")
+        existing = None
+    if existing is None:
+        if want:
+            conn.execute("CREATE VIRTUAL TABLE doc_fts USING fts5(text, tokenize='trigram')")
+        else:
+            conn.execute("CREATE TABLE doc_fts(id INTEGER PRIMARY KEY, text TEXT)")
+    _doc_fts_ok = want
+    n_c = conn.execute("SELECT COUNT(*) FROM doc_chunks").fetchone()[0]
+    n_f = conn.execute("SELECT COUNT(*) FROM doc_fts").fetchone()[0]
+    if n_c != n_f:
+        conn.execute("DELETE FROM doc_fts")
+        rows = conn.execute("SELECT id, heading, text FROM doc_chunks").fetchall()
+        conn.executemany("INSERT INTO doc_fts(rowid, text) VALUES (?,?)", [(r[0], _norm(f"{r[1] or ''} {r[2] or ''}")) for r in rows])
+
+
+def _decode_text(data: bytes) -> str:
+    for enc in ("utf-8-sig", "cp932", "euc_jp"):
+        try:
+            return data.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return data.decode("utf-8", "replace")
+
+
+def _ooxml_paras(xml_bytes: bytes, para_tag: str, text_tag: str, ns: str) -> list[str]:
+    """OOXML の段落ごとのテキスト（<para_tag> 内の <text_tag> を連結）。"""
+    out: list[str] = []
+    try:
+        root = ET.fromstring(xml_bytes)
+    except ET.ParseError:
+        return out
+    for p in root.iter(f"{{{ns}}}{para_tag}"):
+        t = "".join(x.text or "" for x in p.iter(f"{{{ns}}}{text_tag}"))
+        if t.strip():
+            out.append(t.strip())
+    return out
+
+
+_W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+_A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
+_S_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+_R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+_PR_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
+
+
+def extract_doc_text(name: str, data: bytes) -> list[tuple[str, str]]:
+    """ファイル → [(見出し, 段落テキスト), ...]。対応: PDF（pypdf）/ Word / PowerPoint / Excel / テキスト系。"""
+    ext = (name or "").lower().rsplit(".", 1)[-1] if "." in (name or "") else ""
+    parts: list[tuple[str, str]] = []
+    if ext in ("txt", "md", "csv", "tsv", "json", "log"):
+        heading = ""
+        for block in re.split(r"\n\s*\n", _decode_text(data).replace("\r", "")):
+            b = block.strip()
+            if not b:
+                continue
+            m = re.match(r"^#{1,6}\s+(.+)$", b.split("\n", 1)[0])
+            if m and ext == "md":
+                heading = m.group(1).strip()
+                rest = b.split("\n", 1)[1].strip() if "\n" in b else ""
+                if rest:
+                    parts.append((heading, rest))
+                continue
+            parts.append((heading, b))
+        return parts
+    if ext == "docx":
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            root = ET.fromstring(z.read("word/document.xml"))
+        heading = ""
+        body = root.find(f"{{{_W_NS}}}body")
+        for el in (list(body) if body is not None else []):
+            tag = el.tag.split("}")[-1]
+            if tag == "p":
+                t = "".join(x.text or "" for x in el.iter(f"{{{_W_NS}}}t")).strip()
+                if not t:
+                    continue
+                ps = el.find(f"{{{_W_NS}}}pPr/{{{_W_NS}}}pStyle")
+                style = (ps.get(f"{{{_W_NS}}}val") if ps is not None else "") or ""
+                if re.match(r"(?i)^(heading|見出し|title|表題)", style):
+                    heading = t[:60]
+                else:
+                    parts.append((heading, t))
+            elif tag == "tbl":
+                rows = []
+                for tr in el.iter(f"{{{_W_NS}}}tr"):
+                    cells = ["".join(x.text or "" for x in tc.iter(f"{{{_W_NS}}}t")).strip() for tc in tr.iter(f"{{{_W_NS}}}tc")]
+                    if any(cells):
+                        rows.append(" | ".join(cells))
+                if rows:
+                    parts.append((heading, "\n".join(rows[:200])))
+        return parts
+    if ext == "pptx":
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            names = sorted((n for n in z.namelist() if re.match(r"ppt/slides/slide\d+\.xml$", n)),
+                           key=lambda n: int(re.search(r"(\d+)", n.rsplit("/", 1)[-1]).group(1)))
+            for n in names:
+                k = int(re.search(r"(\d+)", n.rsplit("/", 1)[-1]).group(1))
+                ps = _ooxml_paras(z.read(n), "p", "t", _A_NS)
+                if ps:
+                    parts.append((f"スライド {k}", "\n".join(ps)))
+        return parts
+    if ext == "xlsx":
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            shared: list[str] = []
+            if "xl/sharedStrings.xml" in z.namelist():
+                for si in ET.fromstring(z.read("xl/sharedStrings.xml")).iter(f"{{{_S_NS}}}si"):
+                    shared.append("".join(x.text or "" for x in si.iter(f"{{{_S_NS}}}t")))
+            wb = ET.fromstring(z.read("xl/workbook.xml"))
+            rels = {r.get("Id"): r.get("Target") for r in ET.fromstring(z.read("xl/_rels/workbook.xml.rels")).iter(f"{{{_PR_NS}}}Relationship")}
+            for sh in wb.iter(f"{{{_S_NS}}}sheet"):
+                target = rels.get(sh.get(f"{{{_R_NS}}}id")) or ""
+                path = ("xl/" + target) if not target.startswith("/") else target[1:]
+                if path not in z.namelist():
+                    continue
+                rows_out = []
+                for row in ET.fromstring(z.read(path)).iter(f"{{{_S_NS}}}row"):
+                    cells = []
+                    for c in row.iter(f"{{{_S_NS}}}c"):
+                        t = c.get("t")
+                        v = c.find(f"{{{_S_NS}}}v")
+                        if t == "s" and v is not None and v.text and v.text.isdigit() and int(v.text) < len(shared):
+                            cells.append(shared[int(v.text)])
+                        elif t == "inlineStr":
+                            cells.append("".join(x.text or "" for x in c.iter(f"{{{_S_NS}}}t")))
+                        elif v is not None and v.text:
+                            cells.append(v.text)
+                    if any(x.strip() for x in cells):
+                        rows_out.append("\t".join(cells))
+                    if len(rows_out) >= 3000:
+                        break
+                if rows_out:
+                    parts.append((sh.get("name") or "Sheet", "\n".join(rows_out)))
+        return parts
+    if ext == "pdf":
+        try:
+            from pypdf import PdfReader   # 任意依存
+        except ImportError:
+            raise ValueError("PDF の読み込みには pypdf が必要です（pip install pypdf）。または Word/テキストに変換して登録してください")
+        reader = PdfReader(io.BytesIO(data))
+        for i, page in enumerate(reader.pages, 1):
+            try:
+                t = (page.extract_text() or "").strip()
+            except Exception:
+                t = ""
+            if t:
+                parts.append((f"p.{i}", t))
+        return parts
+    raise ValueError("対応形式は PDF / Word(.docx) / PowerPoint(.pptx) / Excel(.xlsx) / テキスト(.txt .md .csv .tsv .json) です")
+
+
+def chunk_passages(parts: list[tuple[str, str]], size: int = DOC_CHUNK_CHARS) -> list[tuple[str, str]]:
+    """(見出し, 段落) の並びを、見出しごとに size 文字前後の抜粋にまとめる。長い段落は文の切れ目で分割。"""
+    out: list[tuple[str, str]] = []
+    cur_h, buf = None, ""
+
+    def flush():
+        nonlocal buf
+        if buf.strip():
+            out.append((cur_h or "", buf.strip()))
+        buf = ""
+
+    for h, t in parts:
+        t = re.sub(r"[ \t　]+", " ", t or "").strip()
+        if not t:
+            continue
+        if h != cur_h:
+            flush()
+            cur_h = h
+        for sent in re.split(r"(?<=[。．！？!?\n])", t):
+            if not sent.strip():
+                continue
+            if len(buf) + len(sent) > size and buf:
+                flush()
+            if len(sent) > size * 1.5:   # 句点の無い長文は強制分割
+                for i in range(0, len(sent), size):
+                    buf = sent[i:i + size]
+                    flush()
+                continue
+            buf += sent
+        if len(buf) >= size * 0.6:
+            flush()
+    flush()
+    return out
+
+
+def add_doc(name: str, data: bytes, note: str = "") -> dict:
+    """資料を登録（本文抽出→分割→索引）。戻り値は資料のメタ情報。"""
+    name = str(name or "資料").strip()[:120] or "資料"
+    if len(data) > DOC_MAX_BYTES:
+        raise ValueError(f"ファイルが大きすぎます（上限 {DOC_MAX_BYTES // (1024 * 1024)} MB）")
+    parts = extract_doc_text(name, data)
+    chunks = chunk_passages(parts)
+    if not chunks:
+        raise ValueError("本文を取り出せませんでした（画像だけの PDF や空のファイルの可能性）")
+    ext = name.lower().rsplit(".", 1)[-1] if "." in name else "txt"
+    with _archive_lock:
+        _archive_init_locked()
+        conn = _db()
+        try:
+            if conn.execute("SELECT COUNT(*) FROM docs").fetchone()[0] >= DOC_MAX:
+                raise ValueError(f"資料は最大 {DOC_MAX} 件までです。不要な資料を削除してください")
+            did = secrets.token_hex(8)
+            total = sum(len(t) for _, t in chunks)
+            conn.execute("INSERT INTO docs VALUES (?,?,?,?,?,?,?)", (did, name, ext, total, len(chunks), time.time(), str(note or "")[:200]))
+            for i, (h, t) in enumerate(chunks):
+                cur = conn.execute("INSERT INTO doc_chunks(doc_id, idx, heading, text) VALUES (?,?,?,?)", (did, i, h[:80], t))
+                conn.execute("INSERT INTO doc_fts(rowid, text) VALUES (?,?)", (cur.lastrowid, _norm(f"{h} {t}")))
+            conn.commit()
+        finally:
+            conn.close()
+    return {"id": did, "name": name, "kind": ext, "chars": total, "chunks": len(chunks)}
+
+
+def add_doc_text(name: str, text: str, note: str = "") -> dict:
+    name = str(name or "貼り付けテキスト").strip()[:120]
+    if not name.lower().endswith((".txt", ".md")):
+        name += ".txt"
+    return add_doc(name, str(text or "").encode("utf-8"), note)
+
+
+def _doc_row(r) -> dict:
+    return {"id": r["id"], "name": r["name"], "kind": r["kind"], "chars": r["chars"], "chunks": r["chunks"],
+            "created_at": r["created_at"], "note": r["note"]}
+
+
+def list_docs() -> list[dict]:
+    with _archive_lock:
+        _archive_init_locked()
+        conn = _db()
+        try:
+            return [_doc_row(r) for r in conn.execute("SELECT * FROM docs ORDER BY created_at DESC")]
+        finally:
+            conn.close()
+
+
+def get_doc(did: str) -> dict | None:
+    if not (isinstance(did, str) and _ID_RE.fullmatch(did)):
+        return None
+    with _archive_lock:
+        _archive_init_locked()
+        conn = _db()
+        try:
+            r = conn.execute("SELECT * FROM docs WHERE id = ?", (did,)).fetchone()
+            return _doc_row(r) if r else None
+        finally:
+            conn.close()
+
+
+def delete_doc(did: str) -> bool:
+    if not (isinstance(did, str) and _ID_RE.fullmatch(did)):
+        return False
+    with _archive_lock:
+        _archive_init_locked()
+        conn = _db()
+        try:
+            conn.execute("DELETE FROM doc_fts WHERE rowid IN (SELECT id FROM doc_chunks WHERE doc_id = ?)", (did,))
+            conn.execute("DELETE FROM doc_chunks WHERE doc_id = ?", (did,))
+            cur = conn.execute("DELETE FROM docs WHERE id = ?", (did,))
+            conn.commit()
+            return cur.rowcount > 0
+        finally:
+            conn.close()
+
+
+def _report_terms(question: str, filters: dict, arts: list[dict]) -> list[str]:
+    """資料検索に使う語: 問いと検索語の語（同義語展開込み）＋記事群によく出る固有名詞。"""
+    terms: list[str] = []
+    for src in (question or "", (filters or {}).get("q") or ""):
+        for g in parse_query(src)["groups"]:
+            terms.extend(g)
+    # 問いの文（例: 「高炉の水素還元の動向を整理する」）は助詞で割って名詞らしい断片も拾う
+    for frag in re.split(r"[、。・\s「」（）()『』,.:：/／]+|の|を|に|は|が|と|で|から|まで|について|に関する", _norm(question or "")):
+        f = frag.strip()
+        if 2 <= len(f) <= 20 and f not in _DOC_STOP:
+            terms.append(f)
+    for e in extract_entities(arts)[:6]:
+        terms.append(_norm(e["name"]))
+    out: list[str] = []
+    for t in terms:
+        t = t.strip().strip('"')
+        if len(t) >= 2 and t not in _DOC_STOP and t not in out:
+            out.append(t)
+    return out[:24]
+
+
+def retrieve_passages(terms: list[str], doc_ids: list[str] | None, k: int = DOC_K_DEFAULT) -> list[dict]:
+    """語の一致で資料の抜粋を上位 k 件選ぶ。FTS5 があれば bm25（3文字以上の語）を主に、短い語は出現回数で加点。"""
+    k = max(1, min(int(k or DOC_K_DEFAULT), DOC_K_MAX))
+    terms = [t for t in (terms or []) if t]
+    ids = [d for d in (doc_ids or []) if isinstance(d, str) and _ID_RE.fullmatch(d)]
+    with _archive_lock:
+        _archive_init_locked()
+        conn = _db()
+        try:
+            where_doc = (" AND c.doc_id IN (%s)" % ",".join("?" * len(ids))) if ids else ""
+            cands: dict[int, dict] = {}
+            longs = [t for t in terms if len(t) >= 3]
+            if _doc_fts_ok and longs:
+                match = " OR ".join(_fts_phrase(t) for t in longs)
+                try:
+                    for r in conn.execute("SELECT c.id, c.doc_id, c.heading, c.text, d.name, bm25(doc_fts) AS s "
+                                          "FROM doc_fts JOIN doc_chunks c ON c.id = doc_fts.rowid JOIN docs d ON d.id = c.doc_id "
+                                          "WHERE doc_fts MATCH ?" + where_doc + " ORDER BY s LIMIT ?", [match] + ids + [k * 4]):
+                        cands[r["id"]] = {"id": r["id"], "doc_id": r["doc_id"], "heading": r["heading"], "text": r["text"],
+                                          "name": r["name"], "score": -float(r["s"])}
+                except sqlite3.OperationalError:
+                    pass
+            if len(cands) < k or not longs:   # 短い語だけ／FTS なし／候補不足 → 走査して出現回数で採点
+                rows = conn.execute("SELECT c.id, c.doc_id, c.heading, c.text, d.name FROM doc_chunks c JOIN docs d ON d.id = c.doc_id"
+                                    + (" WHERE c.doc_id IN (%s)" % ",".join("?" * len(ids)) if ids else "") + " LIMIT 20000", ids).fetchall()
+                for r in rows:
+                    txt = _norm(f"{r['heading'] or ''} {r['text'] or ''}")
+                    s = 0.0
+                    for t in terms:
+                        c = txt.count(t)
+                        if c:
+                            s += c * (1.0 if len(t) >= 3 else 0.4) + 0.5
+                    if s > 0:
+                        e = cands.setdefault(r["id"], {"id": r["id"], "doc_id": r["doc_id"], "heading": r["heading"], "text": r["text"],
+                                                       "name": r["name"], "score": 0.0})
+                        e["score"] += s
+        finally:
+            conn.close()
+    out = sorted(cands.values(), key=lambda x: (-x["score"], x["doc_id"], x["id"]))[:k]
+    return out
+
+
 # ------------------------------------------------------------------ リサーチ: 文書生成（Word / Excel / PowerPoint / PDF）× ローカルLLM
 # 内容の構成・抽出・要約は LLM、ファイルの組み立ては docgen（標準ライブラリ）。生成物は exports/ に保存し一覧・再DL・削除できる。
 
@@ -2844,7 +3321,7 @@ def _json_system(local: bool) -> str:
 def compose_facts(cfg: dict, arts: list[dict], question: str, progress=None) -> list[dict]:
     """記事群から 事実・数値表（日付・企業・項目・値・単位・補足・出典番号）を LLM で抽出する（記事チャンクごと）。"""
     local = cfg["provider"] == "local"
-    budget = FACTS_CHUNK_LOCAL if local else FACTS_CHUNK_CLOUD
+    budget = _budgets(cfg)["facts"]
     lines = [_article_line(i + 1, a) for i, a in enumerate(arts)]
     chunks = _chunk_lines(lines, budget)
     system = _json_system(local)
@@ -3493,6 +3970,10 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok": True, "exports": list_exports()})
             return
 
+        if u.path == "/api/research/docs":   # 外部資料（RAG）の一覧
+            self._json({"ok": True, "docs": list_docs(), "fts": _doc_fts_ok})
+            return
+
         if u.path == "/api/research/export/file":   # 生成した文書ファイルのダウンロード
             r = export_file((parse_qs(u.query).get("id") or [""])[0])
             if not r:
@@ -3537,6 +4018,19 @@ class Handler(BaseHTTPRequestHandler):
             clen = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             clen = 0
+        if u.path == "/api/research/docs/upload":   # 外部資料のアップロード（生のバイト列。JSON の上限とは別）
+            if clen <= 0 or clen > DOC_MAX_BYTES:
+                self._json({"ok": False, "error": f"ファイルが空か、上限（{DOC_MAX_BYTES // (1024 * 1024)} MB）を超えています"}, 413)
+                return
+            name = (parse_qs(u.query).get("name") or ["資料"])[0]
+            data = self.rfile.read(clen)
+            try:
+                self._json({"ok": True, "doc": add_doc(name, data)})
+            except ValueError as e:
+                self._json({"ok": False, "error": str(e)}, 400)
+            except Exception as e:
+                self._json({"ok": False, "error": f"{type(e).__name__}: {str(e)[:200]}"}, 400)
+            return
         if clen > MAX_BODY:
             self._json({"error": "payload too large"}, 413)
             return
@@ -3595,6 +4089,13 @@ class Handler(BaseHTTPRequestHandler):
                 return
             ai = {"provider": provider, "base_url": base_url,
                   "model": (body.get("model") or "").strip()}
+            for k, lo, hi in (("ctx_tokens", 1024, 2_000_000), ("parallel", 1, 8), ("timeout_s", 30, 7200)):   # ローカルLLMの処理設定
+                try:
+                    v = int(body.get(k) or 0)
+                except (TypeError, ValueError):
+                    v = 0
+                if lo <= v <= hi:
+                    ai[k] = v
             # api_key: 未指定/空なら既存を保持（画面には返さないため）
             new_key = body.get("api_key")
             if new_key:
@@ -3659,6 +4160,14 @@ class Handler(BaseHTTPRequestHandler):
             self._json(save_synonyms(str(self._read_body().get("text") or "")))
             return
 
+        if u.path == "/api/research/docs":  # 外部資料をテキストで登録（JSON: name, text）
+            body = self._read_body()
+            try:
+                self._json({"ok": True, "doc": add_doc_text(str(body.get("name") or ""), str(body.get("text") or ""), str(body.get("note") or ""))})
+            except ValueError as e:
+                self._json({"ok": False, "error": str(e)}, 400)
+            return
+
         if u.path == "/api/research/export":  # 文書生成ジョブ（Word / Excel / PowerPoint / PDF × ローカルLLM）
             r = start_export_job(self._read_body())
             self._json(r, 200 if r.get("ok") else 400)
@@ -3706,6 +4215,11 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/research/export":   # 生成した文書ファイルの削除
             ok = delete_export((parse_qs(u.query).get("id") or [""])[0])
             self._json({"ok": ok} if ok else {"ok": False, "error": "unknown export"}, 200 if ok else 404)
+            return
+
+        if u.path == "/api/research/docs":   # 外部資料の削除
+            ok = delete_doc((parse_qs(u.query).get("id") or [""])[0])
+            self._json({"ok": ok} if ok else {"ok": False, "error": "unknown doc"}, 200 if ok else 404)
             return
 
         if u.path == "/api/sources":

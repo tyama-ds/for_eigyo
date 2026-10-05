@@ -544,6 +544,23 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
 .spark{display:inline-flex; align-items:flex-end; gap:1px; height:18px; width:72px; flex:0 0 auto}
 .spark i{flex:1; background:var(--accent); opacity:.7; border-radius:1px; min-height:1px}
 .spark i.last{opacity:1}
+/* ローカルLLMの処理設定・外部資料（Phase 5） */
+#aiLocalTuning[hidden]{display:none}
+.tune{display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center}
+.tune label{display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--text-2); font-weight:500}
+.tune input[type=number]{width:96px; padding:5px 8px; border-radius:7px; border:1px solid var(--line); background:var(--surface); color:var(--text); font:inherit; font-size:12px}
+.tune input[type=number]:focus{border-color:var(--accent); outline:none}
+#rsRDocK{width:52px; padding:2px 5px; border-radius:6px; border:1px solid var(--line); background:var(--surface); color:var(--text); font:inherit; font-size:12px}
+.rs__docpanel{min-width:380px; max-width:520px}
+.rs__docpanel input[type=file]{font-size:12px; max-width:100%}
+.rs__doc{display:flex; gap:8px; align-items:center; font-size:12.5px; padding:4px 6px; border-radius:7px}
+.rs__doc:hover{background:var(--surface-2)}
+.rs__doc input{accent-color:var(--accent)}
+.rs__doc .n{flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.rs__doc .k{font-size:10px; color:#fff; border-radius:4px; padding:0 5px; background:var(--accent)}
+.rs__doc .c{font-size:11px; color:var(--text-3); white-space:nowrap}
+.rs__docpaste{display:flex; flex-direction:column; gap:4px; padding:4px 6px 6px}
+.rs__docpaste textarea, .rs__docpaste input{width:100%; box-sizing:border-box; padding:5px 8px; border-radius:7px; border:1px solid var(--line); background:var(--surface); color:var(--text); font:inherit; font-size:12px}
 /* 文書生成（Phase 4） */
 #rsExSlides{width:56px; padding:3px 6px; border-radius:6px; border:1px solid var(--line); background:var(--surface); color:var(--text); font:inherit; font-size:12px}
 #rsExSlidesWrap[hidden]{display:none}
@@ -950,6 +967,12 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
           <button type="button" class="btn ghost sm" id="rsSrcBtn" aria-haspopup="true" aria-expanded="false">情報源: すべて ▾</button>
           <div class="rs__srcpanel" id="rsSrcPanel" hidden></div>
         </div>
+        <select id="rsLimit" aria-label="表示件数" title="検索結果の表示上限（レポートは選択した全件が対象。多いほど検索と描画に時間がかかります）">
+          <option value="200">表示: 200件</option>
+          <option value="500" selected>表示: 500件</option>
+          <option value="1000">表示: 1000件</option>
+          <option value="2000">表示: 2000件</option>
+        </select>
         <select id="rsOrder" aria-label="並び順" title="関連順は FTS5 全文検索が使え、3文字以上の語で検索したときに選べます">
           <option value="new">並び: 新着順</option>
           <option value="rel">並び: 関連順</option>
@@ -1000,7 +1023,12 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
           <button class="btn ghost sm" type="button" id="rsExpBtn">書き出し済み <span id="rsExpN"></span></button>
           <div class="rs__srcpanel rs__savedpanel right" id="rsExpPanel" hidden></div>
         </div>
+        <div class="rs__src">
+          <button class="btn ghost sm" type="button" id="rsDocBtn" aria-haspopup="true" aria-expanded="false" title="外部資料（PDF / Word / PowerPoint / Excel / テキスト）を登録し、レポート生成や会話で問いに関連する抜粋を記事と一緒に使う（RAG）">資料 <span id="rsDocN"></span>▾</button>
+          <div class="rs__srcpanel rs__docpanel right" id="rsDocPanel" hidden></div>
+        </div>
         <label class="rs__chk" title="左の「本文を取得」で取得済みの本文抜粋を会話に添えます（上から最大10件）"><input type="checkbox" id="rsUseFull"> 会話に本文を使う</label>
+        <label class="rs__chk" title="登録した外部資料から、問いに関連する抜粋（最大6件）を会話に添えます"><input type="checkbox" id="rsUseDocs"> 会話に資料を使う</label>
         <span class="rs__count">選択した記事すべてを部分要約→統合し、出典番号つきのレポートに</span>
       </div>
       <div class="rs__form" id="rsExportForm" hidden>
@@ -1037,6 +1065,7 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
       <div class="rs__form" id="rsReportForm" hidden>
         <input id="rsRQ" type="text" placeholder="調査の問い（例: 高炉の水素還元に関する直近の動き）" aria-label="調査の問い" autocomplete="off">
         <label class="rs__chk" title="選択記事（新しい順に最大80件）のページ本文を取得してから要約します。取得済みはキャッシュを使い、時間がかかる場合があります"><input type="checkbox" id="rsRFull"> 本文も取得して要約する（要約だけでなく記事ページの本文を根拠にする）</label>
+        <label class="rs__chk" title="右上の「資料」で登録した PDF / Word / Excel 等から、問い・検索語・主要な固有名詞に関連する抜粋を選び、記事と同じ出典番号で引用します（RAG）"><input type="checkbox" id="rsRDocs"> 外部資料も使う（関連する抜粋を最大 <input type="number" id="rsRDocK" min="1" max="60" value="20" aria-label="抜粋件数"> 件・登録 <span id="rsRDocsN">0</span> 件）</label>
         <div class="rs__formrow">
           <select id="rsRT" aria-label="レポート形式">
             <option value="overview">概況レポート</option>
@@ -1099,6 +1128,15 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
         <label for="aiModel">モデル</label>
         <input id="aiModel" type="text" autocomplete="off" spellcheck="false">
         <span class="hint" id="aiModelHint"></span>
+      </div>
+      <div class="setrow" id="aiLocalTuning" hidden>
+        <label>ローカルLLMの処理設定（レポート生成・文書生成）</label>
+        <div class="tune">
+          <label>文脈長（トークン）<input id="aiCtx" type="number" min="1024" max="2000000" step="512"></label>
+          <label>並列数<input id="aiPar" type="number" min="1" max="8"></label>
+          <label>タイムアウト（秒）<input id="aiTimeout" type="number" min="30" max="7200" step="30"></label>
+        </div>
+        <span class="hint">文脈長はサーバー側の設定に合わせてください（Ollama: 環境変数 <code>OLLAMA_CONTEXT_LENGTH</code> か Modelfile の <code>num_ctx</code>、LM Studio: コンテキスト長。既定は 4096）。1回に渡す記事量・本文の長さ・統合の段数はここから自動で決まり、超えると切り詰め／タイムアウトの原因になります。並列数は Ollama など同時に1件しか処理しないサーバーでは 1 のまま。タイムアウトは1回の呼び出しの上限で、超えると再試行→分割→スキップします。</span>
       </div>
       <div class="setrow key">
         <label for="aiKey">APIキー <span id="aiKeyOpt" class="hint" style="display:none">（ローカルLLMでは通常不要）</span></label>
@@ -2026,6 +2064,8 @@ function toggleProxyUrl(){ $("#aiProxyUrl").disabled = !$("#aiUseProxy").checked
 function fillAiForm(){
   const c=AI.config||{provider:"anthropic",base_url:"",model:"",has_key:false};
   $("#aiProvider").value=c.provider||"anthropic";
+  $("#aiLocalTuning").hidden = (c.provider||"anthropic")!=="local";
+  $("#aiCtx").value=c.ctx_tokens||4096; $("#aiPar").value=c.parallel||1; $("#aiTimeout").value=c.timeout_s||600;
   $("#aiBase").value=c.base_url||""; $("#aiModel").value=c.model||""; $("#aiKey").value="";
   $("#aiKeyStatus").textContent = c.has_key ? "✓ キー登録済み（変更する場合のみ入力）" : "";
   const p=AI.proxy||{use_proxy:true, proxy_url:"", ca_bundle:""};
@@ -2038,9 +2078,11 @@ function fillAiForm(){
   toggleProxyUrl(); applyProviderHints();
 }
 function proxyPayload(){ const on=$("#aiUseProxy").checked; return { use_proxy:on, proxy_url: on ? $("#aiProxyUrl").value.trim() : "", ca_bundle: $("#aiCaBundle").value.trim(),
-  browser_binary: $("#brBinary").value.trim(), driver_path: $("#brDriver").value.trim(), pdf_font: ($("#pdfFont")?$("#pdfFont").value.trim():"") }; }
+  browser_binary: $("#brBinary").value.trim(), driver_path: $("#brDriver").value.trim(), pdf_font: ($("#pdfFont")?$("#pdfFont").value.trim():""),
+  ctx_tokens: parseInt($("#aiCtx").value,10)||0, parallel: parseInt($("#aiPar").value,10)||0, timeout_s: parseInt($("#aiTimeout").value,10)||0 }; }
 function openAiSettings(){ fillAiForm(); openOverlay($("#aiSettings")); }
 $("#aiProvider").addEventListener("change", applyProviderHints);
+$("#aiProvider").addEventListener("change", ()=>{ $("#aiLocalTuning").hidden = $("#aiProvider").value!=="local"; });
 $("#aiUseProxy").addEventListener("change", toggleProxyUrl);
 $("#aiForm").addEventListener("submit", async (e)=>{
   e.preventDefault();
@@ -2097,13 +2139,14 @@ const RS={results:[], sel:new Set(), srcSel:new Set(), msgs:[], busy:false, stat
           theme:null, newOnly:false, themes:[], fetchJob:null, fetchTimer:null,   // テーマ・本文取得
           hist:null, histOpen:true, openDups:new Set(), expanded:[], dupGroups:0, fts:false, synLoaded:false,   // 分布・類似束・同義語
           watchTrends:null, cands:null, candsAi:null, candsBusy:false,   // 企業・製品ウォッチ
-          exports:[]};   // 文書生成（Word/Excel/PowerPoint/PDF）
+          exports:[],   // 文書生成（Word/Excel/PowerPoint/PDF）
+          docs:[], docSel:new Set()};   // 外部資料（RAG）
 const RS_QUICK=["期間内の動きを時系列で要約","情報源ごとに要点を整理","共通するテーマと相違点を比較","重要トピック3つと根拠"];
 function openResearch(){
   openOverlay($("#researchModal"));
   fillRsCats();
   if(!RS.results.length) researchSearch();
-  renderRsLog(); renderRsQuick(); loadReports(); loadThemes(); loadSynonyms(); loadExports();
+  renderRsLog(); renderRsQuick(); loadReports(); loadThemes(); loadSynonyms(); loadExports(); loadDocs();
   setTimeout(()=>{ try{ $("#rsQ").focus(); }catch(e){} }, 90);
 }
 function fillRsCats(){
@@ -2117,7 +2160,8 @@ function rsFilterParams(){   // 現在のフィルタ → APIクエリ と 表�
   else if(per){ days=parseInt(per,10)||0; }
   const cat=$("#rsCat").value||"";
   const srcs=[...RS.srcSel];
-  const p=new URLSearchParams({q, limit:"200"});
+  const limit=parseInt($("#rsLimit").value,10)||500;
+  const p=new URLSearchParams({q, limit:String(limit)});
   if(days) p.set("days",String(days));
   if(from) p.set("from",from);
   if(to) p.set("to",to);
@@ -2127,7 +2171,7 @@ function rsFilterParams(){   // 現在のフィルタ → APIクエリ と 表�
   if(archived) p.set("archived", String(archived));
   const order=$("#rsOrder").value==="rel" ? "rel" : "new"; p.set("order",order);
   const dedup=$("#rsDedup").checked; p.set("dedup", dedup?"1":"0");
-  return {p, q, days, from, to, cat, srcs, archived, order, dedup};
+  return {p, q, days, from, to, cat, srcs, archived, order, dedup, limit};
 }
 function rsFiltersPayload(){   // AI/レポートへ渡す検索条件（表示名ベース）
   const f=RS.filters||rsFilterParams();
@@ -2151,8 +2195,10 @@ async function researchSearch(keepSel){
 }
 function syncRsCount(){
   const c=$("#rsCount");
-  c.textContent = RS.results.length+"件ヒット"+((RS.filters&&RS.filters.dedup&&RS.dupGroups)?"（類似 "+RS.dupGroups+"束）":"")+" ／ "+RS.sel.size+"件選択";
-  c.title = "会話は選択の上から最大30件、レポートは選択全件が対象"+((RS.filters&&RS.filters.dedup&&RS.dupGroups)?"。類似記事は代表1件にまとめて表示しています":"");
+  const capped = !!(RS.filters && RS.results.length >= (RS.filters.limit||500));
+  c.textContent = RS.results.length+"件ヒット"+(capped?"（表示上限）":"")+((RS.filters&&RS.filters.dedup&&RS.dupGroups)?"（類似 "+RS.dupGroups+"束）":"")+" ／ "+RS.sel.size+"件選択";
+  c.title = "会話は選択の上から最大30件、レポートは選択全件が対象（最大1000件）"+((RS.filters&&RS.filters.dedup&&RS.dupGroups)?"。類似記事は代表1件にまとめて表示しています":"")
+            +(capped?"。ヒットが表示上限に達しています。「表示: N件」で上限を増やせます":"");
   const rc=$("#rsRCount"); if(rc) rc.textContent=String(RS.sel.size);
 }
 function rsSrcName(id){ const s=(RS.stats&&RS.stats.sources||[]).find(x=>x.id===id); return s ? s.name : id; }
@@ -2251,7 +2297,7 @@ async function sendRs(text){
   let res;
   try{
     const d=await api("/api/ai/chat",{method:"POST", headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({question:text, history, context:{kind:"research", items, filters}, fulltext})});
+      body:JSON.stringify({question:text, history, context:{kind:"research", items, filters}, fulltext, use_docs:!!($("#rsUseDocs")&&$("#rsUseDocs").checked)})});
     res = d.ok ? {role:"assistant", text:d.answer, reasoning:(d.reasoning||""), note:(d.page_note||"")}
                : {role:"error", text:"⚠ "+(d.error||"エラーが発生しました")};
   }catch(e){ res={role:"error", text:"⚠ "+(e.server?e.message:"通信に失敗しました")}; }
@@ -2268,7 +2314,8 @@ function defaultQuestion(){
 }
 function toggleReportForm(show){
   const f=$("#rsReportForm"); f.hidden=!show;
-  if(show){ const q=$("#rsRQ"); if(!q.value.trim()) q.value=defaultQuestion(); $("#rsRCount").textContent=String(RS.sel.size); q.focus(); q.select(); }
+  if(show){ const q=$("#rsRQ"); if(!q.value.trim()) q.value=defaultQuestion(); $("#rsRCount").textContent=String(RS.sel.size); q.focus(); q.select();
+            $("#rsRDocsN").textContent=String(RS.docs.length); $("#rsRDocs").disabled=!RS.docs.length; if(!RS.docs.length) $("#rsRDocs").checked=false; }
 }
 async function startReport(){
   if(RS.job && !["done","error"].includes(RS.job.state)){ toast("生成中のレポートがあります。完了をお待ちください","err"); return; }
@@ -2276,9 +2323,13 @@ async function startReport(){
   const ids=RS.results.filter(a=>RS.sel.has(a.id)).map(a=>a.id);
   if(!ids.length){ toast("記事を1件以上選択してください","err"); return; }
   const question=($("#rsRQ").value||"").trim(), template=$("#rsRT").value, fulltext=$("#rsRFull").checked;
+  const useDocs=$("#rsRDocs").checked && RS.docs.length>0;
+  const docs = useDocs ? (RS.docSel.size>=RS.docs.length ? "all" : [...RS.docSel]) : undefined;
+  if(useDocs && Array.isArray(docs) && !docs.length){ toast("「資料」で使う資料にチェックを入れてください","err"); return; }
+  const doc_k=parseInt($("#rsRDocK").value,10)||20;
   try{
     const d=await api("/api/research/report",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({ids, question, template, filters:rsFiltersPayload(), fulltext})});
+      body:JSON.stringify({ids, question, template, filters:rsFiltersPayload(), fulltext, docs, doc_k})});
     RS.job={id:d.job_id, state:"queued", total:0, done:0, articles:ids.length, fulltext};
     toggleReportForm(false);
     RS.msgs.push({role:"progress"}); renderRsLog();
@@ -2321,19 +2372,24 @@ function progressEl(){
     w.append(el("div",{class:"hint",text:"内容の構成・要約・数値抽出はローカルLLMが担当します。完了したファイルは「書き出し済み」からいつでも再ダウンロードできます。"}));
     return w;
   }
+  let eta="";   // 部分要約の残り時間の目安（経過時間 ÷ 完了チャンク × 残り）
+  if(j.state==="mapping" && j.done>0 && j.elapsed){ const remain=Math.round((j.elapsed/j.done)*((j.total||0)-j.done)); if(remain>0) eta="・残り約"+fmtDur(remain); }
+  const fails = (j.failed?"・失敗 "+j.failed:"")+(j.retries?"・再試行 "+j.retries:"");
   const stage = j.state==="queued" ? "準備中…"
               : j.state==="fetching" ? ("本文取得 "+(j.done||0)+" / "+(j.total||"?")+" 件"+(j.sub?"（"+j.sub+"）":""))
-              : j.state==="mapping" ? ("部分要約 "+(j.done||0)+" / "+(j.total||"?")+" チャンク")
-              : j.state==="reducing" ? "統合レポートを作成中…" : "処理中…";
+              : j.state==="retrieving" ? "外部資料から関連する抜粋を検索中…"
+              : j.state==="mapping" ? ("部分要約 "+(j.done||0)+" / "+(j.total||"?")+" チャンク"+eta+fails+(j.sub?"（"+j.sub+"）":""))
+              : j.state==="reducing" ? ((j.sub||"統合レポートを作成中")+(j.mtotal?"（"+(j.mdone||0)+"/"+j.mtotal+"）":"")+"…") : "処理中…";
   const mapLo = j.fulltext ? 35 : 5;   // 本文取得つきは前半 3〜33% を取得に充てる
   const pct = j.state==="fetching" ? (j.total ? Math.round(3+30*(j.done||0)/j.total) : 3)
-            : j.state==="mapping" && j.total ? Math.round(mapLo+(90-mapLo)*(j.done||0)/j.total)
-            : j.state==="reducing" ? 95 : 3;
-  w.append(el("div",{class:"rpt-progress__t",text:"レポート生成中（記事 "+(j.articles||0)+" 件）— "+stage}));
+            : j.state==="mapping" && j.total ? Math.round(mapLo+(88-mapLo)*(j.done||0)/j.total)
+            : j.state==="reducing" ? (j.mtotal ? Math.round(89+6*(j.mdone||0)/j.mtotal) : 96) : 3;
+  w.append(el("div",{class:"rpt-progress__t",text:"レポート生成中（記事 "+(j.articles||0)+" 件"+(j.docs?"＋外部資料":"")+"）— "+stage+(j.elapsed?"　経過 "+fmtDur(j.elapsed):"")}));
   const bar=el("div",{class:"pbar"}); const fill=el("i"); fill.style.width=pct+"%"; bar.append(fill); w.append(bar);
-  w.append(el("div",{class:"hint",text:"ローカルLLMでは数分かかることがあります。この画面を閉じても生成は続き、完了後は「保存済みレポート」から開けます。"}));
+  w.append(el("div",{class:"hint",text:"ローカルLLMでは数分〜数十分かかることがあります。失敗したチャンクは再試行→分割→スキップして先へ進みます。時間がかかりすぎる／タイムアウトする場合は、設定の「文脈長・並列数・タイムアウト」を調整してください。この画面を閉じても生成は続きます。"}));
   return w;
 }
+function fmtDur(s){ s=Math.max(0,Math.round(s)); return s<90 ? s+"秒" : s<5400 ? Math.round(s/60)+"分" : (Math.round(s/360)/10)+"時間"; }
 function mdInline(text, sources){   // 太字と出典番号 [n] だけを安全に DOM 化（textContent 描画）
   const byN=new Map((sources||[]).map(s=>[s.n,s]));
   const frag=document.createDocumentFragment(); const re=/(\*\*[^*]+\*\*|\[\d{1,3}\])/g; let last=0, m;
@@ -2392,6 +2448,10 @@ function reportEl(rep){
   const st=rep.stats||{}; const meta=[d.toLocaleString("ja-JP"), "記事 "+(rep.sources||[]).length+"件"];
   if(st.chunks) meta.push("部分要約 "+st.chunks+"回");
   if(st.fulltext) meta.push("本文 "+st.fulltext+"件"+(st.fulltext_failed?"（取得不可 "+st.fulltext_failed+"）":""));
+  if(st.docs) meta.push("外部資料の抜粋 "+st.docs+"件");
+  if(st.failed_chunks) meta.push("⚠ 部分要約の失敗 "+st.failed_chunks+"チャンク（内容に反映されず。再試行 "+(st.retries||0)+"回）");
+  if(st.truncated) meta.push("⚠ 文脈長の都合でメモを一部省略");
+  if(st.elapsed_s) meta.push("所要 "+fmtDur(st.elapsed_s));
   if(rep.model) meta.push(rep.model);
   w.append(el("div",{class:"rpt__meta",text:meta.join(" ／ ")}));
   w.append(el("div",{class:"rpt__q",text:"問い: "+(rep.question||"")}));
@@ -2853,6 +2913,62 @@ function renderWatchPanel(){
   p.append(box);
 }
 
+// ---- 外部資料（RAG）: 登録・一覧・削除 ----
+async function loadDocs(){
+  try{ const d=await api("/api/research/docs"); RS.docs=d.docs||[]; }catch(e){ RS.docs=RS.docs||[]; }
+  const ids=new Set(RS.docs.map(x=>x.id));
+  if(!RS.docSel.size || [...RS.docSel].some(id=>!ids.has(id))) RS.docSel=new Set(RS.docs.map(x=>x.id));   // 既定は全部
+  $("#rsDocN").textContent = RS.docs.length ? "("+RS.docs.length+") " : "";
+  const n=$("#rsRDocsN"); if(n) n.textContent=String(RS.docs.length);
+  const cb=$("#rsRDocs"); if(cb){ cb.disabled=!RS.docs.length; if(!RS.docs.length) cb.checked=false; }
+  renderDocPanel();
+}
+function renderDocPanel(){
+  const p=$("#rsDocPanel"); if(!p) return; p.innerHTML="";
+  const up=el("div",{class:"rs__themesave"});
+  const fi=el("input",{type:"file",id:"rsDocFile",multiple:true,accept:".pdf,.docx,.pptx,.xlsx,.txt,.md,.csv,.tsv,.json","aria-label":"資料ファイル"});
+  fi.onchange=()=>uploadDocs(fi.files);
+  up.append(fi); p.append(up);
+  p.append(el("div",{class:"hint",text:"PDF（pypdf が必要）/ Word / PowerPoint / Excel / テキスト（最大40MB・200件）。本文を抜粋に分けて索引化し、レポート・会話では問いに関連する抜粋だけを記事と同じ出典番号で渡します。",style:"padding:0 6px 6px; display:block"}));
+  const det=el("details"); det.append(el("summary",{class:"rs__srcrow",text:"テキストを貼り付けて登録…"}));
+  const pf=el("div",{class:"rs__docpaste"});
+  const nm=el("input",{type:"text",id:"rsDocPasteName",placeholder:"資料名（例: 社内メモ 2026-10）",maxLength:120});
+  const tx=el("textarea",{id:"rsDocPasteText",rows:5,placeholder:"本文を貼り付け"});
+  const bt=el("button",{type:"button",class:"btn sm",text:"登録",style:"align-self:flex-end"});
+  bt.onclick=async()=>{ if(!tx.value.trim()){ toast("本文を貼り付けてください","err"); return; }
+    try{ await api("/api/research/docs",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:nm.value.trim()||"貼り付けテキスト", text:tx.value})});
+         toast("資料を登録しました"); tx.value=""; nm.value=""; loadDocs(); }catch(e){ toast(e.server?e.message:"登録に失敗しました","err"); } };
+  pf.append(nm,tx,bt); det.append(pf); p.append(det);
+  const head=el("div",{class:"rs__srchead"}); head.append(el("span",{text:"登録済み（"+RS.docs.length+"）— チェックした資料をレポートで使います"}));
+  if(RS.docs.length){ const all=el("button",{type:"button",text: RS.docSel.size>=RS.docs.length ? "すべて外す" : "すべて選ぶ"});
+    all.onclick=(e)=>{ e.stopPropagation(); if(RS.docSel.size>=RS.docs.length) RS.docSel.clear(); else RS.docSel=new Set(RS.docs.map(x=>x.id)); renderDocPanel(); }; head.append(all); }
+  p.append(head);
+  if(!RS.docs.length){ p.append(el("div",{class:"rs__srcrow",text:"登録した資料はありません"})); return; }
+  RS.docs.forEach(d=>{
+    const row=el("label",{class:"rs__doc"});
+    const cb=el("input",{type:"checkbox"}); cb.checked=RS.docSel.has(d.id); cb.onchange=()=>{ if(cb.checked) RS.docSel.add(d.id); else RS.docSel.delete(d.id); };
+    row.append(cb, el("span",{class:"k",text:(d.kind||"").toUpperCase()}), el("span",{class:"n",text:d.name,title:d.name}),
+               el("span",{class:"c",text:d.chunks+"抜粋・"+Math.round((d.chars||0)/1000)+"千字・"+new Date(d.created_at*1000).toLocaleDateString("ja-JP")}));
+    const del=el("button",{type:"button",class:"lnkbtn danger",text:"削除"});
+    del.onclick=async(e)=>{ e.preventDefault(); e.stopPropagation(); if(!confirm("資料「"+d.name+"」を削除しますか？")) return;
+      try{ await api("/api/research/docs?id="+encodeURIComponent(d.id),{method:"DELETE"}); RS.docSel.delete(d.id); loadDocs(); toast("削除しました"); }catch(err){ toast("削除に失敗しました","err"); } };
+    row.append(del); p.append(row);
+  });
+}
+async function uploadDocs(files){
+  const list=[...(files||[])]; if(!list.length) return;
+  let okN=0;
+  for(const f of list){
+    try{
+      const r=await fetch("/api/research/docs/upload?name="+encodeURIComponent(f.name),{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:f});
+      const d=await r.json().catch(()=>({}));
+      if(r.ok && d.ok){ okN++; toast("「"+f.name+"」を登録しました（"+d.doc.chunks+" 抜粋）"); }
+      else toast("「"+f.name+"」: "+(d.error||("HTTP "+r.status)),"err");
+    }catch(e){ toast("「"+f.name+"」のアップロードに失敗しました","err"); }
+  }
+  if(okN) loadDocs();
+}
+
 // ---- 本文一括取得（選択記事・キャッシュつき・進捗表示） ----
 async function startFetch(){
   if(RS.fetchJob && !["done","error"].includes(RS.fetchJob.state)){ toast("本文取得を実行中です","err"); return; }
@@ -2896,8 +3012,8 @@ function renderFetchBar(){
   bar.append(fill); b.append(bar);
 }
 function closeRsPanels(){
-  for(const id of ["#rsSrcPanel","#rsSavedPanel","#rsThemePanel","#rsSynPanel","#rsWatchPanel","#rsExpPanel"]){ const p=$(id); if(p && !p.hidden) p.hidden=true; }
-  for(const id of ["#rsSrcBtn","#rsThemeBtn","#rsSynBtn","#rsWatchBtn"]) $(id).setAttribute("aria-expanded","false");
+  for(const id of ["#rsSrcPanel","#rsSavedPanel","#rsThemePanel","#rsSynPanel","#rsWatchPanel","#rsExpPanel","#rsDocPanel"]){ const p=$(id); if(p && !p.hidden) p.hidden=true; }
+  for(const id of ["#rsSrcBtn","#rsThemeBtn","#rsSynBtn","#rsWatchBtn","#rsDocBtn"]) $(id).setAttribute("aria-expanded","false");
 }
 $("#researchBtn").onclick=openResearch;
 let rsT=null;
@@ -2923,6 +3039,9 @@ $("#rsExKind").addEventListener("change", syncExportForm);
 $("#rsExInst").addEventListener("keydown",(e)=>{ if(e.key==="Enter"){ e.preventDefault(); startExport(); } });
 $("#rsExpBtn").onclick=(e)=>{ e.stopPropagation(); const p=$("#rsExpPanel"); const open=p.hidden; closeRsPanels(); p.hidden=!open; if(!p.hidden) loadExports(); };
 $("#rsExpPanel").addEventListener("click",(e)=>e.stopPropagation());
+$("#rsDocBtn").onclick=(e)=>{ e.stopPropagation(); const p=$("#rsDocPanel"); const open=p.hidden; closeRsPanels(); p.hidden=!open;
+  $("#rsDocBtn").setAttribute("aria-expanded", String(!p.hidden)); if(!p.hidden) loadDocs(); };
+$("#rsDocPanel").addEventListener("click",(e)=>e.stopPropagation());
 $("#rsCmpCancel").onclick=()=>toggleCmpForm(false);
 $("#rsCmpStart").onclick=startCompare;
 $("#rsRCancel").onclick=()=>toggleReportForm(false);
@@ -2937,6 +3056,7 @@ $("#rsThemeBtn").onclick=(e)=>{ e.stopPropagation(); const p=$("#rsThemePanel");
 $("#rsThemePanel").addEventListener("click",(e)=>e.stopPropagation());
 $("#rsFetchBtn").onclick=startFetch;
 $("#rsOrder").addEventListener("change", ()=>researchSearch(true));
+$("#rsLimit").addEventListener("change", ()=>researchSearch(true));
 $("#rsDedup").addEventListener("change", ()=>researchSearch(true));
 $("#rsSynBtn").onclick=(e)=>{ e.stopPropagation(); const p=$("#rsSynPanel"); const open=p.hidden; closeRsPanels(); p.hidden=!open;
   $("#rsSynBtn").setAttribute("aria-expanded", String(!p.hidden)); if(!p.hidden) setTimeout(()=>$("#rsSynText").focus(),30); };
