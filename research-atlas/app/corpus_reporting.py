@@ -202,6 +202,7 @@ def _summary(db, identifier, *, full=False):
     warnings.extend(config.get("source_warnings", []))
     row.update(report_id=identifier, batch_size=config.get("batch_size", 100), run_all=config.get("run_all", False),
                counts=counts, has_facts=has_facts, annual=annual, topics=topics, methods=methods, methods_total=methods_total, methods_truncated=methods_total > len(methods),
+               adaptive=config.get("adaptive", {}),
                groups=groups, partial=partial, is_demo=config.get("is_demo", False), sampled=config.get("sampled", False), name=config.get("name", "全件抄録レポート"),
                warnings=warnings, abstract_based=True, estimate={"elapsed_seconds": round(row["elapsed_seconds"], 2),
                "sampled_papers": measured, "seconds_per_paper": round(per_paper, 2) if per_paper else None,
@@ -389,6 +390,8 @@ def _save_extraction(db, identifier, row, extraction, *, final=False, elapsed=0)
     covered = min(row["abstract_chars"], max(0, int(extraction.get("covered_chars", 0))))
     error = ("抄録から照合済みの根拠を抽出できませんでした。" if status == "no_grounded_facts" else
              "一部または全部の抄録を抽出できませんでした。保存された結果を確認し、失敗分を再試行してください。") if state == "failed" else None
+    if state == "failed" and extraction.get("error_kind") == "timeout_recovery_exhausted":
+        error = "時間切れへの自動再試行の上限に達しました。完了部分は保存されています。LLMの状態を確認して失敗分を再試行してください。"
     with db:
         db.execute("UPDATE papers SET status=?,processed_chars=?,extraction=?,error=?,fact_count=? WHERE report_id=? AND ordinal=?",
             (state, covered, _json(extraction), error, len(extraction.get("facts", [])), identifier, row["ordinal"]))
@@ -407,10 +410,38 @@ def _save_extraction(db, identifier, row, extraction, *, final=False, elapsed=0)
                        (row["cache_key"], _json(extraction), storage.now()))
 
 
+def _adaptive_checkpoint(db, identifier):
+    """Calibration belongs to this report/model and survives a server restart."""
+    config = json.loads(_row(db, identifier)["config"])
+    def save(value):
+        # Re-read config so a calibration update cannot overwrite other options.
+        current = json.loads(_row(db, identifier)["config"])
+        current["adaptive"] = value
+        _update(db, identifier, config=_json(current))
+    return {"state": config.get("adaptive", {}), "save": save}
+
+
+def _request_progress(db, identifier, label):
+    last = {"time": 0.0, "stage": None}
+    def progress(value):
+        if not isinstance(value, dict):
+            return
+        stage = value.get("stage")
+        # These stages are application-generated, never the model's prose.
+        stage = str(stage)[:240] if stage else "LLMの応答を受信しています。"
+        now = time.monotonic()
+        if stage == last["stage"] and now - last["time"] < 2:
+            return
+        last.update(time=now, stage=stage)
+        _update(db, identifier, stage=f"{label} · {stage}")
+    return progress
+
+
 def _extract(db, identifier, event):
     report = dict(_row(db, identifier))
     config = json.loads(report["config"])
     limit = None if config["run_all"] else config["batch_size"]
+    adaptive = _adaptive_checkpoint(db, identifier)
     attempted, after, failures = 0, -1, 0
     while not event.is_set() and (limit is None or attempted < limit):
         row = db.execute("SELECT * FROM papers WHERE report_id=? AND status='pending' AND ordinal>? ORDER BY ordinal LIMIT 1", (identifier, after)).fetchone()
@@ -428,13 +459,15 @@ def _extract(db, identifier, event):
             _save_extraction(db, identifier, row, extraction, final=True)
             with db:
                 db.execute("UPDATE papers SET cached=1 WHERE report_id=? AND ordinal=?", (identifier, row["ordinal"]))
+            failures = 0
             continue
         started = time.monotonic()
         def checkpoint(value):
             _save_extraction(db, identifier, row, value)
         try:
             extraction = corpus_llm.extract_paper(paper, report["provider"], report["model"],
-                checkpoint={"state": state, "save": checkpoint}, cancelled=event.is_set)
+                checkpoint={"state": state, "save": checkpoint}, cancelled=event.is_set, adaptive=adaptive,
+                progress=_request_progress(db, identifier, f"抄録を抽出中 · 論文 {row['ordinal'] + 1:,}"))
             if (not isinstance(extraction, dict) or extraction.get("status") not in {"completed", "partial", "failed", "cancelled", "missing_abstract", "no_grounded_facts"}
                     or not isinstance(extraction.get("facts"), list) or not isinstance(extraction.get("chunks"), list)
                     or type(extraction.get("covered_chars")) is not int
@@ -449,6 +482,9 @@ def _extract(db, identifier, event):
             extraction.update(status="failed", warnings=["LLMの応答または結果の保存を完了できませんでした。既存の抽出済み範囲は保持しています。"])
         _save_extraction(db, identifier, row, extraction, final=True, elapsed=time.monotonic() - started)
         attempted += 1
+        if extraction.get("error_kind") == "timeout_recovery_exhausted":
+            _update(db, identifier, status="paused", stage="時間切れへの自動再試行の上限に達したため一時停止しました。完了部分は保存済みです。LLMの状態を確認して失敗分を再試行してください。")
+            return
         failures = failures + 1 if extraction["status"] in {"failed", "partial", "no_grounded_facts"} else 0
         if failures >= 3:
             _update(db, identifier, status="paused", stage="3件続けて抽出できなかったため一時停止しました。LLM接続設定と失敗内容を確認し、失敗分を再試行してください。")
@@ -491,6 +527,7 @@ def _summary_checkpoint(db, identifier, kind, key):
 def _synthesize(db, identifier, event):
     report = dict(_row(db, identifier))
     config = json.loads(report["config"])
+    adaptive = _adaptive_checkpoint(db, identifier)
     counts = _counts(db, identifier)
     has_facts = bool(db.execute("SELECT 1 FROM papers WHERE report_id=? AND fact_count>0 LIMIT 1", (identifier,)).fetchone())
     if not has_facts:
@@ -507,12 +544,14 @@ def _synthesize(db, identifier, event):
             metrics = {**row, "scope": "selected_analysis_result", "kind": kind, column: row["group_key"], "is_demo": config.get("is_demo", False), "sampled": config.get("sampled", False)}
             metrics.pop("group_key")
             plan.append((kind, key, label, metrics))
+    failures = 0
     for kind, key, label, metrics in plan:
         if event.is_set():
             _update(db, identifier, status="paused", synthesis_status="partial", stage="総合評論を一時停止しました。保存した年別・分野別の評論は再利用できます。")
             return
         existing = db.execute("SELECT status FROM groups WHERE report_id=? AND kind=? AND group_key=?", (identifier, kind, key)).fetchone()
         if existing and existing[0] == "completed":
+            failures = 0
             continue
         records = list(_group_records(db, identifier, kind, key))
         if not records:
@@ -523,23 +562,37 @@ def _synthesize(db, identifier, event):
                 (identifier, kind, key, label, "running", len(records)))
         try:
             narrative = corpus_llm.synthesize(records, report["provider"], report["model"], label=label,
-                checkpoint=_summary_checkpoint(db, identifier, kind, key), cancelled=event.is_set, metrics=metrics)
+                checkpoint=_summary_checkpoint(db, identifier, kind, key), cancelled=event.is_set, metrics=metrics,
+                adaptive=adaptive, progress=_request_progress(db, identifier, f"{label} の評論を生成中"))
             if not isinstance(narrative, dict) or narrative.get("status") != "completed":
                 raise ValueError("invalid synthesis")
             state, error = "completed", None
+            failures = 0
         except Exception as exc:
             if getattr(exc, "kind", None) == "cancelled" or event.is_set():
                 with db:
                     db.execute("UPDATE groups SET status='partial' WHERE report_id=? AND kind=? AND group_key=?", (identifier, kind, key))
                 _update(db, identifier, status="paused", synthesis_status="partial", stage="評論の途中経過を保存して一時停止しました。再開時は保存済みの部分を再利用します。")
                 return
+            if getattr(exc, "kind", None) == "timeout_recovery_exhausted":
+                error = "時間切れへの自動再試行の上限に達しました。保存済みの中間要約から再開できます。"
+                with db:
+                    db.execute("UPDATE groups SET status='partial',error=? WHERE report_id=? AND kind=? AND group_key=?", (error, identifier, kind, key))
+                _update(db, identifier, status="paused", synthesis_status="partial",
+                        stage=error + " LLMの状態を確認し、再度「評論を生成」を実行してください。")
+                return
             narrative, state = None, "failed"
+            failures += 1
             error = "この区分の評論を生成できませんでした。抽出済みの結果は保存されています。"
         with db:
             db.execute("INSERT INTO groups VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(report_id,kind,group_key) DO UPDATE SET "
                 "label=excluded.label,status=excluded.status,source_count=excluded.source_count,narrative=COALESCE(excluded.narrative,groups.narrative),"
                 "error=excluded.error,narrative_preview=COALESCE(excluded.narrative_preview,groups.narrative_preview)",
                 (identifier, kind, key, label, state, len(records), _json(narrative) if narrative else None, error, _json(_preview(narrative)) if narrative else None))
+        if failures >= 3:
+            _update(db, identifier, status="paused", synthesis_status="partial",
+                    stage="3区分続けて評論を生成できなかったため一時停止しました。保存済みの抽出・中間要約は保持しています。LLMの状態を確認して評論を再生成してください。")
+            return
     if event.is_set():
         _update(db, identifier, status="paused", synthesis_status="partial", stage="区分別の評論を保存して一時停止しました。")
         return
@@ -556,6 +609,7 @@ def _synthesize(db, identifier, event):
                   "is_demo": config.get("is_demo", False), "sampled": config.get("sampled", False)} for row in annual]
         narrative = corpus_llm.synthesize(items, report["provider"], report["model"], label="全期間・全分野の総合評論",
             checkpoint=_summary_checkpoint(db, identifier, "overall", "all"), cancelled=event.is_set,
+            adaptive=adaptive, progress=_request_progress(db, identifier, "全期間の評論を統合中"),
             metrics={"scope": "selected_analysis_result", "counts": counts,
                      "annual": [metrics for kind, _, _, metrics in plan if kind == "year"],
                      "topics": [metrics for kind, _, _, metrics in plan if kind == "topic"]})
@@ -568,6 +622,9 @@ def _synthesize(db, identifier, event):
     except Exception as exc:
         if getattr(exc, "kind", None) == "cancelled" or event.is_set():
             _update(db, identifier, status="paused", synthesis_status="partial", stage="全体評論の途中経過を保存して一時停止しました。")
+        elif getattr(exc, "kind", None) == "timeout_recovery_exhausted":
+            _update(db, identifier, status="paused", synthesis_status="partial",
+                    stage="全体評論の時間切れへの自動再試行の上限に達しました。中間要約は保存済みです。LLMの状態を確認して評論を再生成してください。")
         else:
             _update(db, identifier, status="completed", synthesis_status="failed", stage="全体の評論を生成できませんでした。保存した年別・分野別の評論は利用できます。")
 

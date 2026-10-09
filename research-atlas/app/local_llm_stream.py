@@ -70,11 +70,14 @@ def _error(exc: Exception) -> LocalStreamError:
     if isinstance(exc, LocalStreamError):
         return exc
     if isinstance(exc, httpx.ConnectTimeout):
-        return LocalStreamError("ローカルLLMへの接続がタイムアウトしました。サーバーの起動と接続先を確認してください。")
+        return LocalStreamError("ローカルLLMへの接続がタイムアウトしました。サーバーの起動と接続先を確認してください。", kind="connect_timeout")
     if isinstance(exc, httpx.ReadTimeout):
         return LocalStreamError("ローカルLLMからの受信が長時間停止したため、通信をタイムアウトしました。モデルの処理状況とサーバーのログを確認してください。途中のJSONは採用していません。", kind="read_timeout")
     if isinstance(exc, httpx.TimeoutException):
-        return LocalStreamError("ローカルLLMからの受信が長時間停止したため、通信をタイムアウトしました。モデルの読み込み状態・処理負荷を確認してください。途中のJSONは採用していません。")
+        # Only generation/read deadlines can benefit from smaller input. A
+        # blocked request upload or connection pool is a transport failure.
+        kind = "write_timeout" if isinstance(exc, httpx.WriteTimeout) else "pool_timeout" if isinstance(exc, httpx.PoolTimeout) else "transport_timeout"
+        return LocalStreamError("ローカルLLMとの通信がタイムアウトしました。接続状態・処理負荷を確認してください。途中のJSONは採用していません。", kind=kind)
     if isinstance(exc, httpx.ConnectError):
         return LocalStreamError("ローカルLLMに接続できません。サーバーの起動と接続先を確認してください。")
     if isinstance(exc, httpx.HTTPStatusError):
@@ -334,11 +337,11 @@ def stream_json(client: httpx.Client, url: str, body: dict, backend: str,
             total_remaining = TOTAL_TIMEOUT_SECONDS - (now - started)
             idle_remaining = (READ_TIMEOUT_SECONDS if has_received else FIRST_RESPONSE_TIMEOUT_SECONDS) - (now - last_received)
             if total_remaining <= 0:
-                raise LocalStreamError(_TOTAL_TIMEOUT)
+                raise LocalStreamError(_TOTAL_TIMEOUT, kind="total_timeout")
             if idle_remaining <= 0:
                 if not has_received:
-                    raise LocalStreamError(_FIRST_TIMEOUT)
-                raise LocalStreamError("ローカルLLMから180秒間受信がないため、通信をタイムアウトしました。モデルの読み込み状態・処理負荷を確認してください。途中のJSONは採用していません。")
+                    raise LocalStreamError(_FIRST_TIMEOUT, kind="first_response_timeout")
+                raise LocalStreamError("ローカルLLMから180秒間受信がないため、通信をタイムアウトしました。モデルの読み込み状態・処理負荷を確認してください。途中のJSONは採用していません。", kind="read_timeout")
             try:
                 kind, value = events.get(timeout=min(0.5, total_remaining, idle_remaining))
             except queue.Empty:
@@ -346,7 +349,7 @@ def stream_json(client: httpx.Client, url: str, body: dict, backend: str,
                 continue
             if kind == "error":
                 if not has_received and getattr(value, "kind", None) == "read_timeout":
-                    raise LocalStreamError(_FIRST_TIMEOUT)
+                    raise LocalStreamError(_FIRST_TIMEOUT, kind="first_response_timeout")
                 raise value
             if kind == "chunk":
                 has_received = True
@@ -356,7 +359,7 @@ def stream_json(client: httpx.Client, url: str, body: dict, backend: str,
                 parser.feed(b"", eof=True)
             notify()
         if time.monotonic() - started >= TOTAL_TIMEOUT_SECONDS:
-            raise LocalStreamError(_TOTAL_TIMEOUT)
+            raise LocalStreamError(_TOTAL_TIMEOUT, kind="total_timeout")
         parsed = parser.result(allow_text=allow_text)
         notify(force=True)
         return parsed

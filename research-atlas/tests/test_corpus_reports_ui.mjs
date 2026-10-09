@@ -12,6 +12,26 @@ const report=(extra={})=>({id:reportID,report_id:reportID,result_id:resultID,pro
 const page=(extra={})=>({items:[],total:20000,offset:0,limit:20,...extra});
 const deferred=()=>{let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};};
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
+
+test('poll shows saved adaptive sizing and retry totals without changing browser connection settings',async()=>{
+  let current=report({adaptive:{enabled:true,extraction:{max_chars:2500},synthesis:{max_tokens:1200,max_items:4},timeout_recoveries:1,target_seconds:120,max_timeout_recoveries:3}});
+  const h=harness(url=>url.startsWith('/api/corpus-reports?')?{reports:[current]}:url===`/api/corpus-reports/${reportID}`?current:undefined);
+  await h.mount();
+  assert.match(h.host.innerHTML,/2,500文字/);assert.match(h.host.innerHTML,/累計1回/);
+  current=report({...current,status:'paused',stage:'時間切れへの自動再試行の上限に達しました。',adaptive:{...current.adaptive,extraction:{max_chars:1250},timeout_recoveries:3}});
+  await h.t.poll();
+  assert.match(h.host.innerHTML,/1,250文字/);assert.match(h.host.innerHTML,/累計3回/);
+  assert.match(h.host.innerHTML,/完了時間の保証ではありません/);
+  assert.match(h.host.innerHTML,/失敗した論文を再試行/);
+  assert.ok(h.writes.every(row=>row.key.startsWith('research-atlas:corpus-report:')));
+});
+
+test('OpenAI report does not claim LocalLLM adaptive recovery',async()=>{
+  const value=report({provider:'openai'});
+  const h=harness(url=>url.startsWith('/api/corpus-reports?')?{reports:[value]}:url===`/api/corpus-reports/${reportID}`?value:undefined);
+  await h.mount();
+  assert.doesNotMatch(h.host.innerHTML,/LocalLLMの速度に合わせて自動調整/);
+});
 function harness(responder){
   const calls=[],shown=[],writes=[],store=new Map(),timers=new Map(),events=new Map();let sequence=0;
   const host={innerHTML:'',isConnected:true,events:new Map(),addEventListener(name,fn){this.events.set(name,fn);},removeEventListener(name){this.events.delete(name);}};

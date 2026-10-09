@@ -10,12 +10,13 @@ from copy import deepcopy
 import hashlib
 import json
 import re
+import time
 from typing import Literal
 from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from . import field_llm, llm_context, local_llm_stream
+from . import corpus_adaptive, field_llm, llm_context, local_llm_stream
 from .connection_settings import current_settings
 from .foresight_llm import _numbers, _quantities, _number_warnings
 
@@ -147,7 +148,7 @@ def _safe_error(exc: Exception) -> str:
         return "invalid_output"
     kind = getattr(exc, "kind", None)
     return kind if kind in {"context_budget", "context_length", "token_limit", "incomplete", "malformed_json",
-                           "read_timeout", "first_response_timeout", "total_timeout", "quote_mismatch"} else "generation_failed"
+                           "read_timeout", "first_response_timeout", "total_timeout", "timeout_recovery_exhausted", "quote_mismatch"} else "generation_failed"
 
 
 def _cut(text: str, start: int, end: int) -> int:
@@ -193,11 +194,13 @@ def _facts(raw: object, abstract: str, start: int, end: int, abstract_hash: str)
     return facts, warnings
 
 
-def extract_paper(paper: dict, provider: str, model: str, *, checkpoint=None, progress=None, cancelled=None) -> dict:
+def extract_paper(paper: dict, provider: str, model: str, *, checkpoint=None, progress=None, cancelled=None, adaptive=None) -> dict:
     """Process all characters; checkpoint may be callable or {state, save}."""
     abstract = paper.get("abstract") if isinstance(paper.get("abstract"), str) else ""
     title = str(paper.get("title") or "")
     namespace = cache_namespace(provider, model)
+    policy = corpus_adaptive.AdaptivePolicy(adaptive, namespace, provider, max_chars=INITIAL_CHUNK_CHARS,
+        max_tokens=SUMMARY_BATCH_TOKENS, max_items=SUMMARY_BATCH_ITEMS)
     abstract_hash = _digest(abstract)
     scope = {"is_demo": bool(paper.get("is_demo")), "sampled": bool(paper.get("sampled")),
              "source_warnings": paper.get("source_warnings", [])}
@@ -225,6 +228,8 @@ def extract_paper(paper: dict, provider: str, model: str, *, checkpoint=None, pr
                 result["status"] = "no_grounded_facts"
                 result["warnings"].append(_warning("no_grounded_facts", "抄録全体を処理しましたが、照合済みの根拠がありません。評論に利用できる知見を得たとは判定しません。"))
         result["grounded_fact_count"] = len(result["facts"])
+        result["adaptive"] = {"version": corpus_adaptive.POLICY_VERSION, "timeout_recoveries": policy.recoveries,
+                              "max_chars": policy.limit("extraction")}
         if callable(save):
             save(deepcopy(result))
 
@@ -269,12 +274,20 @@ def extract_paper(paper: dict, provider: str, model: str, *, checkpoint=None, pr
                 result["chunks"].append({"start": a, "end": b, "status": "cancelled", "facts": [],
                                          "warnings": [_warning("cancelled", "この抄録部分は未処理です。再開時に処理します。") ]})
             break
+        if end-start > policy.limit("extraction"):
+            split = start + policy.limit("extraction")
+            pending.appendleft((split, end))
+            end = split
         audit = {}
+        elapsed = None
         try:
             payload = {"papers": [{"id": "paper", "title": title, "abstract": abstract[start:end]}],
                        "segment": {"start": start, "end": end, "abstract_chars": len(abstract)}, "scope": scope}
+            policy.started()
+            began = time.monotonic()
             raw, _, _ = field_llm.structured_output(payload, Extraction, EXTRACT_PROMPT, provider, model,
                                                     progress=progress, input_context=audit, preserve_input=True)
+            elapsed = time.monotonic() - began
             if audit.get("metadata", {}).get("reduced") or audit.get("payload", payload) != payload:
                 raise local_llm_stream.LocalStreamError("入力が縮小されたため再分割します。", kind="context_budget")
             facts, warnings = _facts(raw, abstract, start, end, abstract_hash)
@@ -282,6 +295,26 @@ def extract_paper(paper: dict, provider: str, model: str, *, checkpoint=None, pr
             chunk = {"start": start, "end": end, "status": status, "facts": facts, "warnings": warnings}
         except Exception as exc:
             kind = _safe_error(exc)
+            if kind in corpus_adaptive.TIMEOUT_KINDS and provider == "local":
+                if _stopped(cancelled):
+                    pending.appendleft((start, end))
+                    continue
+                recovery = policy.recovery("extraction", kind, divisible=end-start > MIN_CHUNK_CHARS,
+                    request_key=(start, end), units=end-start, progress=progress)
+                if recovery == "split":
+                    middle = _cut(abstract, start, end)
+                    pending.appendleft((middle, end))
+                    pending.appendleft((start, middle))
+                    continue
+                if recovery == "retry":
+                    pending.appendleft((start, end))
+                    continue
+                result["error_kind"] = "timeout_recovery_exhausted"
+                for a, b in [(start, end), *pending]:
+                    result["chunks"].append({"start": a, "end": b, "status": "failed", "facts": [],
+                        "error_kind": "timeout_recovery_exhausted", "warnings": [_warning("timeout_recovery_exhausted",
+                            "時間切れの自動再試行を停止しました。この範囲は未処理として保存され、再開できます。") ]})
+                break
             if kind in {"context_budget", "context_length", "token_limit"} and end-start > MIN_CHUNK_CHARS:
                 middle = _cut(abstract, start, end)
                 pending.appendleft((middle, end))
@@ -289,6 +322,10 @@ def extract_paper(paper: dict, provider: str, model: str, *, checkpoint=None, pr
                 continue
             chunk = {"start": start, "end": end, "status": "failed", "facts": [], "error_kind": kind,
                      "warnings": [_warning(kind, "この抄録部分の根拠抽出に失敗しました。未処理範囲として残し、再開できます。") ]}
+        if chunk["status"] == "completed" and elapsed is not None:
+            policy.success("extraction", end-start, elapsed, progress)
+        elif policy.enabled:
+            policy.persist()
         if audit.get("metadata"):
             chunk["input_context"] = deepcopy(audit["metadata"])
         result["chunks"].append(chunk)
@@ -327,12 +364,15 @@ def _numeric_warnings(text, nodes, location):
 
 
 def synthesize(items: list[dict], provider: str, model: str, *, label, progress=None, checkpoint=None, cancelled=None,
-               metrics: dict | None = None) -> dict:
+               metrics: dict | None = None, adaptive=None) -> dict:
     """Consume all inputs with bounded fan-in, preserving provenance off prompt."""
     nodes, negatives, input_ids, initial_warnings = [], {}, [], []
     namespace = cache_namespace(provider, model)
+    policy = corpus_adaptive.AdaptivePolicy(adaptive, namespace, provider, max_chars=INITIAL_CHUNK_CHARS,
+        max_tokens=SUMMARY_BATCH_TOKENS, max_items=SUMMARY_BATCH_ITEMS)
     state = checkpoint.get("state", {}) if isinstance(checkpoint, dict) else {}
     cached_nodes = state.get("nodes", {}) if isinstance(state, dict) else {}
+    cached_nodes = cached_nodes if isinstance(cached_nodes, dict) else {}
     save = checkpoint.get("save") if isinstance(checkpoint, dict) else checkpoint
     input_count, unknown_missing = 0, 0
     missing_ids, evidence_ids = set(), set()
@@ -409,7 +449,48 @@ def synthesize(items: list[dict], provider: str, model: str, *, label, progress=
     consumed = set()
     initial_node_ids = {node["child_id"] for node in nodes}
 
-    def combine(batch, *, final=False, depth=0):
+    def split_combine(batch, key, child_ids, *, final, depth, plan=None, soft=False):
+        if _stopped(cancelled):
+            raise CorpusCancelled("階層要約を中断しました。完了した中間要約は保存されています。")
+        soft = soft or (isinstance(plan, dict) and plan.get("soft_limit") is True)
+        if depth >= 16 or (len(batch) == 1 and len(batch[0]["text"]) <= MIN_CHUNK_CHARS):
+            if soft:
+                return combine(batch, final=final, depth=depth, adaptive_bypass=True)
+            raise local_llm_stream.LocalStreamError("入力をさらに分割できません。完了した中間要約から再開できます。", kind="context_budget")
+        split_type = "batch" if len(batch) > 1 else "text"
+        length = len(batch) if len(batch) > 1 else len(batch[0]["text"])
+        midpoint = (length // 2 if len(batch) > 1 else _cut(batch[0]["text"], 0, length))
+        if isinstance(plan, dict) and plan.get("split_type") == split_type and type(plan.get("split_point")) is int and 0 < plan["split_point"] < length:
+            midpoint = plan["split_point"]
+        else:
+            # Persist the branch, not just completed children. On resume a slow
+            # parent is not resent merely to rediscover the same split.
+            plan = {"kind": "summary_node", "record_type": "split_plan", "cache_namespace": namespace,
+                    "request_hash": key, "children": child_ids, "split_type": split_type, "split_point": midpoint, "soft_limit": soft}
+            cached_nodes[key] = deepcopy(plan)
+            if callable(save):
+                save(deepcopy(plan))
+        if len(batch) > 1:
+            children = [combine(batch[:midpoint], depth=depth+1), combine(batch[midpoint:], depth=depth+1)]
+        else:
+            original = batch[0]
+            children = []
+            for offset, text in enumerate((original["text"][:midpoint], original["text"][midpoint:])):
+                child = {**original, "child_id": "n-"+_digest([original["child_id"], offset, text])[:24], "text": text}
+                provenance[child["child_id"]] = {"children": [], "paper_ids": child["paper_ids"], "split_from": original["child_id"]}
+                children.append(combine([child], depth=depth+1))
+            consumed.add(original["child_id"])
+            provenance[original["child_id"]] = {"children": [child["child_id"] for child in children], "paper_ids": original["paper_ids"]}
+        if sum(llm_context.estimate_tokens(child["text"]) for child in children) >= sum(llm_context.estimate_tokens(node["text"]) for node in batch):
+            if soft:
+                # Timing guidance is not a hard context limit. A model may
+                # return longer prose for each half; allow the original merge
+                # once rather than fail a request that the gateway can accept.
+                return combine(batch, final=final, depth=depth, adaptive_bypass=True)
+            raise local_llm_stream.LocalStreamError("中間要約を入力上限に収まる長さへ圧縮できませんでした。保存済みの根拠と要約から再開できます。", kind="context_budget") from None
+        return combine(children, final=final, depth=depth+1)
+
+    def combine(batch, *, final=False, depth=0, adaptive_bypass=False):
         if _stopped(cancelled):
             raise CorpusCancelled("階層要約を中断しました。完了した中間要約は保存されています。")
         payload = {"label": str(label), "stage": "final" if final else "intermediate",
@@ -430,34 +511,44 @@ def synthesize(items: list[dict], provider: str, model: str, *, label, progress=
             if cached.get("input_context"):
                 audits.append(deepcopy(cached["input_context"]))
             return node
+        if (not adaptive_bypass and isinstance(cached, dict) and cached.get("cache_namespace") == namespace and cached.get("request_hash") == key
+                and cached.get("children") == child_ids and cached.get("record_type") == "split_plan"):
+            return split_combine(batch, key, child_ids, final=final, depth=depth, plan=cached)
+        units = sum(llm_context.estimate_tokens(node["text"]) for node in batch)
+        minimum_summary_merge = len(batch) <= 2 and all("summary_text" in node for node in batch)
+        if (not adaptive_bypass and not minimum_summary_merge and policy.enabled
+                and (policy.limit("synthesis") < SUMMARY_BATCH_TOKENS or policy.state["synthesis"]["max_items"] < SUMMARY_BATCH_ITEMS)
+                and (units > policy.limit("synthesis") or len(batch) > policy.state["synthesis"]["max_items"])
+                and (len(batch) > 1 or len(batch[0]["text"]) > MIN_CHUNK_CHARS)):
+            return split_combine(batch, key, child_ids, final=final, depth=depth, soft=True)
         audit = {}
         try:
+            policy.started()
+            began = time.monotonic()
             raw, _, _ = field_llm.structured_output(payload, Summary, SYNTHESIS_PROMPT, provider, model,
                 progress=progress, input_context=audit, preserve_input=True)
+            elapsed = time.monotonic() - began
             if audit.get("metadata", {}).get("reduced") or audit.get("payload", payload) != payload:
                 raise local_llm_stream.LocalStreamError("入力が縮小されたため再分割します。", kind="context_budget")
         except local_llm_stream.LocalStreamError as exc:
+            if exc.kind in corpus_adaptive.TIMEOUT_KINDS and provider == "local":
+                if _stopped(cancelled):
+                    raise CorpusCancelled("階層要約を中断しました。完了した中間要約は保存されています。") from None
+                recovery = policy.recovery("synthesis", exc.kind,
+                    divisible=depth < 16 and (len(batch) > 1 or len(batch[0]["text"]) > MIN_CHUNK_CHARS),
+                    request_key=key, units=units, progress=progress)
+                if recovery == "split":
+                    return split_combine(batch, key, child_ids, final=final, depth=depth)
+                if recovery == "retry":
+                    return combine(batch, final=final, depth=depth, adaptive_bypass=adaptive_bypass)
+                raise local_llm_stream.LocalStreamError("時間切れの自動再試行を停止しました。完了した中間要約は保存されています。未処理分は再開できます。", kind="timeout_recovery_exhausted") from None
             if exc.kind not in {"context_budget", "context_length", "token_limit"} or depth >= 16:
+                if policy.enabled:
+                    policy.persist()
                 raise
-            if len(batch) > 1:
-                midpoint = len(batch)//2
-                children = [combine(batch[:midpoint], depth=depth+1), combine(batch[midpoint:], depth=depth+1)]
-            else:
-                original = batch[0]
-                if len(original["text"]) <= MIN_CHUNK_CHARS:
-                    raise
-                middle = _cut(original["text"], 0, len(original["text"]))
-                children = []
-                for offset, text in enumerate((original["text"][:middle], original["text"][middle:])):
-                    child = {**original, "child_id": "n-"+_digest([original["child_id"], offset, text])[:24], "text": text}
-                    provenance[child["child_id"]] = {"children": [], "paper_ids": child["paper_ids"], "split_from": original["child_id"]}
-                    children.append(combine([child], depth=depth+1))
-                consumed.add(original["child_id"])
-                provenance[original["child_id"]] = {"children": [child["child_id"] for child in children], "paper_ids": original["paper_ids"]}
-            if sum(llm_context.estimate_tokens(child["text"]) for child in children) >= sum(llm_context.estimate_tokens(node["text"]) for node in batch):
-                raise local_llm_stream.LocalStreamError("中間要約を入力上限に収まる長さへ圧縮できませんでした。保存済みの根拠と要約から再開できます。", kind="context_budget") from None
-            return combine(children, final=final, depth=depth+1)
+            return split_combine(batch, key, child_ids, final=final, depth=depth)
         parsed = Summary.model_validate(raw.model_dump() if isinstance(raw, BaseModel) else raw)
+        policy.success("synthesis", units, elapsed, progress)
         by_id = {node["child_id"]: node for node in batch}
         sections, local_warnings = [], []
         for position, section in enumerate(parsed.sections):
@@ -505,6 +596,7 @@ def synthesize(items: list[dict], provider: str, model: str, *, label, progress=
                  "input_context": deepcopy(audit.get("metadata", {}))}
         if callable(save):
             save(event)
+        cached_nodes[key] = deepcopy(event)
         return node
 
     level, levels = nodes, 0
@@ -546,4 +638,6 @@ def synthesize(items: list[dict], provider: str, model: str, *, label, progress=
             "input_node_count": len(initial_node_ids), "consumed_node_count": len(initial_node_ids & consumed),
             "paper_node_count": paper_node_count, "metrics_node_count": len(metric_records),
             "source_numbers": sorted(final["numbers"]), "source_quantities": [list(pair) for pair in sorted(final["quantities"])],
-            "input_contexts": audits, "model": model, "prompt_version": PROMPT_VERSION, "status": "completed"}
+            "input_contexts": audits, "model": model, "prompt_version": PROMPT_VERSION, "status": "completed",
+            "adaptive": {"version": corpus_adaptive.POLICY_VERSION, "timeout_recoveries": policy.recoveries,
+                         "max_tokens": policy.limit("synthesis"), "max_items": policy.state["synthesis"]["max_items"]}}

@@ -392,3 +392,115 @@ def test_outer_synthesis_failure_never_leaves_active_status_stuck(ledger, monkey
     failed = finish(report["id"])
     assert failed["status"] == "error" and failed["synthesis_status"] == "failed"
     assert "private" not in failed["error"]
+
+
+def test_adaptive_calibration_is_durable_and_reused_on_next_batch(ledger):
+    path, state = ledger
+    observed = []
+    calibration = {"enabled": True, "version": "corpus-adaptive-v1", "target_seconds": 120,
+                   "extraction": {"max_chars": 1200}, "timeout_recoveries": 1}
+    def calibrated(paper, *args, **kwargs):
+        observed.append(deepcopy(kwargs["adaptive"]["state"]))
+        kwargs["adaptive"]["save"](calibration)
+        kwargs["adaptive"]["state"] = deepcopy(calibration)
+        kwargs["progress"]({"stage": "時間切れのため入力を分割して再試行しています。"})
+        with closing(reports._db()) as db:
+            active = db.execute("SELECT stage FROM reports WHERE status='running'").fetchone()
+            assert "時間切れ" in active[0]
+        return extraction(paper)
+    state["extract"] = calibrated
+    _, first = start([paper("a"), paper("b")], batch_size=1)
+    assert first["adaptive"] == calibration and observed == [{}]
+    # A fresh worker connection loads the calibration left by the earlier run.
+    reports.resume_report(first["id"], batch_size=1)
+    second = finish(first["id"])
+    assert observed == [{}, calibration]
+    assert second["batch_size"] == 1 and second["counts"]["completed"] == 2
+    with sqlite3.connect(path / "corpus_reports.sqlite") as db:
+        saved = json.loads(db.execute("SELECT config FROM reports WHERE id=?", (first["id"],)).fetchone()[0])
+        assert saved["adaptive"] == calibration and saved["batch_size"] == 1
+    exported = json.loads("".join(reports.iter_export(first["id"], "json")))
+    assert exported["report"]["adaptive"] == calibration
+
+
+def test_exhausted_timeout_pauses_before_next_paper_and_preserves_retry_checkpoint(ledger):
+    _, state = ledger
+    checkpoints = []
+    def timed_out(paper, *args, **kwargs):
+        checkpoints.append(deepcopy(kwargs["checkpoint"]["state"]))
+        if kwargs["checkpoint"]["state"]:
+            return extraction(paper)
+        value = extraction(paper, status="partial", covered=10)
+        value["chunks"][0]["end"] = 10
+        value["error_kind"] = "timeout_recovery_exhausted"
+        kwargs["checkpoint"]["save"](value)
+        return value
+    state["extract"] = timed_out
+    _, first = start([paper("a"), paper("b"), paper("c")], run_all=True)
+    assert first["status"] == "paused" and state["calls"] == ["a"]
+    assert first["counts"]["failed"] == 1 and first["counts"]["pending"] == 2
+    assert first["counts"]["processed_chars"] == 10 and "上限" in first["stage"]
+    record = reports.paper_page(first["id"])["items"][0]
+    assert record["extraction"]["facts"] and "時間切れ" in record["error"]
+    reports.resume_report(first["id"], batch_size=1, retry_failed=True)
+    second = finish(first["id"])
+    assert state["calls"] == ["a", "a"] and checkpoints[-1]["covered_chars"] == 10
+    assert second["counts"]["completed"] == 1 and second["counts"]["pending"] == 2
+
+
+def test_synthesis_timeout_exhaustion_pauses_and_reuses_saved_nodes(ledger):
+    _, state = ledger
+    _, report = start([paper("a", year=2020), paper("b", year=2021)])
+    class Exhausted(Exception):
+        kind = "timeout_recovery_exhausted"
+    def stalled(items, provider, model, **kwargs):
+        kwargs["checkpoint"]["save"]({"kind": "summary_node", "request_hash": "completed-child", "node": {"text": "保存済み要約"}})
+        kwargs["adaptive"]["save"]({"enabled": True, "timeout_recoveries": 3, "synthesis": {"max_tokens": 600}})
+        raise Exhausted("private error text")
+    state["synthesize"] = stalled
+    reports.synthesize_report(report["id"])
+    first = finish(report["id"])
+    assert first["status"] == "paused" and first["synthesis_status"] == "partial"
+    assert len(state["syntheses"]) == 1 and "上限" in first["stage"] and "private" not in first["stage"]
+    assert first["groups"][0]["status"] == "partial" and first["adaptive"]["timeout_recoveries"] == 3
+    state["synthesize"] = None
+    reports.synthesize_report(report["id"])
+    second = finish(report["id"])
+    assert state["syntheses"][1]["state"]["nodes"]["completed-child"]["node"]["text"] == "保存済み要約"
+    assert second["synthesis_status"] == "completed"
+
+
+def test_synthesis_stops_after_three_failed_groups_without_contacting_rest(ledger):
+    _, state = ledger
+    _, report = start([paper(str(year), year=year) for year in range(2015, 2025)])
+    def unavailable(*args, **kwargs):
+        raise RuntimeError("private connection details")
+    state["synthesize"] = unavailable
+    reports.synthesize_report(report["id"])
+    stopped = finish(report["id"])
+    assert stopped["status"] == "paused" and stopped["synthesis_status"] == "partial"
+    assert len(state["syntheses"]) == 3 and all(group["status"] == "failed" for group in stopped["groups"])
+    assert "3区分" in stopped["stage"] and "private" not in json.dumps(stopped)
+
+
+def test_overall_timeout_exhaustion_preserves_completed_groups_and_pauses(ledger):
+    _, state = ledger
+    _, report = start([paper("a")])
+    class Exhausted(Exception):
+        kind = "timeout_recovery_exhausted"
+    def stalled_overall(items, provider, model, **kwargs):
+        if kwargs["label"] == "全期間・全分野の総合評論":
+            kwargs["checkpoint"]["save"]({"kind": "summary_node", "request_hash": "overall-child", "node": {"text": "途中まで保存"}})
+            raise Exhausted()
+        return {"status": "completed", "text": "区分別評論", "sections": [], "paper_ids": ["a"]}
+    state["synthesize"] = stalled_overall
+    reports.synthesize_report(report["id"])
+    stopped = finish(report["id"])
+    assert stopped["status"] == "paused" and stopped["synthesis_status"] == "partial"
+    assert all(group["status"] == "completed" for group in stopped["groups"])
+    state["synthesize"] = None
+    before = len(state["syntheses"])
+    reports.synthesize_report(report["id"])
+    assert finish(report["id"])["synthesis_status"] == "completed"
+    assert len(state["syntheses"]) == before + 1
+    assert "overall-child" in state["syntheses"][-1]["state"]["nodes"]
