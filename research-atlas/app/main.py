@@ -33,7 +33,7 @@ from app.cluster_models import cluster_model_catalog
 
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
-app = FastAPI(title="Research Atlas", version="2.4.0", description="Multi-source bibliometrics & evidence-grounded technology foresight")
+app = FastAPI(title="Research Atlas", version="2.5.0", description="Multi-source bibliometrics & evidence-grounded technology foresight")
 MAX_NON_UPLOAD_REQUEST_BYTES = 256 * 1024 * 1024
 EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="atlas-analysis")
 SOURCE_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="atlas-discovery")
@@ -714,4 +714,6 @@ from app.citation_flow_api import router as citation_flow_router
 app.include_router(citation_flow_router)
 from app.publication_date_api import router as publication_date_router
 app.include_router(publication_date_router)
+from app.corpus_api import router as corpus_router
+app.include_router(corpus_router)
 app.mount("/static", StaticFiles(directory=str(ROOT / "static"), check_dir=False), name="static")

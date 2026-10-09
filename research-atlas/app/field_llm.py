@@ -264,7 +264,8 @@ def _discover_context(client, backend: str, url: str, chosen: str, connection: d
 
 def structured_output(payload: dict, schema: type[BaseModel], instructions: str,
                       provider: str, model: str | None = None, *, progress=None,
-                      allow_text: bool = False, input_context: dict | None = None) -> tuple[object, str, str]:
+                      allow_text: bool = False, input_context: dict | None = None,
+                      preserve_input: bool = False) -> tuple[object, str, str]:
     """Shared gateway; prose fallback requires opt-in and caller validation."""
     if provider not in {"local", "openai"}:
         raise ValueError("LLM接続先が不正です。")
@@ -281,7 +282,7 @@ def structured_output(payload: dict, schema: type[BaseModel], instructions: str,
             raise ValueError("OpenAIモデルはブラウザの接続設定で保存したモデルを使用してください。")
         try:
             with openai_client(timeout=120, max_retries=0) as client:
-                if allow_text:
+                if allow_text or preserve_input:
                     # Keep the schema request, but inspect the completed raw
                     # response before SDK schema parsing can discard its text.
                     # No second generation request is needed for the fallback.
@@ -291,9 +292,25 @@ def structured_output(payload: dict, schema: type[BaseModel], instructions: str,
                 else:
                     response = client.responses.parse(model=chosen, store=False, max_output_tokens=4500,
                                                       input=messages, text_format=schema)
-            parsed = None if allow_text else response.output_parsed
-        except Exception:
+            parsed = None if allow_text or preserve_input else response.output_parsed
+        except Exception as exc:
+            if preserve_input:
+                overflow = local_llm_stream._context_error(getattr(exc, "body", None) or str(exc))
+                if overflow:
+                    raise overflow from None
             raise RuntimeError("OpenAIへの接続または構造化回答の取得に失敗しました。認証・モデル・利用上限を確認してください。") from None
+        if preserve_input and getattr(response, "status", None) != "completed":
+            reason = getattr(getattr(response, "incomplete_details", None), "reason", None)
+            raise local_llm_stream.LocalStreamError("OpenAIの回答が未完了のため採用しませんでした。",
+                                                   kind="token_limit" if reason == "max_output_tokens" else "incomplete")
+        if preserve_input and not allow_text:
+            # The SDK parse helper parses JSON before checking response.status.
+            # Inspect completion first so a truncated response can be split by
+            # exhaustive callers instead of being mistaken for arbitrary JSON.
+            try:
+                parsed = schema.model_validate(_openai_final_output(response))
+            except (ValueError, RuntimeError):
+                raise local_llm_stream.LocalStreamError("OpenAIの完了回答が指定の構造化形式と一致しません。", kind="malformed_json") from None
         return _openai_final_output(response) if allow_text else parsed, "openai", chosen
     connection = local_status()
     if not connection["available"]:
@@ -336,6 +353,11 @@ def structured_output(payload: dict, schema: type[BaseModel], instructions: str,
                 audit["requested_output_tokens"] = requested_output
                 if input_context is not None:
                     input_context.update(payload=actual, metadata=audit)
+                if preserve_input and audit["reduced"]:
+                    audit.update(status="failed", preserve_input=True, reduction_rejected=True, sent_chars=0)
+                    if input_context is not None:
+                        input_context["payload"] = deepcopy(payload)
+                    raise local_llm_stream.LocalStreamError("全件処理の入力を省略せず分割する必要があります。", kind="context_budget")
                 if not audit["fits"]:
                     audit["status"] = "failed"
                     raise local_llm_stream.LocalStreamError(llm_context.BUDGET_ERROR, kind="context_budget")
@@ -362,7 +384,7 @@ def structured_output(payload: dict, schema: type[BaseModel], instructions: str,
                     break
                 except local_llm_stream.LocalStreamError as exc:
                     audit["status"] = "failed"
-                    if exc.kind != "context_length" or attempt == 2:
+                    if preserve_input or exc.kind != "context_length" or attempt == 2:
                         raise
                     if exc.context_limit and exc.context_limit <= window:
                         window, context_source = exc.context_limit, "server_error"
