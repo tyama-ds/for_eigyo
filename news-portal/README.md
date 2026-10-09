@@ -73,10 +73,32 @@ App Portal（`launcher/`）にも `Prism ニュースポータル` として登�
   生成したブリーフはテーマに紐づき、「前回のブリーフを開く」で再表示。
 - **本文一括取得（キャッシュつき）** — 「本文を取得」で選択記事（新しい順に最大80件）の
   ページ本文をまとめて取得（直接取得を並列 → 失敗分は上限件数までヘッドレスブラウザで
-  再試行、進捗バー表示）。結果は SQLite にキャッシュされ、一覧に **「本文」バッジ**が付く。
+  再試行、進捗バー表示）。結果は SQLite にキャッシュされ、一覧に **「本文」バッジ**が付く
+  （続きページを連結した記事は「本文 3p」のようにページ数つき）。
   レポート生成で**「本文も取得して要約する」**を選ぶと、要約だけでなくページ本文の抜粋を
   根拠に部分要約する（取得フェーズも進捗表示）。会話では「会話に本文を使う」で取得済みの
-  本文抜粋（上から最大10件）を依頼に添える。
+  本文抜粋（上から最大10件）を依頼に添える。長い本文は「冒頭＋問い・検索語・主要な固有名詞を含む文」で
+  抜粋するので、2ページ目以降にある関連箇所もレポート・会話に届く。
+- **続きページの取得（2ページ目以降・全文表示）** — 記事が複数ページに分かれていれば続きをたどって本文を連結する。
+  1. **規則で判定**: `<link rel="next">`／`<a rel="next">`、ページ番号だけが違う URL（`?page=2`・`?P=2`・
+     `news123_2.html`・`/slug/2/`・`/page/2/` など）、ページャの文言（「次のページへ」「次へ」「Next」・番号）。
+     「1ページで表示」「全文表示」のリンクがあれば先に試し、1ページ目より十分長ければそれを採用する。
+     Yahoo!ニュースの `/pickup/` ページは記事本体（`/articles/`）へ1ホップしてから取得する。
+  2. **迷うときは生成AIが判断**（設定「自動」）: 規則で1つに決められないとき（別 URL の「次へ」と「Next」が
+     並ぶ、本文が「（続く）」で終わるのに弱い候補しかない、など）だけ、候補リンク（最大15件）を番号つきで渡して
+     「どれが同じ記事の続きか」を JSON で答えさせる。採用するのは**候補の番号だけ**で、候補は最初から
+     同じサイト・内部アドレスでない・未取得の URL に限るため、AI の誤答やページ内に仕込まれた指示があっても
+     候補の外へは行かない。1回の本文取得で AI 判定は最大30件、AI に接続できないときは以降の判定を止める。
+  3. **止める条件**: 最大ページ数（設定・既定6）、1記事45秒、別サイト・内部アドレス、同じ URL の再訪、
+     見出しが別の記事、新しい本文が無い、続きが有料／ログイン必須（「会員限定」「残り○文字」・JSON-LD の
+     `isAccessibleForFree: false` など）。止めた理由は一覧のバッジの説明と完了表示に出る。
+  - 同じ記事のページは 0.6 秒間隔で順に取得し、2ページ目以降は1ページ目と重複する段落（共通ヘッダー・
+    ページャ）を除いて連結する。本文の保存上限は 24,000 字。本文は `<article>`／`<main>` など本文の器を優先し、
+    `nav`／`aside`／`footer` の文字を外して取り出す（Shift_JIS／EUC-JP のページも文字コードを判定して読む）。
+  - ヘッドレスブラウザ経由でも同じ規則で続きをたどる（同じブラウザでページを移動）。ページ内の
+    「続きを読む」ボタン（別 URL へ行かないもの）は最大2回まで押してから本文を読む。
+  - 設定（「設定 → 本文取得」）: 方式＝自動（規則＋迷えば AI）／規則のみ／1ページ目だけ、最大ページ数（1〜20）。
+    以前に取得した本文はキャッシュが使われるため、本文取得の完了表示の「取り直す」で続きページ込みに更新できる。
 - **検索の高度化（FTS5・検索構文・同義語辞書）** — 過去ログの検索は SQLite **FTS5（trigram）**
   の全文索引を使い（FTS5 の無い環境では自動で部分一致に切替）、**全角/半角・大小文字を区別しない**
   （NFKC 正規化）。検索語は **スペース=AND、`|`=OR、先頭 `-`=除外**（例: `高炉|電炉 水素 -株価`）。
@@ -203,7 +225,8 @@ AI アシスタントは**サーバー側から生成AI APIを呼び出す**。�
     NTLM/Kerberos 認証プロキシの場合は `px`（px-proxy）や `cntlm` をローカル中継として
     立て、その `http://127.0.0.1:3128` 等を指定する。
 - **記事本文の読み込み（urllib → ヘッドレスブラウザの2段構え）** — 記事コンテキストでは、
-  必要に応じてサーバーが記事URLの本文を取得して文脈に加える。
+  必要に応じてサーバーが記事URLの本文を取得して文脈に加える（続きページがあれば設定に従ってたどり、
+  「本文は続きページを含め N ページ分を連結して取得しました」と注記する）。
   1. まず `urllib` で取得（プロキシ/CA設定に従う）
   2. 失敗またはほぼ空（JS描画のSPA・ブロックページ等）なら **Selenium のヘッドレス
      ブラウザへ自動フォールダウン**。実ブラウザは**システムのプロキシ設定
@@ -311,7 +334,7 @@ UI の「情報源」から自由に 追加 / 無効化 / 削除でき、URL も
 | POST | `/api/research/report` | レポート生成ジョブの開始（JSON: `ids[]`, `question?`, `template?`=overview/timeline/brief/compare, `filters?`, `fulltext?`=本文も取得, `groups?`=[{label, ids[]}]（比較レポート: 記事行に〔A〕〔B〕タグ）, `title?`）→ `job_id` |
 | POST | `/api/research/compare` | 比較ビュー（JSON: `a`={q,sources[],category,days,from,to,archived?,label?}, `b`={theme_id} / {prev:true} / 条件）→ 両側の件数・条件文・情報源・固有名詞・期間内ヒストグラム・記事id、共通／片方だけの固有名詞 |
 | GET | `/api/research/report/status?id=` | ジョブの進捗（state=queued/fetching/mapping/reducing/done/error, done/total, sub。本文取得ジョブも同じ） |
-| POST | `/api/research/fulltext` | 選択記事の本文一括取得ジョブ（JSON: `ids[]`、最大80件）→ `job_id`。完了時に `summary{ok,partial,failed,cached,selenium}` と記事ごとの可否 |
+| POST | `/api/research/fulltext` | 選択記事の本文一括取得ジョブ（JSON: `ids[]`、最大80件、`force?`=キャッシュを使わず取り直す）→ `job_id`。完了時に `summary{ok,partial,failed,cached,selenium,multi,pages_extra,ai_judged,paywall}` と記事ごとの可否（`pages`・`note`） |
 | GET | `/api/research/themes` | テーマ一覧（条件 `filters`・条件文 `conds`・該当件数 `total`・新着件数 `new`・前回ブリーフ） |
 | POST | `/api/research/themes` | テーマの保存（JSON: `name`, `filters{q,sources[],category,days,from,to}`, `id?`=上書き, `kind?`=theme/watch） |
 | POST | `/api/research/themes/seen` | 既読にする（JSON: `id`。新着差分の基準時刻を今に更新） |
@@ -332,7 +355,9 @@ UI の「情報源」から自由に 追加 / 無効化 / 削除でき、URL も
 
 レポート生成 `POST /api/research/report` は `docs`（"all" または資料 id の配列）と `doc_k`（抜粋件数、既定20）、
 会話 `POST /api/ai/chat` は `use_docs` を受け付ける。`POST /api/settings` の `ctx_tokens` / `parallel` / `timeout_s` が
-ローカルLLMの処理設定（`GET /api/settings` の `ai` に含まれる）。
+ローカルLLMの処理設定（`GET /api/settings` の `ai` に含まれる）。`follow_pages`（auto / rules / off）と `max_pages`（1〜20）が
+本文取得の続きページの設定（`GET /api/settings` の `fulltext`）。`GET /api/archive/search` の各行には `text_pages`（本文のページ数）と
+`text_note`（続きページを止めた理由など）が付く。
 | DELETE | `/api/research/report?id=` | レポート削除 |
 | POST | `/api/ai/chat` | AIへの質問（JSON: `question`, `history`, `context`, `fetch_page?`） |
 

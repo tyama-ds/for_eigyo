@@ -550,6 +550,8 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
 .tune label{display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--text-2); font-weight:500}
 .tune input[type=number]{width:96px; padding:5px 8px; border-radius:7px; border:1px solid var(--line); background:var(--surface); color:var(--text); font:inherit; font-size:12px}
 .tune input[type=number]:focus{border-color:var(--accent); outline:none}
+.tune select{padding:5px 8px; border-radius:7px; border:1px solid var(--line); background:var(--surface); color:var(--text); font:inherit; font-size:12px; max-width:100%}
+.tune select:focus{border-color:var(--accent); outline:none}
 #rsRDocK{width:52px; padding:2px 5px; border-radius:6px; border:1px solid var(--line); background:var(--surface); color:var(--text); font:inherit; font-size:12px}
 .rs__docpanel{min-width:380px; max-width:520px}
 .rs__docpanel input[type=file]{font-size:12px; max-width:100%}
@@ -1165,7 +1167,19 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
         </div>
         <span class="hint">上のフォームの値（保存前でも可）で arXiv への取得を試し、失敗理由（407認証/403遮断/TLS/未到達）を判定します。</span>
       </div>
-      <div class="sethead">本文取得のヘッドレスブラウザ（任意）</div>
+      <div class="sethead">本文取得（続きページ・ヘッドレスブラウザ）</div>
+      <div class="setrow">
+        <label for="ftFollow">続きページ（2ページ目以降・全文表示）の取得</label>
+        <div class="tune">
+          <label>方式<select id="ftFollow">
+            <option value="auto">自動（規則で判定し、迷うときは生成AIが判断）</option>
+            <option value="rules">規則のみ（生成AIを使わない）</option>
+            <option value="off">1ページ目だけ</option>
+          </select></label>
+          <label>最大ページ数<input id="ftMaxPages" type="number" min="1" max="20"></label>
+        </div>
+        <span class="hint">記事が複数ページに分かれているとき、<code>rel=next</code>・ページ番号だけが違うURL（<code>?page=2</code>・<code>_2.html</code> など）・「次のページへ」などの規則で続きをたどり、本文を連結します（同じサイトのページだけ・「全文表示」リンクがあればそれを優先）。規則で決めきれないときは「自動」なら生成AIに候補リンクのどれが続きかを番号で選ばせます（候補の外のURLへは行きません）。続きが有料・ログイン必須のページは取らずに止めます。設定前に取得した本文は、本文取得の完了表示の「取り直す」で続きページ込みに更新できます。</span>
+      </div>
       <div class="setrow">
         <label for="brBinary">ブラウザ実行ファイルのパス</label>
         <input id="brBinary" type="text" autocomplete="off" spellcheck="false"
@@ -1177,7 +1191,7 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
                placeholder="例: C:\tools\chromedriver.exe（空=Selenium Managerが自動解決）">
         <span class="hint">urllib で本文が取れないとき、ヘッドレスブラウザで再取得します（<code>pip install selenium</code> が必要）。通常は両方とも<b>空でOK</b>（インストール済みの Chrome/Edge とドライバ自動解決を使用）。ドライバの自動ダウンロードがプロキシで失敗する環境では、手動配置した WebDriver のパスをここに指定してください。</span>
       </div>
-      <div class="field">
+      <div class="setrow">
         <label for="pdfFont">PDF 書き出し用の日本語フォント（TrueType）のパス</label>
         <input id="pdfFont" type="text" autocomplete="off" spellcheck="false"
                placeholder="例: C:\Windows\Fonts\YuGothM.ttc（空=自動検出: Yu Gothic / Meiryo / MS ゴシック / IPA ゴシック）">
@@ -1930,7 +1944,7 @@ const PROVIDER_DEFAULTS = {
     modelHint:"ローカルにあるモデル名。例: llama3.1 / qwen2.5 / gpt-oss" },
 };
 
-async function loadAiSettings(){ try{ const d=await api("/api/settings"); AI.config=d.ai; AI.proxy=d.proxy; AI.browser=d.browser; AI.pdfFont=d.pdf_font||""; AI.pdfFontFound=!!d.pdf_font_found; }catch(e){ AI.config=null; } }
+async function loadAiSettings(){ try{ const d=await api("/api/settings"); AI.config=d.ai; AI.proxy=d.proxy; AI.browser=d.browser; AI.fulltext=d.fulltext; AI.pdfFont=d.pdf_font||""; AI.pdfFontFound=!!d.pdf_font_found; }catch(e){ AI.config=null; } }
 function aiReady(){ return !!(AI.config && (AI.config.has_key || AI.config.provider==="local")); }
 
 function setAiContext(a){
@@ -2073,13 +2087,16 @@ function fillAiForm(){
   $("#aiCaBundle").value = p.ca_bundle||"";
   const br=AI.browser||{binary:"", driver:""};
   $("#brBinary").value = br.binary||""; $("#brDriver").value = br.driver||"";
+  const ft=AI.fulltext||{follow:"auto", max_pages:6};
+  $("#ftFollow").value = ft.follow||"auto"; $("#ftMaxPages").value = ft.max_pages||6;
   const pf=$("#pdfFont"); if(pf) pf.value=AI.pdfFont||"";
   const ps=$("#pdfFontState"); if(ps) ps.textContent = AI.pdfFontFound ? "現在: 日本語フォントを検出済みです。" : "現在: フォントが見つかりません。パスを指定してください。";
   toggleProxyUrl(); applyProviderHints();
 }
 function proxyPayload(){ const on=$("#aiUseProxy").checked; return { use_proxy:on, proxy_url: on ? $("#aiProxyUrl").value.trim() : "", ca_bundle: $("#aiCaBundle").value.trim(),
   browser_binary: $("#brBinary").value.trim(), driver_path: $("#brDriver").value.trim(), pdf_font: ($("#pdfFont")?$("#pdfFont").value.trim():""),
-  ctx_tokens: parseInt($("#aiCtx").value,10)||0, parallel: parseInt($("#aiPar").value,10)||0, timeout_s: parseInt($("#aiTimeout").value,10)||0 }; }
+  ctx_tokens: parseInt($("#aiCtx").value,10)||0, parallel: parseInt($("#aiPar").value,10)||0, timeout_s: parseInt($("#aiTimeout").value,10)||0,
+  follow_pages: $("#ftFollow").value, max_pages: parseInt($("#ftMaxPages").value,10)||0 }; }
 function openAiSettings(){ fillAiForm(); openOverlay($("#aiSettings")); }
 $("#aiProvider").addEventListener("change", applyProviderHints);
 $("#aiProvider").addEventListener("change", ()=>{ $("#aiLocalTuning").hidden = $("#aiProvider").value!=="local"; });
@@ -2091,7 +2108,7 @@ $("#aiForm").addEventListener("submit", async (e)=>{
   const key=$("#aiKey").value.trim(); if(key) payload.api_key=key;
   try{
     const d=await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
-    if(d.ok){ AI.config=d.ai; AI.proxy=d.proxy; AI.browser=d.browser; AI.pdfFont=d.pdf_font||""; AI.pdfFontFound=!!d.pdf_font_found; toast("AI・プロキシ設定を保存しました"); closeOverlays(); openAI(); }
+    if(d.ok){ AI.config=d.ai; AI.proxy=d.proxy; AI.browser=d.browser; AI.fulltext=d.fulltext; AI.pdfFont=d.pdf_font||""; AI.pdfFontFound=!!d.pdf_font_found; toast("AI・プロキシ設定を保存しました"); closeOverlays(); openAI(); }
     else toast(d.error||"保存に失敗しました","err");
   }catch(e){ toast(e.server ? e.message : "保存に失敗しました","err"); }
 });
@@ -2243,7 +2260,11 @@ function renderRsList(){
     const cc=el("span",{class:"c",text:a.category||""}); cc.style.color=catColor(a.category);
     m.append(cc, el("span",{text:a.source||""}));
     const d=String(a.published||"").slice(0,10); if(d) m.append(el("span",{text:d}));
-    if(a.has_text) m.append(el("span",{class:"tx",text:"本文",title:"ページ本文を取得済み（レポート・会話の根拠に使えます）"}));
+    if(a.has_text){
+      const np=a.text_pages||1;
+      m.append(el("span",{class:"tx",text:np>1?"本文 "+np+"p":"本文",
+        title:(np>1?"続きページを含め "+np+" ページ分の本文を取得済み":"ページ本文を取得済み")+"（レポート・会話の根拠に使えます）"+(a.text_note?"\n"+a.text_note:"")}));
+    }
     if(dedup && a.dups && a.dups.length){   // 類似記事の束: 代表行に「+N 類似」ボタン（展開／折りたたみ）
       const open=RS.openDups.has(a.id);
       const b=el("button",{type:"button",class:"dupn",text:(open?"− ":"+ ")+a.dups.length+" 類似",title:"タイトルが似た記事（別媒体など）を"+(open?"折りたたむ":"表示する")});
@@ -2447,7 +2468,8 @@ function reportEl(rep){
   const d=new Date((rep.created_at||0)*1000);
   const st=rep.stats||{}; const meta=[d.toLocaleString("ja-JP"), "記事 "+(rep.sources||[]).length+"件"];
   if(st.chunks) meta.push("部分要約 "+st.chunks+"回");
-  if(st.fulltext) meta.push("本文 "+st.fulltext+"件"+(st.fulltext_failed?"（取得不可 "+st.fulltext_failed+"）":""));
+  if(st.fulltext){ const ex=[]; if(st.fulltext_multi) ex.push("複数ページ "+st.fulltext_multi); if(st.fulltext_failed) ex.push("取得不可 "+st.fulltext_failed);
+    meta.push("本文 "+st.fulltext+"件"+(ex.length?"（"+ex.join("・")+"）":"")); }
   if(st.docs) meta.push("外部資料の抜粋 "+st.docs+"件");
   if(st.failed_chunks) meta.push("⚠ 部分要約の失敗 "+st.failed_chunks+"チャンク（内容に反映されず。再試行 "+(st.retries||0)+"回）");
   if(st.truncated) meta.push("⚠ 文脈長の都合でメモを一部省略");
@@ -2970,13 +2992,14 @@ async function uploadDocs(files){
 }
 
 // ---- 本文一括取得（選択記事・キャッシュつき・進捗表示） ----
-async function startFetch(){
+async function startFetch(force){
+  force = force===true;
   if(RS.fetchJob && !["done","error"].includes(RS.fetchJob.state)){ toast("本文取得を実行中です","err"); return; }
-  const ids=RS.results.filter(a=>RS.sel.has(a.id)).map(a=>a.id);
+  const ids=(force && RS.fetchJob && RS.fetchJob.ids) ? RS.fetchJob.ids : RS.results.filter(a=>RS.sel.has(a.id)).map(a=>a.id);
   if(!ids.length){ toast("記事を1件以上選択してください","err"); return; }
   try{
-    const d=await api("/api/research/fulltext",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ids})});
-    RS.fetchJob={id:d.job_id, state:"queued", total:0, done:0, articles:d.articles};
+    const d=await api("/api/research/fulltext",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ids, force})});
+    RS.fetchJob={id:d.job_id, state:"queued", total:0, done:0, articles:d.articles, ids, force};
     renderFetchBar(); pollFetch();
   }catch(e){ toast(e.server?e.message:"本文取得を開始できませんでした","err"); }
 }
@@ -2988,10 +3011,12 @@ async function pollFetch(){
     renderFetchBar();
     if(s.state==="done"){
       const m=s.summary||{};
-      toast("本文取得: 成功 "+(m.ok||0)+"件"+(m.partial?"・一部 "+m.partial+"件":"")+(m.failed?"・取得不可 "+m.failed+"件":"")+(m.selenium?"（ブラウザ経由 "+m.selenium+"）":""),
+      toast("本文取得: 成功 "+(m.ok||0)+"件"+(m.partial?"・一部 "+m.partial+"件":"")+(m.failed?"・取得不可 "+m.failed+"件":"")+(m.selenium?"（ブラウザ経由 "+m.selenium+"）":"")
+            +(m.multi?"・続きページあり "+m.multi+"件":""),
             (m.failed && !m.ok) ? "err" : undefined);
       researchSearch(true);   // 「本文」バッジを反映（選択は維持）
-      setTimeout(()=>{ if(RS.fetchJob&&RS.fetchJob.state==="done") $("#rsFetchBar").hidden=true; }, 8000);
+      const jid=RS.fetchJob.id;
+      setTimeout(()=>{ if(RS.fetchJob&&RS.fetchJob.id===jid&&RS.fetchJob.state==="done") $("#rsFetchBar").hidden=true; }, m.cached?20000:8000);
       return;
     }
     if(s.state==="error"){ toast("本文取得に失敗しました: "+(s.error||""),"err"); return; }
@@ -3003,13 +3028,18 @@ function renderFetchBar(){
   if(!j){ b.hidden=true; return; }
   b.hidden=false; b.innerHTML="";
   const m=j.summary||{};
-  const txt = j.state==="done" ? ("本文取得 完了: 成功 "+(m.ok||0)+" ／ 一部 "+(m.partial||0)+" ／ 取得不可 "+(m.failed||0)+(m.cached?"（キャッシュ "+m.cached+"）":""))
+  const extra=[]; if(m.multi) extra.push("続きページあり "+m.multi+"件（+"+(m.pages_extra||0)+"p）"); if(m.ai_judged) extra.push("AI 判定 "+m.ai_judged+"件"); if(m.paywall) extra.push("続きが有料 "+m.paywall+"件");
+  const txt = j.state==="done" ? ("本文取得 完了: 成功 "+(m.ok||0)+" ／ 一部 "+(m.partial||0)+" ／ 取得不可 "+(m.failed||0)+(m.cached?"（キャッシュ "+m.cached+"）":"")+(extra.length?" ／ "+extra.join("・"):""))
             : j.state==="error" ? "本文取得 失敗"
             : ("本文取得中 "+(j.done||0)+" / "+(j.total||j.articles||"?")+" 件"+(j.sub?"（"+j.sub+"）":""));
   b.append(el("span",{text:txt}));
   const bar=el("div",{class:"pbar"}); const fill=el("i");
   fill.style.width = j.state==="done" ? "100%" : (j.total ? Math.round(100*(j.done||0)/j.total) : 3)+"%";
   bar.append(fill); b.append(bar);
+  if(j.state==="done" && m.cached){   // キャッシュを使った記事がある → 続きページ込みで取り直せる
+    const rb=el("button",{type:"button",class:"lnkbtn",id:"rsRefetch",text:"取り直す",title:"キャッシュを使わず、続きページも含めて本文を取り直します（以前に取得した本文の更新）"});
+    rb.onclick=()=>startFetch(true); b.append(rb);
+  }
 }
 function closeRsPanels(){
   for(const id of ["#rsSrcPanel","#rsSavedPanel","#rsThemePanel","#rsSynPanel","#rsWatchPanel","#rsExpPanel","#rsDocPanel"]){ const p=$(id); if(p && !p.hidden) p.hidden=true; }
@@ -3054,7 +3084,7 @@ $("#rsThemeBtn").onclick=(e)=>{ e.stopPropagation(); const p=$("#rsThemePanel");
   $("#rsThemeBtn").setAttribute("aria-expanded", String(!p.hidden));
   if(!p.hidden){ loadThemes(); const i=$("#rsThemeName"); if(i) setTimeout(()=>i.focus(),30); } };   // 開くたびに新着件数を更新
 $("#rsThemePanel").addEventListener("click",(e)=>e.stopPropagation());
-$("#rsFetchBtn").onclick=startFetch;
+$("#rsFetchBtn").onclick=()=>startFetch(false);
 $("#rsOrder").addEventListener("change", ()=>researchSearch(true));
 $("#rsLimit").addEventListener("change", ()=>researchSearch(true));
 $("#rsDedup").addEventListener("change", ()=>researchSearch(true));
