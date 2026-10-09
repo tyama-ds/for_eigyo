@@ -231,6 +231,23 @@
       ],
       "url": "http://127.0.0.1:8795",
       "wait_port": 8795
+    },
+    {
+      "id": "local-llm-chat",
+      "name": "Local Chat",
+      "description": "OpenAI互換APIのローカルLLMと会話。文書・ソースコード・画像の添付、会話履歴、ストリーミング、PC側のWeb取得とプロキシに対応（初回セットアップが必要）",
+      "icon": "chat",
+      "cwd": "../local-llm-chat",
+      "command": [
+        "{venv_python}",
+        "-m",
+        "chat_app",
+        "--no-browser",
+        "--port",
+        "8840"
+      ],
+      "url": "http://127.0.0.1:8840",
+      "wait_port": 8840
     }
   ]
 }

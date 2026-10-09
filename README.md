@@ -26,6 +26,7 @@ Patent Atlas は初回に専用の仮想環境と依存パッケージを準備�
 
 | フォルダ | 内容 |
 |----------|------|
+| [local-llm-chat/](local-llm-chat/) | Local Chat — OpenAI互換のローカルLLMとのチャット、PDF・Office・画像・ソースコード添付、PC側のWeb取得とプロキシ設定。会話はPC内に保存（Python 3.11以降、ポート8840） |
 | [jupyter-local-llm/](jupyter-local-llm/) | llmlab — JupyterLab × ローカルLLM（補完・チャット・各種RAG・Studio・Loop・Copilot Research） |
 | [news-portal/](news-portal/) | Prism ニュースポータル — 多数のRSS/Atomを1画面に束ねて分光するニュース収集ポータル（標準ライブラリのみ） |
 | [kaleido-agents/](kaleido-agents/) | Kaleido Agents — サブエージェントとツールモジュールで依頼を完結させるマルチエージェント・オーケストレータ（標準ライブラリのみ、LLM接続は任意） |
