@@ -106,7 +106,7 @@ async def missing_value(_request, _exc):
 def status():
     transformer = importlib.util.find_spec("sentence_transformers") is not None
     bertopic = transformer and all(importlib.util.find_spec(name) is not None for name in ("bertopic", "umap", "hdbscan"))
-    return {"llm_configured": insights.configured(), "limits": public_limits(),
+    return {"version": app.version, "llm_configured": insights.configured(), "limits": public_limits(),
         "transformer_available": transformer,
         "sbert_models": [{"id": key, "model_id": identifier,
             "label": "多言語 MiniLM" if key == "multilingual_minilm" else "SBERT MPNet（英語）",
