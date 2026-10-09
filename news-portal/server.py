@@ -1475,7 +1475,17 @@ _PAGE_BLOCK_TAGS = {"p", "div", "li", "ul", "ol", "dl", "dt", "dd", "h1", "h2", 
                     "article", "main", "header", "blockquote", "pre", "table", "tr", "td", "th", "caption",
                     "figure", "figcaption", "address", "details", "summary", "form", "fieldset", "center"}
 _PAGE_MAX_LINKS = 1500
+_PAGE_MAX_HREF = 2048          # これより長い href は捨てる（異常に長い URL で正規表現・記憶を使い切らない）
+_PAGE_MAX_CHARS = 600_000      # 1ページの解析で拾う本文の文字数の上限
+_PAGE_MAX_BLOCKS = 30_000      # 同じく段落数の上限
 _LD_FREE_RE = re.compile(r'"isAccessibleForFree"\s*:\s*"?(false|no)"?', re.I)
+# 終了タグの省略（HTML の規則の要点）: 同種の要素が始まると開いている前の要素が閉じる（境界の要素は越えない）
+_IMPLIED_CLOSE = {"p": {"p"}, "li": {"li"}, "option": {"option"}, "optgroup": {"option", "optgroup"},
+                  "dt": {"dt", "dd"}, "dd": {"dt", "dd"}, "tr": {"tr", "td", "th"}, "td": {"td", "th"}, "th": {"td", "th"}}
+_IMPLIED_BARRIER = {"div", "ul", "ol", "dl", "table", "tbody", "thead", "tfoot", "select", "section", "article", "main",
+                    "body", "html", "blockquote", "nav", "aside", "footer", "header", "form", "figure", "details", "menu"}
+_P_CLOSERS = (_PAGE_BLOCK_TAGS | {"nav", "aside", "footer", "menu"}) - {"p", "td", "th", "tr", "li", "dt", "dd", "caption",
+                                                                         "summary", "figcaption"}
 
 
 class _PageParser(HTMLParser):
@@ -1483,15 +1493,18 @@ class _PageParser(HTMLParser):
 
     ブロックは段落単位（p / li / h* / br などで区切る）。nav / aside / footer の中の文字は本文から外すが、
     リンクは拾う（ページャがそこにあることが多いため）。article / main / itemprop=articleBody を「本文の器」として
-    記録し、後で最も文字の多い器を本文とみなす。壊れた HTML でも例外にせず、取れた分を返す。"""
+    記録し、後で最も文字の多い器を本文とみなす。終了タグが省略された p / li / option なども HTML の規則どおりに閉じ、
+    壊れた HTML でも例外にせず取れた分を返す。巨大なページでも時間・記憶が文字数に比例する範囲に収まるようにする。"""
 
     def __init__(self):
         super().__init__(convert_charrefs=True)
-        self.blocks: list[tuple[str, int, bool]] = []   # (文字, 器の番号(0=なし), 枠の中か)
+        self.blocks: list[tuple[str, tuple, bool]] = []   # (文字, 器の番号の並び（外→内）, 枠の中か)
         self.links: list[dict] = []
         self.meta = {"title": "", "og_title": "", "next": "", "canonical": "", "paywall": False}
         self._stack: list[dict] = []
         self._buf: list[str] = []
+        self._tail = ""            # 直前の文字（リンクの前後の文脈に使う。最大40字）
+        self._nchars = 0
         self._hard = self._soft = self._boiler = 0
         self._ncont = 0
         self._a: dict | None = None
@@ -1499,11 +1512,8 @@ class _PageParser(HTMLParser):
         self._ld: list[str] | None = None
 
     # -- 状態
-    def _cont(self) -> int:
-        for e in reversed(self._stack):
-            if e.get("cont"):
-                return e["cont"]
-        return 0
+    def _chain(self) -> tuple:
+        return tuple(e["cont"] for e in self._stack if e.get("cont"))
 
     def _cls_chain(self, own: str) -> str:
         parts = [own]
@@ -1516,14 +1526,16 @@ class _PageParser(HTMLParser):
         if self._buf:
             t = _WS_RE.sub(" ", "".join(self._buf)).strip()
             self._buf = []
-            if t:
-                self.blocks.append((t, self._cont(), self._boiler > 0))
+            if t and self._nchars < _PAGE_MAX_CHARS and len(self.blocks) < _PAGE_MAX_BLOCKS:
+                self.blocks.append((t, self._chain(), self._boiler > 0))
+                self._nchars += len(t)
 
     def _end_a(self) -> None:
         a = self._a
         self._a = None
         if a is not None and len(self.links) < _PAGE_MAX_LINKS:
             a["text"] = _WS_RE.sub(" ", "".join(a.pop("_t"))).strip()[:80]
+            a.pop("_n", None)
             self.links.append(a)
 
     def _pop(self, e: dict) -> None:
@@ -1534,9 +1546,32 @@ class _PageParser(HTMLParser):
             self.meta["title"] = self.meta["title"] or _WS_RE.sub(" ", "".join(self._title)).strip()[:200]
             self._title = None
         if e.get("ld") and self._ld is not None:
-            if _LD_FREE_RE.search("".join(self._ld)):
+            if _LD_FREE_RE.search("".join(self._ld)[:200_000]):
                 self.meta["paywall"] = True
             self._ld = None
+
+    def _close_from(self, i: int) -> None:
+        """スタックの i 番目から上をすべて閉じる（中の文字は閉じる前の状態で段落にする）。"""
+        popped = self._stack[i:]
+        if any(e["tag"] in _PAGE_BLOCK_TAGS or e.get("boiler") or e.get("cont") for e in popped):
+            self._flush()
+        for e in reversed(popped):
+            self._pop(e)
+        del self._stack[i:]
+
+    def _implied_close(self, tag: str) -> None:
+        closes = set(_IMPLIED_CLOSE.get(tag, ()))
+        if tag in _P_CLOSERS:
+            closes.add("p")   # ブロック要素の開始は開いている <p> を閉じる
+        if not closes:
+            return
+        for i in range(len(self._stack) - 1, -1, -1):
+            t = self._stack[i]["tag"]
+            if t in closes:
+                self._close_from(i)
+                return
+            if t in _IMPLIED_BARRIER:
+                return
 
     # -- HTMLParser のコールバック
     def handle_starttag(self, tag, attrs):
@@ -1549,25 +1584,26 @@ class _PageParser(HTMLParser):
             return
         if tag == "link":
             rel = at.get("rel", "").lower().split()
-            if "next" in rel and at.get("href") and not self.meta["next"]:
-                self.meta["next"] = at["href"].strip()
-            if "canonical" in rel and at.get("href"):
-                self.meta["canonical"] = at["href"].strip()
+            href = at.get("href", "").strip()
+            if "next" in rel and href and len(href) <= _PAGE_MAX_HREF and not self.meta["next"]:
+                self.meta["next"] = href
+            if "canonical" in rel and href and len(href) <= _PAGE_MAX_HREF:
+                self.meta["canonical"] = href
             return
         if tag in _PAGE_VOID_TAGS:
             if tag in ("br", "hr"):
                 self._flush()
             return
+        self._implied_close(tag)
         if tag in _PAGE_BLOCK_TAGS:
             self._flush()
         if tag == "a":
             self._end_a()
             href = at.get("href", "").strip()
-            if href and self._hard == 0:
+            if href and len(href) <= _PAGE_MAX_HREF and self._hard == 0 and len(self.links) < _PAGE_MAX_LINKS:
                 own = " ".join(x for x in (at.get("class", ""), at.get("id", ""), at.get("aria-label", ""), at.get("title", "")) if x)
-                tail = self.blocks[-1][0][-30:] if self.blocks else ""
-                self._a = {"href": href, "rel": at.get("rel", "").lower(), "cls": self._cls_chain(own),
-                           "ctx": (tail + " " + "".join(self._buf))[-40:].strip(), "boiler": self._boiler > 0, "_t": []}
+                self._a = {"href": href, "rel": at.get("rel", "").lower()[:60], "cls": self._cls_chain(own[:120]),
+                           "ctx": self._tail.strip(), "boiler": self._boiler > 0, "_t": [], "_n": 0}
         e = {"tag": tag, "cls": " ".join(x for x in (at.get("class", ""), at.get("id", ""), at.get("role", "")) if x)[:80]}
         if tag in _PAGE_HARD_SKIP:
             e["hard"] = 1
@@ -1602,13 +1638,9 @@ class _PageParser(HTMLParser):
             self._end_a()
         if tag in _PAGE_BLOCK_TAGS or tag in _PAGE_BOILER_TAGS:
             self._flush()
-        for i in range(len(self._stack) - 1, max(-1, len(self._stack) - 40), -1):
+        for i in range(len(self._stack) - 1, -1, -1):   # 対応する開始タグまで（間の閉じ忘れもまとめて閉じる）
             if self._stack[i]["tag"] == tag:
-                if tag in _PAGE_BOILER_TAGS or self._stack[i].get("cont"):
-                    self._flush()
-                for e in reversed(self._stack[i:]):
-                    self._pop(e)
-                del self._stack[i:]
+                self._close_from(i)
                 break
 
     def handle_data(self, data):
@@ -1618,10 +1650,12 @@ class _PageParser(HTMLParser):
             self._ld.append(data)
         if self._hard or self._title is not None:
             return
-        if self._a is not None:
-            self._a["_t"].append(data)
+        if self._a is not None and self._a["_n"] < 200:
+            self._a["_t"].append(data[:200])
+            self._a["_n"] += len(data)
         if not self._soft:
             self._buf.append(data)
+            self._tail = (self._tail + data[-40:])[-40:]
 
     def close(self):
         try:
@@ -1634,8 +1668,10 @@ class _PageParser(HTMLParser):
 def _parse_page(html_text: str, base_url: str) -> dict:
     """HTML → {"blocks": 本文の段落, "links": [{href(絶対URL), text, rel, cls, ctx, boiler}], "meta": {...}}。
 
-    本文は「最も文字の多い本文の器（article / main / articleBody）」を優先し、器が小さすぎる・無いときは
-    枠（nav / aside / footer）を除いた全体、それも短すぎるときは枠も含めた全体（従来の全文平文化と同等）。"""
+    本文は「最も文字の多い本文の器（article / main / articleBody）」を優先する。器が入れ子のとき（article の中の
+    articleBody など）は、外側の器にある本文より前の段落（見出し・リード）も含める。器が小さすぎる・無いときは
+    枠（nav / aside / footer）を除いた全体、それも短すぎるときは枠も含めた全体（従来の全文平文化と同等）。
+    返す本文は MAX_PAGE_TEXT_STORE 字まで。"""
     p = _PageParser()
     try:
         p.feed(html_text or "")
@@ -1646,22 +1682,34 @@ def _parse_page(html_text: str, base_url: str) -> dict:
             p._flush()
         except Exception:
             pass
-    rows = [(strip_html(t), c, b) for t, c, b in p.blocks]
-    rows = [(t, c, b) for t, c, b in rows if t]
+    rows = [(strip_html(t), ch, b) for t, ch, b in p.blocks]
+    rows = [(t, ch, b) for t, ch, b in rows if t]
     raw_total = sum(len(t) for t, _, _ in rows)
-    body = [(t, c) for t, c, b in rows if not b]
-    total = sum(len(t) for t, _ in body)
+    body = [(i, t, ch) for i, (t, ch, b) in enumerate(rows) if not b]
+    total = sum(len(t) for _, t, _ in body)
     sizes: dict[int, int] = {}
-    for t, c in body:
-        if c:
-            sizes[c] = sizes.get(c, 0) + len(t)
-    blocks = [t for t, _ in body]
+    for _, t, ch in body:
+        if ch:
+            sizes[ch[-1]] = sizes.get(ch[-1], 0) + len(t)
+    blocks = [t for _, t, _ in body]
     if sizes:
         best = max(sizes, key=lambda k: sizes[k])
         if sizes[best] >= 300 and sizes[best] >= 0.25 * total:
-            blocks = [t for t, c in body if c == best]
+            first, anc = 0, set()
+            for i, _, ch in body:
+                if ch and ch[-1] == best:
+                    first, anc = i, set(ch[:-1])
+                    break
+            blocks = [t for i, t, ch in body
+                      if ch and (ch[-1] == best or (i < first and ch[-1] in anc))]
     if sum(len(t) for t in blocks) < max(MIN_PAGE_TEXT, 0.2 * raw_total):
         blocks = [t for t, _, _ in rows]   # 器・枠の判定が外れたときは従来どおり全体を使う
+    out, n = [], 0
+    for t in blocks:   # 保存上限まで（記憶を使いすぎないよう、ここで切る）
+        if n >= MAX_PAGE_TEXT_STORE:
+            break
+        out.append(t[:MAX_PAGE_TEXT_STORE - n])
+        n += len(out[-1])
     links = []
     for a in p.links:
         href = a["href"]
@@ -1671,7 +1719,7 @@ def _parse_page(html_text: str, base_url: str) -> dict:
             u = urljoin(base_url, href)
         except ValueError:
             continue
-        if safe_url(u):
+        if len(u) <= _PAGE_MAX_HREF and safe_url(u):
             links.append({**a, "href": u})
     meta = dict(p.meta)
     for k in ("next", "canonical"):
@@ -1680,7 +1728,7 @@ def _parse_page(html_text: str, base_url: str) -> dict:
                 meta[k] = urljoin(base_url, meta[k])
             except ValueError:
                 meta[k] = ""
-    return {"blocks": blocks, "links": links, "meta": meta}
+    return {"blocks": out, "links": links, "meta": meta}
 
 
 _CHARSET_RE = re.compile(rb"""<meta[^>]+charset\s*=\s*["']?\s*([A-Za-z0-9_\-]+)""", re.I)
@@ -1763,8 +1811,6 @@ _ALL_PARAMS = {("page", "all"), ("p", "all"), ("display", "b"), ("display", "all
                ("pagetype", "all"), ("all", "1"), ("single", "1"), ("singlepage", "1"), ("full", "1"), ("viewall", "1"),
                ("mode", "all"), ("pages", "all")}
 _PATH_SUFFIX_RE = re.compile(r"^(.+?)[_-](\d{1,2})(\.[a-z]{2,5})?$", re.I)
-_PATH_PAGEDIR_RE = re.compile(r"^(.*?)/page/(\d{1,3})/?$", re.I)
-_PATH_NUMDIR_RE = re.compile(r"^(.*/[^/]*[^\d/][^/]*)/(\d{1,2})/?$")
 _NONPAGE_EXT_RE = re.compile(r"\.(?:jpe?g|png|gif|webp|avif|svg|pdf|zip|mp4|mp3|mov|xlsx?|docx?|pptx?|csv|ics)$", re.I)
 
 
@@ -1792,11 +1838,59 @@ def _canon_url(u: str) -> str:
     """訪問済み判定用の正規化: フラグメント・追跡用パラメータを除き、クエリを並べ替え、末尾スラッシュを統一。"""
     try:
         p = urlparse(u)
-    except ValueError:
+        port = p.port
+    except ValueError:   # 壊れた URL（範囲外のポート等）はそのまま
         return u
     q = sorted((k, v) for k, v in parse_qsl(p.query, keep_blank_values=True) if not _TRACK_PARAMS_RE.match(k))
     path = p.path.rstrip("/") or "/"
-    return f"{(p.hostname or '').lower()}{(':' + str(p.port)) if p.port else ''}{path}?{urlencode(q)}"
+    return f"{(p.hostname or '').lower()}{(':' + str(port)) if port else ''}{path}?{urlencode(q)}"
+
+
+def _small_int(v: str, hi: int = 200) -> int:
+    """ページ番号らしい小さな整数（ASCII の数字3桁まで・1〜hi）。それ以外は 0（² や ② などで例外にしない）。"""
+    v = (v or "").strip()
+    if v.isascii() and v.isdigit() and len(v) <= 3:
+        n = int(v)
+        return n if 0 < n <= hi else 0
+    return 0
+
+
+def _path_pages(path: str) -> list[tuple[str, int, bool]]:
+    """パスの「ページ番号つき」の読み方（記事のパス, ページ番号, 全文表示か）: /page/N、/slug/N（直前の区切りが
+    数字だけでない）、name_N.html、末尾 /all・/print。区切りを数えるだけの線形の処理（異常に長い URL でも遅くならない）。"""
+    out: list[tuple[str, int, bool]] = []
+    p = path.rstrip("/")
+    head, _, last = p.rpartition("/")
+    n = _small_int(last)
+    if n and head:
+        h2, _, prev = head.rpartition("/")
+        if prev.lower() == "page":
+            out.append((h2 or "/", n, False))
+        elif prev and not prev.isdigit() and len(last) <= 2:
+            out.append((head, n, False))
+    seg_head, _, seg = path.rpartition("/")
+    m = _PATH_SUFFIX_RE.match(seg) if len(seg) <= 300 else None
+    if m:
+        out.append((f"{seg_head}/{m.group(1)}{m.group(3) or ''}", int(m.group(2)), False))
+    if p.lower().endswith(("/all", "/print")):
+        out.append((p.rsplit("/", 1)[0] or "/", 1, True))
+    return out
+
+
+def _query_page(query: str) -> tuple[int, list, bool]:
+    """クエリからページ番号（無ければ 1）・残りのパラメータ・全文表示の指定を取り出す。"""
+    k, rest, is_all = 1, [], False
+    for name, val in parse_qsl(query, keep_blank_values=True):
+        if _TRACK_PARAMS_RE.match(name):
+            continue
+        ln, lv = name.lower(), val.strip().lower()
+        if (ln, lv) in _ALL_PARAMS:
+            is_all = True
+        elif ln in _PAGE_PARAMS and _small_int(lv):
+            k = _small_int(lv)
+        else:
+            rest.append((name, val))
+    return k, sorted(rest), is_all
 
 
 def _page_key(u: str) -> tuple[str, int, bool]:
@@ -1805,30 +1899,13 @@ def _page_key(u: str) -> tuple[str, int, bool]:
         p = urlparse(u)
     except ValueError:
         return u, 1, False
-    qs = [(k, v) for k, v in parse_qsl(p.query, keep_blank_values=True) if not _TRACK_PARAMS_RE.match(k)]
-    k, rest, is_all = 1, [], False
-    for name, val in qs:
-        ln, lv = name.lower(), val.strip().lower()
-        if (ln, lv) in _ALL_PARAMS:
-            is_all = True
-        elif ln in _PAGE_PARAMS and lv.isdigit() and 0 < int(lv) <= 200:
-            k = int(lv)
-        else:
-            rest.append((name, val))
+    k, rest, is_all = _query_page(p.query)
     path = p.path or "/"
     if k == 1:
-        m = _PATH_PAGEDIR_RE.match(path) or _PATH_NUMDIR_RE.match(path)
-        if m:
-            path, k = m.group(1), int(m.group(2))
-        else:
-            head, _, last = path.rpartition("/")
-            m = _PATH_SUFFIX_RE.match(last)
-            if m:
-                path, k = f"{head}/{m.group(1)}{m.group(3) or ''}", int(m.group(2))
-        if path.lower().endswith(("/all", "/print")):
-            path, is_all = path.rsplit("/", 1)[0], True
-    path = path.rstrip("/") or "/"
-    return f"{_site_of(p.hostname or '')}{path}?{urlencode(sorted(rest))}", max(1, k), is_all
+        for vp, vk, va in _path_pages(path):
+            path, k, is_all = vp, vk, is_all or va
+            break
+    return f"{_site_of(p.hostname or '')}{path.rstrip('/') or '/'}?{urlencode(rest)}", max(1, k), is_all
 
 
 def _page_keys(u: str) -> list[tuple[str, int]]:
@@ -1838,28 +1915,12 @@ def _page_keys(u: str) -> list[tuple[str, int]]:
         p = urlparse(u)
     except ValueError:
         return [(u, 1)]
-    qs = [(k, v) for k, v in parse_qsl(p.query, keep_blank_values=True) if not _TRACK_PARAMS_RE.match(k)]
-    kq, rest = 1, []
-    for name, val in qs:
-        ln, lv = name.lower(), val.strip().lower()
-        if (ln, lv) in _ALL_PARAMS:
-            continue
-        if ln in _PAGE_PARAMS and lv.isdigit() and 0 < int(lv) <= 200:
-            kq = int(lv)
-        else:
-            rest.append((name, val))
-    site, q = _site_of(p.hostname or ""), urlencode(sorted(rest))
+    kq, rest, _ = _query_page(p.query)
+    site, q = _site_of(p.hostname or ""), urlencode(rest)
     path = p.path or "/"
     out = [(f"{site}{path.rstrip('/') or '/'}?{q}", kq)]
     if kq == 1:
-        for rx in (_PATH_PAGEDIR_RE, _PATH_NUMDIR_RE):
-            m = rx.match(path)
-            if m:
-                out.append((f"{site}{m.group(1).rstrip('/') or '/'}?{q}", int(m.group(2))))
-        head, _, last = path.rpartition("/")
-        m = _PATH_SUFFIX_RE.match(last)
-        if m:
-            out.append((f"{site}{head}/{m.group(1)}{m.group(3) or ''}?{q}", int(m.group(2))))
+        out += [(f"{site}{vp.rstrip('/') or '/'}?{q}", vk) for vp, vk, _ in _path_pages(path)]
     return out
 
 
@@ -1872,11 +1933,13 @@ _NEXT_TEXT_RE = re.compile(
 _MORE_TEXT_RE = re.compile(r"^(?:続きを読む|続きはこちら|続きを見る|記事の続き(?:を読む)?|つづきを読む|この記事の続きを読む|"
                            r"continue reading|read more|keep reading)\s*[›»>＞→]?$", re.I)
 _ALL_TEXT_RE = re.compile(r"^(?:全文(?:を)?(?:表示|読む)|記事全文を?(?:表示|読む)|1ページで(?:表示|読む)|１ページで(?:表示|読む)|"
-                          r"一括表示|全ページ(?:を)?表示|すべて表示|全て表示|single\s*page|view\s*(?:as\s*)?(?:a\s*)?single\s*page|"
+                          r"一括表示|全ページ(?:を)?表示|single\s*page|view\s*(?:as\s*)?(?:a\s*)?single\s*page|"
                           r"show all pages?|view all pages?)$", re.I)
 _PAGER_CLS_RE = re.compile(r"pag(?:er|ing|ination|enation|enavi|e-?nav|e-?link|e-?numbers?|e_?num)|pagenav|pnavi|next", re.I)
-_RELATED_CLS_RE = re.compile(r"relat|recommend|ranking|popular|backnumber|comment|gallery|photo|share|sns|breadcrumb|"
-                             r"sidebar|banner|widget|subnav|globalnav|gnav|megamenu", re.I)
+# 関連記事・ランキングなどの枠のクラス名（単語単位で判定。Tailwind の relative などには反応しない）
+_RELATED_TOKEN_RE = re.compile(r"(?:^|[-_])(?:related|relation|recommend\w*|ranking|rank|popular|backnumber|comments?|gallery|"
+                               r"photos?|share|sns|breadcrumbs?|sidebar|banner|widget|subnav|globalnav|gnav|megamenu|"
+                               r"osusume)(?:$|[-_])", re.I)
 _RELATED_TXT_RE = re.compile(r"関連|おすすめ|オススメ|ランキング|人気|連載|シリーズ|バックナンバー|前回|次回|前の記事|次の記事|"
                              r"コメント|写真|画像|ギャラリー|related|recommended|popular|previous article|next article|"
                              r"next story|up next|comments?$", re.I)
@@ -1904,24 +1967,31 @@ def _page_candidates(links: list[dict], meta: dict, cur_url: str, visited: set) 
         if c is None or score > c["score"]:
             out[cu] = {"url": u, "text": text[:60], "ctx": (ctx or "")[:40], "score": score, "kind": kind, "why": why}
 
+    def rel(href: str) -> tuple[bool, int]:
+        """（同じ記事の URL か, 1つ先のページ番号 or 0）"""
+        hkeys = _page_keys(href)
+        same = any(hb == cb for cb, _ in cur_keys for hb, _ in hkeys)
+        return same, next((hk for cb, ck in cur_keys for hb, hk in hkeys if hb == cb and hk == ck + 1), 0)
+
     if meta.get("next"):
-        add(meta["next"], "", "", 3, "next", "rel=next（<link>）")
+        _, nk = rel(meta["next"])   # 隣の投稿を指す rel=next（WordPress など）もあるので、ページ番号が1つ先のときだけ確実
+        add(meta["next"], "", "", 3 if nk else 2, "next", "rel=next（<link>）" if nk else "rel=next（<link>・別の URL）")
     for l in links:
         href = l["href"]
         text = _norm(l.get("text"))[:60]
         cls = l.get("cls") or ""
-        related = bool(_RELATED_CLS_RE.search(cls) or _RELATED_TXT_RE.search(text))
+        related = bool(any(_RELATED_TOKEN_RE.search(tok) for tok in cls.split()) or _RELATED_TXT_RE.search(text))
         pager = bool(_PAGER_CLS_RE.search(cls))
         is_all = _page_key(href)[2]
-        hkeys = _page_keys(href)
-        same_doc = any(hb == cb for cb, _ in cur_keys for hb, _ in hkeys)
-        k = next((hk for cb, ck in cur_keys for hb, hk in hkeys if hb == cb and hk == ck + 1), 0)
+        same_doc, k = rel(href)
         rels = (l.get("rel") or "").split()
         if "next" in rels:
-            add(href, text, l.get("ctx"), 2 if related else 3, "next", "rel=next")
+            add(href, text, l.get("ctx"), 3 if (k and not related) else 2, "next", "rel=next" if k else "rel=next（別の URL）")
         elif _ALL_TEXT_RE.match(text) or (same_doc and is_all):
-            strong = bool(_ALL_TEXT_RE.match(text)) and (same_doc or is_all)
-            add(href, text, l.get("ctx"), 3 if strong else 2, "all", "全文表示")
+            if related or (l.get("boiler") and not same_doc):
+                continue
+            strong = bool(_ALL_TEXT_RE.match(text)) and same_doc
+            add(href, text, l.get("ctx"), 3 if strong else 2, "all", "全文表示" if same_doc else "全文表示（別の URL）")
         elif k and not related:
             strong = (bool(_NEXT_TEXT_RE.match(text) or _MORE_TEXT_RE.match(text)) or text == str(k) or pager
                       or "ページ" in text or text.startswith("page"))
@@ -1958,13 +2028,33 @@ def _pick_next(cands: list[dict]) -> tuple[str, dict | None]:
 # 本文が途中で切れている合図（文中の表記）。「続きを読む」「次へ」などのリンクの文字は本文にも出るので合図にしない
 _CUT_HINT_RE = re.compile(r"（続く）|\(続く\)|〈続く〉|【続く】|つづく|[へに]続く|to be continued|continued on|"
                           r"page\s*\d+\s*of\s*\d+|\d+\s*/\s*\d+\s*ページ|（\d+/\d+）", re.I)
-_PAYWALL_RE = re.compile(r"会員限定|有料会員|有料記事|有料プラン|購読者限定|ログインして(?:続き|全文)|ログインすると|"
-                         r"会員登録(?:して|すると|が必要)|無料会員登録|続きを読むには|この記事は(?:会員|有料)|残り\s*\d[\d,]*\s*文字|"
-                         r"subscribe to (?:read|continue)|subscribers? only|sign in to (?:read|continue)|members? only|"
-                         r"access options|buy or subscribe|rent or buy", re.I)
-_PAGER_BLOCK_RE = re.compile(r"^[\s\d|/｜・<>«»‹›…\-–—＜＞]*(?:前へ|次へ|前のページへ?|次のページへ?|prev(?:ious)?|next|"
-                             r"page\s*\d+(?:\s*of\s*\d+)?|\d+\s*ページ目?)?[\s\d|/｜・<>«»‹›…\-–—＜＞]*$", re.I)
-_TITLE_PAGE_RE = re.compile(r"[\(（]?\s*\d+\s*/\s*\d+\s*[\)）]?|\d+\s*ページ目?|page\s*\d+(?:\s*of\s*\d+)?|[\(（]\s*\d+\s*[\)）]", re.I)
+# 有料・ログイン必須の合図（文として出るもの。サイト共通のフッターにある「無料会員登録」のようなリンクの文字は除く）
+_PAYWALL_RE = re.compile(r"会員限定(?:です|の記事|記事|コンテンツ)|有料会員(?:限定|向け|の方|になると)|有料記事|購読者限定|"
+                         r"ログインして(?:続き|全文)|(?:会員登録|ログイン)(?:して|すると)(?:続き|全文)|続きを読むには|"
+                         r"この記事は(?:会員|有料)|残り\s*\d[\d,]*\s*文字|subscribe to (?:read|continue)|subscribers? only|"
+                         r"sign in to (?:read|continue)|access options|buy or subscribe|rent or buy this article", re.I)
+# ページャだけの行（「1 2 3 次へ」「‹ 前へ | 次へ ›」など）の判定に使う語。日付・数値だけの行（2024/10/09・8923）は対象外。
+# 入れ子の繰り返しを持つ正規表現は後戻りが爆発するため、語に分けて Python で数える（_is_pager_block）
+_PAGER_TOKEN_RE = re.compile(r"前のページへ?|次のページへ?|前へ|次へ|最初へ|最後へ|previous|prev|next|"
+                             r"page\s*\d{1,3}(?:\s*of\s*\d{1,3})?|\d{1,3}\s*ページ目?|\d+", re.I)
+_PAGER_SEP_RE = re.compile(r"[\s|/｜・<>«»‹›…\-–—＜＞]+")
+
+
+def _is_pager_block(b: str) -> bool:
+    if not b or len(b) >= 60 or _PAGER_SEP_RE.sub("", _PAGER_TOKEN_RE.sub("", b)):
+        return False   # 長い・ページャの語と区切り以外の文字がある
+    toks = _PAGER_TOKEN_RE.findall(b)
+    nums = [t for t in toks if t.isdigit()]
+    if any(len(t) > 3 for t in nums):
+        return False   # 4桁以上の数（年・金額）を含む行は本文
+    if any(not t.isdigit() for t in toks):
+        return True    # 「次へ」「2ページ目」などの語がある
+    vals = [int(t) for t in nums]
+    return len(vals) >= 3 and all(x < y for x, y in zip(vals, vals[1:]))   # 「1 2 3」のような番号の並び
+
+
+# 見出しのページ番号表記（「(1/3)」「2ページ目」「Page 2 of 3」）。日付の「10/7」や連載の「（3）」は消さない
+_TITLE_PAGE_RE = re.compile(r"[\(（]\s*\d+\s*/\s*\d+\s*[\)）]|\d+\s*ページ目?|page\s*\d+(?:\s*of\s*\d+)?", re.I)
 
 
 def _looks_cut(text: str) -> bool:
@@ -2031,25 +2121,31 @@ def _llm_pick_next(cfg: dict, title: str, tail: str, cands: list[dict]) -> dict:
     def idx(v) -> int | None:
         if isinstance(v, bool) or v is None:
             return None
-        if isinstance(v, (int, float)) and float(v).is_integer():
+        if isinstance(v, int):
+            n = v
+        elif isinstance(v, float) and v.is_integer() and abs(v) < 1000:
             n = int(v)
-        elif isinstance(v, str) and v.strip().isdigit():
-            n = int(v.strip())
+        elif isinstance(v, str) and _small_int(v, 999):   # 「²」「②」などは数字とみなさない
+            n = _small_int(v, 999)
         else:
             return None
         return n if 1 <= n <= len(cands) else None
 
     low = str(obj.get("confidence") or "").strip().lower() == "low"
     reason = _clean_for_prompt(obj.get("reason") or "", 80)
-    for key, kind in (("all", "all"), ("next", "next")):
+    picks: list[int] = []
+    for key in ("all", "next"):   # 全文表示を優先して試し、使えなければもう一方（_acc_judge）
         n = idx(obj.get(key))
-        if n is None:
+        if n is None or n in picks or (low and cands[n - 1]["score"] <= 1):
             continue
-        c = cands[n - 1]
-        if low and c["score"] <= 1:
-            continue
-        return {"url": c["url"], "kind": kind, "reason": reason, "error": ""}
-    return {"url": "", "kind": "", "reason": reason, "error": ""}
+        picks.append(n)
+    if not picks:
+        return {"url": "", "kind": "", "reason": reason, "error": ""}
+    first = cands[picks[0] - 1]   # 種類は候補自身のもの（「全文表示」欄に次ページの番号を書く AI もあるため）
+    res = {"url": first["url"], "kind": first["kind"], "reason": reason, "error": ""}
+    if len(picks) > 1:
+        res["next_url"] = cands[picks[1] - 1]["url"]
+    return res
 
 
 def _ai_ready(cfg: dict) -> bool:
@@ -2086,7 +2182,7 @@ def _acc_text(acc: dict) -> str:
     out: list[str] = []
     for pg in acc["pages"]:
         for b in pg["blocks"]:
-            if multi and len(b) < 60 and _PAGER_BLOCK_RE.match(b):
+            if multi and _is_pager_block(b):
                 continue
             out.append(b)
     return "\n".join(out)[:MAX_PAGE_TEXT_STORE]
@@ -2135,6 +2231,11 @@ def _acc_follow(acc: dict, url: str, kind: str, max_pages: int, fetchp, budget_s
             break
         if nkind == "all":
             body = pg["blocks"]
+            mine = {_norm(b) for b in first["blocks"] if len(b) >= 20}
+            covered = (len(mine & {_norm(b) for b in body}) / len(mine)) if mine else 1.0
+            if covered < 0.5:
+                acc["note"] = acc["note"] or "全文表示のリンク先が1ページ目の本文を含まないため不採用"
+                return False
             if (sum(len(b) for b in body) >= 1.2 * sum(len(b) for b in first["blocks"]) and not meta.get("paywall")
                     and not _PAYWALL_RE.search("\n".join(body)[-400:])):
                 acc["pages"] = [{"url": pg["final_url"], "blocks": body, "title": first["title"]}]
@@ -2144,7 +2245,7 @@ def _acc_follow(acc: dict, url: str, kind: str, max_pages: int, fetchp, budget_s
             acc["note"] = acc["note"] or "全文表示ページが1ページ目より短いため不採用"
             return False
         new = [b for b in pg["blocks"] if not (len(b) >= 8 and _norm(b) in acc["seen"])]
-        new_text = "\n".join(b for b in new if not (len(b) < 60 and _PAGER_BLOCK_RE.match(b)))
+        new_text = "\n".join(b for b in new if not (_is_pager_block(b)))
         if meta.get("paywall") or (_PAYWALL_RE.search(new_text[:400]) and len(new_text) < 1500):   # 有料の案内は短いので先に見る
             acc["note"] = acc["note"] or "続きは有料／ログインが必要なため打ち切り"
             break
@@ -2190,11 +2291,14 @@ def _fetch_article(u: str, mode: str = "auto", max_pages: int = PAGES_MAX_DEFAUL
            "visited": visited, "seen": {_norm(b) for b in pg["blocks"] if len(b) >= 8}, "judged": ""}
     if mode not in ("auto", "rules") or max_pages <= 1:
         return _acc_result(acc)
-    if meta.get("paywall") or _PAYWALL_RE.search(text1[-300:]):
+    if meta.get("paywall"):   # JSON-LD の isAccessibleForFree: false（続きも有料）
         acc["note"] = "有料／会員限定の記事の可能性（続きはたどらない）"
         return _acc_result(acc)
     cands = _page_candidates(pg["links"], meta, pg["final_url"], visited)
     decision, cand = _pick_next(cands)
+    if decision not in ("next", "all") and _PAYWALL_RE.search(text1[-300:]):
+        acc["note"] = "有料／会員限定の記事の可能性（続きはたどらない）"
+        return _acc_result(acc)
     if decision in ("next", "all") and cand:
         ok = _acc_follow(acc, cand["url"], cand["kind"], max_pages, fetchp, budget_s)
         if not ok and cand["kind"] == "all":   # 全文表示が使えなければ通常の「次へ」を試す
@@ -2226,7 +2330,9 @@ def _acc_judge(acc: dict, pick: dict, max_pages: int, fetchp, budget_s: float) -
         acc["judged"] = "none"
         return
     acc["judged"] = "follow"
-    _acc_follow(acc, pick["url"], pick["kind"] or "next", max_pages, fetchp, budget_s)
+    ok = _acc_follow(acc, pick["url"], pick["kind"] or "next", max_pages, fetchp, budget_s)
+    if not ok and pick.get("kind") == "all" and pick.get("next_url"):
+        _acc_follow(acc, pick["next_url"], "next", max_pages, fetchp, budget_s)
     if len(acc["pages"]) > 1 or acc["note"] == "全文表示ページから取得":
         acc["note"] = (acc["note"] + "／" if acc["note"] else "") + "AI が続きページを判定"
 
@@ -2252,11 +2358,12 @@ for(let i=0;i<as.length&&i<1500;i++){
 document.querySelectorAll('script[type="application/ld+json"]').forEach(s=>{out.ld+=(s.textContent||'').slice(0,6000);});
 return out;
 """
-# 同じページ内で本文を広げるボタン（「続きを読む」など）を最大2つまで押す。別URLへ行くリンクは押さない
+# 同じページ内で本文を広げるボタン（「続きを読む」など）を最大2つまで押す。別URLへ行くリンク・フォームの送信は押さない
 _SEL_EXPAND_JS = r"""
 const re=/^(続きを読む|続きを表示|記事の続きを読む|全文を読む|全文表示|全文を表示|もっと見る|もっと読む|read more|show more|continue reading)$/i;
 let n=0;
 for(const e of document.querySelectorAll('button,[role=button],a[href="#"],a[href^="javascript:"],a:not([href]),summary')){
+  if(e.closest('form') || (e.getAttribute('type')||'').toLowerCase()==='submit' || e.hasAttribute('formaction')) continue;
   const t=(e.innerText||e.textContent||'').replace(/\s+/g,' ').trim();
   if(t.length<=24 && re.test(t)){ try{ e.click(); n++; }catch(x){} if(n>=2) break; }
 }
@@ -2351,9 +2458,16 @@ def _selenium_page(drv, url: str) -> dict:
                 try:
                     drv.back()
                 except Exception:
-                    pass
+                    return fail("「続きを読む」で別のページへ移動し、元のページに戻れなかったため破棄")
+        # 読む直前と読んだ後に、いまのページが最初に開いた記事のままか確かめる（内部アドレスへの移動も防ぐ）
+        here = drv.current_url or ""
+        if _canon_url(here) != _canon_url(final) or _host_is_internal(here):
+            return fail("記事のページから移動したため破棄")
         info = drv.execute_script(_SEL_COLLECT_JS) or {}
         text = (drv.execute_script("return document.body ? document.body.innerText : ''") or "").strip()
+        here = drv.current_url or ""
+        if _canon_url(here) != _canon_url(final) or _host_is_internal(here):
+            return fail("記事のページから移動したため破棄")
         blocks = [_WS_RE.sub(" ", ln).strip() for ln in text.split("\n")]
         blocks = [b for b in blocks if b]
         links = [{"href": l.get("href") or "", "text": str(l.get("text") or ""), "rel": str(l.get("rel") or ""),
@@ -2386,6 +2500,15 @@ def _fetch_article_selenium(url: str, mode: str = "off", max_pages: int = 1, llm
             pass
 
 
+def _safe_article(fn, url: str) -> dict:
+    """1記事の取得で想定外の例外が出ても、その記事だけの失敗として返す（一括取得・レポート全体を止めない）。"""
+    try:
+        return fn()
+    except Exception as e:
+        return {"text": "", "error": f"{type(e).__name__}: {str(e)[:120]}", "pages": 0, "note": "", "urls": [],
+                "final_url": url, "judged": ""}
+
+
 def fetch_page_text(url: str, cfg: dict | None = None) -> dict:
     """記事ページ本文をプレーンテキストで取得する（会話の「記事ページ本文も読み込む」）。proxy設定に従う。
 
@@ -2402,10 +2525,10 @@ def fetch_page_text(url: str, cfg: dict | None = None) -> dict:
     cfg = cfg or ai_config()
     mode = fc["follow"] if (fc["follow"] != "auto" or _ai_ready(cfg)) else "rules"
     llm = (lambda t, tail, cands: _llm_pick_next(cfg, t, tail, cands)) if mode == "auto" else None
-    r = _fetch_article(u, mode, fc["max_pages"], llm=llm)
+    r = _safe_article(lambda: _fetch_article(u, mode, fc["max_pages"], llm=llm), u)
     if r["text"] and not r["error"]:
         return {"text": r["text"], "via": "urllib", "error": "", "pages": r["pages"], "note": r["note"]}
-    s = _fetch_article_selenium(u, mode, fc["max_pages"], llm=llm)
+    s = _safe_article(lambda: _fetch_article_selenium(u, mode, fc["max_pages"], llm=llm), u)
     if s["text"] and not s["error"]:
         return {"text": s["text"], "via": "selenium", "error": "", "pages": s["pages"], "note": s["note"]}
     best = s if s["text"] else r   # 断片でも無いよりまし（ただし「不十分」だったことは伝える）
@@ -2448,9 +2571,17 @@ def _excerpt(text: str, per: int, terms: list[str] | None = None) -> str:
         if used + cost <= per:
             picked.append(i)
             used += cost
-    picked.sort()
     if not picked:
         return t[:per]
+    for i in range(lead_end, len(sents)):   # 残りの予算は冒頭に続く文で埋める（根拠の量を減らさない）
+        if i in picked:
+            continue
+        cost = len(sents[i]) + 3
+        if used + cost > per:
+            break
+        picked.append(i)
+        used += cost
+    picked.sort()
     parts, prev = ["".join(sents[:lead_end])], lead_end - 1
     for i in picked:
         parts.append(sents[i] if i == prev + 1 else " … " + sents[i].strip())
@@ -3300,7 +3431,8 @@ def fetch_pages(arts: list[dict], progress=None, force: bool = False) -> dict[st
     mode = fc["follow"] if (fc["follow"] != "auto" or _ai_ready(cfg)) else "rules"
     maxp = fc["max_pages"]
     now = time.time()
-    cached = {} if force else pages_cached([a["id"] for a in arts])
+    prev = pages_cached([a["id"] for a in arts])
+    cached = {} if force else prev
     out: dict[str, dict] = {}
     todo: list[dict] = []
     for a in arts:
@@ -3327,7 +3459,7 @@ def fetch_pages(arts: list[dict], progress=None, force: bool = False) -> dict[st
         u = safe_url(a.get("link"))
         if not u or _host_is_internal(u):
             return a, {"text": "", "error": "URLが不正か内部アドレス", "final": True}
-        r = _fetch_article(u, mode, maxp, llm=None)   # 判定待ち（ask）は下で AI にまとめて聞く
+        r = _safe_article(lambda: _fetch_article(u, mode, maxp, llm=None), u)   # 判定待ち（ask）は下で AI にまとめて聞く
         r["final"] = bool(r["text"] and not r["error"])
         if not r["final"] and not r["error"]:
             r["error"] = "本文が取れませんでした"
@@ -3370,7 +3502,10 @@ def fetch_pages(arts: list[dict], progress=None, force: bool = False) -> dict[st
                 ai["k"] += 1
                 k = ai["k"]
             tick(f"続きページの判定（AI） {k}/{len(asks)}")
-            _acc_judge(ask["acc"], ask_ai(ask["title"], ask["tail"], ask["cands"]), maxp, _page_get, PAGES_ARTICLE_BUDGET_S)
+            try:
+                _acc_judge(ask["acc"], ask_ai(ask["title"], ask["tail"], ask["cands"]), maxp, _page_get, PAGES_ARTICLE_BUDGET_S)
+            except Exception as e:   # 判定・続きの取得で失敗しても、1ページ目の本文は残す
+                ask["acc"]["note"] = ask["acc"]["note"] or f"続きページの取得に失敗（{type(e).__name__}）"
             return a, _acc_result(ask["acc"])
         with ThreadPoolExecutor(max_workers=_budgets(cfg)["parallel"]) as ex:
             for a, r in ex.map(judge, asks):
@@ -3385,9 +3520,9 @@ def fetch_pages(arts: list[dict], progress=None, force: bool = False) -> dict[st
             skipped.append((a, res))
             continue
         tick(f"ブラウザで再試行 {k}/{len(retry)}")
+        link = safe_url(a.get("link")) or ""
         with _selenium_lock:
-            s = _fetch_article_selenium(safe_url(a.get("link")) or "", mode, maxp,
-                                        llm=ask_ai if mode == "auto" else None)
+            s = _safe_article(lambda: _fetch_article_selenium(link, mode, maxp, llm=ask_ai if mode == "auto" else None), link)
         if s["text"] and not s["error"]:
             out[a["id"]] = _page_entry(s, "selenium")
         else:
@@ -3408,6 +3543,13 @@ def fetch_pages(arts: list[dict], progress=None, force: bool = False) -> dict[st
     for a in todo:
         o = out.get(a["id"])
         if o is None:
+            continue
+        c = prev.get(a["id"]) if force else None
+        if c and c.get("text") and (not o["text"] or (o["error"] and len(o["text"]) < len(c["text"]))):
+            # 取り直しに失敗（一時的な障害など）: 以前に取れていた本文を消さずに使う（キャッシュも書き換えない）
+            out[a["id"]] = _page_entry({**c, "urls": _json_list(c.get("urls_json")),
+                                        "note": f"取り直しに失敗したため以前の本文を使用（{(o['error'] or '本文なし')[:60]}）"},
+                                       c.get("via") or "", cached=True)
             continue
         text = o["text"][:MAX_PAGE_TEXT_STORE]
         rows.append({"article_id": a["id"], "link": a.get("link"), "text": text, "via": o["via"],
