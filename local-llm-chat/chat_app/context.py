@@ -42,7 +42,7 @@ def build_context(settings, history, text, attachments):
     for message in history:
         if message['role'] == 'user':
             groups.append([message])
-        elif groups and message['content'] and message['status'] == 'complete':
+        elif groups and message['content'].strip() and message['status'] == 'complete':
             groups[-1].append(message)
     included = []
     omitted = False

@@ -7,14 +7,18 @@ import tempfile
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from test_live import fake_llm, live_app
+from test_live import _configure, fake_llm, live_app
 
 if __name__ == '__main__':
     output = Path(__file__).resolve().parents[1] / 'test-results'
     output.mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='local-chat-ui-') as directory:
         with contextmanager(fake_llm.__wrapped__)() as llm, contextmanager(live_app.__wrapped__)(Path(directory)) as application:
-            information = {'url': str(application.client.base_url), 'llm_url': llm.url, 'model': 'socket-model'}
+            _configure(application.client, llm)
+            information = {
+                'url': str(application.client.base_url), 'llm_url': llm.url, 'model': 'socket-model',
+                'scenarios': ['reasoning-demo', 'reasoning-structured-demo', 'reasoning-only-demo', 'reasoning-whitespace-demo', 'slow-reasoning-test'],
+            }
             (output / 'ui-fixture.json').write_text(json.dumps(information), encoding='utf-8')
             (output / 'sample.txt').write_text('UIテスト用の資料です。新製品の検討会は来週月曜日。担当は開発チーム。', encoding='utf-8')
             print(json.dumps(information), flush=True)

@@ -180,7 +180,7 @@ function inlineMarkdown(parent, text, depth = 0) {
   parent.append(document.createTextNode(text.slice(previous)));
 }
 
-function renderMarkdown(text, depth = 0) {
+function renderMarkdown(text, depth = 0, copyLabel = "メッセージのコピー") {
   const fragment = document.createDocumentFragment();
   const source = String(text || "");
   const truncated = depth === 0 && source.length > MAX_RENDERED_CHARS;
@@ -251,7 +251,7 @@ function renderMarkdown(text, depth = 0) {
     paragraphLines.forEach((part, index) => { if (index) paragraph.append(element("br")); inlineMarkdown(paragraph, part); });
     fragment.append(paragraph);
   }
-  if (truncated) fragment.append(element("p", "message-status", "画面には先頭80,000文字まで表示しています。全文はメッセージのコピー、または会話のMarkdown保存で確認できます。"));
+  if (truncated) fragment.append(element("p", "message-status", `画面には先頭80,000文字まで表示しています。全文は${copyLabel}、または会話のMarkdown保存で確認できます。`));
   return fragment;
 }
 
@@ -265,6 +265,8 @@ async function copyText(text, button) {
 
 function appendMessage(message) {
   const user = message.role === "user";
+  let currentText = message.content || "";
+  let currentReasoning = user ? "" : message.reasoning || "";
   const article = element("article", `message ${user ? "user" : "assistant"}`);
   const heading = element("div", "message-heading");
   heading.append(element("span", "message-avatar", user ? "U" : "L"), element("strong", "", user ? "あなた" : "Local Chat"));
@@ -273,9 +275,22 @@ function appendMessage(message) {
     if (!isNaN(date.getTime())) heading.append(element("span", "message-time", date.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" })));
   }
   const body = element("div", "message-body");
-  if (user) body.textContent = message.content || "添付資料を送信しました。";
-  else body.append(renderMarkdown(message.content));
-  article.append(heading, body);
+  if (user) body.textContent = currentText || "添付資料を送信しました。";
+  else body.append(renderMarkdown(currentText));
+  article.append(heading);
+  const reasoning = element("details", "message-reasoning");
+  const reasoningSummary = element("summary", "", "思考過程");
+  const reasoningBody = element("div", "message-body reasoning-body");
+  const reasoningTools = element("div", "reasoning-tools");
+  const reasoningCopy = element("button", "reasoning-copy", "思考過程をコピー");
+  reasoningCopy.type = "button";
+  reasoningCopy.addEventListener("click", () => copyText(currentReasoning, reasoningCopy));
+  reasoningTools.append(reasoningCopy);
+  reasoningBody.append(renderMarkdown(currentReasoning, 0, "「思考過程をコピー」"));
+  reasoning.append(reasoningSummary, reasoningBody, reasoningTools);
+  reasoning.hidden = !currentReasoning;
+  if (!user) article.append(reasoning);
+  article.append(body);
   if (message.attachments?.length) {
     const attachments = element("div", "message-attachments");
     for (const attachment of message.attachments) { const chip = element("span", "attachment-mini"); chip.append(icon(attachment.kind === "web" ? "globe" : "file"), element("span", "", attachment.name)); if (attachment.warning) chip.title = attachment.warning; attachments.append(chip); }
@@ -294,24 +309,52 @@ function appendMessage(message) {
   for (const source of message.sources || []) addSource(source);
   const toolbar = element("div", "message-tools");
   const status = element("span", "message-status");
-  let currentText = message.content || "";
   let renderedPrefix = currentText.slice(0, MAX_RENDERED_CHARS);
   let renderedTruncated = currentText.length > MAX_RENDERED_CHARS;
-  toolbar.append(iconButton("copy", "メッセージをコピー", () => copyText(currentText)), status);
+  let renderedReasoningPrefix = currentReasoning.slice(0, MAX_RENDERED_CHARS);
+  let renderedReasoningTruncated = currentReasoning.length > MAX_RENDERED_CHARS;
+  const copy = iconButton("copy", "メッセージをコピー", () => copyText(currentText));
+  copy.disabled = !currentText.trim();
+  toolbar.append(copy, status);
   if (message.status === "stopped" || message.status === "cancelled" || message.status === "interrupted") status.textContent = "応答を停止しました";
   if (message.status === "error") { status.textContent = "応答中にエラーが発生しました"; status.classList.add("error"); }
+  function setPhase(phase) {
+    reasoningSummary.textContent = phase === "reasoning" ? "思考中…" : ["stopped", "cancelled", "interrupted", "error"].includes(phase) ? "思考過程（途中）" : "思考過程";
+  }
+  function emptyAnswer(text) {
+    // UI hints are never included in message copies or persisted as model output.
+    renderedPrefix = null;
+    body.replaceChildren(element("p", "message-empty", text));
+  }
+  setPhase(message.status);
+  if (!user && !currentText.trim() && currentReasoning) emptyAnswer("回答本文は生成されませんでした。");
   article.append(toolbar);
   ui.messages.append(article);
   return {
-    body, article, status, addSource,
-    update(text) {
+    body, article, status, addSource, setPhase,
+    update(text, thinking = currentReasoning) {
       currentText = text;
+      currentReasoning = thinking;
+      copy.disabled = !text.trim();
+      reasoning.hidden = !thinking;
+      const reasoningPrefix = thinking.slice(0, MAX_RENDERED_CHARS);
+      const reasoningTruncated = thinking.length > MAX_RENDERED_CHARS;
+      if (reasoningPrefix !== renderedReasoningPrefix || reasoningTruncated !== renderedReasoningTruncated) {
+        renderedReasoningPrefix = reasoningPrefix;
+        renderedReasoningTruncated = reasoningTruncated;
+        // Preserve the details element so its open state survives every streamed update.
+        reasoningBody.replaceChildren(renderMarkdown(thinking, 0, "「思考過程をコピー」"));
+      }
       const prefix = text.slice(0, MAX_RENDERED_CHARS);
       const truncated = text.length > MAX_RENDERED_CHARS;
       if (prefix === renderedPrefix && truncated === renderedTruncated) return;
       renderedPrefix = prefix;
       renderedTruncated = truncated;
       body.replaceChildren(renderMarkdown(text));
+    },
+    finish(phase, fallback = "応答が空でした。モデルの設定を確認してください。") {
+      setPhase(phase);
+      if (!currentText.trim()) emptyAnswer(currentReasoning ? "回答本文は生成されませんでした。" : fallback);
     },
     waiting() { renderedPrefix = null; const dots = element("div", "stream-placeholder"); dots.append(element("span"), element("span"), element("span")); body.replaceChildren(dots); },
   };
@@ -414,8 +457,9 @@ async function sendMessage(event) {
   const controller = new AbortController(); state.abort = controller;
   setBusy(true);
   ui.conversationStatus.textContent = "モデルに接続しています…";
-  let assistant, userMessage, fullText = "", renderTimer = null, done = false, streamError = "", submitted = false;
-  const paint = () => { renderTimer = null; if (!assistant) return; const stick = nearBottom(); assistant.update(fullText); if (stick) scrollBottom(); };
+  let assistant, userMessage, fullText = "", fullReasoning = "", renderTimer = null, done = false, doneStatus = "", streamError = "", submitted = false;
+  const paint = () => { renderTimer = null; if (!assistant) return; const stick = nearBottom(); assistant.update(fullText, fullReasoning); if (stick) scrollBottom(); };
+  const flush = () => { if (renderTimer !== null) clearTimeout(renderTimer); paint(); };
   try {
     if (!state.currentId) {
       const conversation = await getJSON("/api/conversations", { method: "POST", body: JSON.stringify({}) , signal: controller.signal });
@@ -432,22 +476,29 @@ async function sendMessage(event) {
     submitted = true;
     await streamEvents(response, (name, data) => {
       if (name === "meta" && data.conversation_id) state.currentId = data.conversation_id;
-      if (name === "delta") { fullText += data.content || ""; ui.conversationStatus.textContent = "応答を作成しています…"; if (renderTimer === null) renderTimer = setTimeout(paint, STREAM_RENDER_INTERVAL_MS); }
+      if (name === "delta" || name === "reasoning") {
+        if (name === "reasoning") fullReasoning += data.content || "";
+        else fullText += data.content || "";
+        assistant.setPhase(name === "reasoning" ? "reasoning" : "answer");
+        ui.conversationStatus.textContent = name === "reasoning" ? "思考中…" : "応答を作成しています…";
+        if (renderTimer === null) renderTimer = setTimeout(paint, STREAM_RENDER_INTERVAL_MS);
+      }
       else if (name === "status") ui.conversationStatus.textContent = data.message || "処理しています…";
       else if (name === "source") assistant.addSource(data);
       else if (name === "warning") toast(data.message || "処理中に注意事項があります。");
       else if (name === "error") streamError = data.message || "モデルの応答中にエラーが発生しました。";
-      else if (name === "done") { done = true; if (["stopped", "cancelled", "interrupted"].includes(data.status)) assistant.status.textContent = "応答を停止しました"; }
+      else if (name === "done") { done = true; doneStatus = data.status || "complete"; if (["stopped", "cancelled", "interrupted"].includes(data.status)) assistant.status.textContent = "応答を停止しました"; }
     });
     if (streamError) throw new Error(streamError);
     if (!done) throw new Error("応答の途中で接続が切れました。接続先を確認して、もう一度送信してください。");
-    if (!fullText) assistant.update("応答が空でした。モデルの設定を確認してください。");
+    flush();
+    assistant.finish(doneStatus);
     ui.conversationStatus.textContent = "";
     $("#export-chat").hidden = false;
   } catch (error) {
-    if (renderTimer !== null) { clearTimeout(renderTimer); renderTimer = null; }
     if (assistant) {
-      assistant.update(fullText || (error.name === "AbortError" ? "応答を停止しました。" : "応答を取得できませんでした。"));
+      flush();
+      assistant.finish(error.name === "AbortError" ? "stopped" : "error", error.name === "AbortError" ? "応答を停止しました。" : "応答を取得できませんでした。");
       assistant.status.textContent = error.name === "AbortError" ? "停止しました" : error.message;
       assistant.status.classList.toggle("error", error.name !== "AbortError");
     }
@@ -459,7 +510,7 @@ async function sendMessage(event) {
       ui.messageInput.value = message; state.attachments = attachments; renderAttachments(); resizeInput();
     }
   } finally {
-    if (renderTimer !== null) { clearTimeout(renderTimer); paint(); }
+    if (renderTimer !== null) clearTimeout(renderTimer);
     state.abort = null;
     setBusy(false);
     ui.messageInput.focus();

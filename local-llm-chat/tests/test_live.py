@@ -18,8 +18,10 @@ from chat_app.main import create_app
 HEADERS = {"X-Local-Chat": "1"}
 
 
-def _frame(content=None, finish=None):
+def _frame(content=None, finish=None, reasoning_content=None):
     delta = {} if content is None else {"content": content}
+    if reasoning_content is not None:
+        delta["reasoning_content"] = reasoning_content
     data = {"choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
     return ("data: " + json.dumps(data, ensure_ascii=False) + "\n\n").encode("utf-8")
 
@@ -70,7 +72,10 @@ def fake_llm():
             assert self.path == "/v1/chat/completions"
             payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             state.payloads.append(payload)
-            slow = payload["messages"][-1]["content"] == "slow-cancel-test"
+            prompt = payload["messages"][-1]["content"]
+            if not isinstance(prompt, str):
+                prompt = ""
+            slow = prompt in {"slow-cancel-test", "slow-reasoning-test"}
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream; charset=utf-8")
             self.send_header("Connection", "close")
@@ -78,13 +83,35 @@ def fake_llm():
             self.close_connection = True
             try:
                 if slow:
-                    self.wfile.write(_frame("途中の回答"))
+                    first = "<think>停止前の思考" if prompt == "slow-reasoning-test" else "途中の回答"
+                    self.wfile.write(_frame(first))
                     self.wfile.flush()
                     for _ in range(500):
                         if state.stop.wait(0.02):
                             return
                         self.wfile.write(_frame("続き" * 1024))
                         self.wfile.flush()
+                elif prompt == "reasoning-demo":
+                    # Deliberately divide both tags over separate SSE events.
+                    for chunk in ("<thi", "nk>", "先に条件を", "確認します。", "</th", "ink>", "結論は", "42です。"):
+                        if state.stop.wait(0.12):
+                            return
+                        self.wfile.write(_frame(chunk))
+                        self.wfile.flush()
+                elif prompt == "reasoning-structured-demo":
+                    for reasoning in ("構造化された", "思考を確認します。"):
+                        if state.stop.wait(0.12):
+                            return
+                        self.wfile.write(_frame(reasoning_content=reasoning))
+                        self.wfile.flush()
+                    self.wfile.write(_frame("構造化APIの回答です。"))
+                    self.wfile.flush()
+                elif prompt == "reasoning-only-demo":
+                    self.wfile.write(_frame(reasoning_content="考えましたが、回答本文はありません。"))
+                    self.wfile.flush()
+                elif prompt == "reasoning-whitespace-demo":
+                    self.wfile.write(_frame("<think>空白を含む応答の思考です。</think>\n\n"))
+                    self.wfile.flush()
                 else:
                     # Split a UTF-8 sequence across socket writes to exercise decoding.
                     first = _frame("確認しました。")
@@ -218,6 +245,78 @@ def test_real_socket_cancel_closes_llm_and_persists_partial(live_app, fake_llm):
     with client.stream("POST", "/api/chat", json={"conversation_id": ident, "message": "停止後に再開"}) as response:
         assert response.status_code == 200
         assert list(_events(response))[-1][1]["status"] == "complete"
+
+
+@pytest.mark.parametrize(
+    ("prompt", "expected_reasoning", "expected_answer"),
+    [
+        ("reasoning-demo", "先に条件を確認します。", "結論は42です。"),
+        ("reasoning-structured-demo", "構造化された思考を確認します。", "構造化APIの回答です。"),
+        ("reasoning-only-demo", "考えましたが、回答本文はありません。", ""),
+        ("reasoning-whitespace-demo", "空白を含む応答の思考です。", "\n\n"),
+    ],
+)
+def test_real_socket_reasoning_is_separate_and_excluded_from_history(
+    live_app, fake_llm, prompt, expected_reasoning, expected_answer
+):
+    client = live_app.client
+    _configure(client, fake_llm)
+    ident = client.post("/api/conversations", json={}).json()["id"]
+    with client.stream("POST", "/api/chat", json={"conversation_id": ident, "message": prompt}) as response:
+        assert response.status_code == 200
+        events = list(_events(response))
+    assert "".join(data["content"] for kind, data in events if kind == "reasoning") == expected_reasoning
+    assert "".join(data["content"] for kind, data in events if kind == "delta") == expected_answer
+    assert not any(kind == "error" for kind, _ in events)
+    assert events[-1][0] == "done" and events[-1][1]["status"] == "complete"
+    saved = client.get("/api/conversations/" + ident).json()["messages"][-1]
+    assert saved["reasoning"] == expected_reasoning
+    assert saved["content"] == expected_answer
+    assert saved["status"] == "complete"
+    with client.stream("POST", "/api/chat", json={"conversation_id": ident, "message": "次の質問"}) as response:
+        assert response.status_code == 200
+        assert list(_events(response))[-1][1]["status"] == "complete"
+    history = fake_llm.payloads[-1]["messages"]
+    assert expected_reasoning not in json.dumps(history, ensure_ascii=False)
+    assert all("reasoning" not in message and "reasoning_content" not in message for message in history)
+    if expected_answer.strip():
+        assert any(message["role"] == "assistant" and message["content"] == expected_answer for message in history)
+    else:
+        assert not any(message["role"] == "assistant" for message in history)
+
+
+def test_real_socket_cancel_during_reasoning_closes_llm_and_persists_partial(live_app, fake_llm):
+    client = live_app.client
+    _configure(client, fake_llm)
+    ident = client.post("/api/conversations", json={}).json()["id"]
+    with client.stream("POST", "/api/chat", json={"conversation_id": ident, "message": "slow-reasoning-test"}) as response:
+        assert response.status_code == 200
+        for kind, data in _events(response):
+            assert kind != "delta", "Thinking content leaked into the final answer"
+            if kind == "reasoning":
+                assert data["content"] == "停止前の思考"
+                break
+        else:
+            pytest.fail("No reasoning was streamed before cancellation")
+    deadline = time.monotonic() + 5
+    saved = []
+    while time.monotonic() < deadline:
+        saved = client.get("/api/conversations/" + ident).json()["messages"]
+        if len(saved) == 2:
+            break
+        time.sleep(0.02)
+    assert len(saved) == 2
+    assert saved[-1]["reasoning"].startswith("停止前の思考")
+    assert saved[-1]["content"] == ""
+    assert saved[-1]["status"] == "interrupted"
+    assert ident not in live_app.app.state.active
+    assert fake_llm.slow_closed.wait(timeout=3), "Cancelled reasoning left the downstream LLM socket open"
+    assert fake_llm.slow_exited.wait(timeout=1)
+    with client.stream("POST", "/api/chat", json={"conversation_id": ident, "message": "思考停止後に再開"}) as response:
+        assert response.status_code == 200
+        assert list(_events(response))[-1][1]["status"] == "complete"
+    history = json.dumps(fake_llm.payloads[-1]["messages"], ensure_ascii=False)
+    assert "停止前の思考" not in history
 
 
 def test_real_socket_web_proxy_is_separate_from_llm(live_app, fake_llm, monkeypatch):

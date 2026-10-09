@@ -88,6 +88,7 @@ def test_error_saves_partial_answer(client, monkeypatch):
     ident = new_chat(client)
 
     async def stream(*args):
+        yield {'event': 'reasoning', 'data': {'content': '途中の思考'}}
         yield {'event': 'delta', 'data': {'content': '途中の回答'}}
         raise RuntimeError('通信が途切れました。')
 
@@ -96,8 +97,56 @@ def test_error_saves_partial_answer(client, monkeypatch):
     assert 'event: error' in result.text
     saved = client.get('/api/conversations/' + ident).json()['messages'][-1]
     assert saved['content'] == '途中の回答'
+    assert saved['reasoning'] == '途中の思考'
     assert saved['status'] == 'error'
     assert not client.app.state.active
+
+
+def test_reasoning_saved_exported_and_excluded_from_next_turn(client, monkeypatch):
+    configured(client)
+    ident = new_chat(client)
+    requests = []
+
+    async def stream(settings, messages, web_enabled):
+        requests.append(messages)
+        yield {'event': 'reasoning', 'data': {'content': '保存する思考。'}}
+        yield {'event': 'reasoning', 'data': {'content': '続き。'}}
+        yield {'event': 'delta', 'data': {'content': '表示する回答。'}}
+
+    monkeypatch.setattr(network, 'stream_chat', stream)
+    result = client.post('/api/chat', json={'conversation_id': ident, 'message': '最初の質問'})
+    assert 'event: reasoning' in result.text
+    saved = client.get('/api/conversations/' + ident).json()['messages'][-1]
+    assert saved['content'] == '表示する回答。'
+    assert saved['reasoning'] == '保存する思考。続き。'
+    exported = client.get(f'/api/conversations/{ident}/export').text
+    assert '### 思考過程\n\n保存する思考。続き。\n\n### 回答\n\n表示する回答。' in exported
+    client.post('/api/chat', json={'conversation_id': ident, 'message': '次の質問'})
+    assert requests[1][-2] == {'role': 'assistant', 'content': '表示する回答。'}
+    assert '保存する思考' not in json.dumps(requests[1], ensure_ascii=False)
+
+
+@pytest.mark.parametrize('answer', ['', '\n\n'])
+def test_reasoning_only_message_remains_separate(client, monkeypatch, answer):
+    configured(client)
+    ident = new_chat(client)
+    requests = []
+
+    async def stream(settings, messages, web_enabled):
+        requests.append(messages)
+        yield {'event': 'reasoning', 'data': {'content': '思考のみ'}}
+        yield {'event': 'delta', 'data': {'content': answer}}
+        yield {'event': 'warning', 'data': {'message': '回答本文がありません。'}}
+
+    monkeypatch.setattr(network, 'stream_chat', stream)
+    result = client.post('/api/chat', json={'conversation_id': ident, 'message': 'テスト'})
+    assert 'event: done' in result.text and 'event: error' not in result.text
+    saved = client.get('/api/conversations/' + ident).json()['messages'][-1]
+    assert saved['content'] == answer
+    assert saved['reasoning'] == '思考のみ'
+    assert saved['status'] == 'complete'
+    client.post('/api/chat', json={'conversation_id': ident, 'message': '次の質問'})
+    assert not any(m['role'] == 'assistant' for m in requests[-1])
 
 
 def test_image_requires_vision_and_no_message_saved(client):

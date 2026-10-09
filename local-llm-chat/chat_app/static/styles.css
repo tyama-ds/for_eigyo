@@ -714,6 +714,53 @@ input:focus,textarea:focus,select:focus{
   margin-left:34px;
   white-space:pre-wrap
 }
+.message-reasoning{
+  margin:0 0 16px 34px;
+  border:1px solid #dfe6d9;
+  border-radius:9px;
+  background:#f0f3ec;
+  min-width:0
+}
+.message-reasoning>summary{
+  padding:10px 13px;
+  color:#647b5c;
+  font-size:11px;
+  line-height:1.7;
+  cursor:pointer;
+  border-radius:9px
+}
+.message-reasoning>summary::marker{
+  color:#91a584
+}
+.message-reasoning[open]>summary{
+  border-bottom:1px solid #dfe6d9;
+  border-radius:9px 9px 0 0
+}
+.message-reasoning>.reasoning-body{
+  padding:13px 14px 0;
+  font-size:12px;
+  color:#65775e
+}
+.reasoning-tools{
+  display:flex;
+  justify-content:flex-end;
+  padding:8px 10px
+}
+.reasoning-copy{
+  padding:6px 8px;
+  border:0;
+  border-radius:5px;
+  background:transparent;
+  color:#61785b;
+  font-size:10px
+}
+.reasoning-copy:hover{
+  background:#e4ebdf
+}
+.message-body>.message-empty{
+  color:#809078;
+  font-size:12px
+}
 .message-body>*:first-child{
   margin-top:0
 }
@@ -1480,6 +1527,9 @@ dialog::backdrop{
   .message.user .message-body{
     margin-left:0;
     padding:12px 15px
+  }
+  .message-reasoning{
+    margin-left:0
   }
   .message-attachments,.message-sources{
     padding-left:0

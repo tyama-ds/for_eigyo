@@ -115,6 +115,95 @@ class NetworkTests(unittest.IsolatedAsyncioTestCase):
             events = await self.collect()
         self.assertEqual(events, [{"event": "delta", "data": {"content": "こんにちは"}}])
 
+    async def test_inline_reasoning_is_separated_across_sse_frames(self):
+        text = "<think>考え</think>答え<think>補足の思考</think>です。"
+        response = stream_response(*(frame({"content": char}) for char in text), frame(finish="stop"))
+        with patch.object(network.httpx, "AsyncClient", side_effect=self.client_factory(lambda _: response)):
+            events = await self.collect()
+        self.assertEqual("".join(e["data"]["content"] for e in events if e["event"] == "delta"), "答えです。")
+        self.assertEqual("".join(e["data"]["content"] for e in events if e["event"] == "reasoning"), "考え補足の思考")
+
+    async def test_explicit_reasoning_fields_and_precedence(self):
+        for reasoning in ({"reasoning_content": "考え"}, {"reasoning": "考え"},
+                          {"reasoning_content": "考え", "reasoning": "duplicate"},
+                          {"reasoning_content": None, "reasoning": "考え"}):
+            with self.subTest(reasoning=reasoning):
+                response = stream_response(frame(reasoning), frame({"content": "答え"}), frame(finish="stop"))
+                with patch.object(network.httpx, "AsyncClient", side_effect=self.client_factory(lambda _: response)):
+                    events = await self.collect()
+                self.assertEqual(events, [{"event": "reasoning", "data": {"content": "考え"}},
+                                          {"event": "delta", "data": {"content": "答え"}}])
+
+    async def test_mirrored_reasoning_uses_first_source_with_explicit_precedence(self):
+        cases = [
+            [frame({"reasoning_content": "考え", "content": "<think>考え</think>答え"})],
+            [frame({"reasoning_content": "考え"}), frame({"content": "<think>考え</think>答え"})],
+            [frame({"content": "<think>考え"}), frame({"reasoning_content": "考え"}), frame({"content": "</think>答え"})],
+        ]
+        for frames in cases:
+            response = stream_response(*frames, frame(finish="stop"))
+            with patch.object(network.httpx, "AsyncClient", side_effect=self.client_factory(lambda _: response)):
+                events = await self.collect()
+            self.assertEqual("".join(e["data"]["content"] for e in events if e["event"] == "reasoning"), "考え")
+            self.assertEqual("".join(e["data"]["content"] for e in events if e["event"] == "delta"), "答え")
+
+    async def test_reasoning_only_finishes_with_a_warning(self):
+        for delta in ({"content": "<think>考え途中</thi"}, {"reasoning_content": "考え途中"}):
+            for finish in ("stop", "length"):
+                response = stream_response(frame(delta), frame(finish=finish))
+                with patch.object(network.httpx, "AsyncClient", side_effect=self.client_factory(lambda _: response)):
+                    events = await self.collect()
+                self.assertFalse(any(e["event"] == "delta" for e in events))
+                self.assertTrue(any(e["event"] == "reasoning" for e in events))
+                warnings = [e["data"]["message"] for e in events if e["event"] == "warning"]
+                self.assertTrue(any("最終回答" in warning for warning in warnings))
+
+    async def test_error_or_truncation_keeps_previously_streamed_reasoning(self):
+        for delta in ({"content": "<think>考え途中</thi"}, {"reasoning_content": "考え途中"}):
+            for ending in ("", "data: {invalid}\n\n", frame(finish="unsupported")):
+                response = stream_response(frame(delta), ending)
+                received = []
+                with patch.object(network.httpx, "AsyncClient", side_effect=self.client_factory(lambda _: response)):
+                    with self.assertRaises(network.NetworkError):
+                        async for event in network.stream_chat(SETTINGS, [{"role": "user", "content": "質問"}]):
+                            received.append(event)
+                self.assertEqual(received, [{"event": "reasoning", "data": {"content": "考え途中"}}])
+
+    async def test_reasoning_after_finish_and_invalid_types_are_rejected(self):
+        for frames in ([frame({"reasoning_content": ["invalid"]})],
+                       [frame({"reasoning": {"invalid": True}})],
+                       [frame({"content": "答え"}), frame(finish="stop"), frame({"reasoning_content": "late"})]):
+            response = stream_response(*frames)
+            with patch.object(network.httpx, "AsyncClient", side_effect=self.client_factory(lambda _: response)):
+                with self.assertRaises(network.NetworkError):
+                    await self.collect()
+
+    async def test_answer_and_reasoning_share_response_size_limit(self):
+        response = stream_response(frame({"reasoning_content": "r" * 6}), frame({"content": "a" * 6}), frame(finish="stop"))
+        with patch.object(network, "MAX_WEB_BYTES", 10), patch.object(network.httpx, "AsyncClient", side_effect=self.client_factory(lambda _: response)):
+            with self.assertRaisesRegex(network.NetworkError, "大きすぎ"):
+                await self.collect()
+
+    async def test_tool_round_reasoning_is_displayed_but_not_sent_as_answer(self):
+        requests = []
+        def handler(request):
+            payload = json.loads(request.content)
+            requests.append(payload)
+            if len(requests) == 1:
+                call = {"index": 0, "id": "call_1", "function": {"name": "web_fetch", "arguments": '{"url":"https://example.com/"}'}}
+                return stream_response(frame({"reasoning_content": "取得を検討"}), frame({"content": "確認します。"}),
+                                       frame({"tool_calls": [call]}), frame(finish="tool_calls"))
+            assistant = payload["messages"][-2]
+            self.assertEqual(assistant["content"], "確認します。")
+            self.assertNotIn("reasoning_content", assistant)
+            self.assertNotIn("取得を検討", json.dumps(payload, ensure_ascii=False))
+            return stream_response(frame({"content": "<think>結果を検討</think>回答です。"}), frame(finish="stop"))
+        fetch = AsyncMock(return_value={"url": "https://example.com/", "title": "参考", "text": "参考本文"})
+        with patch.object(network.httpx, "AsyncClient", side_effect=self.client_factory(handler)), patch.object(network, "fetch_web", fetch):
+            events = await self.collect(web=True)
+        self.assertEqual([e["data"]["content"] for e in events if e["event"] == "reasoning"], ["取得を検討", "結果を検討"])
+        self.assertEqual([e["data"]["content"] for e in events if e["event"] == "delta"], ["確認します。", "回答です。"])
+
     async def test_stream_tool_arguments_are_accumulated_then_returned(self):
         requests = []
         def handler(request):

@@ -215,7 +215,10 @@ def create_app(data_dir=None):
         value = conversation_or_404(ident)
         lines = ['# ' + value['title'], '']
         for message in value['messages']:
-            lines += ['## ' + ('あなた' if message['role'] == 'user' else 'アシスタント'), '', message['content'], '']
+            lines += ['## ' + ('あなた' if message['role'] == 'user' else 'アシスタント'), '']
+            if message['reasoning']:
+                lines += ['### 思考過程', '', message['reasoning'], '', '### 回答', '']
+            lines += [message['content'], '']
             for attachment in message['attachments']:
                 lines += ['添付: ' + attachment['name'], '']
             for source in message['sources']:
@@ -266,7 +269,7 @@ def create_app(data_dir=None):
         app.state.active.add(body.conversation_id)
 
         async def generate():
-            output, sources = [], []
+            output, reasoning, sources = [], [], []
             status = 'interrupted'
             try:
                 yield sse('meta', {'conversation_id': body.conversation_id, 'user_message_id': user_id})
@@ -277,6 +280,8 @@ def create_app(data_dir=None):
                         break
                     if event['event'] == 'delta':
                         output.append(event['data']['content'])
+                    elif event['event'] == 'reasoning':
+                        reasoning.append(event['data']['content'])
                     elif event['event'] == 'source':
                         sources.append(event['data'])
                     yield sse(event['event'], event['data'])
@@ -292,7 +297,8 @@ def create_app(data_dir=None):
                 yield sse('error', {'message': '回答の受信中にエラーが発生しました。接続設定とサーバーの状態を確認してください。'})
             finally:
                 try:
-                    assistant_id = app.state.store.add_message(body.conversation_id, 'assistant', ''.join(output), sources=sources, status=status)
+                    assistant_id = app.state.store.add_message(body.conversation_id, 'assistant', ''.join(output),
+                                                               sources=sources, status=status, reasoning=''.join(reasoning))
                 finally:
                     app.state.active.discard(body.conversation_id)
             yield sse('done', {'message_id': assistant_id, 'status': status})

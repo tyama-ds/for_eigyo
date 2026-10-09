@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
+from .reasoning import split_reasoning
+
 
 def now():
     return datetime.now(timezone.utc).isoformat()
@@ -30,12 +32,24 @@ class Store:
             CREATE TABLE IF NOT EXISTS messages (
                 id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
                 role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL,
-                sources TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'complete');
+                sources TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'complete',
+                reasoning TEXT NOT NULL DEFAULT '');
             CREATE TABLE IF NOT EXISTS attachments (
                 id TEXT PRIMARY KEY, message_id TEXT REFERENCES messages(id) ON DELETE CASCADE,
                 payload TEXT NOT NULL, created_at TEXT NOT NULL);
         ''')
         with self.db:
+            # Upgrade existing histories once, without interpreting user text or
+            # Markdown code examples as model reasoning.
+            columns = {row['name'] for row in self.db.execute('PRAGMA table_info(messages)')}
+            if 'reasoning' not in columns:
+                self.db.execute("ALTER TABLE messages ADD COLUMN reasoning TEXT NOT NULL DEFAULT ''")
+                rows = self.db.execute("SELECT id, content FROM messages WHERE role='assistant'").fetchall()
+                for row in rows:
+                    content, reasoning = split_reasoning(row['content'])
+                    if content != row['content'] or reasoning:
+                        self.db.execute('UPDATE messages SET content=?, reasoning=? WHERE id=?',
+                                        (content, reasoning, row['id']))
             self.db.execute("DELETE FROM attachments WHERE message_id IS NULL AND created_at < datetime('now', '-7 days')")
 
     def close(self):
@@ -95,12 +109,12 @@ class Store:
                 result.append(json.loads(row[0]))
         return result
 
-    def add_message(self, conversation_id, role, content, attachments=(), sources=(), status='complete'):
+    def add_message(self, conversation_id, role, content, attachments=(), sources=(), status='complete', reasoning=''):
         ident = uuid4().hex
         stamp = now()
         with self.lock, self.db:
-            self.db.execute('INSERT INTO messages VALUES (?,?,?,?,?,?,?)',
-                            (ident, conversation_id, role, content, stamp, json.dumps(list(sources), ensure_ascii=False), status))
+            self.db.execute('INSERT INTO messages (id, conversation_id, role, content, created_at, sources, status, reasoning) VALUES (?,?,?,?,?,?,?,?)',
+                            (ident, conversation_id, role, content, stamp, json.dumps(list(sources), ensure_ascii=False), status, reasoning))
             for attachment in attachments:
                 changed = self.db.execute('UPDATE attachments SET message_id=? WHERE id=? AND message_id IS NULL', (ident, attachment['id'])).rowcount
                 if not changed:

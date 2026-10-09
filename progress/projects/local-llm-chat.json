@@ -4,29 +4,75 @@
   "path": "local-llm-chat/",
   "summary": "OpenAI互換のローカルLLMと会話するチャットアプリ。ファイル添付と、PC側からのプロキシ対応Web取得に対応。",
   "status": "active",
-  "phase": "初版実装・模擬APIで検証済み",
+  "phase": "思考・回答の分離を実装、模擬APIで検証済み",
   "progress": 90,
   "started": "2026-10-09",
   "updated": "2026-10-09",
-  "ports": [8840],
+  "ports": [
+    8840
+  ],
   "ci": false,
   "portal": true,
-  "stack": ["Python 3.11+", "FastAPI", "httpx", "SQLite", "HTML/CSS/JavaScript"],
-  "milestones": [
-    {"title": "ストリーミングチャット・保存・停止・書き出し", "state": "done", "date": "2026-10-09"},
-    {"title": "PDF・Office・画像・ソースコード添付", "state": "done", "date": "2026-10-09"},
-    {"title": "PC側Web取得・プロキシ分離・tool calling", "state": "done", "date": "2026-10-09"},
-    {"title": "自動テスト46件とブラウザー操作確認", "state": "done", "date": "2026-10-09"},
-    {"title": "for_eigyo・App Portalへの追加", "state": "done", "date": "2026-10-09"},
-    {"title": "実LLM・組織プロキシでの接続確認", "state": "todo"}
+  "stack": [
+    "Python 3.11+",
+    "FastAPI",
+    "httpx",
+    "SQLite",
+    "HTML/CSS/JavaScript"
   ],
-  "next": ["利用するLLMのAPI URL・モデル名とプロキシを設定し、実接続を確認する"],
+  "milestones": [
+    {
+      "title": "ストリーミングチャット・保存・停止・書き出し",
+      "state": "done",
+      "date": "2026-10-09"
+    },
+    {
+      "title": "PDF・Office・画像・ソースコード添付",
+      "state": "done",
+      "date": "2026-10-09"
+    },
+    {
+      "title": "PC側Web取得・プロキシ分離・tool calling",
+      "state": "done",
+      "date": "2026-10-09"
+    },
+    {
+      "title": "思考タグ・専用フィールドの分離、折りたたみ表示・履歴移行",
+      "state": "done",
+      "date": "2026-10-09"
+    },
+    {
+      "title": "自動テスト72件とブラウザー操作確認",
+      "state": "done",
+      "date": "2026-10-09"
+    },
+    {
+      "title": "for_eigyo・App Portalへの追加",
+      "state": "done",
+      "date": "2026-10-09"
+    },
+    {
+      "title": "実LLM・組織プロキシでの接続確認",
+      "state": "todo"
+    }
+  ],
+  "next": [
+    "利用するLLMのAPI URL・モデル名とプロキシを設定し、実接続を確認する"
+  ],
   "risks": [
     "実LLM・組織プロキシ・社内CAは未検証。画像やtool callingにはモデル・サーバー側の対応が必要",
     "スキャンPDFのOCR、HTML/JavaScriptの実行、キーワードWeb検索は未対応",
     "会話と抽出済み添付はローカルSQLiteへ平文保存。APIキー・プロキシパスワードは起動中のみ保持"
   ],
   "log": [
-    {"date": "2026-10-09", "summary": "Local Chatをfor_eigyo内の新規アプリとして追加。既存アプリとのポート重複を避け8840でポータル登録。模擬API・実ソケット通信の46テストと日本語UI・添付・停止を確認。"}
+    {
+      "date": "2026-10-09",
+      "summary": "Qwen形式のthinkタグとreasoning_contentを思考欄へ分離。停止・コピー・保存・旧履歴移行に対応し、次回送信には本文のみを使用。追加テストとブラウザーで開閉・コピー・停止・履歴を確認。",
+      "ref": "#59"
+    },
+    {
+      "date": "2026-10-09",
+      "summary": "Local Chatをfor_eigyo内の新規アプリとして追加。既存アプリとのポート重複を避け8840でポータル登録。模擬API・実ソケット通信の46テストと日本語UI・添付・停止を確認。"
+    }
   ]
 }
