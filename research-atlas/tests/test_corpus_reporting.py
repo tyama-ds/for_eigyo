@@ -5,6 +5,7 @@ import json
 import sqlite3
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -82,8 +83,18 @@ def start(papers, **options):
     return saved, finish(created["id"])
 
 
-def test_batch_counts_missing_abstracts_and_complete_numerical_population(ledger):
+def test_batch_counts_missing_abstracts_and_complete_numerical_population(ledger, monkeypatch):
     _, state = ledger
+    # A near-instant double can finish within one Windows monotonic tick. Give
+    # extraction a known duration while leaving polling/fixture clocks real.
+    clock = [100.0]
+    monkeypatch.setattr(reports, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    def timed_extract(paper, provider, model, **kwargs):
+        value = extraction(paper)
+        kwargs["checkpoint"]["save"](value)
+        clock[0] += 2.0
+        return value
+    state["extract"] = timed_extract
     _, value = start([paper("a"), paper("b", abstract=""), paper("c", year=2022, topic_id="battery"), paper("d")], batch_size=1)
     assert value["status"] == "paused" and value["partial"]
     assert value["counts"] == {"total": 4, "completed": 1, "missing": 1, "failed": 0, "pending": 2, "cached": 0,
@@ -95,6 +106,7 @@ def test_batch_counts_missing_abstracts_and_complete_numerical_population(ledger
     second = finish(value["id"])
     assert second["counts"]["completed"] == 2 and state["calls"] == ["a", "c"]
     assert second["estimate"]["sampled_papers"] == 2 and second["estimate"]["remaining_seconds"] is not None
+    assert second["estimate"]["seconds_per_paper"] == second["estimate"]["remaining_seconds"] == 2.0
     assert second["methods"] == [{"method": "microscopy", "paper_count": 2}]
 
 

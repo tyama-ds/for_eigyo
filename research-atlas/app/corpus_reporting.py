@@ -682,3 +682,17 @@ def iter_export(identifier, format):
         records = (_public_record(row) for row in db.execute("SELECT * FROM papers WHERE report_id=? ORDER BY ordinal", (identifier,)))
         function = corpus_exports.iter_csv if format == "csv" else corpus_exports.iter_json
         yield from function(report, records)
+
+
+def render_export(identifier, renderer):
+    """Render report and papers from one read snapshot, even during extraction.
+
+    The callback must consume records before returning. This avoids loading the
+    whole ledger and avoids mixing summary counts with a later paper revision.
+    """
+    with closing(_db()) as db:
+        db.execute("BEGIN")
+        report = _summary(db, identifier, full=True)
+        records = (_public_record(row) for row in db.execute(
+            "SELECT * FROM papers WHERE report_id=? ORDER BY ordinal", (identifier,)))
+        return renderer(report, records)
