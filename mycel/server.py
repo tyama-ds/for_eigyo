@@ -29,6 +29,7 @@ from mycelcore import __version__  # noqa: E402
 from mycelcore.app import MycelApp  # noqa: E402
 from mycelcore.config import chat_configured, embed_configured, public_config  # noqa: E402
 from mycelcore.llm import LLMClient, LLMError  # noqa: E402
+from mycelcore.extract import IMAGE_MIME  # noqa: E402
 from mycelcore.graphrag import MODES  # noqa: E402
 from mycelcore.jobs import JobBusy  # noqa: E402
 from mycelcore.library import LINK_TYPES, STATUSES, TYPES, citation, to_bibtex  # noqa: E402
@@ -64,6 +65,7 @@ def api_state(app: MycelApp, _p: dict) -> dict:
     return {"version": __version__, "vault": str(app.vault.root), "user": cfg["user_name"],
             "llm": {"chat": chat_configured(cfg), "embed": embed_configured(cfg), "rag_mode": cfg.get("rag_mode", "standard")},
             "daily_folder": cfg["daily_folder"], "template_folder": cfg["template_folder"],
+            "attachment_folder": cfg.get("attachment_folder", "添付"), "vlm": bool((cfg.get("vlm_model") or "").strip()) and chat_configured(cfg),
             "fts": app.index.has_fts, "index": app.index_status()}
 
 
@@ -135,6 +137,7 @@ GET_ROUTES = {
                                     "types": TYPES, "statuses": STATUSES},
     "/api/library/ref": lambda app, p: {**app.library._row(app.library.get(_str(p, "id"))),
                                         "related": app.library.related(_str(p, "id")),
+                                        "related_vault": app.library.related_in_vault(_str(p, "id")),
                                         "links": app.library.links_of(_str(p, "id")), "link_types": {k: v["label"] for k, v in LINK_TYPES.items()},
                                         "structure": [{"n": s["n"], "heading": s["heading"], "chunks": len(s["chunks"])}
                                                       for s in app.library.structure(_str(p, "id"))],
@@ -154,8 +157,10 @@ GET_ROUTES = {
     "/api/templates": lambda app, p: {"templates": app.templates()},
     "/api/config": lambda app, p: public_config(app.config()),
     "/api/plugins": lambda app, p: {"plugins": app.plugins.available()},
-    "/api/ai/status": lambda app, p: {**app.ai.status(), "graphrag": app.graphrag.status(),
+    "/api/ai/status": lambda app, p: {**app.ai.status(), "graphrag": app.graphrag.status(), "images": app.images_status(),
                                       "rag_mode": app.config().get("rag_mode", "standard"), "modes": MODES},
+    "/api/vault/list": lambda app, p: app.vault_list(),
+    "/api/images": lambda app, p: {"images": app.index.images(), **app.images_status()},
     "/api/graphrag/communities": lambda app, p: {"communities": app.graphrag.communities()},
     "/api/graphrag/entity": lambda app, p: app.graphrag.entity_docs(_str(p, "key")),
     "/api/ai/suggest": lambda app, p: {"suggestions": app.ai.suggest_links(_str(p, "path"))},
@@ -201,6 +206,11 @@ POST_ROUTES = {
     "/api/library/register": lambda app, b: app.library.register_files(_list(b, "paths") or [], bool(b.get("ai")), _list(b, "tags")),
     "/api/library/ai_meta": lambda app, b: app.library._row(app.library.ai_metadata(_str(b, "id"), bool(b.get("overwrite")))),
     "/api/library/ai_summary": lambda app, b: app.library.ai_summary(_str(b, "id")),
+    "/api/library/insights": lambda app, b: {"insights": app.library.insights(_str(b, "id"))},
+    "/api/library/ask_doc": lambda app, b: app.library.ask_doc(_str(b, "id"), _str(b, "question"), _list(b, "history")),
+    "/api/image/caption": lambda app, b: app.caption_image(_str(b, "path")),
+    "/api/image/caption_all": lambda app, b: app.caption_images(_list(b, "prefixes"), b.get("only_missing", True) is not False),
+    "/api/vault/switch": lambda app, b: app.vault_switch(_str(b, "path"), bool(b.get("create")), bool(b.get("seed"))),
     "/api/library/ai_batch": lambda app, b: app.library_ai_batch(_list(b, "ids") or [], _str(b, "what", "meta")),
     "/api/library/embed": lambda app, b: app.library_embed(),
     "/api/library/ask": lambda app, b: app.library.ask(_str(b, "question"), _list(b, "history"), _str(b, "tag"),
@@ -335,14 +345,15 @@ def make_handler(app: MycelApp):
             self.end_headers()
             self.wfile.write(data)
 
-        def _file(self, p: Path) -> None:
-            """資料の原本をダウンロードさせる（ページとしては表示しない）。"""
+        def _file(self, p: Path, inline: bool = False) -> None:
+            """資料の原本をダウンロードさせる（ページとしては表示しない）。画像は inline=1 でそのまま表示できる。"""
             from urllib.parse import quote
             data = p.read_bytes()
+            mime = IMAGE_MIME.get(p.suffix.lower())
             self.send_response(200)
-            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Type", mime if (inline and mime) else "application/octet-stream")
             self.send_header("Content-Length", str(len(data)))
-            self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quote(p.name)}")
+            self.send_header("Content-Disposition", f"{'inline' if (inline and mime) else 'attachment'}; filename*=UTF-8''{quote(p.name)}")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Content-Security-Policy", "sandbox; default-src 'none'")
             self.send_header("Cache-Control", "no-store")
@@ -359,7 +370,7 @@ def make_handler(app: MycelApp):
                     return
                 params = parse_qs(url.query)
                 if url.path == "/api/file":
-                    self._file(app.raw_file(_str(params, "path")))
+                    self._file(app.raw_file(_str(params, "path")), _str(params, "inline") == "1")
                     return
                 if url.path.startswith("/api/plugins/"):
                     self._json(self._plugin_call(url.path, {k: v[0] for k, v in params.items()}, "GET"))

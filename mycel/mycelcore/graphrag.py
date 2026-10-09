@@ -404,7 +404,7 @@ class GraphRAG:
 
     def _ask_local(self, question: str, history, prefixes, paths) -> dict:
         cfg = self.app.config()
-        hits = self.app.ai.retrieve(question, k=8, prefixes=prefixes, paths=paths)
+        hits = self.app.ai.retrieve_for_answer(question, k=max(8, int(cfg.get("rag_top_k") or 6)), prefixes=prefixes, paths=paths)
         seeds = list(dict.fromkeys(self._match_entities(question)))
         hit_ids = [h["id"] for h in hits]
         with _lock:

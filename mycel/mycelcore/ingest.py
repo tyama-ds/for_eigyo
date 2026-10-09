@@ -180,6 +180,8 @@ class Ingestor:
             raise VaultError("ファイル名が不正です")
         if not is_supported(name) or name.lower().endswith((".md", ".markdown")):
             raise VaultError(f"この形式は取り込めません: {name}（PDF・Word・Excel・PowerPoint・メール・テキストなど）")
+        if EXT_GROUP.get(Path(name).suffix.lower()) == "image":
+            raise VaultError(f"画像は AI 取り込みの対象外です: {name}（フォルダに追加して「AI で読む（VLM）」を使ってください）")
         if len(data) > self.app.scope.max_bytes():
             raise VaultError(f"ファイルが大きすぎます（上限 {self.app.scope.data['max_mb']} MB。読み込み範囲で変更できます）", 413)
         d = self._new(name, "upload", "", len(data))

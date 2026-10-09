@@ -26,8 +26,9 @@ def _default_user() -> str:
 
 
 DEFAULT_CONFIG: dict = {
-    # Vault（ノートを置くフォルダ）。空なら mycel/vault
+    # Vault（ノートを置くフォルダ）。空なら mycel/vault。recent_vaults は切り替え画面の履歴
     "vault_path": "",
+    "recent_vaults": [],
     # 作成者名。変更ジャーナルや将来の共有で「誰が変えたか」に使う
     "user_name": "",
     # デイリーノートとテンプレートの置き場所（Vault からの相対フォルダ）
@@ -60,11 +61,20 @@ DEFAULT_CONFIG: dict = {
     "rag_mode": "standard",
     "graphrag_max_communities": 12,    # 全体質問で読むコミュニティ要約の数（多いほど遅い）
     "graphrag_max_chunks": 40,         # 1 文書あたり抽出する段落の上限
+    # ---- RAG の検索の深さ。rag_pool: キーワード／意味検索それぞれで集める候補の数、rag_top_k: LLM に渡す段落の数
+    # rag_rerank: none / llm（LLM に候補の関連度を採点させて並べ直す。遅いが順位が低い候補も拾える）
+    "rag_top_k": 6,
+    "rag_pool": 60,
+    "rag_rerank": "none",
+    "rag_rerank_pool": 24,             # llm リランクで採点する候補の数
+    # ---- 画像。vlm_model が空なら画像の説明（キャプション）は作らない。attachment_folder は貼り付けた画像の保存先
+    "vlm_model": "",
+    "attachment_folder": "添付",
 }
 
 _SECRET_KEYS = ("api_key", "embed_api_key")
 _STR_KEYS = ("vault_path", "user_name", "daily_folder", "template_folder", "base_url",
-             "model", "api_version", "embed_model", "embed_base_url", "proxy_url")
+             "model", "api_version", "embed_model", "embed_base_url", "proxy_url", "vlm_model", "attachment_folder")
 _lock = threading.Lock()
 
 
@@ -100,6 +110,10 @@ def save_config(update: dict, path: Path | None = None) -> dict:
             cfg[key] = update[key].strip()
     if update.get("rag_mode") in ("standard", "auto", "local", "global"):
         cfg["rag_mode"] = update["rag_mode"]
+    if update.get("rag_rerank") in ("none", "llm"):
+        cfg["rag_rerank"] = update["rag_rerank"]
+    if isinstance(update.get("recent_vaults"), list):
+        cfg["recent_vaults"] = [p for p in update["recent_vaults"] if isinstance(p, str) and p.strip()][:12]
     if update.get("provider") in ("openai", "azure"):
         cfg["provider"] = update["provider"]
     # API キーは空文字なら「変更なし」（UI に平文を返さないため）。clear_* で消去
@@ -121,7 +135,10 @@ def save_config(update: dict, path: Path | None = None) -> dict:
                               ("ingest_chunk_chars", 500, 50000, int),
                               ("ingest_max_chunks", 1, 200, int),
                               ("graphrag_max_communities", 1, 100, int),
-                              ("graphrag_max_chunks", 1, 500, int)):
+                              ("graphrag_max_chunks", 1, 500, int),
+                              ("rag_top_k", 1, 40, int),
+                              ("rag_pool", 10, 1000, int),
+                              ("rag_rerank_pool", 4, 200, int)):
         if key in update:
             try:
                 cfg[key] = cast(max(lo, min(hi, float(update[key]))))

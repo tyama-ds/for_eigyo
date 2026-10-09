@@ -35,8 +35,13 @@
   const fail = (e) => toast(e.message || String(e), true);
   const titleOf = (p) => p.split("/").pop().replace(/\.md$/i, "");
   const isDoc = (p) => p.startsWith("@") || !/\.(md|markdown)$/i.test(p);
-  const FT = { word: "W", excel: "X", powerpoint: "P", pdf: "PDF", email: "✉", csv: "CSV", html: "HTML", text: "TXT", code: "{ }", note: "MD" };
-  const GRP_NAME = { word: "Word", excel: "Excel", powerpoint: "PowerPoint", pdf: "PDF", email: "メール", csv: "CSV", html: "HTML", text: "テキスト", code: "データ" };
+  const CLIENT_VERSION = "0.6.0";          // サーバの __version__ と合わせる（tests/test_api が確認）
+  const FT = { word: "W", excel: "X", powerpoint: "P", pdf: "PDF", email: "✉", csv: "CSV", html: "HTML", text: "TXT", code: "{ }", note: "MD", image: "IMG" };
+  const GRP_NAME = { word: "Word", excel: "Excel", powerpoint: "PowerPoint", pdf: "PDF", email: "メール", csv: "CSV", html: "HTML", text: "テキスト", code: "データ", image: "画像" };
+  const fmtDate = (t) => { if (!t) return "—"; const d = new Date(t * 1000), now = new Date(); return d.getFullYear() === now.getFullYear() ? d.toLocaleDateString("ja-JP", { month: "numeric", day: "numeric" }) : d.toLocaleDateString("ja-JP", { year: "numeric", month: "numeric", day: "numeric" }); };
+  const fmtFull = (t) => (t ? new Date(t * 1000).toLocaleString("ja-JP") : "—");
+  const isImage = (p) => /\.(png|jpe?g|gif|webp|bmp)$/i.test(p || "");
+  const imgUrl = (p) => `/api/file?path=${encodeURIComponent(p)}&inline=1`;
   const ftBadge = (grp) => `<span class="ft ft-${esc(grp || "text")}">${esc(FT[grp] || "?")}</span>`;
   const fmtSize = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : n >= 1024 ? Math.round(n / 1024) + " KB" : n + " B");
   const fmtTime = (t) => { if (!t) return "—"; const d = new Date(t * 1000); return d.toLocaleDateString("ja-JP", { month: "numeric", day: "numeric" }) + " " + d.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" }); };
@@ -50,7 +55,7 @@
     rtab: store.get("rtab", "links"), panel: "files", closed: new Set(store.get("closed", [])), selFolder: "",
     hist: [], histPos: -1, chat: [], depth: store.get("depth", 1), graph: null, tag: "",
     folderView: null, treeKind: store.get("treeKind", "all"),
-    libraryView: false, lib: { q: "", tag: "", year: "", status: "", sort: store.get("libSort", "added"), semantic: store.get("libSem", true), sel: new Set(), cur: null, data: null, results: null, detail: null, graphGroup: store.get("libGroup", "tag"), graphExpanded: new Set(), chat: [] },
+    libraryView: false, lib: { q: "", tag: "", year: "", status: "", sort: store.get("libSort", "added"), semantic: store.get("libSem", true), sel: new Set(), cur: null, data: null, results: null, detail: null, graphGroup: store.get("libGroup", "tag"), graphExpanded: new Set(), chat: [], docChat: {} },
     entityView: null, entityData: null, profile: null, peopleKind: store.get("peopleKind", "person"), gPeople: store.get("gPeople", false),
     sources: [], index: null, jobSeen: null, aiScope: store.get("aiScope", "all"), aiRag: null, gDocs: store.get("gDocs", false), gKG: store.get("gKG", false),
   };
@@ -332,12 +337,13 @@
     $("#mEdit").disabled = !!(c && c.readonly);
     $("#titleIn").value = c ? c.title : "";
     $("#crumb").textContent = c && c.folder ? docLabel(c.folder) + " /" : "";
+    renderDates();
     document.title = c ? `${c.title} — Mycel` : "Mycel";
     $("#mPrev").classList.toggle("on", S.mode === "prev");
     $("#mEdit").classList.toggle("on", S.mode === "edit");
     $("#conflict").hidden = !S.conflict;
     if (!c) {
-      $("#body").innerHTML = `<div class="welcome"><h1>Mycel</h1><p>左のファイルからノートを開くか、<b>Ctrl+K</b> でノートを探して開いてください。見つからない名前を入力すると新しく作れます。</p></div>`;
+      $("#body").innerHTML = `<div class="welcome"><h1>Mycel</h1><p>左のファイルからノートを開くか、<b>Ctrl+K</b> でノートを探して開いてください。見つからない名前を入力すると新しく作れます。</p><p class="hint">Mycel v${esc(CLIENT_VERSION)}${S.state && S.state.vault ? ` ・ Vault: <code>${esc(S.state.vault)}</code>` : ""}</p></div>`;
       updateStats(); return;
     }
     if (c.readonly) renderDoc();
@@ -345,6 +351,14 @@
     updateStats();
   }
 
+  /** タイトルの右に作成日・更新日を薄く出す（ノート・資料とも）。 */
+  function renderDates() {
+    const el = $("#noteDates"), c = S.cur;
+    if (!el) return;
+    if (!c || S.libraryView || S.entityView || S.folderView !== null) { el.textContent = ""; el.title = ""; return; }
+    el.textContent = `作成 ${fmtDate(c.created)} ・ 更新 ${fmtDate(c.modified)}`;
+    el.title = `作成 ${fmtFull(c.created)}\n更新 ${fmtFull(c.modified)}`;
+  }
   const docLabel = (p) => { const m = p.match(/^@([^/]+)\/?(.*)$/); if (!m) return p; const s = S.sources.find((x) => x.id === m[1]); return (s ? s.label : "@" + m[1]) + (m[2] ? " / " + m[2] : ""); };
   /** 資料（Word・PDF など）の表示。読み取り専用。 */
   function renderDoc() {
@@ -361,10 +375,13 @@
         <a class="btn sm" href="/api/file?path=${encodeURIComponent(c.path)}" download>ダウンロード</a>
         <button class="btn sm pri" data-docact="ai"${c.status === "ok" ? "" : " disabled"} title="ローカル LLM が要約・名前・タグ・関連ノートを付けたノートの下書きを作ります">AI でノート化</button>
         <button class="btn sm" data-docact="import"${c.status === "ok" ? "" : " disabled"} title="本文をそのまま Markdown ノートとして Vault に保存します">本文をノートに</button>
-        <button class="btn sm" data-docact="ref"${c.status === "ok" ? "" : " disabled"} title="文献管理モードに登録します（論文・報告書など）">文献に登録</button>
+        <button class="btn sm" data-docact="ref"${c.status === "ok" ? "" : " disabled"} title="文書・文献管理モードに登録します（報告書・論文など）">文書管理に登録</button>
         <button class="btn sm" data-docact="update" title="この資料だけ読み込み直します">再読込</button></div>
       ${gone}${stale}${status}
-      <article class="preview md docview">${plain ? `<pre class="doctext">${esc(c.text)}</pre>` : MD.render(c.text, { resolve })}</article>`;
+      ${c.grp === "image" ? `<img class="docimg" src="${imgUrl(c.path)}" alt="${esc(c.title)}">
+        <div class="imgcap">${c.caption && c.caption.text ? `${esc(c.caption.text)}<span class="hint">AI の説明（${esc(c.caption.model)} ・ ${esc(fmtTime(c.caption.at))}）。検索と質問の根拠になります。</span>` : `<span class="hint">この画像にはまだ説明がありません。${S.state.vlm ? "「AI で読む」を押すと VLM が説明を作り、検索・質問の対象になります。" : "設定の「LLM」で「画像を読むモデル（VLM）」を登録すると、AI が説明を作れます。"}</span>`}
+        <div class="acts" style="margin-top:8px"><button class="btn sm pri" data-docact="caption"${S.state.vlm && c.exists !== false ? "" : " disabled"}>${c.caption && c.caption.text ? "AI で読み直す" : "AI で読む（VLM）"}</button> <button class="btn sm" data-docact="copyembed" title="ノートに貼り付ける Markdown をコピーします">ノート用の埋め込みをコピー</button></div></div>`
+      : `<article class="preview md docview">${plain ? `<pre class="doctext">${esc(c.text)}</pre>` : MD.render(c.text, { resolve })}</article>`}`;
     $$("[data-docact]", $("#body")).forEach((b) => (b.onclick = () => docAction(b.dataset.docact)));
   }
   async function docAction(act) {
@@ -374,6 +391,8 @@
       else if (act === "update") { await updateIndex([c.path], `「${c.title}」を読み込み直しています`); }
       else if (act === "ai") { await openIngest({ paths: [c.path], autoRun: true }); }
       else if (act === "ref") { await registerAsRef(c.path); }
+      else if (act === "caption") { toast("画像を読んでいます（VLM）…"); const r = await api.post("/api/image/caption", { path: c.path }); toast("説明を作りました"); await openNote(c.path, { push: false }); }
+      else if (act === "copyembed") { copyText(`![[${c.path}]]`); }
       else if (act === "import") {
         const r = await api.post("/api/note/import", { path: c.path });
         await loadTree(); await openNote(r.path); toast(`ノート「${titleOf(r.path)}」として取り込みました`);
@@ -392,9 +411,33 @@
     const ta = $("#editor");
     ta.value = S.cur.text;
     ta.addEventListener("input", () => { S.cur.text = ta.value; markDirty(); acUpdate(); });
+    ta.addEventListener("paste", (e) => { const files = [...(e.clipboardData && e.clipboardData.files || [])].filter((f) => f.type.startsWith("image/")); if (files.length) { e.preventDefault(); insertImages(files); } });
+    ta.addEventListener("dragover", (e) => { if ([...e.dataTransfer.types].includes("Files")) { e.preventDefault(); e.stopPropagation(); } });
+    ta.addEventListener("drop", (e) => { const files = [...e.dataTransfer.files].filter((f) => f.type.startsWith("image/") || isImage(f.name)); if (files.length) { e.preventDefault(); e.stopPropagation(); insertImages(files); } });
     ta.addEventListener("keydown", editorKeys);
     ta.addEventListener("click", acUpdate);
     ta.addEventListener("blur", () => setTimeout(acClose, 150));
+  }
+
+  /** 画像を添付フォルダに保存して、カーソル位置に ![[...]] を挿入する。 */
+  async function insertImages(files) {
+    const ta = $("#editor"); if (!ta || !S.cur || S.cur.readonly) return;
+    const folder = (S.state.attachment_folder || "添付").replace(/^\/+|\/+$/g, "");
+    const stamp = () => { const d = new Date(), p = (n) => String(n).padStart(2, "0"); return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`; };
+    for (const f of files) {
+      let name = f.name && !/^image\.(png|jpe?g|gif|webp)$/i.test(f.name) ? f.name : `貼り付け ${stamp()}.${(f.type.split("/")[1] || "png").replace("jpeg", "jpg")}`;
+      try {
+        const res = await fetch("/api/file/upload", { method: "POST", headers: { "Content-Type": "application/octet-stream", "X-Filename": encodeURIComponent(name), "X-Folder": encodeURIComponent(folder) }, body: f });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `エラー (${res.status})`);
+        const s = ta.selectionStart, e = ta.selectionEnd, ins = `![[${data.path}]]`;
+        ta.value = ta.value.slice(0, s) + ins + ta.value.slice(e);
+        ta.setSelectionRange(s + ins.length, s + ins.length);
+        S.cur.text = ta.value; markDirty();
+        toast(`画像を ${folder || "Vault 直下"} に保存して挿入しました`);
+      } catch (err) { toast(`${name}: ${err.message}`, true); }
+    }
+    loadTree();
   }
 
   function setMode(mode, render = true) {
@@ -452,7 +495,7 @@
     setSaveStatus("saving");
     S.saving = api.post("/api/note/save", { path, text, base_version: S.cur.version })
       .then((r) => {
-        if (S.cur && S.cur.path === path) { S.cur.version = r.version; if (S.cur.text === text) S.dirty = false; }
+        if (S.cur && S.cur.path === path) { S.cur.version = r.version; if (S.cur.text === text) S.dirty = false; S.cur.modified = Date.now() / 1000; renderDates(); }
         afterSave(path);
       })
       .catch((e) => {
@@ -521,7 +564,7 @@
   }
 
   // ------------------------------------------------------------ 読み込み（インデックス）の状態と更新
-  const JOB_DONE = { update: "読み込み", scan: "確認", ingest: "AI 取り込み", people: "人物・組織の AI 抽出", library: "文献の AI 処理", graphrag: "GraphRAG の索引" };
+  const JOB_DONE = { update: "読み込み", scan: "確認", ingest: "AI 取り込み", people: "人物・組織の AI 抽出", library: "文献の AI 処理", graphrag: "GraphRAG の索引", caption: "画像の読み取り（VLM）" };
   async function applyIndexStatus(st) {
     S.index = st;
     renderIndexChip();
@@ -556,6 +599,7 @@
     if (job.kind === "library" && job.state === "done") toast(`${job.label}: ${r.done || 0} 件完了${r.errors ? `（失敗 ${r.errors} 件）` : ""}`, !!r.errors);
     if (job.kind === "graphrag" && job.state === "done") { toast(`${job.label}: 実体 ${r.nodes || 0} ・ 関係 ${r.edges || 0} ・ コミュニティ ${r.communities || 0}${r.errors ? `（抽出失敗 ${r.errors} 件）` : ""}`, !!r.errors); }
     if (job.kind === "graphrag") renderAIStatusOnly();
+    if (job.kind === "caption" && job.state === "done") { toast(`画像を読みました: ${r.done || 0} 件${r.errors ? `（失敗 ${r.errors} 件）` : ""}`, !!r.errors); renderAIStatusOnly(); if (S.cur && isImage(S.cur.path)) openNote(S.cur.path, { push: false }).catch(() => {}); }
     if (job.kind === "people" && job.state === "done") { toast(`人物・組織の AI 抽出: ${r.extracted || 0} 件${r.errors ? `（失敗 ${r.errors} 件）` : ""}`); refreshEntity(); }
   }
 
@@ -932,7 +976,7 @@
     h += un.length ? un.map((u) => `<div class="card" data-open="${esc(u.path)}"><b>${esc(u.title)}</b><span>${markTitle(u.context, c.title)}</span><div class="acts"><button class="btn sm" data-act="link" data-path="${esc(u.path)}">リンクにする</button></div></div>`).join("") : '<div class="hint">ありません。</div>';
     const uniq = [...new Map(out.map((o) => [o.target.toLowerCase(), o])).values()];
     h += `<div class="rh"><span>このノートからのリンク</span><span>${uniq.length}</span></div>`;
-    h += uniq.length ? `<div class="srcs">${uniq.map((o) => `<a class="wl chip${o.path ? "" : " unres"}" data-target="${esc(o.target)}"${o.path ? ` data-path="${esc(o.path)}"` : ""}>${esc(o.target)}</a>`).join("")}</div>` : '<div class="hint">ありません。</div>';
+    h += uniq.length ? `<div class="srcs">${uniq.map((o) => `<span class="chip${o.path ? "" : " unres"}"><a class="wl" data-target="${esc(o.target)}"${o.path ? ` data-path="${esc(o.path)}"` : ""}>${esc(o.target)}</a>${c.readonly ? "" : `<button class="rx" data-unlink-target="${esc(o.target)}" title="このリンクを外す（本文の [[${esc(o.target)}]] を文字に戻します）">×</button>`}</span>`).join("")}</div>` : '<div class="hint">ありません。</div>';
     if ((c.tags || []).length) h += `<div class="rh"><span>タグ</span></div><div class="srcs">${c.tags.map((t) => `<span class="chip tag" data-tag="${esc(t)}">#${esc(t)}</span>`).join("")}</div>`;
     const heads = c.headings || [];
     if (heads.length) {
@@ -946,6 +990,28 @@
     loadDocPeople(p, c.path);
     $$(".wl-h", p).forEach((a) => (a.onclick = () => scrollToHeading(a.dataset.h)));
     $$('[data-act="link"]', p).forEach((b) => (b.onclick = (e) => { e.stopPropagation(); linkMention(b.dataset.path); }));
+    $$("[data-unlink-target]", p).forEach((b) => (b.onclick = (e) => { e.stopPropagation(); removeLink(b.dataset.unlinkTarget); }));
+  }
+
+  /** 本文中の [[target]] / [[target|表示]] / [[target#見出し]] を表示文字に戻す（リンクの削除）。 */
+  async function removeLink(target) {
+    const c = S.cur; if (!c || c.readonly) return;
+    const key = target.trim().toLowerCase();
+    let n = 0;
+    const text = c.text.replace(/\[\[([^\[\]\n]+?)\]\]/g, (m, inner) => {
+      let t = inner, alias = "";
+      if (t.includes("|")) [t, alias] = [t.slice(0, t.indexOf("|")), t.slice(t.indexOf("|") + 1)];
+      if (t.includes("#")) t = t.slice(0, t.indexOf("#"));
+      if (t.trim().toLowerCase() !== key) return m;
+      n++; return alias.trim() || t.trim();
+    });
+    if (!n) { toast("本文にそのリンクが見つかりませんでした", true); return; }
+    c.text = text; markDirty();
+    const ta = $("#editor"); if (ta) ta.value = text;
+    await save();
+    try { Object.assign(c, await api.get("/api/links", { path: c.path })); } catch { /* 無視 */ }
+    renderMain(); renderRight();
+    toast(`[[${target}]] を ${n} か所、文字に戻しました`);
   }
 
   /** 別ノートの中の「タイトルそのままの文字」を [[リンク]] に置き換える。 */
@@ -1127,9 +1193,14 @@
         `GraphRAG の索引: 実体 ${g.nodes} ・ 関係 ${g.edges} ・ コミュニティ ${g.communities}（要約 ${g.summarized}）・ ${g.extracted} / ${g.documents} 文書${g.pending ? `・ <b>未反映 ${g.pending}</b>` : ""}${g.llm_docs < g.extracted ? `・ 規則抽出 ${g.extracted - g.llm_docs}` : ""}。`;
       const gnote = mode === "standard" ? "GraphRAG を使うには上の「方式」で選び、索引を作ります（文書数に応じて時間がかかります。既定の標準方式はそのまま使えます）。" :
         !g.llm ? "LLM が未設定のため、実体の抽出とコミュニティ要約は規則ベースの簡易版になります。" : "";
-      idx.innerHTML = `キーワード索引: ${s.chunks} 区画。${emb}<br>索引は「更新」を押したときだけ作ります（質問のたびに読み直しません）。 <button class="btn sm" id="embBuild">範囲と更新…</button>
+      const rg = s.rag || {}, im = s.images || {};
+      const ragLine = `検索の深さ: 候補 ${rg.pool} 件 → ${rg.rerank === "llm" ? `LLM が ${rg.rerank_pool} 件を採点して上位 ${rg.top_k} 件` : `上位 ${rg.top_k} 件`}を LLM に渡す <button class="btn xs" id="ragCfg" title="候補の深さ・渡す数・リランクを設定の「LLM → 詳細」で調整します">調整…</button>`;
+      const imgLine = im.total ? `<br>画像: ${im.total} 件（説明あり ${im.captioned}）${im.vlm ? (im.total > im.captioned ? ` <button class="btn xs" id="capAll">未読の画像をまとめて読む（VLM）</button>` : "") : "（設定の「画像を読むモデル」を登録すると説明を作れます）"}` : "";
+      idx.innerHTML = `キーワード索引: ${s.chunks} 区画。${emb}<br>${ragLine}${imgLine}<br>索引は「更新」を押したときだけ作ります（質問のたびに読み直しません）。 <button class="btn sm" id="embBuild">範囲と更新…</button>
         <div class="kgidx${mode === "standard" ? " dim" : ""}">${gline}${gnote ? `<br>${gnote}` : ""} <button class="btn sm${mode !== "standard" && (!g.ready || g.pending) ? " pri" : ""}" id="kgBuild"${running ? " disabled" : ""}>${running ? "作成中…" : g.ready ? "GraphRAG の索引を更新" : "GraphRAG の索引を作る"}</button></div>`;
       $("#embBuild").onclick = () => openScope();
+      $("#ragCfg").onclick = () => openSettings("llm");
+      if ($("#capAll")) $("#capAll").onclick = async () => { try { await api.post("/api/image/caption_all", {}); toast("画像を読んでいます（VLM）。進み具合はステータスバー"); $("#capAll").disabled = true; } catch (e) { toast(e.message, true); } };
       $("#kgBuild").onclick = async () => {
         const sc = $("#askScope").value;
         const prefixes = sc === "all" ? null : sc === "vault" ? [""] : sc === "folder" ? [S.cur.folder] : [sc.slice(4)];
@@ -1280,7 +1351,7 @@
       { label: "設定", run: () => openSettings() },
       { label: "AI 取り込み（文書をノートにする）…", run: () => openIngest() },
       { label: "新しいフォルダ…", run: () => newFolder(S.selFolder) },
-      { label: "文献管理モード", run: () => openLibrary() },
+      { label: "文書・文献管理モード", run: () => openLibrary() },
       { label: "人物・組織の一覧", run: () => showPanel("people") },
       { label: "人物・組織を AI で詳しく抽出", run: async () => { try { await api.post("/api/people/extract", {}); setTimeout(poll, 300); } catch (e) { fail(e); } } },
       { label: "フォルダの一覧を開く（Vault）", run: () => openFolder("") },
@@ -1555,6 +1626,15 @@
     if (L.cur) loadRefDetail(L.cur);
     if (S.rtab === "graph") renderRight();
   }
+  function insightsHtml(ins) {
+    if (!ins || !ins.at) return "";
+    const li = (xs) => xs.map((x) => `<li>${esc(x)}</li>`).join("");
+    return `<div class="lins">
+      ${ins.takeaways.length ? `<div><h4>要点</h4><ul>${li(ins.takeaways)}</ul></div>` : ""}
+      ${ins.connections.length ? `<div><h4>関連する文書とのつながり</h4><ul>${ins.connections.map((c) => `<li>${c.path ? `<a data-open="${esc(c.path)}">${esc(c.title)}</a>` : `<b>${esc(c.title)}</b>`} — ${esc(c.point)}</li>`).join("")}</ul></div>` : ""}
+      ${ins.questions.length ? `<div><h4>残る疑問・確認すべき点</h4><ul>${li(ins.questions)}</ul></div>` : ""}
+      ${ins.actions.length ? `<div><h4>次の一手</h4><ul>${li(ins.actions)}</ul></div>` : ""}</div>`;
+  }
   async function loadRefDetail(id) {
     try { const d = await api.get("/api/library/ref", { id }); if (S.lib.cur === id) { S.lib.detail = d; renderLibDetail(); } }
     catch (e) { if (e.status === 404) { S.lib.cur = null; S.lib.detail = null; renderMain(); } else fail(e); }
@@ -1562,8 +1642,8 @@
   function renderLibraryView() {
     const L = S.lib, d = L.data;
     $("#titleIn").disabled = true; $("#mEdit").disabled = true;
-    $("#titleIn").value = "文献"; $("#crumb").textContent = "";
-    document.title = "文献 — Mycel";
+    $("#titleIn").value = "文書・文献"; $("#crumb").textContent = "";
+    document.title = "文書・文献 — Mycel"; renderDates();
     if (!d) { $("#body").innerHTML = '<div class="welcome"><span class="spin"></span></div>'; return; }
     const rows = L.results ? L.results.results : d.refs;
     const f = d.facets, emb = d.embed;
@@ -1638,12 +1718,13 @@
   function renderLibDetail() {
     const el = $("#libDetail"); if (!el) return;
     const L = S.lib, d = L.detail;
-    if (!L.cur) { el.innerHTML = `<div class="ing-help"><h3>文献管理モード</h3><ol>
+    if (!L.cur) { el.innerHTML = `<div class="ing-help"><h3>文書・文献管理モード</h3><p class="hint">報告書・論文・調査資料を「文書」として登録し、文書だけを対象に探す・問う・つなぐための画面です。</p><ol>
       <li><b>登録</b> — PDF・Word などの資料、BibTeX/RIS、手入力。ローカル LLM があれば題名・著者・年・要旨を自動で補完</li>
-      <li><b>検索</b> — 登録した文献の本文だけを対象に、意味で探します（Embed モデル未設定ならキーワード）。一致した段落も表示</li>
-      <li><b>読む</b> — 状態（未読／読書中／読了）・評価・タグ、AI の構造化要約（目的・手法・結果・限界）、読書ノート</li>
-      <li><b>つなぐ</b> — グラフタブで「タグ → 文献 → 章 → 段落」と開いていけます。内容の近い要素は別の文献の章・段落とも点線で結ばれます</li>
-      <li><b>聞く</b> — AI タブで、文献だけを根拠に質問。引用文（APA / IEEE / BibTeX）のコピーも</li></ol></div>`; return; }
+      <li><b>検索（RAG）</b> — 登録した文書の本文だけを対象に、意味で探します（Embed モデル未設定ならキーワード）。一致した段落も表示</li>
+      <li><b>読む</b> — 状態・評価・タグ、AI の構造化要約、<b>この文書に質問</b>（1 件だけを根拠に）、読書ノート</li>
+      <li><b>気づき</b> — AI が要点、関連する文書との共通点・相違点、残る疑問、次の一手をまとめます。Vault 全体から未登録の関連資料も探します</li>
+      <li><b>つなぐ</b> — 引用・発展・比較などの関係づけ。グラフタブで「タグ → 文書 → 章 → 段落」と分解できます</li>
+      <li><b>聞く</b> — AI タブで、登録した文書全体を根拠に質問。引用文（APA / IEEE / BibTeX）のコピーも</li></ol></div>`; return; }
     if (!d) { el.innerHTML = '<div class="hint"><span class="spin"></span></div>'; return; }
     const field = (k, label, ph = "", type = "text") => `<label for="lf_${k}">${label}</label><input id="lf_${k}" data-lf="${k}" type="${type}" value="${esc(Array.isArray(d[k]) ? d[k].join("; ") : d[k] || "")}" placeholder="${esc(ph)}">`;
     const sum = d.summary || {};
@@ -1669,7 +1750,35 @@
         <div class="relbtns"><button class="btn sm" id="ldLink">＋ つなぐ…</button><button class="btn sm" id="ldLinkAI" title="内容の近い文献を集め、ローカル LLM が関係の種類と理由を判断します">つながりを提案（AI）</button><button class="btn sm" id="ldCite" title="本文（参考文献欄）に他の登録文献の DOI・題名があれば「引用している」と結びます">引用関係を検出</button></div><div id="ldLinkOut"></div></div>
       <div class="ldsec"><h3>引用</h3><div class="cite">${esc(d.citations.apa)}</div><div class="relbtns"><button class="btn xs" data-copy="${esc(d.citations.apa)}">APA をコピー</button><button class="btn xs" data-copy="${esc(d.citations.ieee)}">IEEE をコピー</button><button class="btn xs" data-copy="${esc(d.bibtex)}">BibTeX をコピー</button><button class="btn xs" data-copy="[[${esc(d.note || d.file || d.title)}]]">ノート用リンクをコピー</button></div></div>
       ${d.structure.length ? `<div class="ldsec"><h3>章立て <small class="hint">${d.structure.length} 区分 ・ グラフタブで段落まで開けます</small></h3><div class="ldstruct">${d.structure.slice(0, 40).map((s) => `<span class="chip" data-sec="${s.n}" title="${s.chunks} 段落">${esc(s.heading)}</span>`).join("")}${d.structure.length > 40 ? `<span class="hint">ほか ${d.structure.length - 40}</span>` : ""}</div></div>` : ""}
-      <div class="ldsec"><h3>関連する文献</h3>${d.related.length ? d.related.map((r) => `<div class="card" data-lref="${esc(r.id)}"><b>${esc(r.title)}</b><span>${esc(r.reasons.join(" ・ "))}${r.passage ? " — " + esc(r.passage) : ""}</span></div>`).join("") : '<div class="hint">まだありません（本文ファイルのある文献が増えると出ます）</div>'}</div>`;
+      <div class="ldsec"><h3>この文書に質問 <small class="hint">この 1 件だけを根拠に答えます</small></h3>
+        <div class="chat" id="ldChat">${(L.docChat[d.id] || []).map((m) => m.role === "user" ? `<div class="msg-q">${esc(m.content)}</div>` : `<div class="msg-a"><div class="md">${m.content ? MD.render(m.content, { resolve }) : `<span class="hint">${esc(m.message || "")}</span>`}</div></div>`).join("")}</div>
+        <div class="askbox"><textarea id="ldAsk" placeholder="例: この報告書の結論と根拠の数値は？（Ctrl+Enter で送信）"></textarea><div class="row"><span></span><span><button class="btn sm" id="ldAskClear">クリア</button> <button class="btn sm pri" id="ldAskGo"${llm ? "" : " disabled"}>質問</button></span></div></div></div>
+      <div class="ldsec"><h3>AI の気づき <small class="hint">${(d.insights || {}).at ? esc(fmtTime(d.insights.at)) : "未作成"}</small></h3>
+        <div class="relbtns"><button class="btn sm${(d.insights || {}).at ? "" : " pri"}" id="ldIns"${llm ? "" : " disabled"} title="要点・関連する文書との共通点や相違点・残る疑問・次の一手を AI がまとめます">気づきを出す（AI）${(d.insights || {}).at ? "・作り直す" : ""}</button></div><div id="ldInsOut"></div>
+        ${insightsHtml(d.insights)}</div>
+      <div class="ldsec"><h3>関連する文書（登録済み）</h3>${d.related.length ? d.related.map((r) => `<div class="card" data-lref="${esc(r.id)}"><b>${esc(r.title)}</b><span>${esc(r.reasons.join(" ・ "))}${r.passage ? " — " + esc(r.passage) : ""}</span></div>`).join("") : '<div class="hint">まだありません（本文ファイルのある文書が増えると出ます）</div>'}</div>
+      <div class="ldsec"><h3>関連する文書（Vault 全体・未登録）<small class="hint">内容の近いノート・資料</small></h3>${(d.related_vault || []).length ? d.related_vault.map((r) => `<div class="card" data-open="${esc(r.path)}"><b>${r.kind === "doc" ? ftBadge((r.path.match(/\.(\w+)$/) || [])[1] === "pdf" ? "pdf" : "text") : ftBadge("note")}${esc(r.title)}</b><span>${esc(r.passage)}</span>${r.kind === "doc" ? `<div class="acts"><button class="btn sm" data-act="regref" data-path="${esc(r.path)}">文書管理に登録</button></div>` : ""}</div>`).join("") : '<div class="hint">見つかりませんでした。</div>'}</div>`;
+    $$('[data-act="regref"]', el).forEach((b) => (b.onclick = async (e) => { e.stopPropagation(); try { await registerAsRef(b.dataset.path); loadRefDetail(d.id); } catch (err) { fail(err); } }));
+    $$("[data-open]", el).forEach((c) => c.addEventListener("click", (e) => { if (e.target.closest("[data-act]")) return; }));
+    const askDoc = async () => {
+      const q = $("#ldAsk", el).value.trim(); if (!q) return;
+      $("#ldAsk", el).value = "";
+      const hist = L.docChat[d.id] = L.docChat[d.id] || [];
+      const history = hist.filter((m) => !m.pending && m.content).map((m) => ({ role: m.role, content: m.content }));
+      hist.push({ role: "user", content: q }); const a = { role: "assistant", pending: true }; hist.push(a);
+      const chat = $("#ldChat", el); chat.innerHTML += `<div class="msg-q">${esc(q)}</div><div class="msg-a"><span class="spin"></span> この文書を読んでいます…</div>`;
+      try { const r = await api.post("/api/library/ask_doc", { id: d.id, question: q, history }); Object.assign(a, { pending: false, content: r.answer, message: r.message }); }
+      catch (e) { Object.assign(a, { pending: false, content: "", message: e.message }); }
+      renderLibDetail();
+    };
+    $("#ldAskGo", el).onclick = askDoc;
+    $("#ldAsk", el).addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); askDoc(); } });
+    $("#ldAskClear", el).onclick = () => { L.docChat[d.id] = []; renderLibDetail(); };
+    $("#ldIns", el).onclick = async () => {
+      const out = $("#ldInsOut", el); out.innerHTML = '<div class="hint"><span class="spin"></span> 関連する文書と見比べています…</div>';
+      try { const r = await api.post("/api/library/insights", { id: d.id }); L.detail = { ...L.detail, insights: r.insights }; renderLibDetail(); }
+      catch (e) { out.innerHTML = `<div class="notice">${esc(e.message)}</div>`; }
+    };
     const saveField = async (k, v) => { try { const r = await api.post("/api/library/update", { id: d.id, ref: { [k]: v } }); L.detail = { ...L.detail, ...r }; toast("保存しました"); loadLibrary(); } catch (e) { fail(e); } };
     $$("[data-lf]", el).forEach((inp) => inp.addEventListener("change", () => saveField(inp.dataset.lf, inp.value)));
     $("#ldStatus", el).onchange = (e) => saveField("status", e.target.value);
@@ -2377,8 +2486,10 @@
     const body = document.createElement("div");
     body.innerHTML = `<div class="mtabs">${[["general", "一般"], ["llm", "LLM"], ["plugins", "プラグイン"]].map(([k, l]) => `<button data-t="${k}">${l}</button>`).join("")}</div>
       <div data-tp="general" class="form" style="padding-top:14px">
-        <label for="cVault">Vault の場所</label><input id="cVault" type="text" value="${v("vault_path")}" placeholder="${esc(S.state.vault || "")}">
-        <div class="help">ノートを置くフォルダ。空欄なら mycel/vault。変更すると読み込み直します。</div>
+        <label for="cVault">Vault の場所</label><div class="inrow"><input id="cVault" type="text" value="${v("vault_path")}" placeholder="${esc(S.state.vault || "")}"><button class="btn sm" id="cVaultSw" type="button">切り替え…</button></div>
+        <div class="help">ノートを置くフォルダ。空欄なら mycel/vault。「切り替え…」で最近使った Vault への移動や、新しい Vault（文書管理専用など）の作成ができます。</div>
+        <label for="cAttach">画像の保存先</label><input id="cAttach" type="text" value="${v("attachment_folder")}" placeholder="添付">
+        <div class="help">エディタに画像を貼り付け・ドロップしたときの保存フォルダ（Vault からの相対）。</div>
         <label for="cUser">作成者名</label><input id="cUser" type="text" value="${v("user_name")}">
         <div class="help">変更履歴に記録されます。将来チームで共有するときに「誰が変えたか」に使います。</div>
         <label for="cDaily">デイリーノートのフォルダ</label><input id="cDaily" type="text" value="${v("daily_folder")}">
@@ -2395,12 +2506,22 @@
         ${cfg.has_api_key ? '<label></label><label style="color:var(--muted)"><input type="checkbox" id="cKeyClr"> 保存済みのキーを消す</label>' : ""}
         <label for="cModel" id="modelLbl">モデル</label><div class="inrow"><input id="cModel" type="text" list="dlModels" value="${v("model")}" placeholder="例: qwen2.5:7b ・ gemma2:9b"><button class="btn sm" id="cList" type="button">一覧を取得</button></div><datalist id="dlModels"></datalist>
         <div class="help" id="cListRes"></div>
+        <label for="cVlm">画像を読むモデル（VLM）</label><input id="cVlm" type="text" list="dlModels" value="${v("vlm_model")}" placeholder="例: llava ・ qwen2.5vl ・ gemma3（空欄なら画像の説明は作らない）">
+        <div class="help">画像を資料として開いたときの「AI で読む」と、AI タブの「まとめて読む」で使います。同じ Base URL のモデル名を入れてください。</div>
         <label for="cVer" class="az">API バージョン</label><input id="cVer" class="az" type="text" value="${v("api_version")}">
         <h4>意味検索（任意）</h4>
         <label for="cEmb">Embed モデル</label><input id="cEmb" type="text" list="dlModels" value="${v("embed_model")}" placeholder="例: bge-m3 ・ nomic-embed-text">
         <div class="help">空欄ならキーワード検索だけで関連ノートを探します。</div>
         <label for="cEmbUrl">Embed の Base URL</label><input id="cEmbUrl" type="text" value="${v("embed_base_url")}" placeholder="空欄なら上と同じ">
         <label for="cEmbKey">Embed の API キー</label><input id="cEmbKey" type="password" autocomplete="off" placeholder="${cfg.has_embed_api_key ? "設定済み" : "空欄なら上と同じ"}">
+        <h4>検索（RAG）の深さ</h4>
+        <label for="cPool">候補の深さ</label><input id="cPool" type="number" min="10" max="1000" step="10" value="${v("rag_pool")}">
+        <div class="help">キーワード検索・意味検索それぞれで集める段落の数（既定 60）。順位が低い段落まで見たいときは増やします（遅くなります）。</div>
+        <label for="cTopK">LLM に渡す段落</label><input id="cTopK" type="number" min="1" max="40" value="${v("rag_top_k")}">
+        <div class="help">回答の根拠として渡す段落の数（既定 6）。多いほど見落としが減りますが、文脈長を超えると答えが崩れます。</div>
+        <label for="cRerank">リランク</label><select id="cRerank"><option value="none"${cfg.rag_rerank !== "llm" ? " selected" : ""}>なし（検索順のまま）</option><option value="llm"${cfg.rag_rerank === "llm" ? " selected" : ""}>LLM で採点して並べ直す</option></select>
+        <label for="cRerankPool">採点する候補</label><input id="cRerankPool" type="number" min="4" max="200" value="${v("rag_rerank_pool")}">
+        <div class="help">リランクを使うと、検索順で下位だった候補も LLM が「質問に答える情報があるか」で採点し直します。採点する候補の数だけ本文を LLM に読ませるので、質問ごとに 1 回余分に時間がかかります。</div>
         <h4>詳細</h4>
         <label for="cTemp">Temperature</label><input id="cTemp" type="number" step="0.1" min="0" max="2" value="${v("temperature")}">
         <label for="cMax">Max tokens</label><input id="cMax" type="number" min="64" value="${v("max_tokens")}">
@@ -2423,6 +2544,8 @@
         provider: $("#cProv", body).value, base_url: $("#cUrl", body).value, model: $("#cModel", body).value, api_version: $("#cVer", body).value,
         embed_model: $("#cEmb", body).value, embed_base_url: $("#cEmbUrl", body).value, temperature: $("#cTemp", body).value, max_tokens: $("#cMax", body).value,
         request_timeout: $("#cTo", body).value, ingest_chunk_chars: $("#cChunk", body).value, ingest_max_chunks: $("#cMaxChunk", body).value, use_proxy: $("#cUseProxy", body).checked, proxy_url: $("#cProxyUrl", body).value,
+        rag_pool: $("#cPool", body).value, rag_top_k: $("#cTopK", body).value, rag_rerank: $("#cRerank", body).value, rag_rerank_pool: $("#cRerankPool", body).value,
+        vlm_model: $("#cVlm", body).value, attachment_folder: $("#cAttach", body).value,
         plugins: $$("[data-plug]", body).filter((c) => c.checked).map((c) => c.dataset.plug),
       };
       if ($("#cKey", body).value) d.api_key = $("#cKey", body).value;
@@ -2443,8 +2566,9 @@
         return true;
       } catch (e) { fail(e); return false; }
     };
-    const m = modal({ title: "設定", body, buttons: [{ label: "キャンセル" }, { label: "保存", primary: true, onClick: async () => (await saveCfg()) ? undefined : false }] });
+    const m = modal({ title: `設定 — Mycel v${CLIENT_VERSION}${S.state.version && S.state.version !== CLIENT_VERSION ? `（サーバは v${esc(S.state.version)}）` : ""}`, body, buttons: [{ label: "キャンセル" }, { label: "保存", primary: true, onClick: async () => (await saveCfg()) ? undefined : false }] });
     m.body.style.paddingTop = "0";
+    $("#cVaultSw", body).onclick = () => { m.close(); vaultDialog(); };
     const showTab = (t) => { $$(".mtabs button", body).forEach((b) => b.classList.toggle("on", b.dataset.t === t)); $$("[data-tp]", body).forEach((p) => (p.hidden = p.dataset.tp !== t)); };
     $$(".mtabs button", body).forEach((b) => (b.onclick = () => showTab(b.dataset.t)));
     showTab(tab);
@@ -2530,9 +2654,49 @@
   });
 
   // ------------------------------------------------------------ 起動
+  /** Vault の切り替え: 最近使った Vault の一覧、パス入力、新規作成。 */
+  async function vaultDialog() {
+    let data;
+    try { data = await api.get("/api/vault/list"); } catch (e) { fail(e); return; }
+    const body = document.createElement("div");
+    const draw = () => {
+      body.innerHTML = `<p class="hint" style="margin-top:0">Vault はノートを置くフォルダです。別の Vault に切り替えると、その中のノート・資料・索引を使います（今の Vault の内容はそのまま残り、いつでも戻れます）。</p>
+        <div class="vlist">${data.vaults.map((x) => `<div class="vrow${x.current ? " cur" : ""}"><code title="${esc(x.path)}">${esc(x.path)}</code><small>${x.current ? "使用中" : x.exists ? `ノート ${x.notes}` : "見つかりません"}</small>${x.current ? "" : `<button class="btn sm pri" data-vsw="${esc(x.path)}"${x.exists ? "" : " disabled"}>開く</button>`}</div>`).join("")}</div>
+        <div class="form" style="margin-top:12px"><label for="vPath">フォルダ</label><input id="vPath" type="text" placeholder="例: D:/notes/文書管理  または  /home/me/vault" autocomplete="off">
+          <label></label><label class="ck"><input type="checkbox" id="vSeed"> 新しく作るとき、使い方のサンプルノートを入れる</label>
+          <label></label><div><button class="btn" id="vOpen">開く</button> <button class="btn pri" id="vCreate">作成して開く</button></div></div>
+        <p class="hint">例えば「文書管理専用の Vault」を作り、報告書・文献をそこに集めて文書管理モードで使うこともできます。切り替え後は画面を読み込み直します。</p>`;
+      const go = async (path, create) => {
+        if (!path.trim()) { toast("フォルダを入力してください", true); return; }
+        try {
+          await flushSave();
+          await api.post("/api/vault/switch", { path: path.trim(), create, seed: $("#vSeed", body).checked });
+          store.set("last", null); toast("Vault を切り替えました。読み込み直します…"); setTimeout(() => location.reload(), 300);
+        } catch (e) { fail(e); }
+      };
+      $$("[data-vsw]", body).forEach((b) => (b.onclick = () => go(b.dataset.vsw, false)));
+      $("#vOpen", body).onclick = () => go($("#vPath", body).value, false);
+      $("#vCreate", body).onclick = () => go($("#vPath", body).value, true);
+    };
+    draw();
+    modal({ title: `Vault の切り替え（今: ${data.current}）`, body, buttons: [{ label: "閉じる" }] });
+  }
+  $("#btnVault").onclick = vaultDialog;
+
+  function showVersion() {
+    const el = $("#stVer"); if (!el || !S.state) return;
+    const sv = S.state.version || "";
+    if (sv && sv !== CLIENT_VERSION) {
+      el.textContent = `v${CLIENT_VERSION}（サーバ v${sv}: 再起動が必要）`; el.classList.add("old");
+      el.title = "画面とサーバの版が違います。Mycel のサーバを止めて起動し直してください（起動中に更新されたファイルがあります）。";
+      toast("Mycel のサーバが古い版で動いています。再起動してください", true);
+    } else { el.textContent = `v${CLIENT_VERSION}`; el.classList.remove("old"); el.title = `Mycel v${CLIENT_VERSION} ・ Vault: ${S.state.vault || ""}`; }
+  }
+
   (async function init() {
     try {
       S.state = await api.get("/api/state");
+      showVersion();
       await loadTree();
     } catch (e) { $("#body").innerHTML = `<div class="welcome"><h1>接続できません</h1><p>${esc(e.message)}</p></div>`; return; }
     renderMain(); renderRight();

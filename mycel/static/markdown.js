@@ -13,6 +13,17 @@
     const hold = (html) => "\u0000" + (slots.push(html) - 1) + "\u0000";
     let s = src;
     s = s.replace(/`([^`\n]+)`/g, (m, c) => hold("<code>" + esc(c) + "</code>"));
+    s = s.replace(/!\[\[([^\[\]\n]+?)\]\]/g, (m, inner) => {            // ![[画像.png|幅]] の埋め込み
+      let target = inner, alias = "";
+      if (target.includes("|")) [target, alias] = [target.slice(0, target.indexOf("|")), target.slice(target.indexOf("|") + 1)];
+      target = target.trim();
+      const path = opt.resolve ? opt.resolve(target) : null;
+      const isImg = /\.(png|jpe?g|gif|webp|bmp)$/i.test(path || target);
+      if (!isImg) return hold(`<a class="wl${path ? "" : " unres"}" data-target="${esc(target)}"${path ? ` data-path="${esc(path)}"` : ""}>${esc(alias.trim() || target)}</a>`);
+      const w = /^\d+$/.test(alias.trim()) ? ` width="${alias.trim()}"` : "";
+      if (!path) return hold(`<span class="wl unres" data-target="${esc(target)}" title="画像が見つかりません（読み込み範囲に入っていますか）">![[${esc(target)}]]</span>`);
+      return hold(`<img class="emb" src="/api/file?path=${encodeURIComponent(path)}&inline=1" alt="${esc(alias.trim() || target)}" data-path="${esc(path)}"${w}>`);
+    });
     s = s.replace(/\[\[([^\[\]\n]+?)\]\]/g, (m, inner) => {
       let alias = "", heading = "", target = inner;
       if (target.includes("|")) [target, alias] = [target.slice(0, target.indexOf("|")), target.slice(target.indexOf("|") + 1)];
@@ -22,7 +33,13 @@
       const label = alias.trim() || (target + (heading ? " › " + heading.trim() : "")) || heading;
       return hold(`<a class="wl${path || !target ? "" : " unres"}" data-target="${esc(target)}" data-heading="${esc(heading.trim())}"${path ? ` data-path="${esc(path)}"` : ""} title="${esc(path ? path : target ? "未作成：クリックで作成" : "")}">${esc(label)}</a>`);
     });
-    s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (m, alt, url) => hold(`<img alt="${esc(alt)}" src="${esc(safeUrl(url))}">`));
+    s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (m, alt, url) => {
+      const u = url.trim();
+      if (/^(https?:|data:|\/)/i.test(u)) return hold(`<img alt="${esc(alt)}" src="${esc(safeUrl(u))}">`);
+      let rel = decodeURIComponent(u).replace(/^\.\//, "");                 // Vault 内の相対パス → 画像を配信する API
+      const path = (opt.resolve && opt.resolve(rel)) || rel;
+      return hold(`<img class="emb" alt="${esc(alt)}" src="/api/file?path=${encodeURIComponent(path)}&inline=1" data-path="${esc(path)}">`);
+    });
     s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, t, url) => hold(`<a class="ext" href="${esc(safeUrl(url))}" target="_blank" rel="noopener">${esc(t)}</a>`));
     s = s.replace(/\bhttps?:\/\/[^\s<>()　-ヿ一-鿿]+/g, (u) => hold(`<a class="ext" href="${esc(u)}" target="_blank" rel="noopener">${esc(u)}</a>`));
     s = esc(s);
