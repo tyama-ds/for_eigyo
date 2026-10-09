@@ -107,6 +107,94 @@ class IngestTest(unittest.TestCase):
         self.assertIn("## 本文", d["markdown"])                      # 原本を残さないので本文を入れる
         self.assertIn("元のファイル: 長い報告.txt", d["markdown"])
 
+    def test_very_long_document_full_read_staged_and_body_split(self):
+        """区画が上限を超えても既定（全文）では全区画を読み、節にまとめる。本文は別ノートに分かれる。"""
+        self.llm_on(ingest_chunk_chars=500, ingest_max_chunks=6)
+        body = "\n\n".join(f"# 第{i}章\n\n" + f"本文{i} " * 350 for i in range(1, 41))    # 40 章 ≒ 160 区画、全体 7 万字超
+        self.assertGreater(len(body), 60000)
+        d = self.app.ingest.upload("大きな報告.txt", body.encode("utf-8"))
+        self.run_job(keep_original=False)
+        d = self.app.ingest.get(d["id"])
+        prompts = [r["body"]["messages"][-1]["content"] for r in self.reqs]
+        maps = [p for p in prompts if "[TASK:ingest_map]" in p]
+        groups = [p for p in prompts if "[TASK:ingest_group]" in p]
+        cov = d["coverage"]
+        self.assertEqual(cov["omitted"], 0)
+        self.assertEqual(cov["read"], cov["parts"])
+        self.assertEqual(len(maps), cov["parts"])                       # 全区画を読んだ
+        self.assertGreater(len(groups), 0)                              # 節にまとめた
+        self.assertEqual(cov["groups"], len(groups))
+        final = [p for p in prompts if "[TASK:ingest]" in p][-1]
+        self.assertRegex(final, r"## 節 \d+-1")
+        self.assertNotIn("読んでいません", final)
+        self.assertIn(f"AI が読んだ範囲: 全 {cov['parts']} 区画", d["markdown"])
+        self.assertIsNone(d.get("partial"))
+        # 本文は 6 万字を超えるので別ノートに分けてリンク
+        self.assertEqual(len(d["body_notes"]), 2)
+        self.assertNotIn("（以下省略）", d["markdown"])
+        self.assertIn("## 本文", d["markdown"])
+        self.assertIn("|本文 1]]", d["markdown"])
+        r = self.app.ingest.save([d["id"]])
+        self.assertEqual(r["errors"], [])
+        paths = {n["path"] for n in self.app.index.notes()}
+        main = r["saved"][0]["path"]
+        base = main[:-3]
+        self.assertIn(f"{base}／本文 1.md", paths)
+        self.assertIn(f"{base}／本文 2.md", paths)
+        b1 = self.app.vault.read(f"{base}／本文 1.md")[0]
+        self.assertIn("種別: 取り込み本文", b1)
+        self.assertIn("本文1 ", b1)
+        self.assertIn("|次]]", b1)
+        b2 = self.app.vault.read(f"{base}／本文 2.md")[0]
+        self.assertIn("本文40 ", b2)
+        # 本文ノートから親へ、親から本文へリンクが解決する
+        self.assertEqual(self.app.index.resolve(f"{Path(base).name}／本文 2"), f"{base}／本文 2.md")
+        self.assertTrue(any(b["path"] == f"{base}／本文 1.md" for b in self.app.index.backlinks(main)))
+
+    def test_capped_mode_reads_head_and_tail_only(self):
+        self.llm_on(ingest_chunk_chars=500, ingest_max_chunks=4)
+        body = "\n\n".join(f"第{i}章 " + "本文" * 200 for i in range(10))
+        d = self.app.ingest.upload("長い報告.txt", body.encode("utf-8"))
+        self.run_job(keep_original=False, read_mode="capped")
+        d = self.app.ingest.get(d["id"])
+        maps = [r for r in self.reqs if "[TASK:ingest_map]" in r["body"]["messages"][-1]["content"]]
+        self.assertEqual(len(maps), 4)
+        self.assertEqual(d["coverage"]["mode"], "capped")
+        self.assertGreater(d["coverage"]["omitted"], 0)
+        self.assertIn("中ほどの", d["markdown"])
+        self.assertIn("区画は未読", d["markdown"])
+
+    def test_resume_from_partial_notes(self):
+        """途中まで読んだ要点が残っていれば、続きの区画だけ読む。"""
+        self.llm_on(ingest_chunk_chars=500)
+        body = "\n\n".join(f"第{i}章 " + "本文" * 200 for i in range(8))
+        d = self.app.ingest.upload("再開.txt", body.encode("utf-8"))
+        ing = self.app.ingest
+        from mycelcore.ingest import _split
+        parts = _split(body, 500)
+        self.assertGreater(len(parts), 3)
+        # 1 回目: 3 区画読んだところで中止されたことにする（fp は _analyze と同じ式）
+        import hashlib
+        fp = hashlib.sha1(f"500:True:{len(body)}:{body[:2000]}:{body[-2000:]}".encode("utf-8")).hexdigest()
+        ing._update(d["id"], partial={"fp": fp, "notes": [f"## 部分 {i}\n- 既読 {i}" for i in (1, 2, 3)], "parts": len(parts)})
+        n0 = len(self.reqs)
+        self.run_job(keep_original=False)
+        maps = [r for r in self.reqs[n0:] if "[TASK:ingest_map]" in r["body"]["messages"][-1]["content"]]
+        self.assertEqual(len(maps), len(parts) - 3)
+        self.assertIn("（4/", maps[0]["body"]["messages"][-1]["content"])
+        final = [r for r in self.reqs[n0:] if "[TASK:ingest]" in r["body"]["messages"][-1]["content"]][-1]
+        self.assertIn("既読 2", final["body"]["messages"][-1]["content"])     # 残っていた要点も使う
+        d = ing.get(d["id"])
+        self.assertEqual(d["status"], "ready")
+        self.assertIsNone(d.get("partial"))
+        # 本文が変わっていれば残りは使わない
+        d2 = ing.upload("再開2.txt", (body + "\n\n追記").encode("utf-8"))
+        ing._update(d2["id"], partial={"fp": fp, "notes": ["## 部分 1\n- 古い"], "parts": 9})
+        n1 = len(self.reqs)
+        self.run_job(keep_original=False)
+        maps = [r for r in self.reqs[n1:] if "[TASK:ingest_map]" in r["body"]["messages"][-1]["content"]]
+        self.assertIn("（1/", maps[0]["body"]["messages"][-1]["content"])
+
     def test_without_llm_still_makes_draft(self):
         self.app.update_config({"model": ""})
         d = self.app.ingest.upload("見積書.docx", self.docx)

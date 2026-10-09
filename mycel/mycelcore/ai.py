@@ -40,7 +40,9 @@ class AIService:
         embedded = self.index.embedded_count(cfg["embed_model"]) if embed_configured(cfg) else 0
         return {"chat": chat_configured(cfg), "embed": embed_configured(cfg),
                 "chunks": chunks, "embedded": embedded,
-                "retrieval": "hybrid" if embedded else "keyword"}
+                "retrieval": "hybrid" if embedded else "keyword",
+                "rag": {"top_k": int(cfg.get("rag_top_k") or 6), "pool": int(cfg.get("rag_pool") or 60),
+                        "rerank": cfg.get("rag_rerank", "none"), "rerank_pool": int(cfg.get("rag_rerank_pool") or 24)}}
 
     def _template_prefix(self) -> list[str]:
         tpl = self.get_config().get("template_folder", "").strip().strip("/")
@@ -56,10 +58,13 @@ class AIService:
     # ------------------------------------------------------------ 検索
     def retrieve(self, query: str, k: int = 6, exclude: set[str] | None = None,
                  prefixes: list[str] | None = None, paths: set[str] | None = None,
-                 query_vec: list[float] | None = None, pool: int = 60) -> list[dict]:
+                 query_vec: list[float] | None = None, pool: int | None = None) -> list[dict]:
         """関連するチャンクを返す。prefixes（フォルダ）や paths（ファイルの集合）で検索対象を絞る。
-        query_vec を渡すと埋め込みの API 呼び出しを省く。戻り値の各行に mode（keyword / vector / both）を付ける。"""
+        query_vec を渡すと埋め込みの API 呼び出しを省く。戻り値の各行に mode（keyword / vector / both）を付ける。
+        pool（候補の深さ）を省くと設定 rag_pool を使う。"""
         exclude = exclude or set()
+        if pool is None:
+            pool = int(self.get_config().get("rag_pool") or 60)
         tpl = self._template_prefix()        # テンプレートは空欄の雛形なので対象外
         ranks: dict[int, float] = {}
         modes: dict[int, set] = {}
@@ -113,15 +118,60 @@ class AIService:
         except LLMError:
             return None
 
+    # ------------------------------------------------------------ リランク
+    def rerank(self, question: str, hits: list[dict], k: int, cfg: dict | None = None) -> list[dict]:
+        """LLM に候補の関連度を 0〜10 で採点させ、上位 k 件に並べ直す。失敗したら元の順のまま。"""
+        cfg = cfg or self.get_config()
+        if len(hits) <= k or not chat_configured(cfg):
+            return hits[:k]
+        listing = "\n\n".join(f"[{i}] 「{h['title']}」{(' > ' + h['heading']) if h.get('heading') and h['heading'] != h['title'] else ''}\n{h['text'][:700]}"
+                                for i, h in enumerate(hits, 1))
+        try:
+            raw = LLMClient(cfg).chat(
+                "[TASK:rerank]\n次の質問に答える根拠として、各候補がどれだけ役に立つかを 0〜10 で採点してください。"
+                "質問に直接答える情報があれば高く、話題が同じだけなら低く。出力は JSON 配列だけ: "
+                '[{"n": 候補番号, "score": 点数}, ...]（全候補を含める）\n\n'
+                f"# 質問\n{question}\n\n# 候補\n{listing}", temperature=0.0)
+            data = _parse_json_list(raw)
+            if not isinstance(data, list):
+                return hits[:k]
+            scores: dict[int, float] = {}
+            for row in data:
+                if isinstance(row, dict):
+                    try:
+                        scores[int(row.get("n"))] = float(row.get("score"))
+                    except (TypeError, ValueError):
+                        pass
+            if not scores:
+                return hits[:k]
+        except LLMError:
+            return hits[:k]
+        order = sorted(range(1, len(hits) + 1), key=lambda n: (-scores.get(n, -1.0), n))
+        out = []
+        for n in order[:k]:
+            h = dict(hits[n - 1])
+            h["rerank"] = scores.get(n)
+            out.append(h)
+        return out
+
+    def retrieve_for_answer(self, question: str, k: int | None = None, **kw) -> list[dict]:
+        """質問用の検索。設定の深さ（rag_pool / rag_top_k）とリランク（rag_rerank）を適用する。"""
+        cfg = self.get_config()
+        k = k or int(cfg.get("rag_top_k") or 6)
+        if cfg.get("rag_rerank") == "llm" and chat_configured(cfg):
+            cand = self.retrieve(question, k=max(k, int(cfg.get("rag_rerank_pool") or 24)), **kw)
+            return self.rerank(question, cand, k, cfg)
+        return self.retrieve(question, k=k, **kw)
+
     # ------------------------------------------------------------ 質問
     def ask(self, question: str, path: str | None = None, history: list | None = None,
-            prefixes: list[str] | None = None, paths: set[str] | None = None, k: int = 6,
+            prefixes: list[str] | None = None, paths: set[str] | None = None, k: int | None = None,
             system_extra: str = "") -> dict:
         question = (question or "").strip()
         if not question:
             raise LLMError("質問を入力してください")
         cfg = self.get_config()
-        hits = self.retrieve(question, k=k, prefixes=prefixes, paths=paths)
+        hits = self.retrieve_for_answer(question, k=k, prefixes=prefixes, paths=paths)
         if path:
             note = self.index.get(path)
             if note and all(h["path"] != path for h in hits):
@@ -336,6 +386,21 @@ class AIService:
         if prefixes is None:
             self.index.prune_embeddings()
         return done
+
+
+def _parse_json_list(text: str):
+    """JSON 配列を取り出す（コードフェンスや前置きがあっても）。"""
+    text = (text or "").strip()
+    m = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
+    if m:
+        text = m.group(1)
+    start, end = text.find("["), text.rfind("]")
+    if start == -1 or end <= start:
+        return None
+    try:
+        return json.loads(text[start:end + 1])
+    except ValueError:
+        return None
 
 
 def _parse_json(text: str):

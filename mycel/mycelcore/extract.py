@@ -40,7 +40,10 @@ KINDS: dict[str, str] = {
     ".html": "html", ".htm": "html",
     ".docx": "word", ".xlsx": "excel", ".xlsm": "excel", ".pptx": "powerpoint",
     ".eml": "email", ".pdf": "pdf",
+    ".png": "image", ".jpg": "image", ".jpeg": "image", ".gif": "image", ".webp": "image", ".bmp": "image",
 }
+IMAGE_MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
+              ".webp": "image/webp", ".bmp": "image/bmp"}
 
 # 画面で形式ごとにオン・オフするためのまとまり
 TYPE_GROUPS: dict[str, dict] = {
@@ -54,6 +57,7 @@ TYPE_GROUPS: dict[str, dict] = {
     "powerpoint": {"label": "PowerPoint (.pptx)", "exts": [".pptx"]},
     "email": {"label": "メール (.eml)", "exts": [".eml"]},
     "pdf": {"label": "PDF", "exts": [".pdf"]},
+    "image": {"label": "画像 (.png .jpg .gif .webp)", "exts": [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"]},
 }
 EXT_GROUP = {ext: g for g, info in TYPE_GROUPS.items() for ext in info["exts"]}
 
@@ -438,6 +442,7 @@ def _pdf(path: Path) -> str:
 _READERS = {
     "markdown": _text, "text": _text, "csv": _csv, "code": _code, "html": _html,
     "word": _docx, "excel": _xlsx, "powerpoint": _pptx, "email": _eml, "pdf": _pdf,
+    "image": lambda p: "",          # 画像の本文は VLM の説明（index の captions）。ここでは空
 }
 
 

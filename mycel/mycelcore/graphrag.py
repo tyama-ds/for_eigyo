@@ -404,7 +404,7 @@ class GraphRAG:
 
     def _ask_local(self, question: str, history, prefixes, paths) -> dict:
         cfg = self.app.config()
-        hits = self.app.ai.retrieve(question, k=8, prefixes=prefixes, paths=paths)
+        hits = self.app.ai.retrieve_for_answer(question, k=max(8, int(cfg.get("rag_top_k") or 6)), prefixes=prefixes, paths=paths)
         seeds = list(dict.fromkeys(self._match_entities(question)))
         hit_ids = [h["id"] for h in hits]
         with _lock:
@@ -506,6 +506,59 @@ class GraphRAG:
         sources = [{"n": i, "path": "", "title": p["title"], "heading": "コミュニティ要約", "community": p["id"]} for i, p in enumerate(partials[:10], 1)]
         return {"answer": answer, "sources": sources, "graph": graph, "llm": True}
 
+    # ------------------------------------------------------------ グラフ表示（画面用）
+    def graph_extra(self, center: str | None, max_entities: int = 60) -> dict:
+        """index.graph に足す知識グラフ: 実体ノード（~k:key）、文書→実体の言及、実体同士の関係（説明つき）。
+        center があればその文書の実体とその 1 ホップ先、無ければ言及文書数の多い実体から max_entities 個。"""
+        with _lock:
+            c = self.conn
+            if center:
+                keys = {r["node"] for r in c.execute("SELECT DISTINCT node FROM mentions WHERE path=?", (center,))}
+                if keys:
+                    q = ",".join("?" * len(keys))
+                    rows = c.execute(f"SELECT src, dst, sum(weight) w FROM edges WHERE src IN ({q}) OR dst IN ({q}) "
+                                     "GROUP BY src, dst ORDER BY w DESC LIMIT ?", (*keys, *keys, max_entities)).fetchall()
+                    for r in rows:
+                        keys.add(r["src"]); keys.add(r["dst"])
+            else:
+                keys = {r["node"] for r in c.execute(
+                    "SELECT node, count(DISTINCT path) n FROM mentions GROUP BY node ORDER BY n DESC, node LIMIT ?", (max_entities,))}
+            if not keys:
+                return {"nodes": {}, "edges": [], "links": []}
+            q = ",".join("?" * len(keys))
+            names = {r["key"]: r for r in c.execute(f"SELECT key, name, type FROM nodes WHERE key IN ({q})", tuple(keys))}
+            ment = c.execute(f"SELECT DISTINCT node, path FROM mentions WHERE node IN ({q})", tuple(keys)).fetchall()
+            rels = c.execute(f"SELECT src, dst, rel, sum(weight) w FROM edges WHERE src IN ({q}) AND dst IN ({q}) "
+                             "GROUP BY src, dst ORDER BY w DESC", (*keys, *keys)).fetchall()
+        nid = lambda k: f"~k:{k}"
+        nodes = {nid(k): (r["name"], r["type"] if r["type"] in ("person", "org") else "entity", r["type"]) for k, r in names.items()}
+        edges = [(m["path"], nid(m["node"])) for m in ment if m["node"] in names]
+        seen, links = set(), []
+        for r in rels:
+            a, b = r["src"], r["dst"]
+            if a not in names or b not in names or (b, a) in seen or (a, b) in seen:
+                continue
+            seen.add((a, b))
+            links.append((nid(a), nid(b), (r["rel"] or "")[:40]))
+        return {"nodes": nodes, "edges": edges, "links": links}
+
+    def entity_docs(self, key: str) -> dict:
+        """実体の詳細＋登場する文書（題名つき）と、その文書同士で既にあるつながり。"""
+        ent = self.entity(key)
+        if not ent:
+            return {}
+        docs = []
+        for p in ent["paths"]:
+            it = self.app.index.get(p)
+            if it is not None:
+                docs.append({"path": p, "title": it["title"], "kind": it["kind"]})
+        existing = set()
+        for a, b in self.app.relations.pairs():
+            existing.add((a, b)); existing.add((b, a))
+        pairs = [[a["path"], b["path"]] for i, a in enumerate(docs) for b in docs[i + 1:] if (a["path"], b["path"]) not in existing]
+        ent["type_label"] = ENTITY_TYPES.get(ent.get("type"), "その他")
+        return {**ent, "docs": docs, "unlinked_pairs": pairs}
+
     # ------------------------------------------------------------ 参照（画面用）
     def communities(self, limit: int = 50) -> list[dict]:
         with _lock:
@@ -519,7 +572,8 @@ class GraphRAG:
             n = self.conn.execute("SELECT * FROM nodes WHERE key=?", (key,)).fetchone()
             if not n:
                 return {}
-            rels = self.conn.execute("SELECT src, dst, rel, weight, path FROM edges WHERE src=? OR dst=? ORDER BY weight DESC LIMIT 40", (key, key)).fetchall()
+            rels = self.conn.execute("SELECT src, dst, rel, sum(weight) weight, min(path) path FROM edges WHERE src=? OR dst=? "
+                                     "GROUP BY src, dst, rel ORDER BY weight DESC LIMIT 40", (key, key)).fetchall()
             paths = [r["path"] for r in self.conn.execute("SELECT DISTINCT path FROM mentions WHERE node=?", (key,))]
             names = {r["key"]: r["name"] for r in self.conn.execute("SELECT key, name FROM nodes")}
         return {**dict(n), "relations": [{"other": names.get(r["dst"] if r["src"] == key else r["src"], ""), "descr": r["rel"], "path": r["path"]} for r in rels],

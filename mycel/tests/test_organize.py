@@ -162,7 +162,9 @@ class OrganizeTest(unittest.TestCase):
         self.assertEqual(up["status"], "ok")
         self.assertIsNotNone(self.app.index.get(up["path"]))
         with self.assertRaises(VaultError):
-            self.app.upload_file("資料", "写真.png", b"\x89PNG")
+            self.app.upload_file("資料", "archive.zip", b"PK")
+        img = self.app.upload_file("資料", "写真.png", b"\x89PNG")       # 画像は資料として追加できる
+        self.assertEqual(img["status"], "ok")
         with self.assertRaises(VaultError):
             self.app.upload_file("@s1", "a.docx", data)
 

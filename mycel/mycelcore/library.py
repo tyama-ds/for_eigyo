@@ -305,6 +305,13 @@ class Library:
         out["doi"] = re.sub(r"^https?://(dx\.)?doi\.org/", "", out["doi"], flags=re.I).strip()
         s = r.get("summary") if isinstance(r.get("summary"), dict) else {}
         out["summary"] = {k: str(s.get(k) or "").strip() for k in SUMMARY_KEYS} if s else {}
+        ins = r.get("insights") if isinstance(r.get("insights"), dict) else {}
+        out["insights"] = {"takeaways": [str(x)[:300] for x in ins.get("takeaways") or [] if str(x).strip()][:8],
+                           "connections": [{"title": str(c.get("title") or "")[:120], "point": str(c.get("point") or "")[:300],
+                                            "path": str(c.get("path") or "")} for c in ins.get("connections") or [] if isinstance(c, dict)][:8],
+                           "questions": [str(x)[:300] for x in ins.get("questions") or [] if str(x).strip()][:6],
+                           "actions": [str(x)[:300] for x in ins.get("actions") or [] if str(x).strip()][:6],
+                           "at": float(ins.get("at") or 0)} if ins else {}
         out["added"] = float(r.get("added") or time.time())
         out["updated"] = float(r.get("updated") or out["added"])
         out["source"] = str(r.get("source") or "manual")
@@ -422,7 +429,7 @@ class Library:
 
     def update(self, rid: str, data: dict) -> dict:
         r = self.get(rid)
-        merged = {**r, **{k: v for k, v in data.items() if k in FIELDS or k in ("key", "summary")}}
+        merged = {**r, **{k: v for k, v in data.items() if k in FIELDS or k in ("key", "summary", "insights")}}
         new = self._clean({**merged, "id": rid, "added": r["added"], "source": r["source"]})
         if not new["title"]:
             raise VaultError("題名を入力してください")
@@ -817,6 +824,78 @@ class Library:
             e["reasons"].add("つながり: " + l["label"])
         rows = sorted(out.values(), key=lambda e: -e["score"])[:k]
         return [{**self._row(e["ref"]), "score": round(e["score"], 5), "reasons": sorted(e["reasons"]), "passage": e["passage"]} for e in rows]
+
+    def related_in_vault(self, rid: str, k: int = 6) -> list[dict]:
+        """登録していないノート・資料も含めて、内容の近いものを Vault 全体から探す（報告書の関連資料・気づきの材料）。"""
+        r = self.get(rid)
+        own = {p for p in (r["file"], r["note"]) if p}
+        q = (r["title"] + "\n" + (r["abstract"] or self._text_of(r, 1500)))[:1500]
+        registered = self.paths()
+        out: dict[str, dict] = {}
+        for h in self.app.ai.retrieve(q, k=40, exclude=own, pool=80):
+            if h["path"] in registered or h["path"] in own:
+                continue
+            e = out.setdefault(h["path"], {"path": h["path"], "title": h["title"], "kind": h.get("kind", "note"),
+                                           "score": 0.0, "passage": h["text"][:160].replace("\n", " ")})
+            e["score"] += h["score"]
+        return sorted(out.values(), key=lambda e: -e["score"])[:k]
+
+    def insights(self, rid: str) -> dict:
+        """AI の気づき: 要点、関連する文書との共通点・相違点、残る疑問、次の一手。結果は文献に保存する。"""
+        r = self.get(rid)
+        cfg = self.app.config()
+        if not chat_configured(cfg):
+            raise LLMError("LLM が未設定です")
+        size = int(cfg.get("ingest_chunk_chars") or 3000)
+        text = self._text_of(r, size * 3)
+        if not text:
+            raise LLMError("本文がありません（本文ファイルを結びつけて「更新」してください）")
+        rel = self.related(rid, k=4)
+        rel_vault = self.related_in_vault(rid, k=4)
+        others = []
+        for o in rel:
+            others.append({"title": o["title"], "path": o["file"] or o["note"] or "", "text": self._text_of(o, 1200) or o["abstract"],
+                           "why": "、".join(o["reasons"])})
+        for o in rel_vault:
+            it = self.app.index.get(o["path"])
+            others.append({"title": o["title"], "path": o["path"], "text": (it["text"][:1200] if it else o["passage"]), "why": "内容が近い（未登録）"})
+        others_txt = "\n\n".join(f"## [{i}] {o['title']}（{o['why']}）\n{o['text']}" for i, o in enumerate(others, 1)) or "（関連する文書はまだありません）"
+        raw = LLMClient(cfg).chat(
+            "[TASK:insights]\n次の「対象の文書」を読み、関連する文書と見比べて、読む人の役に立つ気づきを JSON だけで出力してください。\n"
+            '形式: {"takeaways": ["対象の文書の要点（数値・結論・決定事項）", "…"],'
+            ' "connections": [{"n": 関連文書の番号, "point": "対象の文書との共通点・相違点・補い合う点を 1〜2 文"}],'
+            ' "questions": ["読んで残る疑問・確認すべき点"], "actions": ["次にやるとよいこと（確認・比較・連絡など）"]}\n'
+            "文書に書かれていないことは書かず、推測は「推定」と書いてください。\n\n"
+            f"# 対象の文書「{r['title']}」\n{text}\n\n# 関連する文書\n{others_txt}", temperature=0.2)
+        data = _parse_json(raw)
+        if not isinstance(data, dict):
+            raise LLMError("AI の応答を気づきとして読めませんでした")
+        conns = []
+        for c in data.get("connections") or []:
+            if not isinstance(c, dict):
+                continue
+            try:
+                o = others[int(c.get("n")) - 1]
+            except (TypeError, ValueError, IndexError):
+                continue
+            conns.append({"title": o["title"], "path": o["path"], "point": str(c.get("point") or "").strip()})
+        ins = {"takeaways": data.get("takeaways") or [], "connections": conns, "questions": data.get("questions") or [],
+               "actions": data.get("actions") or [], "at": time.time()}
+        self.update(rid, {"insights": ins})
+        return self.get(rid)["insights"]
+
+    def ask_doc(self, rid: str, question: str, history=None) -> dict:
+        """この文書だけを根拠に質問する。"""
+        r = self.get(rid)
+        paths = {p for p in (r["file"], r["note"]) if p and self.app.index.get(p)}
+        if not paths:
+            return {"answer": "", "sources": [], "llm": False, "message": "本文ファイルがありません（結びつけて「更新」してください）"}
+        system = ("あなたは報告書・文献を読み解く助手です。与えられた 1 つの文書の抜粋だけを根拠に、日本語で簡潔かつ正確に答えてください。"
+                  "根拠にした箇所は [[名前]] の形で示し、書かれていないことは「この文書には記載がありません」と答えてください。")
+        res = self.app.ai.ask(question, history=history, paths=paths, k=8, system_extra=system)
+        for s in res["sources"]:
+            s["ref_id"], s["citation"], s["title"] = r["id"], citation(r), r["title"]
+        return res
 
     def ask(self, question: str, history=None, tag: str = "", year: str = "", status: str = "") -> dict:
         ids = {r["id"] for r in self.list(tag=tag, year=year, status=status)["refs"]}

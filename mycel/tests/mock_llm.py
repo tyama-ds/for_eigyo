@@ -22,7 +22,24 @@ def embed_vector(text: str) -> list[float]:
 
 def chat_response(messages: list[dict]) -> str:
     prompt = messages[-1]["content"] if messages else ""
+    if isinstance(prompt, list):                     # VLM: [{"type": "text"}, {"type": "image_url"}]
+        has_img = any(p.get("type") == "image_url" and str(p.get("image_url", {}).get("url", "")).startswith("data:image/") for p in prompt)
+        prompt = " ".join(p.get("text", "") for p in prompt if p.get("type") == "text")
+        if "[TASK:caption]" in prompt:
+            return "A社向け提案の売上推移グラフ。2024 年 120、2025 年 150（推定）。見出し「売上推移」" if has_img else "画像がありません"
     task = (re.search(r"\[TASK:(\w+)\]", prompt) or [None, ""])[1]
+    if task == "rerank":
+        ns = [int(n) for n in re.findall(r"^\[(\d+)\] 「", prompt, re.M)]
+        # 「稼働率」を含む候補を高く、最後の候補を次点に（検索順と逆の順位になるようにする）
+        blocks = re.split(r"^\[\d+\] 「", prompt, flags=re.M)[1:]
+        scores = []
+        for n, b in zip(ns, blocks):
+            scores.append({"n": n, "score": 10 if "稼働率" in b else (9 if n == ns[-1] else 1)})
+        return json.dumps(scores)
+    if task == "insights":
+        return ('{"takeaways": ["初期費用 1,200万円", "決裁者は稼働率を重視"], '
+                '"connections": [{"n": 1, "point": "同じ顧客の案件で、費用の前提が共通する"}], '
+                '"questions": ["保守費の算定根拠は？"], "actions": ["A社の担当者に稼働率の目標値を確認する"]}')
     if task == "ask":
         titles = re.findall(r"\[\d+\] (?:ノート|資料)「([^」]+)」", prompt)
         cited = " ".join(f"[[{t}]]" for t in titles[:2])
@@ -32,6 +49,9 @@ def chat_response(messages: list[dict]) -> str:
     if task == "ingest_map":
         part = (re.search(r"（(\d+)/(\d+)）", prompt) or [None, "?"])[1]
         return f"- 部分{part}の要点: 初期費用 1,200万円"
+    if task == "ingest_group":
+        n = len(re.findall(r"^## 部分 |^## 節 ", prompt, re.M))
+        return f"- 節の要点（{n} 区画分）: 初期費用 1,200万円、保守 月額30万円"
     if task == "ingest":
         return ('考えた結果です。```json\n{"title": "A社 見積の概要", "doc_type": "見積書", "date": "2026-09-01",'
                 ' "summary": "A社向けの概算見積。初期費用は1,200万円。", "points": ["初期費用 1,200万円", "保守 月額30万円"],'
