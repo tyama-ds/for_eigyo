@@ -11,6 +11,7 @@ from . import links as L
 from .ai import AIService
 from .config import chat_configured, embed_configured, load_config, save_config, vault_path
 from .extract import EXT_GROUP, KINDS, TYPE_GROUPS, is_supported, pdf_available
+from . import images as IMG
 from .graphrag import GraphRAG
 from .index import Cancelled, Index, open_index
 from .llm import LLMError
@@ -145,9 +146,16 @@ class MycelApp:
             return self._doc(path)
         text, version = self.vault.read(path)
         props, _, _ = L.split_frontmatter(text)
+        item = self.index.get(path) or {}
+        try:
+            st = (self.vault.root / path).stat()
+            modified = st.st_mtime
+        except (OSError, VaultError):
+            modified = (item.get("mtime_ns") or 0) / 1e9 or None
         return {
             "path": path, "title": title_of(path), "folder": folder_of(path), "kind": "note",
             "readonly": False, "text": text, "version": version, "props": props,
+            "created": item.get("created") or modified, "modified": modified,
             "headings": L.extract_headings(text), "tags": L.extract_tags(text),
             "outgoing": self.index.outgoing(path), "backlinks": self.index.backlinks(path),
             "unlinked": self.index.unlinked_mentions(path),
@@ -175,6 +183,9 @@ class MycelApp:
             "outgoing": [], "backlinks": self.index.backlinks(path),
             "unlinked": self.index.unlinked_mentions(path),
             "source_path": str(abs_p), "indexed_at": item.get("indexed_at"),
+            "created": item.get("created") or ((item.get("mtime_ns") or 0) / 1e9 or None),
+            "modified": (abs_p.stat().st_mtime if abs_p.is_file() else (item.get("mtime_ns") or 0) / 1e9) or None,
+            "caption": self.index.caption_info(path) if item.get("grp") == "image" else None,
             "relations": self.relations_of(path), "editable": not path.startswith("@"),
         }
 
@@ -519,7 +530,7 @@ class MycelApp:
         name = Path((name or "").replace("\\", "/")).name
         ext = Path(name).suffix.lower()
         if not name or name.startswith(".") or not is_supported(name):
-            raise VaultError(f"この形式は追加できません: {name}（画像などは対象外です）")
+            raise VaultError(f"この形式は追加できません: {name}")
         if len(data) > self.scope.max_bytes():
             raise VaultError(f"ファイルが大きすぎます（上限 {self.scope.data['max_mb']} MB）", 413)
         normalize_rel(Path(name).stem)
@@ -717,8 +728,14 @@ class MycelApp:
         return st
 
     # ------------------------------------------------------------ AI 取り込み
-    def graph(self, center: str | None, depth: int = 1, docs: bool = False, people: bool = False) -> dict:
+    def graph(self, center: str | None, depth: int = 1, docs: bool = False, people: bool = False, kg: bool = False) -> dict:
         extra = self.people.graph_extra(center) if people else None
+        if kg and self.graphrag.status()["ready"]:
+            k = self.graphrag.graph_extra(center)
+            if extra:
+                extra = {"nodes": {**extra["nodes"], **k["nodes"]}, "edges": list(extra["edges"]) + k["edges"], "links": k["links"]}
+            else:
+                extra = k
         return self.index.graph(center, depth, docs, extra)
 
     def ask(self, question: str, path: str | None = None, history=None, prefixes=None, mode: str = "") -> dict:
@@ -729,6 +746,61 @@ class MycelApp:
             res["mode"] = "standard"
             return res
         return self.graphrag.ask(question, mode, history, prefixes)
+
+    # ------------------------------------------------------------ 画像（VLM）
+    def caption_image(self, path: str) -> dict:
+        return IMG.caption(self, path)
+
+    def caption_images(self, prefixes=None, only_missing: bool = True) -> dict:
+        prefixes = self._prefixes(prefixes)
+        return self.jobs.start("caption", f"画像を読む（{self._label(prefixes)}）", prefixes,
+                               lambda job: IMG.caption_all(self, prefixes, job, only_missing))
+
+    def images_status(self, prefixes=None) -> dict:
+        ims = self.index.images(self._prefixes(prefixes))
+        return {"total": len(ims), "captioned": sum(1 for i in ims if i["captioned"]),
+                "vlm": IMG.vlm_configured(self.config()), "model": self.config().get("vlm_model", "")}
+
+    # ------------------------------------------------------------ Vault の切り替え
+    def vault_list(self) -> dict:
+        cfg = self.config()
+        cur = str(self.vault.root)
+        seen, out = set(), []
+        for p in [cur] + list(cfg.get("recent_vaults") or []):
+            key = str(Path(p).expanduser().resolve()) if p else ""
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            root = Path(key)
+            out.append({"path": key, "current": key == str(Path(cur).resolve()), "exists": root.is_dir(),
+                        "notes": sum(1 for f in root.glob("*.md")) + sum(1 for f in root.glob("*/*.md")) if root.is_dir() else 0})
+        return {"current": cur, "vaults": out, "default": str(vault_path({"vault_path": ""}))}
+
+    def vault_switch(self, path: str, create: bool = False, seed: bool = False) -> dict:
+        """別の Vault を開く。create なら無ければ作る（seed でサンプルノートを入れる）。"""
+        p = Path((path or "").strip()).expanduser()
+        if not str(p).strip():
+            raise VaultError("Vault のフォルダを入力してください")
+        if not p.is_absolute():
+            raise VaultError("絶対パスで指定してください（例: D:/notes/営業 や /home/me/vault）")
+        if not p.exists():
+            if not create:
+                raise VaultError(f"フォルダがありません: {p}（「作成して開く」を選ぶと作ります）", 404)
+            p.mkdir(parents=True, exist_ok=True)
+        elif not p.is_dir():
+            raise VaultError("フォルダではありません")
+        cur = str(self.vault.root)
+        recents = [x for x in [cur] + list(self.config().get("recent_vaults") or []) if x and str(Path(x).resolve()) != str(p.resolve())]
+        old_seed = self.seed_sample
+        self.seed_sample = bool(seed)
+        try:
+            self.update_config({"vault_path": str(p), "recent_vaults": recents[:12]})
+            if str(self.vault.root.resolve()) != str(p.resolve()):   # vault_path が同じ文字列だった等で開き直されなかった
+                self.vault_override = None
+                self.open_vault()
+        finally:
+            self.seed_sample = old_seed
+        return {"vault": str(self.vault.root), **self.vault_list()}
 
     def graphrag_build(self, prefixes=None) -> dict:
         prefixes = self._prefixes(prefixes)

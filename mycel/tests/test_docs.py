@@ -60,7 +60,8 @@ class ExtractTest(unittest.TestCase):
         self.assertEqual(decode_text("﻿abc".encode("utf-8")), "abc")
 
     def test_unsupported_and_broken(self):
-        self.assertFalse(is_supported("写真.png"))
+        self.assertFalse(is_supported("archive.zip"))
+        self.assertTrue(is_supported("写真.png"))               # 画像は資料として読み込む（本文は VLM の説明）
         self.assertTrue(is_supported("a.DOCX"))
         bad = Path(self.tmp.name) / "壊れた.docx"
         bad.write_bytes(b"not a zip")
@@ -82,7 +83,7 @@ class ScopeTest(unittest.TestCase):
         (self.vault / "a" / "n.md").write_text("# n", encoding="utf-8")
         (self.vault / "b").mkdir()
         (self.vault / "b" / "x.txt").write_text("x", encoding="utf-8")
-        (self.vault / "b" / "img.png").write_bytes(b"\x89PNG")
+        (self.vault / "b" / "img.zip").write_bytes(b"PK")
         self.ext = root / "ext"
         (self.ext / "sub").mkdir(parents=True)
         make_docx(self.ext / "sub" / "見積.docx")
@@ -173,7 +174,9 @@ class ManualUpdateTest(unittest.TestCase):
         st = self.app.index_status()
         self.assertEqual(st["notes"], 0)            # 空でない Vault にはサンプルを入れない
         self.assertGreaterEqual(st["docs"], 7 if pdf_available() else 6)
-        self.assertIsNone(self.app.index.get("資料/写真.png"))
+        img = self.app.index.get("資料/写真.png")              # 画像も資料として入る（本文は空、説明は VLM が付ける）
+        self.assertEqual((img or {}).get("grp"), "image")
+        self.assertEqual(img["text"], "")
         d = self.app.note("資料/見積書.docx")
         self.assertTrue(d["readonly"])
         self.assertEqual(d["kind"], "doc")

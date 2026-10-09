@@ -22,7 +22,7 @@ NOTES = {
 }
 
 
-class GraphRAGTest(unittest.TestCase):
+class _Base(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         root = Path(self.tmp.name)
@@ -50,6 +50,8 @@ class GraphRAGTest(unittest.TestCase):
         self.assertEqual(st["state"], "done", st)
         return st
 
+
+class GraphRAGTest(_Base):
     def test_default_is_standard_and_graphrag_not_built(self):
         self.assertEqual(self.app.config()["rag_mode"], "standard")
         st = self.app.graphrag.status()
@@ -151,3 +153,46 @@ class GraphRAGTest(unittest.TestCase):
         self.assertIsInstance(self.app.graphrag, GraphRAG)
         self.app.open_vault()
         self.assertTrue(self.app.graphrag.status()["ready"])
+
+
+class GraphRAGGraphTest(_Base):
+    """知識グラフの表示と、実体を介した文書同士のつなぎ。"""
+
+    def test_graph_overlay_and_entity_docs(self):
+        # 索引が無いときは kg=1 でも通常のグラフのまま
+        g0 = self.app.graph(None, 0, docs=False, people=False, kg=True)
+        self.assertFalse(any(n["id"].startswith("~k:") for n in g0["nodes"]))
+        self.llm_on()
+        self.build()
+        g = self.app.graph(None, 0, docs=False, people=False, kg=True)
+        ents = [n for n in g["nodes"] if n["id"].startswith("~k:")]
+        self.assertTrue(ents)
+        self.assertTrue(all(n["kind"] in ("person", "org", "entity") for n in ents))
+        kinds = {e[2] if len(e) > 2 else "" for e in g["edges"]}
+        self.assertIn("ent", kinds)      # 文書 → 実体
+        self.assertIn("kg", kinds)       # 実体 → 実体（説明つき）
+        kg = [e for e in g["edges"] if len(e) > 2 and e[2] == "kg"]
+        self.assertTrue(all(e[3] for e in kg))
+        # 2 文書に出る「生産管理システム」経由で A社 と B社 の文書がつながって見える
+        ids = {n["id"] for n in g["nodes"]}
+        self.assertIn("A社 生産管理システム更改.md", ids)
+        self.assertIn("B社 物流DX.md", ids)
+        # 中心を指定すると、その文書の実体と 1 ホップ先に絞る
+        gc = self.app.graph("メモ.md", 1, docs=False, people=False, kg=True)
+        self.assertFalse(any(n["id"].startswith("~k:") for n in gc["nodes"]))   # メモには実体が無い
+        gc = self.app.graph("A社 生産管理システム更改.md", 1, kg=True)
+        self.assertTrue(any(n["id"].startswith("~k:") for n in gc["nodes"]))
+        # 実体の詳細: 登場する文書と、まだつながっていない組
+        key = next(n["id"][3:] for n in ents if n["title"] == "生産管理システム")
+        d = self.app.graphrag.entity_docs(key)
+        self.assertEqual(d["name"], "生産管理システム")
+        paths = sorted(x["path"] for x in d["docs"])
+        self.assertEqual(paths, ["A社 生産管理システム更改.md", "B社 物流DX.md"])
+        self.assertEqual(len(d["unlinked_pairs"]), 1)
+        # つなぐ → 既存のつながりになり、候補から消え、グラフに rel の辺が出る
+        self.app.relate_many([{"a": p[0], "b": p[1], "label": "共通: 生産管理システム"} for p in d["unlinked_pairs"]], "user")
+        d2 = self.app.graphrag.entity_docs(key)
+        self.assertEqual(d2["unlinked_pairs"], [])
+        g2 = self.app.graph(None, 0)
+        self.assertTrue(any(len(e) > 2 and e[2] == "rel" for e in g2["edges"]))
+        self.assertEqual(self.app.graphrag.entity_docs("no-such"), {})

@@ -100,7 +100,8 @@ class Index:
                 path TEXT PRIMARY KEY, kind TEXT, grp TEXT, source TEXT,
                 title TEXT, title_key TEXT, stem_key TEXT, path_key TEXT, folder TEXT,
                 mtime_ns INTEGER, size INTEGER, text TEXT, props TEXT,
-                status TEXT, error TEXT, indexed_at REAL);
+                status TEXT, error TEXT, indexed_at REAL, created REAL);
+            CREATE TABLE IF NOT EXISTS captions(path TEXT PRIMARY KEY, text TEXT, model TEXT, at REAL);
             CREATE INDEX IF NOT EXISTS items_title ON items(title_key);
             CREATE INDEX IF NOT EXISTS items_stem ON items(stem_key);
             CREATE INDEX IF NOT EXISTS items_pathkey ON items(path_key);
@@ -127,6 +128,8 @@ class Index:
                       "path UNINDEXED, title, text, tokenize='trigram')")
         except sqlite3.OperationalError:
             has_fts = False
+        if "created" not in {r[1] for r in c.execute("PRAGMA table_info(items)")}:
+            c.execute("ALTER TABLE items ADD COLUMN created REAL")
         c.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         c.commit()
         return has_fts
@@ -285,6 +288,8 @@ class Index:
         c.execute("UPDATE items SET path=?, title=?, title_key=?, stem_key=?, path_key=?, folder=?, source=? "
                   "WHERE path=?", (new, title, _key(title), _key(stem_of(new)), path_key, folder_of(new), sid, old))
         c.execute("UPDATE chunks SET path=? WHERE path=?", (new, old))
+        c.execute("DELETE FROM captions WHERE path=?", (new,))
+        c.execute("UPDATE captions SET path=? WHERE path=?", (new, old))
         c.execute("UPDATE links SET src=? WHERE src=?", (new, old))
         c.execute("UPDATE tags SET path=? WHERE path=?", (new, old))
         if self.has_fts:
@@ -318,6 +323,8 @@ class Index:
         try:
             if self._is_note(path):
                 text = abs_p.read_bytes().decode("utf-8", errors="replace")
+            elif EXT_GROUP.get(abs_p.suffix.lower()) == "image":
+                text = self.caption_of(path)         # 画像の本文は VLM が付けた説明
             else:
                 text = extract(abs_p)
             return {"status": "ok", "text": text, "error": ""}
@@ -338,7 +345,29 @@ class Index:
         if self.has_fts:
             c.execute("DELETE FROM fts WHERE path=?", (path,))
 
+    def _created_of(self, path: str, props: dict, mtime: int) -> float:
+        """作成日時。frontmatter の「作成日」があればそれ、既に記録があればそれ、無ければファイルの作成日時（取れなければ更新日時）。"""
+        for k in ("作成日", "created", "date", "日付"):
+            v = str(props.get(k, "") or "").strip()
+            m = re.match(r"(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:[ T](\d{1,2}):(\d{2}))?", v)
+            if m:
+                try:
+                    return time.mktime((int(m[1]), int(m[2]), int(m[3]), int(m[4] or 0), int(m[5] or 0), 0, 0, 0, -1))
+                except (ValueError, OverflowError):
+                    pass
+        try:
+            st = self.scope.abs_path(path).stat()
+            birth = getattr(st, "st_birthtime", None)
+            if birth:
+                return float(min(birth, mtime / 1e9))
+        except Exception:  # noqa: BLE001 - 範囲外や消えたファイル
+            pass
+        return mtime / 1e9
+
     def _store(self, path: str, item: dict, mtime: int, size: int) -> None:
+        prev = self.conn.execute("SELECT created FROM items WHERE path=?", (path,)).fetchone()
+        if prev and prev["created"] and not item.get("created"):
+            item = {**item, "created": min(float(prev["created"]), mtime / 1e9)}
         self._remove(path)
         c = self.conn
         note = self._is_note(path)
@@ -348,11 +377,12 @@ class Index:
         sid, _ = split_id(path)
         props = L.split_frontmatter(text)[0] if note else {}
         path_key = _key(path[:-3] if note and path.lower().endswith(".md") else path)
-        c.execute("INSERT INTO items VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        c.execute("INSERT INTO items(path, kind, grp, source, title, title_key, stem_key, path_key, folder, "
+                  "mtime_ns, size, text, props, status, error, indexed_at, created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                   (path, "note" if note else "doc", EXT_GROUP.get(Path(path).suffix.lower(), ""), sid,
                    title, _key(title), _key(stem_of(path)), path_key, folder_of(path),
                    mtime, size, text, json.dumps(props, ensure_ascii=False),
-                   item["status"], item["error"], time.time()))
+                   item["status"], item["error"], time.time(), item.get("created") or self._created_of(path, props, mtime)))
         if item["status"] != "ok":
             return
         if note:
@@ -369,6 +399,29 @@ class Index:
             c.executemany("INSERT INTO terms VALUES(?,?,?)", [(cid, t, n) for t, n in toks.items()])
         if self.has_fts:
             c.execute("INSERT INTO fts(path, title, text) VALUES(?,?,?)", (path, title, text))
+
+    # ------------------------------------------------------------ 画像の説明（VLM）
+    def caption_of(self, path: str) -> str:
+        r = self.conn.execute("SELECT text FROM captions WHERE path=?", (path,)).fetchone()
+        return r["text"] if r else ""
+
+    def caption_info(self, path: str) -> dict | None:
+        with self._lock:
+            r = self.conn.execute("SELECT text, model, at FROM captions WHERE path=?", (path,)).fetchone()
+        return dict(r) if r else None
+
+    def set_caption(self, path: str, text: str, model: str) -> None:
+        with self._lock:
+            self.conn.execute("INSERT OR REPLACE INTO captions VALUES(?,?,?,?)", (path, text, model, time.time()))
+            self.conn.commit()
+
+    def images(self, prefixes: list[str] | None = None) -> list[dict]:
+        """読み込み済みの画像と、説明の有無。"""
+        with self._lock:
+            rows = self.conn.execute("SELECT i.path, i.title, i.size, c.model, c.at FROM items i LEFT JOIN captions c ON c.path=i.path "
+                                     "WHERE i.grp='image' ORDER BY i.path_key").fetchall()
+        return [{"path": r["path"], "title": r["title"], "size": r["size"], "captioned": bool(r["model"]), "model": r["model"] or ""}
+                for r in rows if prefixes is None or any(self._under(r["path"], p) for p in prefixes)]
 
     # ------------------------------------------------------------ 状態
     def status(self) -> dict:
@@ -533,7 +586,8 @@ class Index:
     def graph(self, center: str | None = None, depth: int = 1, all_docs: bool = False,
               extra: dict | None = None) -> dict:
         """ノードとエッジ。資料はリンクされているものだけ（all_docs=True で全部）。
-        extra = {"nodes": {id: (title, kind, grp)}, "edges": [(path, id)]} で人物・組織のノードを足せる。"""
+        extra = {"nodes": {id: (title, kind, grp)}, "edges": [(path, id)], "links": [(id, id, label)]} で
+        人物・組織や知識グラフの実体ノード（と実体同士の関係）を足せる。"""
         with self._lock:
             items = {r["path"]: (r["title"], r["kind"], r["grp"])
                      for r in self.conn.execute("SELECT path, title, kind, grp FROM items")}
@@ -554,12 +608,13 @@ class Index:
                 rel_edges.add((a, b))
         ent_nodes = (extra or {}).get("nodes", {})
         ent_edges = {(a, b) for a, b in (extra or {}).get("edges", []) if a in items and b in ent_nodes}
+        kg_links = {(a, b): lab for a, b, lab in (extra or {}).get("links", []) if a in ent_nodes and b in ent_nodes and a != b}
         linked = {a for e in edges | rel_edges for a in e}
         nodes_set = {p for p, (_, kind, _) in items.items() if kind == "note" or all_docs or p in linked}
         nodes_set |= set(unresolved)
         if ent_edges:
             nodes_set |= {b for _, b in ent_edges} | {a for a, _ in ent_edges}
-        all_edges = edges | rel_edges | ent_edges
+        all_edges = edges | rel_edges | ent_edges | set(kg_links)
         if center:
             keep, frontier = {center}, {center}
             for _ in range(max(1, min(depth, 4))):
@@ -591,6 +646,7 @@ class Index:
         out_edges += [[a, b, "rel"] for a, b in sorted(rel_edges - edges)
                       if a in nodes_set and b in nodes_set and (b, a) not in edges]
         out_edges += [[a, b, "ent"] for a, b in sorted(ent_edges) if a in nodes_set and b in nodes_set]
+        out_edges += [[a, b, "kg", lab] for (a, b), lab in sorted(kg_links.items()) if a in nodes_set and b in nodes_set]
         return {"nodes": nodes, "edges": out_edges}
 
     # ------------------------------------------------------------ AI 用の検索（転置インデックス）

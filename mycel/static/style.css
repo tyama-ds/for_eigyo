@@ -70,6 +70,18 @@ input,textarea,select{font:inherit;color:var(--ink)}
 .crumb{color:var(--muted);font-size:12.5px;white-space:nowrap}
 .title-in{flex:1;min-width:60px;border:1px solid transparent;background:transparent;font-size:14px;font-weight:500;padding:3px 6px;border-radius:5px;text-overflow:ellipsis}
 .title-in:hover{border-color:var(--line)}
+.ndates{color:var(--muted);font-size:11px;white-space:nowrap;opacity:.75;margin:0 4px}
+.stver{color:var(--muted);opacity:.7;font-size:11px}.stver.old{color:var(--warn);opacity:1;cursor:help}
+.ft-image{background:#9B6AA8}
+.docimg{display:block;max-width:100%;max-height:70vh;margin:14px auto 8px;border-radius:8px;border:1px solid var(--line);background:var(--surface)}
+.imgcap{max-width:860px;margin:0 auto 18px;padding:10px 14px;border:1px dashed var(--line);border-radius:8px;font-size:13px;color:var(--ink);line-height:1.7;white-space:pre-wrap}
+.imgcap .hint{display:block;margin-top:6px}
+.md img.emb{max-width:100%;border-radius:6px;border:1px solid var(--line)}
+.vlist{display:grid;gap:6px;margin:8px 0}.vrow{display:flex;gap:8px;align-items:center;padding:8px 10px;border:1px solid var(--line);border-radius:7px;background:var(--surface)}
+.vrow.cur{border-color:var(--accent)}.vrow code{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
+.vrow small{color:var(--muted);white-space:nowrap}
+.chip .rx{border:0;background:transparent;color:var(--muted);cursor:pointer;margin-left:4px;font-size:12px;line-height:1;padding:0 2px}.chip .rx:hover{color:var(--danger)}
+.lins{display:grid;gap:10px;font-size:13px}.lins h4{margin:0 0 4px;font-size:12px;color:var(--muted);font-weight:500}.lins ul{margin:0;padding-left:16px;line-height:1.6}.lins li a{color:var(--link);cursor:pointer}
 .title-in:focus{border-color:var(--accent);background:var(--surface);outline:0}
 .seg{display:flex;background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:2px}
 .seg button{border:0;background:transparent;color:var(--muted);font-size:12px;padding:2px 10px;border-radius:4px;cursor:pointer}
@@ -236,6 +248,10 @@ canvas.graph.big{height:100%;border:0;border-radius:0}
 .kg-rel{margin:4px 0 0;padding-left:14px;line-height:1.6}.kg-rel span{color:var(--muted);margin-left:6px;font-size:11.5px}
 .kg .chip{color:var(--ink)}.kg .chip.kg-person{border-color:#c98}.kg .chip.kg-org{border-color:#7a9}.kg .chip.kg-product{border-color:#89c}
 .kgidx{margin-top:8px;padding-top:6px;border-top:1px dashed var(--line)}.kgidx.dim{opacity:.75}
+.igprog{margin:8px 0}.igprog .bar{height:6px;border-radius:3px;background:var(--surface2);overflow:hidden}.igprog .bar i{display:block;height:100%;background:var(--accent)}.igprog small{color:var(--muted);font-size:11.5px}
+.igcov{margin:4px 0 8px}
+.kg-docs{display:grid;gap:4px;font-size:13px}.kg-docs label{display:flex;gap:6px;align-items:center}.kg-docs a{color:var(--link);text-decoration:none}
+.chip.kg-concept{border-color:#7b9}.chip.kg-place{border-color:#9b7}.chip.kg-event{border-color:#c79}
 .notice.err{color:var(--danger);border-color:var(--danger)}
 .preview.docview{padding-top:18px}
 .doctext{white-space:pre-wrap;word-break:break-word;font-family:var(--mono);font-size:12.5px;line-height:1.6;background:transparent;border:0;padding:0}
