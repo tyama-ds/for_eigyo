@@ -44,6 +44,7 @@ python launcher/launcher.py --port 9200 --open
 | Deep Research Tool | claudecode | Web検索→検証→レポート生成のディープリサーチ | 8802 |
 | Patent Atlas | for_eigyo | 特許検索式・分類候補・CSVマップ・要不要判定と学習・探索の反復と収束表示 | 8810 |
 | Mycel | for_eigyo | Markdown ノート（リンク・バックリンク・グラフ・全文検索・ノートに質問などの AI 機能） | 8795 |
+| Local Chat | for_eigyo | OpenAI互換のローカルLLMとのチャット・ファイル添付・PC側Web取得とプロキシ（要初回セットアップ） | 8840 |
 
 Studio / Loop は標準ライブラリのみで動くため、`PYTHONPATH=src` を通して
 リポジトリのソースから直接起動する（venv や pip install -e は不要）。
@@ -106,6 +107,25 @@ python3 -m venv .venv
 llmlab Studio の 8765 番ポートと分けています。設定や読み込んだ特許は利用するPCに保存されます。
 ローカルで一人が利用する構成です。LLM・プロキシ・追加学習機能の設定は
 [Patent Atlas の README](../patent-atlas/README.md)を参照してください。
+
+## Local Chat の初回セットアップ
+
+Local Chat は Python 3.11 以降とアプリ専用の依存パッケージが必要です。
+Windows PowerShell では、リポジトリのルートから初回に次を実行します。
+
+```powershell
+cd local-llm-chat
+.\Setup.cmd
+```
+
+Python を直接指定する場合は、同じフォルダで `python setup_app.py` を実行します。
+インストール時のプロキシ・CA証明書・オフラインセットアップの指定は
+[Local Chat の README](../local-llm-chat/README.md)を参照してください。
+
+準備後は App Portal の **Local Chat** カードから起動できます。
+アプリ専用の `.venv` の Python を使い、画面は `http://127.0.0.1:8840` に開きます。
+ポータルから依存パッケージを自動インストールすることはありません。
+接続先の OpenAI互換API・モデル・Web取得用プロキシは、Local Chat の「接続・設定」で指定します。
 
 ## claudecode ディレクトリのアプリを登録する
 
