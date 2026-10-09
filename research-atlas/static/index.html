@@ -15,6 +15,7 @@
   <link rel="stylesheet" href="/static/citation-flow.css">
   <link rel="stylesheet" href="/static/annual-landscape.css">
   <link rel="stylesheet" href="/static/author-network.css">
+  <link rel="stylesheet" href="/static/publication-dates.css">
   <script defer src="/static/connection-settings.js"></script>
   <script defer src="/static/map-terrain.js"></script>
   <script defer src="/static/map-layers.js"></script>
@@ -22,6 +23,7 @@
   <script defer src="/static/landscape.js"></script>
   <script defer src="/static/citation-flow.js"></script>
   <script defer src="/static/author-network.js"></script>
+  <script defer src="/static/publication-dates.js"></script>
   <script defer src="/static/app.js"></script>
   <script defer src="/static/foresight.js"></script>
 </head>
@@ -54,7 +56,7 @@
         <div><div class="eyebrow">RESEARCH INTELLIGENCE <span>/</span> <span id="view-eyebrow">OVERVIEW</span></div><h1 id="page-title">研究の現在地と、その先へ。</h1><p id="page-description">論文に散らばるシグナルから、次の技術の可能性を見つける。</p></div>
         <div class="heading-controls"><button class="period-control" data-action="settings"><span data-icon="calendar"></span><span id="period-label">分析期間を設定</span><span data-icon="chevron"></span></button><button class="icon-button refresh-button" data-action="analyze" title="再分析" aria-label="現在の設定で再分析"><span data-icon="refresh"></span></button></div>
       </section>
-      <div class="dataset-strip"><div class="dataset-info"><span data-icon="database"></span><button id="dataset-name" data-action="datasets">データセットを読み込み中</button><span id="demo-badge" class="badge badge-demo" hidden>合成・テストデータ</span></div><div class="dataset-meta"><span id="embedding-label">LOCAL ANALYSIS</span><span class="small-separator">·</span><span id="analysis-time">—</span></div></div>
+      <div class="dataset-strip"><div class="dataset-info"><span data-icon="database"></span><button id="dataset-name" data-action="datasets">データセットを読み込み中</button><span id="demo-badge" class="badge badge-demo" hidden>合成・テストデータ</span></div><div class="dataset-meta"><button class="text-link" data-publication-dates="current">出版日を補完</button><span id="embedding-label">LOCAL ANALYSIS</span><span class="small-separator">·</span><span id="analysis-time">—</span></div></div>
       <div id="notice" class="notice" hidden></div>
       <div id="source-notice" class="source-notice" hidden></div>
       <div id="content" aria-live="polite"></div>

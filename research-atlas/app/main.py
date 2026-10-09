@@ -33,7 +33,7 @@ from app.cluster_models import cluster_model_catalog
 
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
-app = FastAPI(title="Research Atlas", version="2.3.2", description="Multi-source bibliometrics & evidence-grounded technology foresight")
+app = FastAPI(title="Research Atlas", version="2.4.0", description="Multi-source bibliometrics & evidence-grounded technology foresight")
 MAX_NON_UPLOAD_REQUEST_BYTES = 256 * 1024 * 1024
 EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="atlas-analysis")
 SOURCE_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="atlas-discovery")
@@ -161,6 +161,8 @@ async def import_csv(file: UploadFile = File(...), provider: Literal["scopus_csv
 
 
 def _import_csv_dataset(content: bytes | BinaryIO, provider: str, filename: str | None):
+    from urllib.parse import quote
+
     papers, report = parse_scopus_csv(content)
     retrieved_at = storage.now()
     for paper in papers:
@@ -169,7 +171,9 @@ def _import_csv_dataset(content: bytes | BinaryIO, provider: str, filename: str 
         paper["retrieved_at"] = retrieved_at
         paper["citation_snapshots"] = [{"provider": provider, "count": paper["citations"], "retrieved_at": retrieved_at}] if paper.get("citations") is not None else []
         if paper.get("doi"):
-            paper["external_url"] = "https://doi.org/" + paper["doi"]
+            # The original CSV Link stays in source_link, including when the
+            # canonical DOI resolver is preferred for the clickable URL.
+            paper["external_url"] = "https://doi.org/" + quote(paper["doi"], safe="/")
     report["providers"] = [provider]
     if len(papers) > MAX_IMPORT_ROWS:
         raise HTTPException(422, f"1ファイルは{MAX_IMPORT_ROWS:,}論文以内で指定してください。")
@@ -708,4 +712,6 @@ from app.annual_landscape_api import router as annual_landscape_router
 app.include_router(annual_landscape_router)
 from app.citation_flow_api import router as citation_flow_router
 app.include_router(citation_flow_router)
+from app.publication_date_api import router as publication_date_router
+app.include_router(publication_date_router)
 app.mount("/static", StaticFiles(directory=str(ROOT / "static"), check_dir=False), name="static")

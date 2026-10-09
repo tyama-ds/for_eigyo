@@ -311,10 +311,17 @@ def _merge_pair(first, second, counters):
         # An existing annual series also counts as a measurement. Keep its source coherent.
         if second["citation_history"] or (first["citations"] is None and second["citations"] is not None):
             counters["citation_source_conflicts"] += 1
-    for field in ("title", "abstract", "doi", "source", "external_url", "retrieved_at", "year"):
+    for field in ("title", "abstract", "doi", "source", "external_url", "source_link", "retrieved_at", "year"):
         if not merged.get(field) and second.get(field):
             merged[field] = deepcopy(second[field])
     dates, date_warnings = merge_publication_dates(merged, second)
+    if dates["publication_date"] and dates["publication_date"] != merged.get("publication_date"):
+        # The audit must follow the date actually adopted, never another
+        # observation whose date was rejected in favor of the existing record.
+        if isinstance(second.get("date_enrichment"), dict):
+            merged["date_enrichment"] = deepcopy(second["date_enrichment"])
+        else:
+            merged.pop("date_enrichment", None)
     merged.update(dates)
     if date_warnings:
         counters["date_conflicts"] += 1
