@@ -209,10 +209,11 @@ def explore_assessment(assessment_id: str, body: ExploreRequest):
 
 def run_commentary(job_id, assessment, options):
     persisted = assessment
+    input_context = {}
     try:
         _progress(job_id, status="running", stage="根拠文を抽出し、支持・反証・将来像を評論")
         value = foresight_llm.generate(assessment, options["candidate_id"], options["provider"], options.get("model"),
-                                      progress=lambda stage: _progress(job_id, stage=stage))
+                                      progress=lambda stage: _progress(job_id, stage=stage), input_context=input_context)
         persisted = _save(value, assessment)
         validation = (_candidate(persisted, options["candidate_id"]).get("narrative") or {}).get("validation", {})
         warned = validation.get("status") == "warning"
@@ -221,7 +222,11 @@ def run_commentary(job_id, assessment, options):
     except Exception as exc:
         try:
             value = deepcopy(assessment)
-            _candidate(value, options["candidate_id"])["llm_error"] = str(exc) if isinstance(exc, (ValueError, RuntimeError)) else "評論の生成に失敗しました。"
+            candidate = _candidate(value, options["candidate_id"])
+            candidate["llm_error"] = str(exc) if isinstance(exc, (ValueError, RuntimeError)) else "評論の生成に失敗しました。"
+            candidate.pop("llm_input", None)
+            if input_context:
+                candidate["llm_input"] = deepcopy(input_context)
             persisted = _save(value, assessment)
         except Exception:
             pass

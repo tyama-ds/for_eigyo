@@ -5,7 +5,7 @@ from copy import deepcopy
 import json
 import re
 
-from . import field_llm, large_storage, storage
+from . import field_llm, landscape_selection, large_storage, storage
 from .field_exports import _csv
 from .foresight_llm import _number_warnings, _validation
 from .landscape_evidence import input_summary, prepare_papers
@@ -75,7 +75,10 @@ def _report_landscape(result_id, projection, interval, scope, snapshot=None):
 
 
 def prepare_report(result_id: str, projection: str, interval: str, movement_id: str,
-                   projection_id: str | None = None, scope: str = "sample", *, landscape_snapshot=None) -> dict:
+                   projection_id: str | None = None, scope: str = "sample", *, landscape_snapshot=None,
+                   papers_per_period=6, selection_method="centroid", abstract_only=False,
+                   selection_context=None) -> dict:
+    options = landscape_selection.validate_options(papers_per_period, selection_method, abstract_only)
     landscape = _report_landscape(result_id, projection, interval, scope, landscape_snapshot)
     if projection_id and projection_id != landscape["projection_id"]:
         raise ValueError("座標の版が変わりました。技術ランドスケープを再表示してから解釈を作成してください。")
@@ -85,37 +88,77 @@ def prepare_report(result_id: str, projection: str, interval: str, movement_id: 
     topic = next((item for item in landscape.get("topics", []) if item["id"] == movement["topic_id"]), None)
     if topic is None:
         raise ValueError("対象の話題が見つかりません。")
-    # Query only these exact IDs against this immutable result's owner index.
-    before = list(dict.fromkeys(movement.get("evidence_before", [])))[:6]
-    after = list(dict.fromkeys(movement.get("evidence_after", [])))[:6]
+    selection = {**options, "method_label": landscape_selection.METHOD_LABELS[selection_method], "scope": scope}
+    if options == landscape_selection.validate_options():
+        # Preserve the original published representatives for unchanged settings,
+        # including older results whose document representation is unavailable.
+        before = list(dict.fromkeys(movement.get("evidence_before", [])))[:6]
+        after = list(dict.fromkeys(movement.get("evidence_after", [])))[:6]
+        for side, ids, count_key in (("before", before, "from_count"), ("after", after, "to_count")):
+            selection[side] = {"selected_count": len(ids), "selected_ids": ids,
+                               "candidate_count": movement.get(count_key), "eligible_count": None,
+                               "representation_source": "saved_movement_representatives",
+                               "warnings": [], "selected_records": []}
+        selection["selection_source"] = "saved_movement_representatives"
+    else:
+        selector = selection_context or landscape_selection.SelectionContext(result_id, scope)
+        if selector.result_id != result_id or selector.scope != scope:
+            raise ValueError("根拠論文の選択対象と分析結果・分析範囲が一致しません。")
+        before, selection["before"] = selector.select(movement["topic_id"], movement["from_period"], interval, **options)
+        after, selection["after"] = selector.select(movement["topic_id"], movement["to_period"], interval, **options)
+        selection["selection_source"] = "period_candidates"
     identifiers = list(dict.fromkeys([*before, *after]))
     result = storage.read("results", result_id, include_papers=False)
     papers = large_storage.papers_by_ids(result, storage.data_root(), identifiers)
     if {str(p["id"]) for p in papers} != set(identifiers):
         raise ValueError("対象の重心移動と保存論文の根拠IDが一致しません。")
+    # The storage index may return corpus order. Citation aliases and local-LLM
+    # budget reductions must follow the chosen priority within each period.
+    lookup = {str(p["id"]): p for p in papers}
+    ranked = {row["id"]: row for side in ("before", "after") for row in selection[side]["selected_records"]}
     excerpts = prepare_papers([{"id": p["id"], "title": str(p.get("title") or "")[:350],
                  "abstract": str(p.get("abstract") or ""), "year": p.get("year"),
                  "publication_date": p.get("publication_date"),
+                 "date_precision": p.get("date_precision"),
+                 "selection_rank": ranked.get(p["id"], {}).get("selection_rank", (before if p["id"] in before else after).index(p["id"]) + 1),
+                 "centroid_distance": ranked.get(p["id"], {}).get("cosine_distance"),
+                 "citations": p.get("citations"),
+                 "selection_reason": ranked.get(p["id"], {}).get("reason", "保存済みの重心近傍論文"),
                  "period": movement["from_period"] if p["id"] in before else movement["to_period"],
-                 "side": "before" if p["id"] in before else "after"} for p in papers])
+                 "side": "before" if p["id"] in before else "after"} for p in (lookup[identifier] for identifier in identifiers)])
     interpretation = landscape.get("interpretation") or {}
     base_limits = [line for line in LIMITATIONS if scope == "sample" or "最大400" not in line]
     if scope == "full":
         base_limits.append("重心・件数・特徴語は選択した分析結果の全件を対象とします。画面の点は表示用標本であり、取得元の分野全体を網羅するとは限りません。")
     limitations = _unique_text([*base_limits, *landscape.get("warnings", []),
-                               *interpretation.get("limitations", [])])
+                               *interpretation.get("limitations", []),
+                               *selection["before"].get("warnings", []), *selection["after"].get("warnings", []),
+                               "論文の選択条件は評論の根拠に適用します。計測済みの重心・論文件数・変化の検定は変更しません。"])
     if result.get("meta", {}).get("is_demo") or result.get("is_demo"):
         limitations.insert(0, "合成・テストデータを含む架空のデモです。実際の研究動向の判断には使えません。")
     report = {"id": storage.new_id(), "kind": "movement", "scope": scope, "result_id": result_id, "created_at": storage.now(),
               "projection_id": landscape["projection_id"], "projection": projection, "interval": interval,
               "movement": deepcopy(movement), "topic": {"id": topic["id"], "label": topic.get("label", movement.get("topic_label", "話題"))},
               "meta": deepcopy(landscape.get("meta", {})), "evidence_papers": excerpts,
-              "input_summary": input_summary(excerpts),
+              "input_summary": input_summary(excerpts), "selection": selection,
               "limitations": limitations}
+    report["input_summary"]["selection"] = (f"前後の各期間から最大{papers_per_period}件を「{selection['method_label']}」で選択。"
+        f"{'抄録ありに限定。' if abstract_only else '抄録のない論文も候補に含む。'}"
+        f"準備した論文は前期{len(before)}件、後期{len(after)}件。入力容量により送信時に抜粋・件数を追加調整する場合があります。")
+    if missing_comparison_evidence(report):
+        limitations.append("選択条件に合う抄録が片方の期間にありません。論文数や選択方法、抄録限定の設定を見直してください。数値分析は保持しています。")
     report["movement"].update(evidence_before=before, evidence_after=after)
     report["observations"] = observations(report)
     report["narrative"] = deterministic_narrative(report)
     return report
+
+
+def missing_comparison_evidence(report: dict) -> bool:
+    """Customized selections must support an actual two-sided content comparison."""
+    if report.get("selection", {}).get("selection_source") != "period_candidates":
+        return False
+    return any(not any(p.get("side") == side and str(p.get("abstract") or "").strip()
+                       for p in report.get("evidence_papers", [])) for side in ("before", "after"))
 
 
 def observations(report: dict) -> list[dict]:
@@ -236,7 +279,8 @@ def validate_narrative(value, payload: dict, mode: str, model: str) -> dict:
     metric_text = json.dumps(metrics, ensure_ascii=False)
     def paper_text(p):
         return p.get("title", "") + " " + p.get("abstract", "") + " " + json.dumps(
-            {key: p[key] for key in ("year", "publication_date", "rank") if key in p}, ensure_ascii=False)
+            {key: p[key] for key in ("year", "publication_date", "rank", "selection_rank", "citations", "centroid_distance")
+             if key in p and p[key] is not None}, ensure_ascii=False)
     full_evidence = metric_text + " " + " ".join(paper_text(p) for p in papers.values())
     warnings.extend(_number_warnings(parsed["headline"], full_evidence, "headline"))
     for index, caveat in enumerate(parsed["caveats"]):
@@ -289,13 +333,29 @@ def generate(report: dict, provider: str = "none", model: str | None = None, *, 
     payload = evidence_payload(report)
     if not any(p["abstract"].strip() for p in payload["papers"]):
         raise NarrativeValidationError("解釈に使える抄録がありません。計測値による定型解釈を表示します。", kind="missing_abstracts")
+    if missing_comparison_evidence(report):
+        raise NarrativeValidationError("前期・後期の両方に内容比較できる抄録が必要です。", kind="selection_missing_period")
     instructions = INSTRUCTIONS.replace("complete DISPLAY SAMPLE", "specified analysis scope (sample or full corpus)")
     if report.get("kind") == "centroid":
         from .centroid_reports import INSTRUCTIONS as centroid_instructions
         instructions = centroid_instructions
-    value, mode, chosen = field_llm.structured_output(payload, field_llm.NarrativeOutput, instructions, provider, model,
-                                                    progress=progress, allow_text=True)
-    return validate_narrative(value, payload, mode, chosen)
+    context = {}
+    try:
+        value, mode, chosen = field_llm.structured_output(payload, field_llm.NarrativeOutput, instructions, provider, model,
+                                                        progress=progress, allow_text=True, input_context=context)
+    finally:
+        # Persist the request evidence even when generation fails. Prepared source
+        # excerpts and measured statistics remain unchanged for reproducibility.
+        if context.get("metadata"):
+            actual = context.get("payload", payload)
+            report["llm_input"] = {**deepcopy(context["metadata"]), "papers": deepcopy(actual["papers"]),
+                                   "input_summary": deepcopy(actual.get("input_summary") or input_summary(actual["papers"]))}
+    actual = context.get("payload", payload)
+    narrative = validate_narrative(value, actual, mode, chosen)
+    if context.get("metadata"):
+        narrative["input_context"] = deepcopy(context["metadata"])
+        narrative["caveats"] = _unique_text([*narrative["caveats"], *context["metadata"].get("warnings", [])])
+    return narrative
 
 
 def export_csv(report: dict) -> str:
@@ -308,6 +368,13 @@ def export_csv(report: dict) -> str:
     rows.extend(["unverified_evidence_ids", section["title"], json.dumps(section["unverified_evidence_ids"], ensure_ascii=False)]
                 for section in report["narrative"]["sections"] if section.get("unverified_evidence_ids"))
     rows.append(["input_summary", "abstracts", json.dumps(report.get("input_summary", {}), ensure_ascii=False)])
+    if report.get("selection"):
+        rows.append(["selection", "evidence", json.dumps(report["selection"], ensure_ascii=False, allow_nan=False)])
+    if report.get("llm_input"):
+        rows.extend(["llm_input", key, json.dumps(value, ensure_ascii=False)]
+                    for key, value in report["llm_input"].items() if key != "papers")
+        rows.extend(["llm_input_paper", p["id"], json.dumps(p, ensure_ascii=False)]
+                    for p in report["llm_input"].get("papers", []))
     rows.append(["scope", "meta", json.dumps(report["meta"], ensure_ascii=False, allow_nan=False)])
     rows.append(["narrative_metadata", "mode", report["narrative"]["mode"]])
     rows.append(["narrative_metadata", "model", report["narrative"].get("model") or ""])

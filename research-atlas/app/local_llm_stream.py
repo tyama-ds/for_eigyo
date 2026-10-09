@@ -28,27 +28,56 @@ PROGRESS_INTERVAL_SECONDS = 2.0
 class LocalStreamError(RuntimeError):
     """An intentionally sanitized failure, suitable for a local job status."""
 
-    def __init__(self, message: str, *, kind: str | None = None):
+    def __init__(self, message: str, *, kind: str | None = None, context_limit: int | None = None):
         super().__init__(message)
         self.kind = kind
+        self.context_limit = context_limit
 
 
 _INCOMPLETE = "ローカルLLMの応答が完了前に途切れました。途中のJSONは採用していません。モデルのログ・接続状態を確認して再試行してください。"
 _MALFORMED = "ローカルLLMのストリームまたはJSON回答の形式が不正です。構造化出力に対応するモデルを確認してください。途中の回答は採用していません。"
-_LENGTH = "ローカルLLMの出力がトークン上限に達し、回答が未完了です。入力範囲を絞るか、短い回答に対応するモデルで再試行してください。途中のJSONは採用していません。"
+_LENGTH = "ローカルLLMの出力がトークン上限に達し、回答が未完了です。ブラウザの接続設定で回答上限トークンとコンテキスト長を確認してください。入力を減らすか、より大きいコンテキストでモデルを読み込む方法もあります。途中のJSONは採用していません。"
+_CONTEXT = "ローカルLLMの入力がモデルのコンテキスト長を超えました。ブラウザの接続設定で実際のコンテキスト長と回答上限トークンを確認してください。数値分析は保存されています。"
 _FIRST_TIMEOUT = "ローカルLLMの最初の応答を待つ制限時間（10分）に達しました。入力の前処理・モデルの読み込み状況とサーバーのログを確認してください。回答は採用していません。"
 _TOTAL_TIMEOUT = "ローカルLLMの生成が全体の制限時間（20分）に達しました。回答は未完了のため採用していません。入力範囲・モデルの処理速度を確認してください。"
+
+
+def _context_error(value: object) -> LocalStreamError | None:
+    """Classify a bounded server error; raw content never leaves this helper."""
+    text = (value if isinstance(value, str) else json.dumps(value, ensure_ascii=False))[:16384].lower()
+    if any(word in text for word in ("out of memory", "cuda error", "allocation failed", "unauthorized", "invalid api key")):
+        return None
+    patterns = (r"context[_ -]length[_ -]exceeded", r"maximum context length",
+                r"(?:input|prompt).{0,90}(?:too (?:long|large)|exceed.{0,50}(?:context|token))",
+                r"(?:context (?:length|window)|n_ctx).{0,100}(?:exceed|overflow|smaller than)",
+                r"n_keep\s*(?::\s*\d+\s*)?>=\s*n_ctx", r"cannot truncate prompt with n_keep",
+                r"tokens to keep from the initial prompt is greater than the context length")
+    if not any(re.search(pattern, text) for pattern in patterns):
+        return None
+    limits = []
+    for pattern in (r"n_ctx\s*[:=]\s*(\d+)",
+                    r"(?:maximum|max) context length(?: is| of|:)\s*(\d+)",
+                    r"context (?:length|window)(?: is| of|:)\s*(\d+)",
+                    r'"(?:context_length|context_window)"\s*:\s*(\d+)'):
+        for match in re.finditer(pattern, text):
+            limit = int(match.group(1))
+            if 512 <= limit <= 2_097_152:
+                limits.append(limit)
+    return LocalStreamError(_CONTEXT, kind="context_length", context_limit=min(limits) if limits else None)
 
 
 def _error(exc: Exception) -> LocalStreamError:
     if isinstance(exc, LocalStreamError):
         return exc
     if isinstance(exc, httpx.ConnectTimeout):
-        return LocalStreamError("ローカルLLMへの接続がタイムアウトしました。サーバーの起動と接続先を確認してください。")
+        return LocalStreamError("ローカルLLMへの接続がタイムアウトしました。サーバーの起動と接続先を確認してください。", kind="connect_timeout")
     if isinstance(exc, httpx.ReadTimeout):
         return LocalStreamError("ローカルLLMからの受信が長時間停止したため、通信をタイムアウトしました。モデルの処理状況とサーバーのログを確認してください。途中のJSONは採用していません。", kind="read_timeout")
     if isinstance(exc, httpx.TimeoutException):
-        return LocalStreamError("ローカルLLMからの受信が長時間停止したため、通信をタイムアウトしました。モデルの読み込み状態・処理負荷を確認してください。途中のJSONは採用していません。")
+        # Only generation/read deadlines can benefit from smaller input. A
+        # blocked request upload or connection pool is a transport failure.
+        kind = "write_timeout" if isinstance(exc, httpx.WriteTimeout) else "pool_timeout" if isinstance(exc, httpx.PoolTimeout) else "transport_timeout"
+        return LocalStreamError("ローカルLLMとの通信がタイムアウトしました。接続状態・処理負荷を確認してください。途中のJSONは採用していません。", kind=kind)
     if isinstance(exc, httpx.ConnectError):
         return LocalStreamError("ローカルLLMに接続できません。サーバーの起動と接続先を確認してください。")
     if isinstance(exc, httpx.HTTPStatusError):
@@ -146,6 +175,9 @@ class _Parser:
             return
         record = _json_object(text)
         if "error" in record or self.event == "error":
+            error = _context_error(record.get("error", record))
+            if error:
+                raise error
             raise LocalStreamError("ローカルLLMが生成中のエラーを通知しました。モデルのログを確認してください。途中のJSONは採用していません。")
         choices = record.get("choices")
         if not isinstance(choices, list) or len(choices) > 1:
@@ -174,6 +206,9 @@ class _Parser:
     def _ndjson(self, text: str):
         record = _json_object(text)
         if "error" in record:
+            error = _context_error(record["error"])
+            if error:
+                raise error
             raise LocalStreamError("ローカルLLMが生成中のエラーを通知しました。モデルのログを確認してください。途中のJSONは採用していません。")
         if type(record.get("done")) is not bool:
             raise LocalStreamError(_MALFORMED, kind="malformed_json")
@@ -270,6 +305,15 @@ def stream_json(client: httpx.Client, url: str, body: dict, backend: str,
         try:
             with client.stream("POST", url, json=body) as response:
                 responses.append(response)
+                if response.status_code in {400, 413, 422, 500}:
+                    bounded = bytearray()
+                    for chunk in response.iter_bytes():
+                        bounded.extend(chunk[:max(0, 16384 - len(bounded))])
+                        if len(bounded) >= 16384:
+                            break
+                    error = _context_error(bounded.decode("utf-8", errors="replace"))
+                    if error:
+                        raise error
                 response.raise_for_status()
                 received = 0
                 for chunk in response.iter_bytes():
@@ -293,11 +337,11 @@ def stream_json(client: httpx.Client, url: str, body: dict, backend: str,
             total_remaining = TOTAL_TIMEOUT_SECONDS - (now - started)
             idle_remaining = (READ_TIMEOUT_SECONDS if has_received else FIRST_RESPONSE_TIMEOUT_SECONDS) - (now - last_received)
             if total_remaining <= 0:
-                raise LocalStreamError(_TOTAL_TIMEOUT)
+                raise LocalStreamError(_TOTAL_TIMEOUT, kind="total_timeout")
             if idle_remaining <= 0:
                 if not has_received:
-                    raise LocalStreamError(_FIRST_TIMEOUT)
-                raise LocalStreamError("ローカルLLMから180秒間受信がないため、通信をタイムアウトしました。モデルの読み込み状態・処理負荷を確認してください。途中のJSONは採用していません。")
+                    raise LocalStreamError(_FIRST_TIMEOUT, kind="first_response_timeout")
+                raise LocalStreamError("ローカルLLMから180秒間受信がないため、通信をタイムアウトしました。モデルの読み込み状態・処理負荷を確認してください。途中のJSONは採用していません。", kind="read_timeout")
             try:
                 kind, value = events.get(timeout=min(0.5, total_remaining, idle_remaining))
             except queue.Empty:
@@ -305,7 +349,7 @@ def stream_json(client: httpx.Client, url: str, body: dict, backend: str,
                 continue
             if kind == "error":
                 if not has_received and getattr(value, "kind", None) == "read_timeout":
-                    raise LocalStreamError(_FIRST_TIMEOUT)
+                    raise LocalStreamError(_FIRST_TIMEOUT, kind="first_response_timeout")
                 raise value
             if kind == "chunk":
                 has_received = True
@@ -315,7 +359,7 @@ def stream_json(client: httpx.Client, url: str, body: dict, backend: str,
                 parser.feed(b"", eof=True)
             notify()
         if time.monotonic() - started >= TOTAL_TIMEOUT_SECONDS:
-            raise LocalStreamError(_TOTAL_TIMEOUT)
+            raise LocalStreamError(_TOTAL_TIMEOUT, kind="total_timeout")
         parsed = parser.result(allow_text=allow_text)
         notify(force=True)
         return parsed

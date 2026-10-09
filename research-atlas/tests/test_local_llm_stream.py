@@ -190,16 +190,23 @@ def test_http_error_is_distinct_and_does_not_read_or_echo_body(status, match):
     assert "private-secret" not in str(caught.value)
 
 
-@pytest.mark.parametrize("exception,match", [(httpx.ConnectTimeout, "接続がタイムアウト"),
-    (httpx.ConnectError, "接続できません"), (httpx.ReadTimeout, "受信が長時間停止"),
-    (httpx.RemoteProtocolError, "完了前")])
-def test_socket_errors_are_distinguished_and_sanitized(exception, match):
+@pytest.mark.parametrize("exception,match,kind", [
+    (httpx.ConnectTimeout, "接続がタイムアウト", "connect_timeout"),
+    (httpx.ConnectError, "接続できません", None),
+    (httpx.ReadTimeout, "受信が長時間停止", "read_timeout"),
+    (httpx.WriteTimeout, "通信がタイムアウト", "write_timeout"),
+    (httpx.PoolTimeout, "通信がタイムアウト", "pool_timeout"),
+    (httpx.TimeoutException, "通信がタイムアウト", "transport_timeout"),
+    (httpx.RemoteProtocolError, "完了前", "incomplete"),
+])
+def test_socket_errors_are_distinguished_and_sanitized(exception, match, kind):
     class Broken(Chunks):
         def __iter__(self):
             yield sse('{"ok":true}')
             raise exception("private-secret and private-abstract")
     with pytest.raises(streaming.LocalStreamError, match=match) as caught:
         invoke(Broken([]))
+    assert caught.value.kind == kind
     assert "private-secret" not in str(caught.value)
 
 
@@ -208,8 +215,9 @@ def test_hard_deadline_cancels_a_silent_socket_without_waiting_for_socket_timeou
     monkeypatch.setattr(streaming, "READ_TIMEOUT_SECONDS", 10)
     chunks = Chunks([sse('{"ok":true}', "stop"), b"data: [DONE]\n\n"], delay=10)
     started = time.monotonic()
-    with pytest.raises(streaming.LocalStreamError, match="全体の制限時間"):
+    with pytest.raises(streaming.LocalStreamError, match="全体の制限時間") as caught:
         invoke(chunks)
+    assert caught.value.kind == "total_timeout"
     assert time.monotonic() - started < 0.5
     assert chunks.closed.is_set()
 
@@ -223,8 +231,9 @@ def test_inactivity_deadline_is_distinct_from_total_deadline(monkeypatch):
             yield b": first-byte\n\n"
             self.closed.wait(10)
     chunks = Paused([])
-    with pytest.raises(streaming.LocalStreamError, match="180秒間受信がない"):
+    with pytest.raises(streaming.LocalStreamError, match="180秒間受信がない") as caught:
         invoke(chunks)
+    assert caught.value.kind == "read_timeout"
     assert chunks.closed.is_set()
 
 
@@ -250,6 +259,7 @@ def test_first_response_deadline_is_bounded_and_reports_prefill_stage(monkeypatc
     started = time.monotonic()
     with pytest.raises(streaming.LocalStreamError, match="最初の応答.*10分") as caught:
         invoke(chunks)
+    assert caught.value.kind == "first_response_timeout"
     assert "前処理" in str(caught.value) and "メモリ" not in str(caught.value)
     assert time.monotonic() - started < 0.5 and chunks.closed.is_set()
 
@@ -261,7 +271,66 @@ def test_socket_read_timeout_before_any_bytes_has_first_response_message():
             yield b""  # This is a stream whose first read raises.
     with pytest.raises(streaming.LocalStreamError, match="最初の応答") as caught:
         invoke(NoResponse([]))
+    assert caught.value.kind == "first_response_timeout"
     assert "private" not in str(caught.value)
+
+
+@pytest.mark.parametrize("stage,times,kind", [
+    ("silent", [0, 0, 600], "first_response_timeout"),
+    ("silent", [0, 0, 1200], "total_timeout"),
+    ("paused", [0, 0, 0, 0, 0, 180], "read_timeout"),
+    ("completed", [0, 0, 0, 0, 0, 1200], "total_timeout"),
+])
+def test_real_deadline_values_are_typed_without_waiting(monkeypatch, stage, times, kind):
+    # Only the coordinator reads this clock. The real HTTPX mock transport and
+    # reader thread still exercise cancellation and protocol completion.
+    clock = iter(times)
+    reading = threading.Event()
+    def fake_time():
+        value = next(clock, times[-1])
+        if value:
+            assert reading.wait(1), "mock reader did not start"
+        return value
+    monkeypatch.setattr(streaming.time, "monotonic", fake_time)
+    class Controlled(Chunks):
+        def __iter__(self):
+            reading.set()
+            if stage == "completed":
+                yield sse('{"ok":true}', "stop") + b"data: [DONE]\n\n"
+                return
+            if stage == "paused":
+                yield b": first-byte\n\n"
+            self.closed.wait(2)
+    chunks = Controlled([])
+    with pytest.raises(streaming.LocalStreamError) as caught:
+        invoke(chunks)
+    assert caught.value.kind == kind
+    assert chunks.closed.is_set()
+
+
+@pytest.mark.parametrize("exception,kind", [
+    (RuntimeError, None),
+    (ValueError, "malformed_json"),
+    (httpx.ConnectError, None),
+    (httpx.RemoteProtocolError, "incomplete"),
+])
+def test_timeout_words_do_not_make_non_timeout_errors_retryable(exception, kind):
+    class Broken(Chunks):
+        def __iter__(self):
+            raise exception("private-secret: first_response_timeout read_timeout total_timeout")
+            yield b""
+    with pytest.raises(streaming.LocalStreamError) as caught:
+        invoke(Broken([]))
+    assert caught.value.kind == kind
+    assert "private-secret" not in str(caught.value)
+
+
+@pytest.mark.parametrize("status", [401, 429, 500, 504])
+def test_http_errors_with_timeout_text_are_not_generation_timeouts(status):
+    with pytest.raises(streaming.LocalStreamError) as caught:
+        invoke([b"first_response_timeout read_timeout total_timeout"], status=status)
+    assert caught.value.kind is None
+    assert f"HTTP {status}" in str(caught.value)
 
 
 def test_active_generation_can_exceed_inactivity_limit_and_progress_is_text_free(monkeypatch):

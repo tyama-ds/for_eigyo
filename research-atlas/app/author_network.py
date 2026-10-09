@@ -7,7 +7,7 @@ edge drawing cap. Layout positions express groups, not scientific distance.
 
 from __future__ import annotations
 
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 from copy import deepcopy
 import hashlib
 import math
@@ -24,6 +24,24 @@ EDGE_LIMIT = 240
 GROUPS = {"id", "name", "institution", "community", "topic"}
 COLORS = ["#42e8cf", "#9d8cff", "#5fa8ff", "#ffbc6b", "#ff7ea8", "#b5e875",
           "#58d7ff", "#dc93f5", "#f1dd72", "#90b9a5"]
+METRIC_DEFINITIONS = {
+    "degree": {"label": "近隣著者数", "description": "直接共著した異なる著者の人数です。",
+               "formula": "k(v) = |N(v)|", "direction": "descending", "scope": "displayed_authors"},
+    "strength": {"label": "共著強度", "description": "共著相手ごとの共著論文数の合計です。多人数の論文は相手の人数分加算されます。",
+                 "formula": "s(v) = Σ w(v,u)", "direction": "descending", "scope": "displayed_authors"},
+    "betweenness": {"label": "媒介中心性", "description": "著者間の最短経路を仲介する度合いです。辺の長さはすべて1、両端の著者は数えず、到達不能な組の寄与は0です。表示著者数nで正規化します。",
+                    "formula": "2 / ((n−1)(n−2)) × Σ_{s<t; s,t≠v} σ_st(v)/σ_st; n<3 は0",
+                    "direction": "descending", "scope": "displayed_authors"},
+    "pagerank": {"label": "PageRank", "description": "共著件数を重みとして、つながりの中心にいる相手との関係も評価します。減衰係数0.85、孤立著者からの確率は全著者へ均等に配ります。引用評価ではありません。",
+                 "formula": "p(v) = 0.15/n + 0.85 × [Σ_{u:s(u)>0} p(u)w(u,v)/s(u) + Σ_{u:s(u)=0} p(u)/n]",
+                 "direction": "descending", "scope": "displayed_authors"},
+    "local_clustering": {"label": "近隣の結束度（局所推移性）", "description": "自分の共著相手同士も共著している割合です。高いほど近隣の結束が強く、橋渡しの強さや研究成果の質を直接示すものではありません。共著相手2人未満は0です。",
+                         "formula": "C(v) = 2T(v) / (k(v)(k(v)−1)); k(v)<2 は0",
+                         "direction": "descending", "scope": "displayed_authors"},
+    "institution_bridge": {"label": "所属機関への橋渡し数", "description": "直接の共著相手の主表示所属のうち、自分の主表示所属と異なる既知の機関の数です。各人の主表示所属は全対象論文の最多所属を使い、移籍の時系列は示しません。本人の所属不明は未評価、相手の所属不明は除外します。",
+                           "formula": "|{I(u): u∈N(v), I(u)既知, I(u)≠I(v)}|; I(v)不明はnull",
+                           "direction": "descending", "scope": "displayed_authors"},
+}
 
 
 def _text(value):
@@ -286,6 +304,93 @@ def _communities(nodes, edges):
     return {identifier: frozenset(group) for group in groups for identifier in group}, modularity
 
 
+def _attach_metrics(all_nodes, displayed, edges):
+    """Measure the whole display-induced graph, independent of drawing/grouping.
+
+    Brandes counts ordered shortest-path pairs below; dividing by (n-1)(n-2)
+    gives the usual normalized undirected betweenness without counting endpoints.
+    PageRank uses uniform teleportation and uniform redistribution from isolates.
+    """
+    for node in all_nodes:
+        node.update(metrics={key: None for key in METRIC_DEFINITIONS},
+                    metrics_computed=False, neighbor_ids=None, neighbor_weights=None)
+    identifiers = sorted(node["id"] for node in displayed)
+    adjacency = {identifier: {} for identifier in identifiers}
+    for edge in edges:
+        source, target, weight = edge["source"], edge["target"], edge["weight"]
+        adjacency[source][target] = weight
+        adjacency[target][source] = weight
+    adjacency = {identifier: dict(sorted(neighbors.items())) for identifier, neighbors in adjacency.items()}
+    neighbors = {identifier: set(values) for identifier, values in adjacency.items()}
+    strength = {identifier: sum(values.values()) for identifier, values in adjacency.items()}
+    betweenness = {identifier: 0.0 for identifier in identifiers}
+    count = len(identifiers)
+    if count > 2:
+        for source in identifiers:
+            stack, queue = [], deque([source])
+            predecessors = {identifier: [] for identifier in identifiers}
+            paths = dict.fromkeys(identifiers, 0)
+            paths[source] = 1
+            distance = {source: 0}
+            while queue:
+                current = queue.popleft()
+                stack.append(current)
+                for neighbor in adjacency[current]:
+                    if neighbor not in distance:
+                        distance[neighbor] = distance[current] + 1
+                        queue.append(neighbor)
+                    if distance[neighbor] == distance[current] + 1:
+                        paths[neighbor] += paths[current]
+                        predecessors[neighbor].append(current)
+            dependency = dict.fromkeys(identifiers, 0.0)
+            for current in reversed(stack):
+                for predecessor in predecessors[current]:
+                    dependency[predecessor] += paths[predecessor] / paths[current] * (1 + dependency[current])
+                if current != source:
+                    betweenness[current] += dependency[current]
+        betweenness = {identifier: value / ((count - 1) * (count - 2))
+                       for identifier, value in betweenness.items()}
+    pagerank = dict.fromkeys(identifiers, 1.0 / count) if count else {}
+    iterations, residual = 0, 0.0
+    for iteration in range(500 if count else 0):
+        dangling = sum(pagerank[identifier] for identifier in identifiers if not strength[identifier])
+        updated = dict.fromkeys(identifiers, (0.15 + 0.85 * dangling) / count)
+        for source in identifiers:
+            if strength[source]:
+                contribution = 0.85 * pagerank[source] / strength[source]
+                for target, weight in adjacency[source].items():
+                    updated[target] += contribution * weight
+        residual = sum(abs(updated[identifier] - pagerank[identifier]) for identifier in identifiers)
+        pagerank = updated
+        iterations = iteration + 1
+        if residual <= 1e-12:
+            break
+    institutions = {node["id"]: node["affiliations"][0]["normalized_name"] if node["affiliations"] else None
+                    for node in displayed}
+    for node in displayed:
+        identifier = node["id"]
+        degree = len(neighbors[identifier])
+        # Each edge between neighbors is counted twice, matching k(k-1).
+        triangles_twice = sum(len(neighbors[identifier] & neighbors[neighbor]) for neighbor in adjacency[identifier])
+        own = institutions[identifier]
+        bridges = len({institutions[neighbor] for neighbor in adjacency[identifier]
+                       if institutions[neighbor] is not None and institutions[neighbor] != own}) if own is not None else None
+        node.update(metrics={"degree": degree, "strength": strength[identifier],
+                             "betweenness": betweenness[identifier], "pagerank": pagerank[identifier],
+                             "local_clustering": triangles_twice / (degree * (degree - 1)) if degree > 1 else 0.0,
+                             "institution_bridge": bridges},
+                    metrics_computed=True, neighbor_ids=list(adjacency[identifier]),
+                    neighbor_weights=dict(adjacency[identifier]))
+    return {"population": "displayed_authors", "node_count": count, "edge_count": len(edges),
+            "full_edge_set": True, "author_display_limit": AUTHOR_LIMIT, "edge_drawing_limit": EDGE_LIMIT,
+            "selection": "paper_count_desc_then_author_id", "grouping_independent": True,
+            "affiliation_basis": "most_frequent_explicit_author_affiliation_in_scope",
+            "authors_with_known_primary_institution": sum(value is not None for value in institutions.values()),
+            "pagerank_alpha": 0.85, "pagerank_iterations": iterations,
+            "pagerank_l1_delta": residual, "pagerank_converged": residual <= 1e-12,
+            "description": "論文数上位の表示著者間の全共著辺で計算します。描画上限や所属の色分けでは計算結果は変わりません。表示範囲外の著者は未計算です。"}
+
+
 def _assign_groups(all_nodes, displayed, edges, group_by, topics):
     labels = {str(topic["id"]): str(topic.get("label") or topic["id"]) for topic in topics or []}
     community_groups, modularity = _communities(displayed, edges) if group_by == "community" else ({}, None)
@@ -365,6 +470,7 @@ def build_author_network(papers: list[dict], group_by="community", topics=None) 
     all_nodes, paper_authors, identity_stats = _author_records(ordered_papers)
     displayed = all_nodes[:AUTHOR_LIMIT]
     all_edges = _edges(displayed, ordered_papers)
+    metrics_scope = _attach_metrics(all_nodes, displayed, all_edges)
     modularity = _assign_groups(all_nodes, displayed, all_edges, group_by, topics)
     clusters = _layout(displayed)
     warnings = ["研究者の同定は全表示方法で共通です。異なる明示IDを名前が同じという理由だけで統合しません。ID欠測の名前一致や名前由来の別名による照合は推定です。",
@@ -373,7 +479,7 @@ def build_author_network(papers: list[dict], group_by="community", topics=None) 
     if len(all_nodes) > AUTHOR_LIMIT:
         warnings.append(f"全 {len(all_nodes)} 人のうち論文数上位 {AUTHOR_LIMIT} 人を表示・辺計算の対象にしています。全著者の属性はCSV用データに保持しています。")
     if len(all_edges) > EDGE_LIMIT:
-        warnings.append(f"表示著者間の全 {len(all_edges)} 辺のうち共著件数上位 {EDGE_LIMIT} 辺を描画します。グループ計算とCSV用データには表示著者間の全辺を使います。")
+        warnings.append(f"表示著者間の全 {len(all_edges)} 辺のうち共著件数上位 {EDGE_LIMIT} 辺を描画します。グループ・キーマン指標の計算とCSV用データには表示著者間の全辺を使います。")
     if identity_stats["ambiguous_name_groups"]:
         warnings.append(f"同じ正規化名で別IDのノードがある候補群は {identity_stats['ambiguous_name_groups']} 群です。同一人物とは断定しません。")
     if identity_stats["ambiguous_aliases"]:
@@ -386,6 +492,7 @@ def build_author_network(papers: list[dict], group_by="community", topics=None) 
              "community": "表示対象著者間の全共著辺を用いて、重み付きmodularityが最大に増える2群を決定的に統合します。正の増分がなくなった時点で止め、接続のない著者は単独群にします。研究組織や真の研究分野を認定する分類ではありません。",
              "topic": "その著者の論文が最も多く割り当てられた研究分野で表示します。同数なら分野ID順です。複数分野の件数は各ノードに保持しています。"}
     warnings.append(notes[group_by])
+    warnings.append("キーマン指標は観測された共著関係上の特徴です。近隣の結束度（局所推移性）は橋渡し指標ではなく、いずれの指標も人物の能力や研究の質を認定しません。")
     affiliations_known = sum(bool(node["affiliations"]) for node in all_nodes)
     associations = sum(node["count"] for node in all_nodes)
     stats = {"authors_total": len(all_nodes), "papers_total": len(ordered_papers),
@@ -402,8 +509,10 @@ def build_author_network(papers: list[dict], group_by="community", topics=None) 
     return {"nodes": displayed, "edges": all_edges[:EDGE_LIMIT], "clusters": clusters, "group_by": group_by,
             "truncated": len(all_nodes) > AUTHOR_LIMIT or len(all_edges) > EDGE_LIMIT,
             "stats": stats, "warnings": warnings,
+            "metric_definitions": deepcopy(METRIC_DEFINITIONS), "metrics_scope": metrics_scope,
             "methodology": ["各論文について同じcanonical著者は1人、同じ著者ペアは1辺として数えます。自己辺は生成しません。",
                             "論文数・引用既知件数・著者属性は全対象論文から集計し、表示上限とは分けます。",
+                            metrics_scope["description"],
                             "所属名はUnicode・空白を正規化し、単一の大学等の名称を含む場合だけDepartmentやLaboratory等の部局候補部分を規則でまとめます。原文字列と規則の根拠を保持し、大学名・所在地が異なる文字列は推測で統合しません。",
                             notes[group_by],
                             "ノード座標はグループを見やすく配置するための座標です。距離やグループの面積に技術的近さ・引用強度の意味はありません。"],
