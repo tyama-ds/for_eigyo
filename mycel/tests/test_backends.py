@@ -126,7 +126,9 @@ class ClientTest(unittest.TestCase):
             self.assertEqual(len(self.audit.read_text(encoding="utf-8").splitlines()), 1)
 
     def test_env_proxy_is_used_for_external(self):
-        with mock.patch.dict(os.environ, {**NO_PROXY_ENV, "HTTPS_PROXY": self.url}):
+        # Windows は環境変数名の大文字小文字を区別しないので、HTTPS_PROXY を小文字の空値で上書きしないようにする
+        env = {k: v for k, v in NO_PROXY_ENV.items() if k.lower() != "https_proxy"}
+        with mock.patch.dict(os.environ, {**env, "HTTPS_PROXY": self.url}):
             c = LLMClient(self.cfg, "external")
             with self.assertRaises(LLMError):
                 c.chat("x")
