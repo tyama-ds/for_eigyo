@@ -63,7 +63,8 @@ def _str(params: dict, key: str, default: str = "") -> str:
 def api_state(app: MycelApp, _p: dict) -> dict:
     cfg = app.config()
     return {"version": __version__, "vault": str(app.vault.root), "user": cfg["user_name"],
-            "llm": {"chat": chat_configured(cfg), "embed": embed_configured(cfg), "rag_mode": cfg.get("rag_mode", "standard")},
+            "llm": {"chat": chat_configured(cfg), "embed": embed_configured(cfg), "rag_mode": cfg.get("rag_mode", "standard"),
+                    "backends": app.llm_backends()},
             "daily_folder": cfg["daily_folder"], "template_folder": cfg["template_folder"],
             "attachment_folder": cfg.get("attachment_folder", "添付"), "vlm": bool((cfg.get("vlm_model") or "").strip()) and chat_configured(cfg),
             "fts": app.index.has_fts, "index": app.index_status()}
@@ -88,15 +89,23 @@ def _open_file(app: MycelApp, path: str) -> dict:
     return {"ok": True}
 
 
-def api_config_test(app: MycelApp, _p: dict) -> dict:
+def api_config_test(app: MycelApp, b: dict) -> dict:
     cfg = app.config()
-    client = LLMClient(cfg)
-    out = {}
+    backend = "external" if b.get("backend") == "external" else "local"
+    out = {"backend": backend}
     try:
+        if backend == "external" and not cfg.get("ext_enabled"):
+            raise LLMError("外部 API が有効になっていません（「外部 API を使う」をオンにして保存してください）")
+        client = LLMClient(cfg, backend)
+        out["host"] = client.host
         text = client.chat("「接続OK」とだけ返答してください。", max_tokens=256, temperature=0)
         out["chat"] = {"ok": bool(text), "message": text[:120] or "応答が空でした（Max tokens を増やしてください）"}
     except LLMError as e:
         out["chat"] = {"ok": False, "message": str(e)}
+    if backend == "external":
+        out["embed"] = {"ok": None, "message": "埋め込みはローカル LLM だけで行います（外部には送りません）"}
+        return out
+    client = LLMClient(cfg, "local")
     if embed_configured(cfg):
         try:
             out["embed"] = {"ok": True, "message": f"次元数 {len(client.embed(['接続テスト'])[0])}"}
@@ -110,12 +119,19 @@ def api_config_test(app: MycelApp, _p: dict) -> dict:
 def api_llm_models(app: MycelApp, b: dict) -> dict:
     """画面で入力中の URL でモデル一覧を取る（API キーは入力が無ければ保存済みのものを使う）。"""
     cfg = dict(app.config())
+    if b.get("backend") == "external":
+        cfg = {**cfg, "provider": cfg.get("ext_provider", "openai"), "base_url": cfg.get("ext_base_url", ""), "api_key": cfg.get("ext_api_key", ""),
+               "use_proxy": True, "proxy_url": cfg.get("ext_proxy_url") or cfg.get("proxy_url") or "", "_backend": "external"}
+        for k in ("provider", "base_url", "api_key"):
+            if isinstance(b.get(k), str) and b[k].strip():
+                cfg[k] = b[k].strip()
+        return {"models": LLMClient(cfg).list_models()}
     for k in ("provider", "base_url", "api_key", "embed_base_url"):
         if isinstance(b.get(k), str) and b[k].strip():
             cfg[k] = b[k].strip()
     if b.get("target") == "embed" and cfg.get("embed_base_url"):
         cfg["base_url"] = cfg["embed_base_url"]
-    return {"models": LLMClient(cfg).list_models()}
+    return {"models": LLMClient({**cfg, "_backend": "local"}).list_models()}
 
 
 GET_ROUTES = {
@@ -160,6 +176,8 @@ GET_ROUTES = {
     "/api/ai/status": lambda app, p: {**app.ai.status(), "graphrag": app.graphrag.status(), "images": app.images_status(),
                                       "rag_mode": app.config().get("rag_mode", "standard"), "modes": MODES},
     "/api/vault/list": lambda app, p: app.vault_list(),
+    "/api/ai/backends": lambda app, p: app.llm_backends(),
+    "/api/ai/external_log": lambda app, p: app.external_log(int(_str(p, "limit", "50") or 50)),
     "/api/images": lambda app, p: {"images": app.index.images(), **app.images_status()},
     "/api/graphrag/communities": lambda app, p: {"communities": app.graphrag.communities()},
     "/api/graphrag/entity": lambda app, p: app.graphrag.entity_docs(_str(p, "key")),
@@ -207,14 +225,15 @@ POST_ROUTES = {
     "/api/library/ai_meta": lambda app, b: app.library._row(app.library.ai_metadata(_str(b, "id"), bool(b.get("overwrite")))),
     "/api/library/ai_summary": lambda app, b: app.library.ai_summary(_str(b, "id")),
     "/api/library/insights": lambda app, b: {"insights": app.library.insights(_str(b, "id"))},
-    "/api/library/ask_doc": lambda app, b: app.library.ask_doc(_str(b, "id"), _str(b, "question"), _list(b, "history")),
+    "/api/library/ask_doc": lambda app, b: app.library.ask_doc(_str(b, "id"), _str(b, "question"), _list(b, "history"),
+                                                                app.resolve_backend(_str(b, "backend") or None)),
     "/api/image/caption": lambda app, b: app.caption_image(_str(b, "path")),
     "/api/image/caption_all": lambda app, b: app.caption_images(_list(b, "prefixes"), b.get("only_missing", True) is not False),
     "/api/vault/switch": lambda app, b: app.vault_switch(_str(b, "path"), bool(b.get("create")), bool(b.get("seed"))),
     "/api/library/ai_batch": lambda app, b: app.library_ai_batch(_list(b, "ids") or [], _str(b, "what", "meta")),
     "/api/library/embed": lambda app, b: app.library_embed(),
     "/api/library/ask": lambda app, b: app.library.ask(_str(b, "question"), _list(b, "history"), _str(b, "tag"),
-                                                         _str(b, "year"), _str(b, "status")),
+                                                         _str(b, "year"), _str(b, "status"), app.resolve_backend(_str(b, "backend") or None)),
     "/api/library/note": lambda app, b: app.library.create_note(_str(b, "id")),
     "/api/library/link": lambda app, b: app.library.link(_str(b, "a"), _str(b, "b"), _str(b, "type", "related"), _str(b, "note"), _str(b, "origin", "user"))
         and {"links": app.library.links_of(_str(b, "a"))},
@@ -244,7 +263,7 @@ POST_ROUTES = {
     "/api/config": lambda app, b: public_config(app.update_config(b)),
     "/api/config/test": api_config_test,
     "/api/ai/ask": lambda app, b: app.ask(_str(b, "question"), _str(b, "path") or None,
-                                         _list(b, "history"), _list(b, "prefixes"), _str(b, "mode")),
+                                         _list(b, "history"), _list(b, "prefixes"), _str(b, "mode"), _str(b, "backend") or None),
     "/api/graphrag/build": lambda app, b: app.graphrag_build(_list(b, "prefixes")),
     "/api/ai/summarize": lambda app, b: app.ai.summarize(_str(b, "path")),
     "/api/ai/transform": lambda app, b: {"text": app.ai.transform(_str(b, "text"), _str(b, "preset"),

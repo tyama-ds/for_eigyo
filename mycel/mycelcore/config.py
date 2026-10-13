@@ -36,14 +36,25 @@ DEFAULT_CONFIG: dict = {
     "template_folder": "テンプレート",
     # 有効にするプラグイン（plugins/ フォルダのファイル名）
     "plugins": ["change_journal"],
-    # ---- LLM
+    # ---- LLM（ローカル。URL は 127.0.0.1 / 社内ネットワークなど私設アドレスだけを受け付ける）
     "provider": "openai",
     # 既定はローカル LLM（Ollama）。モデルを選ぶまでは未設定扱い
     "base_url": "http://127.0.0.1:11434/v1",
     "api_key": "",
     "model": "",
     "api_version": "2024-10-21",        # Azure のみ
+    # ---- 外部 API（OpenAI など。文書の内容が社外に送られる）。llm_backend が "external" のときだけ使う
+    # 外部へは必ずプロキシ経由（ext_proxy_url、無ければ proxy_url、無ければ環境変数 HTTPS_PROXY）。https 必須
+    "llm_backend": "local",            # 既定の接続先: local / external
+    "ext_enabled": False,              # 外部 API を使ってよいか（設定画面で明示的にオン）
+    "ext_provider": "openai",
+    "ext_base_url": "https://api.openai.com/v1",
+    "ext_api_key": "",
+    "ext_model": "",
+    "ext_api_version": "2024-10-21",
+    "ext_proxy_url": "",
     # 埋め込み。空欄は base_url / api_key を流用。embed_model が空なら AI 検索はキーワード方式
+    # （埋め込みと画像の説明はローカル LLM だけで行う。外部 API には送らない）
     "embed_model": "",
     "embed_base_url": "",
     "embed_api_key": "",
@@ -72,9 +83,32 @@ DEFAULT_CONFIG: dict = {
     "attachment_folder": "添付",
 }
 
-_SECRET_KEYS = ("api_key", "embed_api_key")
+_SECRET_KEYS = ("api_key", "embed_api_key", "ext_api_key")
 _STR_KEYS = ("vault_path", "user_name", "daily_folder", "template_folder", "base_url",
-             "model", "api_version", "embed_model", "embed_base_url", "proxy_url", "vlm_model", "attachment_folder")
+             "model", "api_version", "embed_model", "embed_base_url", "proxy_url", "vlm_model", "attachment_folder",
+             "ext_base_url", "ext_model", "ext_api_version", "ext_proxy_url")
+
+
+class ConfigError(ValueError):
+    """設定の検証エラー（画面にそのまま出す。HTTP 400）。"""
+    status = 400
+
+
+def is_private_url(url: str) -> bool:
+    """ローカル LLM として許す URL か（ループバック・私設 IP・ドットの無いホスト名・.local/.lan/.internal）。"""
+    import ipaddress
+    from urllib.parse import urlsplit
+    try:
+        host = (urlsplit(url.strip()).hostname or "").lower()
+    except ValueError:
+        return False
+    if not host:
+        return False
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_private or ipaddress.ip_address(host.strip("[]")).is_loopback
+    except ValueError:
+        pass
+    return host in ("localhost",) or "." not in host or host.endswith((".local", ".lan", ".internal", ".home", ".corp"))
 _lock = threading.Lock()
 
 
@@ -108,6 +142,21 @@ def save_config(update: dict, path: Path | None = None) -> dict:
     for key in _STR_KEYS:
         if isinstance(update.get(key), str):
             cfg[key] = update[key].strip()
+    if cfg.get("base_url") and not is_private_url(cfg["base_url"]):
+        raise ConfigError("ローカル LLM の URL には 127.0.0.1 や社内ネットワークのアドレスだけを登録できます。"
+                          "OpenAI などの外部サービスは設定の「外部 API」に登録してください（情報漏洩の防止のため分けています）")
+    if cfg.get("ext_base_url") and not cfg["ext_base_url"].lower().startswith("https://"):
+        raise ConfigError("外部 API の URL は https:// で始まる必要があります")
+    if cfg.get("ext_base_url") and is_private_url(cfg["ext_base_url"]):
+        raise ConfigError("外部 API の欄に社内・ローカルのアドレスは登録できません（ローカル LLM の欄に登録してください）")
+    if "ext_enabled" in update:
+        cfg["ext_enabled"] = bool(update["ext_enabled"])
+    if update.get("ext_provider") in ("openai", "azure"):
+        cfg["ext_provider"] = update["ext_provider"]
+    if update.get("llm_backend") in ("local", "external"):
+        cfg["llm_backend"] = update["llm_backend"]
+    if cfg["llm_backend"] == "external" and not (cfg["ext_enabled"] and ext_configured(cfg)):
+        cfg["llm_backend"] = "local"           # 外部が使えない状態では既定を外部にできない
     if update.get("rag_mode") in ("standard", "auto", "local", "global"):
         cfg["rag_mode"] = update["rag_mode"]
     if update.get("rag_rerank") in ("none", "llm"):
@@ -153,6 +202,7 @@ def public_config(cfg: dict) -> dict:
     out = {k: v for k, v in cfg.items() if k not in _SECRET_KEYS}
     out["has_api_key"] = bool(cfg.get("api_key"))
     out["has_embed_api_key"] = bool(cfg.get("embed_api_key"))
+    out["has_ext_api_key"] = bool(cfg.get("ext_api_key"))
     return out
 
 
@@ -160,8 +210,40 @@ def vault_path(cfg: dict) -> Path:
     return Path(cfg["vault_path"]).expanduser() if cfg.get("vault_path") else DEFAULT_VAULT
 
 
-def chat_configured(cfg: dict) -> bool:
-    return bool(cfg.get("base_url") and cfg.get("model"))
+def ext_configured(cfg: dict) -> bool:
+    return bool(cfg.get("ext_base_url") and cfg.get("ext_model"))
+
+
+def ext_allowed(cfg: dict) -> bool:
+    """外部 API を使ってよい状態か（有効化されていて、URL とモデルがある）。"""
+    return bool(cfg.get("ext_enabled")) and ext_configured(cfg)
+
+
+def backend_of(cfg: dict, backend: str | None = None) -> str:
+    """実際に使う接続先。明示が無ければ設定 llm_backend。外部が使えない状態なら必ず local。"""
+    b = backend if backend in ("local", "external") else cfg.get("llm_backend", "local")
+    return "external" if b == "external" and ext_allowed(cfg) else "local"
+
+
+def effective_llm(cfg: dict, backend: str | None = None) -> dict:
+    """接続先ごとの実効設定。外部 API なら provider / base_url / api_key / model / api_version を ext_* に置き換え、
+    プロキシを必ず使う。埋め込みと画像の説明（embed_* / vlm_model）はローカルのまま。_backend に接続先を入れる。"""
+    if cfg.get("_backend"):
+        return cfg                                  # すでに解決済み
+    b = backend_of(cfg, backend)
+    out = dict(cfg)
+    out["_backend"] = b
+    if b == "external":
+        out.update({"provider": cfg.get("ext_provider", "openai"), "base_url": cfg.get("ext_base_url", ""),
+                    "api_key": cfg.get("ext_api_key", ""), "model": cfg.get("ext_model", ""),
+                    "api_version": cfg.get("ext_api_version", "2024-10-21"),
+                    "use_proxy": True, "proxy_url": cfg.get("ext_proxy_url") or cfg.get("proxy_url") or ""})
+    return out
+
+
+def chat_configured(cfg: dict, backend: str | None = None) -> bool:
+    e = effective_llm(cfg, backend)
+    return bool(e.get("base_url") and e.get("model"))
 
 
 def embed_configured(cfg: dict) -> bool:

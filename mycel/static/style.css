@@ -71,6 +71,28 @@ input,textarea,select{font:inherit;color:var(--ink)}
 .title-in{flex:1;min-width:60px;border:1px solid transparent;background:transparent;font-size:14px;font-weight:500;padding:3px 6px;border-radius:5px;text-overflow:ellipsis}
 .title-in:hover{border-color:var(--line)}
 .ndates{color:var(--muted);font-size:11px;white-space:nowrap;opacity:.75;margin:0 4px}
+/* 接続先の切り替え（ローカル / 外部）。外部はオレンジで一目で分かるようにする */
+:root{--ext:#C2410C;--ext-bg:#FFF1E6;--ext-ink:#7C2D12}
+:root[data-theme="dark"]{--ext:#FB923C;--ext-bg:#3B2415;--ext-ink:#FED7AA}
+.btabs{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;margin:4px 0 8px;font-size:12.5px}
+.btabs button{flex:1;border:0;background:transparent;color:var(--muted);padding:7px 8px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px}
+.btabs button.on{background:var(--surface2);color:var(--ink);font-weight:600}
+.btabs button[data-bk="external"].on{background:var(--ext);color:#fff}
+.btabs button[data-bk="external"]:not(.on){color:var(--ext)}
+.btabs button:disabled{opacity:.45;cursor:not-allowed}
+.btabs .ic{font-size:13px}
+.extbanner{background:var(--ext-bg);color:var(--ext-ink);border:1px solid var(--ext);border-radius:8px;padding:8px 10px;font-size:12px;line-height:1.6;margin-bottom:8px}
+.extbanner b{color:var(--ext)}
+.localbanner{font-size:11.5px;color:var(--muted);margin-bottom:8px}
+.rpane.ext{box-shadow:inset 3px 0 0 var(--ext)}
+.rpane.ext .askbox textarea{border-color:var(--ext);background:var(--ext-bg)}
+.btn.ext{background:var(--ext);border-color:var(--ext);color:#fff}
+.bk{display:inline-block;font-size:10px;border-radius:4px;padding:0 6px;margin-bottom:4px;letter-spacing:.02em}
+.bk.local{background:var(--surface2);color:var(--muted)}.bk.external{background:var(--ext);color:#fff;font-weight:600}
+.stext{color:#fff;background:var(--ext);border-radius:4px;padding:0 7px;font-weight:600}
+.extwarn{background:var(--ext-bg);color:var(--ext-ink);border:1px solid var(--ext);border-radius:8px;padding:10px 12px;font-size:12.5px;line-height:1.7;margin:10px 0}
+.extlog{font-size:12px;max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:6px;padding:6px 8px}.extlog div{display:flex;gap:10px;color:var(--muted)}.extlog b{color:var(--ink);font-weight:500}
+.mtabs button[data-t="ext"]{color:var(--ext)}.mtabs button[data-t="ext"].on{border-bottom-color:var(--ext)}
 .stver{color:var(--muted);opacity:.7;font-size:11px}.stver.old{color:var(--warn);opacity:1;cursor:help}
 .ft-image{background:#9B6AA8}
 .docimg{display:block;max-width:100%;max-height:70vh;margin:14px auto 8px;border-radius:8px;border:1px solid var(--line);background:var(--surface)}
