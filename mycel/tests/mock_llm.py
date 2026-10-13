@@ -114,6 +114,11 @@ def start_mock_llm():
                 self.send_response(404)
                 self.end_headers()
 
+        def do_CONNECT(self):  # noqa: N802 - プロキシとして使われたときの CONNECT（TLS は張らず、記録だけして拒否）
+            requests.append({"path": self.path, "method": "CONNECT", "headers": {k.lower(): v for k, v in self.headers.items()}, "body": {}})
+            self.send_response(502)
+            self.end_headers()
+
         def do_POST(self):  # noqa: N802
             body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
             requests.append({"path": self.path, "headers": {k.lower(): v for k, v in self.headers.items()}, "body": body})

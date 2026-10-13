@@ -8,12 +8,19 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import socket
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
+
+from .config import effective_llm
+
+AUDIT_PATH: Path | None = None     # 外部 API への送信記録（.mycel/external_llm.jsonl）。app が Vault を開くときに設定
+BACKEND_LABEL = {"local": "ローカル LLM", "external": "外部 API"}
 
 _THINK_BLOCK_RE = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL | re.IGNORECASE)
 _THINK_OPEN_RE = re.compile(r"<think(?:ing)?>", re.IGNORECASE)
@@ -37,16 +44,63 @@ class LLMError(RuntimeError):
     """接続・API エラー。UI にそのまま出せる日本語メッセージを持つ。"""
 
 
+def _env_proxy() -> str:
+    for k in ("HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"):
+        if os.environ.get(k):
+            return os.environ[k]
+    return ""
+
+
+def _host_of(url: str) -> str:
+    try:
+        return urllib.parse.urlsplit(url).hostname or ""
+    except ValueError:
+        return ""
+
+
 class LLMClient:
-    def __init__(self, cfg: dict):
+    """接続先（ローカル / 外部）は設定から解決する。外部 API は必ずプロキシ経由で、送信を記録する。"""
+
+    def __init__(self, cfg: dict, backend: str | None = None):
+        cfg = effective_llm(cfg, backend)
         self.cfg = cfg
-        if not cfg.get("use_proxy"):
+        self.backend = cfg.get("_backend", "local")
+        self.host = _host_of(cfg.get("base_url", ""))
+        if self.backend == "external":
+            proxy_url = cfg.get("proxy_url") or _env_proxy()
+            if not proxy_url:
+                raise LLMError("外部 API はプロキシ経由でのみ送信します。設定の「外部 API」でプロキシ URL を入力するか、"
+                               "環境変数 HTTPS_PROXY を設定してください（直接の送信は行いません）")
+            proxy = urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
+        elif not cfg.get("use_proxy"):
             proxy = urllib.request.ProxyHandler({})
         elif cfg.get("proxy_url"):
             proxy = urllib.request.ProxyHandler({"http": cfg["proxy_url"], "https": cfg["proxy_url"]})
         else:
             proxy = urllib.request.ProxyHandler()
         self._opener = urllib.request.build_opener(proxy)
+
+    def _audit(self, kind: str, payload: dict, ok: bool, error: str = "") -> None:
+        """外部 API への送信を 1 行ずつ記録する（内容は残さず、何を・どれだけ送ったかだけ）。"""
+        if self.backend != "external" or AUDIT_PATH is None:
+            return
+        task = ""
+        for m in payload.get("messages") or []:
+            c = m.get("content")
+            text = c if isinstance(c, str) else " ".join(p.get("text", "") for p in c if isinstance(p, dict)) if isinstance(c, list) else ""
+            mt = re.search(r"\[TASK:(\w+)\]", text)
+            if mt:
+                task = mt.group(1)
+        rec = {"ts": time.time(), "kind": kind, "task": task, "model": self.cfg.get("model", ""), "host": self.host,
+               "chars": len(json.dumps(payload, ensure_ascii=False)), "ok": ok}
+        if error:
+            rec["error"] = error[:200]
+        try:
+            AUDIT_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with AUDIT_PATH.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
 
     # ------------------------------------------------------------ URL と認証
     def _endpoint(self, kind: str) -> tuple[str, dict, str]:
@@ -79,6 +133,16 @@ class LLMClient:
         return url, headers, model
 
     def _post(self, url: str, headers: dict, payload: dict) -> dict:
+        kind = "embed" if url.split("?")[0].endswith("/embeddings") else "chat"
+        try:
+            data = self._post_raw(url, headers, payload)
+        except LLMError as e:
+            self._audit(kind, payload, False, str(e))
+            raise
+        self._audit(kind, payload, True)
+        return data
+
+    def _post_raw(self, url: str, headers: dict, payload: dict) -> dict:
         req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"),
                                      method="POST", headers=headers)
         timeout = float(self.cfg.get("request_timeout") or 120.0)
@@ -153,6 +217,8 @@ class LLMClient:
                        + (f": {errors[0]}" if errors else ""))
 
     def embed(self, texts: list[str]) -> list[list[float]]:
+        if self.backend == "external":
+            raise LLMError("埋め込み（意味検索）はローカル LLM だけで行います（文書全文を外部に送らないため）")
         url, headers, model = self._endpoint("embed")
         out: list[list[float]] = []
         for i in range(0, len(texts), 32):

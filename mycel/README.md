@@ -255,18 +255,33 @@ GraphRAG は文書全体にまたがる「誰と誰がどうつながってい�
 - 索引は `<vault>/.mycel/graphrag.sqlite`。壊れても「GraphRAG の索引を作る」で作り直せます
 - 設定 `graphrag_max_chunks`（1 文書あたり抽出する段落数、既定 40）、`graphrag_max_communities`（全体質問で読む要約の数、既定 12）で時間と精度を調整できます
 
-## LLM の設定
+## LLM の設定（ローカル LLM と外部 API を分けて管理）
 
-左下の ⚙ → 「LLM」で登録し、「保存して接続テスト」で確認します。設定は `mycel/mycel.config.json`
-に保存されます（API キーを含むため .gitignore 済み。画面にはキーを返しません）。
+左下の ⚙ に「🏠 ローカル LLM」と「☁ 外部 API」の 2 つのタブがあります。**基本はローカル LLM** で、外部 API は
+明示的に有効にしたときだけ使えます。情報漏洩を防ぐため、2 つは画面上も仕組み上も分けています。
+
+| | 🏠 ローカル LLM | ☁ 外部 API（OpenAI / Azure OpenAI） |
+|---|---|---|
+| 登録できる URL | 127.0.0.1 / localhost / 社内ネットワーク（10.x, 192.168.x, 172.16〜31.x, ドットの無いホスト名, .local .lan .internal .corp）だけ。外部の URL は保存時に拒否 | https:// だけ。社内・ローカルのアドレスは拒否 |
+| 通信 | 直接（「プロキシを使う」をオンにした場合のみプロキシ） | **必ずプロキシ経由**（「プロキシ URL」、無ければ環境変数 `HTTPS_PROXY`。どちらも無ければ送信しない） |
+| 使われる場面 | すべての AI 処理（質問・要約・取り込み・人物推定・GraphRAG・リランク・埋め込み・画像の説明） | AI タブ／文書タブで「☁ 外部 API」を選んだ質問だけ（「既定の接続先」を外部にすると他の処理も外部へ） |
+| 埋め込み（意味検索）・画像の説明 | ローカルのみ | 送らない（外部に埋め込みを頼むとエラー） |
+| 記録 | なし | `<vault>/.mycel/external_llm.jsonl` に「いつ・何の処理で・どのモデルへ・何文字」を記録（本文は残さない）。設定画面の「送信の記録」で確認 |
+
+- **切り替え方**: AI タブ（右パネル）の上にある「🏠 ローカル LLM ／ ☁ 外部 API」のタブで選びます。外部を選ぶと確認ダイアログが出て、
+  パネルの左にオレンジの帯、入力欄がオレンジ、ボタンが「☁ 外部へ送信して質問」に変わり、回答にも「☁ 外部 API」のバッジが付きます。
+  画面を読み込み直すとローカルに戻ります（うっかり外部のまま使い続けないため）
+- **設定キー**: ローカルは `base_url` `model` `api_key` など従来どおり。外部は `ext_enabled` `ext_provider` `ext_base_url` `ext_api_key` `ext_model`
+  `ext_api_version` `ext_proxy_url`、既定の接続先は `llm_backend`（local / external）
+- 設定は `mycel/mycel.config.json` に保存されます（API キーを含むため .gitignore 済み。画面にはキーを返しません）
 
 | 接続先 | 接続方式 | Base URL の例 | モデル |
 |--------|----------|---------------|--------|
-| Ollama（既定） | OpenAI 互換 | `http://127.0.0.1:11434/v1` | `qwen2.5:7b` など（「一覧を取得」で選べる） |
-| LM Studio | OpenAI 互換 | `http://127.0.0.1:1234/v1` | 読み込んだモデル名 |
-| vLLM / llama.cpp server | OpenAI 互換 | `http://127.0.0.1:8000/v1` | 起動時のモデル名 |
-| OpenAI | OpenAI 互換 | `https://api.openai.com/v1` | `gpt-4o-mini` など（API キー必須） |
-| Azure OpenAI | Azure OpenAI | `https://<リソース名>.openai.azure.com` | **デプロイ名**（API バージョンも指定） |
+| Ollama（既定・ローカル） | OpenAI 互換 | `http://127.0.0.1:11434/v1` | `qwen2.5:7b` など（「一覧を取得」で選べる） |
+| LM Studio（ローカル） | OpenAI 互換 | `http://127.0.0.1:1234/v1` | 読み込んだモデル名 |
+| vLLM / llama.cpp server（ローカル・社内） | OpenAI 互換 | `http://127.0.0.1:8000/v1` `http://gpu01:8000/v1` | 起動時のモデル名 |
+| OpenAI（外部 API タブ） | OpenAI API | `https://api.openai.com/v1` | `gpt-4o-mini` など（API キー必須・プロキシ必須） |
+| Azure OpenAI（外部 API タブ） | Azure OpenAI | `https://<リソース名>.openai.azure.com` | **デプロイ名**（API バージョンも指定） |
 
 - **画像を読むモデル（VLM）**（任意）: 画像を資料として開いたときの「AI で読む」と AI タブの「まとめて読む」で、説明文（何の画像か・読み取れる文字・図表の傾向）を作ります。
   Ollama なら `ollama pull llava` や `ollama pull qwen2.5vl` を入れてモデル名を設定します。説明は `<vault>/.mycel/index.sqlite` の captions に保存され、索引を作り直しても残ります

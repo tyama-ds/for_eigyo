@@ -368,7 +368,7 @@ class GraphRAG:
         return str(data.get("title") or "")[:80] or names[top[0]]["name"], str(data["summary"])[:3000]
 
     # ------------------------------------------------------------ 質問
-    def ask(self, question: str, mode: str = "auto", history=None, prefixes=None, paths=None) -> dict:
+    def ask(self, question: str, mode: str = "auto", history=None, prefixes=None, paths=None, backend: str | None = None) -> dict:
         question = (question or "").strip()
         if not question:
             raise LLMError("質問を入力してください")
@@ -378,7 +378,7 @@ class GraphRAG:
                     "message": "GraphRAG の索引がまだありません。AI タブの「GraphRAG の索引を作る」で作ってください（標準の質問はそのまま使えます）。"}
         if mode == "auto":
             mode = self._pick_mode(question)
-        res = self._ask_global(question, history) if mode == "global" else self._ask_local(question, history, prefixes, paths)
+        res = self._ask_global(question, history, backend) if mode == "global" else self._ask_local(question, history, prefixes, paths, backend)
         res["mode"] = mode
         res["index"] = {"built": st["built"], "pending": st["pending"]}
         return res
@@ -402,9 +402,9 @@ class GraphRAG:
             return "global"
         return "local"
 
-    def _ask_local(self, question: str, history, prefixes, paths) -> dict:
+    def _ask_local(self, question: str, history, prefixes, paths, backend: str | None = None) -> dict:
         cfg = self.app.config()
-        hits = self.app.ai.retrieve_for_answer(question, k=max(8, int(cfg.get("rag_top_k") or 6)), prefixes=prefixes, paths=paths)
+        hits = self.app.ai.retrieve_for_answer(question, k=max(8, int(cfg.get("rag_top_k") or 6)), backend=backend, prefixes=prefixes, paths=paths)
         seeds = list(dict.fromkeys(self._match_entities(question)))
         hit_ids = [h["id"] for h in hits]
         with _lock:
@@ -421,7 +421,7 @@ class GraphRAG:
                 scores[m] = scores.get(m, 0.0) + min(w, 5.0) / 5.0
         ents = [k for k, _ in sorted(scores.items(), key=lambda kv: -kv[1])[:25]]
         if not ents:
-            res = self.app.ai.ask(question, history=history, prefixes=prefixes, paths=paths)
+            res = self.app.ai.ask(question, history=history, prefixes=prefixes, paths=paths, backend=backend)
             res["graph"] = {"entities": [], "relations": [], "communities": []}
             res["message"] = (res.get("message") or "") or "グラフ上に一致する実体が無かったため、標準の段落検索で答えました。"
             return res
@@ -449,8 +449,8 @@ class GraphRAG:
                  "relations": [{"source": names[r["src"]]["name"], "target": names[r["dst"]]["name"], "descr": r["rel"], "path": r["path"]}
                                for r in rels if r["src"] in names and r["dst"] in names],
                  "communities": [{"id": c["id"], "title": c["title"]} for c in comm_hits]}
-        if not chat_configured(cfg):
-            return {"answer": "", "sources": sources, "graph": graph, "llm": False,
+        if not chat_configured(cfg, backend):
+            return {"answer": "", "sources": sources, "graph": graph, "llm": False, "backend": "local",
                     "message": "LLM が未設定のため、グラフでたどった実体・関係と関連する段落だけを表示しています。"}
         ent_txt = "\n".join(f"- {e['name']}（{ENTITY_TYPES.get(e['type'], 'その他')}）: {e['descr']}" for e in graph["entities"][:20])
         rel_txt = "\n".join(f"- {r['source']} — {r['target']}: {r['descr'] or '関係あり'}" for r in graph["relations"][:25])
@@ -465,10 +465,11 @@ class GraphRAG:
         messages = [{"role": t["role"], "content": t["content"][:4000]} for t in (history or [])[-6:]
                     if isinstance(t, dict) and t.get("role") in ("user", "assistant") and isinstance(t.get("content"), str)]
         messages.append({"role": "user", "content": prompt})
-        answer = LLMClient(cfg).chat(messages, system=system)
-        return {"answer": answer, "sources": sources, "graph": graph, "llm": True}
+        client = LLMClient(cfg, backend)
+        answer = client.chat(messages, system=system)
+        return {"answer": answer, "sources": sources, "graph": graph, "llm": True, "backend": client.backend, "model": client.cfg.get("model", "")}
 
-    def _ask_global(self, question: str, history) -> dict:
+    def _ask_global(self, question: str, history, backend: str | None = None) -> dict:
         cfg = self.app.config()
         limit = int(cfg.get("graphrag_max_communities") or 12)
         with _lock:
@@ -476,10 +477,10 @@ class GraphRAG:
         graph = {"entities": [], "relations": [], "communities": [{"id": c["id"], "title": c["title"], "size": c["size"]} for c in comms]}
         if not comms:
             return {"answer": "", "sources": [], "graph": graph, "llm": False, "message": "コミュニティがまだありません（索引を作り直してください）。"}
-        if not chat_configured(cfg):
-            return {"answer": "", "sources": [], "graph": graph, "llm": False,
+        if not chat_configured(cfg, backend):
+            return {"answer": "", "sources": [], "graph": graph, "llm": False, "backend": "local",
                     "message": "LLM が未設定のため、コミュニティの一覧だけを表示しています。\n\n" + "\n\n".join(f"## {c['title']}\n{c['summary'][:400]}" for c in comms[:8])}
-        client = LLMClient(cfg)
+        client = LLMClient(cfg, backend)
         partials = []
         for c in comms:                                  # map: コミュニティごとの部分回答
             raw = client.chat(
@@ -504,7 +505,7 @@ class GraphRAG:
             "重要な点から順に、根拠になったコミュニティを [番号] で示し、部分回答に無いことは書かないでください。\n\n"
             f"# 部分回答\n{parts}\n\n# 質問\n{question}", system="あなたは複数の要約を統合して全体像を答えるアシスタントです。", temperature=0.2)
         sources = [{"n": i, "path": "", "title": p["title"], "heading": "コミュニティ要約", "community": p["id"]} for i, p in enumerate(partials[:10], 1)]
-        return {"answer": answer, "sources": sources, "graph": graph, "llm": True}
+        return {"answer": answer, "sources": sources, "graph": graph, "llm": True, "backend": client.backend, "model": client.cfg.get("model", "")}
 
     # ------------------------------------------------------------ グラフ表示（画面用）
     def graph_extra(self, center: str | None, max_entities: int = 60) -> dict:

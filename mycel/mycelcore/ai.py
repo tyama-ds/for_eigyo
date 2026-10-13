@@ -119,15 +119,15 @@ class AIService:
             return None
 
     # ------------------------------------------------------------ リランク
-    def rerank(self, question: str, hits: list[dict], k: int, cfg: dict | None = None) -> list[dict]:
+    def rerank(self, question: str, hits: list[dict], k: int, cfg: dict | None = None, backend: str | None = None) -> list[dict]:
         """LLM に候補の関連度を 0〜10 で採点させ、上位 k 件に並べ直す。失敗したら元の順のまま。"""
         cfg = cfg or self.get_config()
-        if len(hits) <= k or not chat_configured(cfg):
+        if len(hits) <= k or not chat_configured(cfg, backend):
             return hits[:k]
         listing = "\n\n".join(f"[{i}] 「{h['title']}」{(' > ' + h['heading']) if h.get('heading') and h['heading'] != h['title'] else ''}\n{h['text'][:700]}"
                                 for i, h in enumerate(hits, 1))
         try:
-            raw = LLMClient(cfg).chat(
+            raw = LLMClient(cfg, backend).chat(
                 "[TASK:rerank]\n次の質問に答える根拠として、各候補がどれだけ役に立つかを 0〜10 で採点してください。"
                 "質問に直接答える情報があれば高く、話題が同じだけなら低く。出力は JSON 配列だけ: "
                 '[{"n": 候補番号, "score": 点数}, ...]（全候補を含める）\n\n'
@@ -154,24 +154,25 @@ class AIService:
             out.append(h)
         return out
 
-    def retrieve_for_answer(self, question: str, k: int | None = None, **kw) -> list[dict]:
-        """質問用の検索。設定の深さ（rag_pool / rag_top_k）とリランク（rag_rerank）を適用する。"""
+    def retrieve_for_answer(self, question: str, k: int | None = None, backend: str | None = None, **kw) -> list[dict]:
+        """質問用の検索。設定の深さ（rag_pool / rag_top_k）とリランク（rag_rerank）を適用する。
+        backend は回答と同じ接続先（リランクの候補も同じ先にしか送らない）。"""
         cfg = self.get_config()
         k = k or int(cfg.get("rag_top_k") or 6)
-        if cfg.get("rag_rerank") == "llm" and chat_configured(cfg):
+        if cfg.get("rag_rerank") == "llm" and chat_configured(cfg, backend):
             cand = self.retrieve(question, k=max(k, int(cfg.get("rag_rerank_pool") or 24)), **kw)
-            return self.rerank(question, cand, k, cfg)
+            return self.rerank(question, cand, k, cfg, backend)
         return self.retrieve(question, k=k, **kw)
 
     # ------------------------------------------------------------ 質問
     def ask(self, question: str, path: str | None = None, history: list | None = None,
             prefixes: list[str] | None = None, paths: set[str] | None = None, k: int | None = None,
-            system_extra: str = "") -> dict:
+            system_extra: str = "", backend: str | None = None) -> dict:
         question = (question or "").strip()
         if not question:
             raise LLMError("質問を入力してください")
         cfg = self.get_config()
-        hits = self.retrieve_for_answer(question, k=k, prefixes=prefixes, paths=paths)
+        hits = self.retrieve_for_answer(question, k=k, backend=backend, prefixes=prefixes, paths=paths)
         if path:
             note = self.index.get(path)
             if note and all(h["path"] != path for h in hits):
@@ -183,8 +184,8 @@ class AIService:
             head = f" > {h['heading']}" if h["heading"] and h["heading"] != h["title"] else ""
             label = "ノート" if h.get("kind", "note") == "note" else "資料"
             blocks.append(f"[{n}] {label}「{h['title']}」{head}\n{h['text']}")
-        if not chat_configured(cfg):
-            return {"answer": "", "sources": sources, "llm": False,
+        if not chat_configured(cfg, backend):
+            return {"answer": "", "sources": sources, "llm": False, "backend": "local",
                     "message": "LLM が未設定のため、関連するノート・資料だけを表示しています。"}
         system = (system_extra or "あなたはユーザーのノートと資料（Word・PDF・メールなど）に基づいて答えるアシスタントです。"
                   "与えられた抜粋だけを根拠に日本語で簡潔に答えてください。"
@@ -198,8 +199,10 @@ class AIService:
             if isinstance(turn, dict) and turn.get("role") in ("user", "assistant") and isinstance(turn.get("content"), str):
                 messages.append({"role": turn["role"], "content": turn["content"][:4000]})
         messages.append({"role": "user", "content": prompt})
-        answer = LLMClient(cfg).chat(messages, system=system)
-        return {"answer": answer, "sources": sources, "llm": True}
+        client = LLMClient(cfg, backend)
+        answer = client.chat(messages, system=system)
+        return {"answer": answer, "sources": sources, "llm": True, "backend": client.backend,
+                "model": client.cfg.get("model", ""), "host": client.host}
 
     # ------------------------------------------------------------ 要約とタグ
     def summarize(self, path: str) -> dict:
