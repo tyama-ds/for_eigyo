@@ -32,10 +32,19 @@
     t.textContent = msg; t.classList.toggle("err", err); t.hidden = false;
     clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), err ? 6000 : 2600);
   }
+  /** 操作つきトースト（「元に戻す」など）。数秒で消える。 */
+  function toastAction(msg, label, fn, ms = 6000) {
+    toast(msg);
+    const t = $(".toast"); if (!t) return;
+    const b = document.createElement("button"); b.className = "tact"; b.textContent = label;
+    b.onclick = async (e) => { e.stopPropagation(); t.hidden = true; try { await fn(); } catch (err) { fail(err); } };
+    t.appendChild(b);
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), ms);
+  }
   const fail = (e) => toast(e.message || String(e), true);
   const titleOf = (p) => p.split("/").pop().replace(/\.md$/i, "");
   const isDoc = (p) => p.startsWith("@") || !/\.(md|markdown)$/i.test(p);
-  const CLIENT_VERSION = "0.6.3";          // サーバの __version__ と合わせる（tests/test_api が確認）
+  const CLIENT_VERSION = "0.6.4";          // サーバの __version__ と合わせる（tests/test_api が確認）
   const FT = { word: "W", excel: "X", powerpoint: "P", pdf: "PDF", email: "✉", csv: "CSV", html: "HTML", text: "TXT", code: "{ }", note: "MD", image: "IMG" };
   const GRP_NAME = { word: "Word", excel: "Excel", powerpoint: "PowerPoint", pdf: "PDF", email: "メール", csv: "CSV", html: "HTML", text: "テキスト", code: "データ", image: "画像" };
   const fmtDate = (t) => { if (!t) return "—"; const d = new Date(t * 1000), now = new Date(); return d.getFullYear() === now.getFullYear() ? d.toLocaleDateString("ja-JP", { month: "numeric", day: "numeric" }) : d.toLocaleDateString("ja-JP", { year: "numeric", month: "numeric", day: "numeric" }); };
@@ -1040,7 +1049,7 @@
   }
 
   async function renderGraphPane(p) {
-    p.innerHTML = `<div class="gctl"><span>範囲</span><div class="seg">${[1, 2, 0].map((d) => `<button data-d="${d}" class="${S.depth === d ? "on" : ""}">${d ? d + " ホップ" : "全体"}</button>`).join("")}</div><label title="リンクされていない資料も表示"><input type="checkbox" id="gDocs"${S.gDocs ? " checked" : ""}> 資料</label><label title="人物・組織を介したつながりも表示"><input type="checkbox" id="gPeople"${S.gPeople ? " checked" : ""}> 人物</label><label title="GraphRAG の知識グラフ（文書から抽出した実体と関係）を重ねて表示。AI タブで索引を作っておく必要があります"><input type="checkbox" id="gKG"${S.gKG ? " checked" : ""}> 知識グラフ</label><span style="flex:1"></span><button class="btn sm" id="gBig">拡大</button></div><canvas class="graph" id="gSmall" aria-label="ノートのつながり。ノードをクリックで開く"></canvas><div class="hint" style="margin-top:8px">ドラッグで移動、ホイールで拡大縮小。薄い輪は未作成のリンク、四角は資料、◆ は人物、▲ は組織（「人物」をオン）、六角形は知識グラフの実体（「知識グラフ」をオン。クリックで登場する文書とつなぎ方）。色はフォルダごと。</div><div id="gKGNote"></div>`;
+    p.innerHTML = `<div class="gctl"><span>範囲</span><div class="seg">${[1, 2, 0].map((d) => `<button data-d="${d}" class="${S.depth === d ? "on" : ""}">${d ? d + " ホップ" : "全体"}</button>`).join("")}</div><label title="リンクされていない資料も表示"><input type="checkbox" id="gDocs"${S.gDocs ? " checked" : ""}> 資料</label><label title="人物・組織を介したつながりも表示"><input type="checkbox" id="gPeople"${S.gPeople ? " checked" : ""}> 人物</label><label title="GraphRAG の知識グラフ（文書から抽出した実体と関係）を重ねて表示。AI タブで索引を作っておく必要があります"><input type="checkbox" id="gKG"${S.gKG ? " checked" : ""}> 知識グラフ</label><span style="flex:1"></span><button class="btn sm" id="gBig">拡大</button></div><canvas class="graph" id="gSmall" aria-label="ノートのつながり。ノードをクリックで開く"></canvas><div class="hint" style="margin-top:8px"><b>Shift＋ドラッグ</b>でノード同士を結ぶ、<b>線をクリック</b>で外す・詳細。ドラッグで移動、ホイールで拡大縮小。薄い輪は未作成のリンク、四角は資料、◆ は人物、▲ は組織（「人物」をオン）、六角形は知識グラフの実体（「知識グラフ」をオン。クリックで登場する文書とつなぎ方）。色はフォルダごと。</div><div id="gKGNote"></div>`;
     $("#gDocs").onchange = (e) => { S.gDocs = e.target.checked; store.set("gDocs", S.gDocs); renderGraphPane(p); };
     $("#gPeople").onchange = (e) => { S.gPeople = e.target.checked; store.set("gPeople", S.gPeople); renderGraphPane(p); };
     $("#gKG").onchange = (e) => { S.gKG = e.target.checked; store.set("gKG", S.gKG); renderGraphPane(p); };
@@ -1048,7 +1057,8 @@
     $$("[data-d]", p).forEach((b) => (b.onclick = () => { S.depth = +b.dataset.d; store.set("depth", S.depth); renderGraphPane(p); }));
     $("#gBig").onclick = () => bigGraph(S.cur ? S.cur.path : null);
     if (S.graph) S.graph.destroy();
-    S.graph = new ForceGraph($("#gSmall"), { onOpen: graphOpen });
+    const refresh = () => { if (S.rtab === "graph") renderGraphPane(p); };
+    S.graph = new ForceGraph($("#gSmall"), { onOpen: graphOpen, onEdgeClick: (e, ev) => graphEdgeMenu(e, ev, refresh), onLink: (a, b) => graphLink(a, b, refresh) });
     try {
       const q = S.depth ? { path: S.cur.path, depth: S.depth } : {};
       if (S.gDocs) q.docs = "1";
@@ -1067,9 +1077,163 @@
   async function bigGraph(center) {
     const m = modal({ title: "グラフ（Vault 全体）", body: '<canvas class="graph big" id="gBigC" aria-label="Vault 全体のグラフ"></canvas>', buttons: [], wide: true, onClose: () => g.destroy() });
     m.body.style.padding = "0"; m.body.style.overflow = "hidden";
-    const g = new ForceGraph($("#gBigC"), { onOpen: (p, t) => { m.close(); graphOpen(p, t); } });
     const q = {}; if (S.gDocs) q.docs = "1"; if (S.gPeople) q.people = "1"; if (S.gKG) q.kg = "1";
-    try { g.setData(await api.get("/api/graph", q), center); } catch (e) { fail(e); }
+    const load = async () => { try { g.setData(await api.get("/api/graph", q), center); } catch (e) { fail(e); } };
+    const refresh = () => { load(); if (S.rtab === "graph" && S.graph) renderRight(); };
+    const g = new ForceGraph($("#gBigC"), { onOpen: (p, t) => { m.close(); graphOpen(p, t); }, onEdgeClick: (e, ev) => graphEdgeMenu(e, ev, refresh), onLink: (a, b) => graphLink(a, b, refresh) });
+    await load();
+  }
+
+  // ------------------------------------------------------------ グラフ上での結合・削除
+  const nodeKind = (n) => (n.id.startsWith("~k:") ? "kg" : n.id.startsWith("~p:") ? "person" : n.id.startsWith("~o:") ? "org"
+    : n.exists === false ? "missing" : n.kind === "doc" ? "doc" : "note");
+  const EDGE_NAME = { wiki: "[[リンク]]", rel: "つながり", ent: "人物・組織の登場", kg: "知識グラフの関係", link: "文献の関係", sim: "内容の近さ", tree: "階層" };
+  /** 本文の [[X]] のうち target を指すものを文字に戻す。戻した数と元の本文を返す。 */
+  async function unlinkInNote(srcPath, target) {
+    const d = await api.get("/api/note", { path: srcPath });
+    const tkey = (target.exists === false ? target.title : "").trim().toLowerCase();
+    let n = 0;
+    const text = d.text.replace(/!?\[\[([^\[\]\n]+?)\]\]/g, (m, inner) => {
+      if (m.startsWith("!")) return m;
+      let t = inner, alias = "";
+      if (t.includes("|")) [t, alias] = [t.slice(0, t.indexOf("|")), t.slice(t.indexOf("|") + 1)];
+      if (t.includes("#")) t = t.slice(0, t.indexOf("#"));
+      const hit = target.exists === false ? t.trim().toLowerCase() === tkey : resolve(t.trim()) === target.id;
+      if (!hit) return m;
+      n++; return alias.trim() || t.trim();
+    });
+    if (!n) return { n: 0 };
+    const r = await api.post("/api/note/save", { path: srcPath, text, base_version: d.version });
+    return { n, old: d.text, version: r.version };
+  }
+  async function afterGraphEdit(paths) {
+    if (S.cur && paths.includes(S.cur.path)) {
+      try { const d = await api.get("/api/note", { path: S.cur.path }); Object.assign(S.cur, { text: d.text, version: d.version, outgoing: d.outgoing, backlinks: d.backlinks, relations: d.relations }); if (S.mode !== "edit") renderMain(); } catch { /* 無視 */ }
+    }
+    refreshFolder();
+  }
+  /** 線をクリック: 種類と両端を示し、外せるものは「外す」（元に戻すつき）。 */
+  function graphEdgeMenu(e, ev, refresh) {
+    const a = e.a, b = e.b, ka = nodeKind(a), kb = nodeKind(b);
+    const head = { label: `${a.title} ${e.directed ? "→" : "—"} ${b.title}（${EDGE_NAME[e.type] || e.type}${e.label ? ": " + e.label : ""}）`, run: () => {} };
+    const items = [head, "-"];
+    const after = async (paths) => { await afterGraphEdit(paths); refresh(); };
+    if (e.type === "wiki" && ka === "note") {
+      items.push({ label: `[[${b.title}]] を「${a.title}」から外す`, danger: true, run: async () => {
+        try {
+          const r = await unlinkInNote(a.id, b);
+          if (!r.n) { toast("本文に該当するリンクが見つかりませんでした", true); return; }
+          await after([a.id]);
+          toastAction(`[[${b.title}]] を ${r.n} か所、文字に戻しました`, "元に戻す", async () => { const d = await api.get("/api/note", { path: a.id }); await api.post("/api/note/save", { path: a.id, text: r.old, base_version: d.version }); await after([a.id]); toast("戻しました"); });
+        } catch (err) { fail(err); }
+      } });
+    } else if (e.type === "rel") {
+      items.push({ label: "このつながりを外す", danger: true, run: async () => {
+        try {
+          let label = "";
+          try { const info = await api.get("/api/links", { path: a.id }); label = ((info.relations || []).find((r) => r.path === b.id) || {}).label || ""; } catch { /* 無視 */ }
+          await api.post("/api/relations/remove", { a: a.id, b: b.id });
+          await after([a.id, b.id]);
+          toastAction("つながりを外しました", "元に戻す", async () => { await api.post("/api/relations/add", { a: a.id, b: b.id, label }); await after([a.id, b.id]); toast("戻しました"); });
+        } catch (err) { fail(err); }
+      } });
+      items.push({ label: "説明を変える…", run: async () => {
+        const label = await promptBox("つながりの説明", "例: 改訂版 / 添付資料", e.label || ""); if (label === null) return;
+        try { await api.post("/api/relations/remove", { a: a.id, b: b.id }); await api.post("/api/relations/add", { a: a.id, b: b.id, label }); await after([a.id, b.id]); toast("説明を変えました"); } catch (err) { fail(err); }
+      } });
+    } else if (e.type === "ent" && (kb === "person" || kb === "org" || ka === "person" || ka === "org")) {
+      const doc = kb === "person" || kb === "org" ? a : b, ent = doc === a ? b : a;
+      const type = ent.id.startsWith("~p:") ? "person" : "org", key = ent.id.slice(3);
+      items.push({ label: `「${ent.title}」を「${doc.title}」から外す`, danger: true, run: async () => {
+        try {
+          await api.post("/api/people/hide", { path: doc.id, type, key });
+          refresh(); if (S.cur && S.cur.path === doc.id) renderRight();
+          toastAction(`「${ent.title}」をこの文書から外しました`, "元に戻す", async () => { await api.post("/api/people/unhide", { path: doc.id, type, key }); refresh(); if (S.cur && S.cur.path === doc.id) renderRight(); toast("戻しました"); });
+        } catch (err) { fail(err); }
+      } });
+      items.push({ label: `「${ent.title}」のページを開く`, run: () => openEntity(type, key) });
+    } else if (e.type === "ent" || e.type === "kg") {
+      items.push({ label: "知識グラフの線は索引から自動で作られるため外せません（索引を作り直すと変わります）", run: () => {} });
+      const kg = ka === "kg" ? a : kb === "kg" ? b : null;
+      if (kg) items.push({ label: `「${kg.title}」の詳細を開く`, run: () => openKGEntity(kg.id.slice(3)) });
+    } else {
+      items.push({ label: "この線は外せません", run: () => {} });
+    }
+    popMenu(ev.clientX, ev.clientY, items);
+  }
+  /** Shift＋ドラッグで結ぶ: 相手の種類で [[リンク]]・つながり・人物の登場に振り分ける。 */
+  async function graphLink(a, b, refresh) {
+    const ka = nodeKind(a), kb = nodeKind(b);
+    const after = async (paths) => { await afterGraphEdit(paths); refresh(); };
+    if (ka === "kg" || kb === "kg") { toast("知識グラフの実体は手で結べません（文書同士は実体をクリックして「チェックした文書をつなぐ」）", true); return; }
+    if (ka === "missing") { toast("未作成のノートからは結べません（相手側からドラッグしてください）", true); return; }
+    const isEnt = (k) => k === "person" || k === "org";
+    if (isEnt(ka) && isEnt(kb)) { toast("人物・組織同士は結べません", true); return; }
+    if (isEnt(ka) || isEnt(kb)) {
+      const ent = isEnt(ka) ? a : b, doc = ent === a ? b : a;
+      if (nodeKind(doc) === "missing") { toast("未作成のノートには結べません", true); return; }
+      const type = ent.id.startsWith("~p:") ? "person" : "org", key = ent.id.slice(3);
+      try {
+        await api.post("/api/people/add", { path: doc.id, type, name: ent.title, role: "" });
+        refresh(); if (S.cur && S.cur.path === doc.id) renderRight();
+        toastAction(`「${ent.title}」を「${doc.title}」の登場人物・組織に加えました`, "元に戻す", async () => { await api.post("/api/people/hide", { path: doc.id, type, key }); refresh(); if (S.cur && S.cur.path === doc.id) renderRight(); toast("戻しました"); });
+      } catch (err) { fail(err); }
+      return;
+    }
+    if (ka === "note" && (kb === "note" || kb === "missing")) {
+      try {
+        const d = await api.get("/api/note", { path: a.id });
+        const already = (d.outgoing || []).some((o) => (kb === "missing" ? o.target.trim().toLowerCase() === b.title.trim().toLowerCase() : o.path === b.id));
+        if (already) { toast(`「${a.title}」はすでに [[${b.title}]] にリンクしています`); return; }
+        const text = d.text.replace(/\s*$/, "") + `\n\n- [[${b.title}]]\n`;
+        const r = await api.post("/api/note/save", { path: a.id, text, base_version: d.version });
+        await after([a.id]);
+        toastAction(`「${a.title}」の末尾に [[${b.title}]] を追記しました`, "元に戻す", async () => { await api.post("/api/note/save", { path: a.id, text: d.text, base_version: r.version }); await after([a.id]); toast("戻しました"); });
+      } catch (err) { fail(err); }
+      return;
+    }
+    // 資料が絡む（資料↔資料、ノート↔資料）: つながりとして保存
+    if (kb === "missing") { toast("未作成のノートには結べません", true); return; }
+    const label = await promptBox(`「${a.title}」と「${b.title}」をつなぐ`, "説明（任意。例: 改訂版 / 添付資料）", "");
+    if (label === null) return;
+    try {
+      await api.post("/api/relations/add", { a: a.id, b: b.id, label });
+      await after([a.id, b.id]);
+      toastAction("つなぎました", "元に戻す", async () => { await api.post("/api/relations/remove", { a: a.id, b: b.id }); await after([a.id, b.id]); toast("戻しました"); });
+    } catch (err) { fail(err); }
+  }
+  /** 文献の分解グラフ: 文献同士の関係を線のクリックで外す・Shift＋ドラッグで結ぶ。 */
+  async function libEdgeMenu(e, ev, refresh) {
+    const a = e.a, b = e.b;
+    const items = [{ label: `${a.title} ${e.directed ? "→" : "—"} ${b.title}（${EDGE_NAME[e.type] || e.type}${e.label ? ": " + e.label : ""}）`, run: () => {} }, "-"];
+    if (e.type === "link" && a.kind === "ref" && b.kind === "ref") {
+      items.push({ label: "この関係を外す", danger: true, run: async () => {
+        try {
+          const ida = a.id.slice(2), idb = b.id.slice(2);
+          const d = await api.get("/api/library/ref", { id: ida });
+          const l = (d.links || []).find((x) => x.id === idb && x.label === e.label) || (d.links || []).find((x) => x.id === idb) || {};
+          const src = l.outgoing === false ? idb : ida, dst = src === ida ? idb : ida;
+          await api.post("/api/library/unlink", { a: ida, b: idb, type: l.type || "" });
+          refresh(); if (S.lib.cur && [ida, idb].includes(S.lib.cur)) loadRefDetail(S.lib.cur);
+          toastAction("関係を外しました", "元に戻す", async () => { await api.post("/api/library/link", { a: src, b: dst, type: l.type || "related", note: l.note || "", origin: l.origin || "user" }); refresh(); if (S.lib.cur) loadRefDetail(S.lib.cur); toast("戻しました"); });
+        } catch (err) { fail(err); }
+      } });
+    } else if (e.type === "sim") items.push({ label: "内容の近さから自動で引いた線なので外せません", run: () => {} });
+    else items.push({ label: "この線は外せません", run: () => {} });
+    popMenu(ev.clientX, ev.clientY, items);
+  }
+  async function libGraphLink(a, b, refresh) {
+    if (a.kind !== "ref" || b.kind !== "ref") { toast("結べるのは文献同士だけです（章・段落・分類は結べません）", true); return; }
+    const ida = a.id.slice(2), idb = b.id.slice(2);
+    let d; try { d = await api.get("/api/library/ref", { id: ida }); } catch (err) { fail(err); return; }
+    const body = document.createElement("div");
+    body.innerHTML = `<div class="form"><label>この文献</label><div><b>${esc(a.title)}</b></div><label for="lkType">関係</label><select id="lkType">${Object.entries(d.link_types || {}).map(([k, v]) => `<option value="${k}"${k === "related" ? " selected" : ""}>${v}</option>`).join("")}</select><label>相手</label><div><b>${esc(b.title)}</b></div><label for="lkNote">説明（任意）</label><input id="lkNote" type="text" placeholder="例: 第3章の手法を前提にしている"></div><p class="hint">向きのある関係（引用している など）は、ドラッグ元 → ドラッグ先 の向きです。</p>`;
+    modal({ title: "文献をつなぐ", body, buttons: [{ label: "キャンセル" }, { label: "つなぐ", primary: true, onClick: async () => {
+      const type = $("#lkType", body).value, note = $("#lkNote", body).value;
+      try { await api.post("/api/library/link", { a: ida, b: idb, type, note }); refresh(); if (S.lib.cur && [ida, idb].includes(S.lib.cur)) loadRefDetail(S.lib.cur);
+        toastAction("つなぎました", "元に戻す", async () => { await api.post("/api/library/unlink", { a: ida, b: idb, type }); refresh(); if (S.lib.cur) loadRefDetail(S.lib.cur); toast("戻しました"); }); }
+      catch (err) { fail(err); return false; }
+    } }] });
   }
   /** 知識グラフの実体: 説明・関係・登場する文書を出し、その文書同士を「つながり」として保存できる。 */
   async function openKGEntity(key) {
@@ -1928,14 +2092,15 @@
   async function renderLibraryGraph(p) {
     const L = S.lib;
     p.innerHTML = `<div class="gctl"><span>分類</span><select id="lgGroup">${Object.entries((L.data && L.data.groups) || { tag: "タグ", author: "著者", year: "年", type: "種類", status: "読了状態", none: "分類なし" }).map(([k, v]) => `<option value="${k}"${L.graphGroup === k ? " selected" : ""}>${v}</option>`).join("")}</select><button class="btn xs" id="lgCollapse" title="開いた要素をすべて閉じる">すべて閉じる</button><span style="flex:1"></span><button class="btn sm" id="lgBig">拡大</button></div>
-      <canvas class="graph" id="gLib" aria-label="文献の分解グラフ。クリックで開閉、Shift+クリックで開く"></canvas>
+      <canvas class="graph" id="gLib" aria-label="文献の分解グラフ。クリックで開閉、Shift+クリックで開く、Shift+ドラッグで文献同士を結ぶ、線をクリックで外す"></canvas>
       <div class="hint" style="margin-top:8px">● 分類 → ● 文献 → ● 章・ページ → ● 段落 の順に、クリックで大きい要素から小さい要素へ開けます（＋／−）。Shift+クリックで文献・ファイルを開きます。点線は内容の近さで、別の文献の章・段落ともつながります。実線（矢印）は付けたつながり（引用・発展・比較など）です。</div>
       <div id="lgInfo" class="lginfo"></div>`;
     $("#lgGroup", p).onchange = (e) => { L.graphGroup = e.target.value; store.set("libGroup", L.graphGroup); L.graphExpanded.clear(); renderLibraryGraph(p); };
     $("#lgCollapse", p).onclick = () => { L.graphExpanded.clear(); loadLibGraph(); };
     $("#lgBig", p).onclick = () => bigLibGraph();
     if (S.graph) S.graph.destroy();
-    S.graph = new ForceGraph($("#gLib", p), { onOpen: libGraphOpen, onExpand: (n) => { L.graphExpanded.has(n.id) ? L.graphExpanded.delete(n.id) : L.graphExpanded.add(n.id); if (n.kind === "ref") { L.cur = n.id.slice(2); L.detail = null; if (S.libraryView) { renderLibraryView(); loadRefDetail(L.cur); } } loadLibGraph(); }, labels: "near" });
+    S.graph = new ForceGraph($("#gLib", p), { onOpen: libGraphOpen, onExpand: (n) => { L.graphExpanded.has(n.id) ? L.graphExpanded.delete(n.id) : L.graphExpanded.add(n.id); if (n.kind === "ref") { L.cur = n.id.slice(2); L.detail = null; if (S.libraryView) { renderLibraryView(); loadRefDetail(L.cur); } } loadLibGraph(); }, labels: "near",
+      onEdgeClick: (e, ev) => libEdgeMenu(e, ev, () => loadLibGraph()), onLink: (a, b) => libGraphLink(a, b, () => loadLibGraph()) });
     loadLibGraph();
   }
   async function loadLibGraph(g = S.graph) {
@@ -1955,7 +2120,8 @@
   async function bigLibGraph() {
     const m = modal({ title: "文献の分解グラフ", body: '<canvas class="graph big" id="gLibBig" aria-label="文献の分解グラフ"></canvas>', buttons: [], wide: true, onClose: () => { g.destroy(); if (S.graph) loadLibGraph(); } });
     m.body.style.padding = "0"; m.body.style.overflow = "hidden";
-    const g = new ForceGraph($("#gLibBig"), { onOpen: (id, t, n) => { m.close(); libGraphOpen(id, t, n); }, onExpand: (n) => { S.lib.graphExpanded.has(n.id) ? S.lib.graphExpanded.delete(n.id) : S.lib.graphExpanded.add(n.id); loadLibGraph(g); }, labels: "near" });
+    const g = new ForceGraph($("#gLibBig"), { onOpen: (id, t, n) => { m.close(); libGraphOpen(id, t, n); }, onExpand: (n) => { S.lib.graphExpanded.has(n.id) ? S.lib.graphExpanded.delete(n.id) : S.lib.graphExpanded.add(n.id); loadLibGraph(g); }, labels: "near",
+      onEdgeClick: (e, ev) => libEdgeMenu(e, ev, () => loadLibGraph(g)), onLink: (a, b) => libGraphLink(a, b, () => loadLibGraph(g)) });
     loadLibGraph(g);
   }
 

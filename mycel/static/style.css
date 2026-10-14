@@ -234,6 +234,7 @@ canvas.graph.big{height:100%;border:0;border-radius:0}
 .result{white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:13.5px;max-height:50vh;overflow:auto}
 .toast{position:fixed;left:50%;bottom:36px;transform:translateX(-50%);background:var(--surface2);border:1px solid var(--line);color:var(--ink);padding:8px 16px;border-radius:8px;box-shadow:0 10px 30px var(--shadow);z-index:80;font-size:13px;max-width:min(560px,90vw)}
 .toast.err{border-color:var(--danger);color:var(--danger)}
+.toast .tact{margin-left:12px;border:1px solid var(--line);background:var(--surface);color:var(--link);border-radius:5px;padding:1px 8px;font-size:12px;cursor:pointer}
 .ac{position:absolute;z-index:40;background:var(--surface);border:1px solid var(--line);border-radius:8px;box-shadow:0 12px 30px var(--shadow);padding:4px;min-width:240px;max-width:420px;max-height:260px;overflow:auto}
 .ac div{padding:5px 10px;border-radius:5px;cursor:pointer;font-size:13px;display:flex;justify-content:space-between;gap:12px}
 .ac div small{color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

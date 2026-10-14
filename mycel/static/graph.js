@@ -6,12 +6,12 @@
   const HUES = [162, 205, 32, 280, 350, 95, 245, 55];
 
   class ForceGraph {
-    constructor(canvas, { onOpen, onExpand, labels = "near" } = {}) {
+    constructor(canvas, { onOpen, onExpand, onEdgeClick, onLink, labels = "near" } = {}) {
       this.c = canvas; this.g = canvas.getContext("2d");
-      this.onOpen = onOpen; this.onExpand = onExpand; this.labels = labels;
+      this.onOpen = onOpen; this.onExpand = onExpand; this.onEdgeClick = onEdgeClick; this.onLink = onLink; this.labels = labels;
       this.nodes = []; this.edges = []; this.center = null;
       this.view = { x: 0, y: 0, k: 1 };
-      this.alpha = 0; this.raf = 0; this.hover = null; this.folderHue = {};
+      this.alpha = 0; this.raf = 0; this.hover = null; this.hoverEdge = null; this.linking = null; this.folderHue = {};
       this.reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
       this._bind();
       this._ro = new ResizeObserver(() => this.resize());
@@ -124,9 +124,10 @@
       const focus = this.hover ?? (this.center ? this.nodes.findIndex((n) => n.id === this.center) : -1);
       const warn = this.color("--warn");
       const linkCol = document.documentElement.dataset.theme === "light" ? "hsl(230 50% 48%)" : "hsl(230 60% 72%)";
-      for (const [i, j, t, label, directed] of this.edges) {
+      for (let ei = 0; ei < this.edges.length; ei++) {
+        const [i, j, t, label, directed] = this.edges[ei];
         const p = this.nodes[i], q = this.nodes[j];
-        const hot = focus >= 0 && (i === focus || j === focus);
+        const hot = (focus >= 0 && (i === focus || j === focus)) || ei === this.hoverEdge;
         g.strokeStyle = hot ? acc : t === "rel" ? warn : t === "link" || t === "kg" ? linkCol : line; g.lineWidth = (hot ? 1.6 : t === "link" ? 1.4 : 1) / Math.sqrt(v.k);
         g.setLineDash(t === "rel" || t === "sim" ? [4 / v.k, 3 / v.k] : t === "ent" ? [1.5 / v.k, 2.5 / v.k] : []);   // つながり・内容の近さは点線、人物は細かい点線
         if (t === "sim" && !hot) g.strokeStyle = warn;
@@ -182,6 +183,12 @@
           g.fillText(t, n.x, n.y + r + 12 / Math.sqrt(v.k));
         }
       });
+      if (this.linking) {                                   // Shift+ドラッグで線を引いている途中
+        const a = this.linking.from, to = this.linking.to;
+        g.setLineDash([5 / v.k, 4 / v.k]); g.strokeStyle = acc; g.lineWidth = 1.6 / Math.sqrt(v.k);
+        g.beginPath(); g.moveTo(a.x, a.y); g.lineTo(to.x, to.y); g.stroke(); g.setLineDash([]);
+        if (this.linking.over != null) { const n = this.nodes[this.linking.over]; g.strokeStyle = acc; g.lineWidth = 2 / Math.sqrt(v.k); g.beginPath(); g.arc(n.x, n.y, (n.r || 6) + 5 / v.k, 0, Math.PI * 2); g.stroke(); }
+      }
       g.restore();
     }
 
@@ -191,33 +198,72 @@
       this.nodes.forEach((n, i) => { const d = Math.hypot(n.x - p.x, n.y - p.y); if (d < bd) { bd = d; best = i; } });
       return best >= 0 && bd < (this.nodes[best].r || 5) + 6 / this.view.k ? best : -1;
     }
+    /** カーソルに最も近い線（ノードの上でないとき）。線の種類が分かる辺だけが対象。 */
+    pickEdge(e) {
+      const p = this.toWorld(e); let best = -1, bd = Infinity;
+      this.edges.forEach(([i, j], ei) => {
+        const a = this.nodes[i], b = this.nodes[j];
+        const dx = b.x - a.x, dy = b.y - a.y, len2 = dx * dx + dy * dy || 1;
+        const t = Math.max(0.08, Math.min(0.92, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2));   // 端はノードのクリックに譲る
+        const d = Math.hypot(a.x + dx * t - p.x, a.y + dy * t - p.y);
+        if (d < bd) { bd = d; best = ei; }
+      });
+      return best >= 0 && bd < 5 / this.view.k ? best : -1;
+    }
+    edgeInfo(ei) {
+      const [i, j, t, label, directed] = this.edges[ei];
+      return { a: this.nodes[i], b: this.nodes[j], type: t || "wiki", label: label || "", directed: !!directed, index: ei };
+    }
+    _hoverMove(ev) {
+      const c = this.c, h = this.pick(ev);
+      const he = h >= 0 || !this.onEdgeClick ? -1 : this.pickEdge(ev);
+      if (h !== (this.hover ?? -1) || he !== (this.hoverEdge ?? -1)) {
+        this.hover = h >= 0 ? h : null; this.hoverEdge = he >= 0 ? he : null;
+        c.style.cursor = h >= 0 || he >= 0 ? "pointer" : "";
+        if (h >= 0) c.title = this.nodes[h].title;                                   // 省略された名前はツールチップで
+        else if (he >= 0) { const e = this.edgeInfo(he); c.title = `${e.a.title} ${e.directed ? "→" : "—"} ${e.b.title}${e.label ? "（" + e.label + "）" : ""}\nクリックで外す・詳細`; }
+        else c.title = "";
+        this.draw();
+      }
+    }
 
     _bind() {
       const c = this.c;
       c.onpointerdown = (e) => {
         c.setPointerCapture(e.pointerId);
         const hit = this.pick(e); const start = { x: e.clientX, y: e.clientY, vx: this.view.x, vy: this.view.y }; let moved = false;
-        if (hit >= 0) this.drag = this.nodes[hit];
+        const edgeHit = hit < 0 && this.onEdgeClick ? this.pickEdge(e) : -1;
+        const linkMode = hit >= 0 && e.shiftKey && !!this.onLink;              // Shift+ドラッグ: ノード同士を結ぶ
+        if (linkMode) { this.linking = { from: this.nodes[hit], to: this.toWorld(e), over: null }; this.draw(); }
+        else if (hit >= 0) this.drag = this.nodes[hit];
         this.autoFit = false;
-        c.style.cursor = "grabbing";
+        c.style.cursor = linkMode ? "crosshair" : "grabbing";
         c.onpointermove = (ev) => {
           if (Math.hypot(ev.clientX - start.x, ev.clientY - start.y) > 3) moved = true;
-          if (this.drag) { const p = this.toWorld(ev); this.drag.x = p.x; this.drag.y = p.y; this.drag.vx = this.drag.vy = 0; this.alpha = Math.max(this.alpha, 0.3); this.kick(); }
+          if (this.linking) { const o = this.pick(ev); this.linking.to = this.toWorld(ev); this.linking.over = o >= 0 && o !== hit ? o : null; this.draw(); }
+          else if (this.drag) { const p = this.toWorld(ev); this.drag.x = p.x; this.drag.y = p.y; this.drag.vx = this.drag.vy = 0; this.alpha = Math.max(this.alpha, 0.3); this.kick(); }
           else { this.view.x = start.vx + ev.clientX - start.x; this.view.y = start.vy + ev.clientY - start.y; this.draw(); }
         };
-        c.onpointerup = () => {
+        c.onpointerup = (ev) => {
           c.onpointermove = null; c.style.cursor = "";
-          if (!moved && hit >= 0) {
+          if (this.linking) {
+            const l = this.linking; this.linking = null; this.draw();
+            if (l.over != null) this.onLink(l.from, this.nodes[l.over], ev);
+            else if (!moved && hit >= 0 && this.onOpen) { const n = this.nodes[hit]; this.onOpen(n.exists ? n.id : null, n.title, n); }   // Shift+クリック（動かさない）は従来どおり開く
+          } else if (!moved && hit >= 0) {
             const n = this.nodes[hit];
             if (n.expandable && this.onExpand && !e.shiftKey) this.onExpand(n);          // 階層グラフ: クリックで開閉、Shift+クリックで開く
             else if (this.onOpen) this.onOpen(n.exists ? n.id : null, n.title, n);
+          } else if (!moved && edgeHit >= 0) {
+            this.onEdgeClick(this.edgeInfo(edgeHit), ev);
           }
           this.drag = null;
-          c.onpointermove = (ev) => { const h = this.pick(ev); if (h !== (this.hover ?? -1)) { this.hover = h >= 0 ? h : null; c.style.cursor = h >= 0 ? "pointer" : ""; this.draw(); } };
+          c.onpointermove = (mv) => this._hoverMove(mv);
         };
       };
-      c.onpointermove = (ev) => { const h = this.pick(ev); if (h !== (this.hover ?? -1)) { this.hover = h >= 0 ? h : null; c.style.cursor = h >= 0 ? "pointer" : ""; c.title = h >= 0 ? this.nodes[h].title : ""; this.draw(); } };   // 省略された名前はツールチップで
-      c.onpointerleave = () => { if (this.hover !== null) { this.hover = null; this.draw(); } };
+      c.oncontextmenu = (e) => { const he = this.pick(e) < 0 && this.onEdgeClick ? this.pickEdge(e) : -1; if (he >= 0) { e.preventDefault(); this.onEdgeClick(this.edgeInfo(he), e); } };
+      c.onpointermove = (ev) => this._hoverMove(ev);
+      c.onpointerleave = () => { if (this.hover !== null || this.hoverEdge !== null) { this.hover = null; this.hoverEdge = null; this.draw(); } };
       c.onwheel = (e) => {
         e.preventDefault();
         this.autoFit = false;
