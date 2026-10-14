@@ -123,6 +123,24 @@ def start_mock_llm():
             body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
             requests.append({"path": self.path, "headers": {k.lower(): v for k, v in self.headers.items()}, "body": body})
             known = self.path.startswith(("/v1/", "/openai/deployments/"))
+            model = str(body.get("model") or "")
+            if known and "/chat/completions" in self.path and model.startswith("strict-"):
+                # OpenAI の推論モデルと同じ拒否の仕方: max_tokens → max_completion_tokens、temperature は既定値以外を拒否
+                err = None
+                if "max_tokens" in body:
+                    err = "Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead."
+                elif "temperature" in body and body["temperature"] != 1:
+                    err = "Unsupported value: 'temperature' does not support 0.2 with this model. Only the default (1) value is supported."
+                elif "reasoning_effort" in body and model == "strict-noeffort":
+                    err = "Unrecognized request argument supplied: reasoning_effort"
+                if err:
+                    data = json.dumps({"error": {"message": err, "type": "invalid_request_error", "param": None, "code": "unsupported_parameter"}}).encode()
+                    self.send_response(400)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
             if known and "/chat/completions" in self.path:
                 out = {"choices": [{"message": {"role": "assistant", "content": chat_response(body.get("messages", []))}}]}
             elif known and "/embeddings" in self.path:

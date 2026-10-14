@@ -272,7 +272,14 @@ GraphRAG は文書全体にまたがる「誰と誰がどうつながってい�
   パネルの左にオレンジの帯、入力欄がオレンジ、ボタンが「☁ 外部へ送信して質問」に変わり、回答にも「☁ 外部 API」のバッジが付きます。
   画面を読み込み直すとローカルに戻ります（うっかり外部のまま使い続けないため）
 - **設定キー**: ローカルは `base_url` `model` `api_key` など従来どおり。外部は `ext_enabled` `ext_provider` `ext_base_url` `ext_api_key` `ext_model`
-  `ext_api_version` `ext_proxy_url`、既定の接続先は `llm_backend`（local / external）
+  `ext_api_version` `ext_proxy_url` `ext_reasoning_effort`、既定の接続先は `llm_backend`（local / external）
+- **モデルごとの送信パラメータ**（`llm.payload_style`。API の返事で拒否されたパラメータは自動で外してやり直します）
+
+  | モデル | 上限 | temperature | reasoning_effort |
+  |---|---|---|---|
+  | gpt-5 / gpt-5-mini / gpt-5-nano、o1 / o3 / o3-mini / o4-mini（推論モデル） | `max_completion_tokens`（4096 以上。推論トークンも含まれるため） | 送らない（既定値 1 以外を拒否するため） | 設定「推論の深さ」の値（gpt-5 系は minimal も可。auto なら送らない） |
+  | gpt-4o / gpt-4o-mini / gpt-4.1 / gpt-5-chat-latest（OpenAI・Azure） | `max_completion_tokens`（`max_tokens` は非推奨） | 送る | 送らない |
+  | Ollama / LM Studio / vLLM などローカルの互換サーバ | `max_tokens` | 送る | 送らない（gpt-oss など推論モデル名のときは推論モデル扱い） |
 - 設定は `mycel/mycel.config.json` に保存されます（API キーを含むため .gitignore 済み。画面にはキーを返しません）
 
 | 接続先 | 接続方式 | Base URL の例 | モデル |

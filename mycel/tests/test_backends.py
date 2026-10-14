@@ -213,3 +213,70 @@ class AppTest(unittest.TestCase):
         with self.assertRaises(VaultError):
             self.call("POST", "/api/config", {"ext_enabled": False})
             self.app.resolve_backend("external")
+
+
+class PayloadTest(unittest.TestCase):
+    """モデルごとの送信パラメータ（max_tokens / max_completion_tokens / temperature / reasoning_effort）と自動修正。"""
+
+    def setUp(self):
+        self.srv, self.url, self.reqs = start_mock_llm()
+        self.cfg = load_config(Path(tempfile.mkdtemp()) / "none.json")
+        self.cfg.update({"base_url": self.url + "/v1", "model": "mock", "request_timeout": 5})
+
+    def tearDown(self):
+        self.srv.shutdown()
+
+    def test_payload_style_by_model_and_host(self):
+        from mycelcore.llm import is_reasoning_model, payload_style
+        for m in ("gpt-5", "gpt-5-mini", "gpt-5-nano", "o1", "o3-mini", "o4-mini", "o3", "gpt-oss:20b"):
+            self.assertTrue(is_reasoning_model(m), m)
+        for m in ("gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-5-chat-latest", "qwen2.5:7b", "llama3", "mock"):
+            self.assertFalse(is_reasoning_model(m), m)
+        openai = {"base_url": "https://api.openai.com/v1", "provider": "openai", "reasoning_effort": "low"}
+        s = payload_style(openai, "gpt-5-mini")
+        self.assertEqual((s["tokens_key"], s["temperature"], s["reasoning_effort"]), ("max_completion_tokens", False, "low"))
+        s = payload_style(openai, "gpt-4o-mini")
+        self.assertEqual((s["tokens_key"], s["temperature"], s["reasoning_effort"]), ("max_completion_tokens", True, ""))
+        s = payload_style({**openai, "reasoning_effort": "auto"}, "o3")
+        self.assertEqual((s["tokens_key"], s["temperature"], s["reasoning_effort"]), ("max_completion_tokens", False, ""))
+        s = payload_style({"base_url": "https://my.openai.azure.com", "provider": "azure"}, "gpt-4o")
+        self.assertEqual((s["tokens_key"], s["temperature"]), ("max_completion_tokens", True))
+        s = payload_style({"base_url": "http://127.0.0.1:11434/v1", "provider": "openai"}, "qwen2.5:7b")
+        self.assertEqual((s["tokens_key"], s["temperature"]), ("max_tokens", True))         # ローカル互換サーバは従来どおり
+        s = payload_style({"base_url": "http://127.0.0.1:11434/v1", "provider": "openai"}, "gpt-oss:20b")
+        self.assertEqual((s["tokens_key"], s["temperature"]), ("max_completion_tokens", False))
+
+    def test_local_model_sends_max_tokens_and_temperature(self):
+        c = LLMClient(self.cfg, "local")
+        c.chat("[TASK:ask] こんにちは", temperature=0.2)
+        body = self.reqs[-1]["body"]
+        self.assertEqual((body["max_tokens"], body["temperature"], body["model"]), (2048, 0.2, "mock"))
+        self.assertNotIn("max_completion_tokens", body)
+        self.assertNotIn("reasoning_effort", body)
+
+    def test_reasoning_model_payload_and_self_correction(self):
+        # gpt-5 系の名前 → 最初から max_completion_tokens・temperature なし・reasoning_effort あり
+        c = LLMClient({**self.cfg, "model": "gpt-5-mini", "reasoning_effort": "minimal"}, "local")
+        c.chat("[TASK:ask] こんにちは")
+        body = self.reqs[-1]["body"]
+        self.assertEqual((body["max_completion_tokens"], body["reasoning_effort"]), (4096, "minimal"))
+        self.assertNotIn("max_tokens", body)
+        self.assertNotIn("temperature", body)
+        # 名前から分からないモデルが拒否したら、API の返事を見て直してやり直す（max_tokens → max_completion_tokens、temperature を外す）
+        n = len(self.reqs)
+        c = LLMClient({**self.cfg, "model": "strict-x"}, "local")
+        text = c.chat("[TASK:ask] こんにちは", temperature=0.2)
+        self.assertTrue(text)
+        tries = [r["body"] for r in self.reqs[n:]]
+        self.assertEqual(len(tries), 3)
+        self.assertIn("max_tokens", tries[0])
+        self.assertIn("max_completion_tokens", tries[1]); self.assertIn("temperature", tries[1])
+        self.assertNotIn("temperature", tries[2]); self.assertEqual(tries[2]["max_completion_tokens"], 2048)
+        self.assertEqual(c.last_payload_keys, ["max_completion_tokens", "model"])
+        # reasoning_effort を知らないモデルなら外して続ける
+        n = len(self.reqs)
+        c = LLMClient({**self.cfg, "model": "strict-noeffort", "reasoning_effort": "low"}, "local")
+        self.assertTrue(c.chat("[TASK:ask] こんにちは", temperature=1))
+        last = self.reqs[-1]["body"]
+        self.assertNotIn("reasoning_effort", last)
+        self.assertIn("max_completion_tokens", last)

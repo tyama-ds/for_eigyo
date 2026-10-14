@@ -35,7 +35,7 @@
   const fail = (e) => toast(e.message || String(e), true);
   const titleOf = (p) => p.split("/").pop().replace(/\.md$/i, "");
   const isDoc = (p) => p.startsWith("@") || !/\.(md|markdown)$/i.test(p);
-  const CLIENT_VERSION = "0.6.1";          // サーバの __version__ と合わせる（tests/test_api が確認）
+  const CLIENT_VERSION = "0.6.2";          // サーバの __version__ と合わせる（tests/test_api が確認）
   const FT = { word: "W", excel: "X", powerpoint: "P", pdf: "PDF", email: "✉", csv: "CSV", html: "HTML", text: "TXT", code: "{ }", note: "MD", image: "IMG" };
   const GRP_NAME = { word: "Word", excel: "Excel", powerpoint: "PowerPoint", pdf: "PDF", email: "メール", csv: "CSV", html: "HTML", text: "テキスト", code: "データ", image: "画像" };
   const fmtDate = (t) => { if (!t) return "—"; const d = new Date(t * 1000), now = new Date(); return d.getFullYear() === now.getFullYear() ? d.toLocaleDateString("ja-JP", { month: "numeric", day: "numeric" }) : d.toLocaleDateString("ja-JP", { year: "numeric", month: "numeric", day: "numeric" }); };
@@ -1225,7 +1225,7 @@
     return `<div class="btabs" role="tablist" aria-label="送信先">
         <button data-bk="local" class="${cur === "local" ? "on" : ""}" title="このパソコン・社内の LLM。文書は外に出ません${loc.host ? "（" + esc(loc.host) + "）" : ""}"><span class="ic">🏠</span>ローカル LLM</button>
         <button data-bk="external" class="${cur === "external" ? "on" : ""}"${extOk ? "" : " disabled"} title="${extOk ? `OpenAI などの外部サービス（${esc(ext.host)}）にプロキシ経由で送ります` : "設定の「外部 API」で有効にすると使えます"}"><span class="ic">☁</span>外部 API${ext.model ? ` <small>${esc(ext.model)}</small>` : ""}</button></div>
-      ${cur === "external" ? `<div class="extbanner"><b>⚠ 外部送信モード</b> — 質問と、検索で見つかったノート・資料の抜粋が <b>${esc(ext.host || "外部")}</b>（${esc(ext.model || "")}）へプロキシ経由で送られます。機密情報を含む文書を対象にしないでください。送信は設定の「外部 API → 送信の記録」に残ります。</div>`
+      ${cur === "external" ? `<div class="extbanner"><b>☁ 外部 API に送信します</b> — 質問と、検索で見つかったノート・資料の抜粋が <b>${esc(ext.host || "外部")}</b>（${esc(ext.model || "")}）へプロキシ経由で送られます。機密情報を含む文書は対象にしないでください。送信は設定の「外部 API → 送信の記録」に残ります。</div>`
                            : `<div class="localbanner">🏠 ローカル LLM（${esc(loc.host || "未設定")}${loc.model ? " · " + esc(loc.model) : ""}）。文書は外部に送られません。</div>`}`;
   }
   function bindBackendTabs(p, rerender) {
@@ -2588,6 +2588,8 @@
         <label for="cExtModel" id="extModelLbl">モデル</label><div class="inrow"><input id="cExtModel" type="text" list="dlExtModels" value="${v("ext_model")}" placeholder="例: gpt-4o-mini"><button class="btn sm" id="cExtList" type="button">一覧を取得</button></div><datalist id="dlExtModels"></datalist>
         <div class="help" id="cExtListRes"></div>
         <label for="cExtVer" class="azx">API バージョン</label><input id="cExtVer" class="azx" type="text" value="${v("ext_api_version")}">
+        <label for="cExtEffort">推論の深さ</label><select id="cExtEffort">${[["auto", "モデルの既定（送らない）"], ["minimal", "minimal（gpt-5 系のみ・最速）"], ["low", "low（推奨）"], ["medium", "medium"], ["high", "high（遅い・高コスト）"]].map(([k, l]) => `<option value="${k}"${(cfg.ext_reasoning_effort || "low") === k ? " selected" : ""}>${l}</option>`).join("")}</select>
+        <div class="help">o1 / o3 / o4-mini / gpt-5 / gpt-5-mini などの推論モデルに <code>reasoning_effort</code> として送ります。これらのモデルには temperature を送らず、上限は <code>max_completion_tokens</code> で送ります（gpt-4o などは temperature あり）。モデルが受け付けないパラメータは API の返事を見て自動で外します。</div>
         <label for="cExtProxy">プロキシ URL</label><input id="cExtProxy" type="text" value="${v("ext_proxy_url")}" placeholder="例: http://proxy.example.co.jp:8080（空欄なら環境変数 HTTPS_PROXY）">
         <div class="help">外部 API への通信はこのプロキシを必ず通します。どちらも無いときは送信しません。</div>
         <label>既定の接続先</label><div><label class="ck"><input type="radio" name="cBk" value="local"${cfg.llm_backend !== "external" ? " checked" : ""}> 🏠 ローカル LLM（推奨）</label><br><label class="ck"><input type="radio" name="cBk" value="external"${cfg.llm_backend === "external" ? " checked" : ""}${cfg.ext_enabled ? "" : " disabled"}> ☁ 外部 API（要約・取り込み・人物推定などすべての AI 処理が外部に送られます）</label></div>
@@ -2607,7 +2609,7 @@
         rag_pool: $("#cPool", body).value, rag_top_k: $("#cTopK", body).value, rag_rerank: $("#cRerank", body).value, rag_rerank_pool: $("#cRerankPool", body).value,
         vlm_model: $("#cVlm", body).value, attachment_folder: $("#cAttach", body).value,
         ext_enabled: $("#cExtOn", body).checked, ext_provider: $("#cExtProv", body).value, ext_base_url: $("#cExtUrl", body).value, ext_model: $("#cExtModel", body).value,
-        ext_api_version: $("#cExtVer", body).value, ext_proxy_url: $("#cExtProxy", body).value, llm_backend: ($("input[name=cBk]:checked", body) || {}).value || "local",
+        ext_api_version: $("#cExtVer", body).value, ext_proxy_url: $("#cExtProxy", body).value, ext_reasoning_effort: $("#cExtEffort", body).value, llm_backend: ($("input[name=cBk]:checked", body) || {}).value || "local",
         plugins: $$("[data-plug]", body).filter((c) => c.checked).map((c) => c.dataset.plug),
       };
       if ($("#cKey", body).value) d.api_key = $("#cKey", body).value;

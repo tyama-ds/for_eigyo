@@ -22,6 +22,46 @@ from .config import effective_llm
 AUDIT_PATH: Path | None = None     # 外部 API への送信記録（.mycel/external_llm.jsonl）。app が Vault を開くときに設定
 BACKEND_LABEL = {"local": "ローカル LLM", "external": "外部 API"}
 
+# 推論モデル（o1 / o3 / o3-mini / o4-mini / gpt-5 / gpt-5-mini / gpt-5-nano など）。
+# temperature・top_p を受け付けず、max_tokens ではなく max_completion_tokens を使う。gpt-5-chat-latest は通常のチャットモデル
+_REASONING_RE = re.compile(r"^(o[1-9](?:[.-]|$)|gpt-5(?!-chat)|gpt-oss)", re.IGNORECASE)
+_OPENAI_HOSTS = (".openai.com", ".openai.azure.com", ".cognitiveservices.azure.com", ".services.ai.azure.com")
+
+
+def is_reasoning_model(model: str) -> bool:
+    return bool(_REASONING_RE.match((model or "").strip()))
+
+
+def payload_style(cfg: dict, model: str) -> dict:
+    """モデル・接続先ごとの送り方。
+    tokens_key: OpenAI / Azure と推論モデルは max_completion_tokens（max_tokens は非推奨で、推論モデルは拒否する）。
+                ローカルの OpenAI 互換サーバ（Ollama / LM Studio / vLLM）は max_tokens
+    temperature: 推論モデルには送らない（既定値 1 以外を拒否する）
+    reasoning_effort: 推論モデルで設定があれば送る（gpt-5 系: minimal/low/medium/high、o 系: low/medium/high）"""
+    host = _host_of(cfg.get("base_url", "")).lower()
+    reasoning = is_reasoning_model(model)
+    official = cfg.get("provider") == "azure" or host.endswith(_OPENAI_HOSTS)
+    effort = (cfg.get("reasoning_effort") or "").strip().lower()
+    return {"tokens_key": "max_completion_tokens" if (official or reasoning) else "max_tokens",
+            "temperature": not reasoning, "reasoning": reasoning,
+            "reasoning_effort": effort if (reasoning and effort and effort != "auto") else ""}
+
+
+def _param_problem(msg: str) -> str | None:
+    """API のエラー文から、受け付けられなかったパラメータを推定する（モデルごとの差を自動で吸収するため）。"""
+    low = (msg or "").lower()
+    if "max_tokens" in low and ("max_completion_tokens" in low or "unsupported" in low or "not supported" in low):
+        return "max_tokens"
+    if "max_completion_tokens" in low and ("unrecognized" in low or "unknown" in low or "unsupported" in low or "not supported" in low or "extra" in low):
+        return "max_completion_tokens"
+    if "reasoning_effort" in low or "reasoning.effort" in low:
+        return "reasoning_effort"
+    if "temperature" in low and ("unsupported" in low or "not supported" in low or "only the default" in low):
+        return "temperature"
+    if "top_p" in low and ("unsupported" in low or "not supported" in low):
+        return "top_p"
+    return None
+
 _THINK_BLOCK_RE = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL | re.IGNORECASE)
 _THINK_OPEN_RE = re.compile(r"<think(?:ing)?>", re.IGNORECASE)
 
@@ -177,19 +217,43 @@ class LLMClient:
         if system:
             messages = [{"role": "system", "content": system}] + messages
         url, headers, model = self._endpoint("chat")
-        payload = {
-            "messages": messages,
-            "max_tokens": int(max_tokens or self.cfg.get("max_tokens") or 2048),
-            "temperature": float(self.cfg.get("temperature", 0.2) if temperature is None else temperature),
-        }
+        style = payload_style(self.cfg, model)
+        budget = int(max_tokens or self.cfg.get("max_tokens") or 2048)
+        if style["reasoning"]:
+            budget = max(budget, 4096)                    # 推論トークンも上限に含まれるので少し多めに
+        payload: dict = {"messages": messages, style["tokens_key"]: budget}
+        if style["temperature"]:
+            payload["temperature"] = float(self.cfg.get("temperature", 0.2) if temperature is None else temperature)
+        if style["reasoning_effort"]:
+            payload["reasoning_effort"] = style["reasoning_effort"]
         if self.cfg.get("provider") != "azure":
             payload["model"] = model
-        data = self._post(url, headers, payload)
+        self.last_payload_keys = sorted(k for k in payload if k != "messages")
+        data = None
+        for _ in range(4):                                # モデルが受け付けないパラメータは API の返事を見て外し、やり直す
+            try:
+                data = self._post(url, headers, payload)
+            except LLMError as e:
+                problem = _param_problem(str(e)) if "HTTP 400" in str(e) else None
+                if problem == "max_tokens" and "max_tokens" in payload:
+                    payload["max_completion_tokens"] = payload.pop("max_tokens")
+                elif problem == "max_completion_tokens" and "max_completion_tokens" in payload:
+                    payload["max_tokens"] = payload.pop("max_completion_tokens")
+                elif problem in ("temperature", "top_p", "reasoning_effort") and problem in payload:
+                    payload.pop(problem)
+                else:
+                    raise
+                self.last_payload_keys = sorted(k for k in payload if k != "messages")
+                continue
+            break
         if isinstance(data.get("error"), dict):
             raise LLMError(f"LLM API エラー: {data['error'].get('message', data['error'])}")
         choices = data.get("choices") or []
         msg = (choices[0].get("message") or {}) if choices else {}
-        return strip_think(msg.get("content") or "")
+        text = strip_think(msg.get("content") or "")
+        if not text and choices and choices[0].get("finish_reason") == "length":
+            raise LLMError("応答が空のまま上限に達しました（推論トークンで使い切った可能性）。設定の Max tokens を増やすか、推論の深さを下げてください")
+        return text
 
     def list_models(self) -> list[str]:
         """使えるモデル名の一覧（OpenAI 互換の /models、だめなら Ollama の /api/tags）。"""
