@@ -2127,7 +2127,7 @@ $("#aiProbeBtn").onclick=async ()=>{   // ローカルLLMの接続先を診断�
     parts.push("最初の文字まで "+d.first_s+"秒・全体 "+d.elapsed_s+"秒"); parts.push(d.thinks ? "思考するモデル" : "思考なし");
     out.append(el("div",{text:"✓ "+parts.join("／")}));
     (d.warnings||[]).forEach(w=>out.append(el("div",{text:"⚠ "+w})));
-    if(d.ctx_server && d.ctx_server!==parseInt($("#aiCtx").value,10)){
+    if(d.ctx_server && d.ctx_exact && d.ctx_server!==parseInt($("#aiCtx").value,10)){   // 設定のモデルの値と確かなときだけ
       const fix=el("button",{type:"button",class:"lnkbtn",text:"文脈長を "+d.ctx_server+" にする"});
       fix.onclick=()=>{ $("#aiCtx").value=d.ctx_server; fix.remove(); toast("文脈長を "+d.ctx_server+" にしました（保存で反映）"); };
       out.append(fix);
@@ -2376,7 +2376,7 @@ function retryEl(m){   // 失敗したレポート生成: 同じ条件で再実�
   const w=el("div",{}); w.append(bubbleEl(m));
   const b=el("button",{type:"button",class:"btn sm",text:"同じ条件で再実行（完了した部分は再利用）",
     title:"部分要約・統合など完了した段の結果はサーバーに保存されています。同じ条件で再実行すると、そこから先だけを行います"});
-  b.onclick=()=>{ const i=RS.msgs.indexOf(m); if(i>=0) RS.msgs.splice(i,1); runReport(m.retry); };
+  b.onclick=()=>{ const i=RS.msgs.indexOf(m); if(i>=0) RS.msgs.splice(i,1); runReport(Object.assign({}, m.retry, {reuse:true})); };
   w.append(b); return w;
 }
 async function startReport(){
@@ -2395,7 +2395,8 @@ async function runReport(payload){
   if(RS.job && !["done","error"].includes(RS.job.state)){ toast("生成中のレポートがあります。完了をお待ちください","err"); return; }
   try{
     const d=await api("/api/research/report",{method:"POST",headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)});
-    RS.job={id:d.job_id, state:"queued", total:0, done:0, articles:payload.ids.length, fulltext:payload.fulltext, payload};
+    const base=Object.assign({}, payload); delete base.reuse;   // 再実行ボタンは毎回 reuse を付け直す
+    RS.job={id:d.job_id, state:"queued", total:0, done:0, articles:payload.ids.length, fulltext:payload.fulltext, payload:base};
     toggleReportForm(false);
     RS.msgs.push({role:"progress"}); renderRsLog();
     pollReport();
