@@ -90,8 +90,9 @@
       <div class="cf-evidence">${edge ? `<div class="cf-evidence-heading"><span class="cf-eyebrow">SELECTED CITATION</span><button type="button" data-cf-action="clear-edge" aria-label="引用の選択を解除">×</button></div><h3>引用元 → 参照先</h3>${paperButton(state, edge.source_id)}<div class="cf-evidence-arrow">↓ <span>実際の引用関係</span></div>${paperButton(state, edge.target_id)}` : `<span class="cf-eyebrow">EVIDENCE</span><h3>重心を構成する根拠論文の例</h3><details open><summary>新しい研究 ${number(c?.current?.count ?? 0)}</summary>${evidenceList(state, c?.current?.evidence_ids)}</details><details><summary>参照した研究基盤</summary>${evidenceList(state, c?.foundation?.evidence_ids)}</details>`}</div>`;
   }
   function header(state) {
+    if(state.root.dataset){const win=periodWindow(state.data?.periods||[],state.start);state.root.dataset.rxReady=String(!!state.data);state.root.dataset.rxCaption=`投影 共通PCA / 集計 全対象論文（描画標本） / 時間単位 ${{year:'年',quarter:'四半期',month:'月'}[state.interval]} / 話題 ${state.topic==='all'?'全話題':state.data?.topics.find(topic=>String(topic.id)===state.topic)?.label||state.topic} / 表示期間 ${win.periods[0]?.label||'—'}〜${win.periods.at(-1)?.label||'—'} / 比較する出版期間 ${state.cohort||'—'}`;}
     const base = `/api/results/${encodeURIComponent(state.result.id)}/citation-flow/export`, params = `interval=${encodeURIComponent(state.interval)}&topic_id=${encodeURIComponent(state.topic)}`;
-    return `<div class="cf-topbar"><div><span class="cf-eyebrow">CITATION FLOW / TEMPORAL OBSERVATORY</span><p>新しい研究が、どの研究基盤を参照しているか。${state.data?.meta.is_demo || state.result.meta?.is_demo ? '<span class="cf-demo-label">合成デモ</span>' : ''}</p></div><div class="cf-exports"><a href="${base}?format=csv&${params}" download>CSV ↓</a><a href="${base}?format=json&${params}" download>JSON ↓</a></div></div>`;
+    return `<div class="cf-topbar"><div><span class="cf-eyebrow">CITATION FLOW / TEMPORAL OBSERVATORY</span><p>新しい研究が、どの研究基盤を参照しているか。${state.data?.meta.is_demo || state.result.meta?.is_demo ? '<span class="cf-demo-label">合成デモ</span>' : ''}</p></div><div class="cf-exports"><a href="${base}?format=csv&${params}" download>CSV ↓</a><a href="${base}?format=json&${params}" download>JSON ↓</a></div>${global.AtlasReportExports?.captureControls(state.result.id,'citation')||''}</div>`;
   }
   function controls(state) {
     const data = state.data;
@@ -267,6 +268,7 @@
   function mount(root, result, context = {}) {
     if (mounted) unmountState(mounted);
     if (!root || !result?.id) return null;
+    if(root.dataset)root.dataset.reportResultId=result.id;
     const media = global.matchMedia?.('(prefers-reduced-motion: reduce)');
     const state = {root, result, context, api: context.api || (async (url, options) => { const response = await global.fetch(url, options); if (!response.ok) throw new Error(`読み込みに失敗しました (${response.status})`); return response.json(); }), doc: root.ownerDocument || document, uid: `cf-${++sequence}`, media, reduced: !!media?.matches, alive: true, request: 0, cleanups: [], interval: 'year', topic: 'all', cohort: '', start: null, edge: null, spread: 365, camera: {...DEFAULT_CAMERA}, playing: true, elapsed: media?.matches ? 2000 : 0, frame: null, lastFrame: null, data: null, scene: null};
     mounted = state; bindEvents(state); const ready = load(state);

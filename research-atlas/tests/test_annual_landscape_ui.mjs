@@ -153,3 +153,51 @@ test('annual metric timeline retains not-yet-prepared years after cancellation',
   const h=harness(),data=report({generation_status:'cancelled'});data.years=data.years.slice(0,1);
   const html=h.t.reportHTML(data);assert.match(html,/id="annual-year-2022"/);assert.match(html,/id="annual-year-2023"/);assert.match(html,/id="annual-year-2024"/);assert.match(html,/この章の生成前に停止/);assert.match(html,/2022年の抄録を詳しく比較しました/);
 });
+
+
+test('annual comparison evidence settings are opt-in and included independently of yearly representative reviews',()=>{
+  const h=harness();assert.equal(h.t.payload().papers_per_period,undefined);
+  h.t.handleChange({target:{dataset:{alControl:'transitions'},checked:true}});
+  h.t.handleChange({target:{dataset:{alControl:'papers_per_period'},value:'15'}});
+  h.t.handleChange({target:{dataset:{alControl:'selection_method'},value:'recent'}});
+  h.t.handleChange({target:{dataset:{alControl:'abstract_only'},checked:true}});
+  const request=h.t.payload();assert.equal(request.papers_per_period,15);assert.equal(request.selection_method,'recent');assert.equal(request.abstract_only,true);
+  assert.match(h.root.html,/各年は重心付近の最大6論文/);assert.match(h.root.html,/期間比較だけに適用/);
+  for(const value of ['0','21','2.5','']){h.t.handleChange({target:{dataset:{alControl:'papers_per_period'},value}});assert.throws(()=>h.t.payload(),/1〜20件の整数/);}
+});
+
+test('annual saved selection is checked and displayed from the report rather than the current controls',()=>{
+  const h=harness();h.t.handleChange({target:{dataset:{alControl:'transitions'},checked:true}});
+  const data=report({include_transitions:true,selection:{papers_per_period:6,selection_method:'centroid',abstract_only:false,method_label:'<saved method>'}});
+  assert.equal(h.t.checkReport(data,h.t.payload()),data);
+  const html=h.t.reportHTML(data);assert.match(html,/&lt;saved method&gt;/);assert.doesNotMatch(html,/<saved method>/);
+  assert.throws(()=>h.t.checkReport({...data,selection:{papers_per_period:5,selection_method:'centroid'}},h.t.payload()),/異なる論文選択条件/);
+  h.t.state.report=data;h.t.handleChange({target:{dataset:{alControl:'selection_method'},value:'diverse'}});assert.equal(h.t.state.report,null);
+});
+
+test('annual evidence controls lock during generation and changed selection invalidates late results',async()=>{
+  let release;const h=harness(url=>url==='/api/landscape-annual-reports'?Promise.resolve({job_id:'job-1',annual_report_id:'annual-1'}):url.startsWith('/api/jobs/')?Promise.resolve({status:'completed'}):new Promise(resolve=>release=resolve));
+  h.t.handleChange({target:{dataset:{alControl:'transitions'},checked:true}});const task=h.t.generate();await tick();
+  assert.match(h.root.html,/<fieldset class="al-selection-controls" disabled>/);
+  h.t.handleChange({target:{dataset:{alControl:'papers_per_period'},value:'20'}});assert.equal(h.t.state.selection.papers_per_period,6);
+  h.t.state.selection.selection_method='recent';release(report({include_transitions:true}));await task;assert.equal(h.t.state.report,null);
+});
+
+
+test('annual input-only count typing updates the request without replacing the focused input',async()=>{
+  const h=harness(async url=>url==='/api/landscape-annual-reports'?{job_id:'job-1',annual_report_id:'annual-1'}:url.startsWith('/api/jobs/')?{status:'completed'}:report({include_transitions:true,selection:{papers_per_period:10,selection_method:'centroid',abstract_only:false}}));
+  h.t.handleChange({target:{dataset:{alControl:'transitions'},checked:true}});h.t.state.report=report();
+  const before=h.root.renders;
+  h.document.dispatch('input',{target:{dataset:{alControl:'papers_per_period'},value:'1'}});
+  h.document.dispatch('input',{target:{dataset:{alControl:'papers_per_period'},value:'10'}});
+  assert.equal(h.root.renders,before,'multi-digit entry keeps the number input mounted');assert.equal(h.t.state.report,null);
+  await h.t.generate();const request=JSON.parse(h.calls.find(c=>c.url==='/api/landscape-annual-reports').options.body);
+  assert.equal(request.papers_per_period,10);assert.equal(h.t.state.report.selection.papers_per_period,10);
+});
+
+test('annual input-only invalid count prevents submission and a later edit repairs the draft',async()=>{
+  const h=harness();h.t.handleChange({target:{dataset:{alControl:'transitions'},checked:true}});
+  h.document.dispatch('input',{target:{dataset:{alControl:'papers_per_period'},value:'21'}});await h.t.generate();
+  assert.equal(h.calls.length,0);assert.match(h.t.state.error,/1〜20件の整数/);
+  h.document.dispatch('input',{target:{dataset:{alControl:'papers_per_period'},value:'12'}});assert.equal(h.t.payload().papers_per_period,12);assert.equal(h.t.state.error,'');
+});

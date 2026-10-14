@@ -33,8 +33,11 @@ def result(client):
         "network": {"nodes": [], "edges": []}, "meta": {"start_year": 2023, "end_year": 2024, "is_demo": True}})
 
 
-def run(client, result, group_by):
-    response = client.post("/api/author-networks", json={"result_id": result["id"], "group_by": group_by})
+def run(client, result, group_by=None):
+    body = {"result_id": result["id"]}
+    if group_by is not None:
+        body["group_by"] = group_by
+    response = client.post("/api/author-networks", json=body)
     assert response.status_code == 200, response.text
     deadline = time.monotonic() + 20
     while time.monotonic() < deadline:
@@ -76,6 +79,46 @@ def test_author_network_input_errors_and_origin(client, result):
     assert client.post("/api/author-networks", json=body, headers={"Origin": "https://other.example"}).status_code == 403
     assert client.get("/api/author-networks/" + "f" * 32).status_code == 404
     assert client.get("/api/author-networks/" + "f" * 32 + "/export?kind=invalid").status_code == 422
+
+
+@pytest.mark.parametrize("indexed", [False, True])
+def test_default_institution_metrics_survive_storage_and_csv(client, result, monkeypatch, indexed):
+    if indexed:
+        from app import large_storage
+        monkeypatch.setattr(large_storage, "LARGE_CORPUS_THRESHOLD", 1)
+        storage.save("results", result)
+    job = run(client, result)
+    assert job["status"] == "completed", job
+    network = client.get("/api/author-networks/" + job["author_network_id"]).json()
+    assert network["group_by"] == "institution"
+    assert network["metrics_scope"]["node_count"] == 3
+    assert network["metrics_scope"]["edge_count"] == 3
+    assert network["metrics_scope"]["full_edge_set"] is True
+    assert set(network["metric_definitions"]) == {
+        "degree", "strength", "betweenness", "pagerank", "local_clustering", "institution_bridge"}
+    nodes = {node["id"]: node for node in network["nodes"]}
+    assert nodes["scopus:100"]["metrics"]["degree"] == 2
+    assert nodes["scopus:100"]["metrics"]["strength"] == 3
+    assert nodes["scopus:100"]["metrics"]["betweenness"] == 0
+    assert nodes["scopus:100"]["metrics"]["local_clustering"] == 1
+    assert nodes["scopus:100"]["metrics"]["institution_bridge"] == 1
+    assert nodes["scopus:300"]["metrics"]["institution_bridge"] is None
+    assert set(nodes["scopus:100"]["neighbor_ids"]) == {"scopus:200", "scopus:300"}
+    assert all(node["metrics_computed"] for node in nodes.values())
+    exported = client.get(f"/api/author-networks/{network['id']}/export?kind=authors")
+    rows = {row["Author ID"]: row for row in csv.DictReader(io.StringIO(exported.content.decode("utf-8-sig")))}
+    assert rows["scopus:100"]["Degree"] == "2"
+    assert rows["scopus:300"]["External primary institutions"] == ""
+    assert json.loads(rows["scopus:100"]["Scope and methodology (JSON)"])["metrics_scope"]["node_count"] == 3
+
+
+def test_demo_institutions_are_explicit_and_fictional():
+    from app.ingest import demo_papers
+    papers = demo_papers()
+    institutions = {affiliation for paper in papers for author in paper["authors"]
+                    for affiliation in author["affiliations"]}
+    assert len(institutions) == 8
+    assert all(name.startswith("Synthetic ") and name.endswith("[Fictional]") for name in institutions)
 
 
 def test_network_disk_error_terminates_job_and_redacts_details(client, result, monkeypatch):

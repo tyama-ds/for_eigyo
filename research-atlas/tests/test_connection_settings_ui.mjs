@@ -7,7 +7,7 @@ const source=readFileSync(new URL('../static/connection-settings.js',import.meta
 const key='research-atlas.connections.v1';
 function harness({initial=null,fetchImpl,store}={}) {
   const values=store||new Map(initial===null?[]:[[key,initial]]), elements=new Map(), windowEvents=new Map(), documentEvents=new Map(), sent=[], emitted=[];
-  const ids=['connections-summary','connections-dialog','connections-message','connections-origin','connection-proxy-fields','connection-openai-key','connection-openai-model','connection-local-backend','connection-local-url','connection-local-model','connection-local-key','connection-proxy-enabled','connection-proxy-url','connection-proxy-username','connection-proxy-password','connection-no-proxy'];
+  const ids=['connections-summary','connections-dialog','connections-message','connections-origin','connection-proxy-fields','connection-openai-key','connection-openai-model','connection-local-backend','connection-local-url','connection-local-model','connection-local-key','connection-local-context','connection-local-output','connection-proxy-enabled','connection-proxy-url','connection-proxy-username','connection-proxy-password','connection-no-proxy'];
   for(const id of ids)elements.set(`#${id}`,{id,value:'',checked:false,open:false,hidden:false,disabled:false,textContent:'',addEventListener(){},setAttribute(){},showModal(){this.open=true;},close(){this.open=false;}});
   const localStorage={getItem:name=>values.get(name)??null,setItem:(name,value)=>values.set(name,value),removeItem:name=>values.delete(name)};
   const window={__ATLAS_UI_TEST__:true,localStorage,fetch:async(...args)=>{sent.push(args);return fetchImpl?fetchImpl(...args):{ok:true,json:async()=>({ok:true,message:'接続できました'})};},addEventListener:(name,handler)=>windowEvents.set(name,handler),dispatchEvent:event=>emitted.push(event)};
@@ -80,7 +80,7 @@ test('invalid URL, embedded credentials, control characters and oversized header
 
 test('another PC LLM URL persists and is restored without changing other browser settings',()=>{
   for(const url of ['http://192.168.1.50:1234/v1','http://10.20.30.40:11434','https://llm.example.internal/v1','http://lab-gpu:1234/v1','http://[fd00::50]:1234/v1','https://external.test/v1']) {
-    const h=harness(),settings=configured(h);settings.local={backend:'openai_compatible',url,model:'test-model',api_key:'local-test-key'};
+    const h=harness(),settings=configured(h);settings.local={...settings.local,backend:'openai_compatible',url,model:'test-model',api_key:'local-test-key'};
     h.t.save(settings);const restored=harness({store:h.values});
     assert.deepEqual(plain(restored.api.get()),plain(settings));assert.equal(h.sent.length,0);
   }
@@ -119,4 +119,42 @@ test('settings markup is separate from analytical submit and credential fields a
   assert.doesNotMatch(html+app+foresight,/\.env/);assert.match(app,/AtlasConnections\?\.fetch/);assert.match(foresight,/AtlasConnections\?\.fetch/);
   assert.match(app,/request!==fieldState\.llmRequest/);assert.match(foresight,/token!==ui\.statusRequest/);
   assert.match(html,/ローカル・別PCのLLM/);assert.match(html,/Serve on Local Network/);assert.match(html,/localhostはResearch AtlasのPythonが動くPCを指します/);
+});
+
+test('older browser settings acquire token defaults without rewriting storage or losing secrets',async()=>{
+  const old=configured(harness());old.local.api_key='preserved-local-key';delete old.local.context_window;delete old.local.max_output_tokens;
+  const raw=JSON.stringify(old),h=harness({initial:raw});
+  assert.equal(h.values.get(key),raw);assert.equal(h.t.storageError,'');
+  assert.equal(h.api.get().local.context_window,null);assert.equal(h.api.get().local.max_output_tokens,4000);
+  assert.equal(h.api.get().local.api_key,'preserved-local-key');assert.equal(h.api.get().openai.api_key,old.openai.api_key);assert.equal(h.api.get().proxy.password,old.proxy.password);
+  h.api.open();assert.equal(h.elements.get('#connection-local-context').value,'');assert.equal(String(h.elements.get('#connection-local-output').value),'4000');
+  await h.api.fetch('/api/connections/status');
+  const sent=JSON.parse(Buffer.from(h.sent[0][1].headers.get('X-Atlas-Connection'),'base64').toString('utf8'));
+  assert.equal(sent.local.max_output_tokens,4000);assert.equal(sent.local.context_window,null);assert.equal(h.values.get(key),raw);
+});
+
+test('token budget edits stay in the draft until explicitly saved and propagate on requests',async()=>{
+  const h=harness();h.t.save(configured(h));const prior=h.values.get(key);h.api.open();
+  h.elements.get('#connection-local-context').value='8192';h.elements.get('#connection-local-output').value='2048';
+  await h.t.testConnection('local');
+  const draft=JSON.parse(Buffer.from(h.sent[0][1].headers.get('X-Atlas-Connection'),'base64').toString('utf8'));
+  assert.equal(draft.local.context_window,8192);assert.equal(draft.local.max_output_tokens,2048);assert.equal(h.values.get(key),prior);
+  assert.equal(h.api.get().local.context_window,null);h.t.save(h.t.readDraft());
+  await h.api.fetch('/api/connections/status');
+  const saved=JSON.parse(Buffer.from(h.sent[1][1].headers.get('X-Atlas-Connection'),'base64').toString('utf8'));
+  assert.equal(saved.local.context_window,8192);assert.equal(saved.local.max_output_tokens,2048);assert.equal(saved.openai.api_key,'fake-key-for-test-only');
+  h.elements.get('#connection-local-context').value='';assert.equal(h.t.readDraft().local.context_window,null);
+});
+
+test('invalid token budgets cannot replace valid browser settings',()=>{
+  const h=harness();h.t.save(configured(h));const prior=h.values.get(key);
+  for(const local of [{context_window:2047},{context_window:262145},{context_window:'8192'},{context_window:true},
+    {max_output_tokens:511},{max_output_tokens:32769},{max_output_tokens:null},{max_output_tokens:'2000'},
+    {max_output_tokens:1024.5}]) {
+    const candidate=configured(h);Object.assign(candidate.local,local);assert.throws(()=>h.t.save(candidate));assert.equal(h.values.get(key),prior);
+  }
+  const candidate=configured(h);Object.assign(candidate.local,{context_window:2048,max_output_tokens:512});
+  assert.equal(h.t.save(candidate).local.context_window,2048);
+  Object.assign(candidate.local,{context_window:4096,max_output_tokens:4000});
+  assert.equal(h.t.save(candidate).local.max_output_tokens,4000); // Gateway adjusts the effective output budget.
 });

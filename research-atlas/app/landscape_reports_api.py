@@ -15,6 +15,8 @@ router = APIRouter()
 
 
 _GENERATION_ERRORS = {
+    "context_length": "ローカルLLMの入力上限超過が、根拠を縮小した再試行でも解消しませんでした。接続設定のコンテキスト長を実際のモデル設定に合わせるか、より大きいコンテキストでモデルを読み込んでください。",
+    "context_budget": "入力上限に収まりません。期間・計測値・最小限の根拠を残して縮小できる限界です。接続設定の回答上限を下げるか、より大きいコンテキストでモデルを読み込んでください。",
     "malformed_json": "LLMの最終回答をJSONとして読み取れませんでした。構造化出力の設定・対応モデルを確認してください。",
     "incomplete": "LLMの最終回答が完了前に途切れました。サーバーのログと接続状態を確認して再試行してください。",
     "token_limit": "LLMの出力がトークン上限に達し、最終回答が完成しませんでした。出力上限や思考モードの設定を確認してください。",
@@ -24,6 +26,7 @@ _GENERATION_ERRORS = {
     "invalid_schema": "LLMの最終回答が評論に必要な形式を満たしていませんでした。構造化出力に対応するモデル・設定を確認してください。",
     "invalid_evidence_ids": "LLMの回答に、提供した根拠資料にない論文IDが含まれていました。この回答は評論として採用していません。",
     "missing_abstracts": "対象の代表論文に抄録がなく、内容に基づくLLM評論を生成できませんでした。抄録を含む論文データを追加してください。",
+    "selection_missing_period": "選んだ論文に、前期・後期の両方を比較できる抄録がありません。論文数・選び方・抄録限定の設定を見直してください。計算結果は保存されています。",
 }
 _GENERATION_ERROR_DEFAULT = "LLMへの接続、回答形式、または根拠論文の照合を完了できませんでした。接続設定とモデルのログを確認してください。"
 
@@ -49,6 +52,9 @@ class LandscapeReportRequest(BaseModel):
     period_id: str | None = Field(default=None, min_length=1, max_length=30)
     provider: Literal["none", "local", "openai"] = "none"
     model: str | None = Field(default=None, min_length=1, max_length=160)
+    papers_per_period: int = Field(default=6, ge=1, le=20, strict=True)
+    selection_method: Literal["centroid", "diverse", "cited", "recent"] = "centroid"
+    abstract_only: bool = Field(default=False, strict=True)
 
     @model_validator(mode="after")
     def target_valid(self):
@@ -56,6 +62,8 @@ class LandscapeReportRequest(BaseModel):
             raise ValueError("比較する重心移動を指定してください。")
         if self.kind == "centroid" and (not self.topic_id or not self.period_id):
             raise ValueError("代表論文を読むクラスターと期間を指定してください。")
+        if self.kind == "centroid" and (self.papers_per_period != 6 or self.selection_method != "centroid" or self.abstract_only):
+            raise ValueError("論文の選択条件は前後の期間比較で指定してください。")
         return self
 
 
@@ -75,7 +83,10 @@ def run_landscape_report(job_id: str, options: dict):
                                     options["topic_id"], options["period_id"], options.get("projection_id"), options.get("scope", "sample"))
         else:
             report = landscape_reports.prepare_report(options["result_id"], options["projection"], options["interval"],
-                                                      options["movement_id"], options.get("projection_id"), options.get("scope", "sample"))
+                                                      options["movement_id"], options.get("projection_id"), options.get("scope", "sample"),
+                                                      papers_per_period=options.get("papers_per_period", 6),
+                                                      selection_method=options.get("selection_method", "centroid"),
+                                                      abstract_only=options.get("abstract_only", False))
         report["requested_provider"] = options["provider"]
         report["generation_status"] = "not_requested" if options["provider"] == "none" else "generating"
         storage.save("landscape_reports", report)
@@ -84,7 +95,7 @@ def run_landscape_report(job_id: str, options: dict):
             _progress(job_id, stage="LLMで話題の変化を解釈")
             def on_generation(event):
                 seconds, count = max(0, int(event["elapsed_seconds"])), max(0, int(event["received_chars"]))
-                _progress(job_id, stage=f"話題の変化を解釈：{seconds // 60}分{seconds % 60:02d}秒・{count:,}文字受信（検証前）")
+                _progress(job_id, stage=event.get("stage") or f"話題の変化を解釈：{seconds // 60}分{seconds % 60:02d}秒・{count:,}文字受信（検証前）")
             try:
                 report["narrative"] = landscape_reports.generate(report, options["provider"], options.get("model"), progress=on_generation)
                 report["generation_status"] = "generated"

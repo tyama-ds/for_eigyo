@@ -33,7 +33,7 @@ from app.cluster_models import cluster_model_catalog
 
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
-app = FastAPI(title="Research Atlas", version="2.2.0", description="Multi-source bibliometrics & evidence-grounded technology foresight")
+app = FastAPI(title="Research Atlas", version="2.6.0", description="Multi-source bibliometrics & evidence-grounded technology foresight")
 MAX_NON_UPLOAD_REQUEST_BYTES = 256 * 1024 * 1024
 EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="atlas-analysis")
 SOURCE_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="atlas-discovery")
@@ -106,7 +106,7 @@ async def missing_value(_request, _exc):
 def status():
     transformer = importlib.util.find_spec("sentence_transformers") is not None
     bertopic = transformer and all(importlib.util.find_spec(name) is not None for name in ("bertopic", "umap", "hdbscan"))
-    return {"llm_configured": insights.configured(), "limits": public_limits(),
+    return {"version": app.version, "llm_configured": insights.configured(), "limits": public_limits(),
         "transformer_available": transformer,
         "sbert_models": [{"id": key, "model_id": identifier,
             "label": "多言語 MiniLM" if key == "multilingual_minilm" else "SBERT MPNet（英語）",
@@ -161,6 +161,8 @@ async def import_csv(file: UploadFile = File(...), provider: Literal["scopus_csv
 
 
 def _import_csv_dataset(content: bytes | BinaryIO, provider: str, filename: str | None):
+    from urllib.parse import quote
+
     papers, report = parse_scopus_csv(content)
     retrieved_at = storage.now()
     for paper in papers:
@@ -169,7 +171,9 @@ def _import_csv_dataset(content: bytes | BinaryIO, provider: str, filename: str 
         paper["retrieved_at"] = retrieved_at
         paper["citation_snapshots"] = [{"provider": provider, "count": paper["citations"], "retrieved_at": retrieved_at}] if paper.get("citations") is not None else []
         if paper.get("doi"):
-            paper["external_url"] = "https://doi.org/" + paper["doi"]
+            # The original CSV Link stays in source_link, including when the
+            # canonical DOI resolver is preferred for the clickable URL.
+            paper["external_url"] = "https://doi.org/" + quote(paper["doi"], safe="/")
     report["providers"] = [provider]
     if len(papers) > MAX_IMPORT_ROWS:
         raise HTTPException(422, f"1ファイルは{MAX_IMPORT_ROWS:,}論文以内で指定してください。")
@@ -533,7 +537,7 @@ def run_field_report(job_id: str, result: dict | str, options: dict):
                 seconds = max(0, int(event["elapsed_seconds"]))
                 count = max(0, int(event["received_chars"]))
                 with JOBS_LOCK:
-                    JOBS[job_id]["stage"] = f"比較レポートを生成：{seconds // 60}分{seconds % 60:02d}秒・{count:,}文字受信（検証前）"
+                    JOBS[job_id]["stage"] = event.get("stage") or f"比較レポートを生成：{seconds // 60}分{seconds % 60:02d}秒・{count:,}文字受信（検証前）"
             report["narrative"] = field_llm.generate(report, options["provider"], options.get("model"), progress=generation_progress)
             storage.save("field_reports", report)
         with JOBS_LOCK:
@@ -594,7 +598,7 @@ def export_field_report(report_id: str, kind: Literal["data", "report", "papers"
 
 class AuthorNetworkRequest(BaseModel):
     result_id: str = Field(pattern=r"^[a-f0-9]{32}$")
-    group_by: Literal["id", "name", "institution", "community", "topic"] = "community"
+    group_by: Literal["id", "name", "institution", "community", "topic"] = "institution"
 
 
 def run_author_network(job_id: str, result: dict | str, group_by: str):
@@ -603,7 +607,7 @@ def run_author_network(job_id: str, result: dict | str, group_by: str):
             result = storage.read("results", result)
         from app.author_network import build_author_network
         with JOBS_LOCK:
-            JOBS[job_id].update(status="running", stage="著者の照合・所属の集計・共著クラスタを計算")
+            JOBS[job_id].update(status="running", stage="著者の照合・所属の集計・共著クラスタと中心性指標を計算")
         network = build_author_network(result["papers"], group_by=group_by, topics=result.get("topics", []))
         network.update(id=storage.new_id(), result_id=result["id"], created_at=storage.now())
         network["scope"] = {"dataset_id": result.get("dataset_id"), "dataset_name": result.get("dataset_name"),
@@ -708,4 +712,10 @@ from app.annual_landscape_api import router as annual_landscape_router
 app.include_router(annual_landscape_router)
 from app.citation_flow_api import router as citation_flow_router
 app.include_router(citation_flow_router)
+from app.publication_date_api import router as publication_date_router
+app.include_router(publication_date_router)
+from app.corpus_api import router as corpus_router
+app.include_router(corpus_router)
+from app.report_export_api import router as report_export_router
+app.include_router(report_export_router)
 app.mount("/static", StaticFiles(directory=str(ROOT / "static"), check_dir=False), name="static")

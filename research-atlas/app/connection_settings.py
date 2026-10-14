@@ -92,6 +92,8 @@ class LocalSettings(_SettingsModel):
     url: str = Field(default="http://127.0.0.1:11434", max_length=2048)
     model: str = Field(default="", max_length=160)
     api_key: SecretStr = Field(default_factory=lambda: SecretStr(""), repr=False)
+    context_window: int | None = Field(default=None, ge=2048, le=262144)
+    max_output_tokens: int = Field(default=4000, ge=512, le=32768)
     _valid_model = field_validator("model")(_model)
     _valid_secret = field_validator("api_key")(_secret)
 
@@ -275,7 +277,8 @@ No process environment is changed, which preserves concurrent request isolation.
 def connection_status() -> dict:
     value = current_settings()
     return {"storage": "browser", "openai": {"configured": bool(value.openai.api_key.get_secret_value().strip() and value.openai.model), "model": value.openai.model or None},
-            "local": {"backend": value.local.backend, "model": value.local.model or None, "authenticated": bool(value.local.api_key.get_secret_value())},
+            "local": {"backend": value.local.backend, "model": value.local.model or None, "authenticated": bool(value.local.api_key.get_secret_value()),
+                      "context_window": value.local.context_window, "max_output_tokens": value.local.max_output_tokens},
             "proxy": {"enabled": value.proxy.enabled, "configured": bool(value.proxy.url)}}
 
 

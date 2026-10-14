@@ -173,7 +173,7 @@ def test_commentary_progress_is_visible_before_any_revision_is_saved(client, res
     entered, release = Event(), Event()
     value = assessment(client, result)
     files_before = set((storage.data_root() / "assessments").glob("*.json"))
-    def generate(current, candidate_id, provider, model=None, *, progress=None):
+    def generate(current, candidate_id, provider, model=None, *, progress=None, **kwargs):
         progress("1/2 抄録から根拠を抽出：3分01秒・1,200文字受信（検証前）")
         entered.set()
         assert release.wait(10)
@@ -244,3 +244,26 @@ def test_demo_can_still_request_deterministic_commentary(client, result, monkeyp
     revised = storage.read("assessments", job["assessment_id"])
     assert revised["numeric_hash"] == value["numeric_hash"]
     assert revised["candidates"][0].get("narrative") is None
+
+
+def test_budget_failure_saves_safe_stage_audit_and_preserves_original_assessment(client, result, monkeypatch):
+    from app import field_llm
+    value = assessment(client, result)
+    original = copy.deepcopy(value)
+    def structured(payload, schema, prompt, provider, model=None, *, input_context, **kwargs):
+        input_context.update(payload=payload, metadata={"context_window": 2048, "fits": False,
+                                                      "reduced": True, "status": "failed", "omitted_paper_ids": ["p2"]})
+        raise RuntimeError("ローカルLLMの入力上限に収まりません。")
+    monkeypatch.setattr(field_llm, "structured_output", structured)
+    job = wait(client, client.post(f"/api/assessments/{value['id']}/commentaries",
+                                  json={"candidate_id": "t1", "provider": "local"}))
+    assert job["status"] == "failed" and "入力上限" in job["error"]
+    revised = storage.read("assessments", job["assessment_id"])
+    assert revised["numeric_hash"] == value["numeric_hash"]
+    assert storage.read("assessments", value["id"]) == original
+    candidate = revised["candidates"][0]
+    assert candidate["llm_input"] == {"extraction": {"context_window": 2048, "fits": False,
+        "reduced": True, "status": "failed", "omitted_paper_ids": ["p2"]}}
+    assert "payload" not in json.dumps(candidate["llm_input"])
+    assert "/llm_input/extraction/context_window" in client.get(
+        f"/api/assessments/{revised['id']}/export?format=csv").text

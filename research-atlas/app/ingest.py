@@ -19,6 +19,7 @@ import unicodedata
 from collections import defaultdict
 from collections.abc import Iterator
 from typing import BinaryIO
+from urllib.parse import urlsplit
 
 from .dates import merge_publication_dates, normalize_paper_date, normalize_publication_date
 from .bibliography import (attach_author_affiliations, bibliography_summary, normalize_affiliations,
@@ -50,6 +51,7 @@ _ALIASES = {
     "citations": ["Cited by", "Citations", "Citation count", "Times cited", "被引用数", "引用数", "被引用回数", "引用回数"],
     "eid": ["EID", "Scopus EID", "Scopus ID", "文献ID"],
     "doi": ["DOI", "Digital object identifier"],
+    "source_link": ["Link", "URL", "Document URL", "Source URL", "External URL", "Source link", "リンク", "文献リンク"],
     "source": ["Source title", "Source", "Journal", "誌名", "掲載誌", "出版物名"],
     "provenance": ["Data provenance", "Research Atlas provenance", "データ来歴"],
     "publication_date": ["Publication date", "Cover Date", "Date", "発行日", "出版日", "公開日"],
@@ -102,6 +104,21 @@ def _year(value: str) -> int:
 def _doi(value: str) -> str:
     value = _optional(value)
     return re.sub(r"^(?:https?://(?:dx\.)?doi\.org/|doi\s*:\s*)", "", value, flags=re.I).strip().casefold()
+
+
+def _http_link(value: str) -> str:
+    """Keep a supplied web link usable without activating arbitrary URI schemes."""
+    if not value or any(character.isspace() or ord(character) < 32 or ord(character) == 127
+                        or character == "\\" for character in value):
+        return ""
+    try:
+        parsed = urlsplit(value)
+        if (parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname
+                or parsed.username is not None or parsed.password is not None or parsed.port == 0):
+            return ""
+    except ValueError:
+        return ""
+    return value
 
 
 def _annual_header(header: str) -> int | None:
@@ -437,6 +454,9 @@ def _merge_papers(first: dict, second: dict, warnings: list[str]) -> dict:
     for field in ("abstract", "doi", "source"):
         if not merged[field] and second[field]:
             merged[field] = second[field]
+    for field in ("source_link", "external_url"):
+        if not merged.get(field) and second.get(field):
+            merged[field] = second[field]
     if merged["citations"] is None:
         merged["citations"] = second["citations"]
     elif second["citations"] is not None and merged["citations"] != second["citations"]:
@@ -519,6 +539,11 @@ def parse_scopus_csv(content: bytes | BinaryIO) -> tuple[list[dict], dict]:
             doi = _doi(_first(row, columns, "doi"))
             identity = eid or ("doi:" + doi if doi else "paper:" + hashlib.sha256(f"{_key(title)}:{year}".encode()).hexdigest()[:20])
             paper = {"id": identity, "title": title, "abstract": _first(row, columns, "abstract"), "year": year, "authors": _authors(row, columns, warnings, row_number), "keywords": _keywords(_values(row, columns, "keywords") + _values(row, columns, "index_keywords")), "citations": citations, "doi": doi, "source": _first(row, columns, "source"), "citation_history": history, "aliases": {"eids": [eid] if eid else [], "dois": [doi] if doi else []}, "provenance": _first(row, columns, "provenance")}
+            source_link = _first(row, columns, "source_link")
+            if source_link:
+                paper["source_link"] = source_link
+                if external_url := _http_link(source_link):
+                    paper["external_url"] = external_url
             paper.update(_publication_date(row, columns, headers, year, warnings, row_number))
             for raw in _values(row, columns, "author_affiliations"):
                 paper["authors"], unmatched = attach_author_affiliations(paper["authors"], raw)
@@ -726,7 +751,13 @@ def demo_papers() -> list[dict]:
     rng = random.Random(20260911)
     surnames = ["Aster", "Boreal", "Citrine", "Dovetail", "Ember", "Fable", "Glimmer", "Harbor", "Islet", "Juniper", "Kestrel", "Lumen", "Morrow", "Nimbus", "Opal", "Prism"]
     given_names = ["Nora", "Eli", "Mira", "Theo", "Lina", "Arlo", "Sora", "Vera"]
-    author_pool = [{"id": f"synthetic-author-{index + 1:03d}", "name": f"{surnames[index % 16]}, {given_names[index // 16]} [Synthetic]"} for index in range(128)]
+    # Explicit fictional author affiliations make institution grouping explorable
+    # without assigning paper-level affiliations to unrelated authors.
+    institutions = [f"Synthetic {name} University [Fictional]" for name in
+                    ("Aurora", "Boreal", "Citrine", "Delta", "Ember", "Fable", "Glimmer", "Harbor")]
+    author_pool = [{"id": f"synthetic-author-{index + 1:03d}",
+                    "name": f"{surnames[index % 16]}, {given_names[index // 16]} [Synthetic]",
+                    "affiliations": [institutions[index // 16]]} for index in range(128)]
     qualifiers = ["Comparative evaluation", "Mechanistic study", "Robust optimization", "Experimental validation", "Scalable design", "Performance assessment", "Multiscale analysis", "Reliability investigation"]
     results = ["The results identify a reproducible operating window and expose a trade-off between performance and robustness.", "Controlled comparisons show improved performance relative to the reference configuration, while long-duration validation remains necessary.", "Sensitivity analysis identifies the dominant loss mechanisms and highlights conditions where the improvement does not generalize.", "Repeated measurements support the proposed mechanism, although variation between devices limits immediate scale-up."]
     papers = []
