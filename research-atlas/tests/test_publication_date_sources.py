@@ -325,19 +325,50 @@ def test_independent_clients_share_host_concurrency(monkeypatch, email, expected
     monkeypatch.setattr(sources, "_GATE", gate)
     counters = {"active": 0, "maximum": 0}
     lock = threading.Lock()
+    worker_count = 6
+    observed_workers = set()
+    all_workers_observed = threading.Event()
+    release_responses = threading.Event()
+    original_wait = gate.condition.wait
+
+    def observe_worker():
+        # Called with lock held. Every worker must either enter the transport or
+        # actually wait behind a saturated gate before responses are released.
+        observed_workers.add(threading.get_ident())
+        if len(observed_workers) == worker_count:
+            all_workers_observed.set()
+
+    def observe_gate_wait(timeout=None):
+        # Keep the real admission logic and Condition wait. Spacing waits before
+        # saturation do not prove that a worker encountered the concurrency cap.
+        if sum(gate.active.values()) >= expected_max:
+            with lock:
+                observe_worker()
+        return original_wait(timeout)
+
+    monkeypatch.setattr(gate.condition, "wait", observe_gate_wait)
 
     def handle(request):
         with lock:
             counters["active"] += 1
             counters["maximum"] = max(counters["maximum"], counters["active"])
-        time.sleep(0.03)
-        with lock:
-            counters["active"] -= 1
+            observe_worker()
+        try:
+            assert release_responses.wait(timeout=10), "Test did not release the held responses"
+        finally:
+            with lock:
+                counters["active"] -= 1
         return response()
 
     monkeypatch.setattr(sources, "http_client", lambda url, **kwargs: httpx.Client(transport=httpx.MockTransport(handle), **kwargs))
     with sources.CrossrefDateClient(email) as first, sources.CrossrefDateClient(email) as second:
-        with ThreadPoolExecutor(max_workers=6) as pool:
-            futures = [pool.submit((first if index % 2 else second).fetch, "10.1234/example") for index in range(6)]
+        with ThreadPoolExecutor(max_workers=worker_count) as pool:
+            futures = [pool.submit((first if index % 2 else second).fetch, "10.1234/example") for index in range(worker_count)]
+            try:
+                assert all_workers_observed.wait(timeout=10), "Workers did not reach the shared concurrency cap"
+                with lock:
+                    assert counters["active"] == expected_max
+            finally:
+                release_responses.set()
             assert all(future.result()["status"] == "found" for future in futures)
     assert counters["maximum"] == expected_max

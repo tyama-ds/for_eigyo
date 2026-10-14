@@ -1,6 +1,8 @@
 """アプリ本体: Vault・読み込み範囲・インデックス・AI・プラグインをまとめ、HTTP 層から呼ばれる操作を提供する。"""
 from __future__ import annotations
 
+import json
+
 import os
 import shutil
 import threading
@@ -14,6 +16,8 @@ from .extract import EXT_GROUP, KINDS, TYPE_GROUPS, is_supported, pdf_available
 from . import images as IMG
 from .graphrag import GraphRAG
 from .index import Cancelled, Index, open_index
+from . import llm as LLM
+from .config import backend_of, ext_allowed, ext_configured
 from .llm import LLMError
 from .ingest import Ingestor
 from .jobs import JobRunner
@@ -80,6 +84,7 @@ class MycelApp:
             if getattr(self, "graphrag", None):
                 self.graphrag.close()
             self.vault = Vault(root)
+            LLM.AUDIT_PATH = self.vault.internal / "external_llm.jsonl"
             self.scope = Scope(self.vault.root, self.vault.internal)
             self.index = open_index(self.vault, self.scope)
             self.relations = Relations(self.vault.internal)
@@ -738,14 +743,49 @@ class MycelApp:
                 extra = k
         return self.index.graph(center, depth, docs, extra)
 
-    def ask(self, question: str, path: str | None = None, history=None, prefixes=None, mode: str = "") -> dict:
-        """質問。mode が standard（既定）なら段落検索の RAG、それ以外なら GraphRAG。"""
+    def resolve_backend(self, backend: str | None) -> str:
+        """画面から指定された接続先を検証する。外部は設定で有効にしてあるときだけ。無指定なら設定の既定。"""
+        cfg = self.config()
+        if backend == "external" and not ext_allowed(cfg):
+            raise VaultError("外部 API は使えません。設定の「外部 API」で有効にし、URL・モデル・API キーを登録してください", 403)
+        return backend_of(cfg, backend)
+
+    def ask(self, question: str, path: str | None = None, history=None, prefixes=None, mode: str = "", backend: str | None = None) -> dict:
+        """質問。mode が standard（既定）なら段落検索の RAG、それ以外なら GraphRAG。backend は local / external。"""
+        backend = self.resolve_backend(backend)
         mode = mode or self.config().get("rag_mode", "standard")
         if mode == "standard" or mode not in ("auto", "local", "global"):
-            res = self.ai.ask(question, path, history, prefixes)
+            res = self.ai.ask(question, path, history, prefixes, backend=backend)
             res["mode"] = "standard"
-            return res
-        return self.graphrag.ask(question, mode, history, prefixes)
+        else:
+            res = self.graphrag.ask(question, mode, history, prefixes, backend=backend)
+        res.setdefault("backend", backend)
+        res["backend_label"] = LLM.BACKEND_LABEL.get(res["backend"], res["backend"])
+        return res
+
+    def llm_backends(self) -> dict:
+        """画面用: 接続先ごとの状態（URL のホスト・モデル・使えるか）。"""
+        cfg = self.config()
+        ext_host = LLM._host_of(cfg.get("ext_base_url", ""))
+        return {"backend": backend_of(cfg), "default": cfg.get("llm_backend", "local"),
+                "show_switch": bool(cfg.get("ext_show_switch")) and ext_allowed(cfg),
+                "local": {"configured": bool(cfg.get("base_url") and cfg.get("model")), "model": cfg.get("model", ""),
+                          "host": LLM._host_of(cfg.get("base_url", ""))},
+                "external": {"enabled": bool(cfg.get("ext_enabled")), "configured": ext_configured(cfg), "allowed": ext_allowed(cfg),
+                             "model": cfg.get("ext_model", ""), "host": ext_host, "provider": cfg.get("ext_provider", "openai"),
+                             "proxy": bool(cfg.get("ext_proxy_url") or cfg.get("proxy_url") or LLM._env_proxy())}}
+
+    def external_log(self, limit: int = 50) -> dict:
+        """外部 API への送信記録（新しい順）。"""
+        p = LLM.AUDIT_PATH
+        rows: list[dict] = []
+        if p and p.is_file():
+            for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
+                try:
+                    rows.append(json.loads(line))
+                except ValueError:
+                    continue
+        return {"total": len(rows), "chars": sum(r.get("chars", 0) for r in rows), "entries": list(reversed(rows))[:limit]}
 
     # ------------------------------------------------------------ 画像（VLM）
     def caption_image(self, path: str) -> dict:

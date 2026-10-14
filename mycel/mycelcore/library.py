@@ -884,7 +884,7 @@ class Library:
         self.update(rid, {"insights": ins})
         return self.get(rid)["insights"]
 
-    def ask_doc(self, rid: str, question: str, history=None) -> dict:
+    def ask_doc(self, rid: str, question: str, history=None, backend: str | None = None) -> dict:
         """この文書だけを根拠に質問する。"""
         r = self.get(rid)
         paths = {p for p in (r["file"], r["note"]) if p and self.app.index.get(p)}
@@ -892,12 +892,12 @@ class Library:
             return {"answer": "", "sources": [], "llm": False, "message": "本文ファイルがありません（結びつけて「更新」してください）"}
         system = ("あなたは報告書・文献を読み解く助手です。与えられた 1 つの文書の抜粋だけを根拠に、日本語で簡潔かつ正確に答えてください。"
                   "根拠にした箇所は [[名前]] の形で示し、書かれていないことは「この文書には記載がありません」と答えてください。")
-        res = self.app.ai.ask(question, history=history, paths=paths, k=8, system_extra=system)
+        res = self.app.ai.ask(question, history=history, paths=paths, k=8, system_extra=system, backend=backend)
         for s in res["sources"]:
             s["ref_id"], s["citation"], s["title"] = r["id"], citation(r), r["title"]
         return res
 
-    def ask(self, question: str, history=None, tag: str = "", year: str = "", status: str = "") -> dict:
+    def ask(self, question: str, history=None, tag: str = "", year: str = "", status: str = "", backend: str | None = None) -> dict:
         ids = {r["id"] for r in self.list(tag=tag, year=year, status=status)["refs"]}
         paths = {p for r in self.refs if r["id"] in ids for p in (r["file"], r["note"]) if p and self.app.index.get(p)}
         if not paths:
@@ -905,7 +905,7 @@ class Library:
         system = ("あなたは研究文献を読み解く助手です。与えられた文献の抜粋だけを根拠に、日本語で簡潔かつ正確に答えてください。"
                   "根拠にした文献は [[名前]] の形で本文中に示し、数値や主張は出典の文献ごとに区別してください。"
                   "文献間で結果が食い違う場合はその旨を書き、書かれていないことは「文献には記載がありません」と答えてください。")
-        res = self.app.ai.ask(question, history=history, paths=paths, k=8, system_extra=system)
+        res = self.app.ai.ask(question, history=history, paths=paths, k=8, system_extra=system, backend=backend)
         for s in res["sources"]:
             ref = self.by_path(s["path"])
             if ref:

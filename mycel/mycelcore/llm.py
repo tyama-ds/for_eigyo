@@ -8,12 +8,59 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import socket
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
+
+from .config import effective_llm
+
+AUDIT_PATH: Path | None = None     # 外部 API への送信記録（.mycel/external_llm.jsonl）。app が Vault を開くときに設定
+BACKEND_LABEL = {"local": "ローカル LLM", "external": "外部 API"}
+
+# 推論モデル（o1 / o3 / o3-mini / o4-mini / gpt-5 / gpt-5-mini / gpt-5-nano など）。
+# temperature・top_p を受け付けず、max_tokens ではなく max_completion_tokens を使う。gpt-5-chat-latest は通常のチャットモデル
+_REASONING_RE = re.compile(r"^(o[1-9](?:[.-]|$)|gpt-5(?!-chat)|gpt-oss)", re.IGNORECASE)
+_OPENAI_HOSTS = (".openai.com", ".openai.azure.com", ".cognitiveservices.azure.com", ".services.ai.azure.com")
+
+
+def is_reasoning_model(model: str) -> bool:
+    return bool(_REASONING_RE.match((model or "").strip()))
+
+
+def payload_style(cfg: dict, model: str) -> dict:
+    """モデル・接続先ごとの送り方。
+    tokens_key: OpenAI / Azure と推論モデルは max_completion_tokens（max_tokens は非推奨で、推論モデルは拒否する）。
+                ローカルの OpenAI 互換サーバ（Ollama / LM Studio / vLLM）は max_tokens
+    temperature: 推論モデルには送らない（既定値 1 以外を拒否する）
+    reasoning_effort: 推論モデルで設定があれば送る（gpt-5 系: minimal/low/medium/high、o 系: low/medium/high）"""
+    host = _host_of(cfg.get("base_url", "")).lower()
+    reasoning = is_reasoning_model(model)
+    official = cfg.get("provider") == "azure" or host.endswith(_OPENAI_HOSTS)
+    effort = (cfg.get("reasoning_effort") or "").strip().lower()
+    return {"tokens_key": "max_completion_tokens" if (official or reasoning) else "max_tokens",
+            "temperature": not reasoning, "reasoning": reasoning,
+            "reasoning_effort": effort if (reasoning and effort and effort != "auto") else ""}
+
+
+def _param_problem(msg: str) -> str | None:
+    """API のエラー文から、受け付けられなかったパラメータを推定する（モデルごとの差を自動で吸収するため）。"""
+    low = (msg or "").lower()
+    if "max_tokens" in low and ("max_completion_tokens" in low or "unsupported" in low or "not supported" in low):
+        return "max_tokens"
+    if "max_completion_tokens" in low and ("unrecognized" in low or "unknown" in low or "unsupported" in low or "not supported" in low or "extra" in low):
+        return "max_completion_tokens"
+    if "reasoning_effort" in low or "reasoning.effort" in low:
+        return "reasoning_effort"
+    if "temperature" in low and ("unsupported" in low or "not supported" in low or "only the default" in low):
+        return "temperature"
+    if "top_p" in low and ("unsupported" in low or "not supported" in low):
+        return "top_p"
+    return None
 
 _THINK_BLOCK_RE = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL | re.IGNORECASE)
 _THINK_OPEN_RE = re.compile(r"<think(?:ing)?>", re.IGNORECASE)
@@ -37,16 +84,63 @@ class LLMError(RuntimeError):
     """接続・API エラー。UI にそのまま出せる日本語メッセージを持つ。"""
 
 
+def _env_proxy() -> str:
+    for k in ("HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"):
+        if os.environ.get(k):
+            return os.environ[k]
+    return ""
+
+
+def _host_of(url: str) -> str:
+    try:
+        return urllib.parse.urlsplit(url).hostname or ""
+    except ValueError:
+        return ""
+
+
 class LLMClient:
-    def __init__(self, cfg: dict):
+    """接続先（ローカル / 外部）は設定から解決する。外部 API は必ずプロキシ経由で、送信を記録する。"""
+
+    def __init__(self, cfg: dict, backend: str | None = None):
+        cfg = effective_llm(cfg, backend)
         self.cfg = cfg
-        if not cfg.get("use_proxy"):
+        self.backend = cfg.get("_backend", "local")
+        self.host = _host_of(cfg.get("base_url", ""))
+        if self.backend == "external":
+            proxy_url = cfg.get("proxy_url") or _env_proxy()
+            if not proxy_url:
+                raise LLMError("外部 API はプロキシ経由でのみ送信します。設定の「外部 API」でプロキシ URL を入力するか、"
+                               "環境変数 HTTPS_PROXY を設定してください（直接の送信は行いません）")
+            proxy = urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
+        elif not cfg.get("use_proxy"):
             proxy = urllib.request.ProxyHandler({})
         elif cfg.get("proxy_url"):
             proxy = urllib.request.ProxyHandler({"http": cfg["proxy_url"], "https": cfg["proxy_url"]})
         else:
             proxy = urllib.request.ProxyHandler()
         self._opener = urllib.request.build_opener(proxy)
+
+    def _audit(self, kind: str, payload: dict, ok: bool, error: str = "") -> None:
+        """外部 API への送信を 1 行ずつ記録する（内容は残さず、何を・どれだけ送ったかだけ）。"""
+        if self.backend != "external" or AUDIT_PATH is None:
+            return
+        task = ""
+        for m in payload.get("messages") or []:
+            c = m.get("content")
+            text = c if isinstance(c, str) else " ".join(p.get("text", "") for p in c if isinstance(p, dict)) if isinstance(c, list) else ""
+            mt = re.search(r"\[TASK:(\w+)\]", text)
+            if mt:
+                task = mt.group(1)
+        rec = {"ts": time.time(), "kind": kind, "task": task, "model": self.cfg.get("model", ""), "host": self.host,
+               "chars": len(json.dumps(payload, ensure_ascii=False)), "ok": ok}
+        if error:
+            rec["error"] = error[:200]
+        try:
+            AUDIT_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with AUDIT_PATH.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
 
     # ------------------------------------------------------------ URL と認証
     def _endpoint(self, kind: str) -> tuple[str, dict, str]:
@@ -79,6 +173,16 @@ class LLMClient:
         return url, headers, model
 
     def _post(self, url: str, headers: dict, payload: dict) -> dict:
+        kind = "embed" if url.split("?")[0].endswith("/embeddings") else "chat"
+        try:
+            data = self._post_raw(url, headers, payload)
+        except LLMError as e:
+            self._audit(kind, payload, False, str(e))
+            raise
+        self._audit(kind, payload, True)
+        return data
+
+    def _post_raw(self, url: str, headers: dict, payload: dict) -> dict:
         req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"),
                                      method="POST", headers=headers)
         timeout = float(self.cfg.get("request_timeout") or 120.0)
@@ -113,19 +217,43 @@ class LLMClient:
         if system:
             messages = [{"role": "system", "content": system}] + messages
         url, headers, model = self._endpoint("chat")
-        payload = {
-            "messages": messages,
-            "max_tokens": int(max_tokens or self.cfg.get("max_tokens") or 2048),
-            "temperature": float(self.cfg.get("temperature", 0.2) if temperature is None else temperature),
-        }
+        style = payload_style(self.cfg, model)
+        budget = int(max_tokens or self.cfg.get("max_tokens") or 2048)
+        if style["reasoning"]:
+            budget = max(budget, 4096)                    # 推論トークンも上限に含まれるので少し多めに
+        payload: dict = {"messages": messages, style["tokens_key"]: budget}
+        if style["temperature"]:
+            payload["temperature"] = float(self.cfg.get("temperature", 0.2) if temperature is None else temperature)
+        if style["reasoning_effort"]:
+            payload["reasoning_effort"] = style["reasoning_effort"]
         if self.cfg.get("provider") != "azure":
             payload["model"] = model
-        data = self._post(url, headers, payload)
+        self.last_payload_keys = sorted(k for k in payload if k != "messages")
+        data = None
+        for _ in range(4):                                # モデルが受け付けないパラメータは API の返事を見て外し、やり直す
+            try:
+                data = self._post(url, headers, payload)
+            except LLMError as e:
+                problem = _param_problem(str(e)) if "HTTP 400" in str(e) else None
+                if problem == "max_tokens" and "max_tokens" in payload:
+                    payload["max_completion_tokens"] = payload.pop("max_tokens")
+                elif problem == "max_completion_tokens" and "max_completion_tokens" in payload:
+                    payload["max_tokens"] = payload.pop("max_completion_tokens")
+                elif problem in ("temperature", "top_p", "reasoning_effort") and problem in payload:
+                    payload.pop(problem)
+                else:
+                    raise
+                self.last_payload_keys = sorted(k for k in payload if k != "messages")
+                continue
+            break
         if isinstance(data.get("error"), dict):
             raise LLMError(f"LLM API エラー: {data['error'].get('message', data['error'])}")
         choices = data.get("choices") or []
         msg = (choices[0].get("message") or {}) if choices else {}
-        return strip_think(msg.get("content") or "")
+        text = strip_think(msg.get("content") or "")
+        if not text and choices and choices[0].get("finish_reason") == "length":
+            raise LLMError("応答が空のまま上限に達しました（推論トークンで使い切った可能性）。設定の Max tokens を増やすか、推論の深さを下げてください")
+        return text
 
     def list_models(self) -> list[str]:
         """使えるモデル名の一覧（OpenAI 互換の /models、だめなら Ollama の /api/tags）。"""
@@ -153,6 +281,8 @@ class LLMClient:
                        + (f": {errors[0]}" if errors else ""))
 
     def embed(self, texts: list[str]) -> list[list[float]]:
+        if self.backend == "external":
+            raise LLMError("埋め込み（意味検索）はローカル LLM だけで行います（文書全文を外部に送らないため）")
         url, headers, model = self._endpoint("embed")
         out: list[list[float]] = []
         for i in range(0, len(texts), 32):

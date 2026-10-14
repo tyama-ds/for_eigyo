@@ -35,7 +35,7 @@
   const fail = (e) => toast(e.message || String(e), true);
   const titleOf = (p) => p.split("/").pop().replace(/\.md$/i, "");
   const isDoc = (p) => p.startsWith("@") || !/\.(md|markdown)$/i.test(p);
-  const CLIENT_VERSION = "0.6.0";          // サーバの __version__ と合わせる（tests/test_api が確認）
+  const CLIENT_VERSION = "0.6.3";          // サーバの __version__ と合わせる（tests/test_api が確認）
   const FT = { word: "W", excel: "X", powerpoint: "P", pdf: "PDF", email: "✉", csv: "CSV", html: "HTML", text: "TXT", code: "{ }", note: "MD", image: "IMG" };
   const GRP_NAME = { word: "Word", excel: "Excel", powerpoint: "PowerPoint", pdf: "PDF", email: "メール", csv: "CSV", html: "HTML", text: "テキスト", code: "データ", image: "画像" };
   const fmtDate = (t) => { if (!t) return "—"; const d = new Date(t * 1000), now = new Date(); return d.getFullYear() === now.getFullYear() ? d.toLocaleDateString("ja-JP", { month: "numeric", day: "numeric" }) : d.toLocaleDateString("ja-JP", { year: "numeric", month: "numeric", day: "numeric" }); };
@@ -57,7 +57,7 @@
     folderView: null, treeKind: store.get("treeKind", "all"),
     libraryView: false, lib: { q: "", tag: "", year: "", status: "", sort: store.get("libSort", "added"), semantic: store.get("libSem", true), sel: new Set(), cur: null, data: null, results: null, detail: null, graphGroup: store.get("libGroup", "tag"), graphExpanded: new Set(), chat: [], docChat: {} },
     entityView: null, entityData: null, profile: null, peopleKind: store.get("peopleKind", "person"), gPeople: store.get("gPeople", false),
-    sources: [], index: null, jobSeen: null, aiScope: store.get("aiScope", "all"), aiRag: null, gDocs: store.get("gDocs", false), gKG: store.get("gKG", false),
+    sources: [], index: null, jobSeen: null, aiScope: store.get("aiScope", "all"), aiRag: null, aiBackend: "local", extConfirmed: false, gDocs: store.get("gDocs", false), gKG: store.get("gKG", false),
   };
 
   // ------------------------------------------------------------ ツリー
@@ -1108,12 +1108,13 @@
     if (!scopes.some(([k]) => k === S.aiScope)) S.aiScope = "all";
     const ragMode = S.aiRag || st.rag_mode || "standard";
     p.innerHTML = `<div class="rh"><span>ノート・資料に質問</span><span id="aiMode"></span></div>
-      ${st.chat ? "" : `<div class="notice">LLM が未設定です。関連ノートの検索だけ動きます。<br><button class="btn sm" style="margin-top:6px" id="aiSetup">LLM を設定する</button></div>`}
+      ${backendTabsHtml()}
+      ${st.chat || S.aiBackend === "external" ? "" : `<div class="notice">ローカル LLM が未設定です。関連ノートの検索だけ動きます。<br><button class="btn sm" style="margin-top:6px" id="aiSetup">LLM を設定する</button></div>`}
       <div class="chat" id="chat"></div>
       <div class="askbox"><textarea id="askIn" placeholder="例: A社の決裁者が気にしていることは？（Ctrl+Enter で送信）"></textarea>
         <div class="row"><label title="検索する範囲。読み込み済みの内容から探します（その場で読み直しはしません）">対象 <select id="askScope">${scopes.map(([k, l]) => `<option value="${esc(k)}"${k === S.aiScope ? " selected" : ""}>${esc(l)}</option>`).join("")}</select></label></div>
         <div class="row"><label title="標準: 関連する段落を検索して答えます（速い）。GraphRAG: 実体・関係のグラフとコミュニティ要約をたどって答えます（索引を別に作る必要があり、時間がかかります）">方式 <select id="askMode">${Object.entries(RAG_MODES).map(([k, l]) => `<option value="${esc(k)}"${k === ragMode ? " selected" : ""}>${esc(l)}</option>`).join("")}</select></label></div>
-        <div class="row"><label><input type="checkbox" id="askCur" checked> 開いているファイルを含める</label><span><button class="btn sm" id="chatClear" title="会話を消す">クリア</button> <button class="btn sm pri" id="askGo">質問</button></span></div></div>
+        <div class="row"><label><input type="checkbox" id="askCur" checked> 開いているファイルを含める</label><span><button class="btn sm" id="chatClear" title="会話を消す">クリア</button> <button class="btn sm ${S.aiBackend === "external" ? "ext" : "pri"}" id="askGo">${S.aiBackend === "external" ? "☁ 外部へ送信して質問" : "質問"}</button></span></div></div>
       <div class="rh"><span>このノート</span></div>
       <div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn sm" id="aiSum"${st.chat ? "" : " disabled"}>要約とタグ提案</button><button class="btn sm" id="aiSug">リンク候補を探す</button></div>
       <div id="aiOut" style="margin-top:8px"></div>
@@ -1121,7 +1122,7 @@
     const chat = $("#chat");
     const drawChat = () => {
       chat.innerHTML = S.chat.map((m) => m.role === "user" ? `<div class="msg-q">${esc(m.content)}</div>` :
-        `<div class="msg-a">${m.pending ? '<span class="spin"></span> 考えています…' : `<div class="md">${m.content ? MD.render(m.content, { resolve }) : `<span class="hint">${esc(m.message || "")}</span>`}${m.content && m.message ? `<div class="hint">${esc(m.message)}</div>` : ""}</div>`}${(m.sources || []).length ? `<div class="srcs">${m.sources.map((s) => s.path ? `<button class="chip" data-open="${esc(s.path)}" data-heading="${esc(s.heading && s.heading !== s.title ? s.heading : "")}" title="${esc(s.path)}">[${s.n}] ${esc(s.title)}${s.heading && s.heading !== s.title ? " › " + esc(s.heading) : ""}</button>` : `<span class="chip" title="コミュニティ要約">[${s.n}] ◎ ${esc(s.title)}</span>`).join("")}</div>` : ""}${m.graph ? drawGraphEvidence(m) : ""}</div>`).join("");
+        `<div class="msg-a">${m.pending ? `<span class="spin"></span> ${m.backend === "external" ? "外部 API に送信中…" : "考えています…"}` : `${bkBadge(m.backend, m.model)}<div class="md">${m.content ? MD.render(m.content, { resolve }) : `<span class="hint">${esc(m.message || "")}</span>`}${m.content && m.message ? `<div class="hint">${esc(m.message)}</div>` : ""}</div>`}${(m.sources || []).length ? `<div class="srcs">${m.sources.map((s) => s.path ? `<button class="chip" data-open="${esc(s.path)}" data-heading="${esc(s.heading && s.heading !== s.title ? s.heading : "")}" title="${esc(s.path)}">[${s.n}] ${esc(s.title)}${s.heading && s.heading !== s.title ? " › " + esc(s.heading) : ""}</button>` : `<span class="chip" title="コミュニティ要約">[${s.n}] ◎ ${esc(s.title)}</span>`).join("")}</div>` : ""}${m.graph ? drawGraphEvidence(m) : ""}</div>`).join("");
     };
     const drawGraphEvidence = (m) => {
       const g = m.graph || {}, label = (RAG_MODES[m.mode] || m.mode || "").replace(/^GraphRAG（|）$/g, "");
@@ -1139,18 +1140,19 @@
       const q = $("#askIn").value.trim(); if (!q) return;
       $("#askIn").value = "";
       const history = S.chat.filter((m) => !m.pending && m.content).map((m) => ({ role: m.role, content: m.content }));
-      S.chat.push({ role: "user", content: q }); const a = { role: "assistant", pending: true }; S.chat.push(a); drawChat();
+      S.chat.push({ role: "user", content: q }); const a = { role: "assistant", pending: true, backend: S.aiBackend }; S.chat.push(a); drawChat();
       try {
         const sc = $("#askScope").value;
         const prefixes = sc === "all" ? null : sc === "vault" ? [""] : sc === "folder" ? [S.cur.folder] : [sc.slice(4)];
         const mode = $("#askMode").value;
-        const r = await api.post("/api/ai/ask", { question: q, path: $("#askCur").checked ? S.cur.path : "", history, prefixes, mode });
-        Object.assign(a, { pending: false, content: r.answer, sources: r.sources, message: r.message, mode: r.mode, graph: r.graph, index: r.index });
+        const r = await api.post("/api/ai/ask", { question: q, path: $("#askCur").checked ? S.cur.path : "", history, prefixes, mode, backend: S.aiBackend });
+        Object.assign(a, { pending: false, content: r.answer, sources: r.sources, message: r.message, mode: r.mode, graph: r.graph, index: r.index, backend: r.backend, model: r.model });
       } catch (e) { Object.assign(a, { pending: false, content: "", message: e.message }); }
       drawChat();
       p.scrollTop = chat.offsetTop + chat.scrollHeight;
     };
     $("#askGo").onclick = ask;
+    bindBackendTabs(p, () => renderAI(p));
     $("#askScope").onchange = (e) => { S.aiScope = e.target.value; store.set("aiScope", S.aiScope); };
     $("#askMode").onchange = async (e) => {
       S.aiRag = e.target.value;
@@ -1210,6 +1212,43 @@
     }
   }
   const RAG_MODES = { standard: "標準（段落の検索）", auto: "GraphRAG（自動）", local: "GraphRAG（局所：実体をたどる）", global: "GraphRAG（全体：コミュニティ要約）" };
+
+  // ------------------------------------------------------------ 接続先（ローカル LLM / 外部 API）
+  const backends = () => ((S.state.llm || {}).backends) || { backend: "local", default: "local", local: {}, external: {} };
+  const BK_LABEL = { local: "ローカル LLM", external: "外部 API" };
+  /** 回答のバッジ。切り替えを表示していないときはローカルのバッジを出さない（外部に送ったものは常に表示）。 */
+  const bkBadge = (b, model) => !b || (b === "local" && !backends().show_switch) ? "" : `<span class="bk ${b === "external" ? "external" : "local"}" title="${esc(model || "")}">${b === "external" ? "☁ 外部 API" : "🏠 ローカル"}${model ? " · " + esc(model) : ""}</span>`;
+  /** 質問欄の上に出す接続先タブと、外部のときの警告帯。設定「切り替えを表示」がオフなら何も出さず、常にローカル。 */
+  function backendTabsHtml() {
+    const bk = backends(), ext = bk.external || {}, loc = bk.local || {};
+    if (!bk.show_switch) { S.aiBackend = "local"; return ""; }
+    const cur = S.aiBackend;
+    const extOk = !!ext.allowed;
+    return `<div class="btabs" role="tablist" aria-label="送信先">
+        <button data-bk="local" class="${cur === "local" ? "on" : ""}" title="このパソコン・社内の LLM。文書は外に出ません${loc.host ? "（" + esc(loc.host) + "）" : ""}"><span class="ic">🏠</span>ローカル LLM</button>
+        <button data-bk="external" class="${cur === "external" ? "on" : ""}"${extOk ? "" : " disabled"} title="${extOk ? `OpenAI などの外部サービス（${esc(ext.host)}）にプロキシ経由で送ります` : "設定の「外部 API」で有効にすると使えます"}"><span class="ic">☁</span>外部 API${ext.model ? ` <small>${esc(ext.model)}</small>` : ""}</button></div>
+      ${cur === "external" ? `<div class="extbanner"><b>☁ 外部 API に送信します</b> — 質問と、検索で見つかったノート・資料の抜粋が <b>${esc(ext.host || "外部")}</b>（${esc(ext.model || "")}）へプロキシ経由で送られます。機密情報を含む文書は対象にしないでください。送信は設定の「外部 API → 送信の記録」に残ります。</div>`
+                           : `<div class="localbanner">🏠 ローカル LLM（${esc(loc.host || "未設定")}${loc.model ? " · " + esc(loc.model) : ""}）。文書は外部に送られません。</div>`}`;
+  }
+  function bindBackendTabs(p, rerender) {
+    $$(".btabs [data-bk]", p).forEach((b) => (b.onclick = async () => {
+      const bk = b.dataset.bk;
+      if (bk === S.aiBackend) return;
+      if (bk === "external" && !S.extConfirmed) {
+        const ext = backends().external || {};
+        const ok = await confirmBox("外部 API に切り替えますか？", `これ以降の質問は <b>${esc(ext.host || "外部サービス")}</b>（${esc(ext.model || "")}）に送られます。<br>送られるのは「質問文」と「検索で見つかったノート・資料の抜粋」です。<br><span class="hint">機密情報を含む Vault では使わないでください。切り替えは画面を読み込み直すとローカルに戻ります。</span>`, "外部 API を使う", true);
+        if (!ok) return;
+        S.extConfirmed = true;
+      }
+      S.aiBackend = bk;
+      rerender();
+    }));
+    $("#rpane").classList.toggle("ext", S.aiBackend === "external");
+  }
+  function showExtDefault() {
+    const el = $("#stExt"); if (!el) return;
+    el.hidden = backends().default !== "external";
+  }
   function renderAIStatusOnly() { if (S.rtab === "ai") renderAI($("#rpane")); }
 
   function insertAfterTitle(text, line) {
@@ -1751,8 +1790,8 @@
       <div class="ldsec"><h3>引用</h3><div class="cite">${esc(d.citations.apa)}</div><div class="relbtns"><button class="btn xs" data-copy="${esc(d.citations.apa)}">APA をコピー</button><button class="btn xs" data-copy="${esc(d.citations.ieee)}">IEEE をコピー</button><button class="btn xs" data-copy="${esc(d.bibtex)}">BibTeX をコピー</button><button class="btn xs" data-copy="[[${esc(d.note || d.file || d.title)}]]">ノート用リンクをコピー</button></div></div>
       ${d.structure.length ? `<div class="ldsec"><h3>章立て <small class="hint">${d.structure.length} 区分 ・ グラフタブで段落まで開けます</small></h3><div class="ldstruct">${d.structure.slice(0, 40).map((s) => `<span class="chip" data-sec="${s.n}" title="${s.chunks} 段落">${esc(s.heading)}</span>`).join("")}${d.structure.length > 40 ? `<span class="hint">ほか ${d.structure.length - 40}</span>` : ""}</div></div>` : ""}
       <div class="ldsec"><h3>この文書に質問 <small class="hint">この 1 件だけを根拠に答えます</small></h3>
-        <div class="chat" id="ldChat">${(L.docChat[d.id] || []).map((m) => m.role === "user" ? `<div class="msg-q">${esc(m.content)}</div>` : `<div class="msg-a"><div class="md">${m.content ? MD.render(m.content, { resolve }) : `<span class="hint">${esc(m.message || "")}</span>`}</div></div>`).join("")}</div>
-        <div class="askbox"><textarea id="ldAsk" placeholder="例: この報告書の結論と根拠の数値は？（Ctrl+Enter で送信）"></textarea><div class="row"><span></span><span><button class="btn sm" id="ldAskClear">クリア</button> <button class="btn sm pri" id="ldAskGo"${llm ? "" : " disabled"}>質問</button></span></div></div></div>
+        <div class="chat" id="ldChat">${(L.docChat[d.id] || []).map((m) => m.role === "user" ? `<div class="msg-q">${esc(m.content)}</div>` : `<div class="msg-a">${bkBadge(m.backend, m.model)}<div class="md">${m.content ? MD.render(m.content, { resolve }) : `<span class="hint">${esc(m.message || "")}</span>`}</div></div>`).join("")}</div>
+        <div class="askbox"><textarea id="ldAsk" placeholder="例: この報告書の結論と根拠の数値は？（Ctrl+Enter で送信）"></textarea><div class="row"><span>${S.aiBackend === "external" ? `<span class="bk external">☁ 外部 API に送信します（AI タブで切り替え）</span>` : backends().show_switch ? `<span class="bk local">🏠 ローカル LLM</span>` : ""}</span><span><button class="btn sm" id="ldAskClear">クリア</button> <button class="btn sm ${S.aiBackend === "external" ? "ext" : "pri"}" id="ldAskGo"${llm || S.aiBackend === "external" ? "" : " disabled"}>${S.aiBackend === "external" ? "☁ 外部へ送信して質問" : "質問"}</button></span></div></div></div>
       <div class="ldsec"><h3>AI の気づき <small class="hint">${(d.insights || {}).at ? esc(fmtTime(d.insights.at)) : "未作成"}</small></h3>
         <div class="relbtns"><button class="btn sm${(d.insights || {}).at ? "" : " pri"}" id="ldIns"${llm ? "" : " disabled"} title="要点・関連する文書との共通点や相違点・残る疑問・次の一手を AI がまとめます">気づきを出す（AI）${(d.insights || {}).at ? "・作り直す" : ""}</button></div><div id="ldInsOut"></div>
         ${insightsHtml(d.insights)}</div>
@@ -1767,7 +1806,7 @@
       const history = hist.filter((m) => !m.pending && m.content).map((m) => ({ role: m.role, content: m.content }));
       hist.push({ role: "user", content: q }); const a = { role: "assistant", pending: true }; hist.push(a);
       const chat = $("#ldChat", el); chat.innerHTML += `<div class="msg-q">${esc(q)}</div><div class="msg-a"><span class="spin"></span> この文書を読んでいます…</div>`;
-      try { const r = await api.post("/api/library/ask_doc", { id: d.id, question: q, history }); Object.assign(a, { pending: false, content: r.answer, message: r.message }); }
+      try { const r = await api.post("/api/library/ask_doc", { id: d.id, question: q, history, backend: S.aiBackend }); Object.assign(a, { pending: false, content: r.answer, message: r.message, backend: r.backend, model: r.model }); }
       catch (e) { Object.assign(a, { pending: false, content: "", message: e.message }); }
       renderLibDetail();
     };
@@ -1923,22 +1962,24 @@
   // ---- 文献に質問
   function renderLibraryAI(p) {
     const L = S.lib, st = S.state.llm || {};
-    p.innerHTML = `<div class="rh"><span>文献に質問</span><span class="hint">${L.tag || L.year || L.status ? "絞り込み中の文献だけ" : "登録した文献すべて"}</span></div>
-      ${st.chat ? "" : `<div class="notice">LLM が未設定です。関連する文献と段落の検索だけ動きます。<br><button class="btn sm" style="margin-top:6px" id="aiSetup">LLM を設定する</button></div>`}
+    p.innerHTML = `<div class="rh"><span>文書に質問</span><span class="hint">${L.tag || L.year || L.status ? "絞り込み中の文書だけ" : "登録した文書すべて"}</span></div>
+      ${backendTabsHtml()}
+      ${st.chat || S.aiBackend === "external" ? "" : `<div class="notice">ローカル LLM が未設定です。関連する文書と段落の検索だけ動きます。<br><button class="btn sm" style="margin-top:6px" id="aiSetup">LLM を設定する</button></div>`}
       <div class="chat" id="libChat"></div>
-      <div class="askbox"><textarea id="libAsk" placeholder="例: 安全在庫の削減率はどの文献でどれくらい？（Ctrl+Enter で送信）"></textarea>
-        <div class="row"><span class="hint">根拠は登録した文献の本文だけ</span><span><button class="btn sm" id="libChatClear">クリア</button> <button class="btn sm pri" id="libAskGo">質問</button></span></div></div>`;
+      <div class="askbox"><textarea id="libAsk" placeholder="例: 安全在庫の削減率はどの文書でどれくらい？（Ctrl+Enter で送信）"></textarea>
+        <div class="row"><span class="hint">根拠は登録した文書の本文だけ</span><span><button class="btn sm" id="libChatClear">クリア</button> <button class="btn sm ${S.aiBackend === "external" ? "ext" : "pri"}" id="libAskGo">${S.aiBackend === "external" ? "☁ 外部へ送信して質問" : "質問"}</button></span></div></div>`;
+    bindBackendTabs(p, () => renderLibraryAI(p));
     const chat = $("#libChat", p);
     const draw = () => { chat.innerHTML = L.chat.map((m) => m.role === "user" ? `<div class="msg-q">${esc(m.content)}</div>` :
-      `<div class="msg-a">${m.pending ? '<span class="spin"></span> 文献を読んでいます…' : `<div class="md">${m.content ? MD.render(m.content, { resolve }) : `<span class="hint">${esc(m.message || "")}</span>`}</div>`}${(m.sources || []).length ? `<div class="srcs">${m.sources.map((s) => `<button class="chip" data-lsrc="${esc(s.ref_id || "")}" data-path="${esc(s.path)}" title="${esc(s.citation || s.path)}">[${s.n}] ${esc(s.title)}</button>`).join("")}</div>` : ""}</div>`).join("");
+      `<div class="msg-a">${m.pending ? `<span class="spin"></span> ${m.backend === "external" ? "外部 API に送信中…" : "文書を読んでいます…"}` : `${bkBadge(m.backend, m.model)}<div class="md">${m.content ? MD.render(m.content, { resolve }) : `<span class="hint">${esc(m.message || "")}</span>`}</div>`}${(m.sources || []).length ? `<div class="srcs">${m.sources.map((s) => `<button class="chip" data-lsrc="${esc(s.ref_id || "")}" data-path="${esc(s.path)}" title="${esc(s.citation || s.path)}">[${s.n}] ${esc(s.title)}</button>`).join("")}</div>` : ""}</div>`).join("");
       $$("[data-lsrc]", chat).forEach((b) => (b.onclick = () => (b.dataset.lsrc ? openLibrary(b.dataset.lsrc) : openNote(b.dataset.path)))); };
     draw();
     const ask = async () => {
       const q = $("#libAsk", p).value.trim(); if (!q) return;
       $("#libAsk", p).value = "";
       const history = L.chat.filter((m) => !m.pending && m.content).map((m) => ({ role: m.role, content: m.content }));
-      L.chat.push({ role: "user", content: q }); const a = { role: "assistant", pending: true }; L.chat.push(a); draw();
-      try { const r = await api.post("/api/library/ask", { question: q, history, tag: L.tag, year: L.year, status: L.status }); Object.assign(a, { pending: false, content: r.answer, sources: r.sources, message: r.message }); }
+      L.chat.push({ role: "user", content: q }); const a = { role: "assistant", pending: true, backend: S.aiBackend }; L.chat.push(a); draw();
+      try { const r = await api.post("/api/library/ask", { question: q, history, tag: L.tag, year: L.year, status: L.status, backend: S.aiBackend }); Object.assign(a, { pending: false, content: r.answer, sources: r.sources, message: r.message, backend: r.backend, model: r.model }); }
       catch (e) { Object.assign(a, { pending: false, content: "", message: e.message }); }
       draw(); p.scrollTop = chat.offsetTop + chat.scrollHeight;
     };
@@ -2484,7 +2525,7 @@
     try { [cfg, { plugins }] = await Promise.all([api.get("/api/config"), api.get("/api/plugins")]); } catch (e) { fail(e); return; }
     const v = (k) => esc(cfg[k] ?? "");
     const body = document.createElement("div");
-    body.innerHTML = `<div class="mtabs">${[["general", "一般"], ["llm", "LLM"], ["plugins", "プラグイン"]].map(([k, l]) => `<button data-t="${k}">${l}</button>`).join("")}</div>
+    body.innerHTML = `<div class="mtabs">${[["general", "一般"], ["llm", "🏠 ローカル LLM"], ["ext", "☁ 外部 API"], ["plugins", "プラグイン"]].map(([k, l]) => `<button data-t="${k}">${l}</button>`).join("")}</div>
       <div data-tp="general" class="form" style="padding-top:14px">
         <label for="cVault">Vault の場所</label><div class="inrow"><input id="cVault" type="text" value="${v("vault_path")}" placeholder="${esc(S.state.vault || "")}"><button class="btn sm" id="cVaultSw" type="button">切り替え…</button></div>
         <div class="help">ノートを置くフォルダ。空欄なら mycel/vault。「切り替え…」で最近使った Vault への移動や、新しい Vault（文書管理専用など）の作成ができます。</div>
@@ -2498,7 +2539,7 @@
       </div>
       <div data-tp="llm" class="form" style="padding-top:14px">
         <label>ローカル LLM</label><div class="presets"><button class="btn sm" data-preset="http://127.0.0.1:11434/v1">Ollama</button><button class="btn sm" data-preset="http://127.0.0.1:1234/v1">LM Studio</button><button class="btn sm" data-preset="http://127.0.0.1:8080/v1">llama.cpp server</button></div>
-        <div class="help">文書を外部に出さないため、ローカル LLM を基本にしています。例: <code>ollama pull qwen2.5:7b</code>（チャット）と <code>ollama pull bge-m3</code>（意味検索）。</div>
+        <div class="help">文書を外部に出さないため、ローカル LLM を基本にしています。例: <code>ollama pull qwen2.5:7b</code>（チャット）と <code>ollama pull bge-m3</code>（意味検索）。<br>この欄の URL は <b>127.0.0.1 や社内ネットワークのアドレスだけ</b>を受け付けます。OpenAI などの外部サービスは「☁ 外部 API」タブに登録してください。</div>
         <label for="cProv">接続方式</label><select id="cProv"><option value="openai">OpenAI 互換 API（OpenAI / Ollama / LM Studio / vLLM など）</option><option value="azure">Azure OpenAI</option></select>
         <label for="cUrl">Base URL</label><input id="cUrl" type="text" value="${v("base_url")}" placeholder="例: http://127.0.0.1:11434/v1 ・ https://api.openai.com/v1">
         <div class="help" id="urlHelp"></div>
@@ -2534,6 +2575,31 @@
         <label for="cProxyUrl">プロキシ URL</label><input id="cProxyUrl" type="text" value="${v("proxy_url")}" placeholder="空欄なら環境変数 HTTPS_PROXY">
         <label></label><div><button class="btn" id="cTest">保存して接続テスト</button><div class="testres" id="cTestRes"></div></div>
       </div>
+      <div data-tp="ext" class="form" style="padding-top:14px">
+        <div class="extwarn" style="grid-column:1/-1"><b>⚠ 外部 API（OpenAI など）に送ると、質問文とノート・資料の抜粋が社外に出ます。</b><br>
+          ・使うときは AI タブで「☁ 外部 API」を選んだ質問だけが外部に送られます（画面を読み込み直すとローカルに戻ります）<br>
+          ・通信は必ずプロキシ経由です（下のプロキシ URL、無ければ環境変数 HTTPS_PROXY。無い場合は送信しません）<br>
+          ・埋め込み（意味検索）・画像の説明・AI 取り込みなどの一括処理は、「既定の接続先」を外部にしない限りローカルだけで行います<br>
+          ・送った回数と文字数は下の「送信の記録」に残ります（内容は残しません）</div>
+        <label></label><label class="ck"><input type="checkbox" id="cExtOn"${cfg.ext_enabled ? " checked" : ""}> <b>外部 API を使えるようにする</b></label>
+        <label></label><label class="ck"><input type="checkbox" id="cExtShow"${cfg.ext_show_switch ? " checked" : ""}> 質問欄に「🏠 ローカル ／ ☁ 外部 API」の切り替えを表示する（既定: 非表示）</label>
+        <div class="help">非表示のあいだ、質問欄は常にローカル LLM に送ります。外部 API を使うときだけオンにしてください（「既定の接続先」を外部にした場合は表示に関係なく外部へ送られます）。</div>
+        <label for="cExtProv">接続方式</label><select id="cExtProv"><option value="openai"${cfg.ext_provider !== "azure" ? " selected" : ""}>OpenAI API</option><option value="azure"${cfg.ext_provider === "azure" ? " selected" : ""}>Azure OpenAI</option></select>
+        <label for="cExtUrl">Base URL</label><input id="cExtUrl" type="text" value="${v("ext_base_url")}" placeholder="https://api.openai.com/v1">
+        <div class="help">https:// のみ。社内・ローカルのアドレスは登録できません（ローカル LLM の欄へ）。</div>
+        <label for="cExtKey">API キー</label><input id="cExtKey" type="password" autocomplete="off" placeholder="${cfg.has_ext_api_key ? "設定済み（変更する場合だけ入力）" : "sk-…"}">
+        ${cfg.has_ext_api_key ? '<label></label><label style="color:var(--muted)"><input type="checkbox" id="cExtKeyClr"> 保存済みのキーを消す</label>' : ""}
+        <label for="cExtModel" id="extModelLbl">モデル</label><div class="inrow"><input id="cExtModel" type="text" list="dlExtModels" value="${v("ext_model")}" placeholder="例: gpt-4o-mini"><button class="btn sm" id="cExtList" type="button">一覧を取得</button></div><datalist id="dlExtModels"></datalist>
+        <div class="help" id="cExtListRes"></div>
+        <label for="cExtVer" class="azx">API バージョン</label><input id="cExtVer" class="azx" type="text" value="${v("ext_api_version")}">
+        <label for="cExtEffort">推論の深さ</label><select id="cExtEffort">${[["auto", "モデルの既定（送らない）"], ["minimal", "minimal（gpt-5 系のみ・最速）"], ["low", "low（推奨）"], ["medium", "medium"], ["high", "high（遅い・高コスト）"]].map(([k, l]) => `<option value="${k}"${(cfg.ext_reasoning_effort || "low") === k ? " selected" : ""}>${l}</option>`).join("")}</select>
+        <div class="help">o1 / o3 / o4-mini / gpt-5 / gpt-5-mini などの推論モデルに <code>reasoning_effort</code> として送ります。これらのモデルには temperature を送らず、上限は <code>max_completion_tokens</code> で送ります（gpt-4o などは temperature あり）。モデルが受け付けないパラメータは API の返事を見て自動で外します。</div>
+        <label for="cExtProxy">プロキシ URL</label><input id="cExtProxy" type="text" value="${v("ext_proxy_url")}" placeholder="例: http://proxy.example.co.jp:8080（空欄なら環境変数 HTTPS_PROXY）">
+        <div class="help">外部 API への通信はこのプロキシを必ず通します。どちらも無いときは送信しません。</div>
+        <label>既定の接続先</label><div><label class="ck"><input type="radio" name="cBk" value="local"${cfg.llm_backend !== "external" ? " checked" : ""}> 🏠 ローカル LLM（推奨）</label><br><label class="ck"><input type="radio" name="cBk" value="external"${cfg.llm_backend === "external" ? " checked" : ""}${cfg.ext_enabled ? "" : " disabled"}> ☁ 外部 API（要約・取り込み・人物推定などすべての AI 処理が外部に送られます）</label></div>
+        <label></label><div><button class="btn" id="cExtTest">保存して接続テスト（外部）</button><div class="testres" id="cExtTestRes"></div></div>
+        <h4>送信の記録</h4><div style="grid-column:1/-1" id="cExtLog" class="hint">読み込み中…</div>
+      </div>
       <div data-tp="plugins" style="padding-top:6px">
         <p class="hint">有効にしたプラグインは保存と同時に読み込まれます。プラグインは mycel/plugins/ に置いた Python ファイルです（作り方は PLUGINS.md）。</p>
         ${plugins.map((p) => `<label class="plug"><input type="checkbox" data-plug="${esc(p.id)}"${p.enabled ? " checked" : ""}><b>${esc(p.name)}</b><p>${esc(p.description)}</p>${p.error ? `<p style="color:var(--danger)">${esc(p.error)}</p>` : ""}${p.status && Object.keys(p.status).length ? `<code>${esc(Object.entries(p.status).filter(([, x]) => x !== "" && x !== null).map(([k, x]) => `${k}: ${x}`).join(" ・ "))}</code>` : ""}</label>`).join("")}
@@ -2546,11 +2612,15 @@
         request_timeout: $("#cTo", body).value, ingest_chunk_chars: $("#cChunk", body).value, ingest_max_chunks: $("#cMaxChunk", body).value, use_proxy: $("#cUseProxy", body).checked, proxy_url: $("#cProxyUrl", body).value,
         rag_pool: $("#cPool", body).value, rag_top_k: $("#cTopK", body).value, rag_rerank: $("#cRerank", body).value, rag_rerank_pool: $("#cRerankPool", body).value,
         vlm_model: $("#cVlm", body).value, attachment_folder: $("#cAttach", body).value,
+        ext_enabled: $("#cExtOn", body).checked, ext_provider: $("#cExtProv", body).value, ext_base_url: $("#cExtUrl", body).value, ext_model: $("#cExtModel", body).value,
+        ext_api_version: $("#cExtVer", body).value, ext_proxy_url: $("#cExtProxy", body).value, ext_reasoning_effort: $("#cExtEffort", body).value, ext_show_switch: $("#cExtShow", body).checked, llm_backend: ($("input[name=cBk]:checked", body) || {}).value || "local",
         plugins: $$("[data-plug]", body).filter((c) => c.checked).map((c) => c.dataset.plug),
       };
       if ($("#cKey", body).value) d.api_key = $("#cKey", body).value;
       if ($("#cEmbKey", body).value) d.embed_api_key = $("#cEmbKey", body).value;
       if ($("#cKeyClr", body) && $("#cKeyClr", body).checked) d.clear_api_key = true;
+      if ($("#cExtKey", body).value) d.ext_api_key = $("#cExtKey", body).value;
+      if ($("#cExtKeyClr", body) && $("#cExtKeyClr", body).checked) d.clear_ext_api_key = true;
       return d;
     };
     const saveCfg = async () => {
@@ -2562,6 +2632,8 @@
         S.state = await api.get("/api/state");
         if (vaultChanged) { store.set("last", null); location.reload(); return true; }
         toast("設定を保存しました");
+        if ((!(backends().external || {}).allowed || !backends().show_switch) && S.aiBackend === "external") S.aiBackend = "local";
+        showExtDefault();
         renderRight();
         return true;
       } catch (e) { fail(e); return false; }
@@ -2591,11 +2663,41 @@
         if (!$("#cModel", body).value && r.models.length) $("#cModel", body).value = r.models.find((x) => !/embed|bge|e5/i.test(x)) || r.models[0];
       } catch (e) { out.innerHTML = `<span class="ng">${esc(e.message)}</span>`; }
     };
+    const extProv = $("#cExtProv", body);
+    const syncExt = () => { const az = extProv.value === "azure"; $$(".azx", body).forEach((x) => (x.hidden = !az)); $("#extModelLbl", body).textContent = az ? "デプロイ名" : "モデル"; };
+    extProv.onchange = syncExt; syncExt();
+    $("#cExtOn", body).onchange = (e) => { const r = $("input[name=cBk][value=external]", body); r.disabled = !e.target.checked; if (!e.target.checked) $("input[name=cBk][value=local]", body).checked = true; };
+    $("#cExtList", body).onclick = async () => {
+      const out = $("#cExtListRes", body); out.innerHTML = '<span class="spin"></span> 取得中（プロキシ経由）…';
+      try {
+        const r = await api.post("/api/llm/models", { backend: "external", provider: extProv.value, base_url: $("#cExtUrl", body).value, api_key: $("#cExtKey", body).value });
+        $("#dlExtModels", body).innerHTML = r.models.map((x) => `<option value="${esc(x)}">`).join("");
+        out.innerHTML = `${r.models.length} 件: ${r.models.slice(0, 12).map((x) => `<a href="#" data-xmdl="${esc(x)}">${esc(x)}</a>`).join(" ・ ")}${r.models.length > 12 ? " …" : ""}`;
+        $$("[data-xmdl]", out).forEach((a) => (a.onclick = (e) => { e.preventDefault(); $("#cExtModel", body).value = a.dataset.xmdl; }));
+      } catch (e) { out.innerHTML = `<span class="ng">${esc(e.message)}</span>`; }
+    };
+    $("#cExtTest", body).onclick = async () => {
+      const out = $("#cExtTestRes", body); out.innerHTML = '<span class="spin"></span> テスト中（プロキシ経由で外部に接続します）…';
+      if (!(await saveCfg())) { out.innerHTML = ""; return; }
+      try {
+        const r = await api.post("/api/config/test", { backend: "external" });
+        out.innerHTML = `<div>送信先: <b>${esc(r.host || "")}</b></div><div>チャット: <span class="${r.chat.ok ? "ok" : "ng"}">${r.chat.ok ? "OK" : "失敗"}</span> ${esc(r.chat.message || "")}</div><div>${esc(r.embed.message || "")}</div>`;
+        loadExtLog();
+      } catch (e) { out.innerHTML = `<span class="ng">${esc(e.message)}</span>`; }
+    };
+    const loadExtLog = async () => {
+      const el = $("#cExtLog", body); if (!el) return;
+      try {
+        const r = await api.get("/api/ai/external_log", { limit: 30 });
+        el.innerHTML = r.total ? `<div class="hint" style="margin-bottom:4px">これまでに ${r.total} 回、約 ${r.chars.toLocaleString()} 文字を外部に送りました。</div><div class="extlog">${r.entries.map((e) => `<div><span>${esc(fmtTime(e.ts))}</span><b>${esc(e.task || e.kind)}</b><span>${esc(e.model)} @ ${esc(e.host)}</span><span>${(e.chars || 0).toLocaleString()} 文字</span><span class="${e.ok ? "" : "ng"}">${e.ok ? "" : "失敗"}</span></div>`).join("")}</div>` : '<span class="hint">まだ外部へ送信していません。</span>';
+      } catch (e) { el.innerHTML = `<span class="ng">${esc(e.message)}</span>`; }
+    };
+    loadExtLog();
     $("#cTest", body).onclick = async () => {
       const out = $("#cTestRes", body); out.innerHTML = '<span class="spin"></span> テスト中…';
       if (!(await saveCfg())) { out.innerHTML = ""; return; }
       try {
-        const r = await api.post("/api/config/test");
+        const r = await api.post("/api/config/test", { backend: "local" });
         const row = (name, x) => `<div>${name}: <span class="${x.ok ? "ok" : x.ok === false ? "ng" : ""}">${x.ok ? "OK" : x.ok === false ? "失敗" : "—"}</span> ${esc(x.message || "")}</div>`;
         out.innerHTML = row("チャット", r.chat) + row("埋め込み", r.embed);
       } catch (e) { out.innerHTML = `<span class="ng">${esc(e.message)}</span>`; }
@@ -2696,7 +2798,7 @@
   (async function init() {
     try {
       S.state = await api.get("/api/state");
-      showVersion();
+      showVersion(); showExtDefault();
       await loadTree();
     } catch (e) { $("#body").innerHTML = `<div class="welcome"><h1>接続できません</h1><p>${esc(e.message)}</p></div>`; return; }
     renderMain(); renderRight();
