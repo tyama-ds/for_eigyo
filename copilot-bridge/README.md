@@ -30,6 +30,10 @@ python server.py --backend fake  :: ブラウザ無しで API の動きだけ見
 設定は `config.json`（`config.example.json` を写す）、環境変数 `COPILOT_BRIDGE_*`、引数の順に上書き。
 主な項目: `windows`（同時ウインドウ数）、`driver_path`（msedgedriver）、`chat_url`、`selectors`（UI 改定時に直す）。
 
+起動時に `Chrome instance exited` で落ちる場合は、社内ポリシーでプロファイルの場所が固定されている可能性が高い。
+既定（`profile_mode: auto`）では専用プロファイル → プロファイル指定なし → 素の起動の順に自動で試す
+（`--profile-mode temp` / `bare` で固定もできる）。
+
 初回起動では各ウインドウが自分のプロファイルで Edge を開く。社内 SSO が通れば自動でログインする。
 通らなければ `login_timeout_sec`（既定 5 分）の間に手でログインする（2 回目以降は不要）。
 

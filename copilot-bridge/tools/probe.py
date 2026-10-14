@@ -65,7 +65,8 @@ def start_workers(cfg, n: int) -> list[EdgeWorker]:
     for w in ws:
         t0 = time.time()
         w.start()
-        print(f"[{w.id}] 起動・入力欄確認 {time.time() - t0:.0f}s", file=sys.stderr)
+        print(f"[{w.id}] 起動（{w.launch_mode}）・入力欄確認 {time.time() - t0:.0f}s  url={w.driver.current_url}",
+              file=sys.stderr)
     return ws
 
 
@@ -73,7 +74,8 @@ def start_workers(cfg, n: int) -> list[EdgeWorker]:
 
 def probe_login(cfg, a):
     ws = start_workers(cfg, a.windows)
-    print(json.dumps({"ok": True, "windows": len(ws)}, ensure_ascii=False))
+    print(json.dumps({"ok": True, "windows": len(ws), "launch_mode": [w.launch_mode for w in ws],
+                      "urls": [w.driver.current_url for w in ws]}, ensure_ascii=False))
     input("ウインドウを確認したら Enter で閉じます > ")
     for w in ws:
         w.close()
@@ -188,6 +190,8 @@ def main(argv=None):
     p.add_argument("--config", default=str(Path(__file__).resolve().parents[1] / "config.json"))
     p.add_argument("--driver-path", dest="driver_path")
     p.add_argument("--chat-url", dest="chat_url")
+    p.add_argument("--profile-mode", dest="profile_mode", choices=["auto", "separate", "temp", "bare"],
+                   help="Edge の起動方式（既定 auto: separate→temp→bare の順に試す）")
     sub = p.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("login")
     s.add_argument("--windows", type=int, default=1)
@@ -199,7 +203,8 @@ def main(argv=None):
     s = sub.add_parser("parallel")
     s.add_argument("--windows", type=int, default=3)
     a = p.parse_args(argv)
-    cfg = load_config(a.config, {"driver_path": a.driver_path, "chat_url": a.chat_url})
+    cfg = load_config(a.config, {"driver_path": a.driver_path, "chat_url": a.chat_url,
+                                 "profile_mode": a.profile_mode})
     {"login": probe_login, "long": probe_long, "toolcall": probe_toolcall,
      "followup": probe_followup, "parallel": probe_parallel}[a.cmd](cfg, a)
 

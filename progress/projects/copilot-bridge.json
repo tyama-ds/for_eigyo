@@ -4,7 +4,7 @@
   "path": "copilot-bridge/",
   "summary": "M365 Copilot のチャット画面を OpenAI 互換 API に見せかける中継サーバ。Codex CLI などのエージェントを Copilot で動かし、orrery のようなハーネスから複数エージェントを並列に使うために Edge を複数ウインドウで操作する。",
   "status": "active",
-  "phase": "骨格の実装。実機（Copilot 画面）での成否試験はこれから",
+  "phase": "実機試験中（Edge 起動の方式を調整）",
   "progress": 20,
   "started": "2026-10-14",
   "version": "0.1.0",
@@ -30,7 +30,7 @@
     },
     {
       "title": "実機試験: SSO・長文送信・文脈の継続・<tool_call> 形式の遵守・並列（tools/probe.py）",
-      "state": "todo"
+      "state": "doing"
     },
     {
       "title": "Codex CLI から短い作業を 1 つ完遂",
@@ -58,6 +58,11 @@
     "UI 改定でセレクタが壊れる（config.selectors で差し替え）"
   ],
   "log": [
+    {
+      "date": "2026-10-14",
+      "summary": "実機で Edge が起動直後に終了（Chrome instance exited）。起動を separate→temp→bare の 3 段構えにし、probe/server に --profile-mode を追加",
+      "ref": "#65"
+    },
     {
       "date": "2026-10-14",
       "summary": "模擬 Copilot 画面 × Chromium で edge.py の操作を検証（2 万字送信 8 秒、続き送信、2 ウインドウ並列で取り違えなし）。クリップボード読み取りの固まり（readText の権限待ち・スレッドからの tkinter）を修正、tests_browser/ を追加",

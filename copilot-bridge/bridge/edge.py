@@ -32,23 +32,50 @@ class EdgeWorker(Worker):
     def __init__(self, index: int, cfg, clipboard_lock=None):
         super().__init__(index, cfg)
         self.driver = None
+        self.launch_mode = ""
         self.clipboard_lock = clipboard_lock or WorkerPool.clipboard_lock
         self.sel = cfg.selectors
 
     # ---------------------------------------------------------------- 起動
-    def start(self) -> None:
+    def _launch(self, mode: str):
+        """Edge を起動する。mode: separate（専用プロファイル＋起動オプション）/ temp（プロファイル指定なし、
+        起動オプションあり）/ bare（実績スクリプトと同じ素の起動）。"""
         from selenium import webdriver
         from selenium.webdriver.edge.options import Options
         from selenium.webdriver.edge.service import Service
 
-        profile = self.cfg.resolved_profile_dir() / self.id
-        profile.mkdir(parents=True, exist_ok=True)
+        service = Service(self.cfg.driver_path)
+        if mode == "bare":
+            return webdriver.Edge(service=service)
         opts = Options()
-        opts.add_argument(f"--user-data-dir={profile}")
+        if mode == "separate":
+            profile = self.cfg.resolved_profile_dir() / self.id
+            profile.mkdir(parents=True, exist_ok=True)
+            opts.add_argument(f"--user-data-dir={profile}")
         for flag in THROTTLE_FLAGS:
             opts.add_argument(flag)
         opts.add_experimental_option("excludeSwitches", ["enable-automation"])
-        self.driver = webdriver.Edge(service=Service(self.cfg.driver_path), options=opts)
+        return webdriver.Edge(service=service, options=opts)
+
+    def start(self) -> None:
+        # 社内 PC ではポリシーでプロファイルの場所が固定され、--user-data-dir 指定だと Edge が即終了する
+        # ことがある（"Chrome instance exited"）。profile_mode=auto なら separate → temp → bare の順に試す
+        modes = ["separate", "temp", "bare"] if self.cfg.profile_mode == "auto" else [self.cfg.profile_mode]
+        last: Exception | None = None
+        for mode in modes:
+            try:
+                self.driver = self._launch(mode)
+                self.launch_mode = mode
+                break
+            except Exception as e:  # noqa: BLE001
+                last = e
+                msg = str(e).splitlines()[0] if str(e) else type(e).__name__
+                print(f"[{self.id}] 起動失敗（{mode}）: {msg} → 次の方式を試します", flush=True)
+        else:
+            raise BridgeError(f"{self.id}: Edge を起動できません（{modes} を試行）: {last}") from last
+        if self.launch_mode != "separate":
+            print(f"[{self.id}] 起動方式: {self.launch_mode}（ウインドウごとの専用プロファイルは使えないため、"
+                  "一時プロファイルで動作。ログインは毎回 SSO 経由）", flush=True)
         try:
             x = (self.index * 60) % 600
             y = (self.index * 40) % 300
