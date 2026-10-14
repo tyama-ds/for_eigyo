@@ -1,0 +1,17 @@
+{
+  "host": "127.0.0.1",
+  "port": 8800,
+  "backend": "edge",
+  "windows": 2,
+  "driver_path": "C:\\Driver\\edgedriver_win32\\msedgedriver.exe",
+  "chat_url": "https://m365.cloud.microsoft/chat/?auth=2",
+  "login_timeout_sec": 300,
+  "reply_timeout_sec": 600,
+  "log_dir": "",
+  "selectors": {
+    "editor": "#m365-chat-editor-target-element",
+    "stop_button": "button[aria-label='生成を停止する']",
+    "copy_button": "button[aria-label='応答のコピー']",
+    "response": "[data-testid='chat-message-content'], [data-tid='chat-message-content']"
+  }
+}
