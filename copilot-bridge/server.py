@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from bridge import __version__  # noqa: E402
 from bridge.config import load_config  # noqa: E402
-from bridge.pool import BridgeError, WorkerPool  # noqa: E402
+from bridge.pool import BridgeError, WorkerPool, WorkerRestarted  # noqa: E402
 from bridge.protocol import normalize_message, parse_reply, render_delta, render_opening  # noqa: E402
 from bridge.session import SessionStore  # noqa: E402
 
@@ -71,8 +71,19 @@ class Bridge:
                     text = render_delta(delta, max_tool_result_chars=self.cfg.max_tool_result_chars)
                 t0 = time.time()
                 try:
-                    reply = worker.send(text)
-                except BridgeError:
+                    try:
+                        reply = worker.send(text)
+                    except WorkerRestarted as e:
+                        # ブラウザが再起動された → 会話を作り直して 1 回だけやり直す
+                        print(f"{e} → 会話を作り直してやり直します", flush=True)
+                        fresh = True
+                        worker.new_chat()
+                        text = render_opening(norm, tools,
+                                              max_tool_result_chars=self.cfg.max_tool_result_chars,
+                                              max_chars=self.cfg.max_resend_chars)
+                        reply = worker.send(text)
+                except BridgeError as e:
+                    print(f"{e}", flush=True)
                     detach = True
                     raise
                 content, calls = parse_reply(reply, id_prefix=f"call_{session.id}_{session.turns + 1}")
@@ -165,6 +176,9 @@ def make_handler(bridge: Bridge):
             except BridgeError as e:
                 return self._error(503, str(e))
             except Exception as e:  # noqa: BLE001
+                import traceback
+
+                traceback.print_exc()
                 return self._error(500, f"{type(e).__name__}: {e}")
             if body.get("stream"):
                 return self._stream(result)

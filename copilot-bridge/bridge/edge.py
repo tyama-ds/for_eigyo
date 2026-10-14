@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import time
 
-from .pool import BridgeError, Worker, WorkerPool
+from .pool import BridgeError, Worker, WorkerPool, WorkerRestarted
 
 THROTTLE_FLAGS = [
     "--disable-background-timer-throttling",
@@ -104,13 +104,60 @@ class EdgeWorker(Worker):
         return WebDriverWait(self.driver, timeout).until(
             EC.element_to_be_clickable((By.CSS_SELECTOR, self.sel["editor"])))
 
+    # ---------------------------------------------------------------- 生存確認・再起動
+    def _alive(self) -> tuple[bool, str]:
+        """driver と Edge の接続が生きているか。"""
+        if self.driver is None:
+            return False, "driver なし"
+        try:
+            self.driver.window_handles
+            return True, ""
+        except Exception as e:  # noqa: BLE001
+            return False, (str(e).splitlines()[0] if str(e) else type(e).__name__)
+
+    def _restart(self, reason: str) -> None:
+        """接続が切れた Edge を閉じて起動し直す。Copilot 側の会話は失われる。"""
+        self._log(f"ブラウザとの接続が切れました（{reason}）。Edge を起動し直します")
+        self.close()
+        self.start()
+
+    def _focus_chat_window(self) -> None:
+        """タブ/ウインドウが複数あれば Copilot のタブへ切り替える（SSO 経由で増えることがある）。"""
+        handles = self.driver.window_handles
+        if len(handles) <= 1:
+            return
+        host = self.cfg.chat_url.split("/")[2] if "//" in self.cfg.chat_url else ""
+        best = None
+        for h in handles:
+            try:
+                self.driver.switch_to.window(h)
+                url = self.driver.current_url
+            except Exception:  # noqa: BLE001
+                continue
+            if host and host in url:
+                best = h
+        if best is None:
+            best = handles[-1]
+        self.driver.switch_to.window(best)
+        self._log(f"タブが {len(handles)} 個あるため Copilot のタブへ切り替え: {self.driver.current_url}")
+
+    def _log(self, msg: str) -> None:
+        print(f"[{self.id}] {msg}", flush=True)
+
     def new_chat(self, timeout: float | None = None) -> None:
         """チャット画面を開き直して新しい会話にする。入力欄が出るまで待つ（SSO/手動ログイン込み）。"""
+        ok, reason = self._alive()
+        if not ok:
+            # 接続が切れていれば起動し直す（start() が new_chat() を呼ぶのでここで戻る）
+            self._restart(reason)
+            return
         self.driver.get(self.cfg.chat_url)
+        self._focus_chat_window()
         try:
             self._editor(timeout or 60.0)
         except Exception as e:  # noqa: BLE001
-            raise BridgeError(f"{self.id}: 入力欄が見つかりません（ログイン画面のままの可能性）: {e}") from e
+            raise BridgeError(f"{self.id}: 入力欄が見つかりません（ログイン画面のままの可能性）: "
+                              f"url={_safe_url(self.driver)} {e}") from e
         time.sleep(1.0)
 
     def _type(self, editor, text: str) -> None:
@@ -190,18 +237,39 @@ class EdgeWorker(Worker):
         return ""
 
     def send(self, text: str) -> str:
-        if self.driver is None:
-            raise BridgeError(f"{self.id}: ブラウザが起動していません")
+        ok, reason = self._alive()
+        if not ok:
+            # 切れていたら起動し直し、呼び出し側（server）に会話の作り直しを頼む
+            self._restart(reason)
+            raise WorkerRestarted(f"{self.id}: ブラウザを再起動しました（{reason}）")
+        try:
+            return self._send(text)
+        except BridgeError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            msg = str(e).splitlines()[0] if str(e) else type(e).__name__
+            if _is_disconnect(msg):
+                self._restart(msg)
+                raise WorkerRestarted(f"{self.id}: 操作中に接続が切れたためブラウザを再起動しました（{msg}）") from e
+            raise BridgeError(f"{self.id}: 操作に失敗: {msg} url={_safe_url(self.driver)}") from e
+
+    def _send(self, text: str) -> str:
         from selenium.webdriver.common.keys import Keys
 
+        self._focus_chat_window()
+        self._log(f"入力欄を探す url={_safe_url(self.driver)}")
         editor = self._editor(30.0)
         before = self._count(self.sel["copy_button"])
+        self._log(f"入力 {len(text)} 文字")
         self._type(editor, text)
         time.sleep(0.3)
         editor.send_keys(Keys.ENTER)
+        self._log("送信。回答を待つ")
+        t0 = time.monotonic()
         self._wait_done(before, self.cfg.reply_timeout_sec)
         time.sleep(1.0)
         reply = (self._read_last_reply() or "").strip()
+        self._log(f"回答 {len(reply)} 文字（{time.monotonic() - t0:.0f} 秒）")
         self.turns += 1
         if not reply:
             raise BridgeError(f"{self.id}: 回答を読み取れませんでした（コピーボタン/DOM とも空）")
@@ -211,6 +279,23 @@ class EdgeWorker(Worker):
                 raise BridgeError(f"{self.id}: Copilot が制限・障害を返しました（{phrase}）")
         self.error = ""
         return reply
+
+
+_DISCONNECT_MARKS = ("not connected to devtools", "disconnected", "invalid session id",
+                     "no such window", "target window already closed", "chrome not reachable",
+                     "session deleted", "target frame detached")
+
+
+def _is_disconnect(msg: str) -> bool:
+    m = msg.lower()
+    return any(k in m for k in _DISCONNECT_MARKS)
+
+
+def _safe_url(driver) -> str:
+    try:
+        return driver.current_url if driver is not None else "-"
+    except Exception:  # noqa: BLE001
+        return "?"
 
 
 # ---------------------------------------------------------------- クリップボード

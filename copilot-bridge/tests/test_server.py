@@ -129,6 +129,31 @@ class ChatTests(ServerTestCase):
         self.assertEqual(sorted(results.values()), ["from w0", "from w1"])
 
 
+class RestartTests(ServerTestCase):
+    windows = 1
+
+    def test_worker_restart_retries_once_with_fresh_chat(self):
+        from bridge.pool import WorkerRestarted
+
+        seen = []
+        state = {"raised": False}
+
+        def responder(text, worker):
+            seen.append(text)
+            if not state["raised"]:
+                state["raised"] = True
+                raise WorkerRestarted("w0: ブラウザを再起動しました（not connected to DevTools）")
+            return "復帰後の回答"
+
+        FakeWorker.responder = staticmethod(responder)
+        r = self.post({"messages": [{"role": "system", "content": "R"}, {"role": "user", "content": "r1"}]})
+        self.assertEqual(r["choices"][0]["message"]["content"], "復帰後の回答")
+        self.assertEqual(len(seen), 2)
+        self.assertIn("【元の指示】\nR", seen[1])   # 会話を作り直して送り直している
+        w = self.get("/status")["windows"][0]
+        self.assertEqual(w["chats"], 2)
+
+
 class EvictionTests(ServerTestCase):
     windows = 1
 
