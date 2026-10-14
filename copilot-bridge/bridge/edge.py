@@ -70,7 +70,11 @@ class EdgeWorker(Worker):
             except Exception as e:  # noqa: BLE001
                 last = e
                 msg = str(e).splitlines()[0] if str(e) else type(e).__name__
-                print(f"[{self.id}] 起動失敗（{mode}）: {msg} → 次の方式を試します", flush=True)
+                hint = ""
+                if mode == "separate" and "exited" in msg:
+                    hint = ("（同じプロファイルを使う Edge が既に開いていませんか? サーバと probe の同時実行や、"
+                            "前回のウインドウの閉じ忘れが原因になります）")
+                print(f"[{self.id}] 起動失敗（{mode}）: {msg}{hint} → 次の方式を試します", flush=True)
         else:
             raise BridgeError(f"{self.id}: Edge を起動できません（{modes} を試行）: {last}") from last
         if self.launch_mode != "separate":

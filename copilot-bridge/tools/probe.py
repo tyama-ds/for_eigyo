@@ -205,6 +205,9 @@ def main(argv=None):
     a = p.parse_args(argv)
     cfg = load_config(a.config, {"driver_path": a.driver_path, "chat_url": a.chat_url,
                                  "profile_mode": a.profile_mode})
+    # サーバ（server.py）の Edge と同じプロファイルを取り合わないよう、試験は別の置き場を使う
+    # （同じ --user-data-dir を 2 つ目の Edge が開くと "Chrome instance exited" で即終了する）
+    cfg.profile_dir = str(cfg.resolved_profile_dir() / "probe")
     {"login": probe_login, "long": probe_long, "toolcall": probe_toolcall,
      "followup": probe_followup, "parallel": probe_parallel}[a.cmd](cfg, a)
 
