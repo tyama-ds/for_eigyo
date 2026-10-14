@@ -1,0 +1,68 @@
+{
+  "slug": "copilot-bridge",
+  "name": "Copilot Bridge",
+  "path": "copilot-bridge/",
+  "summary": "M365 Copilot のチャット画面を OpenAI 互換 API に見せかける中継サーバ。Codex CLI などのエージェントを Copilot で動かし、orrery のようなハーネスから複数エージェントを並列に使うために Edge を複数ウインドウで操作する。",
+  "status": "active",
+  "phase": "骨格の実装。実機（Copilot 画面）での成否試験はこれから",
+  "progress": 15,
+  "started": "2026-10-14",
+  "version": "0.1.0",
+  "ports": [
+    8800
+  ],
+  "ci": true,
+  "portal": false,
+  "stack": [
+    "Python 標準ライブラリ",
+    "Selenium（Edge）"
+  ],
+  "milestones": [
+    {
+      "title": "構想（会話の見分け・ツール呼び出しの文章化・複数ウインドウ）",
+      "state": "done",
+      "date": "2026-10-14"
+    },
+    {
+      "title": "骨格: OpenAI 互換サーバ・session/protocol/pool・fake 裏方・テスト・CI",
+      "state": "done",
+      "date": "2026-10-14"
+    },
+    {
+      "title": "実機試験: SSO・長文送信・文脈の継続・<tool_call> 形式の遵守・並列（tools/probe.py）",
+      "state": "todo"
+    },
+    {
+      "title": "Codex CLI から短い作業を 1 つ完遂",
+      "state": "todo"
+    },
+    {
+      "title": "長いシステムプロンプト・ツール定義の圧縮",
+      "state": "todo"
+    },
+    {
+      "title": "orrery からサブエージェント込みで運用",
+      "state": "todo"
+    }
+  ],
+  "next": [
+    "Windows 実機で tools/probe.py を login → long → followup → toolcall → parallel の順に実行し、結果を README に記録",
+    "selectors.response（コピー不可時の本文読み取り先）を実機で確定",
+    "Codex CLI の接続（wire_api / WSL2 からの到達）を確認"
+  ],
+  "risks": [
+    "Copilot 画面の自動操作・コード送信の社内ルール確認が未了",
+    "Copilot の文字数上限と、エージェント CLI の長いシステムプロンプト・ツール定義の相性",
+    "1 往復 10〜60 秒。作業 1 件に数十分かかる前提",
+    "利用制限はアカウント単位でウインドウを増やしても上限は増えない",
+    "UI 改定でセレクタが壊れる（config.selectors で差し替え）"
+  ],
+  "log": [
+    {
+      "date": "2026-10-14",
+      "summary": "初版: 構想と骨格（OpenAI 互換サーバ、会話の差分送信、<tool_call> 変換、複数ウインドウの割り当て、Edge 担当、fake 裏方、実機試験スクリプト、テスト、CI）",
+      "ref": "#65"
+    }
+  ],
+  "updated": "2026-10-14"
+}

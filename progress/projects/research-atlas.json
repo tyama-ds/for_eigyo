@@ -118,7 +118,13 @@
   "log": [
     {
       "date": "2026-10-14",
-      "summary": "v2.7：API不要のScopus出版日補助拡張と専用台帳UIを追加。変動クラスに依存せずtestid／同じ行のPublication date dt/ddを照合。100件初期・最大500件の逐次取得、停止・再開・結果JSON取り込み・独立SQLite・CSV/JSON監査・固定プレビューから新dataset保存。IDの矛盾・年のみ・未来日を区別し元データ保持。Python1,673件成功・1件スキップ、JavaScript308件・launcher9件成功。合成2万件500件×40バッチの全件取り込み・逐次保存、月/四半期層と根拠保持を確認。実ブラウザのDOM6ケース、ファイル取込・採用方針・CSV・新dataset保存を確認。契約者向けScopus実取得は未検証。"
+      "ref": "#64",
+      "summary": "PR #64へ最新mainを取り込み、生成物progress/dashboard.htmlのみの競合を正本JSONから再生成して解消。mainのcopilot-bridge追加と各プロジェクト情報を保持。Research Atlas本体・v2.7.0の機能は変更なし。"
+    },
+    {
+      "date": "2026-10-14",
+      "summary": "v2.7：API不要のScopus出版日補助拡張と専用台帳UIを追加。変動クラスに依存せずtestid／同じ行のPublication date dt/ddを照合。100件初期・最大500件の逐次取得、停止・再開・結果JSON取り込み・独立SQLite・CSV/JSON監査・固定プレビューから新dataset保存。IDの矛盾・年のみ・未来日を区別し元データ保持。Python1,673件成功・1件スキップ、JavaScript308件・launcher9件成功。合成2万件500件×40バッチの全件取り込み・逐次保存、月/四半期層と根拠保持を確認。実ブラウザのDOM6ケース、ファイル取込・採用方針・CSV・新dataset保存を確認。契約者向けScopus実取得は未検証。",
+      "ref": "#64"
     },
     {
       "date": "2026-10-14",
