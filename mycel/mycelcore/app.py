@@ -768,6 +768,7 @@ class MycelApp:
         cfg = self.config()
         ext_host = LLM._host_of(cfg.get("ext_base_url", ""))
         return {"backend": backend_of(cfg), "default": cfg.get("llm_backend", "local"),
+                "show_switch": bool(cfg.get("ext_show_switch")) and ext_allowed(cfg),
                 "local": {"configured": bool(cfg.get("base_url") and cfg.get("model")), "model": cfg.get("model", ""),
                           "host": LLM._host_of(cfg.get("base_url", ""))},
                 "external": {"enabled": bool(cfg.get("ext_enabled")), "configured": ext_configured(cfg), "allowed": ext_allowed(cfg),
