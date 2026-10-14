@@ -172,3 +172,74 @@ test('orbit binds the main map SVG when zoom-tool icon SVGs precede it',()=>{
   let prevented=false,stopped=false;mapListeners.pointerdown({button:0,pointerId:1,clientX:0,clientY:0,preventDefault(){prevented=true;}});mapListeners.pointerup({pointerId:1});mapListeners.click({preventDefault(){},stopImmediatePropagation(){stopped=true;}});
   assert.equal(prevented,true);assert.equal(stopped,false);
 });
+
+
+test('movement commentary sends bounded evidence settings without changing single-centroid requests',async()=>{
+  const h=harness(async(url,options)=>{
+    if(url==='/api/landscape-reports')return {job_id:'evidence-job'};
+    if(url==='/api/jobs/evidence-job')return {status:'completed',landscape_report_id:'evidence-report'};
+    if(url==='/api/landscape-reports/evidence-report')return {result_id:'r1',projection_id:'shared-pca',interval:'year',scope:'sample',movement:{id:'move1'},selection:{papers_per_period:12,selection_method:'diverse',abstract_only:true},narrative:{headline:'選択した根拠',sections:[]}};
+    return structuredClone(payload);
+  });
+  h.ui.view(h.context);await tick();
+  h.listeners.change({target:{id:'landscape-evidence-count',value:'12'}});
+  h.listeners.change({target:{id:'landscape-evidence-method',value:'diverse'}});
+  h.listeners.change({target:{id:'landscape-evidence-abstract',checked:true}});
+  const before=JSON.stringify(h.context.result);await h.internals.generateReport();
+  const request=JSON.parse(h.calls.find(c=>c.url==='/api/landscape-reports').options.body);
+  assert.equal(request.papers_per_period,12);assert.equal(request.selection_method,'diverse');assert.equal(request.abstract_only,true);
+  assert.equal(h.internals.report.data?.selection.selection_method,'diverse');assert.equal(h.internals.report.error,'');assert.equal(JSON.stringify(h.context.result),before);
+  const html=h.ui.view(h.context);assert.match(html,/value="12"/);assert.match(html,/value="diverse" selected/);assert.match(html,/前期・後期それぞれ最大1〜20件/);
+  await h.internals.generateReport('centroid');
+  const centroid=JSON.parse(h.calls.filter(c=>c.url==='/api/landscape-reports').at(-1).options.body);
+  assert.equal(centroid.kind,'centroid');for(const key of ['papers_per_period','selection_method','abstract_only'])assert.equal(centroid[key],undefined);
+});
+
+test('invalid commentary evidence counts never submit and changing settings clears the previous commentary',async()=>{
+  const h=harness();h.ui.view(h.context);await tick();
+  for(const value of ['0','21','1.5','']){
+    h.internals.report.data={narrative:{headline:'Previous'}};
+    h.listeners.change({target:{id:'landscape-evidence-count',value}});
+    assert.equal(h.internals.report.data,null);await h.internals.generateReport();assert.match(h.internals.report.error,/1〜20件の整数/);
+  }
+  assert.equal(h.calls.some(c=>c.url==='/api/landscape-reports'),false);
+});
+
+test('movement evidence controls are locked while generating and late changed-selection replies are ignored',async()=>{
+  let release;const h=harness(async url=>url==='/api/landscape-reports'?{job_id:'pending-job'}:url==='/api/jobs/pending-job'?new Promise(resolve=>release=resolve):structuredClone(payload));
+  h.ui.view(h.context);await tick();const task=h.internals.generateReport();await tick();
+  assert.match(h.ui.view(h.context),/<fieldset class="landscape-evidence-controls" disabled>/);
+  h.listeners.change({target:{id:'landscape-evidence-method',value:'cited'}});assert.equal(h.internals.preferences.selection_method,'centroid');
+  h.internals.preferences.selection_method='recent';
+  release({status:'completed',landscape_report_id:'stale'});await task;
+  assert.equal(h.internals.report.data,null);assert.equal(h.calls.some(c=>c.url==='/api/landscape-reports/stale'),false);
+});
+
+test('movement replies with mismatched saved selection cannot be mislabeled as the current selection',async()=>{
+  const h=harness(async url=>url==='/api/landscape-reports'?{job_id:'j'}:url==='/api/jobs/j'?{status:'completed',landscape_report_id:'wrong'}:url==='/api/landscape-reports/wrong'?{result_id:'r1',projection_id:'shared-pca',interval:'year',movement:{id:'move1'},selection:{papers_per_period:20,selection_method:'cited',abstract_only:true}}:structuredClone(payload));
+  h.ui.view(h.context);await tick();await h.internals.generateReport();
+  assert.equal(h.internals.report.data,null);assert.match(h.internals.report.error,/異なる論文選択条件/);
+});
+
+
+test('input-only multi-digit evidence count edits reach the POST without replacing the focused control',async()=>{
+  const h=harness(async(url,options)=>{
+    if(url==='/api/landscape-reports')return {job_id:'input-job'};
+    if(url==='/api/jobs/input-job')return {status:'completed',landscape_report_id:'input-report'};
+    if(url==='/api/landscape-reports/input-report')return {result_id:'r1',projection_id:'shared-pca',interval:'year',movement:{id:'move1'},selection:{papers_per_period:10,selection_method:'centroid',abstract_only:false}};
+    return structuredClone(payload);
+  });h.ui.view(h.context);await tick();h.internals.report.data={narrative:{headline:'Old selection'}};
+  const before=h.updates.length;
+  h.listeners.input({target:{id:'landscape-evidence-count',value:'1'}});
+  h.listeners.input({target:{id:'landscape-evidence-count',value:'10'}});
+  assert.equal(h.updates.length,before,'the input must not be replaced while typing');assert.equal(h.internals.report.data,null);
+  await h.internals.generateReport();
+  const request=JSON.parse(h.calls.find(c=>c.url==='/api/landscape-reports').options.body);
+  assert.equal(request.papers_per_period,10);assert.equal(h.internals.report.error,'');
+});
+
+test('input-only invalid evidence count is rejected before POST',async()=>{
+  const h=harness();h.ui.view(h.context);await tick();
+  h.listeners.input({target:{id:'landscape-evidence-count',value:'25'}});await h.internals.generateReport();
+  assert.match(h.internals.report.error,/1〜20件の整数/);assert.equal(h.calls.some(c=>c.url==='/api/landscape-reports'),false);
+});

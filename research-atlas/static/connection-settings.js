@@ -4,7 +4,7 @@
   const STORAGE_KEY = 'research-atlas.connections.v1';
   const HEADER = 'X-Atlas-Connection';
   const $ = selector => document.querySelector(selector);
-  const defaults = () => ({version:1,openai:{api_key:'',model:''},local:{backend:'ollama',url:'http://127.0.0.1:11434',model:'',api_key:''},proxy:{enabled:false,url:'',username:'',password:'',no_proxy:'localhost,127.0.0.1,::1'}});
+  const defaults = () => ({version:1,openai:{api_key:'',model:''},local:{backend:'ollama',url:'http://127.0.0.1:11434',model:'',api_key:'',context_window:null,max_output_tokens:4000},proxy:{enabled:false,url:'',username:'',password:'',no_proxy:'localhost,127.0.0.1,::1'}});
   let current = defaults(), storageError = '', revision = 0, draftVersion = 0, testing = false;
   const copy = value => JSON.parse(JSON.stringify(value));
   function noProxy(value) {
@@ -47,7 +47,14 @@
       if (!value[section] || typeof value[section] !== 'object' || Array.isArray(value[section])) throw new Error('接続設定の形式が正しくありません。');
       for (const key of Object.keys(output[section])) {
         const entry = value[section][key];
-        if (key === 'enabled') {
+        if (section === 'local' && ['context_window','max_output_tokens'].includes(key)) {
+          // Older v1 records keep their credentials; only new preferences receive defaults.
+          if (entry === undefined) continue;
+          if (key === 'context_window' && entry === null) {output[section][key] = null; continue;}
+          const [minimum,maximum]=key==='context_window'?[2048,262144]:[512,32768];
+          if (!Number.isInteger(entry) || entry<minimum || entry>maximum) throw new Error(`${key==='context_window'?'コンテキスト長':'回答上限'}は${minimum.toLocaleString()}～${maximum.toLocaleString()}の整数で指定してください。`);
+          output[section][key]=entry;
+        } else if (key === 'enabled') {
           if (typeof entry !== 'boolean') throw new Error('プロキシの有効・無効を確認してください。');
           output[section][key] = entry;
         } else {
@@ -127,6 +134,7 @@
     'connection-openai-key':['openai','api_key'], 'connection-openai-model':['openai','model'],
     'connection-local-backend':['local','backend'], 'connection-local-url':['local','url'],
     'connection-local-model':['local','model'], 'connection-local-key':['local','api_key'],
+    'connection-local-context':['local','context_window'], 'connection-local-output':['local','max_output_tokens'],
     'connection-proxy-enabled':['proxy','enabled'], 'connection-proxy-url':['proxy','url'],
     'connection-proxy-username':['proxy','username'], 'connection-proxy-password':['proxy','password'],
     'connection-no-proxy':['proxy','no_proxy']
@@ -134,13 +142,16 @@
   function fill(value) {
     for (const [id,[section,key]] of Object.entries(fields)) {
       const element = $(`#${id}`);
-      if (element) element[key === 'enabled' ? 'checked' : 'value'] = value[section][key];
+      if (element) element[key === 'enabled' ? 'checked' : 'value'] = value[section][key] ?? '';
     }
     ++draftVersion; testing = false; syncControls();
   }
   function readDraft() {
     const value = defaults();
-    for (const [id,[section,key]] of Object.entries(fields)) value[section][key] = $(`#${id}`)[key === 'enabled' ? 'checked' : 'value'];
+    for (const [id,[section,key]] of Object.entries(fields)) {
+      const entry=$(`#${id}`)[key === 'enabled' ? 'checked' : 'value'];
+      value[section][key]=key==='context_window'?(String(entry).trim()===''?null:Number(entry)):key==='max_output_tokens'?Number(entry):entry;
+    }
     return normalize(value);
   }
   function showMessage(text = '', error = false) {

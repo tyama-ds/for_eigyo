@@ -210,7 +210,9 @@ def restore_local_facts(extracted: object, schema: type[BaseModel], catalog: dic
         raise RuntimeError("LLMが指定外の原文抜粋や不正な抽出形式を返したため、回答を採用しませんでした。") from None
     facts, positions = [], {}
     for choice in selected.facts:
-        source = catalog[choice.excerpt_id]
+        source = catalog.get(choice.excerpt_id)
+        if source is None:
+            raise RuntimeError("入力上限の調整で送信対象から外れた原文抜粋が指定されたため、LLMの抽出を採用しませんでした。")
         facts.append({"paper_id": source["paper_id"], "source_field": "abstract", "quote": source["quote"],
                       "statement": "選択された原文抜粋。内容の解釈と科学的妥当性は専門家による確認が必要です。",
                       **choice.model_dump(exclude={"excerpt_id"})})
@@ -320,11 +322,14 @@ def validate_critique(value, facts: list[dict], metrics: dict, mode: str, model:
 
 
 def generate(assessment: dict, candidate_id: str, provider: str, model: str | None = None,
-             *, progress: Callable[[str], None] | None = None) -> dict:
+             *, progress: Callable[[str], None] | None = None, input_context: dict | None = None) -> dict:
+    audit = input_context if input_context is not None else {}
+    audit.clear()
     result = deepcopy(assessment)
     candidate = next((c for c in result["candidates"] if c["id"] == candidate_id), None)
     if candidate is None:
         raise ValueError("対象の推薦候補がありません。")
+    candidate.pop("llm_input", None)
     if provider == "none":
         candidate.pop("narrative", None)
         candidate.pop("llm_error", None)
@@ -339,43 +344,73 @@ def generate(assessment: dict, candidate_id: str, provider: str, model: str | No
             return {}
         progress(label + "：生成を開始しています")
         def received(event):
+            if event.get("stage"):
+                progress(label + "：" + event["stage"])
+                return
             seconds = max(0, int(event["elapsed_seconds"]))
             count = max(0, int(event["received_chars"]))
             progress(f"{label}：{seconds // 60}分{seconds % 60:02d}秒・{count:,}文字受信（検証前）")
         return {"progress": received}
+
+    def request(payload, schema, prompt, selected_model, key, label):
+        prepared = {}
+        options = stage_callback(label)
+        if provider == "local":
+            options["input_context"] = prepared
+        try:
+            value = field_llm.structured_output(payload, schema, prompt, provider, selected_model, **options)
+        finally:
+            # Persist accounting even when generation or validation fails, never request text.
+            if prepared.get("metadata"):
+                audit[key] = deepcopy(prepared["metadata"])
+        return *value, prepared.get("payload", payload)
 
     if provider == "local":
         extraction_payload, extraction_schema, excerpts = local_extraction_input(papers)
     else:
         extraction_payload, extraction_schema, excerpts = {"papers": papers}, Extraction, None
     extract_prompt = LOCAL_EXTRACT_PROMPT if provider == "local" else EXTRACT_PROMPT
-    extracted, mode, chosen = field_llm.structured_output(
-        extraction_payload, extraction_schema, extract_prompt, provider, model,
-        **stage_callback("1/2 抄録から根拠を抽出"))
+    extracted, mode, chosen, actual_extraction = request(
+        extraction_payload, extraction_schema, extract_prompt, model, "extraction", "1/2 抄録から根拠を抽出")
     positions = None
+    sent_papers = papers
     if provider == "local":
+        sent_ids = {paper["id"] for paper in actual_extraction.get("papers", [])}
+        sent_excerpts = {excerpt["id"] for paper in actual_extraction.get("papers", [])
+                         for excerpt in paper.get("excerpts", [])}
+        excerpts = {key: value for key, value in excerpts.items()
+                    if key in sent_excerpts and value["paper_id"] in sent_ids}
+        # Offsets refer to the original abstract, never a shortened display copy.
+        original_papers = {paper["id"]: paper for paper in result.get("papers", [])}
+        sent_papers = [original_papers[paper["id"]] for paper in papers if paper["id"] in sent_ids]
         extracted, positions = restore_local_facts(extracted, extraction_schema, excerpts)
-    facts = validate_facts(extracted, papers, source_spans=positions)
+    facts = validate_facts(extracted, sent_papers, source_spans=positions)
     payload = {"candidate": {k: candidate.get(k) for k in ("id", "label", "keywords")},
                "metrics": metrics, "facts": facts, "scope": {k: result.get("meta", {}).get(k) for k in
                    ("start_year", "end_year", "paper_count", "base_paper_count", "sampled", "is_demo", "adaptive_collection", "providers")},
-               "warnings": result.get("warnings", []), "source_papers": len(papers)}
+               "warnings": result.get("warnings", []), "source_papers": len(sent_papers)}
     critique_prompt = LOCAL_CRITIQUE_PROMPT if provider == "local" else CRITIQUE_PROMPT
     critique_schema = local_critique_schema(facts) if provider == "local" else Critique
-    raw, mode, chosen = field_llm.structured_output(
-        payload, critique_schema, critique_prompt, provider, chosen,
-        **stage_callback("2/2 原文を照合した根拠から評論を作成"))
+    raw, mode, chosen, actual_critique = request(
+        payload, critique_schema, critique_prompt, chosen, "critique", "2/2 原文を照合した根拠から評論を作成")
     if provider == "local":
         raw = restore_local_critique(raw, critique_schema)
     if progress:
         progress("2/2 評論の原文参照と数値を検査しています")
-    narrative = validate_critique(raw, facts, metrics, mode, chosen)
-    narrative.update(input_hash=digest(payload), input_paper_ids=[p["id"] for p in papers])
+    critique_facts = actual_critique.get("facts", []) if provider == "local" else facts
+    narrative = validate_critique(raw, critique_facts, metrics, mode, chosen)
+    narrative.update(input_hash=digest(actual_critique), input_paper_ids=[p["id"] for p in sent_papers])
     narrative.update(prompt_version="foresight-v5", extraction_fact_limit=6 if provider == "local" else 32,
                      extraction_method="source_excerpt_selection" if provider == "local" else "quoted_fact_extraction")
     if provider == "local":
+        narrative["extraction_input_hash"] = digest(actual_extraction)
+        narrative["input_fact_ids"] = [fact["id"] for fact in critique_facts]
         narrative["caveats"].append("ローカルモデル向けに最大6件の根拠を選択した短い評論です。全論文・全結果の網羅的評価ではありません。")
         narrative["caveats"].append("数値は計算済みの指標と原文に表示し、LLMの本文は定性的な解釈に限定しています。将来の見通しは未検証の条件付き仮説です。")
+        if any(stage.get("reduced") for stage in audit.values()):
+            narrative["caveats"].append("入力上限に合わせて根拠を抜粋・選別しました。評論は実際に送信した根拠のみを対象とし、省略した論文・根拠は評価していません。")
+    if audit:
+        candidate["llm_input"] = deepcopy(audit)
     candidate.update(content_facts=facts, narrative=narrative)
     candidate.pop("llm_error", None)
     return result

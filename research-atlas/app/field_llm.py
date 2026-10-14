@@ -4,11 +4,12 @@ from __future__ import annotations
 from copy import deepcopy
 import json
 import re
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import insights, local_llm_stream
+from . import insights, llm_context, local_llm_stream
 from .connection_settings import current_settings, http_client, local_headers, openai_client
 
 
@@ -90,7 +91,8 @@ def local_status() -> dict:
         with http_client(url, local=True, timeout=httpx.Timeout(12, connect=5), headers=local_headers()) as client:
             response = _response_json(client.get(url + ("/api/tags" if backend == "ollama" else "/models")))
         models = response.get("models" if backend == "ollama" else "data", [])
-        models = [{"id": _model_id(item.get("name") or item.get("id") or item.get("model"))}
+        models = [{"id": _model_id(item.get("name") or item.get("id") or item.get("model")),
+                   **({"context_length": length} if (length := llm_context.active_context(item)) else {})}
                   for item in models[:100] if isinstance(item, dict) and not _cloud_model(item)]
         configured = current_settings().local.model
         identifiers = {m["id"] for m in models}
@@ -177,9 +179,20 @@ def generate(report: dict, provider: str = "none", model: str | None = None, *, 
     payload = evidence_payload(report)
     if not payload["papers"]:
         raise ValueError("LLMに渡す根拠論文がありません。")
-    options = {"progress": progress} if progress is not None else {}
-    parsed, mode, chosen = structured_output(payload, NarrativeOutput, INSTRUCTIONS, provider, model, **options)
-    return _validate_narrative(parsed, payload, mode, chosen)
+    input_context = {}
+    options = {"input_context": input_context, **({"progress": progress} if progress is not None else {})}
+    try:
+        parsed, mode, chosen = structured_output(payload, NarrativeOutput, INSTRUCTIONS, provider, model, **options)
+    finally:
+        if input_context.get("metadata"):
+            report["llm_input"] = {**deepcopy(input_context["metadata"]),
+                                   "papers": deepcopy(input_context.get("payload", payload).get("papers", []))}
+    actual = input_context.get("payload", payload)
+    result = _validate_narrative(parsed, actual, mode, chosen)
+    if input_context.get("metadata"):
+        result.update(input_context=input_context["metadata"], input_evidence=deepcopy(actual.get("papers", [])))
+        result["caveats"].extend(note for note in input_context["metadata"].get("warnings", []) if note not in result["caveats"])
+    return result
 
 
 def _openai_final_output(response) -> dict | str:
@@ -206,12 +219,59 @@ def _openai_final_output(response) -> dict | str:
         raise RuntimeError("OpenAIの最終回答の形式が不正です。途中のJSONや思考部分は採用していません。") from None
 
 
+def _discover_context(client, backend: str, url: str, chosen: str, connection: dict, info: dict) -> tuple[int | None, str]:
+    """Best-effort active context detection; failures never block generation."""
+    limits = [item.get("context_length") for item in connection["models"] if item["id"] == chosen
+              and llm_context.context_integer(item.get("context_length"))]
+    if backend == "ollama":
+        configured = llm_context.ollama_configured_context(info)
+        if configured:
+            limits.append(configured)
+        try:
+            loaded = _response_json(client.get(url + "/api/ps", timeout=httpx.Timeout(3, connect=2)))
+            limits.extend(length for item in loaded.get("models", []) if isinstance(item, dict)
+                          and chosen in {item.get("name"), item.get("model")}
+                          and (length := llm_context.active_context(item)))
+        except Exception:
+            pass
+    elif not limits:
+        parts = urlsplit(url)
+        # Only the standard compatible endpoint maps to LM Studio's API root.
+        if parts.path.rstrip("/") == "/v1":
+            discovery = urlunsplit((parts.scheme, parts.netloc, "/api/v1/models", "", ""))
+            try:
+                loaded = _response_json(client.get(discovery, timeout=httpx.Timeout(3, connect=2)))
+                for item in loaded.get("models", []):
+                    if not isinstance(item, dict):
+                        continue
+                    instances = [value for value in item.get("loaded_instances", []) if isinstance(value, dict)]
+                    exact = [value for value in instances if value.get("id") == chosen]
+                    selected = exact or (instances if chosen in {item.get("key"), item.get("id")} else [])
+                    limits.extend(length for instance in selected if (length := llm_context.active_context(instance)))
+            except Exception:
+                pass
+            if not limits:
+                # LM Studio 0.3.x exposes loaded_context_length in its older API.
+                legacy = urlunsplit((parts.scheme, parts.netloc, "/api/v0/models", "", ""))
+                try:
+                    loaded = _response_json(client.get(legacy, timeout=httpx.Timeout(3, connect=2)))
+                    limits.extend(length for item in loaded.get("data", []) if isinstance(item, dict)
+                                  and item.get("id") == chosen and (length := llm_context.active_context(item)))
+                except Exception:
+                    pass
+    return (min(limits), "server") if limits else (None, "fallback")
+
+
 def structured_output(payload: dict, schema: type[BaseModel], instructions: str,
                       provider: str, model: str | None = None, *, progress=None,
-                      allow_text: bool = False) -> tuple[object, str, str]:
+                      allow_text: bool = False, input_context: dict | None = None,
+                      preserve_input: bool = False) -> tuple[object, str, str]:
     """Shared gateway; prose fallback requires opt-in and caller validation."""
     if provider not in {"local", "openai"}:
         raise ValueError("LLM接続先が不正です。")
+    if input_context is not None:
+        input_context.clear()
+        input_context["payload"] = deepcopy(payload)
     messages = [{"role": "system", "content": instructions},
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False, allow_nan=False)}]
     if provider == "openai":
@@ -222,7 +282,7 @@ def structured_output(payload: dict, schema: type[BaseModel], instructions: str,
             raise ValueError("OpenAIモデルはブラウザの接続設定で保存したモデルを使用してください。")
         try:
             with openai_client(timeout=120, max_retries=0) as client:
-                if allow_text:
+                if allow_text or preserve_input:
                     # Keep the schema request, but inspect the completed raw
                     # response before SDK schema parsing can discard its text.
                     # No second generation request is needed for the fallback.
@@ -232,9 +292,25 @@ def structured_output(payload: dict, schema: type[BaseModel], instructions: str,
                 else:
                     response = client.responses.parse(model=chosen, store=False, max_output_tokens=4500,
                                                       input=messages, text_format=schema)
-            parsed = None if allow_text else response.output_parsed
-        except Exception:
+            parsed = None if allow_text or preserve_input else response.output_parsed
+        except Exception as exc:
+            if preserve_input:
+                overflow = local_llm_stream._context_error(getattr(exc, "body", None) or str(exc))
+                if overflow:
+                    raise overflow from None
             raise RuntimeError("OpenAIへの接続または構造化回答の取得に失敗しました。認証・モデル・利用上限を確認してください。") from None
+        if preserve_input and getattr(response, "status", None) != "completed":
+            reason = getattr(getattr(response, "incomplete_details", None), "reason", None)
+            raise local_llm_stream.LocalStreamError("OpenAIの回答が未完了のため採用しませんでした。",
+                                                   kind="token_limit" if reason == "max_output_tokens" else "incomplete")
+        if preserve_input and not allow_text:
+            # The SDK parse helper parses JSON before checking response.status.
+            # Inspect completion first so a truncated response can be split by
+            # exhaustive callers instead of being mistaken for arbitrary JSON.
+            try:
+                parsed = schema.model_validate(_openai_final_output(response))
+            except (ValueError, RuntimeError):
+                raise local_llm_stream.LocalStreamError("OpenAIの完了回答が指定の構造化形式と一致しません。", kind="malformed_json") from None
         return _openai_final_output(response) if allow_text else parsed, "openai", chosen
     connection = local_status()
     if not connection["available"]:
@@ -246,22 +322,81 @@ def structured_output(payload: dict, schema: type[BaseModel], instructions: str,
     try:
         with http_client(url, local=True, timeout=httpx.Timeout(
                 local_llm_stream.FIRST_RESPONSE_TIMEOUT_SECONDS, connect=3, write=30, pool=3), headers=local_headers()) as client:
+            info = {}
             if backend == "ollama":
                 info = _response_json(client.post(url + "/api/show", json={"model": chosen},
                                                  timeout=httpx.Timeout(30, connect=3)))
                 if _cloud_model({**info, "name": chosen}):
                     raise ValueError("クラウドへ転送するモデルはローカルLLMとして使用できません。")
-                endpoint = url + "/api/chat"
-                body = {"model": chosen, "messages": messages, "stream": True, "format": schema.model_json_schema(),
-                        "options": {"temperature": 0, "num_ctx": 16384, "num_predict": 4000}}
-            else:
-                endpoint = url + "/chat/completions"
-                body = {"model": chosen,
-                    "messages": messages, "stream": True, "temperature": 0, "max_tokens": 4000,
-                    "response_format": {"type": "json_schema", "json_schema": {"name": "field_report",
-                        "strict": True, "schema": schema.model_json_schema()}}}
+            detected, context_source = _discover_context(client, backend, url, chosen, connection, info)
+            local = current_settings().local
+            configured = getattr(local, "context_window", None)
+            # Older Ollama instances may silently truncate to their 4k default;
+            # use a smaller fallback when no loaded/configured limit is known.
+            fallback = 4096 if backend == "ollama" else llm_context.DEFAULT_CONTEXT_WINDOW
+            window = configured or detected or fallback
+            context_source = "browser" if configured else context_source
+            if detected and window > detected:
+                window, context_source = detected, "server"
+            ceiling = llm_context.model_context_ceiling(info)
+            if ceiling and window > ceiling:
+                window, context_source = ceiling, "model_ceiling"
+            requested_output = getattr(local, "max_output_tokens", 4000)
+            schema_json = schema.model_json_schema()
             options = {"allow_text": True} if allow_text else {}
-            parsed = local_llm_stream.stream_json(client, endpoint, body, backend, progress, **options)
+            input_cap = None
+            for attempt in range(3):
+                output_tokens = min(requested_output, max(512, window // 3))
+                actual, audit = llm_context.prepare(payload, instructions, schema_json,
+                    context_window=window, context_source=context_source, output_tokens=output_tokens,
+                    retries=attempt, input_token_cap=input_cap)
+                audit["requested_output_tokens"] = requested_output
+                if input_context is not None:
+                    input_context.update(payload=actual, metadata=audit)
+                if preserve_input and audit["reduced"]:
+                    audit.update(status="failed", preserve_input=True, reduction_rejected=True, sent_chars=0)
+                    if input_context is not None:
+                        input_context["payload"] = deepcopy(payload)
+                    raise local_llm_stream.LocalStreamError("全件処理の入力を省略せず分割する必要があります。", kind="context_budget")
+                if not audit["fits"]:
+                    audit["status"] = "failed"
+                    raise local_llm_stream.LocalStreamError(llm_context.BUDGET_ERROR, kind="context_budget")
+                messages = [{"role": "system", "content": instructions},
+                            {"role": "user", "content": llm_context.serialize(actual)}]
+                if backend == "ollama":
+                    endpoint = url + "/api/chat"
+                    body = {"model": chosen, "messages": messages, "stream": True, "format": schema_json,
+                            "options": {"temperature": 0, "num_predict": output_tokens}}
+                    # Unknown server defaults stay unknown; never silently grow
+                    # a loaded model's context to its theoretical training size.
+                    if configured or detected:
+                        body["options"]["num_ctx"] = window
+                else:
+                    endpoint = url + "/chat/completions"
+                    body = {"model": chosen, "messages": messages, "stream": True, "temperature": 0,
+                            "max_tokens": output_tokens,
+                            "response_format": {"type": "json_schema", "json_schema": {
+                                "name": "field_report", "strict": True, "schema": schema_json}}}
+                audit.update(status="sent", request_attempts=attempt + 1)
+                try:
+                    parsed = local_llm_stream.stream_json(client, endpoint, body, backend, progress, **options)
+                    audit["status"] = "completed"
+                    break
+                except local_llm_stream.LocalStreamError as exc:
+                    audit["status"] = "failed"
+                    if preserve_input or exc.kind != "context_length" or attempt == 2:
+                        raise
+                    if exc.context_limit and exc.context_limit <= window:
+                        window, context_source = exc.context_limit, "server_error"
+                        detected = window
+                    input_cap = max(0, int(min(audit["payload_token_budget"] * .6,
+                                              audit["payload_tokens_estimate"] * .7)))
+                    if progress:
+                        try:
+                            progress({"elapsed_seconds": 0, "received_chars": 0,
+                                      "stage": f"入力上限超過のため根拠を縮小して再試行（{attempt + 1}/2）"})
+                        except Exception:
+                            pass
     except local_llm_stream.LocalStreamError:
         raise
     except (httpx.HTTPStatusError, httpx.RequestError) as exc:

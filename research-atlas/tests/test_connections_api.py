@@ -72,6 +72,21 @@ def test_draft_test_is_request_scoped_and_never_saved(client, monkeypatch, tmp_p
     assert len(observed) == 1
 
 
+def test_local_token_limits_from_browser_are_request_scoped_and_never_saved(client, tmp_path):
+    response = client.get("/api/connections/status", headers=headers(local={
+        "context_window": 8192, "max_output_tokens": 2048, "api_key": "local-secret"}))
+    assert response.status_code == 200
+    assert response.json()["local"]["context_window"] == 8192
+    assert response.json()["local"]["max_output_tokens"] == 2048
+    assert "local-secret" not in response.text
+    unchanged = client.get("/api/connections/status").json()["local"]
+    assert unchanged["context_window"] is None and unchanged["max_output_tokens"] == 4000
+    invalid = client.get("/api/connections/status", headers=headers(local={
+        "context_window": 2047, "max_output_tokens": 4000, "api_key": "local-secret"}))
+    assert invalid.status_code == 422 and "local-secret" not in invalid.text
+    assert not list(tmp_path.rglob("*"))
+
+
 @pytest.mark.parametrize("base_url", ["http://192.168.10.20:1234/v1", "http://[fd00::20]:1234/v1",
                                      "https://llm-server.example/v1"])
 def test_remote_llm_connection_check_uses_browser_header_without_persistence(client, monkeypatch, tmp_path, base_url):
