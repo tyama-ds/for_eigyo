@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Research Atlas — Scopus 出版日補完",
+  "version": "1.0.0",
+  "description": "ログイン済みの Scopus 詳細画面から出版日を読み取り、Research Atlas 用の根拠ファイルへ保存します。",
+  "permissions": ["storage", "scripting"],
+  "host_permissions": ["https://www.scopus.com/*", "https://scopus.com/*"],
+  "action": {"default_popup": "popup.html", "default_title": "Scopus 出版日補完"},
+  "options_page": "panel.html",
+  "content_security_policy": {"extension_pages": "script-src 'self'; object-src 'none'"}
+}

@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Research Atlas | Scopus 出版日補完</title><link rel="stylesheet" href="panel.css"></head>
+<body><main>
+<header><span class="eyebrow">RESEARCH ATLAS · BROWSER COMPANION</span><h1>Scopus 出版日補完</h1><p>ログイン済みの詳細画面から、Publication date を別の根拠データとして保存します。</p></header>
+<section><h2>1. 取得キューを読み込む</h2><p>Research Atlas の「Scopus の画面から補完」で出力した JSON を選択してください。1 回最大 500 件。取得済みの続きはアプリから次のキューを出力できます。</p><label class="file-label">取得キュー JSON <input type="file" id="queue-file" accept=".json,application/json"></label><p id="queue-summary">キュー未読込</p></section>
+<section><h2>2. 専用タブから取得</h2><p>1 件ずつ開き、Publication date の値を読み取ります。開始間隔は最短 1.5 秒です。このパネルを閉じると停止し、再度開いたときは「開始・再開」が必要です。</p>
+<div class="actions"><button id="start" disabled>開始・再開</button><button id="pause" class="secondary" disabled>一時停止</button><button id="show-tab" class="secondary" disabled>専用タブを表示</button><button id="capture" class="secondary" disabled>現在の画面から再取得</button></div>
+<p class="help">アクセス確認で止まった場合は、専用タブで通常どおりログインしてください。項目を確認できない場合は、対象論文の「Show all information」を開いた状態で「現在の画面から再取得」を押してください。CAPTCHA やアクセス制限が続く場合は取得を中止してください。</p>
+<progress id="progress" value="0" max="1" aria-label="取得進捗"></progress><p id="status" role="status" aria-live="polite">キューの読み込みを待っています。</p><p id="error" role="alert" hidden></p></section>
+<section><h2>3. 結果を Research Atlas へ戻す</h2><p>途中でも出力できます。結果 JSON をアプリに読み込み、日付の照合・確認後に新しいデータセットへ反映してください。</p><button id="export" disabled>結果 JSON を保存</button><p id="totals"></p><div class="table-wrap"><table><thead><tr><th>論文</th><th>状態</th><th>Publication date</th></tr></thead><tbody id="records"></tbody></table></div></section>
+<footer>Cookie・パスワード・本文 HTML は保存しません。保存内容はキュー、Scopus ID、参照 URL、取得日時、日付と取得状態です。結果ファイルは外部へ自動送信しません。</footer>
+</main><script src="core.js"></script><script src="panel.js"></script></body></html>
