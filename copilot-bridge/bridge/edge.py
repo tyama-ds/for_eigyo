@@ -193,7 +193,7 @@ def _clipboard_write(value: str) -> None:
         pass
 
 
-def _clipboard_read(driver) -> str:
+def _clipboard_read(driver=None) -> str:
     try:
         import pyperclip
 
@@ -202,23 +202,8 @@ def _clipboard_read(driver) -> str:
             return v
     except Exception:  # noqa: BLE001
         pass
-    try:
-        v = driver.execute_async_script(
-            "var cb=arguments[arguments.length-1];"
-            "navigator.clipboard.readText().then(function(t){cb(t);})"
-            ".catch(function(){cb('');});")
-        if v:
-            return v
-    except Exception:  # noqa: BLE001
-        pass
-    try:
-        import tkinter
-
-        r = tkinter.Tk()
-        r.withdraw()
-        try:
-            return r.clipboard_get() or ""
-        finally:
-            r.destroy()
-    except Exception:  # noqa: BLE001
-        return ""
+    # navigator.clipboard.readText() は使わない: 自動操作中は権限待ちで戻らないことがある
+    # （模擬ページで再現。script timeout も効かず固まった）。
+    # tkinter も使わない: 作業担当はスレッドで動くため、メインスレッド以外からの Tk() は固まる。
+    # pyperclip が無ければ空を返し、呼び出し側が DOM から本文を読む
+    return ""

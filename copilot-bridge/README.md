@@ -85,11 +85,16 @@ python tools\probe.py parallel --windows 3:: 複数ウインドウ同時で取�
 確認したい点: 文字数の上限、1 往復の秒数、形式が崩れる頻度、同時実行の上限（アカウント単位の利用制限）、
 `selectors.response`（コピーが使えないときの本文の読み取り先）の正しいセレクタ。
 
-## テスト（ブラウザ不要）
+## テスト
 
 ```
-python -m unittest discover -s tests -v
+python -m unittest discover -s tests -v              :: ブラウザ不要（fake 裏方）。CI で実行
+python -m unittest discover -s tests_browser -v      :: 模擬 Copilot 画面 × 実ブラウザで edge.py の操作を通す（Copilot 不要）
 ```
+
+`tests_browser/` は既定で Edge（msedgedriver）を使う。Chrome で動かすときは
+`COPILOT_BRIDGE_TEST_BROWSER=chrome`（任意で `COPILOT_BRIDGE_TEST_BINARY` / `COPILOT_BRIDGE_TEST_DRIVER` / `COPILOT_BRIDGE_TEST_HEADLESS=1`）。
+Linux + Chromium（画面なし）での実測: 起動 1.8 秒、2 万字の送信→回答 8 秒、2 ウインドウ同時で取り違えなし。
 
 ## 既知の課題
 
