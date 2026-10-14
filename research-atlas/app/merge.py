@@ -318,10 +318,11 @@ def _merge_pair(first, second, counters):
     if dates["publication_date"] and dates["publication_date"] != merged.get("publication_date"):
         # The audit must follow the date actually adopted, never another
         # observation whose date was rejected in favor of the existing record.
-        if isinstance(second.get("date_enrichment"), dict):
-            merged["date_enrichment"] = deepcopy(second["date_enrichment"])
-        else:
-            merged.pop("date_enrichment", None)
+        for field in ("date_enrichment", "scopus_date_enrichment"):
+            if isinstance(second.get(field), dict):
+                merged[field] = deepcopy(second[field])
+            else:
+                merged.pop(field, None)
     merged.update(dates)
     if date_warnings:
         counters["date_conflicts"] += 1
