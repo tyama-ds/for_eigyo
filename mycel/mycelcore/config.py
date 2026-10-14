@@ -54,6 +54,7 @@ DEFAULT_CONFIG: dict = {
     "ext_api_version": "2024-10-21",
     "ext_proxy_url": "",
     "ext_reasoning_effort": "low",     # 推論モデル（o1/o3/o4-mini/gpt-5 系）の reasoning_effort。auto なら送らない
+    "ext_show_switch": False,          # 質問欄に「ローカル / 外部 API」の切り替えを表示するか（既定は非表示）
     # 埋め込み。空欄は base_url / api_key を流用。embed_model が空なら AI 検索はキーワード方式
     # （埋め込みと画像の説明はローカル LLM だけで行う。外部 API には送らない）
     "embed_model": "",
@@ -152,6 +153,8 @@ def save_config(update: dict, path: Path | None = None) -> dict:
         raise ConfigError("外部 API の欄に社内・ローカルのアドレスは登録できません（ローカル LLM の欄に登録してください）")
     if "ext_enabled" in update:
         cfg["ext_enabled"] = bool(update["ext_enabled"])
+    if "ext_show_switch" in update:
+        cfg["ext_show_switch"] = bool(update["ext_show_switch"])
     if update.get("ext_provider") in ("openai", "azure"):
         cfg["ext_provider"] = update["ext_provider"]
     if update.get("ext_reasoning_effort") in ("auto", "minimal", "low", "medium", "high"):

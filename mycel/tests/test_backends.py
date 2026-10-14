@@ -64,6 +64,11 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(cfg["llm_backend"], "local")
         self.assertEqual(backend_of(cfg, "external"), "local")
 
+    def test_switch_hidden_by_default(self):
+        cfg = load_config(self.path)
+        self.assertFalse(cfg["ext_show_switch"])
+        self.assertTrue(save_config({"ext_show_switch": True}, self.path)["ext_show_switch"])
+
     def test_effective_llm_swaps_fields_and_forces_proxy(self):
         cfg = save_config({"base_url": "http://127.0.0.1:11434/v1", "model": "qwen", "ext_enabled": True,
                            "ext_base_url": "https://api.openai.com/v1", "ext_model": "gpt-4o-mini", "ext_api_key": "sk-x",
@@ -187,6 +192,12 @@ class AppTest(unittest.TestCase):
         self.assertTrue(ext_allowed(self.app.config()))
         st, bk = self.call("GET", "/api/ai/backends")
         self.assertEqual((bk["external"]["allowed"], bk["external"]["host"], bk["external"]["proxy"]), (True, "api.openai.com", True))
+        self.assertFalse(bk["show_switch"])                                   # 切り替えの表示は既定で非表示
+        st, cfg = self.call("POST", "/api/config", {"ext_show_switch": True})
+        self.assertTrue(cfg["ext_show_switch"])
+        st, bk = self.call("GET", "/api/ai/backends")
+        self.assertTrue(bk["show_switch"])
+        st, cfg = self.call("POST", "/api/config", {"ext_show_switch": False})
         # 外部指定の質問 → プロキシ（モック）へ向かい失敗、記録が残る。既定（無指定）はローカルのまま
         n = len(self.reqs)
         st, r = self.call("POST", "/api/ai/ask", {"question": "A社の決裁者は？", "backend": "external"})

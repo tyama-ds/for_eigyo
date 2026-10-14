@@ -35,7 +35,7 @@
   const fail = (e) => toast(e.message || String(e), true);
   const titleOf = (p) => p.split("/").pop().replace(/\.md$/i, "");
   const isDoc = (p) => p.startsWith("@") || !/\.(md|markdown)$/i.test(p);
-  const CLIENT_VERSION = "0.6.2";          // サーバの __version__ と合わせる（tests/test_api が確認）
+  const CLIENT_VERSION = "0.6.3";          // サーバの __version__ と合わせる（tests/test_api が確認）
   const FT = { word: "W", excel: "X", powerpoint: "P", pdf: "PDF", email: "✉", csv: "CSV", html: "HTML", text: "TXT", code: "{ }", note: "MD", image: "IMG" };
   const GRP_NAME = { word: "Word", excel: "Excel", powerpoint: "PowerPoint", pdf: "PDF", email: "メール", csv: "CSV", html: "HTML", text: "テキスト", code: "データ", image: "画像" };
   const fmtDate = (t) => { if (!t) return "—"; const d = new Date(t * 1000), now = new Date(); return d.getFullYear() === now.getFullYear() ? d.toLocaleDateString("ja-JP", { month: "numeric", day: "numeric" }) : d.toLocaleDateString("ja-JP", { year: "numeric", month: "numeric", day: "numeric" }); };
@@ -1216,10 +1216,12 @@
   // ------------------------------------------------------------ 接続先（ローカル LLM / 外部 API）
   const backends = () => ((S.state.llm || {}).backends) || { backend: "local", default: "local", local: {}, external: {} };
   const BK_LABEL = { local: "ローカル LLM", external: "外部 API" };
-  const bkBadge = (b, model) => b ? `<span class="bk ${b === "external" ? "external" : "local"}" title="${esc(model || "")}">${b === "external" ? "☁ 外部 API" : "🏠 ローカル"}${model ? " · " + esc(model) : ""}</span>` : "";
-  /** 質問欄の上に出す接続先タブと、外部のときの警告帯。 */
+  /** 回答のバッジ。切り替えを表示していないときはローカルのバッジを出さない（外部に送ったものは常に表示）。 */
+  const bkBadge = (b, model) => !b || (b === "local" && !backends().show_switch) ? "" : `<span class="bk ${b === "external" ? "external" : "local"}" title="${esc(model || "")}">${b === "external" ? "☁ 外部 API" : "🏠 ローカル"}${model ? " · " + esc(model) : ""}</span>`;
+  /** 質問欄の上に出す接続先タブと、外部のときの警告帯。設定「切り替えを表示」がオフなら何も出さず、常にローカル。 */
   function backendTabsHtml() {
     const bk = backends(), ext = bk.external || {}, loc = bk.local || {};
+    if (!bk.show_switch) { S.aiBackend = "local"; return ""; }
     const cur = S.aiBackend;
     const extOk = !!ext.allowed;
     return `<div class="btabs" role="tablist" aria-label="送信先">
@@ -1789,7 +1791,7 @@
       ${d.structure.length ? `<div class="ldsec"><h3>章立て <small class="hint">${d.structure.length} 区分 ・ グラフタブで段落まで開けます</small></h3><div class="ldstruct">${d.structure.slice(0, 40).map((s) => `<span class="chip" data-sec="${s.n}" title="${s.chunks} 段落">${esc(s.heading)}</span>`).join("")}${d.structure.length > 40 ? `<span class="hint">ほか ${d.structure.length - 40}</span>` : ""}</div></div>` : ""}
       <div class="ldsec"><h3>この文書に質問 <small class="hint">この 1 件だけを根拠に答えます</small></h3>
         <div class="chat" id="ldChat">${(L.docChat[d.id] || []).map((m) => m.role === "user" ? `<div class="msg-q">${esc(m.content)}</div>` : `<div class="msg-a">${bkBadge(m.backend, m.model)}<div class="md">${m.content ? MD.render(m.content, { resolve }) : `<span class="hint">${esc(m.message || "")}</span>`}</div></div>`).join("")}</div>
-        <div class="askbox"><textarea id="ldAsk" placeholder="例: この報告書の結論と根拠の数値は？（Ctrl+Enter で送信）"></textarea><div class="row"><span>${S.aiBackend === "external" ? `<span class="bk external">☁ 外部 API に送信します（AI タブで切り替え）</span>` : `<span class="bk local">🏠 ローカル LLM</span>`}</span><span><button class="btn sm" id="ldAskClear">クリア</button> <button class="btn sm ${S.aiBackend === "external" ? "ext" : "pri"}" id="ldAskGo"${llm || S.aiBackend === "external" ? "" : " disabled"}>${S.aiBackend === "external" ? "☁ 外部へ送信して質問" : "質問"}</button></span></div></div></div>
+        <div class="askbox"><textarea id="ldAsk" placeholder="例: この報告書の結論と根拠の数値は？（Ctrl+Enter で送信）"></textarea><div class="row"><span>${S.aiBackend === "external" ? `<span class="bk external">☁ 外部 API に送信します（AI タブで切り替え）</span>` : backends().show_switch ? `<span class="bk local">🏠 ローカル LLM</span>` : ""}</span><span><button class="btn sm" id="ldAskClear">クリア</button> <button class="btn sm ${S.aiBackend === "external" ? "ext" : "pri"}" id="ldAskGo"${llm || S.aiBackend === "external" ? "" : " disabled"}>${S.aiBackend === "external" ? "☁ 外部へ送信して質問" : "質問"}</button></span></div></div></div>
       <div class="ldsec"><h3>AI の気づき <small class="hint">${(d.insights || {}).at ? esc(fmtTime(d.insights.at)) : "未作成"}</small></h3>
         <div class="relbtns"><button class="btn sm${(d.insights || {}).at ? "" : " pri"}" id="ldIns"${llm ? "" : " disabled"} title="要点・関連する文書との共通点や相違点・残る疑問・次の一手を AI がまとめます">気づきを出す（AI）${(d.insights || {}).at ? "・作り直す" : ""}</button></div><div id="ldInsOut"></div>
         ${insightsHtml(d.insights)}</div>
@@ -2580,6 +2582,8 @@
           ・埋め込み（意味検索）・画像の説明・AI 取り込みなどの一括処理は、「既定の接続先」を外部にしない限りローカルだけで行います<br>
           ・送った回数と文字数は下の「送信の記録」に残ります（内容は残しません）</div>
         <label></label><label class="ck"><input type="checkbox" id="cExtOn"${cfg.ext_enabled ? " checked" : ""}> <b>外部 API を使えるようにする</b></label>
+        <label></label><label class="ck"><input type="checkbox" id="cExtShow"${cfg.ext_show_switch ? " checked" : ""}> 質問欄に「🏠 ローカル ／ ☁ 外部 API」の切り替えを表示する（既定: 非表示）</label>
+        <div class="help">非表示のあいだ、質問欄は常にローカル LLM に送ります。外部 API を使うときだけオンにしてください（「既定の接続先」を外部にした場合は表示に関係なく外部へ送られます）。</div>
         <label for="cExtProv">接続方式</label><select id="cExtProv"><option value="openai"${cfg.ext_provider !== "azure" ? " selected" : ""}>OpenAI API</option><option value="azure"${cfg.ext_provider === "azure" ? " selected" : ""}>Azure OpenAI</option></select>
         <label for="cExtUrl">Base URL</label><input id="cExtUrl" type="text" value="${v("ext_base_url")}" placeholder="https://api.openai.com/v1">
         <div class="help">https:// のみ。社内・ローカルのアドレスは登録できません（ローカル LLM の欄へ）。</div>
@@ -2609,7 +2613,7 @@
         rag_pool: $("#cPool", body).value, rag_top_k: $("#cTopK", body).value, rag_rerank: $("#cRerank", body).value, rag_rerank_pool: $("#cRerankPool", body).value,
         vlm_model: $("#cVlm", body).value, attachment_folder: $("#cAttach", body).value,
         ext_enabled: $("#cExtOn", body).checked, ext_provider: $("#cExtProv", body).value, ext_base_url: $("#cExtUrl", body).value, ext_model: $("#cExtModel", body).value,
-        ext_api_version: $("#cExtVer", body).value, ext_proxy_url: $("#cExtProxy", body).value, ext_reasoning_effort: $("#cExtEffort", body).value, llm_backend: ($("input[name=cBk]:checked", body) || {}).value || "local",
+        ext_api_version: $("#cExtVer", body).value, ext_proxy_url: $("#cExtProxy", body).value, ext_reasoning_effort: $("#cExtEffort", body).value, ext_show_switch: $("#cExtShow", body).checked, llm_backend: ($("input[name=cBk]:checked", body) || {}).value || "local",
         plugins: $$("[data-plug]", body).filter((c) => c.checked).map((c) => c.dataset.plug),
       };
       if ($("#cKey", body).value) d.api_key = $("#cKey", body).value;
@@ -2628,7 +2632,7 @@
         S.state = await api.get("/api/state");
         if (vaultChanged) { store.set("last", null); location.reload(); return true; }
         toast("設定を保存しました");
-        if (!(backends().external || {}).allowed && S.aiBackend === "external") S.aiBackend = "local";
+        if ((!(backends().external || {}).allowed || !backends().show_switch) && S.aiBackend === "external") S.aiBackend = "local";
         showExtDefault();
         renderRight();
         return true;
