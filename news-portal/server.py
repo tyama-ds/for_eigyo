@@ -71,6 +71,10 @@ USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 
 AI_TIMEOUT = 60           # 生成AI呼び出しのタイムアウト（秒・クラウド）
 AI_TIMEOUT_LOCAL = 600    # ローカルLLMは推論(思考)モデルが長考するため長め（秒・設定で変更可）
+# ローカルLLMはストリーミングで受け取る: タイムアウトは「最初の文字まで」（AI_TIMEOUT_LOCAL・設定）と
+# 「次の文字が届くまで」（AI_IDLE_TIMEOUT）に分け、生成が進んでいる限り打ち切らない。
+AI_IDLE_TIMEOUT = 180     # 生成中に新しい文字が届かないまま待つ上限（秒）
+AI_WALL_FACTOR = 3        # 1回の呼び出し全体の上限 = タイムアウト × これ（止まらない生成への保険）
 LOCAL_CTX_TOKENS_DEFAULT = 4096   # ローカルLLMの文脈長の既定（Ollama / LM Studio の既定に合わせる。設定で変更可）
 AI_MAX_TOKENS = 1500      # AI応答の最大トークン
 MAX_PAGE_TEXT = 6000      # 記事ページを本文コンテキストに含める最大文字数
@@ -829,6 +833,9 @@ def _archive_init_locked() -> None:
         conn.execute("""CREATE TABLE IF NOT EXISTS doc_chunks(
             id INTEGER PRIMARY KEY, doc_id TEXT, idx INTEGER, heading TEXT, text TEXT)""")   # 資料の抜粋（チャンク）
         conn.execute("CREATE INDEX IF NOT EXISTS ix_doc_chunks_doc ON doc_chunks(doc_id, idx)")
+        conn.execute("""CREATE TABLE IF NOT EXISTS llm_cache(
+            key TEXT PRIMARY KEY, created_at REAL, out TEXT)""")   # レポート生成の各段の結果（再実行で再利用）
+        conn.execute("DELETE FROM llm_cache WHERE created_at < ?", (time.time() - LLM_CACHE_DAYS * 86400,))
         if ARCHIVE_FILE.exists():   # 旧 JSONL → SQLite 取り込み（取り込み後は .imported に退避）
             rows = []
             try:
@@ -1442,6 +1449,9 @@ def ai_config() -> dict:
         "ctx_tokens": _int("ctx_tokens", 1024, 2_000_000, LOCAL_CTX_TOKENS_DEFAULT),
         "parallel": _int("parallel", 1, 8, 1),
         "timeout_s": _int("timeout_s", 30, 7200, AI_TIMEOUT_LOCAL),
+        # ストリーミングで受け取る（既定 オン）・レポート/文書生成で推論モデルの思考を抑える（既定 オン）
+        "stream": ai.get("stream", True) is not False,
+        "no_think": ai.get("no_think", True) is not False,
     }
 
 
@@ -1455,6 +1465,7 @@ def ai_status() -> dict:
         "has_key": bool(cfg["api_key"]),
         "providers": list(AI_PROVIDERS),
         "ctx_tokens": cfg["ctx_tokens"], "parallel": cfg["parallel"], "timeout_s": cfg["timeout_s"],
+        "stream": cfg["stream"], "no_think": cfg["no_think"],
     }
 
 
@@ -2111,7 +2122,7 @@ def _llm_pick_next(cfg: dict, title: str, tail: str, cands: list[dict]) -> dict:
     c2["timeout_s"] = min(int(cfg.get("timeout_s") or AI_TIMEOUT_LOCAL), PAGES_LLM_TIMEOUT_S)
     try:
         txt = _split_reasoning(call_ai(c2, _json_system(cfg.get("provider") == "local"),
-                                       _pages_prompt(title, tail, cands), [], max_tokens=300))[0]
+                                       _pages_prompt(title, tail, cands), [], max_tokens=300, opts=_quick_opts(cfg)))[0]
     except Exception as e:
         return {"url": "", "kind": "", "reason": "", "error": f"{type(e).__name__}: {str(e)[:120]}"}
     obj = _parse_json_object(txt)
@@ -2671,10 +2682,171 @@ def _split_reasoning(text: str) -> tuple[str, str]:
     return answer, reasoning
 
 
+_CJK_RE = re.compile(r"[\u3000-\u30ff\u3400-\u9fff\uf900-\ufaff\uff00-\uffef]")
+
+
+def _est_tokens(text: str) -> int:
+    """トークン数の見積もり（安全側）: 日本語・中国語の文字は1文字1トークン、それ以外は3文字1トークン。"""
+    t = text or ""
+    n = len(_CJK_RE.findall(t))
+    return n + (len(t) - n) // 3 + 1
+
+
+_EXTRAS_REJECTED = {"no_think": False}   # 思考を抑える追加の指定を接続先が受け付けなかったら以後は送らない
+
+
+def _no_think_body(cfg: dict, msgs: list[dict]) -> tuple[list[dict], dict]:
+    """推論モデルの思考を抑える指定（できる範囲で）: Qwen3 系は「/no_think」、vLLM・llama.cpp 等は
+    chat_template_kwargs.enable_thinking=false、Ollama は think=false。対応しない接続先は無視する。"""
+    msgs = [dict(m) for m in msgs]
+    if re.search(r"qwen3|qwen-3", cfg.get("model") or "", re.I) and msgs:
+        msgs[-1]["content"] = str(msgs[-1]["content"]) + "\n/no_think"
+    if _EXTRAS_REJECTED["no_think"]:
+        return msgs, {}
+    return msgs, {"chat_template_kwargs": {"enable_thinking": False}, "think": False}
+
+
+def _think_answer_lens(content: str) -> tuple[int, int]:
+    """本文に混ざった <think>…</think> を考慮して（思考の文字数, 回答の文字数）を数える。"""
+    m = _THINK_OPEN_RE.search(content)
+    if not m:
+        c = _THINK_CLOSE_RE.search(content)   # 開きタグをテンプレートが食うサーバー: 閉じタグまでが思考
+        return (c.start(), len(content) - c.end()) if c else (0, len(content.strip()))
+    c = _THINK_CLOSE_RE.search(content, m.end())
+    if not c:
+        return len(content) - m.end(), len(content[:m.start()].strip())
+    return c.start() - m.end(), len((content[:m.start()] + content[c.end():]).strip())
+
+
+def _local_stream(url: str, body: dict, headers: dict, no_proxy: bool, cfg: dict, opts: dict) -> str:
+    """OpenAI 互換のストリーミング（SSE）で受け取る。最初の文字までは設定のタイムアウト、以後は
+    AI_IDLE_TIMEOUT 秒以上止まったら打ち切る（生成が進んでいる限り待つ）。
+    opts: ans_cap=回答の文字数の上限（超えたらそこまでで止める）、think_cap=思考のトークン数の上限
+    （超えたら打ち切って例外。文脈長からはみ出して止まらなくなるのを防ぐ）、on_progress(思考字数, 回答字数)。
+    途中で読むのをやめると接続を閉じ、サーバー側の生成も止まる（次の依頼が待たされない）。
+    戻り値は非ストリーミングと同じ形（推論は <think>…</think> に畳む）。"""
+    first = float(cfg.get("timeout_s") or AI_TIMEOUT_LOCAL)
+    idle = min(first, AI_IDLE_TIMEOUT)
+    wall = max(first * AI_WALL_FACTOR, 600.0)
+    data = json.dumps({**body, "stream": True}).encode("utf-8")
+    req = urllib.request.Request(url, data=data, method="POST",
+                                 headers={**headers, "Content-Type": "application/json", "Accept": "text/event-stream"})
+    t0 = time.monotonic()
+    try:
+        r = _opener(force_direct=no_proxy).open(req, timeout=first)
+    except urllib.error.HTTPError as e:
+        detail = e.read(1500).decode("utf-8", "replace")
+        raise RuntimeError(f"HTTP {e.code}: {detail[:500]}")
+    except (urllib.error.URLError, socket.timeout, TimeoutError, OSError) as e:
+        raise RuntimeError(f"接続エラー: {e}")
+    content: list[str] = []
+    reasoning: list[str] = []
+    n_rs = n_ct = 0
+    think_toks = 0
+    t_in = a_len = 0          # 本文に混ざった思考の文字数・回答の文字数
+    inline_think = False
+    ans_cap = int(opts.get("ans_cap") or 0)
+    think_cap = int(opts.get("think_cap") or 0)
+    cb = opts.get("on_progress")
+    meas = opts.get("_stats") if isinstance(opts.get("_stats"), dict) else {}   # 実測（思考のトークン数など）を返す先
+    last_cb = 0.0
+    got_first = False
+    try:
+        ctype = (r.headers.get("Content-Type") or "").lower()
+        if "event-stream" not in ctype:   # stream を無視して普通の JSON を返すサーバー
+            obj = json.loads(r.read(4 * 1024 * 1024).decode("utf-8", "replace"))
+            msg = ((obj.get("choices") or [{}])[0].get("message") or {})
+            c = (msg.get("content") or "").strip()
+            rc = (msg.get("reasoning_content") or msg.get("reasoning") or "").strip()
+            return (f"<think>{rc}</think>\n{c}" if rc else c) or "（空の応答が返りました）"
+        sock = None
+        try:
+            sock = r.fp.raw._sock   # 生成が始まったら「次の文字まで」の待ち時間に切り替える
+        except AttributeError:
+            pass
+        for raw in r:
+            if time.monotonic() - t0 > wall:
+                raise RuntimeError(f"生成が長すぎるため打ち切り（timed out: 合計 {int(wall)} 秒）")
+            line = raw.strip()
+            if not line.startswith(b"data:"):
+                continue
+            payload = line[5:].strip()
+            if payload == b"[DONE]":
+                break
+            try:
+                obj = json.loads(payload.decode("utf-8", "replace"))
+            except ValueError:
+                continue
+            if obj.get("error"):
+                raise RuntimeError(f"接続先のエラー: {str(obj['error'])[:200]}")
+            ch = (obj.get("choices") or [{}])[0] or {}
+            d = ch.get("delta") or ch.get("message") or {}
+            rc = d.get("reasoning_content") or d.get("reasoning") or ""
+            c = d.get("content") or ""
+            if not (rc or c):
+                continue
+            if not got_first:
+                got_first = True
+                meas["first_s"] = time.monotonic() - t0
+                if sock is not None:
+                    try:
+                        sock.settimeout(idle)
+                    except OSError:
+                        pass
+            if rc:
+                reasoning.append(rc)
+                n_rs += len(rc)
+                think_toks += _est_tokens(rc)
+            if c:
+                content.append(c)
+                n_ct += len(c)
+                if n_ct < 4000 or len(content) % 8 == 0:   # 本文に混ざった思考を正確に数え直す（長いときは間引く）
+                    t_in, a_len = _think_answer_lens("".join(content))
+                    inline_think = _THINK_OPEN_RE.search("".join(content[:4])) is not None and a_len == 0
+                elif a_len or not inline_think:   # 間引いた回は直前の状態を引き継いで足し込む
+                    a_len += len(c)
+                else:
+                    t_in += len(c)
+            think_now = think_toks + t_in   # 本文に混ざった思考は1文字1トークンとみなす（安全側）
+            meas["think_toks"] = think_now
+            if think_cap and a_len == 0 and think_now > think_cap:
+                raise RuntimeError(f"思考が長すぎるため打ち切り（約 {think_now} トークン。文脈長に収まりません）")
+            if ans_cap and a_len > ans_cap:
+                meas["capped"] = True   # 1回で書き切れない量（呼び出し側で続きを書かせる／分けて書く）
+                break   # 回答は十分な長さ。ここで止める（接続を閉じると生成も止まる）
+            if ch.get("finish_reason") == "length":   # サーバー側の上限で切れた
+                meas["capped"] = True
+            if cb and time.monotonic() - last_cb > 1.0:
+                last_cb = time.monotonic()
+                try:
+                    cb(n_rs + t_in, a_len)
+                except Exception:
+                    pass
+    except (socket.timeout, TimeoutError) as e:
+        raise RuntimeError(f"応答が {int(idle if got_first else first)} 秒止まったため打ち切り（timed out: {e}）")
+    except (urllib.error.URLError, OSError) as e:
+        raise RuntimeError(f"接続エラー: {e}")
+    finally:
+        try:
+            r.close()
+        except Exception:
+            pass
+    text = "".join(content).strip()
+    rc = "".join(reasoning).strip()
+    meas["gen_s"] = max(0.0, time.monotonic() - t0 - float(meas.get("first_s") or 0.0))   # 最初の文字から終わりまで
+    meas["ans_chars"] = len(_split_reasoning(text)[0]) if "<think" in text.lower() or "</think" in text.lower() else len(text)
+    meas["think_chars"] = n_rs + t_in
+    if rc:
+        text = f"<think>{rc}</think>\n{text}"
+    return text or "（空の応答が返りました）"
+
+
 def call_ai(cfg: dict, system: str, user_content: str, history: list[dict],
-            max_tokens: int | None = None) -> str:
+            max_tokens: int | None = None, opts: dict | None = None) -> str:
     """provider に応じて生成AIを呼び出し、本文テキストを返す。
-    max_tokens はクラウド向けの応答上限（省略時 AI_MAX_TOKENS。ローカルは常に上限なし）。"""
+    max_tokens はクラウド向けの応答上限（省略時 AI_MAX_TOKENS。ローカルは常に上限なし）。
+    opts（ローカルのみ）: no_think=推論モデルの思考を抑える、ans_cap / think_cap / on_progress=ストリーミングの上限と進捗。"""
+    opts = opts or {}
     provider, key, model = cfg["provider"], cfg["api_key"], cfg["model"]
     base = cfg["base_url"].rstrip("/")
     # history は [{role, content(str)}]（user/assistant のみ想定）
@@ -2693,36 +2865,175 @@ def call_ai(cfg: dict, system: str, user_content: str, history: list[dict],
         })
         parts = [b.get("text", "") for b in data.get("content", [])
                  if isinstance(b, dict) and b.get("type") == "text"]
+        if data.get("stop_reason") == "max_tokens" and isinstance(opts.get("_stats"), dict):
+            opts["_stats"]["capped"] = True   # 応答の上限で切れた（呼び出し側で続きを書かせる）
         return "".join(parts).strip() or "（空の応答が返りました）"
 
     # OpenAI互換（Chat Completions）— openai / local 共通
+    extras: dict = {}
     if provider == "local":
         url = (base or LOCAL_DEFAULT_BASE) + "/chat/completions"
         # ローカル(=内部アドレス)のみプロキシ非経由。外部URLならプロキシ設定に従う
         default_model, no_proxy = "llama3.1", _host_is_internal(base or LOCAL_DEFAULT_BASE)
+        if opts.get("no_think"):
+            msgs, extras = _no_think_body(cfg, msgs)
     else:
         url = (base or "https://api.openai.com/v1") + "/chat/completions"
         default_model, no_proxy = "gpt-4o-mini", False
     full = ([{"role": "system", "content": system}] if system else []) + msgs
-    body = {"model": model or default_model, "messages": full}
+    body = {"model": model or default_model, "messages": full, **extras}
+    headers = {"Authorization": "Bearer " + key} if key else {}   # ローカルはキー任意
     if provider == "local":
-        # 推論(思考)モデルは max_tokens=1500 だと </think> の前に打ち切られて
-        # 生の思考が漏れるため、上限を課さない（サーバー既定=EOSまで）。時間は設定値（既定 600 秒）
+        # 推論(思考)モデルは max_tokens=1500 だと </think> の前に打ち切られて生の思考が漏れるため、
+        # 上限は課さない（ストリーミングでは回答・思考の長さを見て止める）。時間は設定値（既定 600 秒）
+        if cfg.get("stream", True):
+            try:
+                return _local_stream(url, body, headers, no_proxy, cfg, opts)
+            except RuntimeError as e:
+                if extras and str(e).startswith(("HTTP 400", "HTTP 422")):   # 追加の指定を受け付けないサーバー
+                    _EXTRAS_REJECTED["no_think"] = True
+                    body = {k: v for k, v in body.items() if k not in extras}
+                    return _local_stream(url, body, headers, no_proxy, cfg, opts)
+                raise
         timeout = float(cfg.get("timeout_s") or AI_TIMEOUT_LOCAL)
     else:
         body["max_tokens"] = max_tokens or AI_MAX_TOKENS
         timeout = AI_TIMEOUT
-    headers = {"Authorization": "Bearer " + key} if key else {}   # ローカルはキー任意
-    data = _http_json(url, body, headers, no_proxy=no_proxy, timeout=timeout)
+    try:
+        data = _http_json(url, body, headers, no_proxy=no_proxy, timeout=timeout)
+    except RuntimeError as e:
+        if extras and str(e).startswith(("HTTP 400", "HTTP 422")):
+            _EXTRAS_REJECTED["no_think"] = True
+            body = {k: v for k, v in body.items() if k not in extras}
+            data = _http_json(url, body, headers, no_proxy=no_proxy, timeout=timeout)
+        else:
+            raise
     choices = data.get("choices") or [{}]
     msg = choices[0].get("message") or {}
     content = (msg.get("content") or "").strip()
+    if choices[0].get("finish_reason") == "length" and isinstance(opts.get("_stats"), dict):
+        opts["_stats"]["capped"] = True
     # 推論を別フィールドで返す実装（DeepSeek API / Ollama 等）は <think> 形式に
     # 畳んでおき、呼び出し側の _split_reasoning で本文と一元的に分離する
     rc = (msg.get("reasoning_content") or msg.get("reasoning") or "").strip()
     if rc:
         content = f"<think>{rc}</think>\n{content}"
     return content or "（空の応答が返りました）"
+
+
+def _get_json(url: str, no_proxy: bool, timeout: float = 5.0, body: dict | None = None):
+    """接続先の情報を読む小さな GET/POST（失敗は None）。"""
+    try:
+        data = json.dumps(body).encode("utf-8") if body is not None else None
+        req = urllib.request.Request(url, data=data, method="POST" if data else "GET",
+                                     headers={"Content-Type": "application/json"} if data else {})
+        with _opener(force_direct=no_proxy).open(req, timeout=timeout) as r:
+            return json.loads(r.read(2 * 1024 * 1024).decode("utf-8", "replace"))
+    except Exception:
+        return None
+
+
+def _probe_ctx(base: str, model: str, no_proxy: bool) -> tuple[int, str, int]:
+    """接続先が実際に使っている文脈長を読む（できる範囲で）。戻り値 (文脈長, 読み取り元, モデルの最大文脈長)。
+    Ollama: /api/ps の context_length → /api/show の num_ctx（無ければ OLLAMA_CONTEXT_LENGTH か既定）、
+    LM Studio: /api/v0/models の loaded_context_length、llama.cpp: /props の n_ctx、vLLM: /v1/models の max_model_len。"""
+    root = re.sub(r"/v1/?$", "", base.rstrip("/"))
+    name = (model or "").strip()
+    mx = 0
+    ps = _get_json(root + "/api/ps", no_proxy)
+    if isinstance(ps, dict) and isinstance(ps.get("models"), list):
+        for m in ps["models"]:
+            if not name or name in (m.get("name"), m.get("model")) or str(m.get("name", "")).startswith(name):
+                if int(m.get("context_length") or 0):
+                    return int(m["context_length"]), "Ollama（読み込み中のモデル）", 0
+        show = _get_json(root + "/api/show", no_proxy, body={"model": name, "name": name}) if name else None
+        if isinstance(show, dict):
+            for k, v in (show.get("model_info") or {}).items():
+                if k.endswith(".context_length"):
+                    mx = int(v or 0)
+            mm = re.search(r"(?m)^\s*num_ctx\s+(\d+)", str(show.get("parameters") or ""))
+            if mm:
+                return int(mm.group(1)), "Ollama（Modelfile の num_ctx）", mx
+        return 0, "Ollama（既定の文脈長。環境変数 OLLAMA_CONTEXT_LENGTH が無ければ多くの版で 4096）", mx
+    lm = _get_json(root + "/api/v0/models", no_proxy)
+    if isinstance(lm, dict) and isinstance(lm.get("data"), list):
+        loaded = [m for m in lm["data"] if isinstance(m, dict) and int(m.get("loaded_context_length") or 0)]
+        for m in lm["data"]:
+            if isinstance(m, dict) and (not name or str(m.get("id", "")).lower() == name.lower()):
+                if int(m.get("loaded_context_length") or 0):
+                    return int(m["loaded_context_length"]), "LM Studio", int(m.get("max_context_length") or 0)
+                mx = int(m.get("max_context_length") or 0)
+        if len(loaded) == 1:   # モデル名が一致しなくても、読み込み中が1つだけならそれ
+            m = loaded[0]
+            return int(m["loaded_context_length"]), f"LM Studio（読み込み中のモデル {str(m.get('id', ''))[:40]}）", int(m.get("max_context_length") or 0)
+    props = _get_json(root + "/props", no_proxy)
+    if isinstance(props, dict):
+        n = int((props.get("default_generation_settings") or {}).get("n_ctx") or props.get("n_ctx") or 0)
+        if n:
+            return n, "llama.cpp", 0
+    ms = _get_json(root + "/v1/models", no_proxy)
+    if isinstance(ms, dict) and isinstance(ms.get("data"), list):
+        for m in ms["data"]:
+            if (not name or m.get("id") == name) and int(m.get("max_model_len") or 0):
+                return int(m["max_model_len"]), "vLLM", 0
+    return 0, "", mx
+
+
+def ai_probe(body: dict) -> dict:
+    """ローカルLLMの接続先を診断する（保存はしない）: 実際の文脈長・応答の速さ・思考するモデルか。
+    フォームの値（base_url / model / 文脈長 / タイムアウト）で試せる。"""
+    cfg = dict(ai_config())
+    for k in ("base_url", "model"):
+        if isinstance(body.get(k), str):
+            cfg[k] = body[k].strip()
+    for k, lo, hi in (("ctx_tokens", 1024, 2_000_000), ("timeout_s", 30, 7200)):
+        try:
+            v = int(body.get(k) or 0)
+        except (TypeError, ValueError):
+            v = 0
+        if lo <= v <= hi:
+            cfg[k] = v
+    if "stream" in body:
+        cfg["stream"] = bool(body.get("stream"))
+    cfg["provider"] = "local"
+    base = cfg["base_url"] or LOCAL_DEFAULT_BASE
+    if cfg["base_url"] and not safe_url(cfg["base_url"]):
+        return {"ok": False, "error": "base_url は http/https の有効なURLにしてください"}
+    no_proxy = _host_is_internal(base)
+    ctx, src, mx = _probe_ctx(base, cfg["model"], no_proxy)
+    out = {"ok": True, "ctx_server": ctx, "ctx_source": src, "ctx_model_max": mx, "ctx_setting": cfg["ctx_tokens"], "warnings": []}
+    t0 = time.time()
+    seen = {"think": 0, "ans": 0, "t_first": 0.0}
+
+    def prog(th: int, an: int) -> None:
+        if not seen["t_first"] and (th or an):
+            seen["t_first"] = time.time() - t0
+        seen["think"], seen["ans"] = th, an
+    try:   # 短い依頼で速さと思考の有無を見る（思考は抑えずに）
+        raw = call_ai(cfg, "", "次の文を、そのまま日本語で1回だけ書き写してください: 「高炉の水素還元の実証が進んでいる。」",
+                      [], opts={"on_progress": prog, "ans_cap": 400, "think_cap": 4000})
+        ans, rsn = _split_reasoning(raw)
+        el = time.time() - t0
+        out.update({"elapsed_s": round(el, 1), "first_s": round(seen["t_first"] or el, 1), "thinks": bool(rsn),
+                    "think_chars": len(rsn), "answer": ans[:80]})
+    except Exception as e:
+        out.update({"ok": False, "error": f"{type(e).__name__}: {str(e)[:200]}"})
+        return out
+    w = out["warnings"]
+    if ctx and cfg["ctx_tokens"] > ctx:
+        w.append(f"設定の文脈長 {cfg['ctx_tokens']} が接続先の {ctx} より大きいため、入力がはみ出して生成が止まらなくなり、"
+                 f"タイムアウトの原因になります。文脈長を {ctx} にしてください。")
+    elif ctx and ctx >= cfg["ctx_tokens"] * 2:
+        w.append(f"接続先の文脈長は {ctx} です。設定（{cfg['ctx_tokens']}）を {ctx} に上げると、1回に渡せる量が増えて呼び出し回数が減ります。")
+    if not ctx and src.startswith("Ollama"):
+        w.append("Ollama の文脈長は既定のままの可能性があります（多くの版で 4096）。長い入力を使うなら OLLAMA_CONTEXT_LENGTH を大きくし、"
+                 "ここの文脈長も同じ値にしてください。")
+    if out.get("thinks"):
+        w.append(f"このモデルは回答の前に思考します（今回 {out['think_chars']} 字）。レポート生成では「思考を抑える」をオンのままにしてください"
+                 "（Qwen3 は抑えられます。DeepSeek-R1 系など抑えられないモデルでは時間がかかり、文脈長を大きくする必要があります）。")
+    if out["first_s"] > cfg["timeout_s"] * 0.5:
+        w.append(f"最初の文字が出るまで {out['first_s']} 秒かかりました。長い入力ではタイムアウト（{cfg['timeout_s']} 秒）を延ばしてください。")
+    return out
 
 
 def ai_chat(payload: dict) -> dict:
@@ -2850,6 +3161,12 @@ REPORT_CHUNK_CHARS_CLOUD = 12000
 REPORT_PARALLEL_LOCAL = 1       # 部分要約の並列数の旧既定（現在は設定 ai.parallel を使う。Ollama 等は同時1件）
 REPORT_PARALLEL_CLOUD = 4
 REPORT_MAX_TOKENS = 4000        # クラウド向けの応答上限（ローカルは上限を課さない）
+# ローカルLLMの予算（トークン）。入力＋回答＋思考が文脈長に収まるように、回答と思考の分を先に空けておく
+TOK_OVERHEAD = 450              # システム文・指示文
+OUT_MAP, OUT_MERGE, OUT_SECTION, OUT_FULL = 800, 1100, 900, 2600   # 各段の回答に空けておく量
+THINK_RESERVE_MAX = 1500        # 思考を抑えないときに空けておく思考の量（上限）
+SECTION_SPLIT_BELOW = 3000      # 1回で全体を書く余裕（トークン）がこれ未満なら見出しごとに分けて書く
+LLM_CACHE_DAYS = 14             # 途中結果のキャッシュの保存期間（日）
 REPORT_TEMPLATES = {
     "overview": ("概況レポート", [
         "概況（3〜5文で全体像）",
@@ -2942,17 +3259,18 @@ def _article_line(n: int, a: dict, text: str | None = None, per: int = 0, tag: s
     return s
 
 
-def _chunk_lines(lines: list[str], budget: int) -> list[list[str]]:
-    """文字数の予算で行を貪欲にまとめる（1行が予算超でも単独で1チャンク）。"""
+def _chunk_lines(lines: list[str], budget: int, measure=len) -> list[list[str]]:
+    """予算で行を貪欲にまとめる（1行が予算超でも単独で1チャンク）。measure は1行の量（文字数・トークンの見積もり）。"""
     chunks: list[list[str]] = []
     cur: list[str] = []
     size = 0
     for ln in lines:
-        if cur and size + len(ln) > budget:
+        n = measure(ln)
+        if cur and size + n > budget:
             chunks.append(cur)
             cur, size = [], 0
         cur.append(ln)
-        size += len(ln) + 1
+        size += n + 1
     if cur:
         chunks.append(cur)
     return chunks
@@ -3007,6 +3325,63 @@ def _reduce_prompt(question: str, tname: str, sections: list[str], notes: str,
             "- 各文・各箇条書きの末尾に根拠の出典番号 [n] を付ける（与えられた番号のみ使う）\n"
             "- 重複は統合し、矛盾があれば両論を併記する。新しい事実を加えない\n"
             "- 日付は YYYY-MM-DD で書く。「# 」のタイトル行は不要（こちらで付けます）")
+
+
+def _section_prompt(question: str, tname: str, sections: list[str], idx: int, notes: str,
+                    n_articles: int, filters: dict, note: str = "", n_docs: int = 0) -> str:
+    """最終段を見出しごとに分けて書くときの1見出し分の指示（文脈長が小さいローカルLLM向け）。"""
+    conds = _filters_conds(filters)
+    others = " ／ ".join(s for i, s in enumerate(sections) if i != idx)
+    target = (f"【対象】記事 {n_articles} 件（出典番号 [1]〜[{n_articles}]）\n\n" if not n_docs else
+              f"【対象】記事 {n_articles} 件＋外部資料の抜粋 {n_docs} 件（出典番号 [1]〜[{n_articles + n_docs}]。"
+              f"[{n_articles + 1}] 以降が資料）\n\n")
+    return (f"【問い】{question}\n" + note
+            + (f"【検索条件】{' ／ '.join(conds)}\n" if conds else "")
+            + target
+            + f"【部分メモ】\n{notes}\n\n"
+            f"【指示】部分メモに基づき、「{tname}」のうち見出し「{sections[idx]}」の部分だけを Markdown で書いてください。\n"
+            f"- 見出し行（## …）は書かない。他の見出し（{others}）の内容は書かない\n"
+            "- 各文・各箇条書きの末尾に根拠の出典番号 [n] を付ける（与えられた番号のみ使う）\n"
+            "- 新しい事実を加えない。日付は YYYY-MM-DD で書く")
+
+
+_H12_RE = re.compile(r"^\s*#{1,2}\s+(.*)$")
+
+
+def _section_body(text: str, sec: str) -> str:
+    """見出しごとに書かせた回答から、その見出しの本文だけを取り出す。指示に反して全体（# タイトル・他の ## 見出し）を
+    書くモデルもあるため、同じ見出しがあればその下だけを、無ければ先頭の見出し行を除いて次の見出しの手前までを使う。"""
+    lines = (text or "").strip().split("\n")
+    key = sec.split("（")[0].strip()[:8]
+    heads = [i for i, ln in enumerate(lines) if _H12_RE.match(ln)]
+    start = next((i + 1 for i in heads if key and _H12_RE.match(lines[i]).group(1).strip().startswith(key)), None)
+    if start is None:
+        start = 0
+        while start < len(lines) and (_H12_RE.match(lines[start]) or not lines[start].strip()):
+            start += 1
+    out = []
+    for ln in lines[start:]:
+        if _H12_RE.match(ln):
+            break   # 次の見出し（他の見出しの内容）は使わない
+        out.append(ln)
+    return "\n".join(out).strip()
+
+
+def _continue_prompt(prompt: str, written: str) -> str:
+    """回答の上限で止まったときに、続きだけを書かせる指示（元の指示＋ここまでの本文）。"""
+    return (prompt + "\n\n【ここまでに書いた本文】\n" + written.strip()
+            + "\n\n【指示】上の本文の続きだけを書いて完結させてください。すでに書いた内容は繰り返さない。"
+            "見出し行は書かない。出典番号 [n] の付け方は同じ")
+
+
+def _trim_to_line(text: str) -> str:
+    """途中で切れた本文を、最後の行（無ければ最後の文）の終わりで切る。"""
+    t = text.rstrip()
+    for sep in ("\n", "。", ". "):
+        i = t.rfind(sep)
+        if i >= len(t) * 0.5:
+            return t[:i + (len(sep) if sep != "\n" else 0)].rstrip()
+    return t
 
 
 def _strip_bad_cites(text: str, n: int) -> tuple[str, int]:
@@ -3099,33 +3474,121 @@ def delete_report(rid: str) -> bool:
             conn.close()
 
 
-def _budgets(cfg: dict) -> dict:
-    """LLM に渡す文字数の予算。ローカルLLMは設定の文脈長（トークン）から導く（日本語は概ね 1〜1.5 文字/トークン）。
-    chunk=部分要約1回の記事テキスト、merge=統合1回のメモ、reduce_cap=最終統合に渡すメモの上限、
-    per_article=本文抜粋/記事、page=会話の本文、facts=事実抽出1回、parallel=並列数。"""
+def _budgets(cfg: dict, think_override: int | None = None) -> dict:
+    """LLM に渡す量の予算。ローカルLLMは設定の文脈長（トークン）から、回答と思考の分を先に差し引いて決める
+    （日本語は1文字≒1トークンとして安全側に見積もる）。入力＋回答＋思考が文脈長を超えると、サーバーが文脈を
+    ずらしながら生成を続けて止まらなくなり、タイムアウトの原因になるため。
+    chunk=部分要約1回の記事テキスト、merge=統合1回のメモ、reduce_cap=最終段に渡すメモの上限、
+    sectioned=最終段を見出しごとに分けて書くか、per_article=本文抜粋/記事、page=会話の本文、facts=事実抽出1回、
+    parallel=並列数、no_think=思考を抑えるか、ctx=文脈長（トークン）、think=思考に空ける量。"""
     if cfg.get("provider") == "local":
         ctx = int(cfg.get("ctx_tokens") or LOCAL_CTX_TOKENS_DEFAULT)
-        chunk = max(600, min(REPORT_CHUNK_CHARS_LOCAL, int(ctx * 0.5)))
-        return {"chunk": chunk, "merge": max(800, int(ctx * 0.55)), "reduce_cap": max(800, int(ctx * 0.55)),
+        no_think = cfg.get("no_think", True) is not False
+        think = 0 if no_think else min(THINK_RESERVE_MAX, int(ctx * 0.3))
+        if think_override is not None:   # 思考を抑えても考えるモデル: 実測した量を空ける（文脈長の半分まで）
+            think = max(think, min(int(think_override), int(ctx * 0.5)))
+        room = lambda out: ctx - TOK_OVERHEAD - out - think
+        single = room(OUT_FULL)
+        sectioned = single < SECTION_SPLIT_BELOW
+        return {"chunk": max(500, min(REPORT_CHUNK_CHARS_LOCAL, room(OUT_MAP))),
+                "merge": max(500, min(REPORT_CHUNK_CHARS_LOCAL * 2, room(OUT_MERGE))),
+                "reduce_cap": max(500, room(OUT_SECTION) if sectioned else min(single, REPORT_CHUNK_CHARS_CLOUD)),
+                "sectioned": sectioned,
                 "per_article": max(300, min(FULLTEXT_PER_ARTICLE_LOCAL, int(ctx * 0.12))),
-                "page": max(1000, min(MAX_PAGE_TEXT, int(ctx * 0.6))), "facts": max(600, min(FACTS_CHUNK_LOCAL, int(ctx * 0.45))),
-                "parallel": max(1, min(8, int(cfg.get("parallel") or 1)))}
+                "page": max(1000, min(MAX_PAGE_TEXT, int(ctx * 0.6))),
+                "facts": max(500, min(FACTS_CHUNK_LOCAL, room(1200))),
+                "parallel": max(1, min(8, int(cfg.get("parallel") or 1))),
+                "no_think": no_think, "ctx": ctx, "think": think}
     return {"chunk": REPORT_CHUNK_CHARS_CLOUD, "merge": REPORT_CHUNK_CHARS_CLOUD * 2, "reduce_cap": REPORT_CHUNK_CHARS_CLOUD * 2,
-            "per_article": FULLTEXT_PER_ARTICLE_CLOUD, "page": MAX_PAGE_TEXT, "facts": FACTS_CHUNK_CLOUD,
-            "parallel": REPORT_PARALLEL_CLOUD}
+            "sectioned": False, "per_article": FULLTEXT_PER_ARTICLE_CLOUD, "page": MAX_PAGE_TEXT, "facts": FACTS_CHUNK_CLOUD,
+            "parallel": REPORT_PARALLEL_CLOUD, "no_think": False, "ctx": 0, "think": 0}
 
 
-def _llm_retry(cfg: dict, system: str, prompt: str, max_tokens: int | None, upd=None, label: str = "") -> tuple[str, str]:
-    """call_ai を 1 回だけ再試行つきで呼ぶ（接続エラー・タイムアウト対策）。戻り値 (本文, エラー文字列)。"""
+def _quick_opts(cfg: dict) -> dict:
+    """抽出・判定・構成など深い思考が要らない呼び出し（ローカルLLMは設定に従って思考を抑える）。"""
+    return {"no_think": cfg.get("no_think", True) is not False} if cfg.get("provider") == "local" else {}
+
+
+def _step_opts(B: dict, system: str, prompt: str, out: int, on_progress=None) -> dict:
+    """1回の呼び出しの上限（ローカルLLM）: 回答は空けた量の約2.5倍の文字まで、思考は文脈長の残りまで。"""
+    if not B.get("ctx"):
+        return {}
+    left = B["ctx"] - _est_tokens(system) - _est_tokens(prompt) - out
+    return {"no_think": B.get("no_think", False), "ans_cap": int(out * 2.5),
+            "think_cap": max(300, left), "on_progress": on_progress}
+
+
+def _llm_cache_key(cfg: dict, system: str, prompt: str) -> str:
+    raw = json.dumps([cfg.get("provider"), cfg.get("base_url"), cfg.get("model"), system, prompt], ensure_ascii=False)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _llm_cache_get(key: str) -> str | None:
+    try:
+        with _archive_lock:
+            _archive_init_locked()
+            conn = _db()
+            try:
+                r = conn.execute("SELECT out FROM llm_cache WHERE key=?", (key,)).fetchone()
+            finally:
+                conn.close()
+        return r["out"] if r else None
+    except sqlite3.Error:
+        return None
+
+
+def _llm_cache_put(key: str, out: str) -> None:
+    try:
+        with _archive_lock:
+            _archive_init_locked()
+            conn = _db()
+            try:
+                conn.execute("INSERT OR REPLACE INTO llm_cache VALUES (?,?,?)", (key, time.time(), out))
+                conn.commit()
+            finally:
+                conn.close()
+    except sqlite3.Error:
+        pass
+
+
+def _llm_retry(cfg: dict, system: str, prompt: str, max_tokens: int | None, upd=None, label: str = "",
+               opts: dict | None = None, cache: bool = False, stats: dict | None = None,
+               allow_empty: bool = False) -> tuple[str, str]:
+    """call_ai を 1 回だけ再試行つきで呼ぶ（接続エラー・タイムアウト対策）。戻り値 (本文, エラー文字列)。
+    - 思考だけで回答の無い応答（思考の途中で終わった等）は失敗として扱う。ただし allow_empty=True なら、思考を
+      終えたうえで何も書かなかった応答（該当なし）は ("", "") を返す（失敗ではない・再試行しない）
+    - 思考が長すぎた・タイムアウトした後の再試行では、思考を抑える指定を付ける
+    - cache=True なら成功した結果を保存し、同じ入力ならそれを返す（同じ条件で再実行すると続きから進む）"""
+    key = _llm_cache_key(cfg, system, prompt) if cache else ""
+    if key:
+        hit = _llm_cache_get(key)
+        if hit:
+            if stats is not None:
+                stats["cached"] = stats.get("cached", 0) + 1
+            return hit, ""
     err = ""
+    o = dict(opts or {})
     for attempt in range(2):
         try:
-            return _split_reasoning(call_ai(cfg, system, prompt, [], max_tokens=max_tokens))[0], ""
+            raw = call_ai(cfg, system, prompt, [], max_tokens=max_tokens, opts=o)
+            ans, _ = _split_reasoning(raw)
+            if not ans.strip() or ans == _TRUNCATED_NOTE or ans == "（空の応答が返りました）":
+                capped = (o.get("_stats") or {}).get("capped")
+                if allow_empty and not capped and (_THINK_CLOSE_RE.search(raw) or ans == "（空の応答が返りました）"):
+                    return "", ""   # 考えた結果、書くことが無かった（該当なし）
+                raise RuntimeError("回答が空でした（思考の途中で終わった可能性）")
+            if key and not (o.get("_stats") or {}).get("capped"):
+                _llm_cache_put(key, ans)
+            return ans, ""
         except Exception as e:
             err = f"{type(e).__name__}: {str(e)[:160]}"
             if attempt == 0:
+                if "思考が長すぎる" in err and o.get("no_think"):
+                    break   # 思考を抑えても考え続けるモデル: 同じ依頼を繰り返さず、呼び出し側で量を減らす
                 if upd:
                     upd(sub=f"{label}再試行中（{err[:70]}）")
+                if cfg.get("provider") == "local" and ("思考" in err or "timed out" in err):
+                    o["no_think"] = True   # 長考・停止が原因なら思考を抑えてやり直す
                 time.sleep(1.0)
     return "", err
 
@@ -3176,7 +3639,8 @@ def _build_report(cfg: dict, question: str, template: str, ids: list, filters: d
             note += ("【資料】「資料｜」で始まる行は利用者が登録した外部資料（PDF・Word 等）の抜粋。"
                      "記事と同じく事実の根拠として出典番号で引用する\n")
     n_src = len(arts) + len(passages)
-    chunks = _chunk_lines(lines, budget)
+    msr = _est_tokens if local else len   # ローカルは予算（トークン）と同じ物差しで行の量を測る
+    chunks = _chunk_lines(lines, budget, msr)
     t0 = time.time()
     upd(state="mapping", total=len(chunks), done=0, articles=len(arts), sub="", started=t0, failed=0, retries=0)
     done = [0]
@@ -3184,10 +3648,63 @@ def _build_report(cfg: dict, question: str, template: str, ids: list, filters: d
     failed: list[dict] = []
     lock = threading.Lock()
 
+    cst = {"cached": 0}   # 途中結果のキャッシュを使えた回数（同じ条件の再実行）
+    gen_t = [0.0]
+
+    def live(think: int, ans: int) -> None:   # ストリーミング中の生成量（画面に「生成中 n字」）
+        if time.time() - gen_t[0] > 1.0:
+            gen_t[0] = time.time()
+            upd(gen=f"生成中 {ans}字" + (f"（思考 {think}字）" if think else ""))
+
+    think_obs = {"max": 0}   # 実際に観測した思考の量（トークン・思考を抑えても考えるモデルの検出）
+    speed = {"chars": 0, "secs": 0.0}   # 実測した生成の速さ（回答の文字数 ÷ 生成にかかった秒）
+
+    def opts_for(prompt: str, out: int) -> dict:
+        o = _step_opts(B, system, prompt, out, live)
+        o["_stats"] = {}
+        return o
+
+    def seen(o: dict) -> None:
+        st = o.get("_stats") or {}
+        with lock:
+            think_obs["max"] = max(think_obs["max"], int(st.get("think_toks") or 0))
+            if st.get("ans_chars") and st.get("gen_s"):
+                speed["chars"] += int(st["ans_chars"])
+                speed["secs"] += float(st["gen_s"])
+
+    def write_long(prompt: str, out: int, label: str) -> tuple[str, str]:
+        """1回の回答の上限で止まったら、ここまでの本文を渡して「続きだけ」を書かせる（最大2回・文脈長に収まる範囲）。
+        それでも書き切れなければ、最後の行・文で切って省略を注記する。"""
+        o = opts_for(prompt, out)
+        txt, err = _llm_retry(cfg, system, prompt, REPORT_MAX_TOKENS, upd, label, opts=o, cache=True, stats=cst)
+        seen(o)
+        k = 0
+        while txt and (o.get("_stats") or {}).get("capped") and k < 2:
+            cprompt = _continue_prompt(prompt, txt)
+            if local and _est_tokens(system) + _est_tokens(cprompt) + out > B["ctx"]:
+                break   # 続きを書かせる余裕が文脈長に無い
+            upd(sub=f"{label.rstrip('を')}の続きを書いています（{k + 1}回目）", gen="")
+            o = opts_for(cprompt, out)
+            more, e2 = _llm_retry(cfg, system, cprompt, REPORT_MAX_TOKENS, upd, label, opts=o, cache=True, stats=cst)
+            seen(o)
+            if not more:
+                break
+            txt = txt.rstrip() + "\n" + more.strip()
+            k += 1
+            with lock:
+                continued[0] += 1
+        if txt and (o.get("_stats") or {}).get("capped"):
+            txt = _trim_to_line(txt) + "\n（文字数の上限のため、以降は省略しました）"
+        return txt, err
+
     def map_one(ch: list[str], depth: int = 0) -> str:
-        txt, err = _llm_retry(cfg, system, _map_prompt(question, "\n".join(ch), bool(pages), note), REPORT_MAX_TOKENS, upd, "部分要約を")
-        if txt:
-            return txt
+        prompt = _map_prompt(question, "\n".join(ch), bool(pages), note)
+        o = opts_for(prompt, OUT_MAP)
+        txt, err = _llm_retry(cfg, system, prompt, REPORT_MAX_TOKENS, upd, "部分要約を", opts=o, cache=True, stats=cst,
+                              allow_empty=True)
+        seen(o)
+        if txt or not err:
+            return txt   # 空で err も無い = このチャンクには問いに関係する記事が無かった
         with lock:
             retries[0] += 1
         if depth < 1 and len(ch) > 1:   # 文脈長超過・タイムアウトなら半分に割ってもう一度
@@ -3202,42 +3719,126 @@ def _build_report(cfg: dict, question: str, template: str, ids: list, filters: d
         ans = map_one(ch)
         with lock:
             done[0] += 1
-            upd(done=done[0], failed=len(failed), retries=retries[0], sub="")
+            upd(done=done[0], failed=len(failed), retries=retries[0], sub="", gen="", cached=cst["cached"])
         return ans
 
-    with ThreadPoolExecutor(max_workers=max(1, min(par, len(chunks)))) as ex:
-        notes = [n for n in ex.map(do_map, chunks) if n]
+    notes: list[str] = []
+    think_adapted = False
+    if local and B.get("no_think") and len(chunks) > 2:
+        # 最初のチャンクだけ先に処理して思考の量を測る。思考を抑えても考えるモデル（DeepSeek-R1 系など）なら、
+        # その分を空けた予算で残りを分け直す（毎回はみ出して打ち切り→分割、を繰り返さない）
+        first = do_map(chunks[0])
+        if first:
+            notes.append(first)
+        if think_obs["max"] > 200:
+            B = _budgets(cfg, think_override=int(think_obs["max"] * 1.3))
+            budget = B["chunk"]
+            rest_lines = lines[len(chunks[0]):] if first else lines
+            chunks = ([chunks[0]] if first else []) + _chunk_lines(rest_lines, budget, msr)
+            think_adapted = True
+            upd(total=len(chunks), sub=f"思考するモデルのため、1回の量を減らして続けます（思考 約{think_obs['max']}トークン）")
+            todo = chunks[1:] if first else chunks
+        else:
+            todo = chunks[1:]
+    else:
+        todo = chunks
+    with ThreadPoolExecutor(max_workers=max(1, min(par, len(todo) or 1))) as ex:
+        notes += [n for n in ex.map(do_map, todo) if n]
+    if not notes and not failed:
+        raise RuntimeError("部分要約で、問いに関係する事実が1件も抽出されませんでした（問いや記事の選び方を見直してください）")
     if not notes:
         raise RuntimeError("部分要約がすべて失敗しました（" + (failed[0]["error"] if failed else "不明") +
-                           "）。設定の「文脈長」「タイムアウト」「並列数」を見直してください")
-    upd(state="reducing", sub="", mtotal=0, mdone=0)
+                           "）。設定の「文脈長」「タイムアウト」「並列数」を見直すか、「接続先を診断」で確認してください")
+    upd(state="reducing", sub="", mtotal=0, mdone=0, gen="")
     notes_text = "\n\n".join(notes)
     merge_rounds = 0
-    while len(notes_text) > B["reduce_cap"] and merge_rounds < 4:   # 最終統合の文脈長に収まるまで多段統合
+    while msr(notes_text) > B["reduce_cap"] and merge_rounds < 6:   # 最終段の文脈長に収まるまで多段統合
         merge_rounds += 1
-        gs = _chunk_lines(notes_text.split("\n"), B["merge"])
+        gs = _chunk_lines(notes_text.split("\n"), B["merge"], msr)
         upd(sub=f"部分メモを統合中（第{merge_rounds}段）", mtotal=len(gs), mdone=0)
-        mids = []
-        for gi, g in enumerate(gs, 1):
-            txt, err = _llm_retry(cfg, system, _merge_prompt(question, "\n".join(g)), REPORT_MAX_TOKENS, upd, "統合を")
-            mids.append(txt if txt else "\n".join(g)[:B["merge"] // 2])   # 失敗時は元メモを切り詰めて残す
-            upd(mdone=gi)
+        mdone = [0]
+
+        def merge_one(g: list[str]) -> str:
+            prompt = _merge_prompt(question, "\n".join(g))
+            o = opts_for(prompt, OUT_MERGE)
+            txt, err = _llm_retry(cfg, system, prompt, REPORT_MAX_TOKENS, upd, "統合を", opts=o, cache=True, stats=cst,
+                                  allow_empty=True)
+            seen(o)
+            with lock:
+                mdone[0] += 1
+                upd(mdone=mdone[0], gen="")
+            return txt if txt else "\n".join(g)[:B["merge"] // 2]   # 失敗時は元メモを切り詰めて残す
+
+        with ThreadPoolExecutor(max_workers=max(1, min(par, len(gs)))) as ex:
+            mids = list(ex.map(merge_one, gs))
         new_text = "\n\n".join(m for m in mids if m)
-        if len(new_text) >= len(notes_text):   # 縮まらないなら打ち切り
+        if msr(new_text) >= msr(notes_text):   # 縮まらないなら打ち切り
             notes_text = new_text
             break
         notes_text = new_text
     truncated = False
-    cap = int(B["reduce_cap"] * 1.5)
-    if len(notes_text) > cap:
-        notes_text = notes_text[:cap] + "\n（以降のメモは文脈長の都合で省略）"
+
+    def fit(text: str, cap: int) -> str:
+        """メモを予算（msr の単位）に収める。はみ出す分は省略の注記をつけて切る。"""
+        nonlocal truncated
+        n = msr(text)
+        if n <= cap:
+            return text
         truncated = True
-    upd(sub="統合レポートを作成中", mtotal=0, mdone=0)
+        return text[:max(200, int(len(text) * cap / n) - 40)] + "\n（以降のメモは文脈長の都合で省略）"
+
+    notes_text = fit(notes_text, int(B["reduce_cap"]))
     tname, sections = REPORT_TEMPLATES.get(template) or REPORT_TEMPLATES["overview"]
-    body, err = _llm_retry(cfg, system, _reduce_prompt(question, tname, sections, notes_text, len(arts), filters, note, len(passages)),
-                           REPORT_MAX_TOKENS, upd, "統合レポートを")
-    if not body:
-        raise RuntimeError("統合レポートの生成に失敗しました（" + err + "）")
+    sections_failed: list[str] = []
+    fallback = False
+    continued = [0]
+    err = ""
+    # 最終段を1回で書くか、見出しごとに分けて書くか:
+    #  - 文脈長に1回分の回答（OUT_FULL）が収まらない → 見出しごと
+    #  - 実測した生成の速さから、1回で書くと時間の上限の半分を超えそう → 見出しごと
+    #  - 1回で書こうとして失敗した／書き切れなかった（上限で止めた・長さ切れ） → 見出しごとにやり直す
+    mode, reason = "single", ""
+    if B.get("sectioned"):
+        mode, reason = "sectioned", "文脈長に1回分の回答が収まらないため"
+    elif local and speed["secs"] > 0 and speed["chars"] > 0:
+        cps = speed["chars"] / speed["secs"]
+        est = OUT_FULL / max(cps, 0.1)
+        tmo = float(cfg.get("timeout_s") or AI_TIMEOUT_LOCAL)
+        limit = max(tmo * AI_WALL_FACTOR, 600.0) if cfg.get("stream", True) else tmo
+        if est > limit * 0.5:
+            mode, reason = "sectioned", f"1回で書くと約{int(est)}秒かかる見込みのため（上限 {int(limit)}秒）"
+    if mode == "single":
+        upd(sub="統合レポートを作成中", mtotal=0, mdone=0, gen="")
+        prompt = _reduce_prompt(question, tname, sections, notes_text, len(arts), filters, note, len(passages))
+        o = opts_for(prompt, OUT_FULL)
+        body, err = _llm_retry(cfg, system, prompt, REPORT_MAX_TOKENS, upd, "統合レポートを", opts=o, cache=True, stats=cst)
+        seen(o)
+        if not body:
+            mode, reason = "sectioned", f"1回での生成に失敗したため（{err[:50]}）"
+        elif (o.get("_stats") or {}).get("capped"):
+            mode, reason, body = "sectioned", "1回で書き切れなかったため", ""
+    if mode == "sectioned":   # 見出しごとに書く（1回の回答を短くして、はみ出し・タイムアウトを防ぐ）
+        if local:   # 1回で書く予定だった量のメモは、見出しごとの入力には大きすぎることがある
+            notes_text = fit(notes_text, max(500, B["ctx"] - TOK_OVERHEAD - OUT_SECTION - int(B.get("think") or 0)))
+        parts = []
+        for si, sec in enumerate(sections, 1):
+            upd(sub=f"統合レポートを作成中（見出し {si}/{len(sections)}: {sec[:20]}）", mtotal=len(sections), mdone=si - 1, gen="")
+            prompt = _section_prompt(question, tname, sections, si - 1, notes_text, len(arts), filters, note, len(passages))
+            txt, err = write_long(prompt, OUT_SECTION, "統合レポートを")
+            if txt:
+                txt = _section_body(txt, sec)
+                parts.append(f"## {sec}\n{txt}" if txt else f"## {sec}\n（この見出しは内容がありませんでした）")
+            else:
+                sections_failed.append(sec)
+                parts.append(f"## {sec}\n（この見出しは生成できませんでした: {err[:80]}）")
+        body = "\n\n".join(parts)
+        if len(sections_failed) == len(sections):
+            body, fallback = "", True
+    if fallback:   # 最終段がどうしても書けなかった: ここまでの抽出結果（出典番号つき）を失わずにレポートとして残す
+        body = ("## 抽出した要点（統合前のメモ）\n"
+                "※ 最終段の文章化に失敗したため、部分要約で抽出した要点をそのまま掲載しています"
+                f"（{(err or '不明')[:80]}）。同じ条件で再実行すると、完了した部分は再利用して最終段だけをやり直します。\n\n"
+                + notes_text)
     body = re.sub(r"^\s*#\s[^\n]*\n", "", body, count=1)   # 念のため先頭のタイトル行を除去
     body, bad = _strip_bad_cites(body, n_src)
     n_text = sum(1 for p in pages.values() if p.get("text"))
@@ -3257,7 +3858,10 @@ def _build_report(cfg: dict, question: str, template: str, ids: list, filters: d
                   "fulltext": n_text, "fulltext_failed": max(0, n_target - n_text),
                   "fulltext_multi": sum(1 for p in pages.values() if p.get("text") and p.get("pages", 1) > 1),
                   "docs": len(passages), "failed_chunks": len(failed), "retries": retries[0],
-                  "merge_rounds": merge_rounds, "truncated": truncated,
+                  "merge_rounds": merge_rounds, "truncated": truncated, "cached_steps": cst["cached"],
+                  "sectioned": mode == "sectioned", "final_mode": mode, "final_reason": reason, "continued": continued[0],
+                  "sections_failed": sections_failed, "fallback": fallback,
+                  "think_adapted": think_adapted, "think_seen": think_obs["max"],
                   "elapsed_s": round(time.time() - t0, 1), "chunk_chars": budget, "parallel": par,
                   "errors": [f["error"] for f in failed[:3]]},
     }
@@ -3894,7 +4498,7 @@ def extract_entities_ai(rows: list[dict]) -> dict:
               "一般名詞（鉄鋼・EV・高炉 など）や地名は含めない。最大25件。見出しに無い名前を作らない。\n\n"
               + "\n".join(f"- {a['title']}" for a in rows))
     try:
-        txt, _ = _split_reasoning(call_ai(cfg, system, prompt, [], max_tokens=1500))
+        txt, _ = _split_reasoning(call_ai(cfg, system, prompt, [], max_tokens=1500, opts=_quick_opts(cfg)))
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {str(e)[:200]}"}
     items = _parse_json_array(txt)
@@ -4448,7 +5052,7 @@ def compose_facts(cfg: dict, arts: list[dict], question: str, progress=None) -> 
                   "\"unit\": \"単位\", \"note\": \"補足（30字以内）\", \"cite\": 出典番号(整数)} の形。\n"
                   "数値や具体的事実が無い記事は省く。推測しない。最大15件。")
         try:
-            txt, _ = _split_reasoning(call_ai(cfg, system, prompt, [], max_tokens=2500))
+            txt, _ = _split_reasoning(call_ai(cfg, system, prompt, [], max_tokens=2500, opts=_quick_opts(cfg)))
         except Exception:
             continue
         for it in _parse_json_array(txt):
@@ -4482,7 +5086,7 @@ def compose_summary(cfg: dict, rep: dict, instructions: str) -> dict:
               "{\"summary\": [\"1文（60字以内）。末尾に出典番号 [n]\", ...（3〜5件）], \"keywords\": [\"キーワード\", ...（5件以内）]}"
               + (f"\n想定読者・体裁の指示: {instructions}" if instructions else ""))
     try:
-        txt, _ = _split_reasoning(call_ai(cfg, _json_system(local), prompt, [], max_tokens=1200))
+        txt, _ = _split_reasoning(call_ai(cfg, _json_system(local), prompt, [], max_tokens=1200, opts=_quick_opts(cfg)))
     except Exception:
         return {}
     obj = _parse_json_object(txt)
@@ -4504,7 +5108,7 @@ def compose_slides(cfg: dict, rep: dict, instructions: str, n_slides: int) -> li
               "1枚目は全体像（要点）、最後は示唆・次に注目すべき点にする。表紙と出典一覧はこちらで付けるので含めない。レポートに無い事実を加えない。"
               + (f"\n想定読者・体裁の指示: {instructions}" if instructions else ""))
     try:
-        txt, _ = _split_reasoning(call_ai(cfg, _json_system(local), prompt, [], max_tokens=3000))
+        txt, _ = _split_reasoning(call_ai(cfg, _json_system(local), prompt, [], max_tokens=3000, opts=_quick_opts(cfg)))
     except Exception:
         return []
     out: list[dict] = []
@@ -5202,6 +5806,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             ai = {"provider": provider, "base_url": base_url,
                   "model": (body.get("model") or "").strip()}
+            for k in ("stream", "no_think"):   # ストリーミングで受け取る・推論モデルの思考を抑える（既定 オン）
+                if k in body:
+                    ai[k] = bool(body.get(k))
             for k, lo, hi in (("ctx_tokens", 1024, 2_000_000), ("parallel", 1, 8), ("timeout_s", 30, 7200)):   # ローカルLLMの処理設定
                 try:
                     v = int(body.get(k) or 0)
@@ -5249,6 +5856,10 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok": True, "ai": ai_status(), "proxy": proxy_config(),
                         "browser": browser_settings_raw(), "fulltext": fulltext_config(), "pdf_font": settings.get("pdf_font", ""),
                         "pdf_font_found": bool(_pdf_font_path())})
+            return
+
+        if u.path == "/api/ai/probe":  # ローカルLLMの接続先の診断（文脈長・速さ・思考の有無。保存しない）
+            self._json(ai_probe(self._read_body()))
             return
 
         if u.path == "/api/proxy/test":  # 接続テスト（フォーム値で試すだけ・保存しない）

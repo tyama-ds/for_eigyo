@@ -550,6 +550,7 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
 .tune label{display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--text-2); font-weight:500}
 .tune input[type=number]{width:96px; padding:5px 8px; border-radius:7px; border:1px solid var(--line); background:var(--surface); color:var(--text); font:inherit; font-size:12px}
 .tune input[type=number]:focus{border-color:var(--accent); outline:none}
+.setrow .tune input[type=checkbox]{width:auto; padding:0; margin:0; accent-color:var(--accent)}
 .tune select{padding:5px 8px; border-radius:7px; border:1px solid var(--line); background:var(--surface); color:var(--text); font:inherit; font-size:12px; max-width:100%}
 .tune select:focus{border-color:var(--accent); outline:none}
 #rsRDocK{width:52px; padding:2px 5px; border-radius:6px; border:1px solid var(--line); background:var(--surface); color:var(--text); font:inherit; font-size:12px}
@@ -1138,7 +1139,15 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
           <label>並列数<input id="aiPar" type="number" min="1" max="8"></label>
           <label>タイムアウト（秒）<input id="aiTimeout" type="number" min="30" max="7200" step="30"></label>
         </div>
-        <span class="hint">文脈長はサーバー側の設定に合わせてください（Ollama: 環境変数 <code>OLLAMA_CONTEXT_LENGTH</code> か Modelfile の <code>num_ctx</code>、LM Studio: コンテキスト長。既定は 4096）。1回に渡す記事量・本文の長さ・統合の段数はここから自動で決まり、超えると切り詰め／タイムアウトの原因になります。並列数は Ollama など同時に1件しか処理しないサーバーでは 1 のまま。タイムアウトは1回の呼び出しの上限で、超えると再試行→分割→スキップします。</span>
+        <div class="tune">
+          <label><input type="checkbox" id="aiStream"> 応答を少しずつ受け取る（ストリーミング・推奨）</label>
+          <label><input type="checkbox" id="aiNoThink"> レポート・文書生成では推論モデルの思考を抑える（推奨）</label>
+        </div>
+        <div class="tune">
+          <button class="btn ghost sm" type="button" id="aiProbeBtn">接続先を診断</button>
+          <span class="hint" id="aiProbeOut" aria-live="polite" style="flex:1; min-width:220px"></span>
+        </div>
+        <span class="hint">文脈長はサーバー側の設定に合わせてください（Ollama: 環境変数 <code>OLLAMA_CONTEXT_LENGTH</code> か Modelfile の <code>num_ctx</code>、LM Studio: コンテキスト長。既定は 4096）。1回に渡す記事量・本文の長さ・統合の段数はここから自動で決まり、超えると切り詰め／タイムアウトの原因になります。並列数は Ollama など同時に1件しか処理しないサーバーでは 1 のまま。タイムアウトは最初の文字が出るまでの上限です（ストリーミングでは、生成が進んでいる限り打ち切りません）。「接続先を診断」で接続先の実際の文脈長・速さ・思考の有無を確かめられます。</span>
       </div>
       <div class="setrow key">
         <label for="aiKey">APIキー <span id="aiKeyOpt" class="hint" style="display:none">（ローカルLLMでは通常不要）</span></label>
@@ -2080,6 +2089,7 @@ function fillAiForm(){
   $("#aiProvider").value=c.provider||"anthropic";
   $("#aiLocalTuning").hidden = (c.provider||"anthropic")!=="local";
   $("#aiCtx").value=c.ctx_tokens||4096; $("#aiPar").value=c.parallel||1; $("#aiTimeout").value=c.timeout_s||600;
+  $("#aiStream").checked = c.stream!==false; $("#aiNoThink").checked = c.no_think!==false; $("#aiProbeOut").textContent="";
   $("#aiBase").value=c.base_url||""; $("#aiModel").value=c.model||""; $("#aiKey").value="";
   $("#aiKeyStatus").textContent = c.has_key ? "✓ キー登録済み（変更する場合のみ入力）" : "";
   const p=AI.proxy||{use_proxy:true, proxy_url:"", ca_bundle:""};
@@ -2096,11 +2106,35 @@ function fillAiForm(){
 function proxyPayload(){ const on=$("#aiUseProxy").checked; return { use_proxy:on, proxy_url: on ? $("#aiProxyUrl").value.trim() : "", ca_bundle: $("#aiCaBundle").value.trim(),
   browser_binary: $("#brBinary").value.trim(), driver_path: $("#brDriver").value.trim(), pdf_font: ($("#pdfFont")?$("#pdfFont").value.trim():""),
   ctx_tokens: parseInt($("#aiCtx").value,10)||0, parallel: parseInt($("#aiPar").value,10)||0, timeout_s: parseInt($("#aiTimeout").value,10)||0,
-  follow_pages: $("#ftFollow").value, max_pages: parseInt($("#ftMaxPages").value,10)||0 }; }
+  follow_pages: $("#ftFollow").value, max_pages: parseInt($("#ftMaxPages").value,10)||0,
+  stream: $("#aiStream").checked, no_think: $("#aiNoThink").checked }; }
 function openAiSettings(){ fillAiForm(); openOverlay($("#aiSettings")); }
 $("#aiProvider").addEventListener("change", applyProviderHints);
 $("#aiProvider").addEventListener("change", ()=>{ $("#aiLocalTuning").hidden = $("#aiProvider").value!=="local"; });
 $("#aiUseProxy").addEventListener("change", toggleProxyUrl);
+$("#aiProbeBtn").onclick=async ()=>{   // ローカルLLMの接続先を診断（フォームの値で・保存しない）
+  const out=$("#aiProbeOut"); out.textContent="診断中…（短い依頼を1回送ります）";
+  const b=$("#aiProbeBtn"); b.disabled=true;
+  try{
+    const d=await api("/api/ai/probe",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+      base_url:$("#aiBase").value.trim(), model:$("#aiModel").value.trim(), ctx_tokens:parseInt($("#aiCtx").value,10)||0,
+      timeout_s:parseInt($("#aiTimeout").value,10)||0, stream:$("#aiStream").checked})});
+    out.innerHTML="";
+    if(!d.ok){ out.textContent="✗ "+(d.error||"診断に失敗しました"); return; }
+    const parts=[];
+    parts.push(d.ctx_server ? "接続先の文脈長 "+d.ctx_server+"（"+d.ctx_source+"）" : "接続先の文脈長は読み取れませんでした"+(d.ctx_source?"（"+d.ctx_source+"）":""));
+    if(d.ctx_model_max) parts.push("モデルの最大 "+d.ctx_model_max);
+    parts.push("最初の文字まで "+d.first_s+"秒・全体 "+d.elapsed_s+"秒"); parts.push(d.thinks ? "思考するモデル" : "思考なし");
+    out.append(el("div",{text:"✓ "+parts.join("／")}));
+    (d.warnings||[]).forEach(w=>out.append(el("div",{text:"⚠ "+w})));
+    if(d.ctx_server && d.ctx_server!==parseInt($("#aiCtx").value,10)){
+      const fix=el("button",{type:"button",class:"lnkbtn",text:"文脈長を "+d.ctx_server+" にする"});
+      fix.onclick=()=>{ $("#aiCtx").value=d.ctx_server; fix.remove(); toast("文脈長を "+d.ctx_server+" にしました（保存で反映）"); };
+      out.append(fix);
+    }
+  }catch(e){ out.textContent="✗ "+(e.server?e.message:"診断に失敗しました"); }
+  finally{ b.disabled=false; }
+};
 $("#aiForm").addEventListener("submit", async (e)=>{
   e.preventDefault();
   const payload={ provider:$("#aiProvider").value, base_url:$("#aiBase").value.trim(),
@@ -2291,7 +2325,7 @@ function renderRsLog(){
     h.append(el("div",{text:"左で 期間・情報源・カテゴリ・キーワード を組み合わせて絞り込み、「レポート生成」で出典つきの調査レポートを作るか、下の欄で質問できます。"}));
     log.append(h);
   }
-  RS.msgs.forEach(m=>log.append(m.role==="report" ? reportEl(m.report) : m.role==="progress" ? progressEl() : m.role==="compare" ? compareEl(m.data) : m.role==="export" ? exportEl(m.data) : bubbleEl(m)));
+  RS.msgs.forEach(m=>log.append(m.role==="report" ? reportEl(m.report) : m.role==="progress" ? progressEl() : m.role==="compare" ? compareEl(m.data) : m.role==="export" ? exportEl(m.data) : (m.role==="error" && m.retry) ? retryEl(m) : bubbleEl(m)));
   if(RS.busy) log.append(el("div",{class:"bubble think", html:'<span class="dots"><span></span><span></span><span></span></span>'}));
   const sb=$("#rsSend"); if(sb) sb.disabled=RS.busy;
   log.scrollTop=log.scrollHeight;
@@ -2338,6 +2372,13 @@ function toggleReportForm(show){
   if(show){ const q=$("#rsRQ"); if(!q.value.trim()) q.value=defaultQuestion(); $("#rsRCount").textContent=String(RS.sel.size); q.focus(); q.select();
             $("#rsRDocsN").textContent=String(RS.docs.length); $("#rsRDocs").disabled=!RS.docs.length; if(!RS.docs.length) $("#rsRDocs").checked=false; }
 }
+function retryEl(m){   // 失敗したレポート生成: 同じ条件で再実行（完了した部分要約・統合は再利用される）
+  const w=el("div",{}); w.append(bubbleEl(m));
+  const b=el("button",{type:"button",class:"btn sm",text:"同じ条件で再実行（完了した部分は再利用）",
+    title:"部分要約・統合など完了した段の結果はサーバーに保存されています。同じ条件で再実行すると、そこから先だけを行います"});
+  b.onclick=()=>{ const i=RS.msgs.indexOf(m); if(i>=0) RS.msgs.splice(i,1); runReport(m.retry); };
+  w.append(b); return w;
+}
 async function startReport(){
   if(RS.job && !["done","error"].includes(RS.job.state)){ toast("生成中のレポートがあります。完了をお待ちください","err"); return; }
   if(!aiReady()){ RS.msgs.push({role:"error",text:"⚠ 生成AIが未設定です。設定（トップバーの設定ボタン）から登録してください。"}); renderRsLog(); return; }
@@ -2348,10 +2389,13 @@ async function startReport(){
   const docs = useDocs ? (RS.docSel.size>=RS.docs.length ? "all" : [...RS.docSel]) : undefined;
   if(useDocs && Array.isArray(docs) && !docs.length){ toast("「資料」で使う資料にチェックを入れてください","err"); return; }
   const doc_k=parseInt($("#rsRDocK").value,10)||20;
+  runReport({ids, question, template, filters:rsFiltersPayload(), fulltext, docs, doc_k});
+}
+async function runReport(payload){
+  if(RS.job && !["done","error"].includes(RS.job.state)){ toast("生成中のレポートがあります。完了をお待ちください","err"); return; }
   try{
-    const d=await api("/api/research/report",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({ids, question, template, filters:rsFiltersPayload(), fulltext, docs, doc_k})});
-    RS.job={id:d.job_id, state:"queued", total:0, done:0, articles:ids.length, fulltext};
+    const d=await api("/api/research/report",{method:"POST",headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)});
+    RS.job={id:d.job_id, state:"queued", total:0, done:0, articles:payload.ids.length, fulltext:payload.fulltext, payload};
     toggleReportForm(false);
     RS.msgs.push({role:"progress"}); renderRsLog();
     pollReport();
@@ -2368,12 +2412,18 @@ async function pollReport(){
     if(s.state==="done"){
       const r=await api("/api/research/report?id="+encodeURIComponent(s.report_id));
       replaceProgress({role:"report", report:r.report}); loadReports(); loadThemes();   // ブリーフならテーマの「前回ブリーフ」も更新
+      const st=(r.report&&r.report.stats)||{};
+      if(st.fallback && RS.job.payload){   // 最終段だけ失敗: 同じ条件で再実行すると完了した段を再利用して最終段だけやり直せる
+        RS.msgs.push({role:"error", text:"⚠ 最終段の文章化に失敗したため、抽出した要点を掲載しました。", retry:RS.job.payload}); renderRsLog();
+      }
       if(RS.job.fulltext) researchSearch(true);   // 本文を取得したので一覧の「本文」バッジを反映（選択は維持）
       return;
     }
-    if(s.state==="error"){ replaceProgress({role:"error", text:"⚠ "+(s.kind==="export"?"文書の作成":"レポート生成")+"に失敗しました: "+(s.error||"")}); return; }
+    if(s.state==="error"){ replaceProgress({role:"error", text:"⚠ "+(s.kind==="export"?"文書の作成":"レポート生成")+"に失敗しました: "+(s.error||""),
+                                             retry: s.kind==="export" ? null : RS.job.payload}); return; }
     renderRsLog();
-  }catch(e){ replaceProgress({role:"error", text:"⚠ 進捗の取得に失敗しました（サーバーが再起動した可能性）。保存済みレポートを確認してください"}); return; }
+  }catch(e){ replaceProgress({role:"error", text:"⚠ 進捗の取得に失敗しました（サーバーが再起動した可能性）。保存済みレポートを確認し、無ければ同じ条件で再実行してください",
+                              retry: RS.job && RS.job.kind!=="export" ? RS.job.payload : null}); if(RS.job) RS.job.state="error"; return; }
   RS.jobTimer=setTimeout(pollReport, 1500);
 }
 function replaceProgress(msg){
@@ -2395,19 +2445,19 @@ function progressEl(){
   }
   let eta="";   // 部分要約の残り時間の目安（経過時間 ÷ 完了チャンク × 残り）
   if(j.state==="mapping" && j.done>0 && j.elapsed){ const remain=Math.round((j.elapsed/j.done)*((j.total||0)-j.done)); if(remain>0) eta="・残り約"+fmtDur(remain); }
-  const fails = (j.failed?"・失敗 "+j.failed:"")+(j.retries?"・再試行 "+j.retries:"");
+  const fails = (j.failed?"・失敗 "+j.failed:"")+(j.retries?"・再試行 "+j.retries:"")+(j.cached?"・再利用 "+j.cached:"")+(j.gen?"・"+j.gen:"");
   const stage = j.state==="queued" ? "準備中…"
               : j.state==="fetching" ? ("本文取得 "+(j.done||0)+" / "+(j.total||"?")+" 件"+(j.sub?"（"+j.sub+"）":""))
               : j.state==="retrieving" ? "外部資料から関連する抜粋を検索中…"
               : j.state==="mapping" ? ("部分要約 "+(j.done||0)+" / "+(j.total||"?")+" チャンク"+eta+fails+(j.sub?"（"+j.sub+"）":""))
-              : j.state==="reducing" ? ((j.sub||"統合レポートを作成中")+(j.mtotal?"（"+(j.mdone||0)+"/"+j.mtotal+"）":"")+"…") : "処理中…";
+              : j.state==="reducing" ? ((j.sub||"統合レポートを作成中")+(j.mtotal?"（"+(j.mdone||0)+"/"+j.mtotal+"）":"")+(j.gen?"・"+j.gen:"")+"…") : "処理中…";
   const mapLo = j.fulltext ? 35 : 5;   // 本文取得つきは前半 3〜33% を取得に充てる
   const pct = j.state==="fetching" ? (j.total ? Math.round(3+30*(j.done||0)/j.total) : 3)
             : j.state==="mapping" && j.total ? Math.round(mapLo+(88-mapLo)*(j.done||0)/j.total)
             : j.state==="reducing" ? (j.mtotal ? Math.round(89+6*(j.mdone||0)/j.mtotal) : 96) : 3;
   w.append(el("div",{class:"rpt-progress__t",text:"レポート生成中（記事 "+(j.articles||0)+" 件"+(j.docs?"＋外部資料":"")+"）— "+stage+(j.elapsed?"　経過 "+fmtDur(j.elapsed):"")}));
   const bar=el("div",{class:"pbar"}); const fill=el("i"); fill.style.width=pct+"%"; bar.append(fill); w.append(bar);
-  w.append(el("div",{class:"hint",text:"ローカルLLMでは数分〜数十分かかることがあります。失敗したチャンクは再試行→分割→スキップして先へ進みます。時間がかかりすぎる／タイムアウトする場合は、設定の「文脈長・並列数・タイムアウト」を調整してください。この画面を閉じても生成は続きます。"}));
+  w.append(el("div",{class:"hint",text:"ローカルLLMでは数分〜数十分かかることがあります。失敗したチャンクは再試行→分割→スキップして先へ進みます。途中で止まっても、同じ条件で再実行すると完了した部分は再利用されます。時間がかかりすぎる／タイムアウトする場合は、設定の「接続先を診断」で文脈長と速さを確認してください。この画面を閉じても生成は続きます。"}));
   return w;
 }
 function fmtDur(s){ s=Math.max(0,Math.round(s)); return s<90 ? s+"秒" : s<5400 ? Math.round(s/60)+"分" : (Math.round(s/360)/10)+"時間"; }
@@ -2473,6 +2523,11 @@ function reportEl(rep){
   if(st.docs) meta.push("外部資料の抜粋 "+st.docs+"件");
   if(st.failed_chunks) meta.push("⚠ 部分要約の失敗 "+st.failed_chunks+"チャンク（内容に反映されず。再試行 "+(st.retries||0)+"回）");
   if(st.truncated) meta.push("⚠ 文脈長の都合でメモを一部省略");
+  if(st.fallback) meta.push("⚠ 最終段の文章化に失敗（抽出した要点を掲載。同じ条件で再実行すると最終段だけやり直します）");
+  else if(st.sections_failed && st.sections_failed.length) meta.push("⚠ 生成できなかった見出し "+st.sections_failed.length+"件");
+  if(st.sectioned) meta.push("見出しごとに分けて生成"+(st.final_reason?"（"+st.final_reason+"）":""));
+  if(st.continued) meta.push("続きを書かせた回数 "+st.continued);
+  if(st.cached_steps) meta.push("再利用 "+st.cached_steps+"段");
   if(st.elapsed_s) meta.push("所要 "+fmtDur(st.elapsed_s));
   if(rep.model) meta.push(rep.model);
   w.append(el("div",{class:"rpt__meta",text:meta.join(" ／ ")}));
