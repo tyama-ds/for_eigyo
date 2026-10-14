@@ -158,7 +158,14 @@ class EdgeWorker(Worker):
         except Exception as e:  # noqa: BLE001
             raise BridgeError(f"{self.id}: 入力欄が見つかりません（ログイン画面のままの可能性）: "
                               f"url={_safe_url(self.driver)} {e}") from e
-        time.sleep(1.0)
+        # 読み込み直後にページが自分でタブを開き直すことがあるので、少し待ってもう一度 Copilot のタブへ寄せる
+        time.sleep(2.0)
+        self._focus_chat_window()
+        try:
+            n = len(self.driver.window_handles)
+        except Exception:  # noqa: BLE001
+            n = -1
+        self._log(f"チャット画面の準備完了 tabs={n} url={_safe_url(self.driver)}")
 
     def _type(self, editor, text: str) -> None:
         """入力欄に本文を入れる。CDP insertText → だめなら send_keys（改行は Shift+Enter）。"""
