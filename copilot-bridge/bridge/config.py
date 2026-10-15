@@ -43,8 +43,12 @@ class Config:
     driver_path: str = r"C:\Driver\edgedriver_win32\msedgedriver.exe"
     # ウインドウごとの Edge プロファイル置き場（空なら %LOCALAPPDATA%\copilot-bridge\profiles）
     profile_dir: str = ""
-    # Edge の起動方式。auto: separate（専用プロファイル）→ temp（プロファイル指定なし）→ bare（素の起動）の順に試す
+    # Edge の起動方式。auto: separate（専用プロファイル）→ temp（プロファイル指定なし）→ bare（素の起動）
+    # → manager（Selenium Manager が Edge の版に合う msedgedriver を取得）の順に試す
     profile_mode: str = "auto"
+    # 文字入力の方式。auto: js（execCommand）→ paste（Ctrl+V）→ keys（1 行ずつ）。cdp は DevTools プロトコル
+    # （社内ポリシーで接続切れを招くことがあるため既定では使わない）
+    input_mode: str = "auto"
     chat_url: str = "https://m365.cloud.microsoft/chat/?auth=2"
     # 起動後、入力欄が出るまで待つ上限（SSO が通らず手でログインする時間を含む）
     login_timeout_sec: float = 300.0

@@ -4,7 +4,7 @@
   "path": "copilot-bridge/",
   "summary": "M365 Copilot のチャット画面を OpenAI 互換 API に見せかける中継サーバ。Codex CLI などのエージェントを Copilot で動かし、orrery のようなハーネスから複数エージェントを並列に使うために Edge を複数ウインドウで操作する。",
   "status": "active",
-  "phase": "実機試験中（Edge 起動と SSO は到達。次は API 1 往復と形式・並列の確認）",
+  "phase": "実機試験中（API 1 往復で接続切れ。原因候補すべてに対処した版を検証待ち）",
   "progress": 25,
   "started": "2026-10-14",
   "version": "0.1.0",
@@ -55,12 +55,24 @@
     "Copilot の文字数上限と、エージェント CLI の長いシステムプロンプト・ツール定義の相性",
     "1 往復 10〜60 秒。作業 1 件に数十分かかる前提",
     "利用制限はアカウント単位でウインドウを増やしても上限は増えない",
-    "UI 改定でセレクタが壊れる（config.selectors で差し替え）"
+    "UI 改定でセレクタが壊れる（config.selectors で差し替え）",
+    "Copilot ページが SSO 経由で別タブに移る・Edge との接続が切れることがある（自動再起動で回復するが会話は作り直し）"
   ],
   "log": [
     {
+      "date": "2026-10-15",
+      "summary": "接続切れの原因候補に同時対処: 文字入力から CDP を外し js（execCommand）→ 貼り付け → send_keys に変更、Edge/msedgedriver の版表示と警告、Selenium Manager による起動方式、iframe 内の入力欄の探索、送信前の入力欄の取り直し",
+      "ref": "#68"
+    },
+    {
       "date": "2026-10-14",
-      "summary": "実機で server.py が Edge 2 ウインドウとも Copilot チャット画面に到達（専用プロファイル・SSO とも可）。probe はサーバとプロファイルを取り合わないよう別置き場にし、起動失敗時の案内を追加"
+      "summary": "実機の API 1 往復で \"not connected to DevTools\"（Edge との接続切れ）。操作前の生存確認と自動再起動（サーバは会話を作り直して 1 回やり直す）、複数タブ時の Copilot タブへの切り替え、段階ごとのログを追加",
+      "ref": "#68"
+    },
+    {
+      "date": "2026-10-14",
+      "summary": "実機で server.py が Edge 2 ウインドウとも Copilot チャット画面に到達（専用プロファイル・SSO とも可）。probe はサーバとプロファイルを取り合わないよう別置き場にし、起動失敗時の案内を追加",
+      "ref": "#68"
     },
     {
       "date": "2026-10-14",
@@ -78,5 +90,5 @@
       "ref": "#65"
     }
   ],
-  "updated": "2026-10-14"
+  "updated": "2026-10-15"
 }

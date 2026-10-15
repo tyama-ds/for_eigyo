@@ -22,6 +22,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+for _stream in (sys.stdout, sys.stderr):  # Windows コンソールで出せない文字があっても落ちない
+    try:
+        _stream.reconfigure(errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 from bridge.config import load_config  # noqa: E402
 from bridge.edge import EdgeWorker  # noqa: E402
 from bridge.protocol import normalize_message, parse_reply, render_delta, render_opening  # noqa: E402
@@ -190,8 +196,11 @@ def main(argv=None):
     p.add_argument("--config", default=str(Path(__file__).resolve().parents[1] / "config.json"))
     p.add_argument("--driver-path", dest="driver_path")
     p.add_argument("--chat-url", dest="chat_url")
-    p.add_argument("--profile-mode", dest="profile_mode", choices=["auto", "separate", "temp", "bare"],
-                   help="Edge の起動方式（既定 auto: separate→temp→bare の順に試す）")
+    p.add_argument("--profile-mode", dest="profile_mode",
+                   choices=["auto", "separate", "temp", "bare", "manager"],
+                   help="Edge の起動方式（既定 auto: separate→temp→bare→manager の順に試す）")
+    p.add_argument("--input-mode", dest="input_mode", choices=["auto", "js", "paste", "keys", "cdp"],
+                   help="文字入力の方式（既定 auto: js→paste→keys）")
     sub = p.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("login")
     s.add_argument("--windows", type=int, default=1)
@@ -204,7 +213,7 @@ def main(argv=None):
     s.add_argument("--windows", type=int, default=3)
     a = p.parse_args(argv)
     cfg = load_config(a.config, {"driver_path": a.driver_path, "chat_url": a.chat_url,
-                                 "profile_mode": a.profile_mode})
+                                 "profile_mode": a.profile_mode, "input_mode": a.input_mode})
     # サーバ（server.py）の Edge と同じプロファイルを取り合わないよう、試験は別の置き場を使う
     # （同じ --user-data-dir を 2 つ目の Edge が開くと "Chrome instance exited" で即終了する）
     cfg.profile_dir = str(cfg.resolved_profile_dir() / "probe")
