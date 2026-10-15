@@ -22,6 +22,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+for _stream in (sys.stdout, sys.stderr):  # Windows コンソールで出せない文字があっても落ちない
+    try:
+        _stream.reconfigure(errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 from bridge.config import load_config  # noqa: E402
 from bridge.edge import EdgeWorker  # noqa: E402
 from bridge.protocol import normalize_message, parse_reply, render_delta, render_opening  # noqa: E402

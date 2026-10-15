@@ -24,11 +24,22 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+# Windows のコンソール（cp932 / cp1252）で出せない文字があっても落ちないようにする
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 from bridge import __version__  # noqa: E402
 from bridge.config import load_config  # noqa: E402
 from bridge.pool import BridgeError, WorkerPool, WorkerRestarted  # noqa: E402
 from bridge.protocol import normalize_message, parse_reply, render_delta, render_opening  # noqa: E402
 from bridge.session import SessionStore  # noqa: E402
+
+
+class BadRequest(ValueError):
+    """要求の形が不正（HTTP 400）。"""
 
 
 class Bridge:
@@ -53,7 +64,7 @@ class Bridge:
     def complete(self, body: dict) -> dict:
         messages = body.get("messages") or []
         if not isinstance(messages, list) or not messages:
-            raise ValueError("messages が空です")
+            raise BadRequest("messages が空です")
         tools = body.get("tools") or []
         session, norm, delta = self.store.resolve(messages)
         with session.lock:
@@ -171,7 +182,7 @@ def make_handler(bridge: Bridge):
                 return self._error(400, f"JSON を読めません: {e}", "invalid_request_error")
             try:
                 result = bridge.complete(body)
-            except ValueError as e:
+            except BadRequest as e:
                 return self._error(400, str(e), "invalid_request_error")
             except BridgeError as e:
                 return self._error(503, str(e))
