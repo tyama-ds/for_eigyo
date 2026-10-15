@@ -241,7 +241,9 @@ def main(argv=None):
     p.add_argument("--windows", type=int)
     p.add_argument("--driver-path", dest="driver_path")
     p.add_argument("--chat-url", dest="chat_url")
-    p.add_argument("--profile-mode", dest="profile_mode", choices=["auto", "separate", "temp", "bare"])
+    p.add_argument("--profile-mode", dest="profile_mode",
+                   choices=["auto", "separate", "temp", "bare", "manager"])
+    p.add_argument("--input-mode", dest="input_mode", choices=["auto", "js", "paste", "keys", "cdp"])
     p.add_argument("--log-dir", dest="log_dir")
     a = p.parse_args(argv)
     cfg = load_config(a.config, {k: v for k, v in vars(a).items() if k != "config"})
