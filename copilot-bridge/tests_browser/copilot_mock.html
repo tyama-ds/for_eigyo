@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><title>Copilot mock</title>
+<!-- M365 Copilot のチャット画面を模したページ。edge.py の画面操作（入力・送信・完了待ち・読み取り）を
+     実際の Copilot 無しで通すためのもの。セレクタは bridge/config.py の DEFAULT_SELECTORS と同じ。 -->
+<style>
+body{font-family:sans-serif;margin:20px}
+#log>div{border:1px solid #ccc;margin:6px 0;padding:6px;white-space:pre-wrap}
+#m365-chat-editor-target-element{border:1px solid #888;min-height:40px;padding:6px}
+</style></head><body>
+<!-- 会話一覧（Fluent の SplitNavItem を模したもの）。「…」→「削除」→ 確認ダイアログで #deleted が 1 になる -->
+<nav><div class="fui-SplitNavItem r1abc fai-SplitCopilotNavItem" aria-current="page">
+  <button class="fui-SplitNavItem__navItem">現在の会話</button>
+  <button class="fui-SplitNavItem__actionButton" aria-label="その他のオプション"
+          onclick="document.getElementById('menu').style.display='block'">…</button>
+</div></nav>
+<div id="menu" role="menu" style="display:none">
+  <div role="menuitem" class="fui-MenuItem" onclick="document.getElementById('dlg').style.display='block';this.parentNode.style.display='none'">削除</div>
+</div>
+<div id="dlg" role="dialog" style="display:none">本当に削除しますか?
+  <button onclick="document.getElementById('deleted').textContent='1';this.parentNode.style.display='none'">削除</button>
+</div>
+<span id="deleted">0</span>
+<div id="log"></div>
+<button id="stop" aria-label="生成を停止する" style="display:none">■</button>
+<div id="m365-chat-editor-target-element" contenteditable="true"></div>
+<script>
+// Enter（Shift 無し）で送信。1.5 秒「生成中」→ 回答を追加する。
+// 回答: 入力の長さ・先頭・末尾の echo と、ツール結果が来ていなければツール呼び出し 1 件、来ていれば最終回答
+var turn = 0;
+var editor = document.getElementById('m365-chat-editor-target-element');
+editor.addEventListener('keydown', function (e) {
+  if (e.key !== 'Enter' || e.shiftKey) return;
+  e.preventDefault();
+  var text = editor.innerText.replace(/\n$/, '');
+  editor.innerHTML = '';
+  turn += 1;
+  var log = document.getElementById('log');
+  var u = document.createElement('div'); u.className = 'user';
+  u.textContent = '[user ' + turn + '] ' + text.slice(0, 60);
+  log.appendChild(u);
+  var stop = document.getElementById('stop');
+  stop.style.display = 'inline-block';
+  setTimeout(function () {
+    var reply = 'turn=' + turn + ' len=' + text.length + ' head=' + text.slice(0, 6) + ' tail=' + text.slice(-6) + '\n' +
+      (text.indexOf('<tool_result name=') >= 0 ? '完了しました。' :
+        '<tool_call>\n{"name": "read_file", "arguments": {"path": "a.txt"}}\n</tool_call>');
+    // 実機に近い構造: 回答ごとの入れ物の中に本文とボタン類
+    var msg = document.createElement('div'); msg.className = 'assistant-message';
+    var r = document.createElement('div'); r.setAttribute('data-testid', 'chat-message-content');
+    r.textContent = reply;
+    var bar = document.createElement('div'); bar.setAttribute('role', 'toolbar');
+    var b = document.createElement('button'); b.setAttribute('aria-label', '応答のコピー'); b.textContent = 'copy';
+    b.onclick = function () { try { navigator.clipboard.writeText(reply); } catch (err) {} };
+    var like = document.createElement('button'); like.textContent = 'いいね';
+    bar.appendChild(b); bar.appendChild(like);
+    msg.appendChild(r); msg.appendChild(bar); log.appendChild(msg);
+    stop.style.display = 'none';
+  }, 1500);
+});
+</script></body></html>

@@ -1,0 +1,147 @@
+{
+  "slug": "copilot-bridge",
+  "name": "Copilot Bridge",
+  "path": "copilot-bridge/",
+  "summary": "M365 Copilot のチャット画面を OpenAI 互換 API に見せかける中継サーバ。Codex CLI などのエージェントを Copilot で動かし、orrery のようなハーネスから複数エージェントを並列に使うために Edge を複数ウインドウで操作する。",
+  "status": "active",
+  "phase": "実機で擬似エージェントの作業完遂に成功。次は Codex CLI の接続",
+  "progress": 50,
+  "started": "2026-10-14",
+  "version": "0.1.0",
+  "ports": [
+    8800
+  ],
+  "ci": true,
+  "portal": false,
+  "stack": [
+    "Python 標準ライブラリ",
+    "Selenium（Edge）"
+  ],
+  "milestones": [
+    {
+      "title": "構想（会話の見分け・ツール呼び出しの文章化・複数ウインドウ）",
+      "state": "done",
+      "date": "2026-10-14"
+    },
+    {
+      "title": "骨格: OpenAI 互換サーバ・session/protocol/pool・fake 裏方・テスト・CI・模擬画面でのブラウザ試験",
+      "state": "done",
+      "date": "2026-10-14"
+    },
+    {
+      "title": "実機試験: SSO・文脈の継続・並列・<tool_call> 形式の遵守と作業完遂（tools/probe.py）",
+      "state": "done",
+      "date": "2026-10-16"
+    },
+    {
+      "title": "実機で API 1 往復（入力→送信→回答→JSON）",
+      "state": "done",
+      "date": "2026-10-16"
+    },
+    {
+      "title": "Codex CLI から短い作業を 1 つ完遂",
+      "state": "todo"
+    },
+    {
+      "title": "agent-workbench から Copilot を使って作業を 1 つ完遂",
+      "state": "todo"
+    },
+    {
+      "title": "長いシステムプロンプト・ツール定義の圧縮",
+      "state": "todo"
+    },
+    {
+      "title": "orrery からサブエージェント込みで運用",
+      "state": "todo"
+    }
+  ],
+  "next": [
+    "agent-workbench の Local プロファイルに bridge を設定し、文章だけの依頼 → ファイル編集の依頼の順に試す（タイムアウト 900 秒以上、同時数 = windows）",
+    "Codex CLI の接続（~/.codex/config.toml の model_provider、wire_api、WSL2 からの到達）を確認し、短い作業を 1 つ完遂",
+    "probe cleanup で会話の削除が通るか確認し、通れば delete_chat_on_close を有効化",
+    "followup --read-mode dom / --input-mode paste で読み取り・入力方式を確定（selectors.response）",
+    "送る前の伏せ字層（固有名詞・識別子の仮名化）と、機微な作業のローカル LLM への振り分け"
+  ],
+  "risks": [
+    "Copilot 画面の自動操作・コード送信の社内ルール確認が未了",
+    "Copilot の文字数上限と、エージェント CLI の長いシステムプロンプト・ツール定義の相性",
+    "1 往復 10〜60 秒。作業 1 件に数十分かかる前提",
+    "利用制限はアカウント単位でウインドウを増やしても上限は増えない",
+    "UI 改定でセレクタが壊れる（config.selectors で差し替え）",
+    "Copilot ページが SSO 経由で別タブに移る・Edge との接続が切れることがある（自動再起動で回復するが会話は作り直し）",
+    "Copilot は自前の実行環境で作業しようとしたり、「無いツールを架空に呼べない」と断ったりして <tool_call> を出さないことがある（オペレーターへの手順書という枠組みと言い直しで対処中）"
+  ],
+  "log": [
+    {
+      "date": "2026-10-16",
+      "summary": "agent-workbench（tyama-ds/agent-workbench）との接続要件を整理。workbench は未知のツール名・壊れた引数の応答を丸ごと拒否するため、bridge で操作名・arguments を検証して言い直させ、残れば弾く（正しい操作が無ければ 503 で再試行可能に）。X-Conversation-Id ヘッダで会話を結びつける対応を追加。README に設定値と送る量の目安を記載"
+    },
+    {
+      "date": "2026-10-16",
+      "summary": "実機で入力方式 paste（Ctrl+V）が日本語を正しく通すことを確認。read_mode=dom が selectors.response 不一致で読めなかったため、「応答のコピー」ボタンの祖先から回答 1 件分の本文を自動で見つける予備手段を追加。画面読みで <tool_call> タグが消えても裸の JSON を操作として読む"
+    },
+    {
+      "date": "2026-10-16",
+      "summary": "実機の toolcall 試験が成功: オペレーター枠組みで Copilot が言い直しなしに 4 往復・5 回の操作（一覧→読む×3→書く）を正しい書式で出し、README の合言葉を util.py に追記して作業完遂（1 往復 9〜17 秒）。probe の共通オプションをサブコマンドの後ろでも書けるように修正"
+    },
+    {
+      "date": "2026-10-16",
+      "summary": "実機の toolcall で Copilot が「中継ツールは利用できないため架空の <tool_call> は出力できない」と断った（言い直しても同じ）。ツール呼び出しではなく「オペレーター（人間と手元のスクリプト）への手順書を書式どおりに書く」役割に規則文と言い直しを書き換え、断り文句も言い直しの対象に追加。タグ無しの ```json ブロックも操作として読む。英語版の規則文（prompt_lang=en）を追加。入力後に日本語が ? に化けていないか確認して入力方式を切り替える"
+    },
+    {
+      "date": "2026-10-16",
+      "summary": "Edge を画面なしで動かす headless 設定（--headless）を追加。headless では read_mode を dom/auto にする"
+    },
+    {
+      "date": "2026-10-16",
+      "summary": "回答の読み取りで使う Windows のクリップボードを退避・復元するようにし、クリップボードを使わない読み取り方式 read_mode=dom を追加（selectors.response が実機で正しいことが前提）"
+    },
+    {
+      "date": "2026-10-16",
+      "summary": "会話削除のセレクタを実機の DOM（Fluent SplitNavItem の行、role=menuitem の削除）に合わせ、ホバー→「…」→削除→確認の手順にした。模擬画面で検証"
+    },
+    {
+      "date": "2026-10-16",
+      "summary": "Copilot 側の履歴が汚れる対策: 会話ごとの全文を logs/sessions/*.md に既定で保存、tools/summarize.py で Copilot に要約させて保存（--delete-after で元を削除）、使い終えた会話を画面操作で削除する delete_chat_on_close（セレクタ未確認のため既定無効、probe cleanup で確認）"
+    },
+    {
+      "date": "2026-10-16",
+      "summary": "実機試験: followup OK、parallel 3 ウインドウ OK。toolcall は Copilot が <tool_call> を出さず自前の実行環境（/mnt/data）で探して「無い」と答え 1 往復で終了（23 秒）。対策として規則文に「自分ではアクセスできない・必ず依頼する」と実ツール名の例を追加し、自前で探した回答には言い直し（nudge、既定 2 回）を送る"
+    },
+    {
+      "date": "2026-10-16",
+      "summary": "実機（Windows + Edge + M365 Copilot）で API 1 往復が成功（入力→送信→回答→JSON）。接続切れの原因は CDP 入力と確定。PowerShell の文字化け（????）対策に tools/ask.py を追加、受信文字をコンソールに表示"
+    },
+    {
+      "date": "2026-10-15",
+      "summary": "接続切れの原因候補に同時対処: 文字入力から CDP を外し js（execCommand）→ 貼り付け → send_keys に変更、Edge/msedgedriver の版表示と警告、Selenium Manager による起動方式、iframe 内の入力欄の探索、送信前の入力欄の取り直し",
+      "ref": "#68"
+    },
+    {
+      "date": "2026-10-14",
+      "summary": "実機の API 1 往復で \"not connected to DevTools\"（Edge との接続切れ）。操作前の生存確認と自動再起動（サーバは会話を作り直して 1 回やり直す）、複数タブ時の Copilot タブへの切り替え、段階ごとのログを追加",
+      "ref": "#68"
+    },
+    {
+      "date": "2026-10-14",
+      "summary": "実機で server.py が Edge 2 ウインドウとも Copilot チャット画面に到達（専用プロファイル・SSO とも可）。probe はサーバとプロファイルを取り合わないよう別置き場にし、起動失敗時の案内を追加",
+      "ref": "#68"
+    },
+    {
+      "date": "2026-10-14",
+      "summary": "実機で Edge が起動直後に終了（Chrome instance exited）。起動を separate→temp→bare の 3 段構えにし、probe/server に --profile-mode を追加",
+      "ref": "#65"
+    },
+    {
+      "date": "2026-10-14",
+      "summary": "模擬 Copilot 画面 × Chromium で edge.py の操作を検証（2 万字送信 8 秒、続き送信、2 ウインドウ並列で取り違えなし）。クリップボード読み取りの固まり（readText の権限待ち・スレッドからの tkinter）を修正、tests_browser/ を追加",
+      "ref": "#65"
+    },
+    {
+      "date": "2026-10-14",
+      "summary": "初版: 構想と骨格（OpenAI 互換サーバ、会話の差分送信、<tool_call> 変換、複数ウインドウの割り当て、Edge 担当、fake 裏方、実機試験スクリプト、テスト、CI）",
+      "ref": "#65"
+    }
+  ],
+  "updated": "2026-10-16"
+}

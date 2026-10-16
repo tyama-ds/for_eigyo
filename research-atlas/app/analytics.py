@@ -131,8 +131,9 @@ def _normalize_papers(papers, first_year, last_year, notices):
                       "affiliations", "references", "references_status"):
             if field in raw:
                 normalized[field] = deepcopy(raw[field])
-        if isinstance(raw.get("date_enrichment"), dict):
-            normalized["date_enrichment"] = deepcopy(raw["date_enrichment"])
+        for field in ("date_enrichment", "scopus_date_enrichment"):
+            if isinstance(raw.get(field), dict):
+                normalized[field] = deepcopy(raw[field])
         publication_date = normalize_paper_date(raw)
         date_notices.update(publication_date.pop("warnings", []))
         normalized.update(publication_date)

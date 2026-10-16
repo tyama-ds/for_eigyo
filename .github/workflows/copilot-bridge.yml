@@ -1,0 +1,29 @@
+# copilot-bridge のテスト（標準ライブラリのみ・fake 裏方でブラウザ不要）。
+name: copilot-bridge tests
+
+on:
+  push:
+    paths: ["copilot-bridge/**", ".github/workflows/copilot-bridge.yml"]
+  pull_request:
+    paths: ["copilot-bridge/**", ".github/workflows/copilot-bridge.yml"]
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        working-directory: copilot-bridge
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compileall
+        run: python -m compileall -q bridge server.py tools tests
+      - name: Unit + API tests
+        run: python -m unittest discover -s tests -v
