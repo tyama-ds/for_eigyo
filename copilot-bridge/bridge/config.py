@@ -19,10 +19,17 @@ DEFAULT_SELECTORS = {
     "copy_button": "button[aria-label='応答のコピー']",
     # コピーが使えないときに本文を直接読む要素（未確認。実機で確認して直す）
     "response": "[data-testid='chat-message-content'], [data-tid='chat-message-content']",
-    # 会話の削除（未確認。先頭が // なら XPath、それ以外は CSS）
-    "chat_menu_button": "//button[@aria-label='その他のオプション' or @aria-label='その他' or contains(@aria-label,'オプション')]",
-    "delete_menu_item": "//*[@role='menuitem'][contains(., '削除')]",
-    "confirm_delete": "//button[contains(., '削除')]",
+    # 会話の削除（先頭が // なら XPath、それ以外は CSS）。実機の DOM: 会話一覧の 1 行は Fluent の
+    # SplitNavItem（class に SplitNavItem を含む div）、削除は role="menuitem" の div（class に MenuItem）
+    # 今開いている会話の行（選択状態が付いたもの。無ければ先頭 = 最新）
+    "chat_item": "//*[contains(@class,'SplitNavItem')][.//*[@aria-current] or @aria-current or @aria-selected='true' or contains(@class,'selected')] | (//*[contains(@class,'SplitNavItem')])[1]",
+    # 行の中の「…」ボタン（行に対する相対 XPath。ホバーしてから押す）
+    "chat_menu_button": ".//button[last()]",
+    "delete_menu_item": "//*[@role='menuitem'][contains(., '削除') or contains(., 'Delete')]",
+    # 確認ダイアログのボタン（出なければ省略）
+    "confirm_delete": "//*[@role='dialog' or @role='alertdialog']//button[contains(., '削除') or contains(., 'Delete')]",
+    # 会話一覧が畳まれているときに開くボタン（任意）
+    "history_button": "//button[contains(@aria-label,'ナビゲーション') or contains(@aria-label,'履歴') or contains(@aria-label,'チャット')]",
 }
 
 # 回答にこれらが含まれていたら、その担当は制限や障害に当たったとみなす

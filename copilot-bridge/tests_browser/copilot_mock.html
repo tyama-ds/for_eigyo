@@ -7,6 +7,19 @@ body{font-family:sans-serif;margin:20px}
 #log>div{border:1px solid #ccc;margin:6px 0;padding:6px;white-space:pre-wrap}
 #m365-chat-editor-target-element{border:1px solid #888;min-height:40px;padding:6px}
 </style></head><body>
+<!-- 会話一覧（Fluent の SplitNavItem を模したもの）。「…」→「削除」→ 確認ダイアログで #deleted が 1 になる -->
+<nav><div class="fui-SplitNavItem r1abc fai-SplitCopilotNavItem" aria-current="page">
+  <button class="fui-SplitNavItem__navItem">現在の会話</button>
+  <button class="fui-SplitNavItem__actionButton" aria-label="その他のオプション"
+          onclick="document.getElementById('menu').style.display='block'">…</button>
+</div></nav>
+<div id="menu" role="menu" style="display:none">
+  <div role="menuitem" class="fui-MenuItem" onclick="document.getElementById('dlg').style.display='block';this.parentNode.style.display='none'">削除</div>
+</div>
+<div id="dlg" role="dialog" style="display:none">本当に削除しますか?
+  <button onclick="document.getElementById('deleted').textContent='1';this.parentNode.style.display='none'">削除</button>
+</div>
+<span id="deleted">0</span>
 <div id="log"></div>
 <button id="stop" aria-label="生成を停止する" style="display:none">■</button>
 <div id="m365-chat-editor-target-element" contenteditable="true"></div>
