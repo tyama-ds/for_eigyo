@@ -133,6 +133,18 @@ def start_mock_llm():
                     err = "Unsupported value: 'temperature' does not support 0.2 with this model. Only the default (1) value is supported."
                 elif "reasoning_effort" in body and model == "strict-noeffort":
                     err = "Unrecognized request argument supplied: reasoning_effort"
+                elif model == "strict-nosystem" and body.get("messages") and body["messages"][0].get("role") == "system":
+                    err = "Unsupported value: 'messages[0].role' does not support 'system' with this model."
+                elif "verbosity" in body and model == "strict-noverb":
+                    err = "Unrecognized request argument supplied: verbosity"
+                if not err and model == "strict-length" and int(body.get("max_completion_tokens") or 0) < 8192:
+                    data = json.dumps({"choices": [{"message": {"role": "assistant", "content": ""}, "finish_reason": "length"}]}).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
                 if err:
                     data = json.dumps({"error": {"message": err, "type": "invalid_request_error", "param": None, "code": "unsupported_parameter"}}).encode()
                     self.send_response(400)
@@ -141,7 +153,34 @@ def start_mock_llm():
                     self.end_headers()
                     self.wfile.write(data)
                     return
-            if known and "/chat/completions" in self.path:
+            if known and "/chat/completions" in self.path and model.startswith("responses-only"):
+                data = json.dumps({"error": {"message": "This model is only supported in v1/responses and not in v1/chat/completions.", "type": "invalid_request_error"}}).encode()
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
+            if known and self.path.split("?")[0].endswith("/responses"):
+                # Responses API: instructions + input（input_text / input_image）→ output の message / output_text
+                msgs = []
+                if body.get("instructions"):
+                    msgs.append({"role": "system", "content": body["instructions"]})
+                for it in body.get("input") or []:
+                    parts = it.get("content") if isinstance(it.get("content"), list) else [{"type": "input_text", "text": str(it.get("content", ""))}]
+                    conv = []
+                    for p in parts:
+                        if p.get("type") in ("input_text", "output_text"):
+                            conv.append({"type": "text", "text": p.get("text", "")})
+                        elif p.get("type") == "input_image":
+                            conv.append({"type": "image_url", "image_url": {"url": p.get("image_url", "")}})
+                    msgs.append({"role": it.get("role", "user"), "content": conv})
+                if model == "responses-short" and int(body.get("max_output_tokens") or 0) < 8192:
+                    out = {"status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"}, "output": []}
+                else:
+                    out = {"status": "completed", "output": [{"type": "reasoning", "summary": []},
+                                                              {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": chat_response(msgs)}]}]}
+            elif known and "/chat/completions" in self.path:
                 out = {"choices": [{"message": {"role": "assistant", "content": chat_response(body.get("messages", []))}}]}
             elif known and "/embeddings" in self.path:
                 inputs = body.get("input") or []

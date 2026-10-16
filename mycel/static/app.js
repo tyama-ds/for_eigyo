@@ -44,7 +44,7 @@
   const fail = (e) => toast(e.message || String(e), true);
   const titleOf = (p) => p.split("/").pop().replace(/\.md$/i, "");
   const isDoc = (p) => p.startsWith("@") || !/\.(md|markdown)$/i.test(p);
-  const CLIENT_VERSION = "0.6.4";          // サーバの __version__ と合わせる（tests/test_api が確認）
+  const CLIENT_VERSION = "0.6.6";          // サーバの __version__ と合わせる（tests/test_api が確認）
   const FT = { word: "W", excel: "X", powerpoint: "P", pdf: "PDF", email: "✉", csv: "CSV", html: "HTML", text: "TXT", code: "{ }", note: "MD", image: "IMG" };
   const GRP_NAME = { word: "Word", excel: "Excel", powerpoint: "PowerPoint", pdf: "PDF", email: "メール", csv: "CSV", html: "HTML", text: "テキスト", code: "データ", image: "画像" };
   const fmtDate = (t) => { if (!t) return "—"; const d = new Date(t * 1000), now = new Date(); return d.getFullYear() === now.getFullYear() ? d.toLocaleDateString("ja-JP", { month: "numeric", day: "numeric" }) : d.toLocaleDateString("ja-JP", { year: "numeric", month: "numeric", day: "numeric" }); };
@@ -2751,6 +2751,8 @@
         <label></label><label class="ck"><input type="checkbox" id="cExtShow"${cfg.ext_show_switch ? " checked" : ""}> 質問欄に「🏠 ローカル ／ ☁ 外部 API」の切り替えを表示する（既定: 非表示）</label>
         <div class="help">非表示のあいだ、質問欄は常にローカル LLM に送ります。外部 API を使うときだけオンにしてください（「既定の接続先」を外部にした場合は表示に関係なく外部へ送られます）。</div>
         <label for="cExtProv">接続方式</label><select id="cExtProv"><option value="openai"${cfg.ext_provider !== "azure" ? " selected" : ""}>OpenAI API</option><option value="azure"${cfg.ext_provider === "azure" ? " selected" : ""}>Azure OpenAI</option></select>
+        <label for="cExtStyle">API の形式</label><select id="cExtStyle"><option value="chat"${cfg.ext_api_style !== "responses" ? " selected" : ""}>Chat Completions（/chat/completions）</option><option value="responses"${cfg.ext_api_style === "responses" ? " selected" : ""}>Responses API（/responses）</option></select>
+        <div class="help">gpt-5 系は両方で使えます。Responses API では上限を <code>max_output_tokens</code>、推論の深さを <code>reasoning.effort</code>、回答の長さを <code>text.verbosity</code>、system を <code>instructions</code> として送ります。Chat Completions で「Responses API でしか使えない」と返されたモデルは自動で切り替えます。</div>
         <label for="cExtUrl">Base URL</label><input id="cExtUrl" type="text" value="${v("ext_base_url")}" placeholder="https://api.openai.com/v1">
         <div class="help">https:// のみ。社内・ローカルのアドレスは登録できません（ローカル LLM の欄へ）。</div>
         <label for="cExtKey">API キー</label><input id="cExtKey" type="password" autocomplete="off" placeholder="${cfg.has_ext_api_key ? "設定済み（変更する場合だけ入力）" : "sk-…"}">
@@ -2758,8 +2760,11 @@
         <label for="cExtModel" id="extModelLbl">モデル</label><div class="inrow"><input id="cExtModel" type="text" list="dlExtModels" value="${v("ext_model")}" placeholder="例: gpt-4o-mini"><button class="btn sm" id="cExtList" type="button">一覧を取得</button></div><datalist id="dlExtModels"></datalist>
         <div class="help" id="cExtListRes"></div>
         <label for="cExtVer" class="azx">API バージョン</label><input id="cExtVer" class="azx" type="text" value="${v("ext_api_version")}">
+        <div class="help azx">Azure の推論モデル（o 系・gpt-5 系）は 2024-12-01-preview 以降が必要です。古い版が入っていても、推論モデルには自動で 2025-04-01-preview を使います。</div>
         <label for="cExtEffort">推論の深さ</label><select id="cExtEffort">${[["auto", "モデルの既定（送らない）"], ["minimal", "minimal（gpt-5 系のみ・最速）"], ["low", "low（推奨）"], ["medium", "medium"], ["high", "high（遅い・高コスト）"]].map(([k, l]) => `<option value="${k}"${(cfg.ext_reasoning_effort || "low") === k ? " selected" : ""}>${l}</option>`).join("")}</select>
         <div class="help">o1 / o3 / o4-mini / gpt-5 / gpt-5-mini などの推論モデルに <code>reasoning_effort</code> として送ります。これらのモデルには temperature を送らず、上限は <code>max_completion_tokens</code> で送ります（gpt-4o などは temperature あり）。モデルが受け付けないパラメータは API の返事を見て自動で外します。</div>
+        <label for="cExtVerb">回答の長さ（gpt-5 系）</label><select id="cExtVerb">${[["", "モデルの既定（送らない）"], ["low", "low（短く）"], ["medium", "medium"], ["high", "high（詳しく）"]].map(([k, l]) => `<option value="${k}"${(cfg.ext_verbosity || "") === k ? " selected" : ""}>${l}</option>`).join("")}</select>
+        <div class="help">gpt-5 / gpt-5-mini / gpt-5-nano に <code>verbosity</code> として送ります。他のモデルには送りません。</div>
         <label for="cExtProxy">プロキシ URL</label><input id="cExtProxy" type="text" value="${v("ext_proxy_url")}" placeholder="例: http://proxy.example.co.jp:8080（空欄なら環境変数 HTTPS_PROXY）">
         <div class="help">外部 API への通信はこのプロキシを必ず通します。どちらも無いときは送信しません。</div>
         <label>既定の接続先</label><div><label class="ck"><input type="radio" name="cBk" value="local"${cfg.llm_backend !== "external" ? " checked" : ""}> 🏠 ローカル LLM（推奨）</label><br><label class="ck"><input type="radio" name="cBk" value="external"${cfg.llm_backend === "external" ? " checked" : ""}${cfg.ext_enabled ? "" : " disabled"}> ☁ 外部 API（要約・取り込み・人物推定などすべての AI 処理が外部に送られます）</label></div>
@@ -2779,7 +2784,7 @@
         rag_pool: $("#cPool", body).value, rag_top_k: $("#cTopK", body).value, rag_rerank: $("#cRerank", body).value, rag_rerank_pool: $("#cRerankPool", body).value,
         vlm_model: $("#cVlm", body).value, attachment_folder: $("#cAttach", body).value,
         ext_enabled: $("#cExtOn", body).checked, ext_provider: $("#cExtProv", body).value, ext_base_url: $("#cExtUrl", body).value, ext_model: $("#cExtModel", body).value,
-        ext_api_version: $("#cExtVer", body).value, ext_proxy_url: $("#cExtProxy", body).value, ext_reasoning_effort: $("#cExtEffort", body).value, ext_show_switch: $("#cExtShow", body).checked, llm_backend: ($("input[name=cBk]:checked", body) || {}).value || "local",
+        ext_api_version: $("#cExtVer", body).value, ext_proxy_url: $("#cExtProxy", body).value, ext_reasoning_effort: $("#cExtEffort", body).value, ext_verbosity: $("#cExtVerb", body).value, ext_api_style: $("#cExtStyle", body).value, ext_show_switch: $("#cExtShow", body).checked, llm_backend: ($("input[name=cBk]:checked", body) || {}).value || "local",
         plugins: $$("[data-plug]", body).filter((c) => c.checked).map((c) => c.dataset.plug),
       };
       if ($("#cKey", body).value) d.api_key = $("#cKey", body).value;
@@ -2847,7 +2852,7 @@
       if (!(await saveCfg())) { out.innerHTML = ""; return; }
       try {
         const r = await api.post("/api/config/test", { backend: "external" });
-        out.innerHTML = `<div>送信先: <b>${esc(r.host || "")}</b></div><div>チャット: <span class="${r.chat.ok ? "ok" : "ng"}">${r.chat.ok ? "OK" : "失敗"}</span> ${esc(r.chat.message || "")}</div><div>${esc(r.embed.message || "")}</div>`;
+        out.innerHTML = `<div>送信先: <b>${esc(r.host || "")}</b> ・ モデル: <b>${esc(r.model || "")}</b></div><div>チャット: <span class="${r.chat.ok ? "ok" : "ng"}">${r.chat.ok ? "OK" : "失敗"}</span> ${esc(r.chat.message || "")}</div>${(r.sent || []).length ? `<div class="hint">送ったパラメータ: ${esc(r.sent.join(", "))}${(r.adjusted || []).length ? `（API の返事を見て調整: ${esc(r.adjusted.join(" → "))}）` : ""}</div>` : ""}<div>${esc(r.embed.message || "")}</div>`;
         loadExtLog();
       } catch (e) { out.innerHTML = `<span class="ng">${esc(e.message)}</span>`; }
     };

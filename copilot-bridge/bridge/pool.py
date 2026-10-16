@@ -17,6 +17,11 @@ class BridgeError(RuntimeError):
     """担当側の失敗（制限・画面の異常など）。HTTP 503 で返す。"""
 
 
+class WorkerRestarted(BridgeError):
+    """担当がブラウザを起動し直した（接続切れ）。Copilot 側の会話は失われているので、
+    呼び出し側は会話を作り直して 1 回だけやり直す。"""
+
+
 class Worker:
     """作業担当の共通インタフェース。裏方（edge / fake）は start/new_chat/send/close を実装する。"""
 

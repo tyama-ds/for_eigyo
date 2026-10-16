@@ -5,6 +5,7 @@
   python tools/probe.py toolcall --turns 8    # <tool_call> の形式を何往復守れるか
   python tools/probe.py followup              # 同じ会話の続きで文脈が保たれるか
   python tools/probe.py parallel --windows 3  # 複数ウインドウ同時で取り違え・遅れが無いか
+  python tools/probe.py cleanup               # 会話を 1 つ作って削除できるか（履歴の掃除の確認）
 
 --driver-path / --chat-url / --config は server.py と同じ。結果は JSON で標準出力に出す。
 """
@@ -22,9 +23,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+for _stream in (sys.stdout, sys.stderr):  # Windows コンソールで出せない文字があっても落ちない
+    try:
+        _stream.reconfigure(errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 from bridge.config import load_config  # noqa: E402
 from bridge.edge import EdgeWorker  # noqa: E402
-from bridge.protocol import normalize_message, parse_reply, render_delta, render_opening  # noqa: E402
+from bridge.protocol import (  # noqa: E402
+    needs_nudge, normalize_message, nudge_text, parse_reply, render_delta, render_opening,
+)
 
 FAKE_FS = {
     "README.md": "# demo\n\nこのプロジェクトは試験用です。合言葉は ORRERY-42 です。\n",
@@ -65,7 +74,8 @@ def start_workers(cfg, n: int) -> list[EdgeWorker]:
     for w in ws:
         t0 = time.time()
         w.start()
-        print(f"[{w.id}] 起動・入力欄確認 {time.time() - t0:.0f}s", file=sys.stderr)
+        print(f"[{w.id}] 起動（{w.launch_mode}）・入力欄確認 {time.time() - t0:.0f}s  url={w.driver.current_url}",
+              file=sys.stderr)
     return ws
 
 
@@ -73,7 +83,8 @@ def start_workers(cfg, n: int) -> list[EdgeWorker]:
 
 def probe_login(cfg, a):
     ws = start_workers(cfg, a.windows)
-    print(json.dumps({"ok": True, "windows": len(ws)}, ensure_ascii=False))
+    print(json.dumps({"ok": True, "windows": len(ws), "launch_mode": [w.launch_mode for w in ws],
+                      "urls": [w.driver.current_url for w in ws]}, ensure_ascii=False))
     input("ウインドウを確認したら Enter で閉じます > ")
     for w in ws:
         w.close()
@@ -95,18 +106,26 @@ def probe_long(cfg, a):
         w.close()
 
 
-def _agent_loop(w: EdgeWorker, task: str, turns: int) -> dict:
+def _agent_loop(w: EdgeWorker, task: str, turns: int, cfg_nudges: int = 2, lang: str = "ja") -> dict:
     """擬似エージェント: ツール結果を返しながら形式遵守を数える。"""
-    msgs = [normalize_message({"role": "system", "content": "あなたは小さなコード作業を行うエージェントです。必ずツールで確認してから答えてください。"}),
+    msgs = [normalize_message({"role": "system", "content": "あなたは小さなコード作業を進める担当です。内容は必ず操作の結果で確認してから答えてください。"}),
             normalize_message({"role": "user", "content": task})]
-    text = render_opening(msgs, TOOLS)
-    stats = {"turns": 0, "parsed": 0, "no_call": 0, "latency": [], "final": ""}
+    text = render_opening(msgs, TOOLS, lang=lang)
+    stats = {"turns": 0, "parsed": 0, "no_call": 0, "nudges": 0, "latency": [], "final": "", "lang": lang}
     for _ in range(turns):
         t0 = time.time()
         reply = w.send(text)
         stats["latency"].append(round(time.time() - t0, 1))
         stats["turns"] += 1
         content, calls = parse_reply(reply)
+        # サーバと同じ言い直し（自前で探して「無い」と答えたら <tool_call> で依頼させる）
+        n = 0
+        while n < cfg_nudges and needs_nudge(reply, calls, TOOLS):
+            n += 1
+            stats["nudges"] += 1
+            stats.setdefault("nudged_replies", []).append(reply[:200])
+            reply = w.send(nudge_text(lang))
+            content, calls = parse_reply(reply)
         if "<tool_call>" in reply and not calls:
             stats.setdefault("broken", []).append(reply[:300])
         if not calls:
@@ -123,14 +142,17 @@ def _agent_loop(w: EdgeWorker, task: str, turns: int) -> dict:
             results.append(normalize_message({"role": "tool", "name": c["function"]["name"],
                                               "tool_call_id": c["id"],
                                               "content": run_tool(c["function"]["name"], args)}))
-        text = render_delta(results)
+        text = render_delta(results, lang=lang)
     return stats
 
 
 def probe_toolcall(cfg, a):
     (w,) = start_workers(cfg, 1)
     try:
-        stats = _agent_loop(w, "src 配下の Python を読み、README の合言葉を src/util.py の末尾にコメントで追記してください。終わったら何をしたか報告してください。", a.turns)
+        task = ("src 配下の Python を読み、README の合言葉を src/util.py の末尾にコメントで追記してください。終わったら何をしたか報告してください。"
+                if cfg.prompt_lang == "ja" else
+                "Read the Python files under src, then append the passphrase found in README as a comment at the end of src/util.py. Finally report what you did.")
+        stats = _agent_loop(w, task, a.turns, cfg.nudge_retries, cfg.prompt_lang)
         stats["util_py"] = FAKE_FS["src/util.py"]
         print(json.dumps(stats, ensure_ascii=False, indent=1))
     finally:
@@ -183,25 +205,73 @@ def probe_parallel(cfg, a):
             w.close()
 
 
+def probe_cleanup(cfg, a):
+    """会話を 1 つ作ってから削除できるか（selectors.chat_menu_button / delete_menu_item / confirm_delete の確認）。"""
+    (w,) = start_workers(cfg, 1)
+    try:
+        w.send("これは削除試験用の会話です。「了解」とだけ答えてください。")
+        ok, why = w.delete_current_chat()
+        print(json.dumps({"deleted": ok, "error": why,
+                          "hint": "" if ok else "画面で会話のメニュー（…）→削除→確認 の各ボタンの文言を教えてください。config.json の selectors で直せます"},
+                         ensure_ascii=False, indent=1))
+        if not ok:
+            input("画面を確認したら Enter で閉じます > ")
+    finally:
+        w.close()
+
+
+def _common_options(for_sub: bool) -> argparse.ArgumentParser:
+    """共通オプション。サブコマンドの前でも後ろでも書けるよう、親パーサとして両方に付ける。
+    サブコマンド側は既定値を持たせず（SUPPRESS）、前に書いた値を上書きしないようにする。"""
+    c = argparse.ArgumentParser(add_help=False)
+    sup = argparse.SUPPRESS
+
+    def d(v):
+        return sup if for_sub else v
+
+    c.add_argument("--config", default=d(str(Path(__file__).resolve().parents[1] / "config.json")))
+    c.add_argument("--driver-path", dest="driver_path", default=d(None))
+    c.add_argument("--chat-url", dest="chat_url", default=d(None))
+    c.add_argument("--profile-mode", dest="profile_mode", default=d(None),
+                   choices=["auto", "separate", "temp", "bare", "manager"],
+                   help="Edge の起動方式（既定 auto: separate→temp→bare→manager の順に試す）")
+    c.add_argument("--input-mode", dest="input_mode", default=d(None),
+                   choices=["auto", "js", "paste", "keys", "cdp"],
+                   help="文字入力の方式（既定 auto: js→paste→keys）")
+    c.add_argument("--read-mode", dest="read_mode", default=d(None), choices=["clipboard", "dom", "auto"],
+                   help="回答の読み取り方式（既定 clipboard。dom はクリップボードを使わない）")
+    c.add_argument("--headless", dest="headless", action="store_const", const=True, default=d(None),
+                   help="Edge を画面なしで動かす（read_mode は dom 推奨）")
+    c.add_argument("--prompt-lang", dest="prompt_lang", default=d(None), choices=["ja", "en"],
+                   help="規則文の言語（既定 ja。日本語で断られるときは en を試す）")
+    return c
+
+
 def main(argv=None):
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--config", default=str(Path(__file__).resolve().parents[1] / "config.json"))
-    p.add_argument("--driver-path", dest="driver_path")
-    p.add_argument("--chat-url", dest="chat_url")
+    top, sub_common = _common_options(False), _common_options(True)
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
+                                parents=[top])
     sub = p.add_subparsers(dest="cmd", required=True)
-    s = sub.add_parser("login")
+    s = sub.add_parser("login", parents=[sub_common])
     s.add_argument("--windows", type=int, default=1)
-    s = sub.add_parser("long")
+    s = sub.add_parser("long", parents=[sub_common])
     s.add_argument("--chars", type=int, default=20000)
-    s = sub.add_parser("toolcall")
+    s = sub.add_parser("toolcall", parents=[sub_common])
     s.add_argument("--turns", type=int, default=8)
-    sub.add_parser("followup")
-    s = sub.add_parser("parallel")
+    sub.add_parser("followup", parents=[sub_common])
+    s = sub.add_parser("parallel", parents=[sub_common])
     s.add_argument("--windows", type=int, default=3)
+    sub.add_parser("cleanup", parents=[sub_common])
     a = p.parse_args(argv)
-    cfg = load_config(a.config, {"driver_path": a.driver_path, "chat_url": a.chat_url})
+    cfg = load_config(a.config, {"driver_path": a.driver_path, "chat_url": a.chat_url,
+                                 "profile_mode": a.profile_mode, "input_mode": a.input_mode,
+                                 "read_mode": a.read_mode, "headless": a.headless,
+                                 "prompt_lang": a.prompt_lang})
+    # サーバ（server.py）の Edge と同じプロファイルを取り合わないよう、試験は別の置き場を使う
+    # （同じ --user-data-dir を 2 つ目の Edge が開くと "Chrome instance exited" で即終了する）
+    cfg.profile_dir = str(cfg.resolved_profile_dir() / "probe")
     {"login": probe_login, "long": probe_long, "toolcall": probe_toolcall,
-     "followup": probe_followup, "parallel": probe_parallel}[a.cmd](cfg, a)
+     "followup": probe_followup, "parallel": probe_parallel, "cleanup": probe_cleanup}[a.cmd](cfg, a)
 
 
 if __name__ == "__main__":

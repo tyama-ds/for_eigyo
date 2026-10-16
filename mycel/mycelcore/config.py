@@ -51,8 +51,10 @@ DEFAULT_CONFIG: dict = {
     "ext_base_url": "https://api.openai.com/v1",
     "ext_api_key": "",
     "ext_model": "",
-    "ext_api_version": "2024-10-21",
+    "ext_api_version": "2025-04-01-preview",   # Azure のみ。推論モデル（o 系・gpt-5 系）は 2024-12-01-preview 以降が必要
     "ext_proxy_url": "",
+    "ext_verbosity": "",               # gpt-5 系の verbosity（low / medium / high）。空なら送らない
+    "ext_api_style": "chat",           # 外部 API の形式: chat（Chat Completions）/ responses（Responses API）
     "ext_reasoning_effort": "low",     # 推論モデル（o1/o3/o4-mini/gpt-5 系）の reasoning_effort。auto なら送らない
     "ext_show_switch": False,          # 質問欄に「ローカル / 外部 API」の切り替えを表示するか（既定は非表示）
     # 埋め込み。空欄は base_url / api_key を流用。embed_model が空なら AI 検索はキーワード方式
@@ -159,6 +161,10 @@ def save_config(update: dict, path: Path | None = None) -> dict:
         cfg["ext_provider"] = update["ext_provider"]
     if update.get("ext_reasoning_effort") in ("auto", "minimal", "low", "medium", "high"):
         cfg["ext_reasoning_effort"] = update["ext_reasoning_effort"]
+    if update.get("ext_verbosity") in ("", "low", "medium", "high"):
+        cfg["ext_verbosity"] = update["ext_verbosity"]
+    if update.get("ext_api_style") in ("chat", "responses"):
+        cfg["ext_api_style"] = update["ext_api_style"]
     if update.get("llm_backend") in ("local", "external"):
         cfg["llm_backend"] = update["llm_backend"]
     if cfg["llm_backend"] == "external" and not (cfg["ext_enabled"] and ext_configured(cfg)):
@@ -243,7 +249,8 @@ def effective_llm(cfg: dict, backend: str | None = None) -> dict:
         out.update({"provider": cfg.get("ext_provider", "openai"), "base_url": cfg.get("ext_base_url", ""),
                     "api_key": cfg.get("ext_api_key", ""), "model": cfg.get("ext_model", ""),
                     "api_version": cfg.get("ext_api_version", "2024-10-21"),
-                    "reasoning_effort": cfg.get("ext_reasoning_effort", "low"),
+                    "reasoning_effort": cfg.get("ext_reasoning_effort", "low"), "verbosity": cfg.get("ext_verbosity", ""),
+                    "api_style": cfg.get("ext_api_style", "chat"),
                     "use_proxy": True, "proxy_url": cfg.get("ext_proxy_url") or cfg.get("proxy_url") or ""})
     return out
 

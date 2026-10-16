@@ -93,6 +93,31 @@ class ParseTests(unittest.TestCase):
         _, calls = parse_reply('<tool_call>{"name": "a", "arguments": "{\\"p\\": 1}"}</tool_call>')
         self.assertEqual(json.loads(calls[0]["function"]["arguments"]), {"p": 1})
 
+    def test_fenced_json_without_tags(self):
+        content, calls = parse_reply('次の操作をお願いします。\n```json\n{"name": "read_file", "arguments": {"path": "a.py"}}\n```')
+        self.assertEqual(calls[0]["function"]["name"], "read_file")
+        self.assertEqual(content, "次の操作をお願いします。")
+
+    def test_refusal_needs_nudge(self):
+        from bridge.protocol import needs_nudge, render_opening
+        self.assertTrue(needs_nudge("この環境では read_file という中継ツールは利用できないため、架空の <tool_call> は出力できません。", [], TOOLS))
+        self.assertFalse(needs_nudge("完了しました。", [], TOOLS))
+        self.assertFalse(needs_nudge("ファイルは存在しません", [], None))
+        en = render_opening([normalize_message({"role": "user", "content": "hi"})], TOOLS, lang="en")
+        self.assertIn("[Actions the operator can perform]", en)
+        self.assertIn("read_file", en)
+
+    def test_bare_json_without_tags(self):
+        # 画面から読むと <tool_call> タグが消え、JSON だけが残ることがある
+        text = 'ファイルを読みます。\n{"name": "read_file", "arguments": {"path": "a.py"}}\n{"name": "read_file", "arguments": {"path": "b.py"}}'
+        content, calls = parse_reply(text)
+        self.assertEqual([json.loads(c["function"]["arguments"])["path"] for c in calls], ["a.py", "b.py"])
+        self.assertEqual(content, "ファイルを読みます。")
+
+    def test_plain_json_answer_without_arguments_is_not_a_call(self):
+        content, calls = parse_reply('設定は {"name": "x", "value": 1} です。')
+        self.assertEqual(calls, [])
+
     def test_trailing_text_after_json(self):
         _, calls = parse_reply('<tool_call>{"name": "a", "arguments": {}} ← これを実行</tool_call>')
         self.assertEqual(calls[0]["function"]["name"], "a")

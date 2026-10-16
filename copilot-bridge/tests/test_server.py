@@ -22,9 +22,11 @@ TOOLS = [{"type": "function", "function": {
 class ServerTestCase(unittest.TestCase):
     windows = 2
 
+    log_dir = ""
+
     @classmethod
     def setUpClass(cls):
-        cls.cfg = Config(backend="fake", windows=cls.windows, port=0)
+        cls.cfg = Config(backend="fake", windows=cls.windows, port=0, log_dir=cls.log_dir)
         cls.bridge = srv.Bridge(cls.cfg)
         cls.bridge.start()
         cls.httpd = srv.ThreadingHTTPServer(("127.0.0.1", 0), srv.make_handler(cls.bridge))
@@ -75,7 +77,7 @@ class ChatTests(ServerTestCase):
         self.assertEqual(r1["choices"][0]["finish_reason"], "tool_calls")
         self.assertEqual(m1["tool_calls"][0]["function"]["name"], "read_file")
         self.assertEqual(json.loads(m1["tool_calls"][0]["function"]["arguments"]), {"path": "a.txt"})
-        self.assertIn("【利用できるツール】", seen[0])
+        self.assertIn("【オペレーターが実行できる操作】", seen[0])
         self.assertIn("read_file", seen[0])
 
         msgs2 = msgs + [m1, {"role": "tool", "tool_call_id": m1["tool_calls"][0]["id"],
@@ -85,7 +87,7 @@ class ChatTests(ServerTestCase):
         self.assertIn("hello", r2["choices"][0]["message"]["content"])
         # 2 回目は差分（ツール結果）だけが送られ、規則は再送されない
         self.assertIn('<tool_result name="read_file">', seen[1])
-        self.assertNotIn("【利用できるツール】", seen[1])
+        self.assertNotIn("【オペレーターが実行できる操作】", seen[1])
 
         st = self.get("/status")
         sess = [s for s in st["sessions"] if s["turns"] == 2]
@@ -127,6 +129,124 @@ class ChatTests(ServerTestCase):
             t.join()
         FakeWorker.delay_sec = 0.0
         self.assertEqual(sorted(results.values()), ["from w0", "from w1"])
+
+
+class RestartTests(ServerTestCase):
+    windows = 1
+
+    def test_worker_restart_retries_once_with_fresh_chat(self):
+        from bridge.pool import WorkerRestarted
+
+        seen = []
+        state = {"raised": False}
+
+        def responder(text, worker):
+            seen.append(text)
+            if not state["raised"]:
+                state["raised"] = True
+                raise WorkerRestarted("w0: ブラウザを再起動しました（not connected to DevTools）")
+            return "復帰後の回答"
+
+        FakeWorker.responder = staticmethod(responder)
+        r = self.post({"messages": [{"role": "system", "content": "R"}, {"role": "user", "content": "r1"}]})
+        self.assertEqual(r["choices"][0]["message"]["content"], "復帰後の回答")
+        self.assertEqual(len(seen), 2)
+        self.assertIn("【元の指示】\nR", seen[1])   # 会話を作り直して送り直している
+        w = self.get("/status")["windows"][0]
+        self.assertEqual(w["chats"], 2)
+
+
+class NudgeTests(ServerTestCase):
+    windows = 1
+
+    def test_refusal_is_nudged_into_tool_call(self):
+        seen = []
+
+        def responder(text, worker):
+            seen.append(text)
+            if len(seen) == 1:
+                return "作業対象を確認しましたが、現在アクセス可能な作業領域 /mnt/data に src は存在しませんでした。"
+            return '<tool_call>\n{"name": "read_file", "arguments": {"path": "src/util.py"}}\n</tool_call>'
+
+        FakeWorker.responder = staticmethod(responder)
+        r = self.post({"messages": [{"role": "system", "content": "N"}, {"role": "user", "content": "src を読んで"}],
+                       "tools": TOOLS})
+        self.assertEqual(r["choices"][0]["finish_reason"], "tool_calls")
+        self.assertEqual(len(seen), 2)
+        self.assertIn("オペレーターへの指示の書式", seen[1])   # 言い直しが送られた
+        self.assertIn("【回答の例】", seen[0])
+        self.assertIn('"name": "read_file"', seen[0])     # 例は実際のツール名
+
+    def test_no_nudge_without_tools(self):
+        seen = []
+        FakeWorker.responder = staticmethod(lambda text, w: (seen.append(text), "ファイルは存在しません")[1])
+        r = self.post({"messages": [{"role": "user", "content": "nudge なし"}]})
+        self.assertEqual(r["choices"][0]["finish_reason"], "stop")
+        self.assertEqual(len(seen), 1)
+
+
+class TranscriptTests(ServerTestCase):
+    windows = 1
+    import tempfile as _tf
+    log_dir = _tf.mkdtemp(prefix="copilot-bridge-logs-")
+
+    def test_session_transcript_written(self):
+        from pathlib import Path
+
+        FakeWorker.responder = staticmethod(lambda text, w: "記録される回答")
+        self.post({"messages": [{"role": "user", "content": "記録試験"}]})
+        files = list((Path(self.log_dir) / "sessions").glob("*.md"))
+        self.assertEqual(len(files), 1)
+        body = files[0].read_text(encoding="utf-8")
+        self.assertIn("### 送信", body)
+        self.assertIn("記録試験", body)
+        self.assertIn("記録される回答", body)
+        self.assertTrue(list(Path(self.log_dir).glob("*.jsonl")))
+
+
+class ValidationTests(ServerTestCase):
+    windows = 1
+
+    def test_unknown_tool_name_is_nudged(self):
+        seen = []
+
+        def responder(text, worker):
+            seen.append(text)
+            if len(seen) == 1:
+                return '<tool_call>\n{"name": "open_file", "arguments": {"path": "a"}}\n</tool_call>'
+            return '<tool_call>\n{"name": "read_file", "arguments": {"path": "a"}}\n</tool_call>'
+
+        FakeWorker.responder = staticmethod(responder)
+        r = self.post({"messages": [{"role": "user", "content": "v1"}], "tools": TOOLS})
+        self.assertEqual(r["choices"][0]["message"]["tool_calls"][0]["function"]["name"], "read_file")
+        self.assertIn("open_file", seen[1])   # 言い直しに不正な名前を含める
+
+    def test_only_invalid_calls_is_retryable_error(self):
+        FakeWorker.responder = staticmethod(
+            lambda text, w: '<tool_call>\n{"name": "nope", "arguments": {}}\n</tool_call>')
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            self.post({"messages": [{"role": "user", "content": "v2"}], "tools": TOOLS})
+        self.assertEqual(cm.exception.code, 503)
+
+    def test_conversation_id_header_links_sessions(self):
+        seen = []
+        FakeWorker.responder = staticmethod(lambda text, w: (seen.append(text), "ok")[1])
+
+        def post(msgs, key):
+            req = urllib.request.Request(self.base + "/v1/chat/completions", data=json.dumps({"messages": msgs}).encode(),
+                                         headers={"Content-Type": "application/json", "X-Conversation-Id": key})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return json.loads(r.read().decode())
+
+        a = [{"role": "user", "content": "h1"}]
+        r1 = post(a, "run-1/pm")
+        post(a + [r1["choices"][0]["message"], {"role": "user", "content": "h2"}], "run-1/pm")
+        self.assertNotIn("【書式】", seen[1])       # ID で続きと分かり、差分だけ送る
+        # 履歴が書き換わった（要約など）ら同じ ID でも作り直す
+        post([{"role": "user", "content": "rewritten"}], "run-1/pm")
+        self.assertIn("【書式】", seen[2])
+        st = self.get("/status")
+        self.assertTrue(any(s["key"] == "run-1/pm" for s in st["sessions"]))
 
 
 class EvictionTests(ServerTestCase):
