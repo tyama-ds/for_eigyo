@@ -37,6 +37,23 @@ python server.py --backend fake  :: ブラウザ無しで API の動きだけ見
 初回起動では各ウインドウが自分のプロファイルで Edge を開く。社内 SSO が通れば自動でログインする。
 通らなければ `login_timeout_sec`（既定 5 分）の間に手でログインする（2 回目以降は不要）。
 
+### 動作確認（1 回質問する）
+
+```bat
+python tools\ask.py 自己紹介を一行で
+python tools\ask.py --status
+```
+
+PowerShell の `Invoke-RestMethod -Body '…'` は日本語を ISO-8859-1 で送るため、Copilot 側に `????` と届く。
+PowerShell から送るなら UTF-8 のバイト列にする:
+
+```powershell
+$json = '{"model":"copilot","messages":[{"role":"user","content":"自己紹介を一行で"}]}'
+Invoke-RestMethod http://127.0.0.1:8800/v1/chat/completions -Method Post -ContentType "application/json; charset=utf-8" -Body ([System.Text.Encoding]::UTF8.GetBytes($json)) | ConvertTo-Json -Depth 5
+```
+
+サーバのコンソールには `[s1] 受信: '自己紹介を一行で'` のように届いた文字が出るので、化けていればここで分かる。
+
 ### Codex CLI から使う（`~/.codex/config.toml`）
 
 ```toml

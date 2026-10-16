@@ -67,6 +67,9 @@ class Bridge:
             raise BadRequest("messages が空です")
         tools = body.get("tools") or []
         session, norm, delta = self.store.resolve(messages)
+        # 届いた文字が化けていないか（PowerShell の ???? 等）をコンソールで確認できるようにする
+        last_user = next((m["text"] for m in reversed(norm) if m["role"] == "user"), "")
+        print(f"[{session.id}] 受信: {last_user[:80]!r}（messages={len(norm)} tools={len(tools)}）", flush=True)
         with session.lock:
             worker = self.pool.acquire(session.id, self.cfg.acquire_timeout_sec)
             detach = False
