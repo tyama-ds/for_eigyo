@@ -228,18 +228,49 @@ class EdgeWorker(Worker):
             time.sleep(0.3)
 
     def delete_current_chat(self) -> tuple[bool, str]:
-        """今の会話を Copilot の履歴から削除する（画面操作。セレクタは config.selectors で調整）。"""
+        """今の会話を Copilot の履歴から削除する（画面操作。セレクタは config.selectors で調整）。
+
+        手順: 会話一覧の行（chat_item）にホバー → 行の中の「…」（chat_menu_button、行に対する相対 XPath）
+        → メニューの「削除」（delete_menu_item）→ 確認ダイアログの「削除」（confirm_delete、出なければ省略）。
+        """
         if self.driver is None or self.chat_turns == 0:
             return False, "削除する会話がない"
+        from selenium.webdriver.common.action_chains import ActionChains
+        from selenium.webdriver.common.by import By
+
         try:
             self.driver.switch_to.default_content()
-            steps = [("chat_menu_button", "会話のメニュー"), ("delete_menu_item", "削除の項目"),
-                     ("confirm_delete", "削除の確認")]
-            for key, label in steps:
-                el = self._find(self.sel.get(key, ""), 5.0) if self.sel.get(key) else None
-                if el is None:
-                    return False, f"{label}（selectors.{key}）が見つからない"
-                el.click()
+            item = self._find(self.sel.get("chat_item", ""), 3.0) if self.sel.get("chat_item") else None
+            if item is None and self.sel.get("history_button"):
+                # 会話一覧が畳まれていれば開いてから探し直す
+                btn = self._find(self.sel["history_button"], 2.0)
+                if btn is not None:
+                    btn.click()
+                    time.sleep(0.8)
+                    item = self._find(self.sel["chat_item"], 3.0)
+            if item is None:
+                return False, "会話一覧の行（selectors.chat_item）が見つからない"
+            ActionChains(self.driver).move_to_element(item).pause(0.5).perform()
+            rel = self.sel.get("chat_menu_button", ".//button[last()]")
+            menu_btn = None
+            for el in item.find_elements(By.XPATH if rel.startswith(".") else By.CSS_SELECTOR, rel):
+                try:
+                    if el.is_displayed():
+                        menu_btn = el
+                except Exception:  # noqa: BLE001
+                    continue
+            if menu_btn is None:
+                return False, "行の中の「…」ボタン（selectors.chat_menu_button）が見つからない"
+            menu_btn.click()
+            time.sleep(0.8)
+            del_item = self._find(self.sel.get("delete_menu_item", ""), 5.0)
+            if del_item is None:
+                return False, "メニューの削除項目（selectors.delete_menu_item）が見つからない"
+            del_item.click()
+            time.sleep(0.8)
+            confirm = self._find(self.sel.get("confirm_delete", ""), 3.0) if self.sel.get("confirm_delete") else None
+            if confirm is not None:
+                confirm.click()
                 time.sleep(0.8)
             self.chat_turns = 0
             self._log("会話を削除しました")

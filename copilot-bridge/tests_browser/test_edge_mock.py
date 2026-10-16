@@ -89,6 +89,7 @@ class EdgeMockTests(unittest.TestCase):
 
     def test_long_prompt_tool_call_and_continuation(self):
         w = self.workers[0]
+        w.new_chat()   # 他のテストの会話をリセット
         msgs = [normalize_message({"role": "system", "content": "sys"}),
                 normalize_message({"role": "user", "content": "A" * 20000 + "\n行2\n行3 END"})]
         tools = [{"type": "function", "function": {"name": "read_file", "parameters": {
@@ -102,6 +103,16 @@ class EdgeMockTests(unittest.TestCase):
             {"role": "tool", "name": "read_file", "content": "hello"})]))
         self.assertTrue(r2.startswith("turn=2"))  # 同じ会話の続き
         self.assertIn("完了しました", r2)
+
+    def test_delete_current_chat(self):
+        from selenium.webdriver.common.by import By
+
+        w = self.workers[0]
+        w.send("削除試験")
+        ok, why = w.delete_current_chat()
+        self.assertTrue(ok, why)
+        self.assertEqual(w.driver.find_element(By.ID, "deleted").text, "1")
+        self.assertEqual(w.chat_turns, 0)
 
     def test_parallel_windows_do_not_mix(self):
         ws = self.workers[1:]

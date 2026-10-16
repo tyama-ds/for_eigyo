@@ -51,7 +51,7 @@
     }
   ],
   "next": [
-    "Copilot の会話削除メニューのボタン文言を確認し selectors を確定（probe cleanup）",
+    "probe cleanup で会話の削除が通るか確認し、通れば delete_chat_on_close を有効化",
     "Windows 実機で tools/probe.py を login → long → followup → toolcall → parallel の順に実行し、結果を README に記録",
     "selectors.response（コピー不可時の本文読み取り先）を実機で確定",
     "Codex CLI の接続（wire_api / WSL2 からの到達）を確認"
@@ -66,6 +66,10 @@
     "Copilot は自前の実行環境（/mnt/data）で作業しようとし <tool_call> を出さないことがある（規則文の強化と言い直しで対処中）"
   ],
   "log": [
+    {
+      "date": "2026-10-16",
+      "summary": "会話削除のセレクタを実機の DOM（Fluent SplitNavItem の行、role=menuitem の削除）に合わせ、ホバー→「…」→削除→確認の手順にした。模擬画面で検証"
+    },
     {
       "date": "2026-10-16",
       "summary": "Copilot 側の履歴が汚れる対策: 会話ごとの全文を logs/sessions/*.md に既定で保存、tools/summarize.py で Copilot に要約させて保存（--delete-after で元を削除）、使い終えた会話を画面操作で削除する delete_chat_on_close（セレクタ未確認のため既定無効、probe cleanup で確認）"
