@@ -57,6 +57,36 @@ Invoke-RestMethod http://127.0.0.1:8800/v1/chat/completions -Method Post -Conten
 
 サーバのコンソールには `[s1] 受信: '自己紹介を一行で'` のように届いた文字が出るので、化けていればここで分かる。
 
+### agent-workbench から使う
+
+[agent-workbench](https://github.com/tyama-ds/agent-workbench)（PM と作業者のチームでファイル・Office・Web を扱う
+エージェント作業アプリ）の「Local / OpenAI 互換」プロファイルに、この bridge を指定できる。
+
+| 設定 | 値 |
+|---|---|
+| 接続方式 | Local / OpenAI 互換（`/chat/completions`） |
+| API ベース URL | `http://127.0.0.1:8800/v1` |
+| モデル名 | `copilot` |
+| API タイムアウト（`request_timeout_seconds`） | **900〜1800**（Copilot は 1 往復 10〜60 秒。言い直しや再起動を含めると数分かかる） |
+| Local 同時リクエスト数 | bridge の `windows` と同じ（超えた分は bridge 側で順番待ち） |
+| 再試行 | 既定のまま（bridge は失敗を HTTP 503 で返し、workbench は 429/503 を再試行する） |
+
+bridge が workbench の検証規則に合わせていること:
+
+- 非ストリーミング応答、`finish_reason` は `stop` / `tool_calls` のみ、`refusal` は返さない
+- `tool_calls` の `id` は応答内で一意、`arguments` は JSON オブジェクトの文字列
+- **一覧に無い操作名・壊れた `arguments` は workbench が応答ごと拒否する**ので、bridge は言い直させ、残れば弾く。
+  正しい操作が 1 つも無ければ 503（再試行可能）で返す
+- 会話の見分け: workbench は保存した assistant メッセージを原文のまま送り返すので、先頭一致で続きが分かる。
+  要約（auto_compact）で履歴が書き換わると bridge は新しい Copilot 会話を作って全履歴を送り直す
+- 要求ヘッダ `X-Conversation-Id`（または `X-Session-Id`）があれば、指紋の推測ではなくその ID で会話を結びつける
+  （workbench 側で `<作業ID>/<エージェント>` を付けてくれると確実）
+
+送る量の目安: workbench の作業方針は最大 16,000 字、ファイル・Office のツール 14 件は本文化して約 3,300 字。
+最初の送信は 20,000 字前後になる（模擬画面では 2 万字を通したが、実際の Copilot の上限は `probe.py long --chars 25000` で確認する）。
+ツール結果は `max_tool_result_chars`（既定 12,000）で中央を省略する。`patch_text` の `find` は原文と一致する必要が
+あるので、長いファイルを扱うときは上限を上げるか、`search_text` で範囲を絞る依頼にする。
+
 ### Codex CLI から使う（`~/.codex/config.toml`）
 
 ```toml

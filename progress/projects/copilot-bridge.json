@@ -43,6 +43,10 @@
       "state": "todo"
     },
     {
+      "title": "agent-workbench から Copilot を使って作業を 1 つ完遂",
+      "state": "todo"
+    },
+    {
       "title": "長いシステムプロンプト・ツール定義の圧縮",
       "state": "todo"
     },
@@ -52,6 +56,7 @@
     }
   ],
   "next": [
+    "agent-workbench の Local プロファイルに bridge を設定し、文章だけの依頼 → ファイル編集の依頼の順に試す（タイムアウト 900 秒以上、同時数 = windows）",
     "Codex CLI の接続（~/.codex/config.toml の model_provider、wire_api、WSL2 からの到達）を確認し、短い作業を 1 つ完遂",
     "probe cleanup で会話の削除が通るか確認し、通れば delete_chat_on_close を有効化",
     "followup --read-mode dom / --input-mode paste で読み取り・入力方式を確定（selectors.response）",
@@ -67,6 +72,10 @@
     "Copilot は自前の実行環境で作業しようとしたり、「無いツールを架空に呼べない」と断ったりして <tool_call> を出さないことがある（オペレーターへの手順書という枠組みと言い直しで対処中）"
   ],
   "log": [
+    {
+      "date": "2026-10-16",
+      "summary": "agent-workbench（tyama-ds/agent-workbench）との接続要件を整理。workbench は未知のツール名・壊れた引数の応答を丸ごと拒否するため、bridge で操作名・arguments を検証して言い直させ、残れば弾く（正しい操作が無ければ 503 で再試行可能に）。X-Conversation-Id ヘッダで会話を結びつける対応を追加。README に設定値と送る量の目安を記載"
+    },
     {
       "date": "2026-10-16",
       "summary": "実機で入力方式 paste（Ctrl+V）が日本語を正しく通すことを確認。read_mode=dom が selectors.response 不一致で読めなかったため、「応答のコピー」ボタンの祖先から回答 1 件分の本文を自動で見つける予備手段を追加。画面読みで <tool_call> タグが消えても裸の JSON を操作として読む"

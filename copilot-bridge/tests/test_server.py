@@ -204,6 +204,51 @@ class TranscriptTests(ServerTestCase):
         self.assertTrue(list(Path(self.log_dir).glob("*.jsonl")))
 
 
+class ValidationTests(ServerTestCase):
+    windows = 1
+
+    def test_unknown_tool_name_is_nudged(self):
+        seen = []
+
+        def responder(text, worker):
+            seen.append(text)
+            if len(seen) == 1:
+                return '<tool_call>\n{"name": "open_file", "arguments": {"path": "a"}}\n</tool_call>'
+            return '<tool_call>\n{"name": "read_file", "arguments": {"path": "a"}}\n</tool_call>'
+
+        FakeWorker.responder = staticmethod(responder)
+        r = self.post({"messages": [{"role": "user", "content": "v1"}], "tools": TOOLS})
+        self.assertEqual(r["choices"][0]["message"]["tool_calls"][0]["function"]["name"], "read_file")
+        self.assertIn("open_file", seen[1])   # 言い直しに不正な名前を含める
+
+    def test_only_invalid_calls_is_retryable_error(self):
+        FakeWorker.responder = staticmethod(
+            lambda text, w: '<tool_call>\n{"name": "nope", "arguments": {}}\n</tool_call>')
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            self.post({"messages": [{"role": "user", "content": "v2"}], "tools": TOOLS})
+        self.assertEqual(cm.exception.code, 503)
+
+    def test_conversation_id_header_links_sessions(self):
+        seen = []
+        FakeWorker.responder = staticmethod(lambda text, w: (seen.append(text), "ok")[1])
+
+        def post(msgs, key):
+            req = urllib.request.Request(self.base + "/v1/chat/completions", data=json.dumps({"messages": msgs}).encode(),
+                                         headers={"Content-Type": "application/json", "X-Conversation-Id": key})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return json.loads(r.read().decode())
+
+        a = [{"role": "user", "content": "h1"}]
+        r1 = post(a, "run-1/pm")
+        post(a + [r1["choices"][0]["message"], {"role": "user", "content": "h2"}], "run-1/pm")
+        self.assertNotIn("【書式】", seen[1])       # ID で続きと分かり、差分だけ送る
+        # 履歴が書き換わった（要約など）ら同じ ID でも作り直す
+        post([{"role": "user", "content": "rewritten"}], "run-1/pm")
+        self.assertIn("【書式】", seen[2])
+        st = self.get("/status")
+        self.assertTrue(any(s["key"] == "run-1/pm" for s in st["sessions"]))
+
+
 class EvictionTests(ServerTestCase):
     windows = 1
 

@@ -35,7 +35,8 @@ from bridge import __version__  # noqa: E402
 from bridge.config import load_config  # noqa: E402
 from bridge.pool import BridgeError, WorkerPool, WorkerRestarted  # noqa: E402
 from bridge.protocol import (  # noqa: E402
-    needs_nudge, normalize_message, nudge_text, parse_reply, render_delta, render_opening,
+    needs_nudge, normalize_message, nudge_invalid_text, nudge_text, parse_reply, render_delta,
+    render_opening, validate_calls,
 )
 from bridge.session import SessionStore  # noqa: E402
 
@@ -63,12 +64,12 @@ class Bridge:
         self.pool.close_all()
 
     # ------------------------------------------------------------ 1 要求の処理
-    def complete(self, body: dict) -> dict:
+    def complete(self, body: dict, conversation_key: str | None = None) -> dict:
         messages = body.get("messages") or []
         if not isinstance(messages, list) or not messages:
             raise BadRequest("messages が空です")
         tools = body.get("tools") or []
-        session, norm, delta = self.store.resolve(messages)
+        session, norm, delta = self.store.resolve(messages, key=conversation_key)
         # 届いた文字が化けていないか（PowerShell の ???? 等）をコンソールで確認できるようにする
         last_user = next((m["text"] for m in reversed(norm) if m["role"] == "user"), "")
         print(f"[{session.id}] 受信: {last_user[:80]!r}（messages={len(norm)} tools={len(tools)}）", flush=True)
@@ -116,6 +117,27 @@ class Bridge:
                         detach = True
                         raise
                     content, calls = parse_reply(reply, id_prefix=f"call_{session.id}_{session.turns + 1}")
+                # 一覧に無い操作名・壊れた arguments は、呼び出し元（agent-workbench 等）が応答ごと拒否するので
+                # 中継側で言い直させ、それでも残れば弾く
+                calls, bad = validate_calls(calls, tools)
+                while bad and nudges < self.cfg.nudge_retries:
+                    nudges += 1
+                    print(f"[{session.id}] 不正な操作 {bad} → 言い直し {nudges} 回目", flush=True)
+                    try:
+                        reply = worker.send(nudge_invalid_text(bad, lang))
+                    except BridgeError as e:
+                        print(f"{e}", flush=True)
+                        detach = True
+                        raise
+                    content, calls = parse_reply(reply, id_prefix=f"call_{session.id}_{session.turns + 1}")
+                    calls, bad = validate_calls(calls, tools)
+                if bad and not calls:
+                    # 正しい操作が 1 つも無い → 最終回答扱いにすると作業が途中で終わるので、再試行できる失敗として返す
+                    detach = False
+                    raise BridgeError(f"{session.id}: 一覧に無い操作名／壊れた引数のみ（{', '.join(bad)[:200]}）。"
+                                      "呼び出し元の再試行で続けてください")
+                if bad:
+                    print(f"[{session.id}] 不正な操作を除外: {bad}", flush=True)
                 assistant = {"role": "assistant", "content": content or None}
                 if calls:
                     assistant["tool_calls"] = calls
@@ -219,8 +241,10 @@ def make_handler(bridge: Bridge):
                 body = json.loads(self.rfile.read(n).decode("utf-8") or "{}")
             except (ValueError, json.JSONDecodeError) as e:
                 return self._error(400, f"JSON を読めません: {e}", "invalid_request_error")
+            # 呼び出し元が会話 ID を付けてくれれば、指紋の推測ではなく確実に続きを結びつける
+            key = (self.headers.get("X-Conversation-Id") or self.headers.get("X-Session-Id") or "").strip() or None
             try:
-                result = bridge.complete(body)
+                result = bridge.complete(body, conversation_key=key)
             except BadRequest as e:
                 return self._error(400, str(e), "invalid_request_error")
             except BridgeError as e:

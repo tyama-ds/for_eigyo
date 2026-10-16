@@ -30,6 +30,7 @@ class Session:
     def __init__(self, fp: str):
         self.id = f"s{next(_counter)}"
         self.fingerprint = fp
+        self.key: str | None = None   # 呼び出し元が付けた会話 ID（X-Conversation-Id）
         self.sent: list[dict] = []   # Copilot の今の会話に送った（正規化済み）message 列
         self.worker_id: str | None = None   # 最後に使った担当（続きを送れるかは pool が判定）
         self.created = time.time()
@@ -38,7 +39,7 @@ class Session:
         self.lock = threading.Lock()   # 同じ会話への同時要求を直列化
 
     def to_dict(self) -> dict:
-        return {"id": self.id, "fingerprint": self.fingerprint, "sent": len(self.sent),
+        return {"id": self.id, "fingerprint": self.fingerprint, "key": self.key, "sent": len(self.sent),
                 "worker": self.worker_id, "turns": self.turns,
                 "last_used": round(self.last_used, 1)}
 
@@ -46,14 +47,33 @@ class Session:
 class SessionStore:
     def __init__(self, max_sessions: int = 200):
         self._by_fp: dict[str, list[Session]] = {}
+        self._by_key: dict[str, Session] = {}
         self._lock = threading.Lock()
         self.max_sessions = max_sessions
 
-    def resolve(self, raw_messages: list[dict]) -> tuple[Session, list[dict], list[dict]]:
-        """(会話, 正規化した全 message, 続きとして送る差分) を返す。差分が空＝作り直しが必要。"""
+    def resolve(self, raw_messages: list[dict], key: str | None = None) -> tuple[Session, list[dict], list[dict]]:
+        """(会話, 正規化した全 message, 続きとして送る差分) を返す。差分が空＝作り直しが必要。
+
+        key（X-Conversation-Id ヘッダ等）があれば、指紋ではなくその ID で会話を結びつける。
+        ID が同じでも送った列と先頭が一致しなければ（要約で履歴が書き換わった等）作り直す。
+        """
         norm = [normalize_message(m) for m in raw_messages]
         fp = fingerprint(norm)
         with self._lock:
+            if key:
+                s = self._by_key.get(key)
+                if s is None:
+                    s = Session(fp)
+                    s.key = key
+                    self._by_key[key] = s
+                    self._by_fp.setdefault(fp, []).append(s)
+                    self._prune()
+                    return s, norm, []
+                s.last_used = time.time()
+                if s.sent and len(s.sent) < len(norm) and all(same_message(a, b) for a, b in zip(s.sent, norm)):
+                    return s, norm, norm[len(s.sent):]
+                s.sent = []
+                return s, norm, []
             best: Session | None = None
             for s in self._by_fp.get(fp, []):
                 if s.sent and len(s.sent) < len(norm) and all(
@@ -77,6 +97,8 @@ class SessionStore:
             self._by_fp[s.fingerprint].remove(s)
             if not self._by_fp[s.fingerprint]:
                 del self._by_fp[s.fingerprint]
+            if s.key:
+                self._by_key.pop(s.key, None)
 
     def all(self) -> list[Session]:
         with self._lock:
