@@ -98,7 +98,12 @@ def api_config_test(app: MycelApp, b: dict) -> dict:
             raise LLMError("外部 API が有効になっていません（「外部 API を使う」をオンにして保存してください）")
         client = LLMClient(cfg, backend)
         out["host"] = client.host
-        text = client.chat("「接続OK」とだけ返答してください。", max_tokens=256, temperature=0)
+        out["model"] = client.cfg.get("model", "")
+        try:
+            text = client.chat("「接続OK」とだけ返答してください。", max_tokens=256, temperature=0)
+        finally:
+            out["sent"] = getattr(client, "last_payload_keys", [])          # 画面に「送ったパラメータ」を出し、モデル差の切り分けに使う
+            out["adjusted"] = getattr(client, "last_adjustments", [])
         out["chat"] = {"ok": bool(text), "message": text[:120] or "応答が空でした（Max tokens を増やしてください）"}
     except LLMError as e:
         out["chat"] = {"ok": False, "message": str(e)}

@@ -4,6 +4,7 @@ from __future__ import annotations
 import http.client
 import json
 import os
+import re
 import sys
 import tempfile
 import threading
@@ -291,3 +292,65 @@ class PayloadTest(unittest.TestCase):
         last = self.reqs[-1]["body"]
         self.assertNotIn("reasoning_effort", last)
         self.assertIn("max_completion_tokens", last)
+
+
+class Gpt5Test(unittest.TestCase):
+    """gpt-5 系の実運用で起きること: 推論トークンで上限を使い切る、system を受け付けないモデル、verbosity、Azure の api-version。"""
+
+    def setUp(self):
+        self.srv, self.url, self.reqs = start_mock_llm()
+        self.cfg = load_config(Path(tempfile.mkdtemp()) / "none.json")
+        self.cfg.update({"base_url": self.url + "/v1", "model": "mock", "request_timeout": 5})
+
+    def tearDown(self):
+        self.srv.shutdown()
+
+    def test_empty_answer_at_length_retries_with_bigger_budget(self):
+        # strict-length は max_completion_tokens < 8192 だと空のまま finish_reason=length を返す（推論トークンで使い切った状態）。
+        # 推論モデルの判定は名前で行うので、テスト用に strict-length も推論モデル扱いにする
+        from mycelcore import llm as LLM
+        orig = LLM._REASONING_RE
+        LLM._REASONING_RE = re.compile(r"^(o[1-9](?:[.-]|$)|gpt-5(?!-chat)|gpt-oss|strict-length)", re.IGNORECASE)
+        try:
+            n = len(self.reqs)
+            c = LLMClient({**self.cfg, "model": "strict-length"}, "local")
+            self.assertTrue(c.chat("[TASK:ask] こんにちは"))
+            tries = [r["body"] for r in self.reqs[n:]]
+            self.assertEqual([t.get("max_completion_tokens") for t in tries], [4096, 16384])
+            self.assertEqual(c.last_adjustments, ["max_completion_tokens=16384"])
+        finally:
+            LLM._REASONING_RE = orig
+
+    def test_system_role_fallback_and_verbosity(self):
+        n = len(self.reqs)
+        c = LLMClient({**self.cfg, "model": "strict-nosystem"}, "local")
+        self.assertTrue(c.chat("[TASK:ask] こんにちは", system="あなたは助手です", temperature=1))
+        tries = [r["body"] for r in self.reqs[n:]]
+        self.assertEqual(tries[0]["messages"][0]["role"], "system")
+        last = tries[-1]["messages"]
+        self.assertEqual(last[0]["role"], "user")
+        self.assertTrue(last[0]["content"].startswith("あなたは助手です"))
+        self.assertIn("system", c.last_adjustments)
+        # verbosity は gpt-5 系だけに送り、知らないモデルには API の返事を見て外す
+        from mycelcore.llm import payload_style
+        self.assertEqual(payload_style({"base_url": "https://api.openai.com/v1", "verbosity": "low"}, "gpt-5-mini")["verbosity"], "low")
+        self.assertEqual(payload_style({"base_url": "https://api.openai.com/v1", "verbosity": "low"}, "o3")["verbosity"], "")
+        self.assertEqual(payload_style({"base_url": "https://api.openai.com/v1", "verbosity": "low"}, "gpt-4o")["verbosity"], "")
+        c = LLMClient({**self.cfg, "model": "gpt-5-mini", "verbosity": "high", "reasoning_effort": "minimal"}, "local")
+        c.chat("x")
+        body = self.reqs[-1]["body"]
+        self.assertEqual((body["verbosity"], body["reasoning_effort"], body["max_completion_tokens"]), ("high", "minimal", 4096))
+        self.assertNotIn("temperature", body)
+
+    def test_azure_reasoning_uses_newer_api_version(self):
+        from mycelcore.llm import LLMClient as C
+        cfg = {**self.cfg, "provider": "azure", "base_url": "http://127.0.0.1:1/", "model": "gpt-5-mini", "api_version": "2024-10-21", "_backend": "local"}
+        url, _, _ = C(cfg)._endpoint("chat")
+        self.assertIn("api-version=2025-04-01-preview", url)
+        cfg["model"] = "gpt-4o"
+        url, _, _ = C(cfg)._endpoint("chat")
+        self.assertIn("api-version=2024-10-21", url)
+        cfg["model"] = "o3-mini"; cfg["api_version"] = "2025-01-01-preview"
+        url, _, _ = C(cfg)._endpoint("chat")
+        self.assertIn("api-version=2025-01-01-preview", url)
+        self.assertEqual(load_config(Path(tempfile.mkdtemp()) / "none.json")["ext_api_version"], "2025-04-01-preview")
