@@ -4,8 +4,8 @@
   "path": "copilot-bridge/",
   "summary": "M365 Copilot のチャット画面を OpenAI 互換 API に見せかける中継サーバ。Codex CLI などのエージェントを Copilot で動かし、orrery のようなハーネスから複数エージェントを並列に使うために Edge を複数ウインドウで操作する。",
   "status": "active",
-  "phase": "実機試験中（文脈継続・並列は OK。Copilot に <tool_call> を使わせる指示を強化、検証待ち）",
-  "progress": 40,
+  "phase": "実機で擬似エージェントの作業完遂に成功。次は Codex CLI の接続",
+  "progress": 50,
   "started": "2026-10-14",
   "version": "0.1.0",
   "ports": [
@@ -29,8 +29,9 @@
       "date": "2026-10-14"
     },
     {
-      "title": "実機試験: SSO・長文送信・文脈の継続・<tool_call> 形式の遵守・並列（tools/probe.py）",
-      "state": "doing"
+      "title": "実機試験: SSO・文脈の継続・並列・<tool_call> 形式の遵守と作業完遂（tools/probe.py）",
+      "state": "done",
+      "date": "2026-10-16"
     },
     {
       "title": "実機で API 1 往復（入力→送信→回答→JSON）",
@@ -51,10 +52,10 @@
     }
   ],
   "next": [
+    "Codex CLI の接続（~/.codex/config.toml の model_provider、wire_api、WSL2 からの到達）を確認し、短い作業を 1 つ完遂",
     "probe cleanup で会話の削除が通るか確認し、通れば delete_chat_on_close を有効化",
-    "Windows 実機で tools/probe.py を login → long → followup → toolcall → parallel の順に実行し、結果を README に記録",
-    "selectors.response（コピー不可時の本文読み取り先）を実機で確定",
-    "Codex CLI の接続（wire_api / WSL2 からの到達）を確認"
+    "followup --read-mode dom / --input-mode paste で読み取り・入力方式を確定（selectors.response）",
+    "送る前の伏せ字層（固有名詞・識別子の仮名化）と、機微な作業のローカル LLM への振り分け"
   ],
   "risks": [
     "Copilot 画面の自動操作・コード送信の社内ルール確認が未了",
@@ -66,6 +67,10 @@
     "Copilot は自前の実行環境で作業しようとしたり、「無いツールを架空に呼べない」と断ったりして <tool_call> を出さないことがある（オペレーターへの手順書という枠組みと言い直しで対処中）"
   ],
   "log": [
+    {
+      "date": "2026-10-16",
+      "summary": "実機の toolcall 試験が成功: オペレーター枠組みで Copilot が言い直しなしに 4 往復・5 回の操作（一覧→読む×3→書く）を正しい書式で出し、README の合言葉を util.py に追記して作業完遂（1 往復 9〜17 秒）。probe の共通オプションをサブコマンドの後ろでも書けるように修正"
+    },
     {
       "date": "2026-10-16",
       "summary": "実機の toolcall で Copilot が「中継ツールは利用できないため架空の <tool_call> は出力できない」と断った（言い直しても同じ）。ツール呼び出しではなく「オペレーター（人間と手元のスクリプト）への手順書を書式どおりに書く」役割に規則文と言い直しを書き換え、断り文句も言い直しの対象に追加。タグ無しの ```json ブロックも操作として読む。英語版の規則文（prompt_lang=en）を追加。入力後に日本語が ? に化けていないか確認して入力方式を切り替える"
