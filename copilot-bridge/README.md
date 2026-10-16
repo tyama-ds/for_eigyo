@@ -87,6 +87,13 @@ WSL2 から Windows 側のサーバに届くかはネットワーク設定によ
 その間にコピー＆ペーストをすると取り違えることがある。完全に無関係にするには `read_mode: "dom"`
 （`selectors.response` が実機で正しいことが前提。`probe.py followup` で `read_mode: dom` にして確認できる）。
 
+### 画面なし（headless）で動かす
+
+`headless: true`（または `--headless`）で Edge を画面なしで動かせる。コピーボタンがクリップボードに届かないことが
+あるため `read_mode: dom` と組み合わせる（headless で `clipboard` のままなら自動で `auto` にする）。
+SSO の Cookie は専用プロファイルに残るので、初回だけ画面ありで起動してログインを済ませておくと確実。
+`start.bat` の既定は画面あり。例: `python server.py --headless --read-mode dom`
+
 ### 会話の記録と Copilot 側の履歴の掃除
 
 中継を通した会話は Copilot の履歴に大量に残る。そこで:

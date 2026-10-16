@@ -71,6 +71,9 @@ class Config:
     reply_timeout_sec: float = 600.0
     # 空きウインドウを待つ上限
     acquire_timeout_sec: float = 900.0
+    # 画面なしで Edge を動かす（--headless=new）。コピーボタンがクリップボードに届かないことがあるので
+    # read_mode は dom（または auto）にする。初回のログインは画面ありで済ませておくと確実
+    headless: bool = False
     # ウインドウを並べる位置（index 順に横へずらす）
     window_width: int = 900
     window_height: int = 900

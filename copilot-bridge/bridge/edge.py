@@ -56,6 +56,9 @@ class EdgeWorker(Worker):
             opts.add_argument(f"--user-data-dir={profile}")
         for flag in THROTTLE_FLAGS:
             opts.add_argument(flag)
+        if self.cfg.headless:
+            opts.add_argument("--headless=new")
+            opts.add_argument(f"--window-size={self.cfg.window_width},{self.cfg.window_height}")
         opts.add_experimental_option("excludeSwitches", ["enable-automation"])
         return webdriver.Edge(service=service, options=opts)
 
@@ -64,6 +67,13 @@ class EdgeWorker(Worker):
         # ことがある（"Chrome instance exited"）。profile_mode=auto なら separate → temp → bare の順に試す
         modes = (["separate", "temp", "bare", "manager"] if self.cfg.profile_mode == "auto"
                  else [self.cfg.profile_mode])
+        if self.cfg.headless:
+            # bare は起動オプションを付けないので headless にならない
+            modes = [m for m in modes if m != "bare"] or ["separate"]
+            if self.cfg.read_mode == "clipboard":
+                self.cfg.read_mode = "auto"
+                self._log("headless のため read_mode を auto（画面の要素→だめならクリップボード）にします。"
+                          "確実にするには config で read_mode: dom を指定してください")
         last: Exception | None = None
         for mode in modes:
             try:
