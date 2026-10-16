@@ -44,7 +44,7 @@
   const fail = (e) => toast(e.message || String(e), true);
   const titleOf = (p) => p.split("/").pop().replace(/\.md$/i, "");
   const isDoc = (p) => p.startsWith("@") || !/\.(md|markdown)$/i.test(p);
-  const CLIENT_VERSION = "0.6.5";          // サーバの __version__ と合わせる（tests/test_api が確認）
+  const CLIENT_VERSION = "0.6.6";          // サーバの __version__ と合わせる（tests/test_api が確認）
   const FT = { word: "W", excel: "X", powerpoint: "P", pdf: "PDF", email: "✉", csv: "CSV", html: "HTML", text: "TXT", code: "{ }", note: "MD", image: "IMG" };
   const GRP_NAME = { word: "Word", excel: "Excel", powerpoint: "PowerPoint", pdf: "PDF", email: "メール", csv: "CSV", html: "HTML", text: "テキスト", code: "データ", image: "画像" };
   const fmtDate = (t) => { if (!t) return "—"; const d = new Date(t * 1000), now = new Date(); return d.getFullYear() === now.getFullYear() ? d.toLocaleDateString("ja-JP", { month: "numeric", day: "numeric" }) : d.toLocaleDateString("ja-JP", { year: "numeric", month: "numeric", day: "numeric" }); };
@@ -2751,6 +2751,8 @@
         <label></label><label class="ck"><input type="checkbox" id="cExtShow"${cfg.ext_show_switch ? " checked" : ""}> 質問欄に「🏠 ローカル ／ ☁ 外部 API」の切り替えを表示する（既定: 非表示）</label>
         <div class="help">非表示のあいだ、質問欄は常にローカル LLM に送ります。外部 API を使うときだけオンにしてください（「既定の接続先」を外部にした場合は表示に関係なく外部へ送られます）。</div>
         <label for="cExtProv">接続方式</label><select id="cExtProv"><option value="openai"${cfg.ext_provider !== "azure" ? " selected" : ""}>OpenAI API</option><option value="azure"${cfg.ext_provider === "azure" ? " selected" : ""}>Azure OpenAI</option></select>
+        <label for="cExtStyle">API の形式</label><select id="cExtStyle"><option value="chat"${cfg.ext_api_style !== "responses" ? " selected" : ""}>Chat Completions（/chat/completions）</option><option value="responses"${cfg.ext_api_style === "responses" ? " selected" : ""}>Responses API（/responses）</option></select>
+        <div class="help">gpt-5 系は両方で使えます。Responses API では上限を <code>max_output_tokens</code>、推論の深さを <code>reasoning.effort</code>、回答の長さを <code>text.verbosity</code>、system を <code>instructions</code> として送ります。Chat Completions で「Responses API でしか使えない」と返されたモデルは自動で切り替えます。</div>
         <label for="cExtUrl">Base URL</label><input id="cExtUrl" type="text" value="${v("ext_base_url")}" placeholder="https://api.openai.com/v1">
         <div class="help">https:// のみ。社内・ローカルのアドレスは登録できません（ローカル LLM の欄へ）。</div>
         <label for="cExtKey">API キー</label><input id="cExtKey" type="password" autocomplete="off" placeholder="${cfg.has_ext_api_key ? "設定済み（変更する場合だけ入力）" : "sk-…"}">
@@ -2782,7 +2784,7 @@
         rag_pool: $("#cPool", body).value, rag_top_k: $("#cTopK", body).value, rag_rerank: $("#cRerank", body).value, rag_rerank_pool: $("#cRerankPool", body).value,
         vlm_model: $("#cVlm", body).value, attachment_folder: $("#cAttach", body).value,
         ext_enabled: $("#cExtOn", body).checked, ext_provider: $("#cExtProv", body).value, ext_base_url: $("#cExtUrl", body).value, ext_model: $("#cExtModel", body).value,
-        ext_api_version: $("#cExtVer", body).value, ext_proxy_url: $("#cExtProxy", body).value, ext_reasoning_effort: $("#cExtEffort", body).value, ext_verbosity: $("#cExtVerb", body).value, ext_show_switch: $("#cExtShow", body).checked, llm_backend: ($("input[name=cBk]:checked", body) || {}).value || "local",
+        ext_api_version: $("#cExtVer", body).value, ext_proxy_url: $("#cExtProxy", body).value, ext_reasoning_effort: $("#cExtEffort", body).value, ext_verbosity: $("#cExtVerb", body).value, ext_api_style: $("#cExtStyle", body).value, ext_show_switch: $("#cExtShow", body).checked, llm_backend: ($("input[name=cBk]:checked", body) || {}).value || "local",
         plugins: $$("[data-plug]", body).filter((c) => c.checked).map((c) => c.dataset.plug),
       };
       if ($("#cKey", body).value) d.api_key = $("#cKey", body).value;

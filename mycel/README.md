@@ -283,6 +283,19 @@ GraphRAG は文書全体にまたがる「誰と誰がどうつながってい�
   | Ollama / LM Studio / vLLM などローカルの互換サーバ | `max_tokens` | 送る | 送らない（gpt-oss など推論モデル名のときは推論モデル扱い） |
 
   - API が HTTP 400 で拒否したパラメータ（`max_tokens` / `max_completion_tokens` / `temperature` / `top_p` / `reasoning_effort` / `verbosity`、`system` ロール）は返事の文面から推定し、置き換える・外す・user に畳み込むをしてやり直します
+  - **Responses API**（設定「API の形式」`ext_api_style=responses`）にも対応。パラメータ名が Chat Completions と異なるため、次のように変換して `/responses` に送ります。
+    Chat Completions で「このモデルは Responses API でしか使えない」と返されたときは自動で切り替えます
+
+    | Chat Completions | Responses API |
+    |---|---|
+    | `messages`（system / user / assistant） | `instructions`（system をまとめる）＋ `input`（`input_text` / `output_text` / 画像は `input_image`） |
+    | `max_tokens` / `max_completion_tokens` | `max_output_tokens`（空のまま切れたら 16384 まで増やして再試行） |
+    | `reasoning_effort` | `reasoning: {effort}` |
+    | `verbosity` | `text: {verbosity}` |
+    | 応答 `choices[0].message.content` | `output[]` の `message` → `content[]` の `output_text`（`status: incomplete` も扱う） |
+    | （保存なし） | `store: false` を明示（サーバ側に会話を残さない） |
+
+    Azure では `/openai/responses?api-version=2025-03-01-preview` 以降（古い版は自動で 2025-04-01-preview）で、body の `model` にデプロイ名を入れます
   - Azure の推論モデルは `api-version` が 2024-12-01-preview より古いと使えないため、推論モデルへの要求だけ自動で 2025-04-01-preview を使います（既定も 2025-04-01-preview）
   - 設定の「保存して接続テスト（外部）」は、送信先・モデル・**実際に送ったパラメータ**・自動調整の内容を表示します。gpt-5-mini などで失敗したときは、この表示とエラー文を控えてください
 - 設定は `mycel/mycel.config.json` に保存されます（API キーを含むため .gitignore 済み。画面にはキーを返しません）
