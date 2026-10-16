@@ -32,7 +32,7 @@ for _stream in (sys.stdout, sys.stderr):  # Windows コンソールで出せな�
 from bridge.config import load_config  # noqa: E402
 from bridge.edge import EdgeWorker  # noqa: E402
 from bridge.protocol import (  # noqa: E402
-    NUDGE, needs_nudge, normalize_message, parse_reply, render_delta, render_opening,
+    needs_nudge, normalize_message, nudge_text, parse_reply, render_delta, render_opening,
 )
 
 FAKE_FS = {
@@ -106,12 +106,12 @@ def probe_long(cfg, a):
         w.close()
 
 
-def _agent_loop(w: EdgeWorker, task: str, turns: int, cfg_nudges: int = 2) -> dict:
+def _agent_loop(w: EdgeWorker, task: str, turns: int, cfg_nudges: int = 2, lang: str = "ja") -> dict:
     """擬似エージェント: ツール結果を返しながら形式遵守を数える。"""
-    msgs = [normalize_message({"role": "system", "content": "あなたは小さなコード作業を行うエージェントです。必ずツールで確認してから答えてください。"}),
+    msgs = [normalize_message({"role": "system", "content": "あなたは小さなコード作業を進める担当です。内容は必ず操作の結果で確認してから答えてください。"}),
             normalize_message({"role": "user", "content": task})]
-    text = render_opening(msgs, TOOLS)
-    stats = {"turns": 0, "parsed": 0, "no_call": 0, "nudges": 0, "latency": [], "final": ""}
+    text = render_opening(msgs, TOOLS, lang=lang)
+    stats = {"turns": 0, "parsed": 0, "no_call": 0, "nudges": 0, "latency": [], "final": "", "lang": lang}
     for _ in range(turns):
         t0 = time.time()
         reply = w.send(text)
@@ -124,7 +124,7 @@ def _agent_loop(w: EdgeWorker, task: str, turns: int, cfg_nudges: int = 2) -> di
             n += 1
             stats["nudges"] += 1
             stats.setdefault("nudged_replies", []).append(reply[:200])
-            reply = w.send(NUDGE)
+            reply = w.send(nudge_text(lang))
             content, calls = parse_reply(reply)
         if "<tool_call>" in reply and not calls:
             stats.setdefault("broken", []).append(reply[:300])
@@ -142,14 +142,17 @@ def _agent_loop(w: EdgeWorker, task: str, turns: int, cfg_nudges: int = 2) -> di
             results.append(normalize_message({"role": "tool", "name": c["function"]["name"],
                                               "tool_call_id": c["id"],
                                               "content": run_tool(c["function"]["name"], args)}))
-        text = render_delta(results)
+        text = render_delta(results, lang=lang)
     return stats
 
 
 def probe_toolcall(cfg, a):
     (w,) = start_workers(cfg, 1)
     try:
-        stats = _agent_loop(w, "src 配下の Python を読み、README の合言葉を src/util.py の末尾にコメントで追記してください。終わったら何をしたか報告してください。", a.turns, cfg.nudge_retries)
+        task = ("src 配下の Python を読み、README の合言葉を src/util.py の末尾にコメントで追記してください。終わったら何をしたか報告してください。"
+                if cfg.prompt_lang == "ja" else
+                "Read the Python files under src, then append the passphrase found in README as a comment at the end of src/util.py. Finally report what you did.")
+        stats = _agent_loop(w, task, a.turns, cfg.nudge_retries, cfg.prompt_lang)
         stats["util_py"] = FAKE_FS["src/util.py"]
         print(json.dumps(stats, ensure_ascii=False, indent=1))
     finally:
@@ -231,6 +234,8 @@ def main(argv=None):
                    help="回答の読み取り方式（既定 clipboard。dom はクリップボードを使わない）")
     p.add_argument("--headless", dest="headless", action="store_const", const=True, default=None,
                    help="Edge を画面なしで動かす（read_mode は dom 推奨）")
+    p.add_argument("--prompt-lang", dest="prompt_lang", choices=["ja", "en"],
+                   help="規則文の言語（既定 ja。日本語で断られるときは en を試す）")
     sub = p.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("login")
     s.add_argument("--windows", type=int, default=1)
@@ -245,7 +250,8 @@ def main(argv=None):
     a = p.parse_args(argv)
     cfg = load_config(a.config, {"driver_path": a.driver_path, "chat_url": a.chat_url,
                                  "profile_mode": a.profile_mode, "input_mode": a.input_mode,
-                                 "read_mode": a.read_mode, "headless": a.headless})
+                                 "read_mode": a.read_mode, "headless": a.headless,
+                                 "prompt_lang": a.prompt_lang})
     # サーバ（server.py）の Edge と同じプロファイルを取り合わないよう、試験は別の置き場を使う
     # （同じ --user-data-dir を 2 つ目の Edge が開くと "Chrome instance exited" で即終了する）
     cfg.profile_dir = str(cfg.resolved_profile_dir() / "probe")

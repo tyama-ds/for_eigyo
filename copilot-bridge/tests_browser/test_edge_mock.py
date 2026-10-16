@@ -95,7 +95,7 @@ class EdgeMockTests(unittest.TestCase):
         tools = [{"type": "function", "function": {"name": "read_file", "parameters": {
             "type": "object", "properties": {"path": {"type": "string"}}}}}]
         r1 = w.send(render_opening(msgs, tools))
-        self.assertIn("head=あなたはコー", r1)   # 規則文の先頭
+        self.assertIn("head=あなたは", r1)   # 規則文の先頭
         self.assertIn("tail=行3 END", r1)        # 2 万字を越えて末尾まで届いた
         _, calls = parse_reply(r1)
         self.assertEqual(calls[0]["function"]["name"], "read_file")

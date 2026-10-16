@@ -77,7 +77,7 @@ class ChatTests(ServerTestCase):
         self.assertEqual(r1["choices"][0]["finish_reason"], "tool_calls")
         self.assertEqual(m1["tool_calls"][0]["function"]["name"], "read_file")
         self.assertEqual(json.loads(m1["tool_calls"][0]["function"]["arguments"]), {"path": "a.txt"})
-        self.assertIn("【利用できるツール】", seen[0])
+        self.assertIn("【オペレーターが実行できる操作】", seen[0])
         self.assertIn("read_file", seen[0])
 
         msgs2 = msgs + [m1, {"role": "tool", "tool_call_id": m1["tool_calls"][0]["id"],
@@ -87,7 +87,7 @@ class ChatTests(ServerTestCase):
         self.assertIn("hello", r2["choices"][0]["message"]["content"])
         # 2 回目は差分（ツール結果）だけが送られ、規則は再送されない
         self.assertIn('<tool_result name="read_file">', seen[1])
-        self.assertNotIn("【利用できるツール】", seen[1])
+        self.assertNotIn("【オペレーターが実行できる操作】", seen[1])
 
         st = self.get("/status")
         sess = [s for s in st["sessions"] if s["turns"] == 2]
@@ -173,7 +173,7 @@ class NudgeTests(ServerTestCase):
                        "tools": TOOLS})
         self.assertEqual(r["choices"][0]["finish_reason"], "tool_calls")
         self.assertEqual(len(seen), 2)
-        self.assertIn("直接アクセスできません", seen[1])   # 言い直しが送られた
+        self.assertIn("オペレーターへの指示の書式", seen[1])   # 言い直しが送られた
         self.assertIn("【回答の例】", seen[0])
         self.assertIn('"name": "read_file"', seen[0])     # 例は実際のツール名
 

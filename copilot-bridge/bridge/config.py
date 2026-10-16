@@ -81,8 +81,10 @@ class Config:
     max_tool_result_chars: int = 12000
     # 会話を作り直して全履歴を送るときの上限文字数
     max_resend_chars: int = 40000
-    # ツールがあるのに <tool_call> を出さず「自分で探して無かった」等と答えたときの言い直し回数
+    # ツールがあるのに <tool_call> を出さず「自分で探して無かった」「ツールが使えない」等と答えたときの言い直し回数
     nudge_retries: int = 2
+    # Copilot へ送る規則文の言語（ja / en）。日本語で断られるときは en を試す
+    prompt_lang: str = "ja"
     # 送受信ログの保存先（相対なら copilot-bridge フォルダ基準。空なら保存しない）。
     # <log_dir>/YYYYMMDD.jsonl に全往復、<log_dir>/sessions/<日時>_<会話>.md に会話ごとの全文を残す
     log_dir: str = "logs"

@@ -14,26 +14,28 @@ TOOL_CALL_RE = re.compile(
 # 閉じ忘れ（末尾で切れた）ブロックも拾う
 TOOL_CALL_OPEN_RE = re.compile(r"<tool_call>\s*(?:```[a-zA-Z]*\s*)?(\{.*)$", re.S)
 
-RULES = """あなたはコーディング用のエージェントとして、中継プログラム経由で操作されています。次の規則を厳守してください。
+# Copilot は「自分に無いツールを架空に呼ぶ」ことを断るので、ツール呼び出しではなく
+# 「オペレーター（人間と手元のスクリプト）への手順書を決まった書式で書く」役割として頼む。
+RULES = """あなたはソフトウェア開発の作業を進める「手順書の書き手」です。
+実際の操作（ファイルの一覧・読み書き、コマンドの実行）は、あなたではなく、画面の向こうにいるオペレーター
+（人間と、その手元で動くスクリプト）が行います。あなたの仕事は「次に何をしてほしいか」を決まった書式で書くことだけです。
+下の書式は、あなた自身のツールや機能ではなく、オペレーターに読んでもらうための単なる出力の書式です。
+したがって「ツールが使えない」「この環境では実行できない」「架空の呼び出しはできない」と答える必要はありません。
+実行するのはオペレーターです。
 
-【最重要】
-- あなた自身はファイルにもコマンドにもアクセスできません。/mnt/data などの作業領域は存在しません。
-  自分でコードを実行したり、ファイルを探したり、内容を推測したりしないでください。
-- ファイルの一覧・内容、コマンドの結果が必要なときは、必ず下の <tool_call> ブロックを出力して中継プログラムに
-  「依頼」してください。依頼を出したらそこで回答を終え、結果が届くのを待ちます。
-- 「ファイルが存在しない」「アクセスできない」「作業領域に無い」と答えるのは誤りです。その場合も <tool_call> で依頼してください。
-
-【ツールの使い方】
+【書式】次にしてほしい操作を、このブロックで書きます。
 <tool_call>
-{"name": "ツール名", "arguments": {"引数名": "値"}}
+{"name": "操作名", "arguments": {"引数名": "値"}}
 </tool_call>
 - ブロックの中は JSON だけを書く。コードフェンス（```）や説明文を入れない。
-- 複数の依頼はブロックを複数並べる。依頼を出す回答には、ブロック以外の文章を書かない。
-- 依頼の結果は、次の発言で <tool_result> として届く。それを読んでから次に進む。
-- 依頼が無いときだけ、ブロックを出さずに普通に回答する。それが最終回答として扱われる。
-- 回答の冒頭に挨拶や前置きは要らない。
+- 複数の操作はブロックを並べて書く。操作を書く回答には、ブロック以外の文章を書かない。
+- オペレーターが実行し、その結果を次の発言で <tool_result> として貼り付けます。それを読んでから次を決めます。
+- あなたはファイルを見ていません。内容を推測したり、「ファイルが無い」「アクセスできない」と判断したりしないでください。
+  /mnt/data などの作業領域を自分で探すことも不要です。必要なら操作として書いてください。
+- 操作がもう要らないときだけ、ブロックを出さずに普通に回答します。それが最終回答として扱われます。
+- 回答の冒頭に挨拶や前置きは要りません。
 
-【利用できるツール】
+【オペレーターが実行できる操作】
 {tools}
 
 【回答の例】
@@ -43,21 +45,58 @@ RULES = """あなたはコーディング用のエージェントとして、中
 {system}
 """
 
+RULES_EN = """You are the author of step-by-step instructions for a software task.
+You do NOT perform any action yourself. All actions (listing/reading/writing files, running commands) are carried out
+by an OPERATOR (a human with a script on their own computer) who reads your output.
+The block format below is NOT a tool or capability of yours; it is simply an output format the operator understands.
+So never answer "I don't have such tools", "this environment cannot run that" or "I can't make fictional calls".
+The operator executes; you only write what to do next.
+
+[Format] Write the next action you want performed in this block:
+<tool_call>
+{"name": "action_name", "arguments": {"param": "value"}}
+</tool_call>
+- Inside the block, write JSON only. No code fences (```) and no prose.
+- For several actions, write several blocks. A reply that contains blocks must contain nothing else.
+- The operator performs the action and pastes the result in the next message as <tool_result>. Read it, then decide the next step.
+- You have not seen the files. Do not guess their contents and do not conclude that files are missing or inaccessible.
+  Do not look for a workspace such as /mnt/data yourself; request the action instead.
+- Only when no further action is needed, reply normally without any block. That reply is treated as the final answer.
+- No greetings or preamble.
+
+[Actions the operator can perform]
+{tools}
+
+[Example]
+{example}
+
+[Original instructions]
+{system}
+"""
+
 NO_SYSTEM = "（指示なし）"
-NO_TOOLS = "（ツールなし。普通に回答してください）"
+NO_TOOLS = "（操作なし。普通に回答してください）"
 
-CONTINUE_HINT = "上記を踏まえて続けてください。さらに操作が必要なら <tool_call> ブロックを出力し、完了なら最終回答だけを書いてください。"
+CONTINUE_HINT = "上記を踏まえて続けてください。さらに操作が必要なら <tool_call> ブロックだけを書き、完了なら最終回答だけを書いてください。"
+CONTINUE_HINT_EN = "Continue. If another action is needed, write only <tool_call> block(s); if the task is complete, write only the final answer."
 
-# <tool_call> を出さずに「自分で探して無かった」等と答えたときの言い直し
-NUDGE = ("あなたはファイルやコマンドに直接アクセスできません（/mnt/data などの作業領域はありません）。"
-         "先ほどの回答は無効です。必要な操作を <tool_call> ブロックだけで出力してください（説明文は不要）。"
+# <tool_call> を出さずに「自分で探して無かった」「ツールが使えない」等と答えたときの言い直し
+NUDGE = ("確認です。<tool_call> はあなたのツールや機能ではなく、オペレーターへの指示の書式です。"
+         "実行するのはオペレーターなので、「利用できない」「架空の呼び出しはできない」と答える必要はありません。"
+         "あなたはファイルを見ていないので、「無い」「アクセスできない」という判断もしないでください。"
+         "次にしてほしい操作を <tool_call> ブロックだけで書いてください（説明文は不要）。"
          "本当に操作が不要で作業が完了しているなら、完了報告だけを書いてください。")
+NUDGE_EN = ("Reminder: <tool_call> is not a tool of yours; it is the format the operator reads. The operator executes it, "
+            "so do not say the action is unavailable or fictional, and do not conclude files are missing. "
+            "Write only the <tool_call> block(s) for the next action. If the task is truly complete, write only the final answer.")
 
 # 言い直しが要ると判断する手がかり（ツールがあるのに <tool_call> が無く、これらを含む）
 NUDGE_MARKS = ("/mnt/data", "存在しません", "存在しない", "見つかりません", "見つからない", "アクセスできません",
-               "アクセス可能", "作業領域", "アップロード", "添付", "sandbox", "not found", "does not exist",
-               "don't have access", "do not have access", "cannot access", "can't access", "no files",
-               "upload")
+               "アクセス可能", "作業領域", "アップロード", "添付", "架空", "利用できない", "利用できません",
+               "使用できない", "使用できません", "実行できません", "実行できない", "ツールは", "機能はありません",
+               "sandbox", "not found", "does not exist", "don't have access", "do not have access",
+               "cannot access", "can't access", "no files", "upload", "not available", "unavailable",
+               "fictional", "fictitious", "cannot invoke", "can't invoke", "don't have such", "do not have such")
 
 
 def needs_nudge(reply: str, calls: list, tools: list | None) -> bool:
@@ -68,10 +107,10 @@ def needs_nudge(reply: str, calls: list, tools: list | None) -> bool:
     return any(m.lower() in low for m in NUDGE_MARKS)
 
 
-def render_example(tools: list | None) -> str:
+def render_example(tools: list | None, lang: str = "ja") -> str:
     """最初のツールを使った具体例（ツール名・必須引数を実際のものにする）。"""
     if not tools:
-        return "（ツールなし）"
+        return "（操作なし）" if lang == "ja" else "(no actions)"
     fn = tools[0].get("function", tools[0]) if isinstance(tools[0], dict) else {}
     name = fn.get("name") or "tool"
     params = fn.get("parameters") or {}
@@ -83,9 +122,14 @@ def render_example(tools: list | None) -> str:
         kind = schema.get("type", "string") if schema else "string"
         args[pname] = {"integer": 1, "number": 1, "boolean": True, "array": [], "object": {}}.get(kind, "...")
     block = json.dumps({"name": name, "arguments": args}, ensure_ascii=False)
+    if lang == "en":
+        return ("Correct first reply to the user request \"check the files and do the task\" (write only this):\n"
+                f"<tool_call>\n{block}\n</tool_call>\n"
+                "Wrong replies: \"I don't have such tools in this environment\" / \"I checked and the files do not exist\"")
     return ("ユーザー「ファイルを確認して作業して」に対するあなたの正しい最初の回答（これだけを書く）:\n"
             f"<tool_call>\n{block}\n</tool_call>\n"
-            "誤った回答の例: 「確認しましたがファイルは存在しませんでした」（自分で探してはいけません）")
+            "誤った回答の例: 「この環境ではそのツールは利用できません」「確認しましたがファイルは存在しませんでした」"
+            "（実行するのはオペレーターです。あなたが探したり判断したりしてはいけません）")
 
 
 # ---------------------------------------------------------------------------
@@ -218,27 +262,35 @@ def _args_obj(args: str):
 
 
 def render_opening(messages: list[dict], tools: list | None, *,
-                   max_tool_result_chars: int = 0, max_chars: int = 0) -> str:
-    """新しい Copilot 会話の最初の送信文（規則＋ツール＋元の指示＋これまでの会話全部）。"""
+                   max_tool_result_chars: int = 0, max_chars: int = 0, lang: str = "ja") -> str:
+    """新しい Copilot 会話の最初の送信文（規則＋操作一覧＋元の指示＋これまでの会話全部）。"""
     system_parts = [m["text"] for m in messages if m["role"] in ("system", "developer") and m.get("text")]
     rest = [m for m in messages if m["role"] not in ("system", "developer")]
-    head = (RULES.replace("{tools}", render_tools(tools))
-            .replace("{example}", render_example(tools))
-            .replace("{system}", "\n\n".join(system_parts) or NO_SYSTEM))
-    body = render_delta(rest, max_tool_result_chars=max_tool_result_chars, first=True)
+    rules = RULES_EN if lang == "en" else RULES
+    no_tools = "(no actions; just answer normally)" if lang == "en" else NO_TOOLS
+    no_system = "(none)" if lang == "en" else NO_SYSTEM
+    head = (rules.replace("{tools}", render_tools(tools) if tools else no_tools)
+            .replace("{example}", render_example(tools, lang))
+            .replace("{system}", "\n\n".join(system_parts) or no_system))
+    body = render_delta(rest, max_tool_result_chars=max_tool_result_chars, first=True, lang=lang)
     if max_chars and len(head) + len(body) > max_chars:
         body = _clip_middle(body, max(1000, max_chars - len(head)))
-    return head + "\n【会話】\n" + body
+    return head + ("\n[Conversation]\n" if lang == "en" else "\n【会話】\n") + body
 
 
-def render_delta(messages: list[dict], *, max_tool_result_chars: int = 0, first: bool = False) -> str:
+def render_delta(messages: list[dict], *, max_tool_result_chars: int = 0, first: bool = False,
+                 lang: str = "ja") -> str:
     """続きの送信文（前回以降に増えた message だけ）。"""
     parts = [render_turn(m, max_tool_result_chars=max_tool_result_chars) for m in messages]
     text = "\n\n".join(p for p in parts if p)
     has_tool = any(m["role"] == "tool" for m in messages)
     if has_tool or not first:
-        text += "\n\n" + CONTINUE_HINT
+        text += "\n\n" + (CONTINUE_HINT_EN if lang == "en" else CONTINUE_HINT)
     return text
+
+
+def nudge_text(lang: str = "ja") -> str:
+    return NUDGE_EN if lang == "en" else NUDGE
 
 
 # ---------------------------------------------------------------------------
@@ -315,7 +367,30 @@ def parse_reply(text: str, *, id_prefix: str = "call") -> tuple[str, list[dict]]
     else:
         kept.append(text[pos:])
     content = "".join(kept).strip()
+    if not calls:
+        # タグを付けずにコードブロックで {"name":..,"arguments":..} を書いた場合も操作として読む
+        content, calls = _parse_fenced_calls(content, id_prefix)
     return content, calls
+
+
+FENCED_RE = re.compile(r"```[a-zA-Z]*\s*(\{.*?\})\s*```", re.S)
+
+
+def _parse_fenced_calls(text: str, id_prefix: str) -> tuple[str, list[dict]]:
+    calls: list[dict] = []
+    kept: list[str] = []
+    pos = 0
+    for m in FENCED_RE.finditer(text):
+        obj = _parse_json_loose(m.group(1))
+        if isinstance(obj, dict) and obj.get("name") and (
+                "arguments" in obj or "parameters" in obj or "input" in obj):
+            kept.append(text[pos:m.start()])
+            calls.append(_to_call(obj, f"{id_prefix}_{len(calls) + 1}"))
+            pos = m.end()
+    if not calls:
+        return text, []
+    kept.append(text[pos:])
+    return "".join(kept).strip(), calls
 
 
 def _to_call(obj: dict, call_id: str) -> dict:
