@@ -370,7 +370,62 @@ def parse_reply(text: str, *, id_prefix: str = "call") -> tuple[str, list[dict]]
     if not calls:
         # タグを付けずにコードブロックで {"name":..,"arguments":..} を書いた場合も操作として読む
         content, calls = _parse_fenced_calls(content, id_prefix)
+    if not calls:
+        # 画面から読むと <tool_call> タグが Markdown 描画で消えることがある。裸の JSON も操作として読む
+        content, calls = _parse_bare_calls(content, id_prefix)
     return content, calls
+
+
+BARE_START_RE = re.compile(r'\{\s*"name"\s*:')
+
+
+def _parse_bare_calls(text: str, id_prefix: str) -> tuple[str, list[dict]]:
+    calls: list[dict] = []
+    kept: list[str] = []
+    pos = 0
+    for m in BARE_START_RE.finditer(text):
+        if m.start() < pos:
+            continue
+        obj = _parse_json_loose(text[m.start():])
+        if not (isinstance(obj, dict) and obj.get("name") and (
+                "arguments" in obj or "parameters" in obj or "input" in obj)):
+            continue
+        # 対応する閉じ括弧の位置を求める（_parse_json_loose と同じ走査）
+        end = _balanced_end(text, m.start())
+        if end < 0:
+            continue
+        kept.append(text[pos:m.start()])
+        calls.append(_to_call(obj, f"{id_prefix}_{len(calls) + 1}"))
+        pos = end + 1
+    if not calls:
+        return text, []
+    kept.append(text[pos:])
+    return "".join(kept).strip(), calls
+
+
+def _balanced_end(raw: str, start: int) -> int:
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(raw)):
+        ch = raw[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+    return -1
 
 
 FENCED_RE = re.compile(r"```[a-zA-Z]*\s*(\{.*?\})\s*```", re.S)

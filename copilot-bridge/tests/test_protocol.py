@@ -107,6 +107,17 @@ class ParseTests(unittest.TestCase):
         self.assertIn("[Actions the operator can perform]", en)
         self.assertIn("read_file", en)
 
+    def test_bare_json_without_tags(self):
+        # 画面から読むと <tool_call> タグが消え、JSON だけが残ることがある
+        text = 'ファイルを読みます。\n{"name": "read_file", "arguments": {"path": "a.py"}}\n{"name": "read_file", "arguments": {"path": "b.py"}}'
+        content, calls = parse_reply(text)
+        self.assertEqual([json.loads(c["function"]["arguments"])["path"] for c in calls], ["a.py", "b.py"])
+        self.assertEqual(content, "ファイルを読みます。")
+
+    def test_plain_json_answer_without_arguments_is_not_a_call(self):
+        content, calls = parse_reply('設定は {"name": "x", "value": 1} です。')
+        self.assertEqual(calls, [])
+
     def test_trailing_text_after_json(self):
         _, calls = parse_reply('<tool_call>{"name": "a", "arguments": {}} ← これを実行</tool_call>')
         self.assertEqual(calls[0]["function"]["name"], "a")

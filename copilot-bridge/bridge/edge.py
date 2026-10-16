@@ -476,12 +476,38 @@ class EdgeWorker(Worker):
         return self._read_last_reply_dom()
 
     def _read_last_reply_dom(self) -> str:
+        """画面の回答本文を読む。selectors.response で見つからなければ、最後の「応答のコピー」ボタンの
+        祖先をたどって本文を含む要素を探す（セレクタが分からなくても読めるようにする）。"""
         from selenium.webdriver.common.by import By
 
         nodes = self.driver.find_elements(By.CSS_SELECTOR, self.sel["response"])
         if nodes:
             return nodes[-1].get_attribute("innerText") or nodes[-1].text or ""
-        return ""
+        buttons = self.driver.find_elements(By.CSS_SELECTOR, self.sel["copy_button"])
+        if not buttons:
+            return ""
+        try:
+            text = self.driver.execute_script(
+                """
+                var el = arguments[0], editorSel = arguments[1], copySel = arguments[2];
+                var editor = document.querySelector(editorSel);
+                var best = '';
+                for (var i = 0; i < 12 && el; i++) {
+                  el = el.parentElement;
+                  if (!el) break;
+                  if (editor && el.contains(editor)) break;              // 入力欄まで含む大きさは行き過ぎ
+                  if (el.querySelectorAll(copySel).length > 1) break;    // 他の回答まで含んだら行き過ぎ
+                  // ボタン類（コピー・いいね等）を除いた本文
+                  var clone = el.cloneNode(true);
+                  clone.querySelectorAll('button, [role=toolbar], [role=button]').forEach(function (b) { b.remove(); });
+                  var body = (clone.innerText || '').trim();
+                  if (body.length > 0) best = body;                      // 広げられる限り広げた入れ物の本文
+                }
+                return best;
+                """, buttons[-1], self.sel["editor"], self.sel["copy_button"])
+            return text or ""
+        except Exception:  # noqa: BLE001
+            return ""
 
     def send(self, text: str) -> str:
         ok, reason = self._alive()
