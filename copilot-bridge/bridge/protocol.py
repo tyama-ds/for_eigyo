@@ -99,6 +99,53 @@ NUDGE_MARKS = ("/mnt/data", "存在しません", "存在しない", "見つか�
                "fictional", "fictitious", "cannot invoke", "can't invoke", "don't have such", "do not have such")
 
 
+NUDGE_INVALID = ("操作名は【オペレーターが実行できる操作】にあるものだけを使い、arguments は JSON オブジェクト（{...}）で"
+                 "書いてください。先ほどの回答には一覧に無い操作名、または形の違う arguments がありました: {bad}。"
+                 "正しい操作を <tool_call> ブロックだけで書き直してください。")
+NUDGE_INVALID_EN = ("Use only action names listed under [Actions the operator can perform], and write arguments as a JSON "
+                    "object ({...}). Your last reply had an unknown action name or malformed arguments: {bad}. "
+                    "Rewrite the correct action(s) as <tool_call> block(s) only.")
+
+
+def tool_names(tools: list | None) -> set[str]:
+    names = set()
+    for t in tools or []:
+        fn = t.get("function", t) if isinstance(t, dict) else {}
+        if fn.get("name"):
+            names.add(str(fn["name"]))
+    return names
+
+
+def validate_calls(calls: list[dict], tools: list | None) -> tuple[list[dict], list[str]]:
+    """操作名が一覧にあり、arguments が JSON オブジェクトのものだけ残す。残りは理由つきで返す。
+
+    agent-workbench 等は未知のツール名や壊れた引数を含む応答を丸ごと拒否するので、中継側で弾いて言い直させる。
+    """
+    allowed = tool_names(tools)
+    good: list[dict] = []
+    bad: list[str] = []
+    for c in calls:
+        name = c["function"]["name"]
+        if allowed and name not in allowed:
+            bad.append(f"{name}（一覧に無い）")
+            continue
+        try:
+            args = json.loads(c["function"]["arguments"] or "{}")
+        except json.JSONDecodeError:
+            bad.append(f"{name}（arguments が JSON でない）")
+            continue
+        if not isinstance(args, dict):
+            bad.append(f"{name}（arguments がオブジェクトでない）")
+            continue
+        good.append(c)
+    return good, bad
+
+
+def nudge_invalid_text(bad: list[str], lang: str = "ja") -> str:
+    tpl = NUDGE_INVALID_EN if lang == "en" else NUDGE_INVALID
+    return tpl.replace("{bad}", ", ".join(bad)[:300])
+
+
 def needs_nudge(reply: str, calls: list, tools: list | None) -> bool:
     """ツールがあるのにツール呼び出しが無く、自前で探して無かった／アクセスできない旨の回答なら True。"""
     if calls or not tools:
