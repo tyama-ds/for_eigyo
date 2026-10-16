@@ -294,6 +294,8 @@ def main(argv=None):
                    choices=["auto", "separate", "temp", "bare", "manager"])
     p.add_argument("--input-mode", dest="input_mode", choices=["auto", "js", "paste", "keys", "cdp"])
     p.add_argument("--read-mode", dest="read_mode", choices=["clipboard", "dom", "auto"])
+    p.add_argument("--headless", dest="headless", action="store_const", const=True, default=None,
+                   help="Edge を画面なしで動かす（read_mode は dom 推奨）")
     p.add_argument("--log-dir", dest="log_dir")
     a = p.parse_args(argv)
     cfg = load_config(a.config, {k: v for k, v in vars(a).items() if k != "config"})

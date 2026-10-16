@@ -68,6 +68,10 @@
   "log": [
     {
       "date": "2026-10-16",
+      "summary": "Edge を画面なしで動かす headless 設定（--headless）を追加。headless では read_mode を dom/auto にする"
+    },
+    {
+      "date": "2026-10-16",
       "summary": "回答の読み取りで使う Windows のクリップボードを退避・復元するようにし、クリップボードを使わない読み取り方式 read_mode=dom を追加（selectors.response が実機で正しいことが前提）"
     },
     {
