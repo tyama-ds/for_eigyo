@@ -133,6 +133,18 @@ def start_mock_llm():
                     err = "Unsupported value: 'temperature' does not support 0.2 with this model. Only the default (1) value is supported."
                 elif "reasoning_effort" in body and model == "strict-noeffort":
                     err = "Unrecognized request argument supplied: reasoning_effort"
+                elif model == "strict-nosystem" and body.get("messages") and body["messages"][0].get("role") == "system":
+                    err = "Unsupported value: 'messages[0].role' does not support 'system' with this model."
+                elif "verbosity" in body and model == "strict-noverb":
+                    err = "Unrecognized request argument supplied: verbosity"
+                if not err and model == "strict-length" and int(body.get("max_completion_tokens") or 0) < 8192:
+                    data = json.dumps({"choices": [{"message": {"role": "assistant", "content": ""}, "finish_reason": "length"}]}).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
                 if err:
                     data = json.dumps({"error": {"message": err, "type": "invalid_request_error", "param": None, "code": "unsupported_parameter"}}).encode()
                     self.send_response(400)

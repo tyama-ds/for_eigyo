@@ -42,9 +42,12 @@ def payload_style(cfg: dict, model: str) -> dict:
     reasoning = is_reasoning_model(model)
     official = cfg.get("provider") == "azure" or host.endswith(_OPENAI_HOSTS)
     effort = (cfg.get("reasoning_effort") or "").strip().lower()
+    gpt5 = (model or "").lower().startswith("gpt-5") and not (model or "").lower().startswith("gpt-5-chat")
+    verbosity = (cfg.get("verbosity") or "").strip().lower()
     return {"tokens_key": "max_completion_tokens" if (official or reasoning) else "max_tokens",
             "temperature": not reasoning, "reasoning": reasoning,
-            "reasoning_effort": effort if (reasoning and effort and effort != "auto") else ""}
+            "reasoning_effort": effort if (reasoning and effort and effort != "auto") else "",
+            "verbosity": verbosity if (gpt5 and verbosity in ("low", "medium", "high")) else ""}
 
 
 def _param_problem(msg: str) -> str | None:
@@ -60,6 +63,10 @@ def _param_problem(msg: str) -> str | None:
         return "temperature"
     if "top_p" in low and ("unsupported" in low or "not supported" in low):
         return "top_p"
+    if "verbosity" in low and ("unrecognized" in low or "unknown" in low or "unsupported" in low or "not supported" in low):
+        return "verbosity"
+    if "'system'" in low or "system message" in low or ("role" in low and "system" in low and ("unsupported" in low or "not supported" in low)):
+        return "system"
     return None
 
 _THINK_BLOCK_RE = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL | re.IGNORECASE)
@@ -162,7 +169,10 @@ class LLMClient:
         if cfg.get("provider") == "azure":
             if base.endswith("/openai"):
                 base = base[: -len("/openai")]
-            ver = urllib.parse.quote(cfg.get("api_version") or "2024-10-21")
+            api_ver = cfg.get("api_version") or "2024-10-21"
+            if kind == "chat" and is_reasoning_model(model) and api_ver[:10] < "2024-12-01":
+                api_ver = "2025-04-01-preview"          # 推論モデルは古い GA 版の api-version では使えない
+            ver = urllib.parse.quote(api_ver)
             url = f"{base}/openai/deployments/{urllib.parse.quote(model)}/{path}?api-version={ver}"
             if key:
                 headers["api-key"] = key
@@ -226,11 +236,14 @@ class LLMClient:
             payload["temperature"] = float(self.cfg.get("temperature", 0.2) if temperature is None else temperature)
         if style["reasoning_effort"]:
             payload["reasoning_effort"] = style["reasoning_effort"]
+        if style["verbosity"]:
+            payload["verbosity"] = style["verbosity"]
         if self.cfg.get("provider") != "azure":
             payload["model"] = model
         self.last_payload_keys = sorted(k for k in payload if k != "messages")
+        self.last_adjustments: list[str] = []
         data = None
-        for _ in range(4):                                # モデルが受け付けないパラメータは API の返事を見て外し、やり直す
+        for _ in range(6):                                # モデルが受け付けないパラメータは API の返事を見て外し、やり直す
             try:
                 data = self._post(url, headers, payload)
             except LLMError as e:
@@ -239,21 +252,35 @@ class LLMClient:
                     payload["max_completion_tokens"] = payload.pop("max_tokens")
                 elif problem == "max_completion_tokens" and "max_completion_tokens" in payload:
                     payload["max_tokens"] = payload.pop("max_completion_tokens")
-                elif problem in ("temperature", "top_p", "reasoning_effort") and problem in payload:
+                elif problem in ("temperature", "top_p", "reasoning_effort", "verbosity") and problem in payload:
                     payload.pop(problem)
+                elif problem == "system" and payload["messages"] and payload["messages"][0].get("role") == "system":
+                    sys_msg = payload["messages"][0]["content"]          # system を受け付けないモデル（古い o1-mini など）: 先頭の user に畳み込む
+                    rest = payload["messages"][1:]
+                    if rest and isinstance(rest[0].get("content"), str):
+                        rest[0] = {**rest[0], "content": f"{sys_msg}\n\n{rest[0]['content']}"}
+                    else:
+                        rest = [{"role": "user", "content": sys_msg}] + rest
+                    payload["messages"] = rest
                 else:
                     raise
+                self.last_adjustments.append(problem)
                 self.last_payload_keys = sorted(k for k in payload if k != "messages")
                 continue
-            break
-        if isinstance(data.get("error"), dict):
-            raise LLMError(f"LLM API エラー: {data['error'].get('message', data['error'])}")
-        choices = data.get("choices") or []
-        msg = (choices[0].get("message") or {}) if choices else {}
-        text = strip_think(msg.get("content") or "")
-        if not text and choices and choices[0].get("finish_reason") == "length":
-            raise LLMError("応答が空のまま上限に達しました（推論トークンで使い切った可能性）。設定の Max tokens を増やすか、推論の深さを下げてください")
-        return text
+            if isinstance(data.get("error"), dict):
+                raise LLMError(f"LLM API エラー: {data['error'].get('message', data['error'])}")
+            choices = data.get("choices") or []
+            msg = (choices[0].get("message") or {}) if choices else {}
+            text = strip_think(msg.get("content") or "")
+            if not text and choices and choices[0].get("finish_reason") == "length":
+                key = "max_completion_tokens" if "max_completion_tokens" in payload else "max_tokens"
+                if style["reasoning"] and payload[key] < 16384:           # 推論トークンで使い切った: 上限を増やして 1 回だけやり直す
+                    payload[key] = min(16384, payload[key] * 4)
+                    self.last_adjustments.append(f"{key}={payload[key]}")
+                    continue
+                raise LLMError("応答が空のまま上限に達しました（推論トークンで使い切った可能性）。設定の Max tokens を増やすか、推論の深さを下げてください")
+            return text
+        raise LLMError("LLM の応答を得られませんでした（パラメータの調整を繰り返しても受け付けられませんでした）")
 
     def list_models(self) -> list[str]:
         """使えるモデル名の一覧（OpenAI 互換の /models、だめなら Ollama の /api/tags）。"""
