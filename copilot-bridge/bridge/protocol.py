@@ -16,19 +16,28 @@ TOOL_CALL_OPEN_RE = re.compile(r"<tool_call>\s*(?:```[a-zA-Z]*\s*)?(\{.*)$", re.
 
 RULES = """あなたはコーディング用のエージェントとして、中継プログラム経由で操作されています。次の規則を厳守してください。
 
+【最重要】
+- あなた自身はファイルにもコマンドにもアクセスできません。/mnt/data などの作業領域は存在しません。
+  自分でコードを実行したり、ファイルを探したり、内容を推測したりしないでください。
+- ファイルの一覧・内容、コマンドの結果が必要なときは、必ず下の <tool_call> ブロックを出力して中継プログラムに
+  「依頼」してください。依頼を出したらそこで回答を終え、結果が届くのを待ちます。
+- 「ファイルが存在しない」「アクセスできない」「作業領域に無い」と答えるのは誤りです。その場合も <tool_call> で依頼してください。
+
 【ツールの使い方】
-ファイルの読み書きやコマンドの実行は、次の形式のブロックを出力して中継プログラムに依頼します。
 <tool_call>
 {"name": "ツール名", "arguments": {"引数名": "値"}}
 </tool_call>
 - ブロックの中は JSON だけを書く。コードフェンス（```）や説明文を入れない。
-- 複数の依頼はブロックを複数並べる。
+- 複数の依頼はブロックを複数並べる。依頼を出す回答には、ブロック以外の文章を書かない。
 - 依頼の結果は、次の発言で <tool_result> として届く。それを読んでから次に進む。
-- 依頼が無いときはブロックを出さず、普通に回答する。それが最終回答として扱われる。
+- 依頼が無いときだけ、ブロックを出さずに普通に回答する。それが最終回答として扱われる。
 - 回答の冒頭に挨拶や前置きは要らない。
 
 【利用できるツール】
 {tools}
+
+【回答の例】
+{example}
 
 【元の指示】
 {system}
@@ -38,6 +47,45 @@ NO_SYSTEM = "（指示なし）"
 NO_TOOLS = "（ツールなし。普通に回答してください）"
 
 CONTINUE_HINT = "上記を踏まえて続けてください。さらに操作が必要なら <tool_call> ブロックを出力し、完了なら最終回答だけを書いてください。"
+
+# <tool_call> を出さずに「自分で探して無かった」等と答えたときの言い直し
+NUDGE = ("あなたはファイルやコマンドに直接アクセスできません（/mnt/data などの作業領域はありません）。"
+         "先ほどの回答は無効です。必要な操作を <tool_call> ブロックだけで出力してください（説明文は不要）。"
+         "本当に操作が不要で作業が完了しているなら、完了報告だけを書いてください。")
+
+# 言い直しが要ると判断する手がかり（ツールがあるのに <tool_call> が無く、これらを含む）
+NUDGE_MARKS = ("/mnt/data", "存在しません", "存在しない", "見つかりません", "見つからない", "アクセスできません",
+               "アクセス可能", "作業領域", "アップロード", "添付", "sandbox", "not found", "does not exist",
+               "don't have access", "do not have access", "cannot access", "can't access", "no files",
+               "upload")
+
+
+def needs_nudge(reply: str, calls: list, tools: list | None) -> bool:
+    """ツールがあるのにツール呼び出しが無く、自前で探して無かった／アクセスできない旨の回答なら True。"""
+    if calls or not tools:
+        return False
+    low = (reply or "").lower()
+    return any(m.lower() in low for m in NUDGE_MARKS)
+
+
+def render_example(tools: list | None) -> str:
+    """最初のツールを使った具体例（ツール名・必須引数を実際のものにする）。"""
+    if not tools:
+        return "（ツールなし）"
+    fn = tools[0].get("function", tools[0]) if isinstance(tools[0], dict) else {}
+    name = fn.get("name") or "tool"
+    params = fn.get("parameters") or {}
+    props = params.get("properties") or {}
+    required = list(params.get("required") or [])
+    args = {}
+    for pname in (required or list(props)[:1]):
+        schema = props.get(pname) if isinstance(props.get(pname), dict) else {}
+        kind = schema.get("type", "string") if schema else "string"
+        args[pname] = {"integer": 1, "number": 1, "boolean": True, "array": [], "object": {}}.get(kind, "...")
+    block = json.dumps({"name": name, "arguments": args}, ensure_ascii=False)
+    return ("ユーザー「ファイルを確認して作業して」に対するあなたの正しい最初の回答（これだけを書く）:\n"
+            f"<tool_call>\n{block}\n</tool_call>\n"
+            "誤った回答の例: 「確認しましたがファイルは存在しませんでした」（自分で探してはいけません）")
 
 
 # ---------------------------------------------------------------------------
@@ -174,8 +222,9 @@ def render_opening(messages: list[dict], tools: list | None, *,
     """新しい Copilot 会話の最初の送信文（規則＋ツール＋元の指示＋これまでの会話全部）。"""
     system_parts = [m["text"] for m in messages if m["role"] in ("system", "developer") and m.get("text")]
     rest = [m for m in messages if m["role"] not in ("system", "developer")]
-    head = RULES.replace("{tools}", render_tools(tools)).replace(
-        "{system}", "\n\n".join(system_parts) or NO_SYSTEM)
+    head = (RULES.replace("{tools}", render_tools(tools))
+            .replace("{example}", render_example(tools))
+            .replace("{system}", "\n\n".join(system_parts) or NO_SYSTEM))
     body = render_delta(rest, max_tool_result_chars=max_tool_result_chars, first=True)
     if max_chars and len(head) + len(body) > max_chars:
         body = _clip_middle(body, max(1000, max_chars - len(head)))

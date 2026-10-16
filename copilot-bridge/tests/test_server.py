@@ -22,9 +22,11 @@ TOOLS = [{"type": "function", "function": {
 class ServerTestCase(unittest.TestCase):
     windows = 2
 
+    log_dir = ""
+
     @classmethod
     def setUpClass(cls):
-        cls.cfg = Config(backend="fake", windows=cls.windows, port=0)
+        cls.cfg = Config(backend="fake", windows=cls.windows, port=0, log_dir=cls.log_dir)
         cls.bridge = srv.Bridge(cls.cfg)
         cls.bridge.start()
         cls.httpd = srv.ThreadingHTTPServer(("127.0.0.1", 0), srv.make_handler(cls.bridge))
@@ -152,6 +154,54 @@ class RestartTests(ServerTestCase):
         self.assertIn("【元の指示】\nR", seen[1])   # 会話を作り直して送り直している
         w = self.get("/status")["windows"][0]
         self.assertEqual(w["chats"], 2)
+
+
+class NudgeTests(ServerTestCase):
+    windows = 1
+
+    def test_refusal_is_nudged_into_tool_call(self):
+        seen = []
+
+        def responder(text, worker):
+            seen.append(text)
+            if len(seen) == 1:
+                return "作業対象を確認しましたが、現在アクセス可能な作業領域 /mnt/data に src は存在しませんでした。"
+            return '<tool_call>\n{"name": "read_file", "arguments": {"path": "src/util.py"}}\n</tool_call>'
+
+        FakeWorker.responder = staticmethod(responder)
+        r = self.post({"messages": [{"role": "system", "content": "N"}, {"role": "user", "content": "src を読んで"}],
+                       "tools": TOOLS})
+        self.assertEqual(r["choices"][0]["finish_reason"], "tool_calls")
+        self.assertEqual(len(seen), 2)
+        self.assertIn("直接アクセスできません", seen[1])   # 言い直しが送られた
+        self.assertIn("【回答の例】", seen[0])
+        self.assertIn('"name": "read_file"', seen[0])     # 例は実際のツール名
+
+    def test_no_nudge_without_tools(self):
+        seen = []
+        FakeWorker.responder = staticmethod(lambda text, w: (seen.append(text), "ファイルは存在しません")[1])
+        r = self.post({"messages": [{"role": "user", "content": "nudge なし"}]})
+        self.assertEqual(r["choices"][0]["finish_reason"], "stop")
+        self.assertEqual(len(seen), 1)
+
+
+class TranscriptTests(ServerTestCase):
+    windows = 1
+    import tempfile as _tf
+    log_dir = _tf.mkdtemp(prefix="copilot-bridge-logs-")
+
+    def test_session_transcript_written(self):
+        from pathlib import Path
+
+        FakeWorker.responder = staticmethod(lambda text, w: "記録される回答")
+        self.post({"messages": [{"role": "user", "content": "記録試験"}]})
+        files = list((Path(self.log_dir) / "sessions").glob("*.md"))
+        self.assertEqual(len(files), 1)
+        body = files[0].read_text(encoding="utf-8")
+        self.assertIn("### 送信", body)
+        self.assertIn("記録試験", body)
+        self.assertIn("記録される回答", body)
+        self.assertTrue(list(Path(self.log_dir).glob("*.jsonl")))
 
 
 class EvictionTests(ServerTestCase):

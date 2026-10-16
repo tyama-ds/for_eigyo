@@ -4,8 +4,8 @@
   "path": "copilot-bridge/",
   "summary": "M365 Copilot のチャット画面を OpenAI 互換 API に見せかける中継サーバ。Codex CLI などのエージェントを Copilot で動かし、orrery のようなハーネスから複数エージェントを並列に使うために Edge を複数ウインドウで操作する。",
   "status": "active",
-  "phase": "実機で API 1 往復に成功。次は <tool_call> 形式の遵守と並列の確認",
-  "progress": 35,
+  "phase": "実機試験中（文脈継続・並列は OK。Copilot に <tool_call> を使わせる指示を強化、検証待ち）",
+  "progress": 40,
   "started": "2026-10-14",
   "version": "0.1.0",
   "ports": [
@@ -51,6 +51,7 @@
     }
   ],
   "next": [
+    "Copilot の会話削除メニューのボタン文言を確認し selectors を確定（probe cleanup）",
     "Windows 実機で tools/probe.py を login → long → followup → toolcall → parallel の順に実行し、結果を README に記録",
     "selectors.response（コピー不可時の本文読み取り先）を実機で確定",
     "Codex CLI の接続（wire_api / WSL2 からの到達）を確認"
@@ -61,9 +62,18 @@
     "1 往復 10〜60 秒。作業 1 件に数十分かかる前提",
     "利用制限はアカウント単位でウインドウを増やしても上限は増えない",
     "UI 改定でセレクタが壊れる（config.selectors で差し替え）",
-    "Copilot ページが SSO 経由で別タブに移る・Edge との接続が切れることがある（自動再起動で回復するが会話は作り直し）"
+    "Copilot ページが SSO 経由で別タブに移る・Edge との接続が切れることがある（自動再起動で回復するが会話は作り直し）",
+    "Copilot は自前の実行環境（/mnt/data）で作業しようとし <tool_call> を出さないことがある（規則文の強化と言い直しで対処中）"
   ],
   "log": [
+    {
+      "date": "2026-10-16",
+      "summary": "Copilot 側の履歴が汚れる対策: 会話ごとの全文を logs/sessions/*.md に既定で保存、tools/summarize.py で Copilot に要約させて保存（--delete-after で元を削除）、使い終えた会話を画面操作で削除する delete_chat_on_close（セレクタ未確認のため既定無効、probe cleanup で確認）"
+    },
+    {
+      "date": "2026-10-16",
+      "summary": "実機試験: followup OK、parallel 3 ウインドウ OK。toolcall は Copilot が <tool_call> を出さず自前の実行環境（/mnt/data）で探して「無い」と答え 1 往復で終了（23 秒）。対策として規則文に「自分ではアクセスできない・必ず依頼する」と実ツール名の例を追加し、自前で探した回答には言い直し（nudge、既定 2 回）を送る"
+    },
     {
       "date": "2026-10-16",
       "summary": "実機（Windows + Edge + M365 Copilot）で API 1 往復が成功（入力→送信→回答→JSON）。接続切れの原因は CDP 入力と確定。PowerShell の文字化け（????）対策に tools/ask.py を追加、受信文字をコンソールに表示"

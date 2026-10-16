@@ -79,6 +79,17 @@ WSL2 から Windows 側のサーバに届くかはネットワーク設定によ
 | GET | `/status` | ウインドウと会話の状態 |
 | GET | `/health` | 生存確認 |
 
+### 会話の記録と Copilot 側の履歴の掃除
+
+中継を通した会話は Copilot の履歴に大量に残る。そこで:
+
+- **手元に全文を残す**: 既定で `logs/YYYYMMDD.jsonl`（全往復）と `logs/sessions/<日時>_<会話>.md`（会話ごとの全文）に保存する（`log_dir`）。
+- **要約する**: `python tools\summarize.py logs\sessions` で未要約の記録を Copilot に要約させ `*.summary.md` に保存。
+  `--delete-after` で元の記録を削除。
+- **Copilot 側の会話を削除する**: `delete_chat_on_close: true` にすると、使い終えた会話（次の会話に移るとき・終了時）を
+  画面操作で削除する。削除メニューのセレクタ（`selectors.chat_menu_button` / `delete_menu_item` / `confirm_delete`）は
+  未確認なので、まず `python tools\probe.py cleanup` で削除できるか確かめ、だめなら画面のボタンの文言に合わせて直す。
+
 ## 仕組み
 
 - **会話の見分け**: 要求は毎回「会話の全部」で届き ID が無い。system + 最初の user 発言の指紋で候補を絞り、

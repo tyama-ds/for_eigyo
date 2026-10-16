@@ -19,6 +19,10 @@ DEFAULT_SELECTORS = {
     "copy_button": "button[aria-label='応答のコピー']",
     # コピーが使えないときに本文を直接読む要素（未確認。実機で確認して直す）
     "response": "[data-testid='chat-message-content'], [data-tid='chat-message-content']",
+    # 会話の削除（未確認。先頭が // なら XPath、それ以外は CSS）
+    "chat_menu_button": "//button[@aria-label='その他のオプション' or @aria-label='その他' or contains(@aria-label,'オプション')]",
+    "delete_menu_item": "//*[@role='menuitem'][contains(., '削除')]",
+    "confirm_delete": "//button[contains(., '削除')]",
 }
 
 # 回答にこれらが含まれていたら、その担当は制限や障害に当たったとみなす
@@ -63,8 +67,14 @@ class Config:
     max_tool_result_chars: int = 12000
     # 会話を作り直して全履歴を送るときの上限文字数
     max_resend_chars: int = 40000
-    # 送受信ログの保存先（空なら保存しない）
-    log_dir: str = ""
+    # ツールがあるのに <tool_call> を出さず「自分で探して無かった」等と答えたときの言い直し回数
+    nudge_retries: int = 2
+    # 送受信ログの保存先（相対なら copilot-bridge フォルダ基準。空なら保存しない）。
+    # <log_dir>/YYYYMMDD.jsonl に全往復、<log_dir>/sessions/<日時>_<会話>.md に会話ごとの全文を残す
+    log_dir: str = "logs"
+    # 使い終えた Copilot の会話を画面操作で削除する（次の会話に移るとき・終了時）。
+    # 削除メニューのセレクタ（selectors.chat_menu_button / delete_menu_item / confirm_delete）は要確認なので既定は無効
+    delete_chat_on_close: bool = False
     selectors: dict = field(default_factory=lambda: dict(DEFAULT_SELECTORS))
     error_phrases: list = field(default_factory=lambda: list(DEFAULT_ERROR_PHRASES))
 
