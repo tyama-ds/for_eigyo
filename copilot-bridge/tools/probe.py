@@ -227,6 +227,8 @@ def main(argv=None):
                    help="Edge の起動方式（既定 auto: separate→temp→bare→manager の順に試す）")
     p.add_argument("--input-mode", dest="input_mode", choices=["auto", "js", "paste", "keys", "cdp"],
                    help="文字入力の方式（既定 auto: js→paste→keys）")
+    p.add_argument("--read-mode", dest="read_mode", choices=["clipboard", "dom", "auto"],
+                   help="回答の読み取り方式（既定 clipboard。dom はクリップボードを使わない）")
     sub = p.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("login")
     s.add_argument("--windows", type=int, default=1)
@@ -240,7 +242,8 @@ def main(argv=None):
     sub.add_parser("cleanup")
     a = p.parse_args(argv)
     cfg = load_config(a.config, {"driver_path": a.driver_path, "chat_url": a.chat_url,
-                                 "profile_mode": a.profile_mode, "input_mode": a.input_mode})
+                                 "profile_mode": a.profile_mode, "input_mode": a.input_mode,
+                                 "read_mode": a.read_mode})
     # サーバ（server.py）の Edge と同じプロファイルを取り合わないよう、試験は別の置き場を使う
     # （同じ --user-data-dir を 2 つ目の Edge が開くと "Chrome instance exited" で即終了する）
     cfg.profile_dir = str(cfg.resolved_profile_dir() / "probe")

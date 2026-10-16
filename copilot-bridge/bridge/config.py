@@ -60,6 +60,10 @@ class Config:
     # 文字入力の方式。auto: js（execCommand）→ paste（Ctrl+V）→ keys（1 行ずつ）。cdp は DevTools プロトコル
     # （社内ポリシーで接続切れを招くことがあるため既定では使わない）
     input_mode: str = "auto"
+    # 回答の読み取り方式。clipboard: コピーボタン→Windows のクリップボード（利用者のクリップボードは退避・復元）、
+    # dom: 画面の回答要素（selectors.response）から直接読む（クリップボードを使わない）、
+    # auto: dom で読めれば dom、だめなら clipboard
+    read_mode: str = "clipboard"
     chat_url: str = "https://m365.cloud.microsoft/chat/?auth=2"
     # 起動後、入力欄が出るまで待つ上限（SSO が通らず手でログインする時間を含む）
     login_timeout_sec: float = 300.0

@@ -293,6 +293,7 @@ def main(argv=None):
     p.add_argument("--profile-mode", dest="profile_mode",
                    choices=["auto", "separate", "temp", "bare", "manager"])
     p.add_argument("--input-mode", dest="input_mode", choices=["auto", "js", "paste", "keys", "cdp"])
+    p.add_argument("--read-mode", dest="read_mode", choices=["clipboard", "dom", "auto"])
     p.add_argument("--log-dir", dest="log_dir")
     a = p.parse_args(argv)
     cfg = load_config(a.config, {k: v for k, v in vars(a).items() if k != "config"})
