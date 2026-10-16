@@ -7,7 +7,7 @@
   "phase": "v0.6.4: グラフ上でのリンクの結合・削除（個人利用）",
   "progress": 87,
   "started": "2026-09-25",
-  "version": "0.6.5",
+  "version": "0.6.6",
   "ports": [
     8795
   ],
@@ -117,6 +117,10 @@
     "外部 API を既定にすると要約・取り込みなど一括処理も社外に送られる（設定画面で警告、右下に常時表示）"
   ],
   "log": [
+    {
+      "date": "2026-10-16",
+      "summary": "外部 API に Responses API（/responses）を追加。パラメータ名を変換（instructions / input・max_output_tokens・reasoning.effort・text.verbosity・store:false）、応答は output の output_text から取り出し、Chat Completions で「Responses API でしか使えない」と返されたモデルは自動で切り替え。Azure の Responses URL にも対応"
+    },
     {
       "date": "2026-10-16",
       "summary": "gpt-5 系への対応を強化（推論トークンで空応答になったら上限を増やして再試行、system を受け付けないモデルは user に畳み込み、gpt-5 の verbosity、Azure の推論モデルは新しい api-version を自動使用、接続テストに送ったパラメータと自動調整の表示）"
