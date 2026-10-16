@@ -33,6 +33,7 @@ class EdgeWorker(Worker):
         super().__init__(index, cfg)
         self.driver = None
         self.launch_mode = ""
+        self.chat_turns = 0   # 今の Copilot 会話で送った回数（削除要否の判定用）
         self.clipboard_lock = clipboard_lock or WorkerPool.clipboard_lock
         self.sel = cfg.selectors
 
@@ -94,7 +95,14 @@ class EdgeWorker(Worker):
     def close(self) -> None:
         if self.driver is not None:
             try:
+                if self.cfg.delete_chat_on_close and self.chat_turns > 0:
+                    try:
+                        self.delete_current_chat()
+                    except Exception:  # noqa: BLE001
+                        pass
                 self.driver.quit()
+            except Exception:  # noqa: BLE001
+                pass
             finally:
                 self.driver = None
 
@@ -202,6 +210,46 @@ class EdgeWorker(Worker):
     def _log(self, msg: str) -> None:
         print(f"[{self.id}] {msg}", flush=True)
 
+    def _find(self, selector: str, timeout: float = 5.0):
+        """先頭が // なら XPath、それ以外は CSS で、表示されている要素を 1 つ返す（無ければ None）。"""
+        from selenium.webdriver.common.by import By
+
+        by = By.XPATH if selector.startswith("//") else By.CSS_SELECTOR
+        deadline = time.monotonic() + timeout
+        while True:
+            for el in self.driver.find_elements(by, selector):
+                try:
+                    if el.is_displayed():
+                        return el
+                except Exception:  # noqa: BLE001
+                    continue
+            if time.monotonic() > deadline:
+                return None
+            time.sleep(0.3)
+
+    def delete_current_chat(self) -> tuple[bool, str]:
+        """今の会話を Copilot の履歴から削除する（画面操作。セレクタは config.selectors で調整）。"""
+        if self.driver is None or self.chat_turns == 0:
+            return False, "削除する会話がない"
+        try:
+            self.driver.switch_to.default_content()
+            steps = [("chat_menu_button", "会話のメニュー"), ("delete_menu_item", "削除の項目"),
+                     ("confirm_delete", "削除の確認")]
+            for key, label in steps:
+                el = self._find(self.sel.get(key, ""), 5.0) if self.sel.get(key) else None
+                if el is None:
+                    return False, f"{label}（selectors.{key}）が見つからない"
+                el.click()
+                time.sleep(0.8)
+            self.chat_turns = 0
+            self._log("会話を削除しました")
+            return True, ""
+        except Exception as e:  # noqa: BLE001
+            msg = str(e).splitlines()[0] if str(e) else type(e).__name__
+            if _is_disconnect(msg):
+                raise
+            return False, msg
+
     def new_chat(self, timeout: float | None = None) -> None:
         """チャット画面を開き直して新しい会話にする。入力欄が出るまで待つ（SSO/手動ログイン込み）。"""
         ok, reason = self._alive()
@@ -209,6 +257,11 @@ class EdgeWorker(Worker):
             # 接続が切れていれば起動し直す（start() が new_chat() を呼ぶのでここで戻る）
             self._restart(reason)
             return
+        if self.cfg.delete_chat_on_close and self.chat_turns > 0:
+            done, why = self.delete_current_chat()
+            if not done:
+                self._log(f"会話を削除できませんでした: {why}")
+        self.chat_turns = 0
         self.driver.get(self.cfg.chat_url)
         self._focus_chat_window()
         try:
@@ -388,6 +441,7 @@ class EdgeWorker(Worker):
         reply = (self._read_last_reply() or "").strip()
         self._log(f"回答 {len(reply)} 文字（{time.monotonic() - t0:.0f} 秒）")
         self.turns += 1
+        self.chat_turns += 1
         if not reply:
             raise BridgeError(f"{self.id}: 回答を読み取れませんでした（コピーボタン/DOM とも空）")
         for phrase in self.cfg.error_phrases:

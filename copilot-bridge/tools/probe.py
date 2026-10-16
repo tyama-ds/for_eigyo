@@ -5,6 +5,7 @@
   python tools/probe.py toolcall --turns 8    # <tool_call> の形式を何往復守れるか
   python tools/probe.py followup              # 同じ会話の続きで文脈が保たれるか
   python tools/probe.py parallel --windows 3  # 複数ウインドウ同時で取り違え・遅れが無いか
+  python tools/probe.py cleanup               # 会話を 1 つ作って削除できるか（履歴の掃除の確認）
 
 --driver-path / --chat-url / --config は server.py と同じ。結果は JSON で標準出力に出す。
 """
@@ -201,6 +202,21 @@ def probe_parallel(cfg, a):
             w.close()
 
 
+def probe_cleanup(cfg, a):
+    """会話を 1 つ作ってから削除できるか（selectors.chat_menu_button / delete_menu_item / confirm_delete の確認）。"""
+    (w,) = start_workers(cfg, 1)
+    try:
+        w.send("これは削除試験用の会話です。「了解」とだけ答えてください。")
+        ok, why = w.delete_current_chat()
+        print(json.dumps({"deleted": ok, "error": why,
+                          "hint": "" if ok else "画面で会話のメニュー（…）→削除→確認 の各ボタンの文言を教えてください。config.json の selectors で直せます"},
+                         ensure_ascii=False, indent=1))
+        if not ok:
+            input("画面を確認したら Enter で閉じます > ")
+    finally:
+        w.close()
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--config", default=str(Path(__file__).resolve().parents[1] / "config.json"))
@@ -221,6 +237,7 @@ def main(argv=None):
     sub.add_parser("followup")
     s = sub.add_parser("parallel")
     s.add_argument("--windows", type=int, default=3)
+    sub.add_parser("cleanup")
     a = p.parse_args(argv)
     cfg = load_config(a.config, {"driver_path": a.driver_path, "chat_url": a.chat_url,
                                  "profile_mode": a.profile_mode, "input_mode": a.input_mode})
@@ -228,7 +245,7 @@ def main(argv=None):
     # （同じ --user-data-dir を 2 つ目の Edge が開くと "Chrome instance exited" で即終了する）
     cfg.profile_dir = str(cfg.resolved_profile_dir() / "probe")
     {"login": probe_login, "long": probe_long, "toolcall": probe_toolcall,
-     "followup": probe_followup, "parallel": probe_parallel}[a.cmd](cfg, a)
+     "followup": probe_followup, "parallel": probe_parallel, "cleanup": probe_cleanup}[a.cmd](cfg, a)
 
 
 if __name__ == "__main__":

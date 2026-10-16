@@ -122,7 +122,8 @@ class Bridge:
                 session.worker_id = worker.id
                 session.turns += 1
                 self._log({"session": session.id, "worker": worker.id, "fresh": fresh, "nudges": nudges,
-                           "sent": text, "reply": reply, "latency_sec": round(time.time() - t0, 1)})
+                           "sent": text, "reply": reply, "latency_sec": round(time.time() - t0, 1)},
+                          session=session)
             finally:
                 self.pool.release(worker, detach=detach)
         return self._completion(body, assistant, calls)
@@ -138,15 +139,35 @@ class Bridge:
             "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
         }
 
-    def _log(self, rec: dict) -> None:
+    def _log_root(self) -> Path | None:
         if not self.cfg.log_dir:
+            return None
+        p = Path(self.cfg.log_dir)
+        return p if p.is_absolute() else Path(__file__).resolve().parent / p
+
+    def _log(self, rec: dict, session=None) -> None:
+        """全往復を jsonl に、会話ごとの全文を sessions/<日時>_<会話>.md に残す（Copilot 側の履歴を消しても手元に残る）。"""
+        root = self._log_root()
+        if root is None:
             return
         rec["time"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-        path = Path(self.cfg.log_dir) / (time.strftime("%Y%m%d") + ".jsonl")
         with self._log_lock:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with path.open("a", encoding="utf-8") as f:
+            root.mkdir(parents=True, exist_ok=True)
+            with (root / (time.strftime("%Y%m%d") + ".jsonl")).open("a", encoding="utf-8") as f:
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            if session is not None:
+                sdir = root / "sessions"
+                sdir.mkdir(parents=True, exist_ok=True)
+                stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(session.created))
+                path = sdir / f"{stamp}_{session.id}.md"
+                new = not path.exists()
+                with path.open("a", encoding="utf-8") as f:
+                    if new:
+                        f.write(f"# 会話 {session.id}（開始 {stamp}）\n\n")
+                    f.write(f"## 往復 {session.turns}（{rec['time']} / {rec.get('worker')} / "
+                            f"{'新規' if rec.get('fresh') else '続き'} / 言い直し {rec.get('nudges', 0)} / "
+                            f"{rec.get('latency_sec')} 秒）\n\n### 送信\n\n{rec.get('sent', '')}\n\n"
+                            f"### 回答\n\n{rec.get('reply', '')}\n\n")
 
     def status(self) -> dict:
         return {"version": __version__, "backend": self.cfg.backend, "model": self.cfg.model_name,
