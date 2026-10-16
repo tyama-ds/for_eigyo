@@ -44,11 +44,16 @@ editor.addEventListener('keydown', function (e) {
     var reply = 'turn=' + turn + ' len=' + text.length + ' head=' + text.slice(0, 6) + ' tail=' + text.slice(-6) + '\n' +
       (text.indexOf('<tool_result name=') >= 0 ? '完了しました。' :
         '<tool_call>\n{"name": "read_file", "arguments": {"path": "a.txt"}}\n</tool_call>');
+    // 実機に近い構造: 回答ごとの入れ物の中に本文とボタン類
+    var msg = document.createElement('div'); msg.className = 'assistant-message';
     var r = document.createElement('div'); r.setAttribute('data-testid', 'chat-message-content');
     r.textContent = reply;
+    var bar = document.createElement('div'); bar.setAttribute('role', 'toolbar');
     var b = document.createElement('button'); b.setAttribute('aria-label', '応答のコピー'); b.textContent = 'copy';
     b.onclick = function () { try { navigator.clipboard.writeText(reply); } catch (err) {} };
-    log.appendChild(r); log.appendChild(b);
+    var like = document.createElement('button'); like.textContent = 'いいね';
+    bar.appendChild(b); bar.appendChild(like);
+    msg.appendChild(r); msg.appendChild(bar); log.appendChild(msg);
     stop.style.display = 'none';
   }, 1500);
 });

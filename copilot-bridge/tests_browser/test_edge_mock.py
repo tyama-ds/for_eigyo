@@ -114,6 +114,25 @@ class EdgeMockTests(unittest.TestCase):
         self.assertEqual(w.driver.find_element(By.ID, "deleted").text, "1")
         self.assertEqual(w.chat_turns, 0)
 
+    def test_dom_read_without_known_selector(self):
+        """selectors.response が合っていなくても、コピーボタンの祖先から回答 1 件分の本文を読める。"""
+        import copy
+
+        cfg = copy.deepcopy(self.cfg)
+        cfg.read_mode = "dom"
+        cfg.selectors = dict(cfg.selectors, response="#no-such-element")
+        w = MockWorker(3, cfg)
+        w.start()
+        try:
+            w.send("1 回目")
+            r2 = w.send("2 回目 " + "x" * 20)
+            self.assertTrue(r2.startswith("turn=2"), r2)
+            self.assertNotIn("turn=1", r2)       # 前の回答を含まない
+            self.assertNotIn("いいね", r2)        # ボタンの文字を含まない
+            self.assertNotIn("[user", r2)        # 自分の発言を含まない
+        finally:
+            w.close()
+
     def test_parallel_windows_do_not_mix(self):
         ws = self.workers[1:]
         res = {}
