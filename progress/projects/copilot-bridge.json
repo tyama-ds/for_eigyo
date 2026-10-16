@@ -4,8 +4,8 @@
   "path": "copilot-bridge/",
   "summary": "M365 Copilot のチャット画面を OpenAI 互換 API に見せかける中継サーバ。Codex CLI などのエージェントを Copilot で動かし、orrery のようなハーネスから複数エージェントを並列に使うために Edge を複数ウインドウで操作する。",
   "status": "active",
-  "phase": "実機試験中（API 1 往復で接続切れ。原因候補すべてに対処した版を検証待ち）",
-  "progress": 25,
+  "phase": "実機で API 1 往復に成功。次は <tool_call> 形式の遵守と並列の確認",
+  "progress": 35,
   "started": "2026-10-14",
   "version": "0.1.0",
   "ports": [
@@ -31,6 +31,11 @@
     {
       "title": "実機試験: SSO・長文送信・文脈の継続・<tool_call> 形式の遵守・並列（tools/probe.py）",
       "state": "doing"
+    },
+    {
+      "title": "実機で API 1 往復（入力→送信→回答→JSON）",
+      "state": "done",
+      "date": "2026-10-16"
     },
     {
       "title": "Codex CLI から短い作業を 1 つ完遂",
@@ -59,6 +64,10 @@
     "Copilot ページが SSO 経由で別タブに移る・Edge との接続が切れることがある（自動再起動で回復するが会話は作り直し）"
   ],
   "log": [
+    {
+      "date": "2026-10-16",
+      "summary": "実機（Windows + Edge + M365 Copilot）で API 1 往復が成功（入力→送信→回答→JSON）。接続切れの原因は CDP 入力と確定。PowerShell の文字化け（????）対策に tools/ask.py を追加、受信文字をコンソールに表示"
+    },
     {
       "date": "2026-10-15",
       "summary": "接続切れの原因候補に同時対処: 文字入力から CDP を外し js（execCommand）→ 貼り付け → send_keys に変更、Edge/msedgedriver の版表示と警告、Selenium Manager による起動方式、iframe 内の入力欄の探索、送信前の入力欄の取り直し",
@@ -90,5 +99,5 @@
       "ref": "#65"
     }
   ],
-  "updated": "2026-10-15"
+  "updated": "2026-10-16"
 }
