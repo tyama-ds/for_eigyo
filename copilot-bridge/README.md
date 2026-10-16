@@ -17,7 +17,10 @@ orrery ─ tmux ─ Codex CLI / Claude Code        (WSL2)
           └ edge     : Selenium で Edge の Copilot を操作（ウインドウごとに別プロファイル）
 ```
 
-**状態: 骨格のみ。実機（Copilot 画面）では未検証。** まず `tools/probe.py` で成否を確かめる段階。
+**状態: 実機（Windows + Edge + M365 Copilot）で擬似エージェントの作業完遂を確認済み。** 次は Codex CLI の接続。
+
+実機での実測（2026-10-16）: API 1 往復 OK、文脈の継続 OK、3 ウインドウ並列で取り違えなし、
+`probe.py toolcall` は 4 往復・5 回の操作（一覧→読む×3→書く）を言い直しなしで出し、作業を完遂（1 往復 9〜17 秒）。
 
 ## 使い方
 

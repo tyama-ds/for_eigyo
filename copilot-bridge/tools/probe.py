@@ -220,33 +220,48 @@ def probe_cleanup(cfg, a):
         w.close()
 
 
-def main(argv=None):
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--config", default=str(Path(__file__).resolve().parents[1] / "config.json"))
-    p.add_argument("--driver-path", dest="driver_path")
-    p.add_argument("--chat-url", dest="chat_url")
-    p.add_argument("--profile-mode", dest="profile_mode",
+def _common_options(for_sub: bool) -> argparse.ArgumentParser:
+    """共通オプション。サブコマンドの前でも後ろでも書けるよう、親パーサとして両方に付ける。
+    サブコマンド側は既定値を持たせず（SUPPRESS）、前に書いた値を上書きしないようにする。"""
+    c = argparse.ArgumentParser(add_help=False)
+    sup = argparse.SUPPRESS
+
+    def d(v):
+        return sup if for_sub else v
+
+    c.add_argument("--config", default=d(str(Path(__file__).resolve().parents[1] / "config.json")))
+    c.add_argument("--driver-path", dest="driver_path", default=d(None))
+    c.add_argument("--chat-url", dest="chat_url", default=d(None))
+    c.add_argument("--profile-mode", dest="profile_mode", default=d(None),
                    choices=["auto", "separate", "temp", "bare", "manager"],
                    help="Edge の起動方式（既定 auto: separate→temp→bare→manager の順に試す）")
-    p.add_argument("--input-mode", dest="input_mode", choices=["auto", "js", "paste", "keys", "cdp"],
+    c.add_argument("--input-mode", dest="input_mode", default=d(None),
+                   choices=["auto", "js", "paste", "keys", "cdp"],
                    help="文字入力の方式（既定 auto: js→paste→keys）")
-    p.add_argument("--read-mode", dest="read_mode", choices=["clipboard", "dom", "auto"],
+    c.add_argument("--read-mode", dest="read_mode", default=d(None), choices=["clipboard", "dom", "auto"],
                    help="回答の読み取り方式（既定 clipboard。dom はクリップボードを使わない）")
-    p.add_argument("--headless", dest="headless", action="store_const", const=True, default=None,
+    c.add_argument("--headless", dest="headless", action="store_const", const=True, default=d(None),
                    help="Edge を画面なしで動かす（read_mode は dom 推奨）")
-    p.add_argument("--prompt-lang", dest="prompt_lang", choices=["ja", "en"],
+    c.add_argument("--prompt-lang", dest="prompt_lang", default=d(None), choices=["ja", "en"],
                    help="規則文の言語（既定 ja。日本語で断られるときは en を試す）")
+    return c
+
+
+def main(argv=None):
+    top, sub_common = _common_options(False), _common_options(True)
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
+                                parents=[top])
     sub = p.add_subparsers(dest="cmd", required=True)
-    s = sub.add_parser("login")
+    s = sub.add_parser("login", parents=[sub_common])
     s.add_argument("--windows", type=int, default=1)
-    s = sub.add_parser("long")
+    s = sub.add_parser("long", parents=[sub_common])
     s.add_argument("--chars", type=int, default=20000)
-    s = sub.add_parser("toolcall")
+    s = sub.add_parser("toolcall", parents=[sub_common])
     s.add_argument("--turns", type=int, default=8)
-    sub.add_parser("followup")
-    s = sub.add_parser("parallel")
+    sub.add_parser("followup", parents=[sub_common])
+    s = sub.add_parser("parallel", parents=[sub_common])
     s.add_argument("--windows", type=int, default=3)
-    sub.add_parser("cleanup")
+    sub.add_parser("cleanup", parents=[sub_common])
     a = p.parse_args(argv)
     cfg = load_config(a.config, {"driver_path": a.driver_path, "chat_url": a.chat_url,
                                  "profile_mode": a.profile_mode, "input_mode": a.input_mode,
