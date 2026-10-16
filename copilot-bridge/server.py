@@ -35,7 +35,7 @@ from bridge import __version__  # noqa: E402
 from bridge.config import load_config  # noqa: E402
 from bridge.pool import BridgeError, WorkerPool, WorkerRestarted  # noqa: E402
 from bridge.protocol import (  # noqa: E402
-    NUDGE, needs_nudge, normalize_message, parse_reply, render_delta, render_opening,
+    needs_nudge, normalize_message, nudge_text, parse_reply, render_delta, render_opening,
 )
 from bridge.session import SessionStore  # noqa: E402
 
@@ -78,13 +78,14 @@ class Bridge:
             try:
                 # 差分が無い／担当が別の会話に使われた後／まだ何も送っていない → 会話を作り直す
                 fresh = not delta or not worker.resumed or not session.sent
+                lang = self.cfg.prompt_lang
                 if fresh:
                     worker.new_chat()
                     text = render_opening(norm, tools,
                                           max_tool_result_chars=self.cfg.max_tool_result_chars,
-                                          max_chars=self.cfg.max_resend_chars)
+                                          max_chars=self.cfg.max_resend_chars, lang=lang)
                 else:
-                    text = render_delta(delta, max_tool_result_chars=self.cfg.max_tool_result_chars)
+                    text = render_delta(delta, max_tool_result_chars=self.cfg.max_tool_result_chars, lang=lang)
                 t0 = time.time()
                 try:
                     try:
@@ -96,7 +97,7 @@ class Bridge:
                         worker.new_chat()
                         text = render_opening(norm, tools,
                                               max_tool_result_chars=self.cfg.max_tool_result_chars,
-                                              max_chars=self.cfg.max_resend_chars)
+                                              max_chars=self.cfg.max_resend_chars, lang=lang)
                         reply = worker.send(text)
                 except BridgeError as e:
                     print(f"{e}", flush=True)
@@ -107,9 +108,9 @@ class Bridge:
                 nudges = 0
                 while nudges < self.cfg.nudge_retries and needs_nudge(reply, calls, tools):
                     nudges += 1
-                    print(f"[{session.id}] ツール呼び出しが無く自前で探した様子 → 言い直し {nudges} 回目", flush=True)
+                    print(f"[{session.id}] 操作の書式が無く、断り／自前で探した様子 → 言い直し {nudges} 回目", flush=True)
                     try:
-                        reply = worker.send(NUDGE)
+                        reply = worker.send(nudge_text(lang))
                     except BridgeError as e:
                         print(f"{e}", flush=True)
                         detach = True
@@ -296,6 +297,7 @@ def main(argv=None):
     p.add_argument("--read-mode", dest="read_mode", choices=["clipboard", "dom", "auto"])
     p.add_argument("--headless", dest="headless", action="store_const", const=True, default=None,
                    help="Edge を画面なしで動かす（read_mode は dom 推奨）")
+    p.add_argument("--prompt-lang", dest="prompt_lang", choices=["ja", "en"], help="規則文の言語")
     p.add_argument("--log-dir", dest="log_dir")
     a = p.parse_args(argv)
     cfg = load_config(a.config, {k: v for k, v in vars(a).items() if k != "config"})

@@ -331,8 +331,11 @@ class EdgeWorker(Worker):
         for mode in self.INPUT_ORDER.get(self.cfg.input_mode, self.INPUT_ORDER["auto"]):
             try:
                 getattr(self, f"_type_{mode}")(editor, text)
-                if mode != "keys" and not self._editor_has_text(editor):
-                    errors.append(f"{mode}: 入力欄が空のまま")
+                ok, why = self._editor_text_ok(editor, text)
+                if not ok:
+                    errors.append(f"{mode}: {why}")
+                    self._log(f"入力方式 {mode} は不可（{why}）→ 次の方式を試します")
+                    self._clear_editor(editor)
                     continue
                 return mode
             except Exception as e:  # noqa: BLE001
@@ -342,13 +345,34 @@ class EdgeWorker(Worker):
                 errors.append(f"{mode}: {msg}")
         raise BridgeError(f"{self.id}: 入力欄に文字を入れられません（{' / '.join(errors)}）")
 
-    def _editor_has_text(self, editor) -> bool:
+    def _editor_text(self, editor) -> str | None:
         try:
-            v = self.driver.execute_script(
-                "var e=arguments[0]; return (e.innerText||e.textContent||e.value||'').length;", editor)
-            return int(v or 0) > 0
+            return self.driver.execute_script(
+                "var e=arguments[0]; return (e.innerText||e.textContent||e.value||'');", editor)
         except Exception:  # noqa: BLE001
-            return True  # 確認できなければ入ったものとして進む
+            return None
+
+    def _editor_text_ok(self, editor, text: str) -> tuple[bool, str]:
+        """入力欄に本文が入ったか。日本語などが ? に化けていないかも確かめる（send_keys で起きることがある）。"""
+        got = self._editor_text(editor)
+        if got is None:
+            return True, ""  # 確認できなければ入ったものとして進む
+        if not got.strip():
+            return False, "入力欄が空のまま"
+        sample = [ch for ch in text if ord(ch) > 127][:8]
+        if sample and not any(ch in got for ch in sample):
+            return False, "日本語などが入力欄に入っていない（? に化けた可能性）"
+        return True, ""
+
+    def _clear_editor(self, editor) -> None:
+        from selenium.webdriver.common.keys import Keys
+
+        try:
+            editor.click()
+            editor.send_keys(Keys.CONTROL, "a")
+            editor.send_keys(Keys.BACKSPACE)
+        except Exception:  # noqa: BLE001
+            pass
 
     def _type_js(self, editor, text: str) -> None:
         """execCommand('insertText'): contenteditable に対して beforeinput/input を発生させる標準の経路。"""
