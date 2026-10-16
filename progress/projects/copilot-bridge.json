@@ -68,6 +68,10 @@
   "log": [
     {
       "date": "2026-10-16",
+      "summary": "回答の読み取りで使う Windows のクリップボードを退避・復元するようにし、クリップボードを使わない読み取り方式 read_mode=dom を追加（selectors.response が実機で正しいことが前提）"
+    },
+    {
+      "date": "2026-10-16",
       "summary": "会話削除のセレクタを実機の DOM（Fluent SplitNavItem の行、role=menuitem の削除）に合わせ、ホバー→「…」→削除→確認の手順にした。模擬画面で検証"
     },
     {

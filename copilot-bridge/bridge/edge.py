@@ -412,21 +412,38 @@ class EdgeWorker(Worker):
         """最後の回答本文を取る。コピーボタン（Markdown が保たれる）→ だめなら DOM の文字。"""
         from selenium.webdriver.common.by import By
 
+        mode = self.cfg.read_mode
+        if mode in ("dom", "auto"):
+            # 画面の回答要素から直接読む（クリップボードを使わない）。auto は要素が見つかったときだけ
+            text = self._read_last_reply_dom()
+            if text or mode == "dom":
+                return text
         buttons = self.driver.find_elements(By.CSS_SELECTOR, self.sel["copy_button"])
         if buttons:
             with self.clipboard_lock:
+                # 利用者のクリップボード（文字列）を退避し、読み終えたら戻す
+                saved = _clipboard_read(self.driver)
                 _clipboard_write("")
                 try:
-                    self.driver.execute_script("arguments[0].scrollIntoView();", buttons[-1])
-                    buttons[-1].click()
-                except Exception:  # noqa: BLE001
-                    pass
-                else:
-                    for _ in range(20):
-                        time.sleep(0.25)
-                        v = _clipboard_read(self.driver)
-                        if v:
-                            return v
+                    try:
+                        self.driver.execute_script("arguments[0].scrollIntoView();", buttons[-1])
+                        buttons[-1].click()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    else:
+                        for _ in range(20):
+                            time.sleep(0.25)
+                            v = _clipboard_read(self.driver)
+                            if v:
+                                return v
+                finally:
+                    if saved:
+                        _clipboard_write(saved)
+        return self._read_last_reply_dom()
+
+    def _read_last_reply_dom(self) -> str:
+        from selenium.webdriver.common.by import By
+
         nodes = self.driver.find_elements(By.CSS_SELECTOR, self.sel["response"])
         if nodes:
             return nodes[-1].get_attribute("innerText") or nodes[-1].text or ""
