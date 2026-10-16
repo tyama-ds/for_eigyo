@@ -63,6 +63,8 @@ class Config:
     max_tool_result_chars: int = 12000
     # 会話を作り直して全履歴を送るときの上限文字数
     max_resend_chars: int = 40000
+    # ツールがあるのに <tool_call> を出さず「自分で探して無かった」等と答えたときの言い直し回数
+    nudge_retries: int = 2
     # 送受信ログの保存先（空なら保存しない）
     log_dir: str = ""
     selectors: dict = field(default_factory=lambda: dict(DEFAULT_SELECTORS))

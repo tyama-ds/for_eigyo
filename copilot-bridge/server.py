@@ -34,7 +34,9 @@ for _stream in (sys.stdout, sys.stderr):
 from bridge import __version__  # noqa: E402
 from bridge.config import load_config  # noqa: E402
 from bridge.pool import BridgeError, WorkerPool, WorkerRestarted  # noqa: E402
-from bridge.protocol import normalize_message, parse_reply, render_delta, render_opening  # noqa: E402
+from bridge.protocol import (  # noqa: E402
+    NUDGE, needs_nudge, normalize_message, parse_reply, render_delta, render_opening,
+)
 from bridge.session import SessionStore  # noqa: E402
 
 
@@ -101,13 +103,25 @@ class Bridge:
                     detach = True
                     raise
                 content, calls = parse_reply(reply, id_prefix=f"call_{session.id}_{session.turns + 1}")
+                # Copilot が自前の実行環境で探して「無い」と答えたら、<tool_call> で依頼するよう言い直させる
+                nudges = 0
+                while nudges < self.cfg.nudge_retries and needs_nudge(reply, calls, tools):
+                    nudges += 1
+                    print(f"[{session.id}] ツール呼び出しが無く自前で探した様子 → 言い直し {nudges} 回目", flush=True)
+                    try:
+                        reply = worker.send(NUDGE)
+                    except BridgeError as e:
+                        print(f"{e}", flush=True)
+                        detach = True
+                        raise
+                    content, calls = parse_reply(reply, id_prefix=f"call_{session.id}_{session.turns + 1}")
                 assistant = {"role": "assistant", "content": content or None}
                 if calls:
                     assistant["tool_calls"] = calls
                 session.sent = norm + [normalize_message(assistant)]
                 session.worker_id = worker.id
                 session.turns += 1
-                self._log({"session": session.id, "worker": worker.id, "fresh": fresh,
+                self._log({"session": session.id, "worker": worker.id, "fresh": fresh, "nudges": nudges,
                            "sent": text, "reply": reply, "latency_sec": round(time.time() - t0, 1)})
             finally:
                 self.pool.release(worker, detach=detach)

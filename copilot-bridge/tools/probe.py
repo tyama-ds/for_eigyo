@@ -30,7 +30,9 @@ for _stream in (sys.stdout, sys.stderr):  # Windows コンソールで出せな�
 
 from bridge.config import load_config  # noqa: E402
 from bridge.edge import EdgeWorker  # noqa: E402
-from bridge.protocol import normalize_message, parse_reply, render_delta, render_opening  # noqa: E402
+from bridge.protocol import (  # noqa: E402
+    NUDGE, needs_nudge, normalize_message, parse_reply, render_delta, render_opening,
+)
 
 FAKE_FS = {
     "README.md": "# demo\n\nこのプロジェクトは試験用です。合言葉は ORRERY-42 です。\n",
@@ -103,18 +105,26 @@ def probe_long(cfg, a):
         w.close()
 
 
-def _agent_loop(w: EdgeWorker, task: str, turns: int) -> dict:
+def _agent_loop(w: EdgeWorker, task: str, turns: int, cfg_nudges: int = 2) -> dict:
     """擬似エージェント: ツール結果を返しながら形式遵守を数える。"""
     msgs = [normalize_message({"role": "system", "content": "あなたは小さなコード作業を行うエージェントです。必ずツールで確認してから答えてください。"}),
             normalize_message({"role": "user", "content": task})]
     text = render_opening(msgs, TOOLS)
-    stats = {"turns": 0, "parsed": 0, "no_call": 0, "latency": [], "final": ""}
+    stats = {"turns": 0, "parsed": 0, "no_call": 0, "nudges": 0, "latency": [], "final": ""}
     for _ in range(turns):
         t0 = time.time()
         reply = w.send(text)
         stats["latency"].append(round(time.time() - t0, 1))
         stats["turns"] += 1
         content, calls = parse_reply(reply)
+        # サーバと同じ言い直し（自前で探して「無い」と答えたら <tool_call> で依頼させる）
+        n = 0
+        while n < cfg_nudges and needs_nudge(reply, calls, TOOLS):
+            n += 1
+            stats["nudges"] += 1
+            stats.setdefault("nudged_replies", []).append(reply[:200])
+            reply = w.send(NUDGE)
+            content, calls = parse_reply(reply)
         if "<tool_call>" in reply and not calls:
             stats.setdefault("broken", []).append(reply[:300])
         if not calls:
@@ -138,7 +148,7 @@ def _agent_loop(w: EdgeWorker, task: str, turns: int) -> dict:
 def probe_toolcall(cfg, a):
     (w,) = start_workers(cfg, 1)
     try:
-        stats = _agent_loop(w, "src 配下の Python を読み、README の合言葉を src/util.py の末尾にコメントで追記してください。終わったら何をしたか報告してください。", a.turns)
+        stats = _agent_loop(w, "src 配下の Python を読み、README の合言葉を src/util.py の末尾にコメントで追記してください。終わったら何をしたか報告してください。", a.turns, cfg.nudge_retries)
         stats["util_py"] = FAKE_FS["src/util.py"]
         print(json.dumps(stats, ensure_ascii=False, indent=1))
     finally:
