@@ -21,8 +21,9 @@
       const isImg = /\.(png|jpe?g|gif|webp|bmp)$/i.test(path || target);
       if (!isImg) return hold(`<a class="wl${path ? "" : " unres"}" data-target="${esc(target)}"${path ? ` data-path="${esc(path)}"` : ""}>${esc(alias.trim() || target)}</a>`);
       const w = /^\d+$/.test(alias.trim()) ? ` width="${alias.trim()}"` : "";
-      if (!path) return hold(`<span class="wl unres" data-target="${esc(target)}" title="画像が見つかりません（読み込み範囲に入っていますか）">![[${esc(target)}]]</span>`);
-      return hold(`<img class="emb" src="/api/file?path=${encodeURIComponent(path)}&inline=1" alt="${esc(alias.trim() || target)}" data-path="${esc(path)}"${w}>`);
+      // 索引に無くても（更新前・読み込み範囲の外）画像ファイルはそのまま表示を試みる。無ければ app 側で未解決表示に置き換える
+      const p = path || target.replace(/^\.?\//, "");
+      return hold(`<img class="emb" src="/api/file?path=${encodeURIComponent(p)}&inline=1" alt="${esc(alias.trim() || target)}" data-path="${esc(p)}" data-target="${esc(target)}"${path ? "" : ' data-unres="1"'}${w}>`);
     });
     s = s.replace(/\[\[([^\[\]\n]+?)\]\]/g, (m, inner) => {
       let alias = "", heading = "", target = inner;

@@ -27,8 +27,11 @@ DEFAULT_SCOPE = {
     "sources": [],                       # [{"id": "s1", "path": "D:/共有/営業資料", "label": "営業資料"}]
     "exclude": [],                       # ["テンプレート/古い", "@s1/アーカイブ"]
     "types": list(TYPE_GROUPS),
+    "types_known": list(TYPE_GROUPS),    # 保存した時点で存在した種類。後から増えた種類は自動で有効にする
     "max_mb": 50,
 }
+# types_known が無い古い scope.json が知っていた種類（画像は v0.6.0 で追加）
+_LEGACY_KNOWN = [t for t in TYPE_GROUPS if t != "image"]
 _lock = threading.Lock()
 
 
@@ -86,13 +89,19 @@ class Scope:
                 for key, default in DEFAULT_SCOPE.items():
                     if isinstance(saved.get(key), type(default)):
                         data[key] = saved[key]
+                if isinstance(saved.get("types"), list):
+                    # 保存後に増えた種類（例: 画像）は、利用者が外したのではないので有効にする
+                    known = saved.get("types_known") if isinstance(saved.get("types_known"), list) else _LEGACY_KNOWN
+                    data["types"] += [t for t in TYPE_GROUPS if t not in known and t not in data["types"]]
         data["types"] = [t for t in data["types"] if t in TYPE_GROUPS]
+        data["types_known"] = list(TYPE_GROUPS)
         return data
 
     def save(self, update: dict) -> dict:
         data = json.loads(json.dumps(self.data))
         if isinstance(update.get("types"), list):
             data["types"] = [t for t in update["types"] if t in TYPE_GROUPS]
+        data["types_known"] = list(TYPE_GROUPS)
         if "max_mb" in update:
             try:
                 data["max_mb"] = max(1, min(2048, int(float(update["max_mb"]))))

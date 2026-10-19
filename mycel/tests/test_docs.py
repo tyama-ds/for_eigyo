@@ -95,6 +95,20 @@ class ScopeTest(unittest.TestCase):
     def paths(self, prefixes=None):
         return sorted(p for p, *_ in self.scope.walk(prefixes))
 
+    def test_new_type_groups_enabled_for_old_scope_file(self):
+        """画像対応より前に保存した scope.json（types に image が無い）でも、画像は自動で有効になる。"""
+        f = self.vault / ".mycel" / "scope.json"
+        f.write_text(json.dumps({"sources": [], "exclude": [], "types": ["note", "word", "pdf"], "max_mb": 50}), encoding="utf-8")
+        sc = Scope(self.vault, self.vault / ".mycel")
+        self.assertIn("image", sc.data["types"])
+        self.assertTrue(sc.type_enabled("添付/図.png"))
+        self.assertNotIn("excel", sc.data["types"])            # 利用者が外した種類はそのまま
+        # 保存後は types_known が記録され、同じファイルを読み直しても外した種類は戻らない
+        sc.save({"types": ["note", "word", "pdf"]})
+        again = Scope(self.vault, self.vault / ".mycel")
+        self.assertNotIn("image", again.data["types"])
+        self.assertEqual(sorted(json.loads(f.read_text(encoding="utf-8"))["types_known"]), sorted(sc.data["types_known"]))
+
     def test_walk_exclude_types_and_sources(self):
         self.assertEqual(self.paths(), ["a/n.md", "b/x.txt"])
         self.scope.save({"sources": [{"path": str(self.ext), "label": "共有"}]})
