@@ -44,7 +44,7 @@
   const fail = (e) => toast(e.message || String(e), true);
   const titleOf = (p) => p.split("/").pop().replace(/\.md$/i, "");
   const isDoc = (p) => p.startsWith("@") || !/\.(md|markdown)$/i.test(p);
-  const CLIENT_VERSION = "0.6.6";          // サーバの __version__ と合わせる（tests/test_api が確認）
+  const CLIENT_VERSION = "0.6.7";          // サーバの __version__ と合わせる（tests/test_api が確認）
   const FT = { word: "W", excel: "X", powerpoint: "P", pdf: "PDF", email: "✉", csv: "CSV", html: "HTML", text: "TXT", code: "{ }", note: "MD", image: "IMG" };
   const GRP_NAME = { word: "Word", excel: "Excel", powerpoint: "PowerPoint", pdf: "PDF", email: "メール", csv: "CSV", html: "HTML", text: "テキスト", code: "データ", image: "画像" };
   const fmtDate = (t) => { if (!t) return "—"; const d = new Date(t * 1000), now = new Date(); return d.getFullYear() === now.getFullYear() ? d.toLocaleDateString("ja-JP", { month: "numeric", day: "numeric" }) : d.toLocaleDateString("ja-JP", { year: "numeric", month: "numeric", day: "numeric" }); };
@@ -326,7 +326,7 @@
 
   function scrollToHeading(h) {
     const want = h.trim().toLowerCase();
-    if (S.mode === "edit") {
+    if (S.mode === "edit" || S.mode === "split") {
       const ta = $("#editor"); if (!ta) return;
       const i = ta.value.split("\n").findIndex((l) => /^#{1,6}\s/.test(l) && l.replace(/^#+\s*/, "").trim().toLowerCase() === want);
       if (i >= 0) { const pos = ta.value.split("\n").slice(0, i).join("\n").length + 1; ta.focus(); ta.setSelectionRange(pos, pos); ta.scrollTop = Math.max(0, i * 25 - 60); }
@@ -343,20 +343,19 @@
     if (S.folderView !== null) { renderFolderView(); $("#conflict").hidden = true; return; }
     const c = S.cur;
     $("#titleIn").disabled = !c || (c.readonly && !c.editable);
-    $("#mEdit").disabled = !!(c && c.readonly);
+    $("#mEdit").disabled = !!(c && c.readonly); $("#mSplit").disabled = !!(c && c.readonly);
     $("#titleIn").value = c ? c.title : "";
     $("#crumb").textContent = c && c.folder ? docLabel(c.folder) + " /" : "";
     renderDates();
     document.title = c ? `${c.title} — Mycel` : "Mycel";
-    $("#mPrev").classList.toggle("on", S.mode === "prev");
-    $("#mEdit").classList.toggle("on", S.mode === "edit");
+    setModeButtons(S.mode);
     $("#conflict").hidden = !S.conflict;
     if (!c) {
       $("#body").innerHTML = `<div class="welcome"><h1>Mycel</h1><p>左のファイルからノートを開くか、<b>Ctrl+K</b> でノートを探して開いてください。見つからない名前を入力すると新しく作れます。</p><p class="hint">Mycel v${esc(CLIENT_VERSION)}${S.state && S.state.vault ? ` ・ Vault: <code>${esc(S.state.vault)}</code>` : ""}</p></div>`;
       updateStats(); return;
     }
     if (c.readonly) renderDoc();
-    else if (S.mode === "edit") renderEditor(); else renderPreview();
+    else if (S.mode === "edit") renderEditor(); else if (S.mode === "split") renderSplit(); else renderPreview();
     updateStats();
   }
 
@@ -412,25 +411,52 @@
   function renderPreview() {
     const top = $("#body").scrollTop;
     $("#body").innerHTML = `<article class="preview md">${MD.render(S.cur.text, { resolve })}</article>`;
+    fixImages($("#body"));
     $("#body").scrollTop = top;
   }
 
-  function renderEditor() {
-    $("#body").innerHTML = `<textarea class="editor" id="editor" spellcheck="false" aria-label="Markdown を編集"></textarea>`;
-    const ta = $("#editor");
+  /** 索引に無い画像（更新前・範囲外）を試しに表示した結果、無かったものだけ未解決表示に戻す。 */
+  function fixImages(root) {
+    $$("img.emb", root).forEach((img) => {
+      img.addEventListener("error", () => {
+        const t = img.dataset.target || img.dataset.path || "";
+        const sp = document.createElement("span");
+        sp.className = "wl unres"; sp.dataset.target = t; sp.title = "画像が見つかりません（ファイルの場所と名前を確認してください）"; sp.textContent = `![[${t}]]`;
+        img.replaceWith(sp);
+      }, { once: true });
+    });
+  }
+
+  const imageFiles = (list) => [...(list || [])].filter((f) => f.type.startsWith("image/") || isImage(f.name));
+  function bindEditor(ta, onInput) {
     ta.value = S.cur.text;
-    ta.addEventListener("input", () => { S.cur.text = ta.value; markDirty(); acUpdate(); });
-    ta.addEventListener("paste", (e) => { const files = [...(e.clipboardData && e.clipboardData.files || [])].filter((f) => f.type.startsWith("image/")); if (files.length) { e.preventDefault(); insertImages(files); } });
+    ta.addEventListener("input", () => { S.cur.text = ta.value; markDirty(); acUpdate(); if (onInput) onInput(); });
+    ta.addEventListener("paste", (e) => { const files = imageFiles(e.clipboardData && e.clipboardData.files); if (files.length) { e.preventDefault(); insertImages(files); } });
     ta.addEventListener("dragover", (e) => { if ([...e.dataTransfer.types].includes("Files")) { e.preventDefault(); e.stopPropagation(); } });
-    ta.addEventListener("drop", (e) => { const files = [...e.dataTransfer.files].filter((f) => f.type.startsWith("image/") || isImage(f.name)); if (files.length) { e.preventDefault(); e.stopPropagation(); insertImages(files); } });
+    ta.addEventListener("drop", (e) => { const files = imageFiles(e.dataTransfer.files); if (files.length) { e.preventDefault(); e.stopPropagation(); insertImages(files); } });
     ta.addEventListener("keydown", editorKeys);
     ta.addEventListener("click", acUpdate);
     ta.addEventListener("blur", () => setTimeout(acClose, 150));
   }
 
+  function renderEditor() {
+    $("#body").innerHTML = `<textarea class="editor" id="editor" spellcheck="false" aria-label="Markdown を編集"></textarea>`;
+    bindEditor($("#editor"));
+  }
+
+  /** 分割: 左で編集、右に表示（入力のたびに描き直す。画像を貼るとその場で見える）。 */
+  let liveTimer = 0;
+  function renderSplit() {
+    $("#body").innerHTML = `<div class="split"><textarea class="editor" id="editor" spellcheck="false" aria-label="Markdown を編集"></textarea><article class="preview md live" id="livePrev"></article></div>`;
+    const draw = () => { const lp = $("#livePrev"); if (!lp || !S.cur) return; const top = lp.scrollTop; lp.innerHTML = MD.render(S.cur.text, { resolve }); fixImages(lp); lp.scrollTop = top; };
+    bindEditor($("#editor"), () => { clearTimeout(liveTimer); liveTimer = setTimeout(draw, 250); });
+    draw();
+  }
+  function livePreviewNow() { const lp = $("#livePrev"); if (lp && S.cur) { clearTimeout(liveTimer); lp.innerHTML = MD.render(S.cur.text, { resolve }); fixImages(lp); } }
+
   /** 画像を添付フォルダに保存して、カーソル位置に ![[...]] を挿入する。 */
   async function insertImages(files) {
-    const ta = $("#editor"); if (!ta || !S.cur || S.cur.readonly) return;
+    const ta = $("#editor"); if (!S.cur || S.cur.readonly) return;
     const folder = (S.state.attachment_folder || "添付").replace(/^\/+|\/+$/g, "");
     const stamp = () => { const d = new Date(), p = (n) => String(n).padStart(2, "0"); return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`; };
     for (const f of files) {
@@ -439,29 +465,40 @@
         const res = await fetch("/api/file/upload", { method: "POST", headers: { "Content-Type": "application/octet-stream", "X-Filename": encodeURIComponent(name), "X-Folder": encodeURIComponent(folder) }, body: f });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || `エラー (${res.status})`);
-        const s = ta.selectionStart, e = ta.selectionEnd, ins = `![[${data.path}]]`;
-        ta.value = ta.value.slice(0, s) + ins + ta.value.slice(e);
-        ta.setSelectionRange(s + ins.length, s + ins.length);
-        S.cur.text = ta.value; markDirty();
-        toast(`画像を ${folder || "Vault 直下"} に保存して挿入しました`);
+        const ins = `![[${data.path}]]`;
+        if (ta) {
+          const s = ta.selectionStart, e = ta.selectionEnd;
+          ta.value = ta.value.slice(0, s) + ins + ta.value.slice(e);
+          ta.setSelectionRange(s + ins.length, s + ins.length);
+          S.cur.text = ta.value;
+        } else {
+          S.cur.text = S.cur.text.replace(/\s*$/, "") + (S.cur.text.trim() ? "\n\n" : "") + ins + "\n";
+        }
+        markDirty();
+        if (S.mode === "split") livePreviewNow();
+        else if (S.mode === "prev") renderPreview();
+        if (S.mode === "edit") toastAction(`画像を ${folder || "Vault 直下"} に保存して挿入しました`, "表示して確認", () => setMode("split"));
+        else toast(`画像を ${folder || "Vault 直下"} に保存して挿入しました`);
       } catch (err) { toast(`${name}: ${err.message}`, true); }
     }
     loadTree();
   }
 
   function setMode(mode, render = true) {
-    if (mode === "edit" && S.cur && S.cur.readonly) { toast("資料は読み取り専用です（「ノートとして取り込む」で編集できます）"); return; }
+    if (mode !== "prev" && S.cur && S.cur.readonly) { toast("資料は読み取り専用です（「ノートとして取り込む」で編集できます）"); return; }
     let caret = null;
     const ta = $("#editor");
     if (ta) caret = ta.selectionStart;
     S.mode = mode; store.set("mode", mode);
     if (render && S.cur) {
       renderMain();
-      if (mode === "edit") { const t = $("#editor"); t.focus(); if (caret !== null) t.setSelectionRange(caret, caret); }
-    } else { $("#mPrev").classList.toggle("on", mode === "prev"); $("#mEdit").classList.toggle("on", mode === "edit"); }
+      if (mode !== "prev") { const t = $("#editor"); t.focus(); if (caret !== null) t.setSelectionRange(caret, caret); }
+    } else setModeButtons(mode);
   }
+  function setModeButtons(mode) { $("#mPrev").classList.toggle("on", mode === "prev"); $("#mEdit").classList.toggle("on", mode === "edit"); $("#mSplit").classList.toggle("on", mode === "split"); }
   $("#mPrev").onclick = () => setMode("prev");
   $("#mEdit").onclick = () => setMode("edit");
+  $("#mSplit").onclick = () => setMode("split");
 
   function updateStats() {
     if (!S.cur) { $("#stInfo").textContent = ""; $("#stWords").textContent = ""; return; }
@@ -2682,7 +2719,17 @@
     if (![...e.dataTransfer.types].includes("Files")) return;
     e.preventDefault();
     const files = [...e.dataTransfer.files];
+    const imgs = imageFiles(files);
+    // 閲覧中のノートに画像を落としたら、資料として取り込むのではなくノートに貼る
+    if (imgs.length === files.length && S.cur && !S.cur.readonly && S.mode === "prev" && !S.libraryView && !S.entityView && S.folderView === null && $("#body").contains(e.target)) { insertImages(imgs); return; }
     if (files.length) openIngest({ files });
+  });
+  document.addEventListener("paste", (e) => {
+    const ae = document.activeElement;
+    if (ae && (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA" || ae.isContentEditable)) return;   // 編集欄は自分で処理する
+    if (!S.cur || S.cur.readonly || S.mode !== "prev" || S.libraryView || S.entityView || S.folderView !== null) return;
+    const files = imageFiles(e.clipboardData && e.clipboardData.files);
+    if (files.length) { e.preventDefault(); insertImages(files); }
   });
 
   // ------------------------------------------------------------ 設定
