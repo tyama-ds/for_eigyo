@@ -639,6 +639,104 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
 .gempty{text-align:center; color:var(--text-3); padding:38px 10px; font-size:13.5px}
 @media (max-width:560px){ .gsub{display:none} }
 
+/* ============================================================ 過去ログ（タブ表示） */
+/* 過去ログ表示中はフィード（#lead/#grid）とトレンド行を隠すだけ。フィードは裏で更新され続ける */
+body.arc-on #lead, body.arc-on #grid, body.arc-on .subbar{display:none !important}
+.iconbtn[aria-pressed="true"]{color:var(--accent); border-color:color-mix(in srgb,var(--accent) 55%,transparent);
+  background:color-mix(in srgb,var(--accent) 13%,var(--surface))}
+.chip .chip__ic{display:inline-flex; width:15px; height:15px}
+.chip .chip__ic svg{width:15px; height:15px}
+.arc{display:flex; flex-direction:column; gap:12px; margin-top:4px; min-width:0}
+.arc[hidden]{display:none}   /* display 指定が hidden 属性を打ち消さないように */
+.arc__head{display:flex; align-items:center; gap:8px 12px; flex-wrap:wrap}
+.arc__title{display:flex; align-items:center; gap:9px; margin:0; font-family:var(--font-serif); font-size:22px; font-weight:700; outline:none}
+.arc__title svg{width:22px; height:22px; color:var(--accent); flex:0 0 auto}
+.arc__sub{font-size:12.5px; color:var(--text-3); min-width:0}
+.arc__back{margin-left:auto; display:inline-flex; align-items:center; gap:6px; white-space:nowrap}
+.arc__back svg{width:15px; height:15px}
+.arc__panel{background:var(--surface); border:1px solid var(--line); border-radius:var(--r); padding:14px;
+  display:flex; flex-direction:column; gap:11px; box-shadow:var(--shadow-sm); min-width:0}
+.arc__row{display:flex; align-items:center; gap:8px 10px; flex-wrap:wrap; min-width:0}
+.arc__q{flex:1 1 320px; min-width:0}
+.arc__q input{font-size:15px; padding:12px 14px 12px 44px}
+.arc__lbl{font-size:11.5px; font-weight:700; color:var(--text-3); letter-spacing:.04em; white-space:nowrap}
+.arc__chips{display:flex; gap:6px; flex-wrap:wrap}
+.pchip{padding:5px 12px; border-radius:99px; border:1px solid var(--line-2); background:transparent; color:var(--text-2);
+  font-size:12.5px; font-weight:700; transition:.18s var(--ease)}
+.pchip:hover{color:var(--text); border-color:var(--text-3)}
+.pchip[aria-pressed="true"]{color:var(--text); border-color:transparent;
+  background:color-mix(in srgb,var(--accent) 18%,transparent); box-shadow:inset 0 0 0 1.5px var(--accent)}
+.arc__range{display:inline-flex; align-items:center; gap:5px; flex-wrap:wrap; min-width:0}
+.arc__range.on input{border-color:var(--accent)}
+.arc__tilde{font-size:12px; color:var(--text-3)}
+.arc select, .arc input[type=date]{padding:7px 10px; border-radius:9px; background:var(--surface-2); border:1px solid var(--line);
+  color:var(--text); font:inherit; font-size:12.5px; outline:none; max-width:100%; min-width:0}
+.arc select:focus, .arc input[type=date]:focus{border-color:var(--accent)}
+:root[data-theme="dark"] .arc input[type=date]{color-scheme:dark}
+.arc__sel{max-width:min(260px,100%)}
+.arc__clear{margin-left:auto}
+.seg{display:inline-flex; border:1px solid var(--line-2); border-radius:11px; overflow:hidden; background:var(--surface-2); flex:0 0 auto}
+.seg button{border:none; background:transparent; color:var(--text-2); padding:9px 13px; font-size:13px; font-weight:700;
+  display:inline-flex; align-items:center; gap:6px; transition:.18s var(--ease)}
+.seg button + button{border-left:1px solid var(--line-2)}
+.seg button:hover{color:var(--text)}
+.seg button[aria-pressed="true"]{background:var(--accent); color:#05101d}
+:root[data-theme="light"] .seg button[aria-pressed="true"]{color:#fff}
+.seg svg{width:15px; height:15px}
+.arc__count{font-size:13px; color:var(--text-2); display:flex; flex-wrap:wrap; gap:4px 12px; align-items:baseline; min-height:22px}
+.arc__count b{color:var(--accent); font-family:var(--font-serif); font-size:17px}
+.arc__count .seg2{color:var(--text-3); font-size:12px}
+.arc__count .seg2 b{font-size:12px; font-family:inherit; color:var(--text-2)}
+.arc__results{min-width:0}
+.arc__list{display:flex; flex-direction:column; gap:8px}
+.arow{display:grid; grid-template-columns:96px minmax(0,1fr) auto; gap:4px 14px; align-items:start;
+  padding:11px 10px 11px 14px; background:var(--surface); border:1px solid var(--line); border-left:3px solid var(--c,var(--accent));
+  border-radius:12px; cursor:pointer; transition:background .18s, border-color .18s, opacity .2s}
+.arow:hover{background:var(--surface-2); border-color:var(--line-2); border-left-color:var(--c,var(--accent))}
+.arow.read{opacity:.6}
+.arow.read:hover{opacity:1}
+.arow:focus, .arc .card:focus{outline:none}
+.arow:focus-visible, .arc .card:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+.arow__date{display:flex; flex-direction:column; font-size:12px; color:var(--text-3); line-height:1.4; font-variant-numeric:tabular-nums; padding-top:1px}
+.arow__date b{color:var(--text); font-weight:700; font-size:12.5px}
+.arow__main{min-width:0; display:flex; flex-direction:column; gap:3px}
+.arow__meta{display:flex; align-items:center; gap:4px 9px; font-size:11.5px; color:var(--text-3); flex-wrap:wrap; min-width:0}
+.arow__cat{display:inline-flex; align-items:center; gap:5px; font-weight:700; color:var(--c,var(--accent))}
+.arow__cat .dot{width:7px; height:7px; border-radius:99px; background:var(--c,var(--accent))}
+.arow__src{color:var(--text-2); font-weight:600; overflow-wrap:anywhere}
+.arow__title{font-size:15px; font-weight:700; line-height:1.42; color:var(--text); margin:0; overflow-wrap:anywhere}
+.arow__link{color:inherit; text-decoration:none}
+.arow__link:hover{color:var(--accent); text-decoration:underline; text-underline-offset:3px}
+.arow__link:focus-visible{outline:2px solid var(--accent); outline-offset:2px; border-radius:4px}
+.arc__results.is-loading{opacity:.55; transition:opacity .2s; pointer-events:none}
+.arow__sum{font-size:12.5px; color:var(--text-3); line-height:1.55; margin:0; overflow-wrap:anywhere;
+  display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden}
+.arow__acts{display:flex; gap:2px; align-items:center}
+.arow mark, .arc .card mark{background:color-mix(in srgb,var(--accent) 34%,transparent); color:inherit; border-radius:3px; padding:0 1px}
+.arow.sk{cursor:default; border-left-color:var(--line-2)}
+.arc__state{text-align:center; padding:48px 16px; color:var(--text-3); grid-column:1/-1}
+.arc__state svg{width:48px; height:48px; opacity:.5; margin-bottom:10px}
+.arc__state h3{color:var(--text-2); font-weight:700; margin:0 0 6px; font-size:16.5px}
+.arc__state .btn{margin-top:14px}
+.arc__state.err h3{color:var(--cat-世界)}
+.arc__more{display:flex; justify-content:center; padding:4px 0 8px}
+.arc__more[hidden]{display:none}
+.arc__more .btn{min-width:200px}
+.arc__expand{font-size:11.5px; color:var(--text-3)}
+.arc__expand b{color:var(--accent); font-weight:600}
+@media(max-width:600px){
+  .arc__title{font-size:19px}
+  .arc__sub{display:none}
+  .arc__panel{padding:11px}
+  .arc__chips{flex:1 1 200px; min-width:0}   /* 「期間」ラベルと同じ行に並べ、ボタンは中で折り返す */
+  .arc__clear{margin-left:0}
+  .arc__range input[type=date]{flex:1 1 120px}
+  .arow{grid-template-columns:minmax(0,1fr) auto; padding:10px 6px 10px 11px; gap:3px 8px}
+  .arow__date{grid-column:1 / -1; flex-direction:row; gap:7px}
+  .arow__acts{grid-row:2; grid-column:2; align-self:start}
+  .arow__acts .act{width:30px; height:30px}
+}
+
 /* ============================================================ AI パネル */
 .drawer.wide{width:min(600px,96vw)}
 /* パネル本体は #aiBody で指定する。クラス .ai だと assistant バブル
@@ -780,6 +878,9 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
       <button class="iconbtn" id="researchBtn" title="リサーチ（現在＋過去ログを検索してAIに質問）" aria-label="リサーチ">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5.5" rx="8" ry="2.5"/><path d="M4 5.5v6c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5v-6"/><path d="M4 11.5v6c0 1.4 3.6 2.5 8 2.5 1.2 0 2.4-.08 3.4-.23"/><path d="M18.5 15.5l2.5 2.5-2.5 2.5M21 18h-5"/></svg>
       </button>
+      <button class="iconbtn" id="archiveBtn" title="過去ログ (H)" aria-label="過去ログ" aria-pressed="false" aria-controls="archive">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 12a8.5 8.5 0 1 0 2.5-6"/><path d="M3 3.5V8h4.5"/><path d="M12 7.5V12l3 2"/></svg>
+      </button>
       <button class="iconbtn pill" id="autoBtn" title="自動更新の間隔を切り替え">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2" stroke-linecap="round"/></svg>
         <span id="autoLbl">自動: オフ</span>
@@ -826,6 +927,57 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
 <main>
   <section id="lead" class="lead" hidden></section>
   <section id="grid" class="grid"></section>
+  <!-- 過去ログ（タブ表示）: キーワード×期間×情報源×カテゴリで過去ログを検索し、リスト／パネルで閲覧 -->
+  <section id="archive" class="arc" hidden aria-labelledby="arcTitle">
+    <div class="arc__head">
+      <h2 class="arc__title" id="arcTitle" tabindex="-1">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 12a8.5 8.5 0 1 0 2.5-6"/><path d="M3 3.5V8h4.5"/><path d="M12 7.5V12l3 2"/></svg>
+        過去ログ
+      </h2>
+      <span class="arc__sub" id="arcSub">保存された記事を期間・キーワードで検索</span>
+      <button class="btn ghost sm arc__back" type="button" id="arcBack" aria-label="フィードに戻る（Esc）" title="フィードに戻る（Esc）">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>フィードに戻る
+      </button>
+    </div>
+    <div class="arc__panel" role="search" aria-label="過去ログの検索条件">
+      <div class="arc__row">
+        <div class="gsearch arc__q">
+          <svg class="gsearch__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3" stroke-linecap="round"/></svg>
+          <input id="arcQ" type="search" enterkeyhint="search" placeholder="キーワード（スペース=AND・|=OR・-語=除外。例: 高炉|電炉 水素 -株価）" autocomplete="off" spellcheck="false" aria-label="過去ログのキーワード（スペース区切りでAND、|でOR、先頭に-で除外）">
+        </div>
+        <div class="seg" role="group" aria-label="表示形式">
+          <button type="button" id="arcViewList" aria-pressed="true" aria-label="リスト表示" title="リスト表示（L）">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="3.5" cy="6" r="1" fill="currentColor"/><circle cx="3.5" cy="12" r="1" fill="currentColor"/><circle cx="3.5" cy="18" r="1" fill="currentColor"/></svg>リスト
+          </button>
+          <button type="button" id="arcViewPanel" aria-pressed="false" aria-label="パネル表示" title="パネル表示（L）">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>パネル
+          </button>
+        </div>
+      </div>
+      <div class="arc__expand" id="arcExpand" hidden></div>
+      <div class="arc__row">
+        <span class="arc__lbl" id="arcPerLbl">期間</span>
+        <div class="arc__chips" id="arcPeriods" role="group" aria-labelledby="arcPerLbl"></div>
+        <span class="arc__range" id="arcRange">
+          <input type="date" id="arcFrom" aria-label="開始日（指定すると期間ボタンは解除）"><span class="arc__tilde" aria-hidden="true">〜</span><input type="date" id="arcTo" aria-label="終了日（指定すると期間ボタンは解除）">
+        </span>
+      </div>
+      <div class="arc__row">
+        <select id="arcSrc" class="arc__sel" aria-label="情報源"><option value="">すべての情報源</option></select>
+        <select id="arcCat" class="arc__sel" aria-label="カテゴリ"><option value="">すべてのカテゴリ</option></select>
+        <select id="arcOrder" aria-label="並び順" title="関連順はキーワード（3文字以上の語）で検索したときに使えます">
+          <option value="new">新しい順</option>
+          <option value="rel">関連順</option>
+        </select>
+        <button type="button" class="lnkbtn arc__clear" id="arcReset" title="キーワード・期間・情報源・カテゴリ・並び順を初期状態（直近30日）に戻す">条件をリセット</button>
+      </div>
+    </div>
+    <div class="arc__count" id="arcCount" role="status" aria-live="polite" aria-atomic="true"></div>
+    <div class="arc__results" id="arcResults" aria-busy="false" aria-label="過去ログの検索結果"></div>
+    <div class="arc__more" id="arcMoreWrap" hidden>
+      <button class="btn ghost" type="button" id="arcMore">さらに読み込む</button>
+    </div>
+  </section>
 </main>
 
 <!-- ============================================ overlays -->
@@ -909,13 +1061,14 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
       <div class="kbd-row"><kbd>F</kbd> 横断検索（全カテゴリ）</div>
       <div class="kbd-row"><kbd>R</kbd> 記事を再取得</div>
       <div class="kbd-row"><kbd>T</kbd> ライト / ダーク切替</div>
-      <div class="kbd-row"><kbd>L</kbd> グリッド / リスト切替</div>
+      <div class="kbd-row"><kbd>L</kbd> グリッド / リスト切替（過去ログではリスト / パネル）</div>
+      <div class="kbd-row"><kbd>H</kbd> 過去ログを開く / フィードに戻る</div>
       <div class="kbd-row"><kbd>B</kbd> 保存済みを開く</div>
       <div class="kbd-row"><kbd>S</kbd> 情報源を開く</div>
       <div class="kbd-row"><kbd>V</kbd> ソース別に表示</div>
       <div class="kbd-row"><kbd>A</kbd> AIアシスタント</div>
       <div class="kbd-row"><kbd>1</kbd>〜<kbd>9</kbd> カテゴリ切替</div>
-      <div class="kbd-row"><kbd>Esc</kbd> 閉じる / 検索クリア</div>
+      <div class="kbd-row"><kbd>Esc</kbd> 閉じる / 検索クリア / フィードに戻る</div>
     </div>
   </div>
 </div>
@@ -1251,15 +1404,19 @@ function relTime(ts){
   const d=Math.floor(h/24); if(d<7) return d+"日前";
   const dt=new Date(ts*1000); return (dt.getMonth()+1)+"月"+dt.getDate()+"日";
 }
-// テキスト中の検索語を安全にハイライト（textNode + <mark> のみ）
+// テキスト中の検索語を安全にハイライト（textNode + <mark> のみ）。q は語1つか語の配列（過去ログの AND/OR 語）
 function highlight(text, q){
   const frag=document.createDocumentFragment();
-  if(!q){ frag.append(document.createTextNode(text)); return frag; }
-  const lc=text.toLowerCase(), lq=q.toLowerCase(); let i=0, idx;
-  while((idx=lc.indexOf(lq,i))!==-1){
+  const terms=[].concat(q||[]).map(t=>String(t||"").toLowerCase()).filter(Boolean);
+  if(!terms.length){ frag.append(document.createTextNode(text)); return frag; }
+  const lc=text.toLowerCase(); let i=0;
+  while(i<text.length){
+    let idx=-1, len=0;   // 最も手前で一致する語（同じ位置なら長い語）
+    for(const t of terms){ const k=lc.indexOf(t,i); if(k!==-1 && (idx===-1 || k<idx || (k===idx && t.length>len))){ idx=k; len=t.length; } }
+    if(idx===-1) break;
     if(idx>i) frag.append(document.createTextNode(text.slice(i,idx)));
-    frag.append(el("mark",{text:text.slice(idx,idx+q.length)}));
-    i=idx+q.length;
+    frag.append(el("mark",{text:text.slice(idx,idx+len)}));
+    i=idx+len;
   }
   frag.append(document.createTextNode(text.slice(i)));
   return frag;
@@ -1362,28 +1519,40 @@ function renderAll(){ renderCats(); renderTrend(); renderStatus(); renderGrid();
 function renderCats(){
   const box=$("#cats"); box.innerHTML="";
   if(S.source){   // 情報源フィルタ中：解除できるアクティブなソースチップを先頭に表示
-    const sc=el("button",{class:"chip active srcchip", title:"情報源フィルタを解除"});
+    const sc=el("button",{class:"chip srcchip"+(AR.active?"":" active"), title:AR.active?"フィードに戻る（情報源フィルタ中）":"情報源フィルタを解除"});
     sc.style.setProperty("--c", catColor((S.articles.find(matchSource)||{}).category||"総合"));
     sc.append(el("span",{class:"dot"}), el("span",{text:"情報源: "+(S.sourceName||S.source)}),
               el("span",{class:"cnt",text:String(S.articles.filter(matchSource).length)}),
               el("span",{class:"x",html:'&times;'}));
-    sc.onclick=clearSourceFilter;
+    sc.onclick=()=>{ if(AR.active){ exitArchive(); return; } clearSourceFilter(); };   // 過去ログ表示中は「フィードに戻る」
     box.append(sc);
   }
   const cats=["すべて",...S.categories,"保存済み"];
   cats.forEach((c,i)=>{
-    const active=!S.source && c===S.cat, isSpecial=c==="すべて"||c==="保存済み";
+    const active=!AR.active && !S.source && c===S.cat, isSpecial=c==="すべて"||c==="保存済み";
     const chip=el("button",{class:"chip"+(active?" active":""), title:c+" ("+catCount(c)+")"});
+    if(active) chip.setAttribute("aria-current","page");
     chip.style.setProperty("--c", isSpecial? "var(--accent)":catColor(c));
     if(c==="保存済み"){
       chip.append(el("span",{class:"dot"}), el("span",{html:'★',style:"font-size:12px"}), el("span",{text:"保存済み"}), el("span",{class:"cnt",text:String(catCount(c))}));
     }else{
       chip.append(el("span",{class:"dot"}), el("span",{text:c}), el("span",{class:"cnt",text:String(catCount(c))}));
     }
-    chip.onclick=()=>{ S.source=null; S.sourceName=""; S.cat=c; store.set("cat",c); renderAll(); };
+    chip.onclick=()=>{ const back=AR.active; if(back) exitArchive({silent:true});   // 過去ログ表示中ならフィードに戻ってそのカテゴリへ
+      S.source=null; S.sourceName=""; S.cat=c; store.set("cat",c); renderAll();
+      if(back) focusActiveChip(); };
     box.append(chip);
   });
+  // 過去ログタブ（末尾）: main をフィードから過去ログの検索・閲覧に切り替える
+  const ac=el("button",{class:"chip arcchip"+(AR.active?" active":""), id:"arcTab", type:"button",
+                        title:"過去ログを検索・閲覧 (H)", "aria-controls":"archive"});
+  ac.style.setProperty("--c","var(--accent-2)");
+  if(AR.active) ac.setAttribute("aria-current","page");
+  ac.append(el("span",{class:"chip__ic",html:ICON_ARCHIVE}), el("span",{text:"過去ログ"}));
+  ac.onclick=()=>{ if(!AR.active) enterArchive(); };
+  box.append(ac);
 }
+function focusActiveChip(){ const c=$("#cats .chip.active"); if(c) try{ c.focus(); }catch(e){} }
 function renderTrend(){
   const box=$("#trend"); box.innerHTML="";
   const words=trending();
@@ -1412,6 +1581,7 @@ function renderStatus(){
 // ============================================================ ソース別表示
 function setSourceFilter(name){
   if(!name) return;
+  if(AR.active) exitArchive({silent:true});   // 過去ログ表示中に（ソース別ピッカー等から）選んだらフィードへ戻して表示
   S.source=name; S.sourceName=name; S.cat="すべて"; S.q=""; if($("#q")) $("#q").value="";
   closeOverlays(); renderAll();
   try{ window.scrollTo({top:0, behavior:"smooth"}); }catch(e){}
@@ -1575,16 +1745,17 @@ function srcSpan(name, cls){
   return s;
 }
 
-function card(a){
+function card(a, hl){   // hl: ハイライトする語（省略時はインスタント検索の語。過去ログは検索語の配列）
+  const q = hl===undefined ? S.q : hl;
   const c=el("article",{class:"card"+(S.seen.has(a.id)?" read":"")});
   c.style.setProperty("--c", catColor(a.category));
   c.append(mediaEl(a));
   const body=el("div",{class:"card__body"});
   const top=el("div",{class:"card__top"});
-  const cat=el("span",{class:"card__cat"}); cat.append(el("span",{class:"dot"}), document.createTextNode(a.category));
+  const cat=el("span",{class:"card__cat"}); cat.append(el("span",{class:"dot"}), document.createTextNode(a.category||""));
   top.append(cat, srcSpan(a.source,"card__src"), el("span",{class:"card__time",text:timeMeta(a)}));
-  const title=el("h3",{class:"card__title"}); title.append(highlight(a.title, S.q));
-  const sum=el("p",{class:"card__sum"}); sum.append(highlight(a.summary||"", S.q));
+  const title=el("h3",{class:"card__title"}); title.append(highlight(a.title||"", q));
+  const sum=el("p",{class:"card__sum"}); sum.append(highlight(a.summary||"", q));
   body.append(top,title); if(a.summary) body.append(sum);
   c.append(body, cardFoot(a));
   if(a.link){ c.style.cursor="pointer"; c.addEventListener("click",(e)=>{ if(e.target.closest(".card__foot"))return; openArticle(a); }); }
@@ -1916,6 +2087,369 @@ $("#scrim").onclick=closeTop;
 $$("[data-close]").forEach(b=>b.onclick=closeTop);
 $("#bmClear").onclick=()=>{ S.bookmarks.clear(); store.set("bm",[]); syncBmBadge(); renderCats(); renderBookmarks(); if(S.cat==="保存済み")renderGrid(); toast("保存済みをすべて削除しました"); };
 
+// ============================================================ 過去ログ（タブ表示）
+// 過去ログ（SQLite）を キーワード × 期間 × 情報源 × カテゴリ で検索し、リスト／パネルで閲覧する。
+// main のフィード（#lead/#grid）は隠すだけで裏で更新され続け、「フィードに戻る」でそのまま戻る。
+// 条件は URL ハッシュ（#archive?q=…&days=30&view=list）と sessionStorage に残し、再読み込みでも復元する。
+const ICON_ARCHIVE='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 12a8.5 8.5 0 1 0 2.5-6"/><path d="M3 3.5V8h4.5"/><path d="M12 7.5V12l3 2"/></svg>';
+const AR_PERIODS=[["today","今日"],["3","3日"],["7","7日"],["30","30日"],["90","90日"],["365","1年"],["all","すべて"]];
+const AR_PAGE=30;   // 1回に読む件数（「さらに読み込む」で次の30件）
+const AR_DEFAULT={q:"", days:"30", from:"", to:"", src:"", cat:"", order:"new"};
+const AR={active:false, f:Object.assign({},AR_DEFAULT), view:(store.get("arView","list")==="panel"?"panel":"list"),
+          items:[], ids:new Set(), next:0, total:0, hasMore:false, stats:null, expanded:[],
+          seq:0, loading:false, loadingMore:false, error:"", feedScroll:0, qT:null, selSig:""};
+const pad2=n=>String(n).padStart(2,"0");
+function localDay(d){ return d.getFullYear()+"-"+pad2(d.getMonth()+1)+"-"+pad2(d.getDate()); }
+function validDay(s){ s=String(s||""); return (/^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(new Date(s+"T00:00:00").getTime())) ? s : ""; }
+function arTs(a){ return a.published_ts || a.sort_ts || a.archived_at || 0; }
+function arDate(a, withTime){ const t=arTs(a); if(!t) return ""; const d=new Date(t*1000); return localDay(d)+(withTime?" "+pad2(d.getHours())+":"+pad2(d.getMinutes()):""); }
+function arNum(n){ return Number(n||0).toLocaleString("ja-JP"); }
+function safeHref(u){ u=String(u||""); return /^https?:\/\//i.test(u) ? u : ""; }
+
+// ---- 条件（検証・URL ハッシュ・sessionStorage）
+function arSanitize(f){   // ハッシュ／sessionStorage から来た条件を検証して正規化
+  const o=Object.assign({}, AR_DEFAULT);
+  if(!f || typeof f!=="object") return o;
+  o.q=String(f.q||"").slice(0,200);
+  o.from=validDay(f.from); o.to=validDay(f.to);
+  if(o.from && o.to && o.from>o.to){ const t=o.from; o.from=o.to; o.to=t; }
+  o.days=(o.from||o.to) ? "" : (AR_PERIODS.some(p=>p[0]===String(f.days)) ? String(f.days) : AR_DEFAULT.days);
+  o.src=String(f.src||"").slice(0,200); o.cat=String(f.cat||"").slice(0,40);
+  o.order=f.order==="rel" ? "rel" : "new";
+  return o;
+}
+function isArchiveHash(h){ return /^#archive(\?|$)/.test(h==null ? location.hash : h); }
+function arParseHash(h){
+  const i=h.indexOf("?"), p=new URLSearchParams(i>=0 ? h.slice(i+1) : ""), v=p.get("view");
+  return { f:arSanitize({q:p.get("q"), days:p.get("days"), from:p.get("from"), to:p.get("to"),
+                         src:p.get("src"), cat:p.get("cat"), order:p.get("order")}),
+           view:(v==="list"||v==="panel") ? v : null };
+}
+function arHash(){
+  const f=AR.f, p=new URLSearchParams();
+  if(f.q) p.set("q",f.q);
+  if(f.from||f.to){ if(f.from) p.set("from",f.from); if(f.to) p.set("to",f.to); }
+  else p.set("days",f.days||AR_DEFAULT.days);
+  if(f.src) p.set("src",f.src);
+  if(f.cat) p.set("cat",f.cat);
+  if(f.order==="rel") p.set("order","rel");
+  p.set("view",AR.view);
+  return "#archive?"+p.toString();
+}
+function arSaveState(){   // 再読み込み・再訪で条件を復元（URL ハッシュ＋同じタブの sessionStorage）
+  try{ sessionStorage.setItem("prism.archive", JSON.stringify(AR.f)); }catch(e){}
+  if(AR.active){ try{ history.replaceState({prism:"archive"}, "", arHash()); }catch(e){} }
+}
+function arLoadSaved(){ try{ const v=sessionStorage.getItem("prism.archive"); return v ? arSanitize(JSON.parse(v)) : null; }catch(e){ return null; } }
+function arParams(offset){   // 条件 → /api/archive/search のクエリ
+  const f=AR.f, q=f.q.trim();
+  const p=new URLSearchParams({q, limit:String(AR_PAGE), offset:String(offset||0), dedup:"0",
+                               order:(f.order==="rel" && q) ? "rel" : "new"});
+  if(f.from||f.to){ if(f.from) p.set("from",f.from); if(f.to) p.set("to",f.to); }
+  else if(f.days==="today") p.set("from", localDay(new Date()));   // 今日 = 今日の0時（ローカル）以降
+  else if(f.days && f.days!=="all") p.set("days", f.days);
+  if(f.src) p.set("sources", f.src);
+  if(f.cat) p.set("category", f.cat);
+  return p;
+}
+function arTerms(){   // ハイライトする語: AND/OR の語（除外語・記号は除く）＋同義語で展開された語
+  const out=[];
+  for(const t of (AR.f.q.match(/-?"[^"]*"|\S+/g)||[])){
+    if(t.startsWith("-")) continue;
+    t.split("|").forEach(w=>{ w=w.replace(/"/g,"").trim(); if(w) out.push(w); });
+  }
+  (AR.expanded||[]).forEach(x=>(x.to||[]).forEach(w=>out.push(String(w))));
+  return [...new Set(out)].slice(0,40);
+}
+function arPeriodText(){
+  const f=AR.f;
+  if(f.from||f.to) return (f.from||"…")+" 〜 "+(f.to||"…");
+  if(f.days==="all") return "すべての期間";
+  if(f.days==="today") return "今日";
+  return "直近"+((AR_PERIODS.find(p=>p[0]===f.days)||[0,f.days+"日"])[1]);
+}
+
+// ---- 表示の切替（フィード ⇄ 過去ログ）
+function syncArcToggles(){
+  $("#archiveBtn").setAttribute("aria-pressed", String(AR.active));
+  const t=$("#arcTab");
+  if(t){ t.classList.toggle("active",AR.active); if(AR.active) t.setAttribute("aria-current","page"); else t.removeAttribute("aria-current"); }
+}
+function enterArchive(opts){
+  opts=opts||{};
+  if(overlayStack.length) closeOverlays();
+  if(opts.filters) AR.f=arSanitize(opts.filters);
+  else if(!AR.active){ const saved=arLoadSaved(); if(saved) AR.f=saved; }   // 同じタブで前回の条件を復元
+  if(opts.view && opts.view!==AR.view){ AR.view=opts.view; store.set("arView",AR.view); }
+  if(AR.active){ arFillControls(); arSearch(); return; }   // 履歴の移動などで条件だけ変わった
+  AR.active=true; AR.feedScroll=window.scrollY||0;
+  document.body.classList.add("arc-on"); $("#archive").hidden=false;
+  renderCats(); syncArcToggles(); arFillControls();
+  if(opts.history!==false){ try{ history.pushState({prism:"archive"}, "", arHash()); }catch(e){} }   // 「戻る」でフィードへ
+  window.scrollTo(0,0);
+  arSearch();
+  if(opts.focus!==false) setTimeout(()=>{ try{   // タッチ端末では見出しへ（いきなりキーボードを出さない）
+    (matchMedia("(pointer: coarse)").matches ? $("#arcTitle") : $("#arcQ")).focus({preventScroll:true}); }catch(e){} }, 30);
+}
+function exitArchive(opts){
+  opts=opts||{};
+  if(!AR.active) return;
+  AR.active=false; AR.seq++; AR.loading=AR.loadingMore=false; clearTimeout(AR.qT);   // 応答待ちの検索は捨てる
+  document.body.classList.remove("arc-on"); $("#archive").hidden=true;
+  if(opts.history!==false){ try{ history.pushState({prism:"feed"}, "", location.pathname+location.search); }catch(e){} }
+  syncArcToggles();
+  if(!opts.silent) renderCats();
+  window.scrollTo(0, AR.feedScroll||0);   // フィードは元のスクロール位置のまま
+  if(opts.focus) setTimeout(()=>{ try{ $(opts.focus).focus({preventScroll:true}); }catch(e){} }, 30);
+}
+function toggleArchive(){ if(AR.active) exitArchive({focus:"#archiveBtn"}); else enterArchive(); }
+window.addEventListener("popstate", ()=>{   // ブラウザの戻る／進む
+  if(isArchiveHash()){ const h=arParseHash(location.hash); enterArchive({filters:h.f, view:h.view, history:false, focus:false}); }
+  else if(AR.active) exitArchive({history:false});
+});
+
+// ---- 検索
+async function arSearch(more){
+  if(!AR.active) return;
+  clearTimeout(AR.qT);
+  if(more && (AR.loading || !AR.hasMore)) return;
+  const seq=++AR.seq, offset=more ? AR.next : 0;   // 連続操作で古い応答が新しい結果を上書きしないよう、最新だけ採用
+  AR.loading=true; AR.loadingMore=!!more; AR.error="";
+  if(more) arSyncMore(); else { arSaveState(); arRenderLoading(); }
+  try{
+    const d=await api("/api/archive/search?"+arParams(offset).toString());
+    if(seq!==AR.seq || !AR.active) return;
+    const rows=d.articles||[];
+    if(!more){ AR.items=[]; AR.ids=new Set(); }
+    const fresh=rows.filter(a=>a && a.id && !AR.ids.has(a.id));   // 新着でページの境目がずれても重複させない
+    fresh.forEach(a=>{ AR.ids.add(a.id); AR.items.push(a); });
+    AR.next=offset+rows.length; AR.total=d.total||0; AR.hasMore=!!d.has_more && rows.length>0;
+    AR.stats=d.stats||AR.stats; AR.expanded=d.expanded||[];
+    AR.loading=AR.loadingMore=false;
+    arFillSelects(); arRenderCount(); arRenderExpand();
+    if(more) arAppend(fresh, null, true); else arRenderResults();
+    arSyncMore();
+  }catch(e){
+    if(seq!==AR.seq) return;
+    AR.loading=AR.loadingMore=false;
+    if(more){ toast("続きの読み込みに失敗しました","err"); arSyncMore(); return; }
+    AR.error=(e && e.server) ? e.message : "サーバーに接続できませんでした";
+    AR.items=[]; AR.ids=new Set(); AR.total=0; AR.hasMore=false;
+    arRenderCount(); arRenderResults(); arSyncMore();
+  }
+}
+function arSearchSoon(){ clearTimeout(AR.qT); AR.qT=setTimeout(()=>arSearch(), 300); }   // 入力中はまとめて1回
+
+// ---- 描画
+function arRenderLoading(){
+  const box=$("#arcResults"); box.setAttribute("aria-busy","true");
+  $("#arcMoreWrap").hidden=true;
+  if(box.querySelector(".arc__grid .card, .arc__list .arow:not(.sk)")){ box.classList.add("is-loading"); return; }   // 前の結果を薄く残す（ちらつき防止）
+  box.innerHTML=""; box.classList.remove("is-loading");
+  if(!$("#arcCount").textContent) $("#arcCount").textContent="検索中…";
+  const wrap=AR.view==="panel" ? el("div",{class:"grid arc__grid"}) : el("div",{class:"arc__list"});
+  for(let i=0;i<6;i++) wrap.append(AR.view==="panel" ? skeleton() : arSkeletonRow());
+  box.append(wrap);
+}
+function arSkeletonRow(){
+  const r=el("div",{class:"arow sk","aria-hidden":"true"});
+  const d=el("div",{class:"arow__date"}); d.append(el("div",{class:"sk__l shimmer",style:"width:72px"}));
+  const m=el("div",{class:"arow__main"});
+  m.append(el("div",{class:"sk__l shimmer",style:"width:30%"}), el("div",{class:"sk__l shimmer",style:"height:16px;width:85%"}), el("div",{class:"sk__l shimmer",style:"width:65%"}));
+  r.append(d, m, el("div")); return r;
+}
+function arStateEl(kind, title, sub, btnText, onBtn){
+  const w=el("div",{class:"arc__state"+(kind?" "+kind:"")});
+  w.innerHTML = kind==="err"
+    ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.5v.5"/></svg>'
+    : ICON_ARCHIVE;
+  w.append(el("h3",{text:title}), el("div",{text:sub}));
+  if(btnText){ const b=el("button",{type:"button",class:"btn ghost",text:btnText}); b.onclick=onBtn; w.append(b); }
+  return w;
+}
+function arRenderResults(){
+  const box=$("#arcResults"); box.innerHTML=""; box.classList.remove("is-loading"); box.setAttribute("aria-busy","false");
+  if(AR.error){ box.append(arStateEl("err","過去ログの検索に失敗しました",AR.error,"再試行",()=>arSearch())); return; }
+  if(!AR.items.length){
+    if(AR.stats && !AR.stats.count) box.append(arStateEl("","過去ログはまだありません","記事を取得すると、ここに自動で保存されます（最大2万件）"));
+    else box.append(arStateEl("","条件に一致する記事はありません","期間を広げるか、キーワード・情報源・カテゴリを変えてみてください",
+                              (AR.f.days!=="all") ? "期間を「すべて」にして探す" : null, ()=>arSetPeriod("all")));
+    return;
+  }
+  const wrap=AR.view==="panel" ? el("div",{class:"grid arc__grid"}) : el("div",{class:"arc__list"});
+  box.append(wrap);
+  arAppend(AR.items, wrap, false);
+}
+function arAppend(list, wrap, focusFirst){
+  wrap=wrap || $("#arcResults .arc__grid, #arcResults .arc__list");
+  if(!wrap){ arRenderResults(); return; }
+  const terms=arTerms(), nodes=list.map(a=>AR.view==="panel" ? arCard(a,terms) : arRow(a,terms));
+  nodes.forEach((n,i)=>{ if(n.classList.contains("card")) n.style.transitionDelay=Math.min(i,12)*22+"ms"; wrap.append(n); });
+  void wrap.offsetWidth;   // 初期状態を確定させてからフェードイン
+  nodes.forEach(n=>n.classList.add("in"));
+  if(focusFirst && nodes.length){   // 「さらに読み込む」の後は続きの先頭へフォーカス（ボタンは消えることがある）
+    nodes[0].tabIndex=-1; try{ nodes[0].focus({preventScroll:true}); }catch(e){}
+  }
+}
+function arSrcLink(node, a){   // 過去ログ内の情報源名は「この情報源に絞り込む」（フィードのソース別表示ではなく）
+  if(!node || !a.source_id) return;
+  const pick=(e)=>{ e.preventDefault(); e.stopPropagation();
+    if(AR.f.src===a.source_id) return;
+    AR.f.src=a.source_id; arFillSelects(); arSearch(); try{ window.scrollTo({top:0, behavior:"smooth"}); }catch(e2){} };
+  node.title="この情報源に絞り込む"; node.onclick=pick;
+  node.onkeydown=(e)=>{ if(e.key==="Enter"||e.key===" ") pick(e); };
+}
+function arCard(a, terms){   // パネル表示: フィードと同じカード（保存・コピー・AI・開く・既読がそのまま使える）
+  const c=card(a, terms);
+  const t=c.querySelector(".card__time"); if(t){ t.textContent=arDate(a); t.title=arDate(a,true)+"（"+relTime(arTs(a))+"）"; }
+  arSrcLink(c.querySelector(".card__src"), a);
+  c.addEventListener("click",()=>{ if(S.seen.has(a.id)) c.classList.add("read"); });
+  return c;
+}
+const BM_SVG_ON='<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z"/></svg>';
+const BM_SVG_OFF='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z"/></svg>';
+function arRow(a, terms){   // リスト表示: 日付・情報源・タイトル・短い要約の1行
+  const r=el("article",{class:"arow"+(S.seen.has(a.id)?" read":"")});
+  r.style.setProperty("--c", catColor(a.category));
+  const d=el("div",{class:"arow__date"}), ts=arTs(a);
+  if(ts){ const dt=new Date(ts*1000); d.append(el("b",{text:localDay(dt)}), el("span",{text:pad2(dt.getHours())+":"+pad2(dt.getMinutes())})); d.title=relTime(ts); }
+  else d.append(el("span",{text:"日付なし"}));
+  const main=el("div",{class:"arow__main"}), meta=el("div",{class:"arow__meta"});
+  if(a.category){ const cat=el("span",{class:"arow__cat"}); cat.append(el("span",{class:"dot"}), document.createTextNode(a.category)); meta.append(cat); }
+  const src=srcSpan(a.source||a.source_id||"", "arow__src"); arSrcLink(src, a); meta.append(src);
+  const href=safeHref(a.link), h=el("h3",{class:"arow__title"});
+  if(href){
+    const lk=el("a",{class:"arow__link", href, target:"_blank", rel:"noopener noreferrer"});
+    lk.append(highlight(a.title||"（無題）", terms));
+    lk.addEventListener("click",(e)=>{ e.stopPropagation(); markSeen(a); r.classList.add("read"); });
+    h.append(lk);
+  } else h.append(highlight(a.title||"（無題）", terms));
+  main.append(meta, h);
+  if(a.summary){
+    const s=String(a.summary), p=el("p",{class:"arow__sum"});
+    p.append(highlight(s.length>180 ? s.slice(0,180)+"…" : s, terms)); main.append(p);
+  }
+  const acts=el("div",{class:"arow__acts"});
+  const saved=S.bookmarks.has(a.id);
+  const bm=el("button",{type:"button", class:"act"+(saved?" saved":""), title:saved?"保存を解除":"保存", "aria-label":"保存", "aria-pressed":String(saved)});
+  bm.innerHTML=saved ? BM_SVG_ON : BM_SVG_OFF;
+  bm.onclick=(e)=>{ e.stopPropagation(); toggleBookmark(a, bm); const on=S.bookmarks.has(a.id); bm.setAttribute("aria-pressed",String(on)); bm.title=on?"保存を解除":"保存"; };
+  const ai=el("button",{type:"button", class:"act", title:"この記事についてAIに聞く", "aria-label":"AIに聞く"});
+  ai.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"><path d="M12 3l1.9 4.6L18.5 9l-4.6 1.9L12 15l-1.9-4.1L5.5 9l4.6-1.4z"/></svg>';
+  ai.onclick=(e)=>{ e.stopPropagation(); openAI(a); };
+  acts.append(bm, ai);
+  r.append(d, main, acts);
+  if(href) r.addEventListener("click",(e)=>{ if(e.target.closest("a,button,.srclink")) return; openArticle(a); r.classList.add("read"); });
+  else r.style.cursor="default";
+  return r;
+}
+function arRenderCount(){
+  const c=$("#arcCount"); c.innerHTML="";
+  if(AR.error){ c.textContent="検索に失敗しました"; return; }
+  const st=AR.stats||{};
+  const n=el("span"); n.append(el("b",{text:arNum(AR.total)}), document.createTextNode(" 件（全 "+arNum(st.count)+" 件中）"));
+  c.append(n);
+  if(AR.total) c.append(el("span",{class:"seg2",text:"表示 "+arNum(AR.items.length)+" 件"}));
+  const conds=[arPeriodText()];
+  if(AR.f.src){ const s=(st.sources||[]).find(x=>x.id===AR.f.src); conds.push(s ? (s.name||s.id) : AR.f.src); }
+  if(AR.f.cat) conds.push(AR.f.cat);
+  if(AR.f.order==="rel" && AR.f.q.trim()) conds.push("関連順");
+  c.append(el("span",{class:"seg2",text:conds.join(" · ")}));
+  if(st.oldest){
+    const sp=el("span",{class:"seg2"}); sp.append(document.createTextNode("保存期間 "), el("b",{text:localDay(new Date(st.oldest*1000))}),
+      document.createTextNode(" 〜 "), el("b",{text:localDay(new Date(st.newest*1000))}));
+    c.append(sp);
+  }
+}
+function arRenderExpand(){   // 同義語辞書での展開を表示（リサーチ画面と同じ辞書）
+  const box=$("#arcExpand"), ex=AR.expanded||[];
+  box.innerHTML=""; box.hidden=!ex.length;
+  if(!ex.length) return;
+  box.append(document.createTextNode("同義語で展開: "));
+  ex.forEach((x,i)=>{ if(i) box.append(document.createTextNode(" ／ ")); box.append(el("b",{text:x.term}), document.createTextNode(" → "+(x.to||[]).join("・"))); });
+}
+function arSyncMore(){
+  const w=$("#arcMoreWrap"), b=$("#arcMore");
+  w.hidden=!(AR.hasMore && !AR.error && AR.items.length>0 && !(AR.loading && !AR.loadingMore));
+  b.disabled=AR.loadingMore;
+  b.setAttribute("aria-busy", String(AR.loadingMore));
+  b.textContent=AR.loadingMore ? "読み込み中…" : "さらに読み込む（残り "+arNum(Math.max(0,AR.total-AR.next))+" 件）";
+}
+
+// ---- 検索条件のコントロール
+function arBuildPeriods(){
+  const box=$("#arcPeriods");
+  AR_PERIODS.forEach(([v,label])=>{
+    const b=el("button",{type:"button", class:"pchip", text:label, "aria-pressed":"false",
+                         title:v==="all" ? "期間を限定しない" : v==="today" ? "今日（0時以降）" : "直近"+label});
+    b.dataset.days=v; b.onclick=()=>arSetPeriod(v); box.append(b);
+  });
+}
+function arSyncPeriods(){
+  const custom=!!(AR.f.from||AR.f.to);
+  $$("#arcPeriods .pchip").forEach(b=>b.setAttribute("aria-pressed", String(!custom && b.dataset.days===AR.f.days)));
+  $("#arcFrom").value=AR.f.from; $("#arcTo").value=AR.f.to;
+  $("#arcRange").classList.toggle("on", custom);
+}
+function arSetPeriod(v){ AR.f.days=v; AR.f.from=""; AR.f.to=""; arSyncPeriods(); arSearch(); }
+function arFillSelects(){   // 情報源・カテゴリの選択肢は過去ログの集計（archive_stats）から
+  const st=AR.stats||{}, srcs=st.sources||[], cmap=new Map((st.categories||[]).filter(c=>c.name).map(c=>[c.name,c.count]));
+  const sig=JSON.stringify([srcs, st.categories||[], AR.f.src, AR.f.cat]);
+  if(sig!==AR.selSig){
+    AR.selSig=sig;
+    const ss=$("#arcSrc"); ss.innerHTML=""; ss.append(el("option",{value:"",text:"すべての情報源"}));
+    srcs.forEach(s=>ss.append(el("option",{value:s.id, text:(s.name||s.id)+"（"+arNum(s.count)+"）"})));
+    if(AR.f.src && !srcs.some(s=>s.id===AR.f.src)) ss.append(el("option",{value:AR.f.src, text:AR.f.src}));
+    const cs=$("#arcCat"); cs.innerHTML=""; cs.append(el("option",{value:"",text:"すべてのカテゴリ"}));
+    const names=[...ALL_CATS.filter(c=>cmap.has(c)), ...[...cmap.keys()].filter(c=>!ALL_CATS.includes(c))];
+    names.forEach(c=>cs.append(el("option",{value:c, text:c+"（"+arNum(cmap.get(c))+"）"})));
+    if(AR.f.cat && !names.includes(AR.f.cat)) cs.append(el("option",{value:AR.f.cat, text:AR.f.cat}));
+  }
+  $("#arcSrc").value=AR.f.src; $("#arcCat").value=AR.f.cat;
+}
+function arSyncOrder(){   // 関連順はキーワードがあるときだけ
+  const has=!!AR.f.q.trim(), sel=$("#arcOrder");
+  sel.querySelector('option[value="rel"]').disabled=!has;
+  if(!has && AR.f.order==="rel") AR.f.order="new";
+  sel.value=AR.f.order;
+}
+function arSyncView(){
+  $("#arcViewList").setAttribute("aria-pressed", String(AR.view==="list"));
+  $("#arcViewPanel").setAttribute("aria-pressed", String(AR.view==="panel"));
+}
+function arSetView(v){
+  if((v!=="list" && v!=="panel") || v===AR.view) return;
+  AR.view=v; store.set("arView",v); arSyncView(); arSaveState();
+  if(AR.loading && !AR.loadingMore){ $("#arcResults").innerHTML=""; arRenderLoading(); }
+  else arRenderResults();   // 読み込み済みの結果をそのまま描き直す
+}
+function arFillControls(){
+  $("#arcQ").value=AR.f.q;
+  arSyncPeriods(); arFillSelects(); arSyncOrder(); arSyncView();
+}
+arBuildPeriods();
+$("#archiveBtn").onclick=toggleArchive;
+$("#arcBack").onclick=()=>exitArchive({focus:"#archiveBtn"});
+$("#arcQ").addEventListener("input",(e)=>{ if(e.isComposing) return; AR.f.q=$("#arcQ").value; arSyncOrder(); arSearchSoon(); });
+$("#arcQ").addEventListener("compositionend",()=>{ AR.f.q=$("#arcQ").value; arSyncOrder(); arSearchSoon(); });   // 日本語入力の確定後に検索
+$("#arcQ").addEventListener("keydown",(e)=>{ if(e.key==="Enter" && !e.isComposing && e.keyCode!==229){ e.preventDefault(); AR.f.q=$("#arcQ").value; arSyncOrder(); arSearch(); } });
+const arRangeChanged=()=>{   // 日付を指定すると期間ボタンは解除。開始＞終了なら入れ替える
+  let f=validDay($("#arcFrom").value), t=validDay($("#arcTo").value);
+  if(f && t && f>t){ const x=f; f=t; t=x; }
+  AR.f.from=f; AR.f.to=t;
+  if(f||t) AR.f.days=""; else if(!AR.f.days) AR.f.days=AR_DEFAULT.days;
+  arSyncPeriods(); arSearch();
+};
+$("#arcFrom").addEventListener("change", arRangeChanged);
+$("#arcTo").addEventListener("change", arRangeChanged);
+$("#arcSrc").addEventListener("change",()=>{ AR.f.src=$("#arcSrc").value; arSearch(); });
+$("#arcCat").addEventListener("change",()=>{ AR.f.cat=$("#arcCat").value; arSearch(); });
+$("#arcOrder").addEventListener("change",()=>{ AR.f.order=$("#arcOrder").value==="rel" ? "rel" : "new"; arSearch(); });
+$("#arcViewList").onclick=()=>arSetView("list");
+$("#arcViewPanel").onclick=()=>arSetView("panel");
+$("#arcReset").onclick=()=>{ AR.f=Object.assign({},AR_DEFAULT); arFillControls(); arSearch(); try{ $("#arcQ").focus(); }catch(e){} };
+$("#arcMore").onclick=()=>arSearch(true);
+
 // ============================================================ toasts
 let toastT=null;
 function toast(msg, kind){
@@ -1943,7 +2477,9 @@ function setAuto(min){
 $("#autoBtn").onclick=()=>{ const i=(AUTO_STEPS.indexOf(S.auto)+1)%AUTO_STEPS.length; setAuto(AUTO_STEPS[i]); toast("自動更新: "+(AUTO_STEPS[i]?AUTO_STEPS[i]+"分ごと":"オフ")); };
 $("#refreshBtn").onclick=doRefresh;
 $("#themeBtn").onclick=()=>applyTheme(document.documentElement.getAttribute("data-theme")==="dark"?"light":"dark");
-$("#layoutBtn").onclick=()=>{ S.layout=S.layout==="grid"?"list":"grid"; store.set("layout",S.layout); renderGrid(); };
+$("#layoutBtn").onclick=()=>{
+  if(AR.active){ arSetView(AR.view==="list"?"panel":"list"); return; }   // 過去ログ表示中はリスト／パネルを切替（フィードとは別に記憶）
+  S.layout=S.layout==="grid"?"list":"grid"; store.set("layout",S.layout); renderGrid(); };
 $("#bmBtn").onclick=openBookmarks;
 $("#srcBtn").onclick=openSources;
 $("#srcViewBtn").onclick=openSourcePicker;
@@ -2067,7 +2603,7 @@ async function sendAi(text){
   const ctxPayload = ctxAtSend.kind==="article"
     ? { kind:"article", title:ctxAtSend.title, source:ctxAtSend.source, category:ctxAtSend.category,
         published:ctxAtSend.published, summary:ctxAtSend.summary, link:ctxAtSend.link }
-    : { kind:"list", items: filtered().slice(0,25).map(a=>({title:a.title, source:a.source, category:a.category, summary:a.summary})) };
+    : { kind:"list", items: (AR.active ? AR.items : filtered()).slice(0,25).map(a=>({title:a.title, source:a.source, category:a.category, summary:a.summary})) };   // 過去ログ表示中はその検索結果が「表示中の記事一覧」
   AI.msgs.push({role:"user", text}); AI.busy=true; renderAiMessages();
   let res;
   try{
@@ -3172,10 +3708,19 @@ $("#q").addEventListener("keydown",(e)=>{ if(e.key==="Enter"){ e.preventDefault(
 // ============================================================ keyboard
 document.addEventListener("keydown",(e)=>{
   const ae=document.activeElement; const typing=!!ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName);
-  if(e.key==="Escape"){ if(overlayStack.length) closeTop(); else if($("#q").value){ $("#q").value=""; S.q=""; renderGrid(); renderStatus(); renderTrend(); } $("#q").blur(); return; }
+  if(e.key==="Escape"){
+    if(overlayStack.length) closeTop();
+    else if($("#q").value){ $("#q").value=""; S.q=""; renderGrid(); renderStatus(); renderTrend(); }
+    else if(AR.active){   // 過去ログ: 入力欄では既定動作（キーワードのクリア）かフォーカスを外すだけ、それ以外はフィードに戻る
+      if(typing){ if(!(ae.id==="arcQ" && ae.value)) ae.blur(); }
+      else exitArchive({focus:"#archiveBtn"});
+    }
+    $("#q").blur(); return;
+  }
   if(typing) return;
   if(e.ctrlKey||e.metaKey||e.altKey) return;   // ブラウザのショートカット(Ctrl+T等)と衝突させない
-  if(e.key==="/"){ e.preventDefault(); $("#q").focus(); }
+  if(e.key==="/"){ e.preventDefault(); if(AR.active){ $("#arcQ").focus(); $("#arcQ").select(); } else $("#q").focus(); }
+  else if(e.key==="h"||e.key==="H"){ e.preventDefault(); toggleArchive(); }
   else if(e.key==="f"||e.key==="F"){ e.preventDefault(); openSearchAll(); }
   else if(e.key==="r"||e.key==="R") doRefresh();
   else if(e.key==="t"||e.key==="T") $("#themeBtn").click();
@@ -3185,7 +3730,9 @@ document.addEventListener("keydown",(e)=>{
   else if(e.key==="v"||e.key==="V") openSourcePicker();
   else if(e.key==="a"||e.key==="A"){ setAiContext(null); openAI(); }
   else if(e.key==="?") openHelp();
-  else if(/^[1-9]$/.test(e.key)){ S.source=null; S.sourceName=""; const cats=["すべて",...S.categories,"保存済み"]; const c=cats[parseInt(e.key)-1]; if(c){ S.cat=c; store.set("cat",c); renderAll(); } }
+  else if(/^[1-9]$/.test(e.key)){ const cats=["すべて",...S.categories,"保存済み"]; const c=cats[parseInt(e.key)-1];
+    if(c && AR.active) exitArchive({silent:true});   // カテゴリを選んだらフィードに戻る
+    S.source=null; S.sourceName=""; if(c){ S.cat=c; store.set("cat",c); renderAll(); } }
 });
 
 // ============================================================ boot
@@ -3196,6 +3743,7 @@ document.addEventListener("keydown",(e)=>{
   if(!["すべて","保存済み",...ALL_CATS].includes(S.cat)) S.cat="すべて";
   $$(".modal,.drawer").forEach(n=>{ n.inert=true; });   // 非表示の overlay をタブ順/AT から外す
   renderGrid();                 // スケルトン即表示
+  if(isArchiveHash()){ const h=arParseHash(location.hash); enterArchive({filters:h.f, view:h.view, history:false}); }   // #archive?… で開いた／再読み込み
   loadAiSettings();
   loadArticles(false).then(()=>setAuto(S.auto)).catch(()=>setAuto(S.auto));
   // 相対時刻を反映するためステータスを定期更新（記事カードは再取得時に更新）

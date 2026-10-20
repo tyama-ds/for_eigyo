@@ -1118,10 +1118,27 @@ def _search_where(q: str, sources: list[str] | None, since_ts: float | None, unt
     return (" WHERE " + " AND ".join(where)) if where else "", params, uses_match
 
 
+def search_limit(v, default: int = 60) -> int:
+    """1回に返す件数（1〜2000）。不正値は default。"""
+    try:
+        return max(1, min(int(v), 2000))
+    except (TypeError, ValueError):
+        return default
+
+
+def search_offset(v) -> int:
+    """ページ送りの開始位置（0〜ARCHIVE_MAX）。不正値・負の値は 0。過去ログは最大 ARCHIVE_MAX 件なので
+    それより先は常に空になる（巨大な OFFSET で SQLite に無駄な走査をさせない）。"""
+    try:
+        return max(0, min(int(v), ARCHIVE_MAX))
+    except (TypeError, ValueError):
+        return 0
+
+
 def archive_search(q: str, limit: int = 60, sources: list[str] | None = None,
                    since_ts: float | None = None, until_ts: float | None = None,
                    category: str | None = None, archived_since: float | None = None,
-                   order: str = "new", parsed: dict | None = None) -> list[dict]:
+                   order: str = "new", parsed: dict | None = None, offset: int = 0) -> list[dict]:
     """過去ログを条件検索する。条件はすべて AND:
     - q: 検索語（parse_query の構文。全角/半角・大小文字は区別しない。同義語辞書で展開）
     - sources: source_id のリスト（いずれかに一致）
@@ -1129,18 +1146,18 @@ def archive_search(q: str, limit: int = 60, sources: list[str] | None = None,
     - category: カテゴリ名の完全一致
     - archived_since: 保存日時（archived_at）がこれより後の記事だけ（テーマの「新着のみ」）
     order="rel" かつ FTS の MATCH を使えた場合は関連順（bm25）、それ以外は新着順。
+    offset 件目から limit 件（過去ログタブのページ送り）。同時刻の記事でもページの境目で重複・欠落が
+    出ないよう、並びの最後に rowid を加えて順序を一意にする。該当の総数は archive_count()。
     各行に has_text（本文キャッシュあり）を付けて返す。"""
     where, params, uses_match = _search_where(q, sources, since_ts, until_ts, category, archived_since, parsed)
-    try:
-        n = max(1, min(int(limit), 2000))
-    except (TypeError, ValueError):
-        n = 60
-    order_sql = ("articles_fts.rank, a.sort_ts DESC" if (order == "rel" and uses_match) else "a.sort_ts DESC")
+    n = search_limit(limit)
+    order_sql = ("articles_fts.rank, a.sort_ts DESC, a.rowid DESC" if (order == "rel" and uses_match)
+                 else "a.sort_ts DESC, a.rowid DESC")
     sql = ("SELECT a.*, (p.article_id IS NOT NULL AND coalesce(p.chars,0) > 0) AS has_text, "
            "CASE WHEN coalesce(p.chars,0) > 0 THEN coalesce(p.pages,1) ELSE 0 END AS text_pages, p.note AS text_note "
            + _SEARCH_FROM + " LEFT JOIN pages p ON p.article_id = a.id"
-           + where + " ORDER BY " + order_sql + " LIMIT ?")
-    params.append(n)
+           + where + " ORDER BY " + order_sql + " LIMIT ? OFFSET ?")
+    params.extend([n, search_offset(offset)])
     with _archive_lock:
         _archive_init_locked()
         conn = _db()
@@ -1151,6 +1168,21 @@ def archive_search(q: str, limit: int = 60, sources: list[str] | None = None,
     for r in rows:
         r["has_text"] = bool(r.get("has_text"))
     return rows
+
+
+def archive_count(q: str, sources: list[str] | None = None, since_ts: float | None = None,
+                  until_ts: float | None = None, category: str | None = None,
+                  archived_since: float | None = None, parsed: dict | None = None) -> int:
+    """archive_search と同じ条件に合う記事の総数（ページ送りの「全 N 件」・has_more 用）。
+    WHERE 句は _search_where を共用するので、検索結果と件数がずれない。"""
+    where, params, _ = _search_where(q, sources, since_ts, until_ts, category, archived_since, parsed)
+    with _archive_lock:
+        _archive_init_locked()
+        conn = _db()
+        try:
+            return int(conn.execute("SELECT COUNT(*) " + _SEARCH_FROM + where, params).fetchone()[0])
+        finally:
+            conn.close()
 
 
 def _filters_window(f: dict, now: float | None = None) -> tuple[float | None, float | None]:
@@ -5899,10 +5931,14 @@ class Handler(BaseHTTPRequestHandler):
                 archived = None
             parsed = parse_query(g("q"))
             order = "rel" if g("order") == "rel" else "new"
-            arts = archive_search(g("q"), g("limit", "60"), sources, since, until, category, archived, order, parsed)
+            limit, offset = search_limit(g("limit", "60")), search_offset(g("offset", "0"))   # ページ送り（過去ログタブ）
+            arts = archive_search(g("q"), limit, sources, since, until, category, archived, order, parsed, offset)
+            total = archive_count(g("q"), sources, since, until, category, archived, parsed)   # 同じ条件での総数
             groups = group_duplicates(arts) if g("dedup", "1") not in ("0", "false") else 0
             self._json({"ok": True, "count": len(arts), "articles": arts, "stats": archive_stats(),
                         "fts": _fts_ok, "order": order, "expanded": parsed["expanded"], "dup_groups": groups,
+                        "total": total, "offset": offset, "limit": limit,
+                        "has_more": offset + len(arts) < total,
                         "filters": {"q": g("q"), "sources": sources, "category": category,
                                     "from": g("from"), "to": g("to"), "days": days, "archived": archived}})
             return

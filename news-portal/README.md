@@ -52,6 +52,17 @@ App Portal（`launcher/`）にも `Prism ニュースポータル` として登�
   間引き・デモ記事は対象外・公開日時/情報源/カテゴリに索引）。旧形式の `archive.jsonl` が
   あれば初回起動時に自動取り込み（`.imported` に退避）。フィードが入れ替わっても過去の
   記事を条件検索できる。
+- **過去ログタブ（検索・閲覧）** — 上部の 過去ログ アイコン（時計の矢印・`H`）か、カテゴリ列の
+  末尾の「過去ログ」タブで、メイン画面を過去ログの検索・閲覧に切り替える。フィードは裏で更新され
+  続け、「フィードに戻る」・`Esc`・カテゴリの選択・ブラウザの「戻る」で元の位置のまま戻る。
+  **キーワード**（スペース=AND・`|`=OR・`-`=除外・`"..."`、同義語辞書で展開、一致語をハイライト。
+  入力は自動で検索・`Enter` で即時）× **期間**（今日／3日／7日／30日／90日／1年／すべて、既定は
+  30日。開始日〜終了日の指定も可）× **情報源** × **カテゴリ** で絞り込み、新しい順／関連順で並べる。
+  **リスト**（日付・情報源・タイトル・短い要約の1行）と **パネル**（フィードと同じカード。保存・
+  コピー・AI・開く・既読がそのまま使える）を切り替えられ（`L` でも切替・フィードの表示とは別に
+  記憶）、30件ずつ「さらに読み込む」で続きを読む。件数は「N 件（全 M 件中）」と過去ログの保存期間を
+  表示し、一覧の情報源名を押すとその情報源に絞り込む。条件は URL（`#archive?q=…&days=30&view=list`）
+  と同じタブの sessionStorage に残り、再読み込みやブラウザの戻る／進むでも復元される。
 - **リサーチ（過去ログ×AI）** — 上部のリサーチボタンで専用ウィンドウを起動。
   **情報源（複数選択）× 期間（直近N日 or 日付範囲）× カテゴリ × キーワード（AND）**
   を組み合わせて過去ログを絞り込み、ヒットした記事をチェックボックスで選択。右ペインで
@@ -206,7 +217,8 @@ App Portal（`launcher/`）にも `Prism ニュースポータル` として登�
 - **オフラインでも空にならない** — どのフィードにも接続できないときは、内蔵の
   サンプル記事（オフラインデモ）で画面を満たし、状態バーに「オフラインデモ」を表示。
 - **キーボード操作** — `/` 検索・`F` 横断検索・`V` ソース別・`R` 再取得・`T` テーマ・
-  `L` 表示・`B` 保存済み・`S` 情報源・`A` AIアシスタント・`1`〜`9` カテゴリ・`Esc` 閉じる（`?` で一覧）。
+  `L` 表示・`B` 保存済み・`S` 情報源・`A` AIアシスタント・`H` 過去ログ・`1`〜`9` カテゴリ・
+  `Esc` 閉じる（過去ログからはフィードに戻る）（`?` で一覧）。
 
 ## 生成AI（要約・質問）
 
@@ -362,7 +374,7 @@ UI の「情報源」から自由に 追加 / 無効化 / 削除でき、URL も
 | GET | `/api/settings` | AI 設定（プロバイダ / base_url / model / キー登録有無。**キー本体は返さない**） |
 | POST | `/api/settings` | AI 設定の保存（JSON: `provider`, `base_url`, `model`, `api_key?`, `clear_key?`） |
 | POST | `/api/proxy/test` | プロキシ接続テスト（JSON: `use_proxy`, `proxy_url`, `ca_bundle`, `url?`。**保存せず**その設定で1回取得を試し、状態/件数/所要時間を返す） |
-| GET | `/api/archive/search?q=&sources=&days=&from=&to=&category=&archived=&order=&dedup=&limit=` | 過去ログの条件検索（`q`: スペース=AND・`\|`=OR・`-`=除外、同義語辞書で展開。情報源(カンマ区切りid)・直近N日 or 日付範囲・カテゴリ・`archived`=この時刻(epoch)より後に保存された記事のみ。`order`=new/rel、`dedup`=1 で類似記事を束ねる（代表に `dups[]`、他に `dup_of`）。応答に `fts`・`expanded`・`dup_groups`、各記事に `has_text`） |
+| GET | `/api/archive/search?q=&sources=&days=&from=&to=&category=&archived=&order=&dedup=&limit=&offset=` | 過去ログの条件検索（`q`: スペース=AND・`\|`=OR・`-`=除外、同義語辞書で展開。情報源(カンマ区切りid)・直近N日 or 日付範囲・カテゴリ・`archived`=この時刻(epoch)より後に保存された記事のみ。`order`=new/rel、`dedup`=1 で類似記事を束ねる（代表に `dups[]`、他に `dup_of`）。応答に `fts`・`expanded`・`dup_groups`、各記事に `has_text`）。**ページ送り**: `limit`（1〜2000、既定60）件を `offset`（0〜20000、不正値は0）件目から返し、応答に `total`（同じ条件に合う総数）・`offset`・`limit`・`has_more`（`offset`＋`count` < `total`）を含む。並びは同時刻でも一意（ページの境目で重複・欠落しない） |
 | GET | `/api/archive/histogram?q=&sources=&category=` | 日付×情報源の件数分布（期間以外の条件。`unit`=day/week/month、`buckets[{from,to,total,src{}}]`、`sources` 上位6） |
 | GET/POST | `/api/research/synonyms` | 同義語辞書の取得／保存（POST JSON: `text` = 1行1グループ・カンマ区切り） |
 | GET | `/api/archive/entities?q=&sources=&category=&days=&from=&to=&archived=` | 検索結果（最大300件）に出てくる企業・組織・製品らしい固有名詞の候補（`name`/`kind`/`count`） |
