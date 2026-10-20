@@ -31,6 +31,7 @@ import ssl
 import sys
 import threading
 import time
+import traceback
 import unicodedata
 import webbrowser
 import zipfile
@@ -38,6 +39,7 @@ import zlib
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
+from html.entities import name2codepoint
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from html.parser import HTMLParser
@@ -391,7 +393,7 @@ def _extract_thumb(item, summary_html: str) -> str | None:
 
 
 def parse_feed(raw: bytes, src: dict) -> list[dict]:
-    root = ET.fromstring(raw)  # ET.ParseError は呼び出し側で捕捉
+    root = ET.fromstring(raw)  # ET.ParseError は呼び出し側（_parse_feed_tolerant）で捕捉
     items = [e for e in root.iter() if _local(e.tag) in ("item", "entry")]
     out: list[dict] = []
     for it in items:
@@ -439,6 +441,54 @@ def parse_feed(raw: bytes, src: dict) -> list[dict]:
 # ------------------------------------------------------------------ 取得
 
 FEED_ACCEPT = "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.8"
+
+
+_XML_CTRL_RE = re.compile(rb"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+_XML_AMP_RE = re.compile(rb"&(?:#([0-9]{1,8});|#[xX]([0-9a-fA-F]{1,8});|([A-Za-z][A-Za-z0-9]{0,31});)?")
+_XML_PREDEF = {b"amp", b"lt", b"gt", b"quot", b"apos"}
+
+
+def _xml_char_ok(cp: int) -> bool:
+    return cp in (0x9, 0xA, 0xD) or 0x20 <= cp <= 0xD7FF or 0xE000 <= cp <= 0xFFFD or 0x10000 <= cp <= 0x10FFFF
+
+
+def _repair_xml(raw: bytes) -> bytes:
+    """配信元の書き損じでよく壊れる箇所だけを直す（解析に失敗したときだけ使う）:
+    生の「&」→ &amp;、XML に無い HTML の名前付き文字参照（&nbsp; 等）→ 数値参照、
+    XML で使えない文字への数値参照・制御文字 → 除去／置換。UTF-16 は対象外（制御文字の判定ができない）。"""
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return raw
+    raw = _XML_CTRL_RE.sub(b"", raw)
+
+    def amp(m: re.Match) -> bytes:
+        dec, hexa, name = m.group(1), m.group(2), m.group(3)
+        if dec is not None or hexa is not None:
+            cp = int(dec) if dec is not None else int(hexa, 16)
+            return m.group(0) if _xml_char_ok(cp) else b"&#65533;"
+        if name is None:
+            return b"&amp;"   # 生の & （「A & B」など）
+        if name in _XML_PREDEF:
+            return m.group(0)
+        cp = name2codepoint.get(name.decode("ascii"))
+        return f"&#{cp};".encode("ascii") if cp else b"&amp;" + name + b";"
+    return _XML_AMP_RE.sub(amp, raw)
+
+
+def _parse_feed_tolerant(raw: bytes, src: dict) -> tuple[list[dict], str | None]:
+    """parse_feed を例外なしで呼ぶ。XML が壊れていれば _repair_xml で直して1回だけ読み直す。
+    戻り値 (articles, error)。1件の情報源の書き損じで記事一覧全体を止めないため。"""
+    try:
+        return parse_feed(raw, src), None
+    except ET.ParseError as e:
+        fixed = _repair_xml(raw)
+        if fixed != raw:
+            try:
+                return parse_feed(fixed, src), None
+            except Exception:
+                pass
+        return [], f"フィードの XML が壊れています（{e}）"
+    except Exception as e:
+        return [], f"フィードの解析に失敗しました（{type(e).__name__}: {str(e)[:120]}）"
 
 
 def _looks_like_feed(raw: bytes) -> bool:
@@ -525,7 +575,9 @@ def _fetch_and_parse(url: str, src: dict):
     if not _looks_like_feed(raw):
         ct = (res["ctype"].split(";")[0] or "?").strip()
         return [], f"非フィード応答 (HTTP {res['status']}, {ct}) — 同意/ブロックページの可能性"
-    arts = parse_feed(raw, src)
+    arts, perr = _parse_feed_tolerant(raw, src)
+    if perr:
+        return [], perr
     return arts[:MAX_PER_SOURCE], None
 
 
@@ -602,14 +654,16 @@ def diagnose_source(src: dict) -> dict:
         raw = res["raw"]
         looks = False
         items = 0
+        parse_error = ""
         try:
             if res["ok"]:
                 dec = _decode_feed_bytes(res)
                 looks = _looks_like_feed(dec)
                 if looks:
-                    items = len(parse_feed(dec, src))
-        except Exception:
-            pass
+                    arts, perr = _parse_feed_tolerant(dec, src)
+                    items, parse_error = len(arts), perr or ""
+        except Exception as e:
+            parse_error = f"{type(e).__name__}: {str(e)[:160]}"
         snippet = ""
         try:
             snippet = raw[:160].decode("utf-8", "replace").replace("\n", " ").strip()
@@ -618,7 +672,7 @@ def diagnose_source(src: dict) -> dict:
         return {"url": u, "ok": res["ok"], "status": res["status"],
                 "final_url": res["final_url"], "content_type": res["ctype"].split(";")[0],
                 "bytes": len(raw), "looks_like_feed": looks, "items": items,
-                "error": res["error"], "snippet": snippet}
+                "error": res["error"], "parse_error": parse_error, "snippet": snippet}
 
     url = src.get("url", "")
     out = {"id": src.get("id", ""), "name": src.get("name", ""), "url": url,
@@ -652,17 +706,18 @@ def proxy_test(body: dict) -> dict:
     t0 = time.time()
     res = _http_get(url, cfg=cfg)
     elapsed = int((time.time() - t0) * 1000)
-    looks, items = False, 0
+    looks, items, parse_error = False, 0, ""
     if res["ok"]:
         try:
             raw = _decode_feed_bytes(res)
             looks = _looks_like_feed(raw)
             if looks:
-                items = len(parse_feed(raw, {"id": "test", "name": "test", "category": "総合"}))
-        except Exception:
-            pass
+                arts, perr = _parse_feed_tolerant(raw, {"id": "test", "name": "test", "category": "総合"})
+                items, parse_error = len(arts), perr or ""
+        except Exception as e:
+            parse_error = f"{type(e).__name__}: {str(e)[:160]}"
     return {"ok": bool(res["ok"] and looks), "http_ok": res["ok"], "status": res["status"],
-            "error": res["error"], "looks_like_feed": looks, "items": items,
+            "error": res["error"], "parse_error": parse_error, "looks_like_feed": looks, "items": items,
             "elapsed_ms": elapsed, "url": url, "proxy_mode": mode,
             "content_type": (res["ctype"].split(";")[0] if res.get("ctype") else "")}
 
@@ -1238,13 +1293,21 @@ def _parse_day(s: str | None) -> float | None:
         return None
 
 
+def _fetch_source_safe(src: dict) -> tuple[str, list[dict], str | None]:
+    """fetch_source を例外なしで呼ぶ（1件の情報源の想定外のエラーで記事一覧全体を止めない）。"""
+    try:
+        return fetch_source(src)
+    except Exception as e:
+        return src.get("id", ""), [], f"取得処理のエラー（{type(e).__name__}: {str(e)[:160]}）"
+
+
 def refresh(sources: list[dict]) -> dict:
     enabled = [s for s in sources if s.get("enabled", True)]
     articles: list[dict] = []
     errors: dict[str, str] = {}
     if enabled:
         with ThreadPoolExecutor(max_workers=min(8, len(enabled))) as ex:
-            for sid, arts, err in ex.map(fetch_source, enabled):
+            for sid, arts, err in ex.map(_fetch_source_safe, enabled):
                 if err:
                     errors[sid] = err
                 articles.extend(arts)
@@ -5709,6 +5772,31 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _guard(self, fn) -> None:
+        """想定外の例外でも接続を黙って切らず、500 と理由（JSON）を返す。経緯はコンソールに出す。"""
+        try:
+            fn()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass   # ブラウザ側が先に切断した
+        except Exception as e:
+            try:
+                sys.stderr.write(f"[error] {self.command} {self.path}\n{traceback.format_exc()}")
+            except Exception:
+                pass
+            try:
+                self._json({"error": f"サーバー内部のエラー（{type(e).__name__}: {str(e)[:200]}）"}, 500)
+            except Exception:
+                pass
+
+    def do_GET(self):
+        self._guard(self._do_GET)
+
+    def do_POST(self):
+        self._guard(self._do_POST)
+
+    def do_DELETE(self):
+        self._guard(self._do_DELETE)
+
     def _send_bytes(self, data: bytes, ctype: str, filename: str) -> None:
         """ファイルダウンロード応答（Content-Disposition は RFC 5987 で UTF-8 名を渡す）。"""
         self.send_response(200)
@@ -5748,7 +5836,7 @@ class Handler(BaseHTTPRequestHandler):
         return obj if isinstance(obj, dict) else {}   # 非オブジェクトJSONで落ちない
 
     # ------------------------------------------------------------------ GET
-    def do_GET(self):
+    def _do_GET(self):
         u = urlparse(self.path)
         if u.path in ("/", "/index.html"):
             try:
@@ -5922,7 +6010,7 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"error": "not found"}, 404)
 
     # ------------------------------------------------------------------ POST
-    def do_POST(self):
+    def _do_POST(self):
         u = urlparse(self.path)
         if not self._same_origin():
             self._json({"error": "cross-origin request refused"}, 403)
@@ -6128,7 +6216,7 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"error": "not found"}, 404)
 
     # ------------------------------------------------------------------ DELETE
-    def do_DELETE(self):
+    def _do_DELETE(self):
         u = urlparse(self.path)
         if not self._same_origin():
             self._json({"error": "cross-origin request refused"}, 403)

@@ -1313,7 +1313,14 @@ async function loadArticles(force){
     S.offline=!!d.offline; S.updated=d.updated; S.errors=d.errors||{}; S.loading=false;
     renderAll();
     return d;
-  }catch(e){ S.loading=false; renderCats(); renderTrend(); renderStatus(); renderGrid(); syncBmBadge(); toast("読み込みに失敗しました", "err"); return null; }
+  }catch(e){
+    S.loading=false;
+    // 記事の取得が失敗しても情報源の一覧は別に読む（「情報源がありません」と誤って見せない・診断ができるように）
+    try{ const s=await api("/api/sources"); S.sources=s.sources||S.sources; if(s.categories) S.categories=s.categories; }catch(_){}
+    renderCats(); renderTrend(); renderStatus(); renderGrid(); syncBmBadge();
+    toast("記事の読み込みに失敗しました"+(e.server?"（"+e.message+"）":"（サーバーから応答がありません。起動した画面のエラー表示を確認してください）"), "err");
+    return null;
+  }
 }
 
 // ============================================================ derived
@@ -1773,6 +1780,7 @@ function diagVerdict(diag){
   if(p.status===403||p.status===407||errl.includes("forbidden")||errl.includes("proxy authentication")) return ["warn","アクセス拒否（HTTP "+(p.status||"?")+"）。社内プロキシのカテゴリ制限／認証の可能性が高いです。管理者に news.google.com / bing.com の許可を依頼するか、代替を利用してください。"];
   if(errl.includes("urlerror")||errl.includes("timed out")||errl.includes("timeout")||errl.includes("refused")||errl.includes("name or service")||errl.includes("getaddrinfo")) return ["warn","接続できません（"+(p.error||"")+"）。プロキシ未経由／ブロック／DNS の可能性。プロキシ設定を確認してください。"];
   if(p.ok && !p.looks_like_feed) return ["warn","フィードではない応答（同意ページ／ブロックページの可能性。HTTP "+(p.status||"?")+", "+(p.content_type||"?")+"）。"];
+  if(p.parse_error) return ["warn","配信元のフィードの書式が壊れていて読めません（"+p.parse_error+"）。配信元の不具合です。直るまでこの情報源をオフにしてください。"];
   return ["warn", p.error ? ("取得エラー: "+p.error) : "記事0件（フィードが空、または内容が想定と異なります）。"];
 }
 function probeCard(title, pr){
@@ -1788,6 +1796,7 @@ function probeCard(title, pr){
   add("フィード形式", pr.looks_like_feed?"はい":"いいえ");
   add("記事数", pr.items);
   if(pr.error) add("エラー", pr.error);
+  if(pr.parse_error) add("解析エラー", pr.parse_error);
   if(pr.snippet) add("先頭抜粋", pr.snippet, true);
   w.append(dl); return w;
 }
@@ -2167,7 +2176,8 @@ $("#proxyTestBtn").onclick=async()=>{
                                           body:JSON.stringify(proxyPayload())});
     if(d.ok){
       out.className="hint ok";
-      out.textContent="✓ 接続OK — "+d.proxy_mode+" で "+d.items+"件取得（"+d.elapsed_ms+"ms）。保存して再取得してください。";
+      out.textContent="✓ 接続OK — "+d.proxy_mode+" で "+d.items+"件取得（"+d.elapsed_ms+"ms）。保存して再取得してください。"
+        +(d.parse_error?"（このフィードは配信元の書式が壊れています: "+d.parse_error+"）":"");
     }else{
       const e=(d.error||"").toLowerCase(); let hint="";
       if(d.status===407||e.includes("407")) hint="プロキシ認証(407)。URLを http://ユーザー名:パスワード@proxy:8080 形式にするか、px/cntlm の利用をご検討ください。";
