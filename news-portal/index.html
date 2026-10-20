@@ -160,6 +160,44 @@ button{font-family:inherit; cursor:pointer}
 .badge-offline{color:var(--cat-ビジネス); border:1px solid color-mix(in srgb,var(--cat-ビジネス) 45%,transparent);
   padding:2px 9px; border-radius:99px; font-weight:700; cursor:pointer}
 .badge-err{color:var(--cat-世界); cursor:pointer; font-weight:600}
+.badge-err:focus-visible{outline:2px solid var(--accent); outline-offset:2px; border-radius:4px}
+
+/* feeds.json を読み込めないときの警告（メイン画面の帯・情報源パネル） */
+.srcalert{display:flex; align-items:center; gap:12px; margin:2px 0 16px; padding:12px 14px; border-radius:12px; cursor:pointer;
+  border:1px solid color-mix(in srgb,var(--cat-世界) 55%,transparent);
+  background:color-mix(in srgb,var(--cat-世界) 12%,var(--surface)); color:var(--text)}
+.srcalert[hidden]{display:none}   /* display 指定が hidden 属性を打ち消さないように */
+.srcalert__ic{flex:0 0 auto; display:inline-flex; color:var(--cat-世界)}
+.srcalert__ic svg{width:20px; height:20px}
+.srcalert__c{flex:1; min-width:0}
+.srcalert__t{font-weight:700; font-size:14px}
+.srcalert__m{font-size:12.5px; color:var(--text-2); margin-top:2px; overflow-wrap:anywhere}
+.srcalert .btn{flex:0 0 auto}
+@media(max-width:600px){ .srcalert{flex-wrap:wrap} .srcalert .btn{width:100%} }
+.srcprob{border:1px solid color-mix(in srgb,var(--cat-世界) 55%,transparent); border-radius:12px; padding:14px 16px;
+  background:color-mix(in srgb,var(--cat-世界) 9%,var(--surface)); font-size:13px; line-height:1.7; color:var(--text)}
+.srcprob h3{margin:0 0 4px; font-size:15px; display:flex; align-items:center; gap:8px}
+.srcprob p{margin:0 0 8px; overflow-wrap:anywhere}
+.srcprob__where{font-size:12px; color:var(--text-2); font-weight:600}
+.srcprob__code{margin:4px 0 10px; padding:8px 10px; border-radius:8px; background:var(--surface-2); border:1px solid var(--line);
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; line-height:1.6; white-space:pre-wrap;
+  overflow-wrap:anywhere; color:var(--text)}
+.srcprob__code .ln{color:var(--text-3); user-select:none}
+.srcprob__code .dim{color:var(--text-3)}
+.srcprob__code mark{background:color-mix(in srgb,var(--cat-世界) 26%,transparent); color:var(--text); border-radius:3px; padding:0 2px}
+.srcprob__path{font-size:12px; color:var(--text-2); overflow-wrap:anywhere}
+.srcprob__path code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11.5px; color:var(--text)}
+.srcprob__sub{font-size:12px; font-weight:700; color:var(--text-2); margin-top:10px}
+.srcprob ul{margin:4px 0 8px; padding-left:20px; color:var(--text-2); font-size:12.5px}
+.srcprob ul b{color:var(--text); font-weight:700}
+.srcprob__note{font-size:12px; color:var(--text-2)}
+.srcprob__acts, .srcempty__acts{display:flex; flex-wrap:wrap; gap:8px; margin-top:12px}
+.srcempty__acts{justify-content:center}
+.srcprob .btn, .srcempty__acts .btn{max-width:100%}
+.srctools .btn:disabled, .addform .btn:disabled, .srcprob .btn:disabled, .srcempty__acts .btn:disabled{opacity:.45; cursor:not-allowed; filter:none; transform:none}
+.addform input:disabled, .addform select:disabled{opacity:.5; cursor:not-allowed}
+.srcnote{font-size:12px; color:var(--text-2); line-height:1.6; padding:7px 11px; margin-bottom:10px; border-radius:9px;
+  background:color-mix(in srgb,var(--accent) 10%,transparent); border:1px solid color-mix(in srgb,var(--accent) 22%,transparent)}
 
 /* ============================================================ main */
 main{max-width:1360px; margin:0 auto; padding:16px 22px 80px}
@@ -925,6 +963,8 @@ body.arc-on #lead, body.arc-on #grid, body.arc-on .subbar{display:none !importan
 
 <!-- ============================================ main -->
 <main>
+  <!-- feeds.json を読み込めないときの警告（クリックで情報源パネルを開く） -->
+  <div id="srcAlert" class="srcalert" role="alert" hidden></div>
   <section id="lead" class="lead" hidden></section>
   <section id="grid" class="grid"></section>
   <!-- 過去ログ（タブ表示）: キーワード×期間×情報源×カテゴリで過去ログを検索し、リスト／パネルで閲覧 -->
@@ -1435,6 +1475,7 @@ function copyText(t){
 // ============================================================ state
 const S = {
   articles:[], sources:[], categories:[], offline:false, updated:null, errors:{},
+  srcProblem:null, srcNote:[], srcRestored:"",   // feeds.json を読み込めない理由・注記・初期化の結果
   cat: store.get("cat","すべて"), q:"",
   source:null, sourceName:"",        // 情報源フィルタ（ソース別表示）
   layout: store.get("layout","grid"),
@@ -1460,7 +1501,7 @@ applyTheme(store.get("theme", matchMedia("(prefers-color-scheme: light)").matche
 async function api(path, opts){
   const r = await fetch(path, opts);
   let data=null; try{ data=await r.json(); }catch(e){}
-  if(!r.ok){ const err=new Error((data&&data.error)||("HTTP "+r.status)); err.server=!!(data&&data.error); throw err; }
+  if(!r.ok){ const err=new Error((data&&data.error)||("HTTP "+r.status)); err.server=!!(data&&data.error); err.status=r.status; err.data=data; throw err; }
   return data;
 }
 async function loadArticles(force){
@@ -1468,13 +1509,16 @@ async function loadArticles(force){
     const d = await api("/api/articles"+(force?"?refresh=1":""));
     S.articles=d.articles||[]; S.sources=d.sources||[]; S.categories=d.categories||[];
     S.offline=!!d.offline; S.updated=d.updated; S.errors=d.errors||{}; S.loading=false;
+    S.srcProblem=d.sources_problem||null; S.srcNote=d.sources_note||[];
     renderAll();
+    if($("#srcModal").classList.contains("show")) renderSources();   // 開いている情報源パネルも最新に
     return d;
   }catch(e){
     S.loading=false;
     // 記事の取得が失敗しても情報源の一覧は別に読む（「情報源がありません」と誤って見せない・診断ができるように）
-    try{ const s=await api("/api/sources"); S.sources=s.sources||S.sources; if(s.categories) S.categories=s.categories; }catch(_){}
-    renderCats(); renderTrend(); renderStatus(); renderGrid(); syncBmBadge();
+    try{ const s=await api("/api/sources"); S.sources=s.sources||S.sources; if(s.categories) S.categories=s.categories;
+         S.srcProblem=s.sources_problem||null; S.srcNote=s.sources_note||[]; }catch(_){}
+    renderAll();
     toast("記事の読み込みに失敗しました"+(e.server?"（"+e.message+"）":"（サーバーから応答がありません。起動した画面のエラー表示を確認してください）"), "err");
     return null;
   }
@@ -1514,7 +1558,7 @@ function trending(){
 }
 
 // ============================================================ render
-function renderAll(){ renderCats(); renderTrend(); renderStatus(); renderGrid(); syncBmBadge(); }
+function renderAll(){ renderCats(); renderTrend(); renderStatus(); renderSrcAlert(); renderGrid(); syncBmBadge(); }
 
 function renderCats(){
   const box=$("#cats"); box.innerHTML="";
@@ -1575,7 +1619,32 @@ function renderStatus(){
   if(S.updated){ box.append(el("span",{class:"sep"})); box.append(el("span",{text:"更新 "+relTime(new Date(S.updated).getTime()/1000)})); }
   const errN=Object.keys(S.errors).length;
   if(errN){ box.append(el("span",{class:"sep"})); const e=el("span",{class:"badge-err",text:"⚠ "+errN+"件の取得エラー"}); e.onclick=openSources; box.append(e); }
+  if(S.srcProblem){   // feeds.json を読み込めない（情報源が0件に見える原因）
+    box.append(el("span",{class:"sep"}));
+    const w=el("span",{class:"badge-err", role:"button", tabindex:"0", text:"⚠ feeds.json を読み込めません",
+                       title:"情報源ファイルを読み込めません。クリックで原因と対処を表示"});
+    w.onclick=openSources; w.onkeydown=(e)=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); openSources(); } };
+    box.append(w);
+  }
   if(S.offline){ const o=el("span",{class:"badge-offline",text:"オフラインデモ"}); o.title="情報源に接続できないため、サンプル記事を表示しています。クリックで情報源を確認"; o.onclick=openSources; box.append(o); }
+}
+
+// ============================================================ feeds.json の警告
+const WARN_SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>';
+let srcAlertSig="";
+function renderSrcAlert(){   // メイン画面の帯（情報源パネルを開かなくても気付けるように）
+  const box=$("#srcAlert"), p=S.srcProblem;
+  const sig=p ? [p.kind,p.line,p.col,p.message].join("|") : "";
+  if(sig===srcAlertSig) return;   // 同じ内容なら描き直さない（読み上げを繰り返さない）
+  srcAlertSig=sig; box.innerHTML=""; box.hidden=!p;
+  if(!p) return;
+  const c=el("div",{class:"srcalert__c"});
+  c.append(el("div",{class:"srcalert__t",text:"情報源ファイル（feeds.json）を読み込めません"}),
+           el("div",{class:"srcalert__m",text:p.message}));
+  const b=el("button",{class:"btn sm", type:"button", text:"原因と対処を見る", "aria-label":"情報源ファイルを読み込めない原因と対処を見る（情報源を開く）"});
+  b.onclick=(e)=>{ e.stopPropagation(); openSources(); };
+  box.onclick=openSources;
+  box.append(el("span",{class:"srcalert__ic", "aria-hidden":"true", html:WARN_SVG}), c, b);
 }
 
 // ============================================================ ソース別表示
@@ -1875,7 +1944,20 @@ function renderSources(){
   const list=filteredSources();
   const cnt=$("#srcCount");
   if(cnt){ cnt.innerHTML=""; cnt.append(document.createTextNode("有効 "), el("b",{text:String(on)}), document.createTextNode(" / 全 "+total+(list.length!==total?"（表示 "+list.length+"）":""))); }
-  if(!S.sources.length){ box.append(el("div",{class:"empty",style:"padding:30px",html:'<h3>情報源がありません</h3>'})); return; }
+  // feeds.json を読み込めない間は書き込み系を止める（サーバーも 409 で断る。壊れたファイルを空の一覧で上書きしないため）
+  const locked=!!S.srcProblem;
+  [$("#srcAllOn"),$("#srcAllOff")].forEach(b=>{ b.disabled=locked; });
+  $$("#addForm input, #addForm select, #addForm button").forEach(x=>{ x.disabled=locked; });
+  const notes=(S.srcRestored?[S.srcRestored]:[]).concat(S.srcNote||[]);   // 読み込めたが知らせたいこと
+  notes.forEach(t=>box.append(el("div",{class:"srcnote", role:"status", text:"ℹ "+t})));
+  if(locked){ box.append(srcProblemBox(S.srcProblem)); return; }
+  if(!S.sources.length){
+    const e=el("div",{class:"empty",style:"padding:30px"});
+    e.append(el("h3",{text:"情報源がありません"}),
+             el("div",{text:"feeds.json に情報源が1件もありません。下の欄から追加するか、初期の情報源に戻せます。"}),
+             el("div",{class:"srcempty__acts"},[restoreSrcBtn()]));
+    box.append(e); return;
+  }
   if(!list.length){ box.append(el("div",{class:"empty",style:"padding:26px",html:'<h3>該当する情報源がありません</h3>'})); return; }
   const artCnt=new Map();   // 表示中（パネルに載っている）記事数を情報源ごとに集計
   for(const a of S.articles) artCnt.set(a.source_id,(artCnt.get(a.source_id)||0)+1);
@@ -1892,13 +1974,13 @@ function renderSources(){
     n.append(cntpill);
     c.append(n, el("div",{class:"src__u",text:s.url}));
     const sw=el("button",{class:"switch"+(s.enabled?" on":""), title:s.enabled?"無効にする":"有効にする", "aria-label":"有効切替"});
-    sw.onclick=async()=>{ sw.classList.toggle("on"); try{ const d=await api("/api/sources/toggle?id="+encodeURIComponent(s.id),{method:"POST"}); S.sources=d.sources; renderSources(); toast("情報源を更新しました。再取得します"); loadArticles(true);}catch(e){ sw.classList.toggle("on"); toast("更新に失敗","err"); } };
+    sw.onclick=async()=>{ sw.classList.toggle("on"); try{ const d=await api("/api/sources/toggle?id="+encodeURIComponent(s.id),{method:"POST"}); S.sources=d.sources; renderSources(); toast("情報源を更新しました。再取得します"); loadArticles(true);}catch(e){ sw.classList.toggle("on"); srcWriteFailed(e,"更新に失敗"); } };
     const diag=el("button",{class:"act", title:"診断（取得できるか確認）", "aria-label":"診断"});
     diag.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2 5 4-12 2 7h6"/></svg>';
     diag.onclick=(e)=>{ e.stopPropagation(); diagnoseSource(s); };
     const del=el("button",{class:"act", title:"削除", "aria-label":"削除"});
     del.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>';
-    del.onclick=async()=>{ try{ const d=await api("/api/sources?id="+encodeURIComponent(s.id),{method:"DELETE"}); S.sources=d.sources; renderSources(); renderCats(); toast("情報源を削除しました"); loadArticles(true);}catch(e){ toast(e.server ? e.message : "削除に失敗","err"); } };
+    del.onclick=async()=>{ try{ const d=await api("/api/sources?id="+encodeURIComponent(s.id),{method:"DELETE"}); S.sources=d.sources; renderSources(); renderCats(); toast("情報源を削除しました"); loadArticles(true);}catch(e){ srcWriteFailed(e,"削除に失敗"); } };
     row.append(dot,c,sw,diag,del); box.append(row);
   });
 }
@@ -1910,8 +1992,70 @@ $("#addForm").addEventListener("submit", async (e)=>{
     const d=await api("/api/sources",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name,url,category})});
     if(d.ok){ S.sources=d.sources; renderSources(); renderCats(); $("#addForm").reset(); toast("情報源を追加しました。再取得します"); loadArticles(true); }
     else toast(d.error||"追加に失敗","err");
-  }catch(e){ toast(e.server ? e.message : "追加に失敗","err"); }
+  }catch(e){ srcWriteFailed(e,"追加に失敗"); }
 });
+// 情報源の書き込みに失敗したとき。feeds.json を読み込めなくなっていれば（409）警告の表示に切り替える
+function srcWriteFailed(e, fallback){
+  if(e && e.data && e.data.sources_problem){
+    S.srcProblem=e.data.sources_problem; S.sources=[];
+    renderSources(); renderSrcAlert(); renderStatus();
+  }
+  toast(e && e.server ? e.message : fallback, "err");
+}
+// 読み込めない理由の表示（情報源パネル）。ファイルの内容は textContent でのみ描画する
+function srcProblemBox(p){
+  const w=el("div",{class:"srcprob"});
+  const h=el("h3"); h.append(el("span",{class:"srcalert__ic", "aria-hidden":"true", html:WARN_SVG}), document.createTextNode("情報源ファイル（feeds.json）を読み込めません"));
+  w.append(h, el("p",{text:p.message||""}));
+  if(p.line){
+    w.append(el("div",{class:"srcprob__where",text:p.line+" 行目"+(p.col?" "+p.col+" 文字目":"")+" 付近:"}));
+    const pre=el("pre",{class:"srcprob__code"});
+    if(p.before && p.before_line) pre.append(el("span",{class:"ln",text:p.before_line+" │ "}), el("span",{class:"dim",text:p.before}), document.createTextNode("\n"));
+    pre.append(el("span",{class:"ln",text:p.line+" │ "}), el("mark",{text:p.excerpt||"（空の行）"}));
+    w.append(pre);
+  }
+  w.append(el("div",{class:"srcprob__path"},["ファイル: ", el("code",{text:p.path||"feeds.json"})]));
+  const ul=el("ul");
+  [["文字コード","メモ帳などで開き「名前を付けて保存」→ 文字コード「UTF-8」を選んで保存し直す（Shift_JIS は自動で読み込みます）"],
+   ["カンマ","項目の間のカンマ（,）の抜け・最後の項目の後の余分なカンマ・// コメントが無いか確認する"],
+   ["競合の印","<<<<<<< ／ ======= ／ >>>>>>> の行が残っていれば、どちらか一方の内容を残して印の行を消す"],
+   ["使用中","OneDrive・ウイルス対策・エディタ・Excel などが開いていれば閉じる"]].forEach(([k,v])=>{
+    const li=el("li"); li.append(el("b",{text:k+"："}), document.createTextNode(v)); ul.append(li); });
+  w.append(el("div",{class:"srcprob__sub",text:"よくある原因と直し方"}), ul,
+           el("div",{class:"srcprob__note",text:"直すまでは、ファイルを守るため情報源の追加・切替・削除はできません。直して保存したら「読み込み直す」を押してください。"}));
+  const re=el("button",{class:"btn ghost sm", type:"button", text:"読み込み直す", title:"feeds.json をもう一度読み込む"});
+  re.onclick=async()=>{ re.disabled=true; const d=await loadArticles(true); re.disabled=false; srcPanelFocus();
+    if(d) toast(d.sources_problem ? "まだ読み込めません（"+(d.sources_problem.line ? d.sources_problem.line+" 行目" : "理由は情報源の画面に表示")+"）" : "情報源ファイルを読み込みました", d.sources_problem ? "err" : undefined); };
+  w.append(el("div",{class:"srcprob__acts"},[restoreSrcBtn(), re]));
+  return w;
+}
+// パネルを描き直すと押したボタンが消えるので、フォーカスをパネルの中に戻す（キーボード・読み上げ利用者向け）
+function srcPanelFocus(){
+  if(!$("#srcModal").classList.contains("show")) return;
+  const t=$("#srcList .srcprob .btn.ghost") || $("#srcQ");
+  try{ t.focus(); }catch(e){}
+}
+function restoreSrcBtn(){
+  const b=el("button",{class:"btn sm", type:"button", text:"初期の情報源に戻す（今のファイルは控えを残す）"});
+  b.onclick=()=>restoreDefaultSources(b);
+  return b;
+}
+// 初期の情報源に戻す。今の feeds.json は同じフォルダに feeds.json.broken-日時 として控えが残る
+async function restoreDefaultSources(btn){
+  const msg = S.srcProblem
+    ? "情報源ファイル（feeds.json）を初期の情報源に戻します。\n\n今のファイルは同じフォルダに「feeds.json.broken-日時」という名前で控えを残します（自分で直したい場合は控えから内容を写せます）。\n\n初期の情報源に戻しますか？"
+    : "初期の情報源を登録します。今の feeds.json（情報源 0 件）は同じフォルダに「feeds.json.broken-日時」という名前で控えを残します。\n\n初期の情報源に戻しますか？";
+  if(!confirm(msg)) return;
+  if(btn) btn.disabled=true;
+  try{
+    const d=await api("/api/sources/restore-defaults",{method:"POST"});
+    S.sources=d.sources||[]; S.srcProblem=null; S.srcNote=[];
+    S.srcRestored="初期の情報源（"+S.sources.length+" 件）に戻しました"+(d.backup?"。元のファイルの控え: "+d.backup:"");
+    renderSources(); renderSrcAlert(); renderStatus(); renderCats();
+    toast("初期の情報源に戻しました。再取得します");
+    await loadArticles(true); srcPanelFocus();
+  }catch(e){ if(btn) btn.disabled=false; toast(e.server ? e.message : "初期の情報源に戻せませんでした","err"); }
+}
 // 情報源の絞り込み・一括 ON/OFF
 $("#srcQ").addEventListener("input", renderSources);
 $("#srcCat").addEventListener("change", renderSources);
@@ -1923,7 +2067,7 @@ async function bulkEnableSources(enabled){
     S.sources=d.sources; renderSources(); renderCats();
     if(d.changed){ toast("表示中の"+d.changed+"件を"+(enabled?"有効化":"無効化")+"しました。再取得します"); loadArticles(true); }
     else toast("変更はありませんでした");
-  }catch(e){ toast(e.server ? e.message : "更新に失敗","err"); }
+  }catch(e){ srcWriteFailed(e,"更新に失敗"); }
 }
 $("#srcAllOn").onclick=()=>bulkEnableSources(true);
 $("#srcAllOff").onclick=()=>bulkEnableSources(false);
@@ -2008,7 +2152,7 @@ function closeTop(){   // 一番上の overlay だけ閉じる
 }
 function closeOverlays(){ while(overlayStack.length) closeTop(); }
 function openBookmarks(){ renderBookmarks(); openOverlay($("#bmDrawer")); }
-function openSources(){ renderSources(); openOverlay($("#srcModal")); }
+function openSources(){ S.srcRestored=""; renderSources(); openOverlay($("#srcModal")); }
 function openHelp(){ openOverlay($("#helpModal")); }
 
 // ============================================================ 横断検索（全カテゴリ・全情報源）
@@ -2464,7 +2608,9 @@ function toast(msg, kind){
 // ============================================================ refresh / auto
 async function doRefresh(){
   const btn=$("#refreshBtn"); btn.classList.add("spin");
-  try{ const d=await loadArticles(true); toast(d.offline?"オフライン: デモ記事を表示中":("最新 "+d.count+" 件を取得しました")); }
+  try{ const d=await loadArticles(true); if(!d) return;
+    if(d.sources_problem) toast("情報源ファイル（feeds.json）を読み込めません","err");
+    else toast(d.offline?"オフライン: デモ記事を表示中":("最新 "+d.count+" 件を取得しました")); }
   catch(e){}
   finally{ setTimeout(()=>btn.classList.remove("spin"),600); }
 }

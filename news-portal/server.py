@@ -184,7 +184,8 @@ def _slug(name: str) -> str:
 def _ensure_ids(sources: list[dict]) -> list[dict]:
     seen: set[str] = set()
     for s in sources:
-        sid = s.get("id") or _slug(s.get("name", "src"))
+        # 手編集で name / id が文字列でない（数値・null）ことがあっても落ちない
+        sid = str(s.get("id") or "") or _slug(str(s.get("name") or "src"))
         uniq, n = sid, 2
         while uniq in seen:
             uniq, n = f"{sid}-{n}", n + 1
@@ -200,28 +201,210 @@ def _defaults() -> list[dict]:
                         for (n, u, c) in DEFAULT_SOURCES])
 
 
-def _load_locked() -> list[dict]:
-    """feeds.json を読む（_sources_lock 保持前提）。壊れていても動き続ける。"""
-    if not FEEDS_FILE.exists():
-        sources = _defaults()
-        _save_locked(sources)
-        return sources
+# feeds.json の読み込み状態（_sources_lock 保持中に更新する）。
+# 読めない・壊れているときは情報源を空として扱うが、理由を残して画面に出し、その間は
+# 書き込み（追加・切替・削除）を断る（空の一覧で上書きして利用者のファイルを消さないため）。
+_sources_problem: dict | None = None   # 使えない理由 {kind, message, line, col, excerpt, path}。None=正常
+_sources_note: list[str] = []          # 読み込めたが知らせたいこと（文字コード・読み飛ばした件数）
+_sources_skipped: list = []            # 読み飛ばした要素（保存時に末尾へ書き戻し、手で書いた内容を消さない）
+_sources_warned = ""                   # 同じ警告をコンソールに繰り返し出さないための印
+
+SOURCES_REFUSED_MSG = ("情報源ファイル（feeds.json）を読み込めないため、変更を保存しませんでした"
+                       "（今のファイルを上書きして内容を失わないため）。「情報源」画面で原因を確認し、"
+                       "ファイルを直すか「初期の情報源に戻す」を使ってください")
+
+# JSONDecodeError の英語メッセージ（先頭一致）→ 直し方の手がかり
+_JSON_HINTS = (
+    ("Expecting ',' delimiter", "カンマ（,）が足りません。この位置の直前（前の行の終わり）にカンマが必要な可能性があります"),
+    ("Expecting ':' delimiter", "項目名の後のコロン（:）が足りません"),
+    ("Expecting property name enclosed in double quotes",
+     "項目名が \" で囲まれていません（最後の項目の後の余分なカンマ・// コメント・' の使用など）"),
+    ("Expecting value", "値がありません（直前の余分なカンマ・コメント・書きかけの行など）"),
+    ("Extra data", "JSON の終わりの後に余分な内容があります（括弧の閉じ過ぎ・内容の二重貼り付けなど）"),
+    ("Unterminated string", "文字列の \" が閉じていません"),
+    ("Invalid control character", "文字列の中に改行やタブがそのまま入っています"),
+    ("Invalid \\escape", "\\ の使い方が正しくありません（\\ そのものは \\\\ と書きます）"),
+)
+_CONFLICT_RE = re.compile(r"^(?:<{7}|={7}|>{7})(?: |\r?$)", re.M)   # Git の競合の印（行頭）
+
+
+class SourcesUnavailable(Exception):
+    """feeds.json が使えない間の書き込み要求。上書きで元の内容を消さないため断る（HTTP 409）。"""
+
+    def __init__(self, problem: dict):
+        super().__init__(problem.get("message", ""))
+        self.problem = problem
+
+
+def _console(msg: str) -> None:
+    """コンソールへ1行出す。cp932 の Windows コンソールで表せない文字は置き換え、出力先が無くても落ちない。"""
     try:
-        data = json.loads(FEEDS_FILE.read_text(encoding="utf-8"))
-    except (ValueError, OSError):
-        return []
-    if not isinstance(data, dict) or not isinstance(data.get("sources"), list):
-        return []
-    # dict 以外や url 欠落の要素は捨てる（手編集ミスで全体を壊さない）
-    clean = [s for s in data["sources"] if isinstance(s, dict) and s.get("url")]
-    return _ensure_ids(clean)
+        print(msg, flush=True)
+        return
+    except UnicodeEncodeError:
+        pass
+    except Exception:   # pythonw（stdout なし）・閉じたパイプ等
+        return
+    try:
+        enc = getattr(sys.stdout, "encoding", None) or "ascii"
+        print(msg.encode(enc, "replace").decode(enc, "replace"), flush=True)
+    except Exception:
+        pass
+
+
+def _feeds_problem(kind: str, message: str, line: int | None = None, col: int | None = None,
+                   excerpt: str = "") -> dict:
+    """使えない理由（画面表示用）。JSON の誤りでは before_line / before（直前の空でない行）も付く。"""
+    return {"kind": kind, "message": message, "line": line, "col": col,
+            "excerpt": excerpt, "path": str(FEEDS_FILE)}
+
+
+def _line_excerpt(text: str, line: int, col: int | None = None, width: int = 160) -> str:
+    """問題のある行を1行だけ取り出して整える（制御文字は空白に・長い行は問題の位置の前後に絞る）。"""
+    lines = text.split("\n")   # JSONDecodeError の行番号は \n だけで数える
+    if not 1 <= line <= len(lines):
+        return ""
+    raw = "".join(c if c.isprintable() else " " for c in lines[line - 1].rstrip("\r"))
+    lead = len(raw) - len(raw.lstrip())
+    s = raw.strip()
+    if len(s) > width:
+        c = max(0, (col or 1) - 1 - lead)
+        start = max(0, min(c - width // 2, len(s) - width))
+        s = ("…" if start else "") + s[start:start + width] + ("…" if start + width < len(s) else "")
+    return s
+
+
+def _decode_feeds(raw: bytes) -> tuple[str | None, str]:
+    """feeds.json のバイト列を文字列にする。UTF-8（BOM の有無とも）→ UTF-16（BOM つき・メモ帳の「Unicode」）
+    → Shift_JIS（cp932・メモ帳の「ANSI」）の順に試す。戻り値は (文字列 or None=読めない, 読み方の注記)。"""
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        try:
+            return raw.decode("utf-16"), "文字コードが UTF-8 ではありません（UTF-16 として読み込みました）"
+        except UnicodeDecodeError:
+            return None, ""
+    try:
+        return raw.decode("utf-8-sig"), ""
+    except UnicodeDecodeError:
+        pass
+    try:
+        return raw.decode("cp932"), "文字コードが UTF-8 ではありません（Shift_JIS として読み込みました）"
+    except UnicodeDecodeError:
+        return None, ""
+
+
+def _read_feeds_locked() -> tuple[list[dict], dict | None, list[str], list]:
+    """feeds.json を読み (使える情報源, 使えない理由 or None, 注記, 読み飛ばした要素) を返す。例外は投げない。
+    JSON の誤りを推測で直すことはしない（理由と位置を示して利用者に直してもらう）。"""
+    try:
+        raw = FEEDS_FILE.read_bytes()
+    except PermissionError:
+        return [], _feeds_problem(
+            "locked", "feeds.json を開けません（アクセスが拒否されました）。別のプログラム（OneDrive・ウイルス対策・"
+                      "エディタ・Excel など）が使用中の可能性があります。そのプログラムを閉じるか、少し待ってから"
+                      "「再取得」を押してください"), [], []
+    except OSError as e:
+        return [], _feeds_problem(
+            "unreadable", f"feeds.json を読み込めません（{e.strerror or type(e).__name__}）。ファイルの場所と"
+                          "アクセス権を確認してください（OneDrive の同期中や、クラウドにだけあるファイルでも起こります）"), [], []
+    text, how = _decode_feeds(raw)
+    if text is None:
+        return [], _feeds_problem(
+            "encoding", "文字コードを判別できません（UTF-8 でも Shift_JIS でもありません）。メモ帳などで開き、"
+                        "文字コード「UTF-8」を選んで保存し直してください"), [], []
+    if not text.strip():
+        return [], _feeds_problem(
+            "empty_file", "feeds.json が空です（中身がありません）。保存の途中で止まった・同期に失敗したなどが"
+                          "考えられます。控えがあれば戻すか、「初期の情報源に戻す」を使ってください"), [], []
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as e:
+        m = _CONFLICT_RE.search(text)
+        if m:   # git pull / マージで残った競合の印。JSON の誤りとしてではなく、そうと分かるように伝える
+            line = text.count("\n", 0, m.start()) + 1
+            return [], _feeds_problem(
+                "conflict", f"Git の競合の印（<<<<<<< ／ ======= ／ >>>>>>>）が {line} 行目に残っています。"
+                            "どちらか一方の内容を残して印の行を消すか、「初期の情報源に戻す」を使ってください",
+                line, 1, _line_excerpt(text, line)), [], []
+        hint = next((h for k, h in _JSON_HINTS if e.msg.startswith(k)), e.msg)
+        msg = f"JSON の書式に誤りがあります（{e.lineno} 行 {e.colno} 文字目）: {hint}。該当の行を直して保存し、「再取得」を押してください"
+        if how:
+            msg += f"。なお、{how}"
+        p = _feeds_problem("json", msg, e.lineno, e.colno, _line_excerpt(text, e.lineno, e.colno))
+        # 原因は直前の行の終わり（カンマの過不足）にあることが多いので、直前の空でない行も添える
+        prev = [(i, t) for i, t in enumerate(text.split("\n")[:e.lineno - 1], 1) if t.strip()]
+        if prev:
+            p["before_line"], p["before"] = prev[-1][0], _line_excerpt(text, prev[-1][0])
+        return [], p, [], []
+    except RecursionError:
+        return [], _feeds_problem("json", "JSON の入れ子が深すぎて読み込めません。括弧の対応を確認してください"), [], []
+    if isinstance(data, list):
+        items = data   # 一覧だけを書いた形（[ {...}, ... ]）も受け付ける。次の保存で {"sources": [...]} に整える
+    elif isinstance(data, dict) and isinstance(data.get("sources"), list):
+        items = data["sources"]
+    else:
+        why = ("\"sources\" が一覧（[ ]）になっていません" if isinstance(data, dict) and "sources" in data
+               else "\"sources\" の一覧が見つかりません" if isinstance(data, dict)
+               else "全体が { } でも [ ] でもありません")
+        return [], _feeds_problem(
+            "shape", f"feeds.json の形式が想定と違います（{why}）。"
+                     "{\"sources\": [ {\"name\": …, \"url\": …, \"category\": …}, … ]} の形にしてください"), [], []
+    ok = lambda s: isinstance(s, dict) and isinstance(s.get("url"), str) and s["url"].strip()
+    clean = [s for s in items if ok(s)]
+    skipped = [s for s in items if not ok(s)]   # dict 以外や url 欠落の要素（手編集ミスで全体を壊さない）
+    if items and not clean:   # 中身はあるのに1件も使えない → 形式違いとして扱い、上書きさせない
+        return [], _feeds_problem(
+            "shape", f"情報源を1件も読み取れません（{len(items)} 件すべてに \"url\" がありません）。"
+                     "各情報源に \"name\" と \"url\" があるか確認してください"), [], []
+    notes = [how] if how else []
+    if skipped:
+        notes.append(f"{len(skipped)} 件の情報源を読み飛ばしました（url が無い等）")
+    return _ensure_ids(clean), None, notes, skipped
+
+
+def _load_locked() -> list[dict]:
+    """feeds.json を読む（_sources_lock 保持前提）。壊れていても動き続ける。
+
+    使えないとき（文字コード・JSON の誤り・競合の印・ほかのプログラムが使用中・形式違い）は空の一覧を返し、
+    理由を _sources_problem に残す（画面に表示し、書き込みを断る）。コンソールにも1行だけ警告する。"""
+    global _sources_problem, _sources_note, _sources_skipped, _sources_warned
+    try:
+        missing = not FEEDS_FILE.exists()
+    except OSError:
+        missing = False   # 状態を確かめられない → 読んでみて理由を示す（新規作成で上書きしない）
+    if missing:
+        sources = _defaults()
+        _sources_problem, _sources_note, _sources_skipped, _sources_warned = None, [], [], ""
+        try:
+            _save_locked(sources)
+        except OSError:
+            pass   # 書けない場所でも初期の情報源で動かす（次の読み込みで再び書き出しを試みる）
+        return sources
+    sources, problem, notes, skipped = _read_feeds_locked()
+    _sources_problem, _sources_note, _sources_skipped = problem, notes, skipped
+    if problem:
+        sig = f"{problem['kind']}:{problem.get('line')}:{problem.get('col')}"
+        if sig != _sources_warned:
+            _sources_warned = sig
+            _console(f"[Prism] 警告: 情報源ファイルを読み込めません: {problem['message']}（{problem['path']}）")
+    else:
+        _sources_warned = ""
+    return sources
+
+
+def _load_for_write_locked() -> list[dict]:
+    """書き込み前の読み込み。feeds.json が使えない間は SourcesUnavailable で断る。"""
+    sources = _load_locked()
+    if _sources_problem:
+        raise SourcesUnavailable(_sources_problem)
+    return sources
 
 
 def _save_locked(sources: list[dict]) -> None:
-    """原子的に書き出す（_sources_lock 保持前提）。書き込み中の破損を防ぐ。"""
+    """原子的に書き出す（_sources_lock 保持前提）。書き込み中の破損を防ぐ。常に UTF-8（BOM なし）。
+    読み込み時に読み飛ばした要素（url の無い行など）も末尾に書き戻し、手で書いた内容を消さない。"""
     tmp = FEEDS_FILE.parent / (FEEDS_FILE.name + ".tmp")
     tmp.write_text(
-        json.dumps({"sources": sources}, ensure_ascii=False, indent=2) + "\n",
+        json.dumps({"sources": list(sources) + list(_sources_skipped)}, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
     os.replace(tmp, FEEDS_FILE)
@@ -232,9 +415,16 @@ def load_sources() -> list[dict]:
         return _load_locked()
 
 
-def add_source(name: str, url: str, category: str) -> list[dict]:
+def load_sources_state() -> tuple[list[dict], dict | None, list[str]]:
+    """情報源の一覧と feeds.json の状態（使えない理由・注記）をまとめて返す（画面表示用）。"""
     with _sources_lock:
         sources = _load_locked()
+        return sources, (dict(_sources_problem) if _sources_problem else None), list(_sources_note)
+
+
+def add_source(name: str, url: str, category: str) -> list[dict]:
+    with _sources_lock:
+        sources = _load_for_write_locked()
         sources.append({"name": name, "url": url, "category": category, "enabled": True})
         _ensure_ids(sources)
         _save_locked(sources)
@@ -243,7 +433,7 @@ def add_source(name: str, url: str, category: str) -> list[dict]:
 
 def toggle_source(sid: str) -> tuple[list[dict], bool]:
     with _sources_lock:
-        sources = _load_locked()
+        sources = _load_for_write_locked()
         hit = False
         for s in sources:
             if s.get("id") == sid:
@@ -258,7 +448,7 @@ def set_enabled(ids: list[str], enabled: bool) -> tuple[list[dict], int]:
     """指定 id 群の enabled を一括で設定（トグルではなく指定値）。変更件数を返す。"""
     want = set(ids)
     with _sources_lock:
-        sources = _load_locked()
+        sources = _load_for_write_locked()
         n = 0
         for s in sources:
             if s.get("id") in want and bool(s.get("enabled", True)) != enabled:
@@ -271,12 +461,58 @@ def set_enabled(ids: list[str], enabled: bool) -> tuple[list[dict], int]:
 
 def delete_source(sid: str) -> tuple[list[dict], bool]:
     with _sources_lock:
-        sources = _load_locked()
+        sources = _load_for_write_locked()
         remain = [s for s in sources if s.get("id") != sid]
         changed = len(remain) != len(sources)
         if changed:
             _save_locked(remain)
         return remain, changed
+
+
+def _backup_feeds_locked() -> str:
+    """今の feeds.json を同じフォルダの feeds.json.broken-YYYYMMDD-HHMMSS に控える（既存の控えは上書きしない）。
+    控えのファイル名を返す。読めない・書けないときは OSError。"""
+    raw = FEEDS_FILE.read_bytes()
+    base = FEEDS_FILE.name + ".broken-" + datetime.now().strftime("%Y%m%d-%H%M%S")
+    for n in range(1, 1000):
+        name = base if n == 1 else f"{base}-{n}"
+        try:
+            with open(FEEDS_FILE.parent / name, "xb") as f:   # x = 既にあれば失敗（同じ秒の2回目も消さない）
+                f.write(raw)
+            return name
+        except FileExistsError:
+            continue
+    raise OSError("控えのファイル名を決められません")
+
+
+def restore_default_sources() -> tuple[int, dict]:
+    """初期の情報源に戻す（POST /api/sources/restore-defaults）。(HTTP ステータス, 応答) を返す。
+
+    feeds.json が使えないとき、または正常でも情報源が0件のときだけ行う。今のファイルは必ず控えを
+    残してから（控えを作れなければ中止）、初期の情報源を原子的に書き出す。"""
+    global _sources_problem, _sources_note, _sources_skipped, _sources_warned
+    with _sources_lock:
+        sources = _load_locked()
+        if not _sources_problem and sources:
+            return 409, {"ok": False, "error": "情報源ファイルは正常に読み込めています（初期の情報源に戻す必要はありません）"}
+        backup = ""
+        try:
+            if FEEDS_FILE.exists():
+                backup = _backup_feeds_locked()
+        except OSError as e:
+            return 500, {"ok": False, "error": f"今のファイルの控えを作れなかったため、初期化を中止しました（{e.strerror or e}）。"
+                                               "feeds.json を使っているプログラム（OneDrive・ウイルス対策・エディタ・Excel など）を"
+                                               "閉じてから、もう一度お試しください"}
+        defaults = _defaults()
+        _sources_skipped = []   # 初期化では書き戻さない（元の内容は控えに残っている）
+        try:
+            _save_locked(defaults)
+        except OSError as e:
+            return 500, {"ok": False, "backup": backup,
+                         "error": f"初期の情報源を書き込めませんでした（{e.strerror or e}）。"
+                                  + (f"今のファイルの控え: {backup}" if backup else "")}
+        _sources_problem, _sources_note, _sources_warned = None, [], ""
+        return 200, {"ok": True, "sources": defaults, "backup": backup}
 
 
 # ------------------------------------------------------------------ 解析ユーティリティ
@@ -1381,6 +1617,7 @@ def get_feed(force: bool = False) -> dict:
             if fresh and not force:
                 return dict(_cache)
         data = refresh(load_sources())
+        data["sources_broken"] = _sources_problem is not None   # feeds.json が使えないまま取得した（直ったら取り直す）
         with _cache_lock:
             _cache.update(data)
             return dict(_cache)
@@ -5854,6 +6091,18 @@ class Handler(BaseHTTPRequestHandler):
                 return False
         return True
 
+    def _sources_write(self, fn, *args):
+        """情報源の書き込み（追加・切替・削除）を実行する。feeds.json が使えない間は 409 で断り、
+        保存に失敗したら 500 を返す（どちらも応答済みなら None を返す）。"""
+        try:
+            return fn(*args)
+        except SourcesUnavailable as e:
+            self._json({"ok": False, "error": SOURCES_REFUSED_MSG, "sources_problem": e.problem}, 409)
+        except OSError as e:
+            self._json({"ok": False, "error": f"feeds.json に保存できませんでした（{e.strerror or e}）。"
+                                              "ほかのプログラムが使用中でないか確認してください"}, 500)
+        return None
+
     def _read_body(self) -> dict:
         try:
             n = int(self.headers.get("Content-Length") or 0)
@@ -5887,7 +6136,11 @@ class Handler(BaseHTTPRequestHandler):
             q = parse_qs(u.query)
             force = q.get("refresh", ["0"])[0] in ("1", "true")
             data = get_feed(force=force)
-            sources = load_sources()
+            sources, problem, note = load_sources_state()
+            if data.get("sources_broken") and not problem and not force:
+                # feeds.json が直った: 壊れていた間に取得した（情報源0件の）キャッシュを使わず取り直す
+                data = get_feed(force=True)
+                sources, problem, note = load_sources_state()
             self._json({
                 "articles": data["articles"],
                 "sources": source_status(sources, data["errors"]),
@@ -5896,14 +6149,17 @@ class Handler(BaseHTTPRequestHandler):
                 "updated": data["updated"],
                 "errors": data["errors"],
                 "count": len(data["articles"]),
+                "sources_problem": problem,   # feeds.json を使えない理由（null=正常）
+                "sources_note": note,         # 読み込めたが知らせたいこと（文字コード・読み飛ばし）
             })
             return
 
         if u.path == "/api/sources":
             with _cache_lock:
                 errors = dict(_cache["errors"]) if _cache["ts"] else {}
-            self._json({"sources": source_status(load_sources(), errors),
-                        "categories": CATEGORIES})
+            sources, problem, note = load_sources_state()
+            self._json({"sources": source_status(sources, errors),
+                        "categories": CATEGORIES, "sources_problem": problem, "sources_note": note})
             return
 
         if u.path == "/api/sources/diagnose":   # 1件を実取得して失敗理由を切り分ける
@@ -6089,14 +6345,19 @@ class Handler(BaseHTTPRequestHandler):
             cat = body.get("category") or "総合"
             if cat not in CATEGORIES:
                 cat = "総合"
-            sources = add_source(name, url, cat)
+            sources = self._sources_write(add_source, name, url, cat)
+            if sources is None:
+                return
             self._invalidate()
             self._json({"ok": True, "sources": source_status(sources, {})})
             return
 
         if u.path == "/api/sources/toggle":
             sid = (parse_qs(u.query).get("id") or [""])[0]
-            sources, hit = toggle_source(sid)
+            r = self._sources_write(toggle_source, sid)
+            if r is None:
+                return
+            sources, hit = r
             if not hit:
                 self._json({"ok": False, "error": "unknown source"}, 404)
                 return
@@ -6109,10 +6370,21 @@ class Handler(BaseHTTPRequestHandler):
             ids = body.get("ids")
             ids = [str(i) for i in ids] if isinstance(ids, list) else []
             enabled = bool(body.get("enabled"))
-            sources, n = set_enabled(ids, enabled)
+            r = self._sources_write(set_enabled, ids, enabled)
+            if r is None:
+                return
+            sources, n = r
             if n:
                 self._invalidate()
             self._json({"ok": True, "changed": n, "sources": source_status(sources, {})})
+            return
+
+        if u.path == "/api/sources/restore-defaults":  # 初期の情報源に戻す（今の feeds.json は控えを残す）
+            code, r = restore_default_sources()
+            if r.get("ok"):
+                self._invalidate()
+                r = {**r, "sources": source_status(r["sources"], {}), "sources_problem": None, "sources_note": []}
+            self._json(r, code)
             return
 
         if u.path == "/api/settings":  # AI API 設定の保存
@@ -6280,7 +6552,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if u.path == "/api/sources":
             sid = (parse_qs(u.query).get("id") or [""])[0]
-            remain, changed = delete_source(sid)
+            r = self._sources_write(delete_source, sid)
+            if r is None:
+                return
+            remain, changed = r
             if not changed:
                 self._json({"ok": False, "error": "unknown source"}, 404)
                 return
@@ -6311,6 +6586,10 @@ def main(argv: list[str] | None = None) -> None:
     server = ThreadingHTTPServer((HOST, args.port), Handler)
     url = f"http://{HOST}:{args.port}"
     print(f"Prism ニュースポータル: {url}  (Ctrl+C で終了)")
+    try:
+        load_sources()   # feeds.json を起動時に一度読み、使えなければコンソールに警告を出す
+    except Exception:
+        pass
     if args.open:
         webbrowser.open(url)
     try:
