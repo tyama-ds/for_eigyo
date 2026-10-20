@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import argparse
+import codecs
 import gzip
 import hashlib
 import html
@@ -31,6 +32,7 @@ import ssl
 import sys
 import threading
 import time
+import traceback
 import unicodedata
 import webbrowser
 import zipfile
@@ -38,6 +40,7 @@ import zlib
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
+from html.entities import name2codepoint
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from html.parser import HTMLParser
@@ -57,7 +60,8 @@ ARCHIVE_FILE = BASE / "archive.jsonl"   # 旧形式。存在すれば初回起�
 DEFAULT_PORT = 8780
 HOST = "127.0.0.1"
 CACHE_TTL = 600          # 秒。これより新しいキャッシュはそのまま配信する
-FETCH_TIMEOUT = 8        # 秒。1フィードあたりの取得タイムアウト
+FETCH_TIMEOUT = 8        # 秒。1フィードあたりの取得タイムアウト（接続・1回の受信を待つ時間）
+FETCH_DEADLINE = 30      # 秒。1回の取得（本文の読み終わりまで）全体の上限。少しずつしか届かない相手で止まらない
 MAX_PER_SOURCE = 40      # 1フィードから取り込む最大記事数
 MAX_TOTAL = 600          # 全体の上限
 MIN_PER_SOURCE = 8       # 上限あふれ時も各情報源に保証する最低枠（低頻度フィードの全滅防止）
@@ -182,7 +186,8 @@ def _slug(name: str) -> str:
 def _ensure_ids(sources: list[dict]) -> list[dict]:
     seen: set[str] = set()
     for s in sources:
-        sid = s.get("id") or _slug(s.get("name", "src"))
+        # 手編集で name / id が文字列でない（数値・null）ことがあっても落ちない
+        sid = str(s.get("id") or "") or _slug(str(s.get("name") or "src"))
         uniq, n = sid, 2
         while uniq in seen:
             uniq, n = f"{sid}-{n}", n + 1
@@ -198,31 +203,305 @@ def _defaults() -> list[dict]:
                         for (n, u, c) in DEFAULT_SOURCES])
 
 
-def _load_locked() -> list[dict]:
-    """feeds.json を読む（_sources_lock 保持前提）。壊れていても動き続ける。"""
-    if not FEEDS_FILE.exists():
-        sources = _defaults()
-        _save_locked(sources)
-        return sources
+# feeds.json の読み込み状態（_sources_lock 保持中に更新する）。
+# 読めない・壊れているときは情報源を空として扱うが、理由を残して画面に出し、その間は
+# 書き込み（追加・切替・削除）を断る（空の一覧で上書きして利用者のファイルを消さないため）。
+_sources_problem: dict | None = None   # 使えない理由 {kind, message, line, col, excerpt, path}。None=正常
+_sources_note: list[str] = []          # 読み込めたが知らせたいこと（文字コード・読み飛ばした件数）
+_sources_skipped: list = []            # 読み飛ばした要素（保存時に末尾へ書き戻し、手で書いた内容を消さない）
+_sources_warned = ""                   # 同じ警告をコンソールに繰り返し出さないための印
+_sources_enc = ""                      # UTF-8 以外で読んだとき "cp932" / "utf-16"（初めて書き直す前に元のファイルを控える）
+
+SOURCES_REFUSED_MSG = ("情報源ファイル（feeds.json）を読み込めないため、変更を保存しませんでした"
+                       "（今のファイルを上書きして内容を失わないため）。「情報源」画面で原因を確認し、"
+                       "ファイルを直すか「初期の情報源に戻す」を使ってください")
+
+# JSONDecodeError の英語メッセージ（先頭一致）→ 直し方の手がかり
+_JSON_HINTS = (
+    ("Expecting ',' delimiter", "カンマ（,）が足りません。この位置の直前（前の行の終わり）にカンマが必要な可能性があります"),
+    ("Expecting ':' delimiter", "項目名の後のコロン（:）が足りません"),
+    ("Expecting property name enclosed in double quotes",
+     "項目名が \" で囲まれていません（最後の項目の後の余分なカンマ・// コメント・' の使用など）"),
+    ("Expecting value", "値がありません（直前の余分なカンマ・コメント・書きかけの行など）"),
+    ("Extra data", "JSON の終わりの後に余分な内容があります（括弧の閉じ過ぎ・内容の二重貼り付けなど）"),
+    ("Unterminated string", "文字列の \" が閉じていません"),
+    ("Invalid control character", "文字列の中に改行やタブがそのまま入っています"),
+    ("Invalid \\escape", "\\ の使い方が正しくありません（\\ そのものは \\\\ と書きます）"),
+    ("Unexpected UTF-8 BOM", "見えない印（BOM）がファイルの途中に入っています"),
+)
+_CONFLICT_RE = re.compile(r"^(?:<{7}|={7}|>{7})(?: |\r?$)", re.M)   # Git の競合の印（行頭）
+_CTRL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")        # JSON の中に入るはずのない制御文字（NUL など）
+# 日本語の文字（UTF-8 として正しく読めた行に日本語があるか＝人が書いた UTF-8 の行か、の判定用）
+_JA_CHAR_RE = re.compile(r"[\u3000-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff01-\uff9f]")
+
+
+class SourcesUnavailable(Exception):
+    """feeds.json が使えない間の書き込み要求。上書きで元の内容を消さないため断る（HTTP 409）。"""
+
+    def __init__(self, problem: dict):
+        super().__init__(problem.get("message", ""))
+        self.problem = problem
+
+
+def _console(msg: str) -> None:
+    """コンソールへ1行出す。cp932 の Windows コンソールで表せない文字は置き換え、出力先が無くても落ちない。"""
     try:
-        data = json.loads(FEEDS_FILE.read_text(encoding="utf-8"))
-    except (ValueError, OSError):
-        return []
-    if not isinstance(data, dict) or not isinstance(data.get("sources"), list):
-        return []
-    # dict 以外や url 欠落の要素は捨てる（手編集ミスで全体を壊さない）
-    clean = [s for s in data["sources"] if isinstance(s, dict) and s.get("url")]
-    return _ensure_ids(clean)
+        print(msg, flush=True)
+        return
+    except UnicodeEncodeError:
+        pass
+    except Exception:   # pythonw（stdout なし）・閉じたパイプ等
+        return
+    try:
+        enc = getattr(sys.stdout, "encoding", None) or "ascii"
+        print(msg.encode(enc, "replace").decode(enc, "replace"), flush=True)
+    except Exception:
+        pass
+
+
+def _feeds_problem(kind: str, message: str, line: int | None = None, col: int | None = None,
+                   excerpt: str = "") -> dict:
+    """使えない理由（画面表示用）。JSON の誤りでは before_line / before（直前の空でない行）も付く。"""
+    return {"kind": kind, "message": message, "line": line, "col": col,
+            "excerpt": excerpt, "path": str(FEEDS_FILE)}
+
+
+def _line_excerpt(text: str, line: int, col: int | None = None, width: int = 160, show_ctrl: bool = False) -> str:
+    """問題のある行を1行だけ取り出して整える（制御文字は空白に・長い行は問題の位置の前後に絞る）。
+    show_ctrl=True なら NUL などの制御文字を見える記号（␀ ␁ …）にする（壊れた箇所を探せるように）。"""
+    lines = text.split("\n")   # JSONDecodeError の行番号は \n だけで数える
+    if not 1 <= line <= len(lines):
+        return ""
+    raw = "".join(c if c.isprintable() else
+                  (chr(0x2400 + ord(c)) if show_ctrl and ord(c) < 0x20 and c != "\t" else " ")
+                  for c in lines[line - 1].rstrip("\r"))
+    lead = len(raw) - len(raw.lstrip())
+    s = raw.strip()
+    if len(s) > width:
+        c = max(0, (col or 1) - 1 - lead)
+        start = max(0, min(c - width // 2, len(s) - width))
+        s = ("…" if start else "") + s[start:start + width] + ("…" if start + width < len(s) else "")
+    return s
+
+
+FEEDS_RESAVE_NOTE = "次に情報源を変更したとき UTF-8 で保存し直します。元のファイルは feeds.json.before-utf8-日時 に控えます"
+
+
+def _utf16_without_bom(raw: bytes) -> str | None:
+    """BOM の無い UTF-16 か（JSON の記号・英数字が「文字, NUL」の並びになる）。"utf-16-le" / "utf-16-be" / None。
+    NUL は UTF-8 としても正しい文字なので、先に見分けないと「JSON の書式の誤り」に見えてしまう。"""
+    head = raw[:4096]
+    if len(head) < 8:
+        return None
+    even, odd = head[0::2], head[1::2]
+    ze, zo = even.count(0) / len(even), odd.count(0) / len(odd)
+    if zo >= 0.3 and ze <= 0.02:
+        return "utf-16-le"
+    if ze >= 0.3 and zo <= 0.02:
+        return "utf-16-be"
+    return None
+
+
+def _mixed_utf8_at(raw: bytes) -> tuple[int, int] | None:
+    """UTF-8 として正しく読める日本語の行と、UTF-8 として読めない行が混ざっていれば、読めない最初の
+    (行, 文字目) を返す。サーバーが UTF-8 で書いたファイルに、Shift_JIS（ANSI）で保存するエディタや
+    Windows PowerShell で1件書き足した場合など。全体を Shift_JIS として読むと UTF-8 の行が文字化けする。"""
+    good_ja, first_bad = False, None
+    for i, line in enumerate(raw.split(b"\n"), 1):
+        if line.isascii():
+            continue
+        try:
+            s = line.decode("utf-8")
+        except UnicodeDecodeError as e:
+            if first_bad is None:
+                first_bad = (i, len(line[:e.start].decode("utf-8", "replace")) + 1)
+        else:
+            good_ja = good_ja or bool(_JA_CHAR_RE.search(s))
+        if good_ja and first_bad:
+            return first_bad
+    return None
+
+
+def _decode_feeds(raw: bytes) -> tuple[str | None, str, str, dict | None]:
+    """feeds.json のバイト列を文字列にする。UTF-16（BOM つき・メモ帳の「Unicode」／BOM なし）→ UTF-8
+    （BOM の有無とも）→ Shift_JIS（cp932・メモ帳の「ANSI」）の順に試す。UTF-8 と Shift_JIS が行ごとに
+    混ざっていれば読まずに理由を返す（どちらで読んでも一部が文字化けし、保存すると元に戻せないため）。
+    戻り値は (文字列 or None=読めない, 読み方の注記, 読んだ文字コード ""=UTF-8 / "utf-16" / "cp932", 使えない理由)。"""
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        try:
+            return raw.decode("utf-16"), "文字コードが UTF-8 ではありません（UTF-16 として読み込みました）", "utf-16", None
+        except UnicodeDecodeError:
+            return None, "", "", None
+    nb = _utf16_without_bom(raw)
+    if nb:
+        try:
+            return raw.decode(nb), "文字コードが UTF-8 ではありません（BOM の無い UTF-16 として読み込みました）", "utf-16", None
+        except UnicodeDecodeError:
+            pass
+    try:
+        return raw.decode("utf-8-sig"), "", "", None
+    except UnicodeDecodeError:
+        pass
+    mixed = _mixed_utf8_at(raw)
+    if mixed:
+        line, col = mixed
+        text = raw.decode("utf-8", "replace")
+        return None, "", "", _feeds_problem(
+            "mixed_encoding",
+            f"feeds.json の文字コードが混ざっています（ほとんどの行は UTF-8 ですが、{line} 行目に UTF-8 として"
+            "読めない文字があります）。Shift_JIS（ANSI）で保存するエディタや Windows PowerShell で書き足した行の"
+            "可能性があります。このまま読むと日本語が文字化けし、保存すると元に戻せなくなるため、読み込みを止めています。"
+            f"{line} 行目の日本語を、UTF-8 で開けるエディタ（VS Code など）で入力し直して保存してください"
+            "（メモ帳でファイル全体を開いて保存し直すと、ほかの行が文字化けすることがあります）。"
+            "直せないときは「初期の情報源に戻す」を使ってください",
+            line, col, _line_excerpt(text, line, col))
+    try:
+        return raw.decode("cp932"), "文字コードが UTF-8 ではありません（Shift_JIS として読み込みました）", "cp932", None
+    except UnicodeDecodeError:
+        return None, "", "", None
+
+
+def _read_feeds_locked() -> tuple[list[dict], dict | None, list[str], list, str]:
+    """feeds.json を読み (使える情報源, 使えない理由 or None, 注記, 読み飛ばした要素, 読んだ文字コード) を返す。
+    例外は投げない。JSON の誤りを推測で直すことはしない（理由と位置を示して利用者に直してもらう）。"""
+    try:
+        raw = FEEDS_FILE.read_bytes()
+    except PermissionError:
+        return [], _feeds_problem(
+            "locked", "feeds.json を開けません（アクセスが拒否されました）。別のプログラム（OneDrive・ウイルス対策・"
+                      "エディタ・Excel など）が使用中の可能性があります。そのプログラムを閉じるか、少し待ってから"
+                      "「再取得」を押してください"), [], [], ""
+    except OSError as e:
+        return [], _feeds_problem(
+            "unreadable", f"feeds.json を読み込めません（{e.strerror or type(e).__name__}）。ファイルの場所と"
+                          "アクセス権を確認してください（OneDrive の同期中や、クラウドにだけあるファイルでも起こります）"), [], [], ""
+    text, how, enc, problem = _decode_feeds(raw)
+    if problem:
+        return [], problem, [], [], ""
+    if text is None:
+        return [], _feeds_problem(
+            "encoding", "文字コードを判別できません（UTF-8 でも Shift_JIS でもありません）。メモ帳などで開き、"
+                        "文字コード「UTF-8」を選んで保存し直してください"), [], [], ""
+    text = text.lstrip("\ufeff")   # BOM が重なっている（BOM つきで保存し直すツールを2回通した等）。中身には関係ない
+    if not text.strip():
+        return [], _feeds_problem(
+            "empty_file", "feeds.json が空です（中身がありません）。保存の途中で止まった・同期に失敗したなどが"
+                          "考えられます。控えがあれば戻すか、「初期の情報源に戻す」を使ってください"), [], [], ""
+    if not text.strip(" \t\r\n\x00"):   # 見えない NUL だけ（保存の途中で電源が落ちた NTFS 上のファイルなど）
+        return [], _feeds_problem(
+            "corrupt", "feeds.json の中身が壊れています（見えない文字 NUL だけで埋まっていて、情報源が1件もありません）。"
+                       "保存の途中で PC が止まった・同期に失敗した、などで起こります。控えがあれば戻すか、"
+                       "「初期の情報源に戻す」を使ってください"), [], [], ""
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as e:
+        m = _CONFLICT_RE.search(text)
+        if m:   # git pull / マージで残った競合の印。JSON の誤りとしてではなく、そうと分かるように伝える
+            line = text.count("\n", 0, m.start()) + 1
+            return [], _feeds_problem(
+                "conflict", f"Git の競合の印（<<<<<<< ／ ======= ／ >>>>>>>）が {line} 行目に残っています。"
+                            "どちらか一方の内容を残して印の行を消すか、「初期の情報源に戻す」を使ってください",
+                line, 1, _line_excerpt(text, line)), [], [], ""
+        c = _CTRL_CHAR_RE.search(text)
+        if c:   # 見えない制御文字。カンマや引用符の誤りではないので、そうと分かるように場所を示す
+            line = text.count("\n", 0, c.start()) + 1
+            col = c.start() - (text.rfind("\n", 0, c.start()) + 1) + 1
+            name = "NUL" if text[c.start()] == "\x00" else f"U+{ord(text[c.start()]):04X}"
+            msg = (f"feeds.json に見えない制御文字（{name}）が入っています（{line} 行 {col} 文字目。下の抜粋では "
+                   f"{chr(0x2400 + ord(text[c.start()]))} の位置）。保存の途中で止まった・別の文字コードで保存された、などで"
+                   "ファイルの一部が壊れた可能性があります。その文字を消して保存し直すか、「初期の情報源に戻す」を使ってください")
+            if how:
+                msg += f"。なお、{how}"
+            return [], _feeds_problem("corrupt", msg, line, col, _line_excerpt(text, line, col, show_ctrl=True)), [], [], ""
+        hint = next((h for k, h in _JSON_HINTS if e.msg.startswith(k)), e.msg)
+        msg = f"JSON の書式に誤りがあります（{e.lineno} 行 {e.colno} 文字目）: {hint}。該当の行を直して保存し、「再取得」を押してください"
+        if how:
+            msg += f"。なお、{how}"
+        p = _feeds_problem("json", msg, e.lineno, e.colno, _line_excerpt(text, e.lineno, e.colno))
+        # 原因は直前の行の終わり（カンマの過不足）にあることが多いので、直前の空でない行も添える
+        prev = [(i, t) for i, t in enumerate(text.split("\n")[:e.lineno - 1], 1) if t.strip()]
+        if prev:
+            p["before_line"], p["before"] = prev[-1][0], _line_excerpt(text, prev[-1][0])
+        return [], p, [], [], ""
+    except RecursionError:
+        return [], _feeds_problem("json", "JSON の入れ子が深すぎて読み込めません。括弧の対応を確認してください"), [], [], ""
+    if isinstance(data, list):
+        items = data   # 一覧だけを書いた形（[ {...}, ... ]）も受け付ける。次の保存で {"sources": [...]} に整える
+    elif isinstance(data, dict) and isinstance(data.get("sources"), list):
+        items = data["sources"]
+    else:
+        why = ("\"sources\" が一覧（[ ]）になっていません" if isinstance(data, dict) and "sources" in data
+               else "\"sources\" の一覧が見つかりません" if isinstance(data, dict)
+               else "全体が { } でも [ ] でもありません")
+        return [], _feeds_problem(
+            "shape", f"feeds.json の形式が想定と違います（{why}）。"
+                     "{\"sources\": [ {\"name\": …, \"url\": …, \"category\": …}, … ]} の形にしてください"), [], [], ""
+    ok = lambda s: isinstance(s, dict) and isinstance(s.get("url"), str) and s["url"].strip()
+    clean = [s for s in items if ok(s)]
+    skipped = [s for s in items if not ok(s)]   # dict 以外や url 欠落の要素（手編集ミスで全体を壊さない）
+    if items and not clean:   # 中身はあるのに1件も使えない → 形式違いとして扱い、上書きさせない
+        return [], _feeds_problem(
+            "shape", f"情報源を1件も読み取れません（{len(items)} 件すべてに \"url\" がありません）。"
+                     "各情報源に \"name\" と \"url\" があるか確認してください"), [], [], ""
+    notes = [f"{how}。{FEEDS_RESAVE_NOTE}"] if how else []
+    if skipped:
+        notes.append(f"{len(skipped)} 件の情報源を読み飛ばしました（url が無い等）")
+    return _ensure_ids(clean), None, notes, skipped, enc
+
+
+def _load_locked() -> list[dict]:
+    """feeds.json を読む（_sources_lock 保持前提）。壊れていても動き続ける。
+
+    使えないとき（文字コード・JSON の誤り・競合の印・ほかのプログラムが使用中・形式違い）は空の一覧を返し、
+    理由を _sources_problem に残す（画面に表示し、書き込みを断る）。コンソールにも1行だけ警告する。"""
+    global _sources_problem, _sources_note, _sources_skipped, _sources_warned, _sources_enc
+    try:
+        missing = not FEEDS_FILE.exists()
+    except OSError:
+        missing = False   # 状態を確かめられない → 読んでみて理由を示す（新規作成で上書きしない）
+    if missing:
+        sources = _defaults()
+        _sources_problem, _sources_note, _sources_skipped, _sources_warned, _sources_enc = None, [], [], "", ""
+        try:
+            _save_locked(sources)
+        except OSError:
+            pass   # 書けない場所でも初期の情報源で動かす（次の読み込みで再び書き出しを試みる）
+        return sources
+    sources, problem, notes, skipped, enc = _read_feeds_locked()
+    _sources_problem, _sources_note, _sources_skipped, _sources_enc = problem, notes, skipped, enc
+    if problem:
+        sig = f"{problem['kind']}:{problem.get('line')}:{problem.get('col')}"
+        if sig != _sources_warned:
+            _sources_warned = sig
+            _console(f"[Prism] 警告: 情報源ファイルを読み込めません: {problem['message']}（{problem['path']}）")
+    else:
+        _sources_warned = ""
+    return sources
+
+
+def _load_for_write_locked() -> list[dict]:
+    """書き込み前の読み込み。feeds.json が使えない間は SourcesUnavailable で断る。"""
+    sources = _load_locked()
+    if _sources_problem:
+        raise SourcesUnavailable(_sources_problem)
+    return sources
 
 
 def _save_locked(sources: list[dict]) -> None:
-    """原子的に書き出す（_sources_lock 保持前提）。書き込み中の破損を防ぐ。"""
+    """原子的に書き出す（_sources_lock 保持前提）。書き込み中の破損を防ぐ。常に UTF-8（BOM なし）。
+    読み込み時に読み飛ばした要素（url の無い行など）も末尾に書き戻し、手で書いた内容を消さない。
+    UTF-8 以外（Shift_JIS・UTF-16）で読んだファイルを初めて書き直すときは、元のバイト列を
+    feeds.json.before-utf8-日時 に控えてから書く（読み違いがあっても元に戻せるように。控えを作れなければ書かない）。"""
+    global _sources_enc
+    if _sources_enc and FEEDS_FILE.exists():
+        _backup_feeds_locked("before-utf8")
     tmp = FEEDS_FILE.parent / (FEEDS_FILE.name + ".tmp")
     tmp.write_text(
-        json.dumps({"sources": sources}, ensure_ascii=False, indent=2) + "\n",
+        json.dumps({"sources": list(sources) + list(_sources_skipped)}, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
     os.replace(tmp, FEEDS_FILE)
+    _sources_enc = ""
 
 
 def load_sources() -> list[dict]:
@@ -230,9 +509,16 @@ def load_sources() -> list[dict]:
         return _load_locked()
 
 
-def add_source(name: str, url: str, category: str) -> list[dict]:
+def load_sources_state() -> tuple[list[dict], dict | None, list[str]]:
+    """情報源の一覧と feeds.json の状態（使えない理由・注記）をまとめて返す（画面表示用）。"""
     with _sources_lock:
         sources = _load_locked()
+        return sources, (dict(_sources_problem) if _sources_problem else None), list(_sources_note)
+
+
+def add_source(name: str, url: str, category: str) -> list[dict]:
+    with _sources_lock:
+        sources = _load_for_write_locked()
         sources.append({"name": name, "url": url, "category": category, "enabled": True})
         _ensure_ids(sources)
         _save_locked(sources)
@@ -241,7 +527,7 @@ def add_source(name: str, url: str, category: str) -> list[dict]:
 
 def toggle_source(sid: str) -> tuple[list[dict], bool]:
     with _sources_lock:
-        sources = _load_locked()
+        sources = _load_for_write_locked()
         hit = False
         for s in sources:
             if s.get("id") == sid:
@@ -256,7 +542,7 @@ def set_enabled(ids: list[str], enabled: bool) -> tuple[list[dict], int]:
     """指定 id 群の enabled を一括で設定（トグルではなく指定値）。変更件数を返す。"""
     want = set(ids)
     with _sources_lock:
-        sources = _load_locked()
+        sources = _load_for_write_locked()
         n = 0
         for s in sources:
             if s.get("id") in want and bool(s.get("enabled", True)) != enabled:
@@ -269,12 +555,59 @@ def set_enabled(ids: list[str], enabled: bool) -> tuple[list[dict], int]:
 
 def delete_source(sid: str) -> tuple[list[dict], bool]:
     with _sources_lock:
-        sources = _load_locked()
+        sources = _load_for_write_locked()
         remain = [s for s in sources if s.get("id") != sid]
         changed = len(remain) != len(sources)
         if changed:
             _save_locked(remain)
         return remain, changed
+
+
+def _backup_feeds_locked(tag: str = "broken") -> str:
+    """今の feeds.json を同じフォルダの feeds.json.<tag>-YYYYMMDD-HHMMSS に控える（既存の控えは上書きしない）。
+    控えのファイル名を返す。読めない・書けないときは OSError。控えは .gitignore 対象（手元にだけ残す）。"""
+    raw = FEEDS_FILE.read_bytes()
+    base = FEEDS_FILE.name + "." + tag + "-" + datetime.now().strftime("%Y%m%d-%H%M%S")
+    for n in range(1, 1000):
+        name = base if n == 1 else f"{base}-{n}"
+        try:
+            with open(FEEDS_FILE.parent / name, "xb") as f:   # x = 既にあれば失敗（同じ秒の2回目も消さない）
+                f.write(raw)
+            return name
+        except FileExistsError:
+            continue
+    raise OSError("控えのファイル名を決められません")
+
+
+def restore_default_sources() -> tuple[int, dict]:
+    """初期の情報源に戻す（POST /api/sources/restore-defaults）。(HTTP ステータス, 応答) を返す。
+
+    feeds.json が使えないとき、または正常でも情報源が0件のときだけ行う。今のファイルは必ず控えを
+    残してから（控えを作れなければ中止）、初期の情報源を原子的に書き出す。"""
+    global _sources_problem, _sources_note, _sources_skipped, _sources_warned, _sources_enc
+    with _sources_lock:
+        sources = _load_locked()
+        if not _sources_problem and sources:
+            return 409, {"ok": False, "error": "情報源ファイルは正常に読み込めています（初期の情報源に戻す必要はありません）"}
+        backup = ""
+        try:
+            if FEEDS_FILE.exists():
+                backup = _backup_feeds_locked()
+        except OSError as e:
+            return 500, {"ok": False, "error": f"今のファイルの控えを作れなかったため、初期化を中止しました（{e.strerror or e}）。"
+                                               "feeds.json を使っているプログラム（OneDrive・ウイルス対策・エディタ・Excel など）を"
+                                               "閉じてから、もう一度お試しください"}
+        defaults = _defaults()
+        _sources_skipped = []   # 初期化では書き戻さない（元の内容は控えに残っている）
+        _sources_enc = ""       # 控えは上で作った（文字コードの変換用の控えは重ねて作らない）
+        try:
+            _save_locked(defaults)
+        except OSError as e:
+            return 500, {"ok": False, "backup": backup,
+                         "error": f"初期の情報源を書き込めませんでした（{e.strerror or e}）。"
+                                  + (f"今のファイルの控え: {backup}" if backup else "")}
+        _sources_problem, _sources_note, _sources_warned = None, [], ""
+        return 200, {"ok": True, "sources": defaults, "backup": backup}
 
 
 # ------------------------------------------------------------------ 解析ユーティリティ
@@ -324,30 +657,47 @@ def strip_html(s: str) -> str:
 
 
 def safe_url(u: str | None) -> str | None:
-    if not u:
+    if not u or not isinstance(u, str):
         return None
     u = u.strip()
-    p = urlparse(u)
+    try:
+        p = urlparse(u)
+    except ValueError:   # 「https://a.example.com]/x」のような壊れた URL（Invalid IPv6 URL）
+        return None
     if p.scheme in ("http", "https") and p.netloc:
         return u
     return None
 
 
 def parse_date(s: str) -> datetime | None:
+    """RSS（RFC 822）／Atom（ISO 8601）の日付。読めない・桁あふれする日付は None（記事は日付なしで残す）。"""
     if not s:
         return None
     s = s.strip()
     try:  # RFC 822 (RSS の pubDate)
         dt = parsedate_to_datetime(s)
         if dt is not None:
-            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
-    except (TypeError, ValueError, IndexError):
+            dt = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+            dt.timestamp()   # 範囲外（極端な時差など）はここで例外にして捨てる
+            return dt
+    except (TypeError, ValueError, IndexError, OverflowError, OSError):
         pass
     try:  # ISO 8601 (Atom の updated/published)
         dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
-        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
-    except ValueError:
+        dt = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        dt.timestamp()
+        return dt
+    except (ValueError, OverflowError, OSError):
         return None
+
+
+def _src_text(v) -> str:
+    """feeds.json の手編集で name 等が文字列でない（数値・一覧・null）ときも、記事・過去ログに渡せる文字列にする。"""
+    if isinstance(v, str):
+        return v
+    if v is None or isinstance(v, (list, dict, bool)):
+        return ""
+    return str(v)
 
 
 def _extract_link(item) -> str | None:
@@ -390,55 +740,207 @@ def _extract_thumb(item, summary_html: str) -> str | None:
     return m.group(1) if m else None
 
 
+def _parse_item(it, src_name: str, src_id: str, category: str) -> dict | None:
+    title = strip_html(_text(_find_local(it, ("title",))))
+    link = safe_url(_extract_link(it))
+    # J-STAGE WebAPI 互換: 標準の title/link ではなく
+    # <article_title><ja>…</ja></article_title> / <article_link> を使う
+    if not title:
+        at = _find_local(it, ("article_title",))
+        if at is not None:
+            title = strip_html(_text(_find_local(at, ("ja", "en")))
+                               or "".join(at.itertext()).strip())
+    if not link:
+        al = _find_local(it, ("article_link",))
+        if al is not None:
+            link = safe_url(_text(_find_local(al, ("ja", "en")))
+                            or "".join(al.itertext()).strip())
+    if not title or not link:
+        return None
+    raw_summary = _text(_find_local(
+        it, ("description", "summary", "encoded", "content", "subtitle")))
+    summary = strip_html(raw_summary)
+    if len(summary) > MAX_SUMMARY:
+        summary = summary[:MAX_SUMMARY].rstrip() + "…"
+    dt = parse_date(_text(_find_local(
+        it, ("pubdate", "published", "updated", "date", "issued"))))
+    aid = hashlib.md5(link.encode("utf-8")).hexdigest()[:12]
+    return {
+        "id": aid,
+        "source": src_name,
+        "source_id": src_id,
+        "category": category,
+        "title": title,
+        "link": link,
+        "summary": summary,
+        "thumbnail": safe_url(_extract_thumb(it, raw_summary)),
+        "published": dt.isoformat() if dt else None,
+        "published_ts": dt.timestamp() if dt else None,
+    }
+
+
 def parse_feed(raw: bytes, src: dict) -> list[dict]:
-    root = ET.fromstring(raw)  # ET.ParseError は呼び出し側で捕捉
+    root = ET.fromstring(raw)  # ET.ParseError は呼び出し側（_parse_feed_tolerant）で捕捉
     items = [e for e in root.iter() if _local(e.tag) in ("item", "entry")]
+    # feeds.json の手編集で category / name が文字列でなくても、記事・過去ログ（SQLite）に渡せる値にする
+    cat = src.get("category")
+    category = cat if isinstance(cat, str) and cat.strip() else "総合"
+    src_name, src_id = _src_text(src.get("name")), _src_text(src.get("id"))
     out: list[dict] = []
     for it in items:
-        title = strip_html(_text(_find_local(it, ("title",))))
-        link = safe_url(_extract_link(it))
-        # J-STAGE WebAPI 互換: 標準の title/link ではなく
-        # <article_title><ja>…</ja></article_title> / <article_link> を使う
-        if not title:
-            at = _find_local(it, ("article_title",))
-            if at is not None:
-                title = strip_html(_text(_find_local(at, ("ja", "en")))
-                                   or "".join(at.itertext()).strip())
-        if not link:
-            al = _find_local(it, ("article_link",))
-            if al is not None:
-                link = safe_url(_text(_find_local(al, ("ja", "en")))
-                                or "".join(al.itertext()).strip())
-        if not title or not link:
+        try:   # 1件の記事の想定外の値（壊れた URL・桁あふれの日付など）で、その情報源の全記事を落とさない
+            a = _parse_item(it, src_name, src_id, category)
+        except Exception:
             continue
-        raw_summary = _text(_find_local(
-            it, ("description", "summary", "encoded", "content", "subtitle")))
-        summary = strip_html(raw_summary)
-        if len(summary) > MAX_SUMMARY:
-            summary = summary[:MAX_SUMMARY].rstrip() + "…"
-        cat_el = _find_local(it, ("category",))
-        category = src.get("category") or "総合"
-        dt = parse_date(_text(_find_local(
-            it, ("pubdate", "published", "updated", "date", "issued"))))
-        aid = hashlib.md5(link.encode("utf-8")).hexdigest()[:12]
-        out.append({
-            "id": aid,
-            "source": src.get("name", ""),
-            "source_id": src.get("id", ""),
-            "category": category,
-            "title": title,
-            "link": link,
-            "summary": summary,
-            "thumbnail": safe_url(_extract_thumb(it, raw_summary)),
-            "published": dt.isoformat() if dt else None,
-            "published_ts": dt.timestamp() if dt else None,
-        })
+        if a:
+            out.append(a)
     return out
 
 
 # ------------------------------------------------------------------ 取得
 
 FEED_ACCEPT = "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.8"
+
+
+_XML_CTRL_RE = re.compile(rb"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+_XML_AMP_RE = re.compile(rb"&(?:#([0-9]{1,8});|#[xX]([0-9a-fA-F]{1,8});|([A-Za-z][A-Za-z0-9]{0,31});)?")
+_XML_PREDEF = {b"amp", b"lt", b"gt", b"quot", b"apos"}
+
+
+def _xml_char_ok(cp: int) -> bool:
+    return cp in (0x9, 0xA, 0xD) or 0x20 <= cp <= 0xD7FF or 0xE000 <= cp <= 0xFFFD or 0x10000 <= cp <= 0x10FFFF
+
+
+_XML_SKIP_RE = re.compile(rb"(?s)<!\[CDATA\[.*?\]\]>|<!--.*?-->")   # & を直さない部分（CDATA の中の & は文字どおりの &）
+_XML_DECL_RE = re.compile(rb"<\?xml[\s?]")
+_XML_ROOT_RE = re.compile(rb"<(rss|feed|rdf:RDF|RDF)[\s>/]")
+_XML_ENC_RE = re.compile(rb"""<\?xml[^>]*?\bencoding\s*=\s*["']([A-Za-z0-9._:-]+)["']""")
+_XML_ENC_STR_RE = re.compile(r"""(<\?xml[^>]*?\bencoding\s*=\s*["'])[^"']*(["'])""")
+_CT_CHARSET_RE = re.compile(r"""charset\s*=\s*["']?([A-Za-z0-9._:-]+)""", re.I)   # Content-Type の charset
+# pyexpat がそのまま読める文字コード（codecs.lookup の名前）。これ以外（Shift_JIS・EUC-JP・ISO-2022-JP など
+# 多バイトの文字コード）は pyexpat が「multi-byte encodings are not supported」で読めないので、先に UTF-8 にする
+_EXPAT_NATIVE = {"utf-8", "utf-16", "utf-16-le", "utf-16-be", "ascii", "iso8859-1"}
+_ENC_ALIASES = {"windows-31j": "cp932", "x-sjis": "cp932", "shift-jis": "cp932", "shift_jis": "cp932", "sjis": "cp932",
+                "x-ms-cp932": "cp932", "ms932": "cp932", "x-euc-jp": "euc_jp", "eucjp": "euc_jp"}
+
+
+def _codec_name(name: str) -> str:
+    """文字コード名を Python の codec 名にそろえる（Shift_JIS は機種依存文字も読める cp932 として扱う）。
+    知らない名前はそのまま（小文字）返す。"""
+    n = (name or "").strip().lower()
+    n = _ENC_ALIASES.get(n, n)
+    try:
+        return codecs.lookup(n).name
+    except LookupError:
+        return n
+
+
+def _declared_encoding(raw: bytes) -> str | None:
+    """XML 宣言の encoding（codec 名にそろえる）。宣言が無ければ None。"""
+    m = _XML_ENC_RE.search(raw[:1024])
+    return _codec_name(m.group(1).decode("ascii")) if m else None
+
+
+def _feed_to_utf8(raw: bytes, ctype: str = "") -> bytes:
+    """pyexpat が読めない文字コード（Shift_JIS・EUC-JP など）のフィードを UTF-8 にする（宣言も UTF-8 に書き換える）。
+    文字コードは XML 宣言で、宣言が無ければ Content-Type の charset で決める。ただし宣言が無く UTF-8 として
+    正しく読める本文は、ヘッダ（誤った ISO-8859-1 の既定値など）より中身を信じてそのまま読む。"""
+    if raw.startswith((b"\xef\xbb\xbf", b"\xff\xfe", b"\xfe\xff")):
+        return raw   # BOM があればそれが優先（pyexpat が読める）
+    enc = _declared_encoding(raw)
+    declared = enc is not None
+    if not declared:
+        cs = _CT_CHARSET_RE.search(ctype or "")
+        if not cs:
+            return raw
+        try:
+            raw.decode("utf-8")
+            return raw
+        except UnicodeDecodeError:
+            enc = _codec_name(cs.group(1))
+    if enc in _EXPAT_NATIVE:
+        return raw
+    try:
+        text = raw.decode(enc, "replace")
+    except LookupError:
+        return raw   # 知らない文字コード名 → そのまま（解析エラーとして伝える）
+    if declared:
+        text = _XML_ENC_STR_RE.sub(r"\g<1>UTF-8\g<2>", text, count=1)
+    return text.encode("utf-8")
+
+
+def _repair_xml(raw: bytes) -> bytes:
+    """配信元の書き損じでよく壊れる箇所だけを直す（解析に失敗したときだけ使う）:
+    XML 宣言（無ければルート要素）より前の余計な内容（空行・PHP の警告など）とルート要素の閉じタグより後の
+    余計な内容（<script> など）を捨てる、UTF-8 として壊れたバイト列（途中で切れた文字など）→ 置換文字、
+    生の「&」→ &amp;、XML に無い HTML の名前付き文字参照（&nbsp; 等）→ 数値参照、
+    XML で使えない文字への数値参照・制御文字 → 除去／置換。& の修正は CDATA・コメントの外だけ
+    （CDATA の中の & は文字どおりの & なので、直すとリンク・画像の URL が変わってしまう）。
+    UTF-16 は対象外（制御文字の判定ができない）。"""
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return raw
+    m = _XML_DECL_RE.search(raw, 0, 4096) or _XML_ROOT_RE.search(raw, 0, 65536)
+    if m and m.start() > 0:
+        raw = raw[m.start():]
+    r = _XML_ROOT_RE.search(raw)
+    if r:
+        close = b"</" + r.group(1) + b">"
+        end = raw.rfind(close)
+        if end > r.start():
+            raw = raw[:end + len(close)]
+    if _declared_encoding(raw) in (None, "utf-8"):
+        raw = raw.decode("utf-8", "replace").encode("utf-8")
+    raw = _XML_CTRL_RE.sub(b"", raw)
+
+    def amp(m: re.Match) -> bytes:
+        dec, hexa, name = m.group(1), m.group(2), m.group(3)
+        if dec is not None or hexa is not None:
+            cp = int(dec) if dec is not None else int(hexa, 16)
+            return m.group(0) if _xml_char_ok(cp) else b"&#65533;"
+        if name is None:
+            return b"&amp;"   # 生の & （「A & B」など）
+        if name in _XML_PREDEF:
+            return m.group(0)
+        cp = name2codepoint.get(name.decode("ascii"))
+        return f"&#{cp};".encode("ascii") if cp else b"&amp;" + name + b";"
+    out, pos = [], 0
+    for s in _XML_SKIP_RE.finditer(raw):
+        out += [_XML_AMP_RE.sub(amp, raw[pos:s.start()]), s.group(0)]
+        pos = s.end()
+    out.append(_XML_AMP_RE.sub(amp, raw[pos:]))
+    return b"".join(out)
+
+
+XML_BROKEN_PREFIX = "フィードの XML が壊れています"   # 配信元の書式の誤り（診断の「配信元の不具合」の判定に使う）
+
+
+def parse_error_kind(err: str | None) -> str:
+    """解析エラーの種類: "xml"=配信元の XML の誤り / "internal"=Prism 側の処理の失敗 / ""=エラーなし。"""
+    if not err:
+        return ""
+    return "xml" if err.startswith(XML_BROKEN_PREFIX) else "internal"
+
+
+def _parse_feed_tolerant(raw: bytes, src: dict, ctype: str = "") -> tuple[list[dict], str | None]:
+    """parse_feed を例外なしで呼ぶ。pyexpat が読めない文字コード（Shift_JIS・EUC-JP など）は先に UTF-8 にし、
+    XML が壊れていれば _repair_xml で直して1回だけ読み直す。戻り値 (articles, error)。
+    1件の情報源の書き損じで記事一覧全体を止めないため。ctype は応答の Content-Type（charset の判定用）。"""
+    try:
+        raw = _feed_to_utf8(raw, ctype)
+    except Exception:
+        pass
+    try:
+        return parse_feed(raw, src), None
+    except ET.ParseError as e:
+        fixed = _repair_xml(raw)
+        if fixed != raw:
+            try:
+                return parse_feed(fixed, src), None
+            except Exception:
+                pass
+        return [], f"{XML_BROKEN_PREFIX}（{e}）"
+    except Exception as e:
+        return [], f"フィードの解析に失敗しました（{type(e).__name__}: {str(e)[:120]}）"
 
 
 def _looks_like_feed(raw: bytes) -> bool:
@@ -468,6 +970,22 @@ def _alt_aggregator(url: str) -> str:
     return ""
 
 
+def _read_body_until(r, cap: int, deadline: float) -> bytes:
+    """応答本文を cap バイトまで読む。FETCH_TIMEOUT は「1回の受信を待つ時間」なので、少しずつ送り続ける相手
+    （数秒ごとに1バイトなど）には効かず、記事一覧の取得全体が止まってしまう。受信ごとに全体の締め切り
+    （deadline = time.monotonic() の値）を確かめ、過ぎたら TimeoutError で打ち切る。"""
+    buf = bytearray()
+    read = getattr(r, "read1", None) or r.read   # read1 = 届いた分だけ返す（read は n バイト揃うまで待つ）
+    while len(buf) < cap:
+        if time.monotonic() > deadline:
+            raise TimeoutError(f"応答が遅すぎるため {FETCH_DEADLINE} 秒で打ち切りました（timed out）")
+        chunk = read(min(65536, cap - len(buf)))
+        if not chunk:
+            break
+        buf += chunk
+    return bytes(buf)
+
+
 def _http_get(url: str, accept: str = FEED_ACCEPT, block_internal: bool = True,
               cfg: dict | None = None) -> dict:
     """1回のHTTP GET。ブラウザ相当のヘッダを送り、Google系には同意回避Cookieを付ける。
@@ -483,9 +1001,10 @@ def _http_get(url: str, accept: str = FEED_ACCEPT, block_internal: bool = True,
     if host.endswith("google.com"):
         headers["Cookie"] = "CONSENT=YES+cb; SOCS=CAISHAgBEhJnd3NfMjAyMw"   # EU同意ページ回避
     req = urllib.request.Request(url, headers=headers)
+    deadline = time.monotonic() + FETCH_DEADLINE
     try:
         with _opener(block_internal=block_internal, cfg=cfg).open(req, timeout=FETCH_TIMEOUT) as r:
-            raw = r.read(MAX_FEED_BYTES + 1)
+            raw = _read_body_until(r, MAX_FEED_BYTES + 1, deadline)
             return {"ok": True, "status": getattr(r, "status", 200) or 200,
                     "final_url": r.geturl(), "ctype": (r.headers.get("Content-Type") or ""),
                     "enc": (r.headers.get("Content-Encoding") or "").lower(),
@@ -525,7 +1044,9 @@ def _fetch_and_parse(url: str, src: dict):
     if not _looks_like_feed(raw):
         ct = (res["ctype"].split(";")[0] or "?").strip()
         return [], f"非フィード応答 (HTTP {res['status']}, {ct}) — 同意/ブロックページの可能性"
-    arts = parse_feed(raw, src)
+    arts, perr = _parse_feed_tolerant(raw, src, res.get("ctype", ""))
+    if perr:
+        return [], perr
     return arts[:MAX_PER_SOURCE], None
 
 
@@ -602,14 +1123,16 @@ def diagnose_source(src: dict) -> dict:
         raw = res["raw"]
         looks = False
         items = 0
+        parse_error = ""
         try:
             if res["ok"]:
                 dec = _decode_feed_bytes(res)
                 looks = _looks_like_feed(dec)
                 if looks:
-                    items = len(parse_feed(dec, src))
-        except Exception:
-            pass
+                    arts, perr = _parse_feed_tolerant(dec, src, res.get("ctype", ""))
+                    items, parse_error = len(arts), perr or ""
+        except Exception as e:
+            parse_error = f"{type(e).__name__}: {str(e)[:160]}"
         snippet = ""
         try:
             snippet = raw[:160].decode("utf-8", "replace").replace("\n", " ").strip()
@@ -618,7 +1141,8 @@ def diagnose_source(src: dict) -> dict:
         return {"url": u, "ok": res["ok"], "status": res["status"],
                 "final_url": res["final_url"], "content_type": res["ctype"].split(";")[0],
                 "bytes": len(raw), "looks_like_feed": looks, "items": items,
-                "error": res["error"], "snippet": snippet}
+                "error": res["error"], "parse_error": parse_error,
+                "parse_error_kind": parse_error_kind(parse_error), "snippet": snippet}
 
     url = src.get("url", "")
     out = {"id": src.get("id", ""), "name": src.get("name", ""), "url": url,
@@ -652,18 +1176,20 @@ def proxy_test(body: dict) -> dict:
     t0 = time.time()
     res = _http_get(url, cfg=cfg)
     elapsed = int((time.time() - t0) * 1000)
-    looks, items = False, 0
+    looks, items, parse_error = False, 0, ""
     if res["ok"]:
         try:
             raw = _decode_feed_bytes(res)
             looks = _looks_like_feed(raw)
             if looks:
-                items = len(parse_feed(raw, {"id": "test", "name": "test", "category": "総合"}))
-        except Exception:
-            pass
+                arts, perr = _parse_feed_tolerant(raw, {"id": "test", "name": "test", "category": "総合"},
+                                                  res.get("ctype", ""))
+                items, parse_error = len(arts), perr or ""
+        except Exception as e:
+            parse_error = f"{type(e).__name__}: {str(e)[:160]}"
     return {"ok": bool(res["ok"] and looks), "http_ok": res["ok"], "status": res["status"],
-            "error": res["error"], "looks_like_feed": looks, "items": items,
-            "elapsed_ms": elapsed, "url": url, "proxy_mode": mode,
+            "error": res["error"], "parse_error": parse_error, "parse_error_kind": parse_error_kind(parse_error),
+            "looks_like_feed": looks, "items": items, "elapsed_ms": elapsed, "url": url, "proxy_mode": mode,
             "content_type": (res["ctype"].split(";")[0] if res.get("ctype") else "")}
 
 
@@ -731,11 +1257,21 @@ def _archive_key(a: dict) -> float:
     return a.get("published_ts") or a.get("archived_at") or 0.0
 
 
+def _db_text(v) -> str | None:
+    """SQLite に渡せる文字列（一覧・辞書などは文字列にする。1件の型違いで一括保存全体が失敗しないように）。"""
+    return v if v is None or isinstance(v, str) else str(v)
+
+
+def _db_num(v) -> float | None:
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
 def _archive_row(a: dict, now: float) -> tuple:
-    at = a.get("archived_at") or now
-    return (a.get("id"), a.get("source_id"), a.get("source"), a.get("category"),
-            a.get("title"), a.get("link"), a.get("summary"), a.get("published"),
-            a.get("published_ts"), at, a.get("published_ts") or at)
+    at = _db_num(a.get("archived_at")) or now
+    pts = _db_num(a.get("published_ts"))
+    return (_db_text(a.get("id")), _db_text(a.get("source_id")), _db_text(a.get("source")), _db_text(a.get("category")),
+            _db_text(a.get("title")), _db_text(a.get("link")), _db_text(a.get("summary")), _db_text(a.get("published")),
+            pts, at, pts or at)
 
 
 def _norm(s) -> str:
@@ -879,8 +1415,16 @@ def archive_add(articles: list[dict]) -> int:
         conn = _db()
         try:
             max_rowid = conn.execute("SELECT coalesce(MAX(rowid), 0) FROM articles").fetchone()[0]
-            conn.executemany("INSERT OR IGNORE INTO articles VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                             [_archive_row(a, now) for a in fresh])
+            ins = "INSERT OR IGNORE INTO articles VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+            rows = [_archive_row(a, now) for a in fresh]
+            try:
+                conn.executemany(ins, rows)
+            except (sqlite3.InterfaceError, sqlite3.ProgrammingError):   # 保存できない行が混ざっても他の行は保存する
+                for row in rows:
+                    try:
+                        conn.execute(ins, row)
+                    except (sqlite3.InterfaceError, sqlite3.ProgrammingError):
+                        pass
             new_rows = conn.execute("SELECT rowid, title, summary, source FROM articles WHERE rowid > ?",
                                     (max_rowid,)).fetchall()
             if new_rows:
@@ -1021,18 +1565,29 @@ def _fts_phrase(w: str) -> str:
 _SEARCH_FROM = "FROM articles a JOIN articles_fts ON articles_fts.rowid = a.rowid"
 
 
+def _group_uses_match(g: list[str]) -> bool:
+    """この OR グループを FTS5 の MATCH（trigram・3文字以上の語だけ）で評価するか。"""
+    return _fts_ok and all(len(w) >= 3 for w in g)
+
+
+def search_uses_match(parsed: dict) -> bool:
+    """検索語が MATCH を使う（＝関連順 bm25 で並べられる）か。2文字以下の語だけなら新着順になる。"""
+    return any(_group_uses_match(g) for g in parsed["groups"])
+
+
 def _search_where(q: str, sources: list[str] | None, since_ts: float | None, until_ts: float | None,
                   category: str | None, archived_since: float | None = None,
-                  parsed: dict | None = None) -> tuple[str, list, bool]:
+                  parsed: dict | None = None, max_rowid: int | None = None) -> tuple[str, list, bool]:
     """archive_search / ヒストグラム / テーマの件数 で共用する WHERE 句（_SEARCH_FROM を前提）。
     3文字以上の語だけから成る OR グループは FTS5 の MATCH（trigram）、2文字以下を含むグループと
-    除外語は正規化テキストへの instr() で評価する。戻り値 (where_sql, params, MATCH を使ったか)。"""
+    除外語は正規化テキストへの instr() で評価する。max_rowid を与えるとその時点までに保存された記事だけ
+    （ページ送りの途中で新着が入っても並びがずれないように）。戻り値 (where_sql, params, MATCH を使ったか)。"""
     p = parsed if parsed is not None else parse_query(q)
     where: list[str] = []
     params: list = []
     match_parts: list[str] = []
     for g in p["groups"]:
-        if _fts_ok and all(len(w) >= 3 for w in g):
+        if _group_uses_match(g):
             match_parts.append("(" + " OR ".join(_fts_phrase(w) for w in g) + ")")
         else:
             where.append("(" + " OR ".join("instr(articles_fts.text, ?) > 0" for _ in g) + ")")
@@ -1060,13 +1615,64 @@ def _search_where(q: str, sources: list[str] | None, since_ts: float | None, unt
     if archived_since is not None:   # 新着差分: 前回確認以降に過去ログへ入った記事
         where.append("a.archived_at > ?")
         params.append(float(archived_since))
+    if max_rowid is not None:
+        where.append("a.rowid <= ?")
+        params.append(int(max_rowid))
     return (" WHERE " + " AND ".join(where)) if where else "", params, uses_match
+
+
+def search_limit(v, default: int = 60) -> int:
+    """1回に返す件数（1〜2000）。不正値は default。"""
+    try:
+        return max(1, min(int(v), 2000))
+    except (TypeError, ValueError):
+        return default
+
+
+def search_offset(v) -> int:
+    """ページ送りの開始位置（0〜ARCHIVE_MAX）。不正値・負の値は 0。過去ログは最大 ARCHIVE_MAX 件なので
+    それより先は常に空になる（巨大な OFFSET で SQLite に無駄な走査をさせない）。"""
+    try:
+        return max(0, min(int(v), ARCHIVE_MAX))
+    except (TypeError, ValueError):
+        return 0
+
+
+def archive_category_arg(v: str | None) -> str | None:
+    """過去ログの検索条件のカテゴリ（完全一致）。feeds.json を手で編集した独自のカテゴリ（CATEGORIES に無いもの）も
+    過去ログには保存され、絞り込みの選択肢にも出るので、そのまま使う（以前は CATEGORIES 以外を黙って外し、
+    「経済」を選んでも全カテゴリが出ていた）。存在しないカテゴリは0件になる。SQL にはパラメータで渡す。"""
+    v = (v or "").strip()
+    return v[:40] if v else None
+
+
+def _epoch_arg(v: str | None) -> float | None:
+    """クエリの epoch 秒（as_of）。不正値・未来すぎる値は None。"""
+    try:
+        t = float(v) if v else None
+    except ValueError:
+        return None
+    if t is None or not (0 < t <= time.time() + 120):   # NaN・inf・負も弾く
+        return None
+    return t
+
+
+def archive_max_rowid() -> int:
+    """過去ログの最後に保存された記事の rowid（ページ送り中に新着が入っても並びを変えないための上限）。"""
+    with _archive_lock:
+        _archive_init_locked()
+        conn = _db()
+        try:
+            return int(conn.execute("SELECT coalesce(MAX(rowid), 0) FROM articles").fetchone()[0])
+        finally:
+            conn.close()
 
 
 def archive_search(q: str, limit: int = 60, sources: list[str] | None = None,
                    since_ts: float | None = None, until_ts: float | None = None,
                    category: str | None = None, archived_since: float | None = None,
-                   order: str = "new", parsed: dict | None = None) -> list[dict]:
+                   order: str = "new", parsed: dict | None = None, offset: int = 0,
+                   max_rowid: int | None = None) -> list[dict]:
     """過去ログを条件検索する。条件はすべて AND:
     - q: 検索語（parse_query の構文。全角/半角・大小文字は区別しない。同義語辞書で展開）
     - sources: source_id のリスト（いずれかに一致）
@@ -1074,18 +1680,19 @@ def archive_search(q: str, limit: int = 60, sources: list[str] | None = None,
     - category: カテゴリ名の完全一致
     - archived_since: 保存日時（archived_at）がこれより後の記事だけ（テーマの「新着のみ」）
     order="rel" かつ FTS の MATCH を使えた場合は関連順（bm25）、それ以外は新着順。
-    各行に has_text（本文キャッシュあり）を付けて返す。"""
-    where, params, uses_match = _search_where(q, sources, since_ts, until_ts, category, archived_since, parsed)
-    try:
-        n = max(1, min(int(limit), 2000))
-    except (TypeError, ValueError):
-        n = 60
-    order_sql = ("articles_fts.rank, a.sort_ts DESC" if (order == "rel" and uses_match) else "a.sort_ts DESC")
+    offset 件目から limit 件（過去ログタブのページ送り）。同時刻の記事でもページの境目で重複・欠落が
+    出ないよう、並びの最後に rowid を加えて順序を一意にする。該当の総数は archive_count()。
+    各行に has_text（本文キャッシュあり）を付けて返す。max_rowid は _search_where を参照。"""
+    where, params, uses_match = _search_where(q, sources, since_ts, until_ts, category, archived_since, parsed,
+                                              max_rowid)
+    n = search_limit(limit)
+    order_sql = ("articles_fts.rank, a.sort_ts DESC, a.rowid DESC" if (order == "rel" and uses_match)
+                 else "a.sort_ts DESC, a.rowid DESC")
     sql = ("SELECT a.*, (p.article_id IS NOT NULL AND coalesce(p.chars,0) > 0) AS has_text, "
            "CASE WHEN coalesce(p.chars,0) > 0 THEN coalesce(p.pages,1) ELSE 0 END AS text_pages, p.note AS text_note "
            + _SEARCH_FROM + " LEFT JOIN pages p ON p.article_id = a.id"
-           + where + " ORDER BY " + order_sql + " LIMIT ?")
-    params.append(n)
+           + where + " ORDER BY " + order_sql + " LIMIT ? OFFSET ?")
+    params.extend([n, search_offset(offset)])
     with _archive_lock:
         _archive_init_locked()
         conn = _db()
@@ -1096,6 +1703,22 @@ def archive_search(q: str, limit: int = 60, sources: list[str] | None = None,
     for r in rows:
         r["has_text"] = bool(r.get("has_text"))
     return rows
+
+
+def archive_count(q: str, sources: list[str] | None = None, since_ts: float | None = None,
+                  until_ts: float | None = None, category: str | None = None,
+                  archived_since: float | None = None, parsed: dict | None = None,
+                  max_rowid: int | None = None) -> int:
+    """archive_search と同じ条件に合う記事の総数（ページ送りの「全 N 件」・has_more 用）。
+    WHERE 句は _search_where を共用するので、検索結果と件数がずれない。"""
+    where, params, _ = _search_where(q, sources, since_ts, until_ts, category, archived_since, parsed, max_rowid)
+    with _archive_lock:
+        _archive_init_locked()
+        conn = _db()
+        try:
+            return int(conn.execute("SELECT COUNT(*) " + _SEARCH_FROM + where, params).fetchone()[0])
+        finally:
+            conn.close()
 
 
 def _filters_window(f: dict, now: float | None = None) -> tuple[float | None, float | None]:
@@ -1238,13 +1861,21 @@ def _parse_day(s: str | None) -> float | None:
         return None
 
 
+def _fetch_source_safe(src: dict) -> tuple[str, list[dict], str | None]:
+    """fetch_source を例外なしで呼ぶ（1件の情報源の想定外のエラーで記事一覧全体を止めない）。"""
+    try:
+        return fetch_source(src)
+    except Exception as e:
+        return src.get("id", ""), [], f"取得処理のエラー（{type(e).__name__}: {str(e)[:160]}）"
+
+
 def refresh(sources: list[dict]) -> dict:
     enabled = [s for s in sources if s.get("enabled", True)]
     articles: list[dict] = []
     errors: dict[str, str] = {}
     if enabled:
         with ThreadPoolExecutor(max_workers=min(8, len(enabled))) as ex:
-            for sid, arts, err in ex.map(fetch_source, enabled):
+            for sid, arts, err in ex.map(_fetch_source_safe, enabled):
                 if err:
                     errors[sid] = err
                 articles.extend(arts)
@@ -1254,8 +1885,8 @@ def refresh(sources: list[dict]) -> dict:
         all_uniq = [a for a in articles
                     if a.get("id") and not (a["id"] in seen_ids or seen_ids.add(a["id"]))]
         archive_add(all_uniq)
-    except Exception:
-        pass   # アーカイブ失敗で表示を壊さない
+    except Exception as e:   # アーカイブ失敗で表示を壊さない。ただし黙って止まらないようコンソールに出す
+        _console(f"[Prism] 警告: 過去ログへの保存に失敗しました（{type(e).__name__}: {str(e)[:200]}）")
     uniq = _merge_articles(articles)
 
     offline = len(uniq) == 0
@@ -1286,6 +1917,7 @@ def get_feed(force: bool = False) -> dict:
             if fresh and not force:
                 return dict(_cache)
         data = refresh(load_sources())
+        data["sources_broken"] = _sources_problem is not None   # feeds.json が使えないまま取得した（直ったら取り直す）
         with _cache_lock:
             _cache.update(data)
             return dict(_cache)
@@ -1785,8 +2417,9 @@ def _fetch_html(u: str, referer: str = "") -> dict:
         headers["Cookie"] = "CONSENT=YES+cb; SOCS=CAISHAgBEhJnd3NfMjAyMw"   # EU同意ページ回避（フィード取得と同じ）
     try:
         req = urllib.request.Request(u, headers=headers)
+        deadline = time.monotonic() + FETCH_DEADLINE
         with _opener(block_internal=True).open(req, timeout=FETCH_TIMEOUT) as r:
-            raw = r.read(MAX_FEED_BYTES + 1)
+            raw = _read_body_until(r, MAX_FEED_BYTES + 1, deadline)
             enc = (r.headers.get("Content-Encoding") or "").lower()
             ctype = r.headers.get("Content-Type") or ""
             final = r.geturl() or u
@@ -5709,6 +6342,31 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _guard(self, fn) -> None:
+        """想定外の例外でも接続を黙って切らず、500 と理由（JSON）を返す。経緯はコンソールに出す。"""
+        try:
+            fn()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass   # ブラウザ側が先に切断した
+        except Exception as e:
+            try:
+                sys.stderr.write(f"[error] {self.command} {self.path}\n{traceback.format_exc()}")
+            except Exception:
+                pass
+            try:
+                self._json({"error": f"サーバー内部のエラー（{type(e).__name__}: {str(e)[:200]}）"}, 500)
+            except Exception:
+                pass
+
+    def do_GET(self):
+        self._guard(self._do_GET)
+
+    def do_POST(self):
+        self._guard(self._do_POST)
+
+    def do_DELETE(self):
+        self._guard(self._do_DELETE)
+
     def _send_bytes(self, data: bytes, ctype: str, filename: str) -> None:
         """ファイルダウンロード応答（Content-Disposition は RFC 5987 で UTF-8 名を渡す）。"""
         self.send_response(200)
@@ -5734,6 +6392,18 @@ class Handler(BaseHTTPRequestHandler):
                 return False
         return True
 
+    def _sources_write(self, fn, *args):
+        """情報源の書き込み（追加・切替・削除）を実行する。feeds.json が使えない間は 409 で断り、
+        保存に失敗したら 500 を返す（どちらも応答済みなら None を返す）。"""
+        try:
+            return fn(*args)
+        except SourcesUnavailable as e:
+            self._json({"ok": False, "error": SOURCES_REFUSED_MSG, "sources_problem": e.problem}, 409)
+        except OSError as e:
+            self._json({"ok": False, "error": f"feeds.json に保存できませんでした（{e.strerror or e}）。"
+                                              "ほかのプログラムが使用中でないか確認してください"}, 500)
+        return None
+
     def _read_body(self) -> dict:
         try:
             n = int(self.headers.get("Content-Length") or 0)
@@ -5748,7 +6418,7 @@ class Handler(BaseHTTPRequestHandler):
         return obj if isinstance(obj, dict) else {}   # 非オブジェクトJSONで落ちない
 
     # ------------------------------------------------------------------ GET
-    def do_GET(self):
+    def _do_GET(self):
         u = urlparse(self.path)
         if u.path in ("/", "/index.html"):
             try:
@@ -5767,7 +6437,11 @@ class Handler(BaseHTTPRequestHandler):
             q = parse_qs(u.query)
             force = q.get("refresh", ["0"])[0] in ("1", "true")
             data = get_feed(force=force)
-            sources = load_sources()
+            sources, problem, note = load_sources_state()
+            if data.get("sources_broken") and not problem and not force:
+                # feeds.json が直った: 壊れていた間に取得した（情報源0件の）キャッシュを使わず取り直す
+                data = get_feed(force=True)
+                sources, problem, note = load_sources_state()
             self._json({
                 "articles": data["articles"],
                 "sources": source_status(sources, data["errors"]),
@@ -5776,14 +6450,17 @@ class Handler(BaseHTTPRequestHandler):
                 "updated": data["updated"],
                 "errors": data["errors"],
                 "count": len(data["articles"]),
+                "sources_problem": problem,   # feeds.json を使えない理由（null=正常）
+                "sources_note": note,         # 読み込めたが知らせたいこと（文字コード・読み飛ばし）
             })
             return
 
         if u.path == "/api/sources":
             with _cache_lock:
                 errors = dict(_cache["errors"]) if _cache["ts"] else {}
-            self._json({"sources": source_status(load_sources(), errors),
-                        "categories": CATEGORIES})
+            sources, problem, note = load_sources_state()
+            self._json({"sources": source_status(sources, errors),
+                        "categories": CATEGORIES, "sources_problem": problem, "sources_note": note})
             return
 
         if u.path == "/api/sources/diagnose":   # 1件を実取得して失敗理由を切り分ける
@@ -5799,22 +6476,41 @@ class Handler(BaseHTTPRequestHandler):
             q = parse_qs(u.query)
             g = lambda k, d="": (q.get(k) or [d])[0]
             sources = [s for s in g("sources").split(",") if s.strip()]
-            category = g("category") if g("category") in CATEGORIES else None
+            category = archive_category_arg(g("category"))
             try:
                 days = int(g("days") or 0)
             except ValueError:
                 days = 0
-            since, until = _filters_window({"from": g("from"), "to": g("to"), "days": days})
+            # ページ送りの2ページ目以降は、1ページ目の基準時刻（as_of）と保存済みの範囲（upto=rowid の上限）を
+            # 送り返してもらう。「直近N日」の期間が動いたり新着が入ったりして、関連順で境目の記事が抜けないように
+            as_of = _epoch_arg(g("as_of"))
+            now = as_of if as_of is not None else time.time()
+            since, until = _filters_window({"from": g("from"), "to": g("to"), "days": days}, now=now)
             try:   # テーマの「新着のみ」: 前回確認(epoch)より後に保存された記事だけ
                 archived = float(g("archived")) if g("archived") else None
             except ValueError:
                 archived = None
+            try:
+                upto = int(g("upto")) if g("upto") else None
+            except ValueError:
+                upto = None
+            if upto is None or upto < 0:
+                upto = archive_max_rowid()
             parsed = parse_query(g("q"))
             order = "rel" if g("order") == "rel" else "new"
-            arts = archive_search(g("q"), g("limit", "60"), sources, since, until, category, archived, order, parsed)
+            # 実際の並び: 関連順（bm25）は3文字以上の語（FTS5 の MATCH）があるときだけ。無ければ新しい順
+            order_used = "rel" if order == "rel" and search_uses_match(parsed) else "new"
+            limit, offset = search_limit(g("limit", "60")), search_offset(g("offset", "0"))   # ページ送り（過去ログタブ）
+            arts = archive_search(g("q"), limit, sources, since, until, category, archived, order, parsed, offset,
+                                  max_rowid=upto)
+            total = archive_count(g("q"), sources, since, until, category, archived, parsed,
+                                  max_rowid=upto)   # 同じ条件での総数
             groups = group_duplicates(arts) if g("dedup", "1") not in ("0", "false") else 0
             self._json({"ok": True, "count": len(arts), "articles": arts, "stats": archive_stats(),
-                        "fts": _fts_ok, "order": order, "expanded": parsed["expanded"], "dup_groups": groups,
+                        "fts": _fts_ok, "order": order, "order_used": order_used,
+                        "expanded": parsed["expanded"], "dup_groups": groups,
+                        "total": total, "offset": offset, "limit": limit,
+                        "has_more": offset + len(arts) < total, "as_of": now, "upto": upto,
                         "filters": {"q": g("q"), "sources": sources, "category": category,
                                     "from": g("from"), "to": g("to"), "days": days, "archived": archived}})
             return
@@ -5823,7 +6519,7 @@ class Handler(BaseHTTPRequestHandler):
             q = parse_qs(u.query)
             g = lambda k, d="": (q.get(k) or [d])[0]
             sources = [s for s in g("sources").split(",") if s.strip()]
-            category = g("category") if g("category") in CATEGORIES else None
+            category = archive_category_arg(g("category"))
             try:
                 days = int(g("days") or 0)
             except ValueError:
@@ -5849,7 +6545,7 @@ class Handler(BaseHTTPRequestHandler):
             q = parse_qs(u.query)
             g = lambda k, d="": (q.get(k) or [d])[0]
             sources = [s for s in g("sources").split(",") if s.strip()]
-            category = g("category") if g("category") in CATEGORIES else None
+            category = archive_category_arg(g("category"))
             self._json({"ok": True, **archive_histogram(g("q"), sources, category)})
             return
 
@@ -5922,7 +6618,7 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"error": "not found"}, 404)
 
     # ------------------------------------------------------------------ POST
-    def do_POST(self):
+    def _do_POST(self):
         u = urlparse(self.path)
         if not self._same_origin():
             self._json({"error": "cross-origin request refused"}, 403)
@@ -5965,14 +6661,19 @@ class Handler(BaseHTTPRequestHandler):
             cat = body.get("category") or "総合"
             if cat not in CATEGORIES:
                 cat = "総合"
-            sources = add_source(name, url, cat)
+            sources = self._sources_write(add_source, name, url, cat)
+            if sources is None:
+                return
             self._invalidate()
             self._json({"ok": True, "sources": source_status(sources, {})})
             return
 
         if u.path == "/api/sources/toggle":
             sid = (parse_qs(u.query).get("id") or [""])[0]
-            sources, hit = toggle_source(sid)
+            r = self._sources_write(toggle_source, sid)
+            if r is None:
+                return
+            sources, hit = r
             if not hit:
                 self._json({"ok": False, "error": "unknown source"}, 404)
                 return
@@ -5985,10 +6686,21 @@ class Handler(BaseHTTPRequestHandler):
             ids = body.get("ids")
             ids = [str(i) for i in ids] if isinstance(ids, list) else []
             enabled = bool(body.get("enabled"))
-            sources, n = set_enabled(ids, enabled)
+            r = self._sources_write(set_enabled, ids, enabled)
+            if r is None:
+                return
+            sources, n = r
             if n:
                 self._invalidate()
             self._json({"ok": True, "changed": n, "sources": source_status(sources, {})})
+            return
+
+        if u.path == "/api/sources/restore-defaults":  # 初期の情報源に戻す（今の feeds.json は控えを残す）
+            code, r = restore_default_sources()
+            if r.get("ok"):
+                self._invalidate()
+                r = {**r, "sources": source_status(r["sources"], {}), "sources_problem": None, "sources_note": []}
+            self._json(r, code)
             return
 
         if u.path == "/api/settings":  # AI API 設定の保存
@@ -6128,7 +6840,7 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"error": "not found"}, 404)
 
     # ------------------------------------------------------------------ DELETE
-    def do_DELETE(self):
+    def _do_DELETE(self):
         u = urlparse(self.path)
         if not self._same_origin():
             self._json({"error": "cross-origin request refused"}, 403)
@@ -6156,7 +6868,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if u.path == "/api/sources":
             sid = (parse_qs(u.query).get("id") or [""])[0]
-            remain, changed = delete_source(sid)
+            r = self._sources_write(delete_source, sid)
+            if r is None:
+                return
+            remain, changed = r
             if not changed:
                 self._json({"ok": False, "error": "unknown source"}, 404)
                 return
@@ -6187,6 +6902,10 @@ def main(argv: list[str] | None = None) -> None:
     server = ThreadingHTTPServer((HOST, args.port), Handler)
     url = f"http://{HOST}:{args.port}"
     print(f"Prism ニュースポータル: {url}  (Ctrl+C で終了)")
+    try:
+        load_sources()   # feeds.json を起動時に一度読み、使えなければコンソールに警告を出す
+    except Exception:
+        pass
     if args.open:
         webbrowser.open(url)
     try:
