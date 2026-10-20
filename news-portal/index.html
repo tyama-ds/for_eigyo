@@ -680,6 +680,10 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
 /* ============================================================ 過去ログ（タブ表示） */
 /* 過去ログ表示中はフィード（#lead/#grid）とトレンド行を隠すだけ。フィードは裏で更新され続ける */
 body.arc-on #lead, body.arc-on #grid, body.arc-on .subbar{display:none !important}
+/* 上部の検索欄は隠れたフィードを絞り込むだけなので、過去ログ表示中は隠す（過去ログには専用のキーワード欄がある）。
+   幅の広い画面では場所を残してボタンの位置を変えない */
+body.arc-on .topbar .search{visibility:hidden}
+@media(max-width:600px){ body.arc-on .topbar .search{display:none} }
 .iconbtn[aria-pressed="true"]{color:var(--accent); border-color:color-mix(in srgb,var(--accent) 55%,transparent);
   background:color-mix(in srgb,var(--accent) 13%,var(--surface))}
 .chip .chip__ic{display:inline-flex; width:15px; height:15px}
@@ -757,6 +761,7 @@ body.arc-on #lead, body.arc-on #grid, body.arc-on .subbar{display:none !importan
 .arc__state h3{color:var(--text-2); font-weight:700; margin:0 0 6px; font-size:16.5px}
 .arc__state .btn{margin-top:14px}
 .arc__state.err h3{color:var(--cat-世界)}
+:root[data-theme="light"] .arc__state.err h3{color:#a8360a}   /* 明るい背景でも読める濃さ（--cat-世界 のままでは約 1.9:1） */
 .arc__more{display:flex; justify-content:center; padding:4px 0 8px}
 .arc__more[hidden]{display:none}
 .arc__more .btn{min-width:200px}
@@ -974,7 +979,7 @@ body.arc-on #lead, body.arc-on #grid, body.arc-on .subbar{display:none !importan
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 12a8.5 8.5 0 1 0 2.5-6"/><path d="M3 3.5V8h4.5"/><path d="M12 7.5V12l3 2"/></svg>
         過去ログ
       </h2>
-      <span class="arc__sub" id="arcSub">保存された記事を期間・キーワードで検索</span>
+      <span class="arc__sub" id="arcSub">保存された記事を期間・キーワードで検索（/ でキーワード欄へ）</span>
       <button class="btn ghost sm arc__back" type="button" id="arcBack" aria-label="フィードに戻る（Esc）" title="フィードに戻る（Esc）">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>フィードに戻る
       </button>
@@ -983,7 +988,7 @@ body.arc-on #lead, body.arc-on #grid, body.arc-on .subbar{display:none !importan
       <div class="arc__row">
         <div class="gsearch arc__q">
           <svg class="gsearch__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3" stroke-linecap="round"/></svg>
-          <input id="arcQ" type="search" enterkeyhint="search" placeholder="キーワード（スペース=AND・|=OR・-語=除外。例: 高炉|電炉 水素 -株価）" autocomplete="off" spellcheck="false" aria-label="過去ログのキーワード（スペース区切りでAND、|でOR、先頭に-で除外）">
+          <input id="arcQ" type="search" enterkeyhint="search" placeholder="キーワード（スペース=AND・|=OR・-語=除外。例: 高炉|電炉 水素 -株価）" autocomplete="off" spellcheck="false" aria-keyshortcuts="/" aria-label="過去ログのキーワード（スペース区切りでAND、|でOR、先頭に-で除外。/ キーでここへ）">
         </div>
         <div class="seg" role="group" aria-label="表示形式">
           <button type="button" id="arcViewList" aria-pressed="true" aria-label="リスト表示" title="リスト表示（L）">
@@ -1097,7 +1102,7 @@ body.arc-on #lead, body.arc-on #grid, body.arc-on .subbar{display:none !importan
   </div>
   <div class="modal__body">
     <div class="kbd-list">
-      <div class="kbd-row"><kbd>/</kbd> 検索にフォーカス</div>
+      <div class="kbd-row"><kbd>/</kbd> 検索にフォーカス（過去ログではキーワード欄）</div>
       <div class="kbd-row"><kbd>F</kbd> 横断検索（全カテゴリ）</div>
       <div class="kbd-row"><kbd>R</kbd> 記事を再取得</div>
       <div class="kbd-row"><kbd>T</kbd> ライト / ダーク切替</div>
@@ -1108,7 +1113,7 @@ body.arc-on #lead, body.arc-on #grid, body.arc-on .subbar{display:none !importan
       <div class="kbd-row"><kbd>V</kbd> ソース別に表示</div>
       <div class="kbd-row"><kbd>A</kbd> AIアシスタント</div>
       <div class="kbd-row"><kbd>1</kbd>〜<kbd>9</kbd> カテゴリ切替</div>
-      <div class="kbd-row"><kbd>Esc</kbd> 閉じる / 検索クリア / フィードに戻る</div>
+      <div class="kbd-row"><kbd>Esc</kbd> 閉じる / 過去ログからフィードに戻る / 検索クリア</div>
     </div>
   </div>
 </div>
@@ -1509,7 +1514,7 @@ async function loadArticles(force){
     const d = await api("/api/articles"+(force?"?refresh=1":""));
     S.articles=d.articles||[]; S.sources=d.sources||[]; S.categories=d.categories||[];
     S.offline=!!d.offline; S.updated=d.updated; S.errors=d.errors||{}; S.loading=false;
-    S.srcProblem=d.sources_problem||null; S.srcNote=d.sources_note||[];
+    S.srcProblem=d.sources_problem||null; S.srcNote=d.sources_note||[]; S.srcLoadFailed=false;
     renderAll();
     if($("#srcModal").classList.contains("show")) renderSources();   // 開いている情報源パネルも最新に
     return d;
@@ -1517,8 +1522,10 @@ async function loadArticles(force){
     S.loading=false;
     // 記事の取得が失敗しても情報源の一覧は別に読む（「情報源がありません」と誤って見せない・診断ができるように）
     try{ const s=await api("/api/sources"); S.sources=s.sources||S.sources; if(s.categories) S.categories=s.categories;
-         S.srcProblem=s.sources_problem||null; S.srcNote=s.sources_note||[]; }catch(_){}
+         S.srcProblem=s.sources_problem||null; S.srcNote=s.sources_note||[]; S.srcLoadFailed=false; }
+    catch(_){ S.srcLoadFailed=true; }   // サーバーが応答しない: 一覧が空でも「feeds.json が空」とは言わない
     renderAll();
+    if($("#srcModal").classList.contains("show")) renderSources();
     toast("記事の読み込みに失敗しました"+(e.server?"（"+e.message+"）":"（サーバーから応答がありません。起動した画面のエラー表示を確認してください）"), "err");
     return null;
   }
@@ -1561,7 +1568,7 @@ function trending(){
 function renderAll(){ renderCats(); renderTrend(); renderStatus(); renderSrcAlert(); renderGrid(); syncBmBadge(); }
 
 function renderCats(){
-  const box=$("#cats"); box.innerHTML="";
+  const box=$("#cats"), keep=box.scrollLeft; box.innerHTML="";   // 描き直しても横スクロールの位置は保つ
   if(S.source){   // 情報源フィルタ中：解除できるアクティブなソースチップを先頭に表示
     const sc=el("button",{class:"chip srcchip"+(AR.active?"":" active"), title:AR.active?"フィードに戻る（情報源フィルタ中）":"情報源フィルタを解除"});
     sc.style.setProperty("--c", catColor((S.articles.find(matchSource)||{}).category||"総合"));
@@ -1595,6 +1602,16 @@ function renderCats(){
   ac.append(el("span",{class:"chip__ic",html:ICON_ARCHIVE}), el("span",{text:"過去ログ"}));
   ac.onclick=()=>{ if(!AR.active) enterArchive(); };
   box.append(ac);
+  box.scrollLeft=keep;
+  if(AR.active) revealChip(ac);   // 過去ログタブは列の末尾。狭い画面（1280px 以下など）でも表示中のタブが見えるように
+}
+// 横にスクロールするカテゴリ列の中で、chip が見える位置までスクロールする（ページ自体は縦にも横にも動かさない）
+function revealChip(c){
+  const box=$("#cats"); if(!c || !box || !box.contains(c)) return;
+  const cs=getComputedStyle(box), padL=parseFloat(cs.paddingLeft)||0, padR=parseFloat(cs.paddingRight)||0;
+  const br=box.getBoundingClientRect(), r=c.getBoundingClientRect();
+  if(r.right > br.right-padR) box.scrollLeft += r.right-(br.right-padR);
+  else if(r.left < br.left+padL) box.scrollLeft -= (br.left+padL)-r.left;
 }
 function focusActiveChip(){ const c=$("#cats .chip.active"); if(c) try{ c.focus(); }catch(e){} }
 function renderTrend(){
@@ -1951,6 +1968,16 @@ function renderSources(){
   const notes=(S.srcRestored?[S.srcRestored]:[]).concat(S.srcNote||[]);   // 読み込めたが知らせたいこと
   notes.forEach(t=>box.append(el("div",{class:"srcnote", role:"status", text:"ℹ "+t})));
   if(locked){ box.append(srcProblemBox(S.srcProblem)); return; }
+  if(!S.sources.length && S.srcLoadFailed){   // サーバーから一覧を取れなかった（feeds.json の中身は分からない）
+    const e=el("div",{class:"empty",style:"padding:30px"});
+    const re=el("button",{class:"btn ghost sm", type:"button", text:"読み込み直す", title:"サーバーからもう一度読み込む"});
+    re.onclick=async()=>{ re.disabled=true; const d=await loadArticles(true); re.disabled=false; renderSources(); srcPanelFocus();
+      if(d) toast("情報源の一覧を読み込みました"); };
+    e.append(el("h3",{text:"サーバーから情報源の一覧を取得できません"}),
+             el("div",{text:"Prism のサーバーが応答していません。起動した画面（コンソール）にエラーが出ていないか確認し、サーバーを起動し直してから「読み込み直す」を押してください。"}),
+             el("div",{class:"srcempty__acts"},[re]));
+    box.append(e); return;
+  }
   if(!S.sources.length){
     const e=el("div",{class:"empty",style:"padding:30px"});
     e.append(el("h3",{text:"情報源がありません"}),
@@ -2016,7 +2043,10 @@ function srcProblemBox(p){
   }
   w.append(el("div",{class:"srcprob__path"},["ファイル: ", el("code",{text:p.path||"feeds.json"})]));
   const ul=el("ul");
-  [["文字コード","メモ帳などで開き「名前を付けて保存」→ 文字コード「UTF-8」を選んで保存し直す（Shift_JIS は自動で読み込みます）"],
+  [p.kind==="mixed_encoding"   // UTF-8 と Shift_JIS が混ざったファイルは、メモ帳で全体を保存し直すと残りの行が文字化けする
+     ? ["文字コード","一部の行だけ Shift_JIS（ANSI）になっています。表示された行の日本語を、UTF-8 で開けるエディタ（VS Code など）で入力し直して保存する（メモ帳でファイル全体を保存し直さない）"]
+     : ["文字コード","メモ帳などで開き「名前を付けて保存」→ 文字コード「UTF-8」を選んで保存し直す（Shift_JIS は自動で読み込みます）"],
+   ...(p.kind==="corrupt" ? [["見えない文字","NUL などの見えない文字が入っている・中身が NUL だけのときは、ファイルが壊れています。控えから戻すか、初期の情報源に戻す"]] : []),
    ["カンマ","項目の間のカンマ（,）の抜け・最後の項目の後の余分なカンマ・// コメントが無いか確認する"],
    ["競合の印","<<<<<<< ／ ======= ／ >>>>>>> の行が残っていれば、どちらか一方の内容を残して印の行を消す"],
    ["使用中","OneDrive・ウイルス対策・エディタ・Excel などが開いていれば閉じる"]].forEach(([k,v])=>{
@@ -2095,6 +2125,8 @@ function diagVerdict(diag){
   if(p.status===403||p.status===407||errl.includes("forbidden")||errl.includes("proxy authentication")) return ["warn","アクセス拒否（HTTP "+(p.status||"?")+"）。社内プロキシのカテゴリ制限／認証の可能性が高いです。管理者に news.google.com / bing.com の許可を依頼するか、代替を利用してください。"];
   if(errl.includes("urlerror")||errl.includes("timed out")||errl.includes("timeout")||errl.includes("refused")||errl.includes("name or service")||errl.includes("getaddrinfo")) return ["warn","接続できません（"+(p.error||"")+"）。プロキシ未経由／ブロック／DNS の可能性。プロキシ設定を確認してください。"];
   if(p.ok && !p.looks_like_feed) return ["warn","フィードではない応答（同意ページ／ブロックページの可能性。HTTP "+(p.status||"?")+", "+(p.content_type||"?")+"）。"];
+  if(p.parse_error && p.parse_error_kind==="internal")   // 配信元の XML の誤りではなく、Prism 側の処理で読めなかった
+    return ["warn","フィードは取得できましたが、Prism 側の処理で読み込めませんでした（"+p.parse_error+"）。配信元の不具合とは限りません。この表示を添えて Prism の管理者に連絡してください（ほかの情報源には影響しません）。"];
   if(p.parse_error) return ["warn","配信元のフィードの書式が壊れていて読めません（"+p.parse_error+"）。配信元の不具合です。直るまでこの情報源をオフにしてください。"];
   return ["warn", p.error ? ("取得エラー: "+p.error) : "記事0件（フィードが空、または内容が想定と異なります）。"];
 }
@@ -2241,7 +2273,8 @@ const AR_PAGE=30;   // 1回に読む件数（「さらに読み込む」で次�
 const AR_DEFAULT={q:"", days:"30", from:"", to:"", src:"", cat:"", order:"new"};
 const AR={active:false, f:Object.assign({},AR_DEFAULT), view:(store.get("arView","list")==="panel"?"panel":"list"),
           items:[], ids:new Set(), next:0, total:0, hasMore:false, stats:null, expanded:[],
-          seq:0, loading:false, loadingMore:false, error:"", feedScroll:0, qT:null, selSig:""};
+          seq:0, loading:false, loadingMore:false, error:"", feedScroll:0, qT:null, selSig:"",
+          qp:null, snap:null, orderUsed:"new", fts:true, qPending:false};   // qp/snap: ページ送りの間は1ページ目の条件・基準時刻を使う
 const pad2=n=>String(n).padStart(2,"0");
 function localDay(d){ return d.getFullYear()+"-"+pad2(d.getMonth()+1)+"-"+pad2(d.getDate()); }
 function validDay(s){ s=String(s||""); return (/^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(new Date(s+"T00:00:00").getTime())) ? s : ""; }
@@ -2269,10 +2302,12 @@ function arParseHash(h){
                          src:p.get("src"), cat:p.get("cat"), order:p.get("order")}),
            view:(v==="list"||v==="panel") ? v : null };
 }
+// 日付範囲（開始＞終了なら入れ替えた順）。入力欄は利用者が入力したとおりに残し、検索・URL でだけ並べ替える
+function arRange(){ const f=AR.f.from, t=AR.f.to; return (f && t && f>t) ? [t,f] : [f,t]; }
 function arHash(){
-  const f=AR.f, p=new URLSearchParams();
+  const f=AR.f, p=new URLSearchParams(), [from,to]=arRange();
   if(f.q) p.set("q",f.q);
-  if(f.from||f.to){ if(f.from) p.set("from",f.from); if(f.to) p.set("to",f.to); }
+  if(from||to){ if(from) p.set("from",from); if(to) p.set("to",to); }
   else p.set("days",f.days||AR_DEFAULT.days);
   if(f.src) p.set("src",f.src);
   if(f.cat) p.set("cat",f.cat);
@@ -2286,10 +2321,10 @@ function arSaveState(){   // 再読み込み・再訪で条件を復元（URL �
 }
 function arLoadSaved(){ try{ const v=sessionStorage.getItem("prism.archive"); return v ? arSanitize(JSON.parse(v)) : null; }catch(e){ return null; } }
 function arParams(offset){   // 条件 → /api/archive/search のクエリ
-  const f=AR.f, q=f.q.trim();
+  const f=AR.f, q=f.q.trim(), [from,to]=arRange();
   const p=new URLSearchParams({q, limit:String(AR_PAGE), offset:String(offset||0), dedup:"0",
                                order:(f.order==="rel" && q) ? "rel" : "new"});
-  if(f.from||f.to){ if(f.from) p.set("from",f.from); if(f.to) p.set("to",f.to); }
+  if(from||to){ if(from) p.set("from",from); if(to) p.set("to",to); }
   else if(f.days==="today") p.set("from", localDay(new Date()));   // 今日 = 今日の0時（ローカル）以降
   else if(f.days && f.days!=="all") p.set("days", f.days);
   if(f.src) p.set("sources", f.src);
@@ -2306,8 +2341,8 @@ function arTerms(){   // ハイライトする語: AND/OR の語（除外語・�
   return [...new Set(out)].slice(0,40);
 }
 function arPeriodText(){
-  const f=AR.f;
-  if(f.from||f.to) return (f.from||"…")+" 〜 "+(f.to||"…");
+  const f=AR.f, [from,to]=arRange();
+  if(from||to) return (from||"…")+" 〜 "+(to||"…");
   if(f.days==="all") return "すべての期間";
   if(f.days==="today") return "今日";
   return "直近"+((AR_PERIODS.find(p=>p[0]===f.days)||[0,f.days+"日"])[1]);
@@ -2328,21 +2363,24 @@ function enterArchive(opts){
   if(AR.active){ arFillControls(); arSearch(); return; }   // 履歴の移動などで条件だけ変わった
   AR.active=true; AR.feedScroll=window.scrollY||0;
   document.body.classList.add("arc-on"); $("#archive").hidden=false;
+  $("#q").disabled=true;   // 上部の検索欄（隠れたフィードの絞り込み）は過去ログ表示中は使わない
   renderCats(); syncArcToggles(); arFillControls();
   if(opts.history!==false){ try{ history.pushState({prism:"archive"}, "", arHash()); }catch(e){} }   // 「戻る」でフィードへ
   window.scrollTo(0,0);
   arSearch();
-  if(opts.focus!==false) setTimeout(()=>{ try{   // タッチ端末では見出しへ（いきなりキーボードを出さない）
-    (matchMedia("(pointer: coarse)").matches ? $("#arcTitle") : $("#arcQ")).focus({preventScroll:true}); }catch(e){} }, 30);
+  // フォーカスは見出しへ（キーワード欄には入れない）。開いた直後の H（フィードに戻る）・L（リスト／パネル）が
+  // 入力欄に文字として入って検索・保存されないように。キーワード欄へは「/」かクリックで
+  if(opts.focus!==false) setTimeout(()=>{ try{ $("#arcTitle").focus({preventScroll:true}); }catch(e){} }, 30);
 }
 function exitArchive(opts){
   opts=opts||{};
   if(!AR.active) return;
   AR.active=false; AR.seq++; AR.loading=AR.loadingMore=false; clearTimeout(AR.qT);   // 応答待ちの検索は捨てる
   document.body.classList.remove("arc-on"); $("#archive").hidden=true;
+  $("#q").disabled=false;
   if(opts.history!==false){ try{ history.pushState({prism:"feed"}, "", location.pathname+location.search); }catch(e){} }
   syncArcToggles();
-  if(!opts.silent) renderCats();
+  if(!opts.silent){ renderCats(); revealChip($("#cats .chip.active")); }
   window.scrollTo(0, AR.feedScroll||0);   // フィードは元のスクロール位置のまま
   if(opts.focus) setTimeout(()=>{ try{ $(opts.focus).focus({preventScroll:true}); }catch(e){} }, 30);
 }
@@ -2356,21 +2394,32 @@ window.addEventListener("popstate", ()=>{   // ブラウザの戻る／進む
 async function arSearch(more){
   if(!AR.active) return;
   clearTimeout(AR.qT);
+  if(more && AR.qPending) more=false;   // 条件を変えた直後（検索待ち）なら、続きではなく新しい条件で1ページ目から
+  AR.qPending=false;
   if(more && (AR.loading || !AR.hasMore)) return;
   const seq=++AR.seq, offset=more ? AR.next : 0;   // 連続操作で古い応答が新しい結果を上書きしないよう、最新だけ採用
+  // 「さらに読み込む」は1ページ目と同じ条件で続きを読む: 「今日」の日付・「直近N日」の基準時刻（as_of）・
+  // その時点までに保存された記事（upto）を固定し、関連順で境目の記事が抜けたり日付をまたいで期間が変わったりしないように
+  if(!more || !AR.qp){ AR.qp=arParams(0).toString(); AR.snap=null; }
+  const p=new URLSearchParams(AR.qp); p.set("offset", String(offset));
+  if(more && AR.snap){ p.set("as_of", AR.snap.as_of); p.set("upto", AR.snap.upto); }
   AR.loading=true; AR.loadingMore=!!more; AR.error="";
   if(more) arSyncMore(); else { arSaveState(); arRenderLoading(); }
   try{
-    const d=await api("/api/archive/search?"+arParams(offset).toString());
+    const d=await api("/api/archive/search?"+p.toString());
     if(seq!==AR.seq || !AR.active) return;
     const rows=d.articles||[];
-    if(!more){ AR.items=[]; AR.ids=new Set(); }
-    const fresh=rows.filter(a=>a && a.id && !AR.ids.has(a.id));   // 新着でページの境目がずれても重複させない
+    if(!more){
+      AR.items=[]; AR.ids=new Set();
+      AR.snap=(d.as_of!=null && d.upto!=null) ? {as_of:String(d.as_of), upto:String(d.upto)} : null;
+      AR.orderUsed=d.order_used || "new"; AR.fts=d.fts!==false;
+    }
+    const fresh=rows.filter(a=>a && a.id && !AR.ids.has(a.id));   // 念のため重複は除く
     fresh.forEach(a=>{ AR.ids.add(a.id); AR.items.push(a); });
     AR.next=offset+rows.length; AR.total=d.total||0; AR.hasMore=!!d.has_more && rows.length>0;
     AR.stats=d.stats||AR.stats; AR.expanded=d.expanded||[];
     AR.loading=AR.loadingMore=false;
-    arFillSelects(); arRenderCount(); arRenderExpand();
+    arFillSelects(); arSyncOrder(); arRenderCount(); arRenderExpand();
     if(more) arAppend(fresh, null, true); else arRenderResults();
     arSyncMore();
   }catch(e){
@@ -2382,7 +2431,7 @@ async function arSearch(more){
     arRenderCount(); arRenderResults(); arSyncMore();
   }
 }
-function arSearchSoon(){ clearTimeout(AR.qT); AR.qT=setTimeout(()=>arSearch(), 300); }   // 入力中はまとめて1回
+function arSearchSoon(){ clearTimeout(AR.qT); AR.qPending=true; AR.qT=setTimeout(()=>arSearch(), 300); }   // 入力中はまとめて1回
 
 // ---- 描画
 function arRenderLoading(){
@@ -2497,7 +2546,10 @@ function arRenderCount(){
   const conds=[arPeriodText()];
   if(AR.f.src){ const s=(st.sources||[]).find(x=>x.id===AR.f.src); conds.push(s ? (s.name||s.id) : AR.f.src); }
   if(AR.f.cat) conds.push(AR.f.cat);
-  if(AR.f.order==="rel" && AR.f.q.trim()) conds.push("関連順");
+  if(AR.f.order==="rel" && AR.f.q.trim()){   // サーバーが実際に使った並び（短い語だけなら関連順にならない）
+    conds.push(AR.orderUsed==="rel" ? "関連順"
+      : AR.fts ? "新しい順で表示（関連順は3文字以上の語で使えます）" : "新しい順で表示（この環境では関連順を使えません）");
+  }
   c.append(el("span",{class:"seg2",text:conds.join(" · ")}));
   if(st.oldest){
     const sp=el("span",{class:"seg2"}); sp.append(document.createTextNode("保存期間 "), el("b",{text:localDay(new Date(st.oldest*1000))}),
@@ -2532,7 +2584,9 @@ function arBuildPeriods(){
 function arSyncPeriods(){
   const custom=!!(AR.f.from||AR.f.to);
   $$("#arcPeriods .pchip").forEach(b=>b.setAttribute("aria-pressed", String(!custom && b.dataset.days===AR.f.days)));
-  $("#arcFrom").value=AR.f.from; $("#arcTo").value=AR.f.to;
+  // 入力中（フォーカスのある）日付欄には書き戻さない（キーボードで入力している途中の値を消さない）
+  [["#arcFrom","from"],["#arcTo","to"]].forEach(([sel,k])=>{ const i=$(sel);
+    if(i!==document.activeElement && (i.value!==AR.f[k] || (i.validity && i.validity.badInput))) i.value=AR.f[k]; });
   $("#arcRange").classList.toggle("on", custom);
 }
 function arSetPeriod(v){ AR.f.days=v; AR.f.from=""; AR.f.to=""; arSyncPeriods(); arSearch(); }
@@ -2551,8 +2605,8 @@ function arFillSelects(){   // 情報源・カテゴリの選択肢は過去ロ�
   }
   $("#arcSrc").value=AR.f.src; $("#arcCat").value=AR.f.cat;
 }
-function arSyncOrder(){   // 関連順はキーワードがあるときだけ
-  const has=!!AR.f.q.trim(), sel=$("#arcOrder");
+function arSyncOrder(){   // 関連順はキーワードがあるときだけ（全文索引 FTS5 が無い環境では使えない）
+  const has=!!AR.f.q.trim() && AR.fts!==false, sel=$("#arcOrder");
   sel.querySelector('option[value="rel"]').disabled=!has;
   if(!has && AR.f.order==="rel") AR.f.order="new";
   sel.value=AR.f.order;
@@ -2577,12 +2631,20 @@ $("#arcBack").onclick=()=>exitArchive({focus:"#archiveBtn"});
 $("#arcQ").addEventListener("input",(e)=>{ if(e.isComposing) return; AR.f.q=$("#arcQ").value; arSyncOrder(); arSearchSoon(); });
 $("#arcQ").addEventListener("compositionend",()=>{ AR.f.q=$("#arcQ").value; arSyncOrder(); arSearchSoon(); });   // 日本語入力の確定後に検索
 $("#arcQ").addEventListener("keydown",(e)=>{ if(e.key==="Enter" && !e.isComposing && e.keyCode!==229){ e.preventDefault(); AR.f.q=$("#arcQ").value; arSyncOrder(); arSearch(); } });
-const arRangeChanged=()=>{   // 日付を指定すると期間ボタンは解除。開始＞終了なら入れ替える
-  let f=validDay($("#arcFrom").value), t=validDay($("#arcTo").value);
-  if(f && t && f>t){ const x=f; f=t; t=x; }
-  AR.f.from=f; AR.f.to=t;
-  if(f||t) AR.f.days=""; else if(!AR.f.days) AR.f.days=AR_DEFAULT.days;
-  arSyncPeriods(); arSearch();
+// 日付欄の値。キーボード入力の途中（一部の欄が空・年が 0002 など）は undefined＝まだ条件に反映しない
+// （Chromium は入力の途中でも日付として成り立つたびに change を出すため）
+function arDateVal(inp){
+  if(inp.validity && inp.validity.badInput) return undefined;
+  if(!inp.value) return "";
+  const d=validDay(inp.value), y=d ? +d.slice(0,4) : 0;
+  return (y>=1970 && y<=2100) ? d : undefined;
+}
+const arRangeChanged=(e)=>{   // 日付を指定すると期間ボタンは解除。開始＞終了は検索のときに並べ替える（入力欄は書き換えない）
+  const inp=e.target, v=arDateVal(inp), k=inp.id==="arcFrom" ? "from" : "to";
+  if(v===undefined || AR.f[k]===v) return;
+  AR.f[k]=v;
+  if(AR.f.from||AR.f.to) AR.f.days=""; else if(!AR.f.days) AR.f.days=AR_DEFAULT.days;
+  arSyncPeriods(); arSearchSoon();   // 続けて入力しても検索は最後の1回だけ
 };
 $("#arcFrom").addEventListener("change", arRangeChanged);
 $("#arcTo").addEventListener("change", arRangeChanged);
@@ -2859,7 +2921,9 @@ $("#proxyTestBtn").onclick=async()=>{
     if(d.ok){
       out.className="hint ok";
       out.textContent="✓ 接続OK — "+d.proxy_mode+" で "+d.items+"件取得（"+d.elapsed_ms+"ms）。保存して再取得してください。"
-        +(d.parse_error?"（このフィードは配信元の書式が壊れています: "+d.parse_error+"）":"");
+        +(d.parse_error ? (d.parse_error_kind==="internal"
+            ? "（このフィードは Prism 側の処理で読み込めませんでした: "+d.parse_error+"）"
+            : "（このフィードは配信元の書式が壊れています: "+d.parse_error+"）") : "");
     }else{
       const e=(d.error||"").toLowerCase(); let hint="";
       if(d.status===407||e.includes("407")) hint="プロキシ認証(407)。URLを http://ユーザー名:パスワード@proxy:8080 形式にするか、px/cntlm の利用をご検討ください。";
@@ -3856,11 +3920,11 @@ document.addEventListener("keydown",(e)=>{
   const ae=document.activeElement; const typing=!!ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName);
   if(e.key==="Escape"){
     if(overlayStack.length) closeTop();
-    else if($("#q").value){ $("#q").value=""; S.q=""; renderGrid(); renderStatus(); renderTrend(); }
     else if(AR.active){   // 過去ログ: 入力欄では既定動作（キーワードのクリア）かフォーカスを外すだけ、それ以外はフィードに戻る
-      if(typing){ if(!(ae.id==="arcQ" && ae.value)) ae.blur(); }
+      if(typing){ if(!(ae.id==="arcQ" && ae.value)) ae.blur(); }   // （隠れたフィードの検索語はここでは消さない）
       else exitArchive({focus:"#archiveBtn"});
     }
+    else if($("#q").value){ $("#q").value=""; S.q=""; renderGrid(); renderStatus(); renderTrend(); }
     $("#q").blur(); return;
   }
   if(typing) return;
