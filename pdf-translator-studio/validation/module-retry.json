@@ -1,0 +1,17 @@
+{
+  "passed": true,
+  "failedAttempts": 2,
+  "sameDocumentRecovery": true,
+  "moduleRequests": [
+    "/vendor/pdf.mjs",
+    "/vendor/pdf.mjs?retry=1",
+    "/vendor/pdf.mjs?retry=2"
+  ],
+  "workerRequests": [
+    "/vendor/pdf.worker.mjs",
+    "/vendor/pdf.worker.mjs"
+  ],
+  "blockCount": 23,
+  "translatedCount": 21,
+  "pageErrors": []
+}

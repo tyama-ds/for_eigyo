@@ -1,0 +1,89 @@
+{
+  "Validator": "Microsoft OpenXML SDK",
+  "SDKVersion": "2.20.0.0",
+  "Schema": "Office2013",
+  "FileCount": 20,
+  "ErrorCount": 0,
+  "Files": [
+    {
+      "File": "demo-a4\\export-1.docx",
+      "Errors": []
+    },
+    {
+      "File": "demo-a4\\export-1.pptx",
+      "Errors": []
+    },
+    {
+      "File": "demo-a4\\export-2.docx",
+      "Errors": []
+    },
+    {
+      "File": "demo-a4\\export-2.pptx",
+      "Errors": []
+    },
+    {
+      "File": "demo-a4\\export-3.docx",
+      "Errors": []
+    },
+    {
+      "File": "demo-a4\\export-3.pptx",
+      "Errors": []
+    },
+    {
+      "File": "layout-colors\\export-1.docx",
+      "Errors": []
+    },
+    {
+      "File": "layout-colors\\export-1.pptx",
+      "Errors": []
+    },
+    {
+      "File": "layout-colors\\export-2.docx",
+      "Errors": []
+    },
+    {
+      "File": "layout-colors\\export-2.pptx",
+      "Errors": []
+    },
+    {
+      "File": "layout-colors\\export-3.docx",
+      "Errors": []
+    },
+    {
+      "File": "layout-colors\\export-3.pptx",
+      "Errors": []
+    },
+    {
+      "File": "mixed-sizes\\export-1.docx",
+      "Errors": []
+    },
+    {
+      "File": "mixed-sizes\\export-1.pptx",
+      "Errors": []
+    },
+    {
+      "File": "mixed-sizes\\export-2.docx",
+      "Errors": []
+    },
+    {
+      "File": "mixed-sizes\\export-2.pptx",
+      "Errors": []
+    },
+    {
+      "File": "mixed-sizes\\export-3.docx",
+      "Errors": []
+    },
+    {
+      "File": "mixed-sizes\\export-3.pptx",
+      "Errors": []
+    },
+    {
+      "File": "ui-sample.docx",
+      "Errors": []
+    },
+    {
+      "File": "ui-sample.pptx",
+      "Errors": []
+    }
+  ]
+}

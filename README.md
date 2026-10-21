@@ -34,6 +34,7 @@ Patent Atlas は初回に専用の仮想環境と依存パッケージを準備�
 | [tensorium/](tensorium/) | Tensorium — CSV / XLSX を入れて Transformer（BERT ファインチューニング / SentenceBERT + MLP / ゼロから学習 / FT-Transformer）で回帰・分類を行う GUI スタジオ。列型自動判定・学習曲線のライブ表示・混同行列 / 散布図で評価・新データへの一括予測。サーバは標準ライブラリのみ、学習は PyTorch（CPU / GPU）、オフライン・ローカルモデル対応 |
 | [research-atlas/](research-atlas/) | Research Atlas — 公開論文・Scopus CSVの研究分野、NMF技術マップ、共著ネットワーク、引用・年次動向を分析。Rocchio反復探索、原文に基づくローカルLLM / OpenAI評論、照合警告付きPDF・CSV出力。Python 3.11以降と依存インストールが必要。LLM API・proxy設定はブラウザに保存 |
 | [mycel/](mycel/) | Mycel — ローカルの Markdown フォルダを、つながるノートに。[[リンク]]・バックリンク・グラフ・全文検索・デイリーノート・テンプレート、ノートに質問（RAG）・要約・リンク候補の AI 機能（OpenAI 互換 / Azure OpenAI）。共有に備えたプラグイン機構つき（標準ライブラリのみ） |
+| [pdf-translator-studio/](pdf-translator-studio/) | PDF Lingua — PDF の文字領域をローカルLLM / OpenAIで翻訳し、元の配置を参照して編集。PDF・Word・PowerPointへページ画像として出力。プロキシ設定はアプリに保存（Node.js 24.5以降、npm install不要） |
 | [launcher/](launcher/) | App Portal — 上記アプリ群を呼び出す窓口 |
 | [patent-atlas/](patent-atlas/) | Patent Atlas — IPC・Fターム候補の選択、特許CSVの可視化と要不要判定、学習・LLM判定からの検索式更新、探索ラボと統括ワークフロー、収束グラフ（Python + HTML/JS、ローカルLLM対応） |
 
@@ -41,3 +42,8 @@ Research Atlas をポータルから使う場合は、最初に
 [専用仮想環境と依存パッケージを準備](launcher/README.md)してください。
 カードからの起動先は `http://127.0.0.1:8778` です。単独起動の手順は
 [Research Atlas README](research-atlas/README.md)にあります。
+
+PDF Lingua はリポジトリのルートで `cd pdf-translator-studio`、続けて
+`node launch.mjs` を実行し、`http://127.0.0.1:4173` を開いて使用します。
+接続設定・出力形式の制約・検証範囲は [PDF Lingua README](pdf-translator-studio/README.md)を参照してください。
+Word / PowerPoint の出力は配置を保つためのページ画像で、文字や表を直接編集できる形式ではありません。

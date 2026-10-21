@@ -1,0 +1,172 @@
+{
+  "date": "2026-10-21",
+  "version": "1.2.1",
+  "status": "passed",
+  "beforeFix": {
+    "status": "failed",
+    "elapsedMs": 112590,
+    "blocks": 24,
+    "error": "翻訳結果のIDまたはJSON形式が不正です。モデルを変更するか、対象領域を減らしてください。",
+    "finishReason": "stop",
+    "usage": {
+      "prompt_tokens": 676,
+      "completion_tokens": 512,
+      "total_tokens": 1188,
+      "completion_tokens_details": {
+        "reasoning_tokens": 0
+      }
+    },
+    "expectedRegions": 24,
+    "receivedRegions": 22,
+    "missingIds": [
+      "p269-b23",
+      "p269-b24"
+    ]
+  },
+  "afterFix": {
+    "status": "passed",
+    "provider": "local",
+    "model": "google/gemma-3n-e4b",
+    "source": "User-provided public annual report, page 269, first 24 regions",
+    "realApiCalls": 5,
+    "elapsedMs": 208365,
+    "expectedRegions": 24,
+    "receivedRegions": 24,
+    "requests": [
+      {
+        "inputIds": [
+          "p269-b1",
+          "p269-b2",
+          "p269-b3",
+          "p269-b4",
+          "p269-b5",
+          "p269-b6",
+          "p269-b7",
+          "p269-b8"
+        ],
+        "format": "json_schema",
+        "elapsedMs": 43770,
+        "finishReason": "stop",
+        "usage": {
+          "prompt_tokens": 300,
+          "completion_tokens": 177,
+          "total_tokens": 477,
+          "completion_tokens_details": {
+            "reasoning_tokens": 0
+          }
+        }
+      },
+      {
+        "inputIds": [
+          "p269-b9",
+          "p269-b10",
+          "p269-b11",
+          "p269-b12",
+          "p269-b13",
+          "p269-b14",
+          "p269-b15",
+          "p269-b16"
+        ],
+        "format": "json_schema",
+        "elapsedMs": 57483,
+        "finishReason": "stop",
+        "usage": {
+          "prompt_tokens": 362,
+          "completion_tokens": 244,
+          "total_tokens": 606,
+          "completion_tokens_details": {
+            "reasoning_tokens": 0
+          }
+        }
+      },
+      {
+        "inputIds": [
+          "p269-b9",
+          "p269-b10",
+          "p269-b11",
+          "p269-b12"
+        ],
+        "format": "json_schema",
+        "elapsedMs": 29506,
+        "finishReason": "stop",
+        "usage": {
+          "prompt_tokens": 238,
+          "completion_tokens": 120,
+          "total_tokens": 358,
+          "completion_tokens_details": {
+            "reasoning_tokens": 0
+          }
+        }
+      },
+      {
+        "inputIds": [
+          "p269-b13",
+          "p269-b14",
+          "p269-b15",
+          "p269-b16"
+        ],
+        "format": "json_schema",
+        "elapsedMs": 36668,
+        "finishReason": "stop",
+        "usage": {
+          "prompt_tokens": 254,
+          "completion_tokens": 157,
+          "total_tokens": 411,
+          "completion_tokens_details": {
+            "reasoning_tokens": 0
+          }
+        }
+      },
+      {
+        "inputIds": [
+          "p269-b17",
+          "p269-b18",
+          "p269-b19",
+          "p269-b20",
+          "p269-b21",
+          "p269-b22",
+          "p269-b23",
+          "p269-b24"
+        ],
+        "format": "json_schema",
+        "elapsedMs": 40683,
+        "finishReason": "stop",
+        "usage": {
+          "prompt_tokens": 291,
+          "completion_tokens": 165,
+          "total_tokens": 456,
+          "completion_tokens_details": {
+            "reasoning_tokens": 0
+          }
+        }
+      }
+    ],
+    "translations": {
+      "p269-b1": "中复神鹰カーボンファイバー株式会社",
+      "p269-b2": "年次報告書",
+      "p269-b3": "2025年",
+      "p269-b4": "上記各项以外の営業外収益および費用",
+      "p269-b5": "-9,616,386.81",
+      "p269-b6": "特別損益に該当する項目",
+      "p269-b7": "減：法人税効果額",
+      "p269-b8": "4,063,567.06",
+      "p269-b9": "少数株主权益影響額（税後）",
+      "p269-b10": "合計",
+      "p269-b11": "27,545,050.47",
+      "p269-b12": "会社が「開示情報に関する個別銘柄の非継続的損益に関する説明会第1号」に記載されていない項目を認識していること",
+      "p269-b13": "通常非一時的な損益項目と見なされ、金額が重要なもの、および「公表すべき有価証券に関する会社情報開示の説明資料第1号」に列挙されている「一時的損益」に該当する項目を定めます。",
+      "p269-b14": "一時的損益として分類されている項目が、通常損益の項目に該当する場合、その理由を説明する必要があります。",
+      "p269-b15": "√ 該当する □ 該当しない",
+      "p269-b16": "単位：元",
+      "p269-b17": "通貨：人民元",
+      "p269-b18": "項目",
+      "p269-b19": "関連金額",
+      "p269-b20": "理由",
+      "p269-b21": "その他の収益",
+      "p269-b22": "7,955,396.19",
+      "p269-b23": "付加価値税の加計控除によるもの",
+      "p269-b24": "会社の通常の事業活動と密接に関連するもの"
+    }
+  },
+  "scope": "Real local LM Studio API only; no full-document or live OpenAI/proxy test"
+}

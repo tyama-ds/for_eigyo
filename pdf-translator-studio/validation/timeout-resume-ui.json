@@ -1,0 +1,217 @@
+{
+  "version": "1.3.1",
+  "date": "2026-10-21",
+  "status": "passed",
+  "automatedNodeTests": 131,
+  "browser": "Codex in-app browser",
+  "document": "Built-in fieldnotes-sample.pdf (23 regions)",
+  "testText": "Synthetic Japanese labels from local QA upstream; not real translation output",
+  "deadlineCase": {
+    "deadlineSeconds": 30,
+    "secondRequest": "Upstream accepts request but sends no response",
+    "observedAppHttpStatus": 504,
+    "completedRetained": 4,
+    "remainingAtFailure": 19,
+    "completedAfterResume": 23,
+    "resumeButtonHiddenAfterCompletion": true,
+    "stats": {
+      "requests": [
+        [
+          "p1-b1",
+          "p1-b2",
+          "p1-b3",
+          "p1-b4"
+        ],
+        [
+          "p1-b5",
+          "p1-b6",
+          "p1-b7",
+          "p1-b8"
+        ],
+        [
+          "p1-b5",
+          "p1-b6",
+          "p1-b7",
+          "p1-b8"
+        ],
+        [
+          "p1-b9",
+          "p1-b10",
+          "p1-b11",
+          "p1-b12"
+        ],
+        [
+          "p1-b13",
+          "p1-b14",
+          "p1-b15",
+          "p1-b16"
+        ],
+        [
+          "p1-b17",
+          "p1-b18",
+          "p1-b19",
+          "p1-b20"
+        ],
+        [
+          "p1-b21",
+          "p1-b22",
+          "p1-b23"
+        ]
+      ],
+      "successful": [
+        "p1-b1",
+        "p1-b2",
+        "p1-b3",
+        "p1-b4",
+        "p1-b5",
+        "p1-b6",
+        "p1-b7",
+        "p1-b8",
+        "p1-b9",
+        "p1-b10",
+        "p1-b11",
+        "p1-b12",
+        "p1-b13",
+        "p1-b14",
+        "p1-b15",
+        "p1-b16",
+        "p1-b17",
+        "p1-b18",
+        "p1-b19",
+        "p1-b20",
+        "p1-b21",
+        "p1-b22",
+        "p1-b23"
+      ],
+      "failed": [
+        "p1-b5",
+        "p1-b6",
+        "p1-b7",
+        "p1-b8"
+      ]
+    }
+  },
+  "settingsCase": {
+    "initialDefaults": {
+      "localTimeoutSeconds": 600,
+      "openaiTimeoutSeconds": 180,
+      "localBatchBlocks": 4,
+      "localBatchCharacters": 1000
+    },
+    "savedLocalTimeoutSeconds": 900,
+    "savedLocalBatchBlocks": 2,
+    "resumedBatchSizes": [
+      2,
+      2,
+      2,
+      2,
+      2,
+      2,
+      2,
+      2,
+      2,
+      1
+    ],
+    "upstreamHttpStatus": 504,
+    "mappedAppHttpStatus": 502,
+    "completedRetained": 4,
+    "completedAfterResume": 23,
+    "skipAlreadyTranslated": "No extra requests; visible UI reports no untranslated regions",
+    "stats": {
+      "requests": [
+        [
+          "p1-b1",
+          "p1-b2",
+          "p1-b3",
+          "p1-b4"
+        ],
+        [
+          "p1-b5",
+          "p1-b6",
+          "p1-b7",
+          "p1-b8"
+        ],
+        [
+          "p1-b5",
+          "p1-b6"
+        ],
+        [
+          "p1-b7",
+          "p1-b8"
+        ],
+        [
+          "p1-b9",
+          "p1-b10"
+        ],
+        [
+          "p1-b11",
+          "p1-b12"
+        ],
+        [
+          "p1-b13",
+          "p1-b14"
+        ],
+        [
+          "p1-b15",
+          "p1-b16"
+        ],
+        [
+          "p1-b17",
+          "p1-b18"
+        ],
+        [
+          "p1-b19",
+          "p1-b20"
+        ],
+        [
+          "p1-b21",
+          "p1-b22"
+        ],
+        [
+          "p1-b23"
+        ]
+      ],
+      "successful": [
+        "p1-b1",
+        "p1-b2",
+        "p1-b3",
+        "p1-b4",
+        "p1-b5",
+        "p1-b6",
+        "p1-b7",
+        "p1-b8",
+        "p1-b9",
+        "p1-b10",
+        "p1-b11",
+        "p1-b12",
+        "p1-b13",
+        "p1-b14",
+        "p1-b15",
+        "p1-b16",
+        "p1-b17",
+        "p1-b18",
+        "p1-b19",
+        "p1-b20",
+        "p1-b21",
+        "p1-b22",
+        "p1-b23"
+      ],
+      "failed": [
+        "p1-b5",
+        "p1-b6",
+        "p1-b7",
+        "p1-b8"
+      ]
+    }
+  },
+  "limitations": [
+    "No full long-document real translation in this run.",
+    "No OpenAI paid API or real corporate proxy used.",
+    "GUI project-data save was clicked, but browser automation download event timed out; downloaded file was not independently inspected in this run."
+  ],
+  "screenshots": [
+    "timeout-settings-ui.jpg",
+    "timeout-partial-ui.jpg",
+    "timeout-resume-ui.jpg"
+  ]
+}

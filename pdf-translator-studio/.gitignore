@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+tmp/
+output/
+data/
+node_modules/
+.sites-runtime/
+.openai/
+__pycache__/
+*.pyc
+*.log
