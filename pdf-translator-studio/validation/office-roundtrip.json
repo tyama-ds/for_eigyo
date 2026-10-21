@@ -1,0 +1,6257 @@
+{
+  "summary": {
+    "status": "passed",
+    "completenessErrors": [],
+    "expectedDocumentChecks": 27,
+    "expectedOfficeConversions": 18,
+    "conversionExitCode": 0,
+    "documentChecks": 27,
+    "pageChecks": 45,
+    "passedDocuments": 27,
+    "passedPages": 45,
+    "maxMeanAbsoluteChannelError": 1.035298,
+    "maxForegroundBoundsShiftPx": 1,
+    "registrationChecks": 135,
+    "maxRegistrationBoundsShiftPx": 2,
+    "maxRegistrationCentroidShiftPx": 1.45,
+    "cases": [
+      "demo-a4",
+      "layout-colors",
+      "mixed-sizes"
+    ],
+    "nativeOfficeConversions": 18,
+    "repeatabilityChecks": 15,
+    "identicalThreeRunRenders": 15,
+    "comparison": "Microsoft Office read-only import + native PDF export, independent PDFium rasterization, no image alignment"
+  },
+  "comparatorControls": [
+    {
+      "name": "identical",
+      "expectedAccepted": true,
+      "actualAccepted": true,
+      "status": "passed"
+    },
+    {
+      "name": "six-pixel-shift",
+      "expectedAccepted": false,
+      "actualAccepted": false,
+      "status": "passed"
+    },
+    {
+      "name": "blank-page",
+      "expectedAccepted": false,
+      "actualAccepted": false,
+      "status": "passed"
+    },
+    {
+      "name": "bottom-clipping",
+      "expectedAccepted": false,
+      "actualAccepted": false,
+      "status": "passed"
+    },
+    {
+      "name": "aspect-distortion",
+      "expectedAccepted": false,
+      "actualAccepted": false,
+      "status": "passed"
+    },
+    {
+      "name": "single-registration-shift",
+      "expectedAccepted": false,
+      "actualAccepted": false,
+      "status": "passed"
+    }
+  ],
+  "repeatability": [
+    {
+      "case": "demo-a4",
+      "format": "docx",
+      "page": 1,
+      "repetitions": 3,
+      "identicalRenderedPixels": true
+    },
+    {
+      "case": "demo-a4",
+      "format": "pdf",
+      "page": 1,
+      "repetitions": 3,
+      "identicalRenderedPixels": true
+    },
+    {
+      "case": "demo-a4",
+      "format": "pptx",
+      "page": 1,
+      "repetitions": 3,
+      "identicalRenderedPixels": true
+    },
+    {
+      "case": "layout-colors",
+      "format": "docx",
+      "page": 1,
+      "repetitions": 3,
+      "identicalRenderedPixels": true
+    },
+    {
+      "case": "layout-colors",
+      "format": "pdf",
+      "page": 1,
+      "repetitions": 3,
+      "identicalRenderedPixels": true
+    },
+    {
+      "case": "layout-colors",
+      "format": "pptx",
+      "page": 1,
+      "repetitions": 3,
+      "identicalRenderedPixels": true
+    },
+    {
+      "case": "mixed-sizes",
+      "format": "docx",
+      "page": 1,
+      "repetitions": 3,
+      "identicalRenderedPixels": true
+    },
+    {
+      "case": "mixed-sizes",
+      "format": "docx",
+      "page": 2,
+      "repetitions": 3,
+      "identicalRenderedPixels": true
+    },
+    {
+      "case": "mixed-sizes",
+      "format": "docx",
+      "page": 3,
+      "repetitions": 3,
+      "identicalRenderedPixels": true
+    },
+    {
+      "case": "mixed-sizes",
+      "format": "pdf",
+      "page": 1,
+      "repetitions": 3,
+      "identicalRenderedPixels": true
+    },
+    {
+      "case": "mixed-sizes",
+      "format": "pdf",
+      "page": 2,
+      "repetitions": 3,
+      "identicalRenderedPixels": true
+    },
+    {
+      "case": "mixed-sizes",
+      "format": "pdf",
+      "page": 3,
+      "repetitions": 3,
+      "identicalRenderedPixels": true
+    },
+    {
+      "case": "mixed-sizes",
+      "format": "pptx",
+      "page": 1,
+      "repetitions": 3,
+      "identicalRenderedPixels": true
+    },
+    {
+      "case": "mixed-sizes",
+      "format": "pptx",
+      "page": 2,
+      "repetitions": 3,
+      "identicalRenderedPixels": true
+    },
+    {
+      "case": "mixed-sizes",
+      "format": "pptx",
+      "page": 3,
+      "repetitions": 3,
+      "identicalRenderedPixels": true
+    }
+  ],
+  "criteria": {
+    "pageDimensionTolerancePt": 0.1,
+    "rasterRoundingTolerancePx": 1,
+    "meanAbsoluteChannelErrorMaximum": 4,
+    "blurredChannelErrorMaximum": 2,
+    "pixelsDifferingOver48MaximumFraction": 0.02,
+    "foregroundBoundsTolerancePx": 2,
+    "weightedInkCoverageToleranceFraction": 0.05,
+    "registrationBoundsAndCentroidTolerancePx": 2,
+    "registrationAreaToleranceFraction": 0.1,
+    "notes": "Registration checks use named solid regions from fixture geometry; binary foreground coverage is diagnostic only because antialiasing changes thresholded edge-pixel counts."
+  },
+  "contactSheets": [
+    "tmp\\office-qa\\roundtrip-final\\contact-demo-a4.png",
+    "tmp\\office-qa\\roundtrip-final\\contact-layout-colors.png",
+    "tmp\\office-qa\\roundtrip-final\\contact-mixed-sizes.png"
+  ],
+  "results": [
+    {
+      "pdf": "tmp\\office-qa\\fixtures\\final-run\\demo-a4\\export-1.pdf",
+      "pageCount": 1,
+      "expectedPageCount": 1,
+      "pages": [
+        {
+          "page": 1,
+          "widthPt": 595.280029296875,
+          "heightPt": 841.8900146484375,
+          "expectedWidthPt": 595.28,
+          "expectedHeightPt": 841.89,
+          "actualPixels": [
+            1341,
+            1896
+          ],
+          "expectedPixels": [
+            1340,
+            1895
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\demo-a4\\export-1\\pdf\\page-1.png",
+          "errors": [],
+          "roundingEdgeAdjusted": true,
+          "meanAbsoluteChannelError": 0.859514,
+          "blurredMeanAbsoluteChannelError": 0.670198,
+          "pixelsOver48Fraction": 0.005855,
+          "expectedForegroundBounds": [
+            0,
+            0,
+            1339,
+            1795
+          ],
+          "actualForegroundBounds": [
+            0,
+            0,
+            1339,
+            1796
+          ],
+          "maxForegroundBoundsShiftPx": 1,
+          "foregroundCoverageRatio": 1.009415,
+          "weightedInkCoverageRatio": 1.001269,
+          "colorLandmarks": [
+            {
+              "name": "green-header-left-edge",
+              "roi": [
+                0,
+                0,
+                56,
+                438
+              ],
+              "rgb": [
+                30,
+                92,
+                81
+              ],
+              "expectedBounds": [
+                0,
+                0,
+                55,
+                426
+              ],
+              "actualBounds": [
+                0,
+                0,
+                55,
+                426
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "gold-circle",
+              "roi": [
+                1065,
+                1536,
+                1208,
+                1678
+              ],
+              "rgb": [
+                233,
+                215,
+                173
+              ],
+              "expectedBounds": [
+                11,
+                10,
+                131,
+                130
+              ],
+              "actualBounds": [
+                12,
+                11,
+                132,
+                131
+              ],
+              "maxBoundsShiftPx": 1,
+              "centroidShiftPx": 0.9123,
+              "coverageRatio": 1.000498
+            }
+          ],
+          "status": "passed"
+        }
+      ],
+      "errors": [],
+      "status": "passed",
+      "case": "demo-a4",
+      "run": "export-1",
+      "format": "pdf",
+      "renderer": "PDFium"
+    },
+    {
+      "pdf": "tmp\\office-qa\\fixtures\\final-run\\demo-a4\\export-2.pdf",
+      "pageCount": 1,
+      "expectedPageCount": 1,
+      "pages": [
+        {
+          "page": 1,
+          "widthPt": 595.280029296875,
+          "heightPt": 841.8900146484375,
+          "expectedWidthPt": 595.28,
+          "expectedHeightPt": 841.89,
+          "actualPixels": [
+            1341,
+            1896
+          ],
+          "expectedPixels": [
+            1340,
+            1895
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\demo-a4\\export-2\\pdf\\page-1.png",
+          "errors": [],
+          "roundingEdgeAdjusted": true,
+          "meanAbsoluteChannelError": 0.859514,
+          "blurredMeanAbsoluteChannelError": 0.670198,
+          "pixelsOver48Fraction": 0.005855,
+          "expectedForegroundBounds": [
+            0,
+            0,
+            1339,
+            1795
+          ],
+          "actualForegroundBounds": [
+            0,
+            0,
+            1339,
+            1796
+          ],
+          "maxForegroundBoundsShiftPx": 1,
+          "foregroundCoverageRatio": 1.009415,
+          "weightedInkCoverageRatio": 1.001269,
+          "colorLandmarks": [
+            {
+              "name": "green-header-left-edge",
+              "roi": [
+                0,
+                0,
+                56,
+                438
+              ],
+              "rgb": [
+                30,
+                92,
+                81
+              ],
+              "expectedBounds": [
+                0,
+                0,
+                55,
+                426
+              ],
+              "actualBounds": [
+                0,
+                0,
+                55,
+                426
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "gold-circle",
+              "roi": [
+                1065,
+                1536,
+                1208,
+                1678
+              ],
+              "rgb": [
+                233,
+                215,
+                173
+              ],
+              "expectedBounds": [
+                11,
+                10,
+                131,
+                130
+              ],
+              "actualBounds": [
+                12,
+                11,
+                132,
+                131
+              ],
+              "maxBoundsShiftPx": 1,
+              "centroidShiftPx": 0.9123,
+              "coverageRatio": 1.000498
+            }
+          ],
+          "status": "passed"
+        }
+      ],
+      "errors": [],
+      "status": "passed",
+      "case": "demo-a4",
+      "run": "export-2",
+      "format": "pdf",
+      "renderer": "PDFium"
+    },
+    {
+      "pdf": "tmp\\office-qa\\fixtures\\final-run\\demo-a4\\export-3.pdf",
+      "pageCount": 1,
+      "expectedPageCount": 1,
+      "pages": [
+        {
+          "page": 1,
+          "widthPt": 595.280029296875,
+          "heightPt": 841.8900146484375,
+          "expectedWidthPt": 595.28,
+          "expectedHeightPt": 841.89,
+          "actualPixels": [
+            1341,
+            1896
+          ],
+          "expectedPixels": [
+            1340,
+            1895
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\demo-a4\\export-3\\pdf\\page-1.png",
+          "errors": [],
+          "roundingEdgeAdjusted": true,
+          "meanAbsoluteChannelError": 0.859514,
+          "blurredMeanAbsoluteChannelError": 0.670198,
+          "pixelsOver48Fraction": 0.005855,
+          "expectedForegroundBounds": [
+            0,
+            0,
+            1339,
+            1795
+          ],
+          "actualForegroundBounds": [
+            0,
+            0,
+            1339,
+            1796
+          ],
+          "maxForegroundBoundsShiftPx": 1,
+          "foregroundCoverageRatio": 1.009415,
+          "weightedInkCoverageRatio": 1.001269,
+          "colorLandmarks": [
+            {
+              "name": "green-header-left-edge",
+              "roi": [
+                0,
+                0,
+                56,
+                438
+              ],
+              "rgb": [
+                30,
+                92,
+                81
+              ],
+              "expectedBounds": [
+                0,
+                0,
+                55,
+                426
+              ],
+              "actualBounds": [
+                0,
+                0,
+                55,
+                426
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "gold-circle",
+              "roi": [
+                1065,
+                1536,
+                1208,
+                1678
+              ],
+              "rgb": [
+                233,
+                215,
+                173
+              ],
+              "expectedBounds": [
+                11,
+                10,
+                131,
+                130
+              ],
+              "actualBounds": [
+                12,
+                11,
+                132,
+                131
+              ],
+              "maxBoundsShiftPx": 1,
+              "centroidShiftPx": 0.9123,
+              "coverageRatio": 1.000498
+            }
+          ],
+          "status": "passed"
+        }
+      ],
+      "errors": [],
+      "status": "passed",
+      "case": "demo-a4",
+      "run": "export-3",
+      "format": "pdf",
+      "renderer": "PDFium"
+    },
+    {
+      "case": "demo-a4",
+      "source": "tmp\\office-qa\\fixtures\\final-run\\demo-a4\\export-1.docx",
+      "format": "docx",
+      "pdf": "tmp\\office-qa\\roundtrip-final\\demo-a4\\export-1\\docx\\rendered.pdf",
+      "status": "passed",
+      "renderer": "Microsoft Word",
+      "version": "16.0",
+      "build": "16.0.4266",
+      "pageCount": 1,
+      "sectionCount": 1,
+      "run": "export-1",
+      "expectedPageCount": 1,
+      "pages": [
+        {
+          "page": 1,
+          "widthPt": 595.3200073242188,
+          "heightPt": 841.9199829101562,
+          "expectedWidthPt": 595.28,
+          "expectedHeightPt": 841.89,
+          "actualPixels": [
+            1341,
+            1896
+          ],
+          "expectedPixels": [
+            1340,
+            1895
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\demo-a4\\export-1\\docx\\page-1.png",
+          "errors": [],
+          "roundingEdgeAdjusted": true,
+          "meanAbsoluteChannelError": 0.859514,
+          "blurredMeanAbsoluteChannelError": 0.670198,
+          "pixelsOver48Fraction": 0.005855,
+          "expectedForegroundBounds": [
+            0,
+            0,
+            1339,
+            1795
+          ],
+          "actualForegroundBounds": [
+            0,
+            0,
+            1339,
+            1796
+          ],
+          "maxForegroundBoundsShiftPx": 1,
+          "foregroundCoverageRatio": 1.009415,
+          "weightedInkCoverageRatio": 1.001269,
+          "colorLandmarks": [
+            {
+              "name": "green-header-left-edge",
+              "roi": [
+                0,
+                0,
+                56,
+                438
+              ],
+              "rgb": [
+                30,
+                92,
+                81
+              ],
+              "expectedBounds": [
+                0,
+                0,
+                55,
+                426
+              ],
+              "actualBounds": [
+                0,
+                0,
+                55,
+                426
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "gold-circle",
+              "roi": [
+                1065,
+                1536,
+                1208,
+                1678
+              ],
+              "rgb": [
+                233,
+                215,
+                173
+              ],
+              "expectedBounds": [
+                11,
+                10,
+                131,
+                130
+              ],
+              "actualBounds": [
+                12,
+                11,
+                132,
+                131
+              ],
+              "maxBoundsShiftPx": 1,
+              "centroidShiftPx": 0.9123,
+              "coverageRatio": 1.000498
+            }
+          ],
+          "status": "passed"
+        }
+      ],
+      "errors": []
+    },
+    {
+      "case": "demo-a4",
+      "source": "tmp\\office-qa\\fixtures\\final-run\\demo-a4\\export-1.pptx",
+      "format": "pptx",
+      "pdf": "tmp\\office-qa\\roundtrip-final\\demo-a4\\export-1\\pptx\\rendered.pdf",
+      "status": "passed",
+      "renderer": "Microsoft PowerPoint",
+      "version": "16.0",
+      "build": "4266",
+      "pageCount": 1,
+      "widthPt": 595.25,
+      "heightPt": 841.875,
+      "run": "export-1",
+      "expectedPageCount": 1,
+      "pages": [
+        {
+          "page": 1,
+          "widthPt": 595.2000122070312,
+          "heightPt": 841.9199829101562,
+          "expectedWidthPt": 595.28,
+          "expectedHeightPt": 841.89,
+          "actualPixels": [
+            1340,
+            1896
+          ],
+          "expectedPixels": [
+            1340,
+            1895
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\demo-a4\\export-1\\pptx\\page-1.png",
+          "errors": [],
+          "roundingEdgeAdjusted": true,
+          "meanAbsoluteChannelError": 1.035298,
+          "blurredMeanAbsoluteChannelError": 0.873751,
+          "pixelsOver48Fraction": 0.00742,
+          "expectedForegroundBounds": [
+            0,
+            0,
+            1338,
+            1795
+          ],
+          "actualForegroundBounds": [
+            0,
+            0,
+            1339,
+            1796
+          ],
+          "maxForegroundBoundsShiftPx": 1,
+          "foregroundCoverageRatio": 1.002665,
+          "weightedInkCoverageRatio": 1.000918,
+          "colorLandmarks": [
+            {
+              "name": "green-header-left-edge",
+              "roi": [
+                0,
+                0,
+                56,
+                438
+              ],
+              "rgb": [
+                30,
+                92,
+                81
+              ],
+              "expectedBounds": [
+                0,
+                0,
+                55,
+                426
+              ],
+              "actualBounds": [
+                0,
+                0,
+                55,
+                425
+              ],
+              "maxBoundsShiftPx": 1,
+              "centroidShiftPx": 0.5,
+              "coverageRatio": 0.997658
+            },
+            {
+              "name": "gold-circle",
+              "roi": [
+                1065,
+                1536,
+                1208,
+                1678
+              ],
+              "rgb": [
+                233,
+                215,
+                173
+              ],
+              "expectedBounds": [
+                10,
+                9,
+                130,
+                129
+              ],
+              "actualBounds": [
+                11,
+                11,
+                132,
+                131
+              ],
+              "maxBoundsShiftPx": 2,
+              "centroidShiftPx": 1.45,
+              "coverageRatio": 1.005903
+            }
+          ],
+          "status": "passed"
+        }
+      ],
+      "errors": []
+    },
+    {
+      "case": "demo-a4",
+      "source": "tmp\\office-qa\\fixtures\\final-run\\demo-a4\\export-2.docx",
+      "format": "docx",
+      "pdf": "tmp\\office-qa\\roundtrip-final\\demo-a4\\export-2\\docx\\rendered.pdf",
+      "status": "passed",
+      "renderer": "Microsoft Word",
+      "version": "16.0",
+      "build": "16.0.4266",
+      "pageCount": 1,
+      "sectionCount": 1,
+      "run": "export-2",
+      "expectedPageCount": 1,
+      "pages": [
+        {
+          "page": 1,
+          "widthPt": 595.3200073242188,
+          "heightPt": 841.9199829101562,
+          "expectedWidthPt": 595.28,
+          "expectedHeightPt": 841.89,
+          "actualPixels": [
+            1341,
+            1896
+          ],
+          "expectedPixels": [
+            1340,
+            1895
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\demo-a4\\export-2\\docx\\page-1.png",
+          "errors": [],
+          "roundingEdgeAdjusted": true,
+          "meanAbsoluteChannelError": 0.859514,
+          "blurredMeanAbsoluteChannelError": 0.670198,
+          "pixelsOver48Fraction": 0.005855,
+          "expectedForegroundBounds": [
+            0,
+            0,
+            1339,
+            1795
+          ],
+          "actualForegroundBounds": [
+            0,
+            0,
+            1339,
+            1796
+          ],
+          "maxForegroundBoundsShiftPx": 1,
+          "foregroundCoverageRatio": 1.009415,
+          "weightedInkCoverageRatio": 1.001269,
+          "colorLandmarks": [
+            {
+              "name": "green-header-left-edge",
+              "roi": [
+                0,
+                0,
+                56,
+                438
+              ],
+              "rgb": [
+                30,
+                92,
+                81
+              ],
+              "expectedBounds": [
+                0,
+                0,
+                55,
+                426
+              ],
+              "actualBounds": [
+                0,
+                0,
+                55,
+                426
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "gold-circle",
+              "roi": [
+                1065,
+                1536,
+                1208,
+                1678
+              ],
+              "rgb": [
+                233,
+                215,
+                173
+              ],
+              "expectedBounds": [
+                11,
+                10,
+                131,
+                130
+              ],
+              "actualBounds": [
+                12,
+                11,
+                132,
+                131
+              ],
+              "maxBoundsShiftPx": 1,
+              "centroidShiftPx": 0.9123,
+              "coverageRatio": 1.000498
+            }
+          ],
+          "status": "passed"
+        }
+      ],
+      "errors": []
+    },
+    {
+      "case": "demo-a4",
+      "source": "tmp\\office-qa\\fixtures\\final-run\\demo-a4\\export-2.pptx",
+      "format": "pptx",
+      "pdf": "tmp\\office-qa\\roundtrip-final\\demo-a4\\export-2\\pptx\\rendered.pdf",
+      "status": "passed",
+      "renderer": "Microsoft PowerPoint",
+      "version": "16.0",
+      "build": "4266",
+      "pageCount": 1,
+      "widthPt": 595.25,
+      "heightPt": 841.875,
+      "run": "export-2",
+      "expectedPageCount": 1,
+      "pages": [
+        {
+          "page": 1,
+          "widthPt": 595.2000122070312,
+          "heightPt": 841.9199829101562,
+          "expectedWidthPt": 595.28,
+          "expectedHeightPt": 841.89,
+          "actualPixels": [
+            1340,
+            1896
+          ],
+          "expectedPixels": [
+            1340,
+            1895
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\demo-a4\\export-2\\pptx\\page-1.png",
+          "errors": [],
+          "roundingEdgeAdjusted": true,
+          "meanAbsoluteChannelError": 1.035298,
+          "blurredMeanAbsoluteChannelError": 0.873751,
+          "pixelsOver48Fraction": 0.00742,
+          "expectedForegroundBounds": [
+            0,
+            0,
+            1338,
+            1795
+          ],
+          "actualForegroundBounds": [
+            0,
+            0,
+            1339,
+            1796
+          ],
+          "maxForegroundBoundsShiftPx": 1,
+          "foregroundCoverageRatio": 1.002665,
+          "weightedInkCoverageRatio": 1.000918,
+          "colorLandmarks": [
+            {
+              "name": "green-header-left-edge",
+              "roi": [
+                0,
+                0,
+                56,
+                438
+              ],
+              "rgb": [
+                30,
+                92,
+                81
+              ],
+              "expectedBounds": [
+                0,
+                0,
+                55,
+                426
+              ],
+              "actualBounds": [
+                0,
+                0,
+                55,
+                425
+              ],
+              "maxBoundsShiftPx": 1,
+              "centroidShiftPx": 0.5,
+              "coverageRatio": 0.997658
+            },
+            {
+              "name": "gold-circle",
+              "roi": [
+                1065,
+                1536,
+                1208,
+                1678
+              ],
+              "rgb": [
+                233,
+                215,
+                173
+              ],
+              "expectedBounds": [
+                10,
+                9,
+                130,
+                129
+              ],
+              "actualBounds": [
+                11,
+                11,
+                132,
+                131
+              ],
+              "maxBoundsShiftPx": 2,
+              "centroidShiftPx": 1.45,
+              "coverageRatio": 1.005903
+            }
+          ],
+          "status": "passed"
+        }
+      ],
+      "errors": []
+    },
+    {
+      "case": "demo-a4",
+      "source": "tmp\\office-qa\\fixtures\\final-run\\demo-a4\\export-3.docx",
+      "format": "docx",
+      "pdf": "tmp\\office-qa\\roundtrip-final\\demo-a4\\export-3\\docx\\rendered.pdf",
+      "status": "passed",
+      "renderer": "Microsoft Word",
+      "version": "16.0",
+      "build": "16.0.4266",
+      "pageCount": 1,
+      "sectionCount": 1,
+      "run": "export-3",
+      "expectedPageCount": 1,
+      "pages": [
+        {
+          "page": 1,
+          "widthPt": 595.3200073242188,
+          "heightPt": 841.9199829101562,
+          "expectedWidthPt": 595.28,
+          "expectedHeightPt": 841.89,
+          "actualPixels": [
+            1341,
+            1896
+          ],
+          "expectedPixels": [
+            1340,
+            1895
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\demo-a4\\export-3\\docx\\page-1.png",
+          "errors": [],
+          "roundingEdgeAdjusted": true,
+          "meanAbsoluteChannelError": 0.859514,
+          "blurredMeanAbsoluteChannelError": 0.670198,
+          "pixelsOver48Fraction": 0.005855,
+          "expectedForegroundBounds": [
+            0,
+            0,
+            1339,
+            1795
+          ],
+          "actualForegroundBounds": [
+            0,
+            0,
+            1339,
+            1796
+          ],
+          "maxForegroundBoundsShiftPx": 1,
+          "foregroundCoverageRatio": 1.009415,
+          "weightedInkCoverageRatio": 1.001269,
+          "colorLandmarks": [
+            {
+              "name": "green-header-left-edge",
+              "roi": [
+                0,
+                0,
+                56,
+                438
+              ],
+              "rgb": [
+                30,
+                92,
+                81
+              ],
+              "expectedBounds": [
+                0,
+                0,
+                55,
+                426
+              ],
+              "actualBounds": [
+                0,
+                0,
+                55,
+                426
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "gold-circle",
+              "roi": [
+                1065,
+                1536,
+                1208,
+                1678
+              ],
+              "rgb": [
+                233,
+                215,
+                173
+              ],
+              "expectedBounds": [
+                11,
+                10,
+                131,
+                130
+              ],
+              "actualBounds": [
+                12,
+                11,
+                132,
+                131
+              ],
+              "maxBoundsShiftPx": 1,
+              "centroidShiftPx": 0.9123,
+              "coverageRatio": 1.000498
+            }
+          ],
+          "status": "passed"
+        }
+      ],
+      "errors": []
+    },
+    {
+      "case": "demo-a4",
+      "source": "tmp\\office-qa\\fixtures\\final-run\\demo-a4\\export-3.pptx",
+      "format": "pptx",
+      "pdf": "tmp\\office-qa\\roundtrip-final\\demo-a4\\export-3\\pptx\\rendered.pdf",
+      "status": "passed",
+      "renderer": "Microsoft PowerPoint",
+      "version": "16.0",
+      "build": "4266",
+      "pageCount": 1,
+      "widthPt": 595.25,
+      "heightPt": 841.875,
+      "run": "export-3",
+      "expectedPageCount": 1,
+      "pages": [
+        {
+          "page": 1,
+          "widthPt": 595.2000122070312,
+          "heightPt": 841.9199829101562,
+          "expectedWidthPt": 595.28,
+          "expectedHeightPt": 841.89,
+          "actualPixels": [
+            1340,
+            1896
+          ],
+          "expectedPixels": [
+            1340,
+            1895
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\demo-a4\\export-3\\pptx\\page-1.png",
+          "errors": [],
+          "roundingEdgeAdjusted": true,
+          "meanAbsoluteChannelError": 1.035298,
+          "blurredMeanAbsoluteChannelError": 0.873751,
+          "pixelsOver48Fraction": 0.00742,
+          "expectedForegroundBounds": [
+            0,
+            0,
+            1338,
+            1795
+          ],
+          "actualForegroundBounds": [
+            0,
+            0,
+            1339,
+            1796
+          ],
+          "maxForegroundBoundsShiftPx": 1,
+          "foregroundCoverageRatio": 1.002665,
+          "weightedInkCoverageRatio": 1.000918,
+          "colorLandmarks": [
+            {
+              "name": "green-header-left-edge",
+              "roi": [
+                0,
+                0,
+                56,
+                438
+              ],
+              "rgb": [
+                30,
+                92,
+                81
+              ],
+              "expectedBounds": [
+                0,
+                0,
+                55,
+                426
+              ],
+              "actualBounds": [
+                0,
+                0,
+                55,
+                425
+              ],
+              "maxBoundsShiftPx": 1,
+              "centroidShiftPx": 0.5,
+              "coverageRatio": 0.997658
+            },
+            {
+              "name": "gold-circle",
+              "roi": [
+                1065,
+                1536,
+                1208,
+                1678
+              ],
+              "rgb": [
+                233,
+                215,
+                173
+              ],
+              "expectedBounds": [
+                10,
+                9,
+                130,
+                129
+              ],
+              "actualBounds": [
+                11,
+                11,
+                132,
+                131
+              ],
+              "maxBoundsShiftPx": 2,
+              "centroidShiftPx": 1.45,
+              "coverageRatio": 1.005903
+            }
+          ],
+          "status": "passed"
+        }
+      ],
+      "errors": []
+    },
+    {
+      "pdf": "tmp\\office-qa\\fixtures\\final-run\\layout-colors\\export-1.pdf",
+      "pageCount": 1,
+      "expectedPageCount": 1,
+      "pages": [
+        {
+          "page": 1,
+          "widthPt": 720.0,
+          "heightPt": 450.0,
+          "expectedWidthPt": 720,
+          "expectedHeightPt": 450,
+          "actualPixels": [
+            1620,
+            1013
+          ],
+          "expectedPixels": [
+            1620,
+            1013
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\layout-colors\\export-1\\pdf\\page-1.png",
+          "errors": [],
+          "meanAbsoluteChannelError": 0.0,
+          "blurredMeanAbsoluteChannelError": 0.0,
+          "pixelsOver48Fraction": 0.0,
+          "expectedForegroundBounds": [
+            0,
+            0,
+            1619,
+            1012
+          ],
+          "actualForegroundBounds": [
+            0,
+            0,
+            1619,
+            1012
+          ],
+          "maxForegroundBoundsShiftPx": 0,
+          "foregroundCoverageRatio": 1.0,
+          "weightedInkCoverageRatio": 1.0,
+          "colorLandmarks": [
+            {
+              "name": "top-left-red",
+              "roi": [
+                0,
+                0,
+                69,
+                31
+              ],
+              "rgb": [
+                240,
+                44,
+                49
+              ],
+              "expectedBounds": [
+                0,
+                0,
+                57,
+                19
+              ],
+              "actualBounds": [
+                0,
+                0,
+                57,
+                19
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "top-right-blue",
+              "roi": [
+                1583,
+                0,
+                1620,
+                62
+              ],
+              "rgb": [
+                19,
+                90,
+                244
+              ],
+              "expectedBounds": [
+                10,
+                0,
+                36,
+                50
+              ],
+              "actualBounds": [
+                10,
+                0,
+                36,
+                50
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-left-green",
+              "roi": [
+                0,
+                960,
+                33,
+                1013
+              ],
+              "rgb": [
+                18,
+                168,
+                111
+              ],
+              "expectedBounds": [
+                0,
+                10,
+                21,
+                51
+              ],
+              "actualBounds": [
+                0,
+                10,
+                21,
+                51
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-right-purple",
+              "roi": [
+                1540,
+                980,
+                1620,
+                1013
+              ],
+              "rgb": [
+                158,
+                64,
+                221
+              ],
+              "expectedBounds": [
+                11,
+                10,
+                79,
+                31
+              ],
+              "actualBounds": [
+                11,
+                10,
+                79,
+                31
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            }
+          ],
+          "status": "passed"
+        }
+      ],
+      "errors": [],
+      "status": "passed",
+      "case": "layout-colors",
+      "run": "export-1",
+      "format": "pdf",
+      "renderer": "PDFium"
+    },
+    {
+      "pdf": "tmp\\office-qa\\fixtures\\final-run\\layout-colors\\export-2.pdf",
+      "pageCount": 1,
+      "expectedPageCount": 1,
+      "pages": [
+        {
+          "page": 1,
+          "widthPt": 720.0,
+          "heightPt": 450.0,
+          "expectedWidthPt": 720,
+          "expectedHeightPt": 450,
+          "actualPixels": [
+            1620,
+            1013
+          ],
+          "expectedPixels": [
+            1620,
+            1013
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\layout-colors\\export-2\\pdf\\page-1.png",
+          "errors": [],
+          "meanAbsoluteChannelError": 0.0,
+          "blurredMeanAbsoluteChannelError": 0.0,
+          "pixelsOver48Fraction": 0.0,
+          "expectedForegroundBounds": [
+            0,
+            0,
+            1619,
+            1012
+          ],
+          "actualForegroundBounds": [
+            0,
+            0,
+            1619,
+            1012
+          ],
+          "maxForegroundBoundsShiftPx": 0,
+          "foregroundCoverageRatio": 1.0,
+          "weightedInkCoverageRatio": 1.0,
+          "colorLandmarks": [
+            {
+              "name": "top-left-red",
+              "roi": [
+                0,
+                0,
+                69,
+                31
+              ],
+              "rgb": [
+                240,
+                44,
+                49
+              ],
+              "expectedBounds": [
+                0,
+                0,
+                57,
+                19
+              ],
+              "actualBounds": [
+                0,
+                0,
+                57,
+                19
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "top-right-blue",
+              "roi": [
+                1583,
+                0,
+                1620,
+                62
+              ],
+              "rgb": [
+                19,
+                90,
+                244
+              ],
+              "expectedBounds": [
+                10,
+                0,
+                36,
+                50
+              ],
+              "actualBounds": [
+                10,
+                0,
+                36,
+                50
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-left-green",
+              "roi": [
+                0,
+                960,
+                33,
+                1013
+              ],
+              "rgb": [
+                18,
+                168,
+                111
+              ],
+              "expectedBounds": [
+                0,
+                10,
+                21,
+                51
+              ],
+              "actualBounds": [
+                0,
+                10,
+                21,
+                51
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-right-purple",
+              "roi": [
+                1540,
+                980,
+                1620,
+                1013
+              ],
+              "rgb": [
+                158,
+                64,
+                221
+              ],
+              "expectedBounds": [
+                11,
+                10,
+                79,
+                31
+              ],
+              "actualBounds": [
+                11,
+                10,
+                79,
+                31
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            }
+          ],
+          "status": "passed"
+        }
+      ],
+      "errors": [],
+      "status": "passed",
+      "case": "layout-colors",
+      "run": "export-2",
+      "format": "pdf",
+      "renderer": "PDFium"
+    },
+    {
+      "pdf": "tmp\\office-qa\\fixtures\\final-run\\layout-colors\\export-3.pdf",
+      "pageCount": 1,
+      "expectedPageCount": 1,
+      "pages": [
+        {
+          "page": 1,
+          "widthPt": 720.0,
+          "heightPt": 450.0,
+          "expectedWidthPt": 720,
+          "expectedHeightPt": 450,
+          "actualPixels": [
+            1620,
+            1013
+          ],
+          "expectedPixels": [
+            1620,
+            1013
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\layout-colors\\export-3\\pdf\\page-1.png",
+          "errors": [],
+          "meanAbsoluteChannelError": 0.0,
+          "blurredMeanAbsoluteChannelError": 0.0,
+          "pixelsOver48Fraction": 0.0,
+          "expectedForegroundBounds": [
+            0,
+            0,
+            1619,
+            1012
+          ],
+          "actualForegroundBounds": [
+            0,
+            0,
+            1619,
+            1012
+          ],
+          "maxForegroundBoundsShiftPx": 0,
+          "foregroundCoverageRatio": 1.0,
+          "weightedInkCoverageRatio": 1.0,
+          "colorLandmarks": [
+            {
+              "name": "top-left-red",
+              "roi": [
+                0,
+                0,
+                69,
+                31
+              ],
+              "rgb": [
+                240,
+                44,
+                49
+              ],
+              "expectedBounds": [
+                0,
+                0,
+                57,
+                19
+              ],
+              "actualBounds": [
+                0,
+                0,
+                57,
+                19
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "top-right-blue",
+              "roi": [
+                1583,
+                0,
+                1620,
+                62
+              ],
+              "rgb": [
+                19,
+                90,
+                244
+              ],
+              "expectedBounds": [
+                10,
+                0,
+                36,
+                50
+              ],
+              "actualBounds": [
+                10,
+                0,
+                36,
+                50
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-left-green",
+              "roi": [
+                0,
+                960,
+                33,
+                1013
+              ],
+              "rgb": [
+                18,
+                168,
+                111
+              ],
+              "expectedBounds": [
+                0,
+                10,
+                21,
+                51
+              ],
+              "actualBounds": [
+                0,
+                10,
+                21,
+                51
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-right-purple",
+              "roi": [
+                1540,
+                980,
+                1620,
+                1013
+              ],
+              "rgb": [
+                158,
+                64,
+                221
+              ],
+              "expectedBounds": [
+                11,
+                10,
+                79,
+                31
+              ],
+              "actualBounds": [
+                11,
+                10,
+                79,
+                31
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            }
+          ],
+          "status": "passed"
+        }
+      ],
+      "errors": [],
+      "status": "passed",
+      "case": "layout-colors",
+      "run": "export-3",
+      "format": "pdf",
+      "renderer": "PDFium"
+    },
+    {
+      "case": "layout-colors",
+      "source": "tmp\\office-qa\\fixtures\\final-run\\layout-colors\\export-1.docx",
+      "format": "docx",
+      "pdf": "tmp\\office-qa\\roundtrip-final\\layout-colors\\export-1\\docx\\rendered.pdf",
+      "status": "passed",
+      "renderer": "Microsoft Word",
+      "version": "16.0",
+      "build": "16.0.4266",
+      "pageCount": 1,
+      "sectionCount": 1,
+      "run": "export-1",
+      "expectedPageCount": 1,
+      "pages": [
+        {
+          "page": 1,
+          "widthPt": 720.0,
+          "heightPt": 450.0,
+          "expectedWidthPt": 720,
+          "expectedHeightPt": 450,
+          "actualPixels": [
+            1620,
+            1013
+          ],
+          "expectedPixels": [
+            1620,
+            1013
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\layout-colors\\export-1\\docx\\page-1.png",
+          "errors": [],
+          "meanAbsoluteChannelError": 0.0,
+          "blurredMeanAbsoluteChannelError": 0.0,
+          "pixelsOver48Fraction": 0.0,
+          "expectedForegroundBounds": [
+            0,
+            0,
+            1619,
+            1012
+          ],
+          "actualForegroundBounds": [
+            0,
+            0,
+            1619,
+            1012
+          ],
+          "maxForegroundBoundsShiftPx": 0,
+          "foregroundCoverageRatio": 1.0,
+          "weightedInkCoverageRatio": 1.0,
+          "colorLandmarks": [
+            {
+              "name": "top-left-red",
+              "roi": [
+                0,
+                0,
+                69,
+                31
+              ],
+              "rgb": [
+                240,
+                44,
+                49
+              ],
+              "expectedBounds": [
+                0,
+                0,
+                57,
+                19
+              ],
+              "actualBounds": [
+                0,
+                0,
+                57,
+                19
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "top-right-blue",
+              "roi": [
+                1583,
+                0,
+                1620,
+                62
+              ],
+              "rgb": [
+                19,
+                90,
+                244
+              ],
+              "expectedBounds": [
+                10,
+                0,
+                36,
+                50
+              ],
+              "actualBounds": [
+                10,
+                0,
+                36,
+                50
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-left-green",
+              "roi": [
+                0,
+                960,
+                33,
+                1013
+              ],
+              "rgb": [
+                18,
+                168,
+                111
+              ],
+              "expectedBounds": [
+                0,
+                10,
+                21,
+                51
+              ],
+              "actualBounds": [
+                0,
+                10,
+                21,
+                51
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-right-purple",
+              "roi": [
+                1540,
+                980,
+                1620,
+                1013
+              ],
+              "rgb": [
+                158,
+                64,
+                221
+              ],
+              "expectedBounds": [
+                11,
+                10,
+                79,
+                31
+              ],
+              "actualBounds": [
+                11,
+                10,
+                79,
+                31
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            }
+          ],
+          "status": "passed"
+        }
+      ],
+      "errors": []
+    },
+    {
+      "case": "layout-colors",
+      "source": "tmp\\office-qa\\fixtures\\final-run\\layout-colors\\export-1.pptx",
+      "format": "pptx",
+      "pdf": "tmp\\office-qa\\roundtrip-final\\layout-colors\\export-1\\pptx\\rendered.pdf",
+      "status": "passed",
+      "renderer": "Microsoft PowerPoint",
+      "version": "16.0",
+      "build": "4266",
+      "pageCount": 1,
+      "widthPt": 720.0,
+      "heightPt": 450.0,
+      "run": "export-1",
+      "expectedPageCount": 1,
+      "pages": [
+        {
+          "page": 1,
+          "widthPt": 720.0,
+          "heightPt": 450.0,
+          "expectedWidthPt": 720,
+          "expectedHeightPt": 450,
+          "actualPixels": [
+            1620,
+            1013
+          ],
+          "expectedPixels": [
+            1620,
+            1013
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\layout-colors\\export-1\\pptx\\page-1.png",
+          "errors": [],
+          "meanAbsoluteChannelError": 0.45675,
+          "blurredMeanAbsoluteChannelError": 0.361111,
+          "pixelsOver48Fraction": 0.001667,
+          "expectedForegroundBounds": [
+            0,
+            0,
+            1619,
+            1011
+          ],
+          "actualForegroundBounds": [
+            0,
+            0,
+            1619,
+            1012
+          ],
+          "maxForegroundBoundsShiftPx": 1,
+          "foregroundCoverageRatio": 0.982722,
+          "weightedInkCoverageRatio": 1.001321,
+          "colorLandmarks": [
+            {
+              "name": "top-left-red",
+              "roi": [
+                0,
+                0,
+                69,
+                31
+              ],
+              "rgb": [
+                240,
+                44,
+                49
+              ],
+              "expectedBounds": [
+                0,
+                0,
+                57,
+                19
+              ],
+              "actualBounds": [
+                0,
+                0,
+                57,
+                19
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "top-right-blue",
+              "roi": [
+                1583,
+                0,
+                1620,
+                62
+              ],
+              "rgb": [
+                19,
+                90,
+                244
+              ],
+              "expectedBounds": [
+                10,
+                0,
+                36,
+                50
+              ],
+              "actualBounds": [
+                10,
+                0,
+                36,
+                50
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-left-green",
+              "roi": [
+                0,
+                960,
+                33,
+                1013
+              ],
+              "rgb": [
+                18,
+                168,
+                111
+              ],
+              "expectedBounds": [
+                0,
+                10,
+                21,
+                50
+              ],
+              "actualBounds": [
+                0,
+                10,
+                21,
+                51
+              ],
+              "maxBoundsShiftPx": 1,
+              "centroidShiftPx": 0.5,
+              "coverageRatio": 1.02439
+            },
+            {
+              "name": "bottom-right-purple",
+              "roi": [
+                1540,
+                980,
+                1620,
+                1013
+              ],
+              "rgb": [
+                158,
+                64,
+                221
+              ],
+              "expectedBounds": [
+                11,
+                10,
+                79,
+                30
+              ],
+              "actualBounds": [
+                11,
+                10,
+                79,
+                31
+              ],
+              "maxBoundsShiftPx": 1,
+              "centroidShiftPx": 0.5,
+              "coverageRatio": 1.047619
+            }
+          ],
+          "status": "passed"
+        }
+      ],
+      "errors": []
+    },
+    {
+      "case": "layout-colors",
+      "source": "tmp\\office-qa\\fixtures\\final-run\\layout-colors\\export-2.docx",
+      "format": "docx",
+      "pdf": "tmp\\office-qa\\roundtrip-final\\layout-colors\\export-2\\docx\\rendered.pdf",
+      "status": "passed",
+      "renderer": "Microsoft Word",
+      "version": "16.0",
+      "build": "16.0.4266",
+      "pageCount": 1,
+      "sectionCount": 1,
+      "run": "export-2",
+      "expectedPageCount": 1,
+      "pages": [
+        {
+          "page": 1,
+          "widthPt": 720.0,
+          "heightPt": 450.0,
+          "expectedWidthPt": 720,
+          "expectedHeightPt": 450,
+          "actualPixels": [
+            1620,
+            1013
+          ],
+          "expectedPixels": [
+            1620,
+            1013
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\layout-colors\\export-2\\docx\\page-1.png",
+          "errors": [],
+          "meanAbsoluteChannelError": 0.0,
+          "blurredMeanAbsoluteChannelError": 0.0,
+          "pixelsOver48Fraction": 0.0,
+          "expectedForegroundBounds": [
+            0,
+            0,
+            1619,
+            1012
+          ],
+          "actualForegroundBounds": [
+            0,
+            0,
+            1619,
+            1012
+          ],
+          "maxForegroundBoundsShiftPx": 0,
+          "foregroundCoverageRatio": 1.0,
+          "weightedInkCoverageRatio": 1.0,
+          "colorLandmarks": [
+            {
+              "name": "top-left-red",
+              "roi": [
+                0,
+                0,
+                69,
+                31
+              ],
+              "rgb": [
+                240,
+                44,
+                49
+              ],
+              "expectedBounds": [
+                0,
+                0,
+                57,
+                19
+              ],
+              "actualBounds": [
+                0,
+                0,
+                57,
+                19
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "top-right-blue",
+              "roi": [
+                1583,
+                0,
+                1620,
+                62
+              ],
+              "rgb": [
+                19,
+                90,
+                244
+              ],
+              "expectedBounds": [
+                10,
+                0,
+                36,
+                50
+              ],
+              "actualBounds": [
+                10,
+                0,
+                36,
+                50
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-left-green",
+              "roi": [
+                0,
+                960,
+                33,
+                1013
+              ],
+              "rgb": [
+                18,
+                168,
+                111
+              ],
+              "expectedBounds": [
+                0,
+                10,
+                21,
+                51
+              ],
+              "actualBounds": [
+                0,
+                10,
+                21,
+                51
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-right-purple",
+              "roi": [
+                1540,
+                980,
+                1620,
+                1013
+              ],
+              "rgb": [
+                158,
+                64,
+                221
+              ],
+              "expectedBounds": [
+                11,
+                10,
+                79,
+                31
+              ],
+              "actualBounds": [
+                11,
+                10,
+                79,
+                31
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            }
+          ],
+          "status": "passed"
+        }
+      ],
+      "errors": []
+    },
+    {
+      "case": "layout-colors",
+      "source": "tmp\\office-qa\\fixtures\\final-run\\layout-colors\\export-2.pptx",
+      "format": "pptx",
+      "pdf": "tmp\\office-qa\\roundtrip-final\\layout-colors\\export-2\\pptx\\rendered.pdf",
+      "status": "passed",
+      "renderer": "Microsoft PowerPoint",
+      "version": "16.0",
+      "build": "4266",
+      "pageCount": 1,
+      "widthPt": 720.0,
+      "heightPt": 450.0,
+      "run": "export-2",
+      "expectedPageCount": 1,
+      "pages": [
+        {
+          "page": 1,
+          "widthPt": 720.0,
+          "heightPt": 450.0,
+          "expectedWidthPt": 720,
+          "expectedHeightPt": 450,
+          "actualPixels": [
+            1620,
+            1013
+          ],
+          "expectedPixels": [
+            1620,
+            1013
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\layout-colors\\export-2\\pptx\\page-1.png",
+          "errors": [],
+          "meanAbsoluteChannelError": 0.45675,
+          "blurredMeanAbsoluteChannelError": 0.361111,
+          "pixelsOver48Fraction": 0.001667,
+          "expectedForegroundBounds": [
+            0,
+            0,
+            1619,
+            1011
+          ],
+          "actualForegroundBounds": [
+            0,
+            0,
+            1619,
+            1012
+          ],
+          "maxForegroundBoundsShiftPx": 1,
+          "foregroundCoverageRatio": 0.982722,
+          "weightedInkCoverageRatio": 1.001321,
+          "colorLandmarks": [
+            {
+              "name": "top-left-red",
+              "roi": [
+                0,
+                0,
+                69,
+                31
+              ],
+              "rgb": [
+                240,
+                44,
+                49
+              ],
+              "expectedBounds": [
+                0,
+                0,
+                57,
+                19
+              ],
+              "actualBounds": [
+                0,
+                0,
+                57,
+                19
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "top-right-blue",
+              "roi": [
+                1583,
+                0,
+                1620,
+                62
+              ],
+              "rgb": [
+                19,
+                90,
+                244
+              ],
+              "expectedBounds": [
+                10,
+                0,
+                36,
+                50
+              ],
+              "actualBounds": [
+                10,
+                0,
+                36,
+                50
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-left-green",
+              "roi": [
+                0,
+                960,
+                33,
+                1013
+              ],
+              "rgb": [
+                18,
+                168,
+                111
+              ],
+              "expectedBounds": [
+                0,
+                10,
+                21,
+                50
+              ],
+              "actualBounds": [
+                0,
+                10,
+                21,
+                51
+              ],
+              "maxBoundsShiftPx": 1,
+              "centroidShiftPx": 0.5,
+              "coverageRatio": 1.02439
+            },
+            {
+              "name": "bottom-right-purple",
+              "roi": [
+                1540,
+                980,
+                1620,
+                1013
+              ],
+              "rgb": [
+                158,
+                64,
+                221
+              ],
+              "expectedBounds": [
+                11,
+                10,
+                79,
+                30
+              ],
+              "actualBounds": [
+                11,
+                10,
+                79,
+                31
+              ],
+              "maxBoundsShiftPx": 1,
+              "centroidShiftPx": 0.5,
+              "coverageRatio": 1.047619
+            }
+          ],
+          "status": "passed"
+        }
+      ],
+      "errors": []
+    },
+    {
+      "case": "layout-colors",
+      "source": "tmp\\office-qa\\fixtures\\final-run\\layout-colors\\export-3.docx",
+      "format": "docx",
+      "pdf": "tmp\\office-qa\\roundtrip-final\\layout-colors\\export-3\\docx\\rendered.pdf",
+      "status": "passed",
+      "renderer": "Microsoft Word",
+      "version": "16.0",
+      "build": "16.0.4266",
+      "pageCount": 1,
+      "sectionCount": 1,
+      "run": "export-3",
+      "expectedPageCount": 1,
+      "pages": [
+        {
+          "page": 1,
+          "widthPt": 720.0,
+          "heightPt": 450.0,
+          "expectedWidthPt": 720,
+          "expectedHeightPt": 450,
+          "actualPixels": [
+            1620,
+            1013
+          ],
+          "expectedPixels": [
+            1620,
+            1013
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\layout-colors\\export-3\\docx\\page-1.png",
+          "errors": [],
+          "meanAbsoluteChannelError": 0.0,
+          "blurredMeanAbsoluteChannelError": 0.0,
+          "pixelsOver48Fraction": 0.0,
+          "expectedForegroundBounds": [
+            0,
+            0,
+            1619,
+            1012
+          ],
+          "actualForegroundBounds": [
+            0,
+            0,
+            1619,
+            1012
+          ],
+          "maxForegroundBoundsShiftPx": 0,
+          "foregroundCoverageRatio": 1.0,
+          "weightedInkCoverageRatio": 1.0,
+          "colorLandmarks": [
+            {
+              "name": "top-left-red",
+              "roi": [
+                0,
+                0,
+                69,
+                31
+              ],
+              "rgb": [
+                240,
+                44,
+                49
+              ],
+              "expectedBounds": [
+                0,
+                0,
+                57,
+                19
+              ],
+              "actualBounds": [
+                0,
+                0,
+                57,
+                19
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "top-right-blue",
+              "roi": [
+                1583,
+                0,
+                1620,
+                62
+              ],
+              "rgb": [
+                19,
+                90,
+                244
+              ],
+              "expectedBounds": [
+                10,
+                0,
+                36,
+                50
+              ],
+              "actualBounds": [
+                10,
+                0,
+                36,
+                50
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-left-green",
+              "roi": [
+                0,
+                960,
+                33,
+                1013
+              ],
+              "rgb": [
+                18,
+                168,
+                111
+              ],
+              "expectedBounds": [
+                0,
+                10,
+                21,
+                51
+              ],
+              "actualBounds": [
+                0,
+                10,
+                21,
+                51
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-right-purple",
+              "roi": [
+                1540,
+                980,
+                1620,
+                1013
+              ],
+              "rgb": [
+                158,
+                64,
+                221
+              ],
+              "expectedBounds": [
+                11,
+                10,
+                79,
+                31
+              ],
+              "actualBounds": [
+                11,
+                10,
+                79,
+                31
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            }
+          ],
+          "status": "passed"
+        }
+      ],
+      "errors": []
+    },
+    {
+      "case": "layout-colors",
+      "source": "tmp\\office-qa\\fixtures\\final-run\\layout-colors\\export-3.pptx",
+      "format": "pptx",
+      "pdf": "tmp\\office-qa\\roundtrip-final\\layout-colors\\export-3\\pptx\\rendered.pdf",
+      "status": "passed",
+      "renderer": "Microsoft PowerPoint",
+      "version": "16.0",
+      "build": "4266",
+      "pageCount": 1,
+      "widthPt": 720.0,
+      "heightPt": 450.0,
+      "run": "export-3",
+      "expectedPageCount": 1,
+      "pages": [
+        {
+          "page": 1,
+          "widthPt": 720.0,
+          "heightPt": 450.0,
+          "expectedWidthPt": 720,
+          "expectedHeightPt": 450,
+          "actualPixels": [
+            1620,
+            1013
+          ],
+          "expectedPixels": [
+            1620,
+            1013
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\layout-colors\\export-3\\pptx\\page-1.png",
+          "errors": [],
+          "meanAbsoluteChannelError": 0.45675,
+          "blurredMeanAbsoluteChannelError": 0.361111,
+          "pixelsOver48Fraction": 0.001667,
+          "expectedForegroundBounds": [
+            0,
+            0,
+            1619,
+            1011
+          ],
+          "actualForegroundBounds": [
+            0,
+            0,
+            1619,
+            1012
+          ],
+          "maxForegroundBoundsShiftPx": 1,
+          "foregroundCoverageRatio": 0.982722,
+          "weightedInkCoverageRatio": 1.001321,
+          "colorLandmarks": [
+            {
+              "name": "top-left-red",
+              "roi": [
+                0,
+                0,
+                69,
+                31
+              ],
+              "rgb": [
+                240,
+                44,
+                49
+              ],
+              "expectedBounds": [
+                0,
+                0,
+                57,
+                19
+              ],
+              "actualBounds": [
+                0,
+                0,
+                57,
+                19
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "top-right-blue",
+              "roi": [
+                1583,
+                0,
+                1620,
+                62
+              ],
+              "rgb": [
+                19,
+                90,
+                244
+              ],
+              "expectedBounds": [
+                10,
+                0,
+                36,
+                50
+              ],
+              "actualBounds": [
+                10,
+                0,
+                36,
+                50
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-left-green",
+              "roi": [
+                0,
+                960,
+                33,
+                1013
+              ],
+              "rgb": [
+                18,
+                168,
+                111
+              ],
+              "expectedBounds": [
+                0,
+                10,
+                21,
+                50
+              ],
+              "actualBounds": [
+                0,
+                10,
+                21,
+                51
+              ],
+              "maxBoundsShiftPx": 1,
+              "centroidShiftPx": 0.5,
+              "coverageRatio": 1.02439
+            },
+            {
+              "name": "bottom-right-purple",
+              "roi": [
+                1540,
+                980,
+                1620,
+                1013
+              ],
+              "rgb": [
+                158,
+                64,
+                221
+              ],
+              "expectedBounds": [
+                11,
+                10,
+                79,
+                30
+              ],
+              "actualBounds": [
+                11,
+                10,
+                79,
+                31
+              ],
+              "maxBoundsShiftPx": 1,
+              "centroidShiftPx": 0.5,
+              "coverageRatio": 1.047619
+            }
+          ],
+          "status": "passed"
+        }
+      ],
+      "errors": []
+    },
+    {
+      "pdf": "tmp\\office-qa\\fixtures\\final-run\\mixed-sizes\\export-1.pdf",
+      "pageCount": 3,
+      "expectedPageCount": 3,
+      "pages": [
+        {
+          "page": 1,
+          "widthPt": 360.0,
+          "heightPt": 540.0,
+          "expectedWidthPt": 360,
+          "expectedHeightPt": 540,
+          "actualPixels": [
+            810,
+            1215
+          ],
+          "expectedPixels": [
+            810,
+            1215
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\mixed-sizes\\export-1\\pdf\\page-1.png",
+          "errors": [],
+          "meanAbsoluteChannelError": 0.0,
+          "blurredMeanAbsoluteChannelError": 0.0,
+          "pixelsOver48Fraction": 0.0,
+          "expectedForegroundBounds": [
+            0,
+            0,
+            809,
+            1214
+          ],
+          "actualForegroundBounds": [
+            0,
+            0,
+            809,
+            1214
+          ],
+          "maxForegroundBoundsShiftPx": 0,
+          "foregroundCoverageRatio": 1.0,
+          "weightedInkCoverageRatio": 1.0,
+          "colorLandmarks": [
+            {
+              "name": "top-border-green",
+              "roi": [
+                0,
+                0,
+                810,
+                26
+              ],
+              "rgb": [
+                24,
+                61,
+                56
+              ],
+              "expectedBounds": [
+                0,
+                0,
+                809,
+                14
+              ],
+              "actualBounds": [
+                0,
+                0,
+                809,
+                14
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-left-orange",
+              "roi": [
+                0,
+                1184,
+                83,
+                1215
+              ],
+              "rgb": [
+                210,
+                87,
+                49
+              ],
+              "expectedBounds": [
+                0,
+                11,
+                71,
+                30
+              ],
+              "actualBounds": [
+                0,
+                11,
+                71,
+                30
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-right-blue",
+              "roi": [
+                759,
+                1151,
+                810,
+                1215
+              ],
+              "rgb": [
+                49,
+                100,
+                187
+              ],
+              "expectedBounds": [
+                11,
+                10,
+                50,
+                63
+              ],
+              "actualBounds": [
+                11,
+                10,
+                50,
+                63
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            }
+          ],
+          "status": "passed"
+        },
+        {
+          "page": 2,
+          "widthPt": 720.0,
+          "heightPt": 405.0,
+          "expectedWidthPt": 720,
+          "expectedHeightPt": 405,
+          "actualPixels": [
+            1620,
+            912
+          ],
+          "expectedPixels": [
+            1620,
+            912
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\mixed-sizes\\export-1\\pdf\\page-2.png",
+          "errors": [],
+          "meanAbsoluteChannelError": 0.0,
+          "blurredMeanAbsoluteChannelError": 0.0,
+          "pixelsOver48Fraction": 0.0,
+          "expectedForegroundBounds": [
+            0,
+            0,
+            1619,
+            911
+          ],
+          "actualForegroundBounds": [
+            0,
+            0,
+            1619,
+            911
+          ],
+          "maxForegroundBoundsShiftPx": 0,
+          "foregroundCoverageRatio": 1.0,
+          "weightedInkCoverageRatio": 1.0,
+          "colorLandmarks": [
+            {
+              "name": "top-border-green",
+              "roi": [
+                0,
+                0,
+                1620,
+                26
+              ],
+              "rgb": [
+                24,
+                61,
+                56
+              ],
+              "expectedBounds": [
+                0,
+                0,
+                1619,
+                14
+              ],
+              "actualBounds": [
+                0,
+                0,
+                1619,
+                14
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-left-orange",
+              "roi": [
+                0,
+                881,
+                83,
+                912
+              ],
+              "rgb": [
+                210,
+                87,
+                49
+              ],
+              "expectedBounds": [
+                0,
+                10,
+                71,
+                29
+              ],
+              "actualBounds": [
+                0,
+                10,
+                71,
+                29
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-right-blue",
+              "roi": [
+                1569,
+                847,
+                1620,
+                912
+              ],
+              "rgb": [
+                49,
+                100,
+                187
+              ],
+              "expectedBounds": [
+                11,
+                11,
+                50,
+                63
+              ],
+              "actualBounds": [
+                11,
+                11,
+                50,
+                63
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            }
+          ],
+          "status": "passed"
+        },
+        {
+          "page": 3,
+          "widthPt": 480.0,
+          "heightPt": 480.0,
+          "expectedWidthPt": 480,
+          "expectedHeightPt": 480,
+          "actualPixels": [
+            1080,
+            1080
+          ],
+          "expectedPixels": [
+            1080,
+            1080
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\mixed-sizes\\export-1\\pdf\\page-3.png",
+          "errors": [],
+          "meanAbsoluteChannelError": 0.0,
+          "blurredMeanAbsoluteChannelError": 0.0,
+          "pixelsOver48Fraction": 0.0,
+          "expectedForegroundBounds": [
+            0,
+            0,
+            1079,
+            1079
+          ],
+          "actualForegroundBounds": [
+            0,
+            0,
+            1079,
+            1079
+          ],
+          "maxForegroundBoundsShiftPx": 0,
+          "foregroundCoverageRatio": 1.0,
+          "weightedInkCoverageRatio": 1.0,
+          "colorLandmarks": [
+            {
+              "name": "top-border-green",
+              "roi": [
+                0,
+                0,
+                1080,
+                26
+              ],
+              "rgb": [
+                24,
+                61,
+                56
+              ],
+              "expectedBounds": [
+                0,
+                0,
+                1079,
+                14
+              ],
+              "actualBounds": [
+                0,
+                0,
+                1079,
+                14
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-left-orange",
+              "roi": [
+                0,
+                1049,
+                83,
+                1080
+              ],
+              "rgb": [
+                210,
+                87,
+                49
+              ],
+              "expectedBounds": [
+                0,
+                11,
+                71,
+                30
+              ],
+              "actualBounds": [
+                0,
+                11,
+                71,
+                30
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-right-blue",
+              "roi": [
+                1029,
+                1016,
+                1080,
+                1080
+              ],
+              "rgb": [
+                49,
+                100,
+                187
+              ],
+              "expectedBounds": [
+                11,
+                10,
+                50,
+                63
+              ],
+              "actualBounds": [
+                11,
+                10,
+                50,
+                63
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            }
+          ],
+          "status": "passed"
+        }
+      ],
+      "errors": [],
+      "status": "passed",
+      "case": "mixed-sizes",
+      "run": "export-1",
+      "format": "pdf",
+      "renderer": "PDFium"
+    },
+    {
+      "pdf": "tmp\\office-qa\\fixtures\\final-run\\mixed-sizes\\export-2.pdf",
+      "pageCount": 3,
+      "expectedPageCount": 3,
+      "pages": [
+        {
+          "page": 1,
+          "widthPt": 360.0,
+          "heightPt": 540.0,
+          "expectedWidthPt": 360,
+          "expectedHeightPt": 540,
+          "actualPixels": [
+            810,
+            1215
+          ],
+          "expectedPixels": [
+            810,
+            1215
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\mixed-sizes\\export-2\\pdf\\page-1.png",
+          "errors": [],
+          "meanAbsoluteChannelError": 0.0,
+          "blurredMeanAbsoluteChannelError": 0.0,
+          "pixelsOver48Fraction": 0.0,
+          "expectedForegroundBounds": [
+            0,
+            0,
+            809,
+            1214
+          ],
+          "actualForegroundBounds": [
+            0,
+            0,
+            809,
+            1214
+          ],
+          "maxForegroundBoundsShiftPx": 0,
+          "foregroundCoverageRatio": 1.0,
+          "weightedInkCoverageRatio": 1.0,
+          "colorLandmarks": [
+            {
+              "name": "top-border-green",
+              "roi": [
+                0,
+                0,
+                810,
+                26
+              ],
+              "rgb": [
+                24,
+                61,
+                56
+              ],
+              "expectedBounds": [
+                0,
+                0,
+                809,
+                14
+              ],
+              "actualBounds": [
+                0,
+                0,
+                809,
+                14
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-left-orange",
+              "roi": [
+                0,
+                1184,
+                83,
+                1215
+              ],
+              "rgb": [
+                210,
+                87,
+                49
+              ],
+              "expectedBounds": [
+                0,
+                11,
+                71,
+                30
+              ],
+              "actualBounds": [
+                0,
+                11,
+                71,
+                30
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-right-blue",
+              "roi": [
+                759,
+                1151,
+                810,
+                1215
+              ],
+              "rgb": [
+                49,
+                100,
+                187
+              ],
+              "expectedBounds": [
+                11,
+                10,
+                50,
+                63
+              ],
+              "actualBounds": [
+                11,
+                10,
+                50,
+                63
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            }
+          ],
+          "status": "passed"
+        },
+        {
+          "page": 2,
+          "widthPt": 720.0,
+          "heightPt": 405.0,
+          "expectedWidthPt": 720,
+          "expectedHeightPt": 405,
+          "actualPixels": [
+            1620,
+            912
+          ],
+          "expectedPixels": [
+            1620,
+            912
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\mixed-sizes\\export-2\\pdf\\page-2.png",
+          "errors": [],
+          "meanAbsoluteChannelError": 0.0,
+          "blurredMeanAbsoluteChannelError": 0.0,
+          "pixelsOver48Fraction": 0.0,
+          "expectedForegroundBounds": [
+            0,
+            0,
+            1619,
+            911
+          ],
+          "actualForegroundBounds": [
+            0,
+            0,
+            1619,
+            911
+          ],
+          "maxForegroundBoundsShiftPx": 0,
+          "foregroundCoverageRatio": 1.0,
+          "weightedInkCoverageRatio": 1.0,
+          "colorLandmarks": [
+            {
+              "name": "top-border-green",
+              "roi": [
+                0,
+                0,
+                1620,
+                26
+              ],
+              "rgb": [
+                24,
+                61,
+                56
+              ],
+              "expectedBounds": [
+                0,
+                0,
+                1619,
+                14
+              ],
+              "actualBounds": [
+                0,
+                0,
+                1619,
+                14
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-left-orange",
+              "roi": [
+                0,
+                881,
+                83,
+                912
+              ],
+              "rgb": [
+                210,
+                87,
+                49
+              ],
+              "expectedBounds": [
+                0,
+                10,
+                71,
+                29
+              ],
+              "actualBounds": [
+                0,
+                10,
+                71,
+                29
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-right-blue",
+              "roi": [
+                1569,
+                847,
+                1620,
+                912
+              ],
+              "rgb": [
+                49,
+                100,
+                187
+              ],
+              "expectedBounds": [
+                11,
+                11,
+                50,
+                63
+              ],
+              "actualBounds": [
+                11,
+                11,
+                50,
+                63
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            }
+          ],
+          "status": "passed"
+        },
+        {
+          "page": 3,
+          "widthPt": 480.0,
+          "heightPt": 480.0,
+          "expectedWidthPt": 480,
+          "expectedHeightPt": 480,
+          "actualPixels": [
+            1080,
+            1080
+          ],
+          "expectedPixels": [
+            1080,
+            1080
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\mixed-sizes\\export-2\\pdf\\page-3.png",
+          "errors": [],
+          "meanAbsoluteChannelError": 0.0,
+          "blurredMeanAbsoluteChannelError": 0.0,
+          "pixelsOver48Fraction": 0.0,
+          "expectedForegroundBounds": [
+            0,
+            0,
+            1079,
+            1079
+          ],
+          "actualForegroundBounds": [
+            0,
+            0,
+            1079,
+            1079
+          ],
+          "maxForegroundBoundsShiftPx": 0,
+          "foregroundCoverageRatio": 1.0,
+          "weightedInkCoverageRatio": 1.0,
+          "colorLandmarks": [
+            {
+              "name": "top-border-green",
+              "roi": [
+                0,
+                0,
+                1080,
+                26
+              ],
+              "rgb": [
+                24,
+                61,
+                56
+              ],
+              "expectedBounds": [
+                0,
+                0,
+                1079,
+                14
+              ],
+              "actualBounds": [
+                0,
+                0,
+                1079,
+                14
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-left-orange",
+              "roi": [
+                0,
+                1049,
+                83,
+                1080
+              ],
+              "rgb": [
+                210,
+                87,
+                49
+              ],
+              "expectedBounds": [
+                0,
+                11,
+                71,
+                30
+              ],
+              "actualBounds": [
+                0,
+                11,
+                71,
+                30
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-right-blue",
+              "roi": [
+                1029,
+                1016,
+                1080,
+                1080
+              ],
+              "rgb": [
+                49,
+                100,
+                187
+              ],
+              "expectedBounds": [
+                11,
+                10,
+                50,
+                63
+              ],
+              "actualBounds": [
+                11,
+                10,
+                50,
+                63
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            }
+          ],
+          "status": "passed"
+        }
+      ],
+      "errors": [],
+      "status": "passed",
+      "case": "mixed-sizes",
+      "run": "export-2",
+      "format": "pdf",
+      "renderer": "PDFium"
+    },
+    {
+      "pdf": "tmp\\office-qa\\fixtures\\final-run\\mixed-sizes\\export-3.pdf",
+      "pageCount": 3,
+      "expectedPageCount": 3,
+      "pages": [
+        {
+          "page": 1,
+          "widthPt": 360.0,
+          "heightPt": 540.0,
+          "expectedWidthPt": 360,
+          "expectedHeightPt": 540,
+          "actualPixels": [
+            810,
+            1215
+          ],
+          "expectedPixels": [
+            810,
+            1215
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\mixed-sizes\\export-3\\pdf\\page-1.png",
+          "errors": [],
+          "meanAbsoluteChannelError": 0.0,
+          "blurredMeanAbsoluteChannelError": 0.0,
+          "pixelsOver48Fraction": 0.0,
+          "expectedForegroundBounds": [
+            0,
+            0,
+            809,
+            1214
+          ],
+          "actualForegroundBounds": [
+            0,
+            0,
+            809,
+            1214
+          ],
+          "maxForegroundBoundsShiftPx": 0,
+          "foregroundCoverageRatio": 1.0,
+          "weightedInkCoverageRatio": 1.0,
+          "colorLandmarks": [
+            {
+              "name": "top-border-green",
+              "roi": [
+                0,
+                0,
+                810,
+                26
+              ],
+              "rgb": [
+                24,
+                61,
+                56
+              ],
+              "expectedBounds": [
+                0,
+                0,
+                809,
+                14
+              ],
+              "actualBounds": [
+                0,
+                0,
+                809,
+                14
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-left-orange",
+              "roi": [
+                0,
+                1184,
+                83,
+                1215
+              ],
+              "rgb": [
+                210,
+                87,
+                49
+              ],
+              "expectedBounds": [
+                0,
+                11,
+                71,
+                30
+              ],
+              "actualBounds": [
+                0,
+                11,
+                71,
+                30
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-right-blue",
+              "roi": [
+                759,
+                1151,
+                810,
+                1215
+              ],
+              "rgb": [
+                49,
+                100,
+                187
+              ],
+              "expectedBounds": [
+                11,
+                10,
+                50,
+                63
+              ],
+              "actualBounds": [
+                11,
+                10,
+                50,
+                63
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            }
+          ],
+          "status": "passed"
+        },
+        {
+          "page": 2,
+          "widthPt": 720.0,
+          "heightPt": 405.0,
+          "expectedWidthPt": 720,
+          "expectedHeightPt": 405,
+          "actualPixels": [
+            1620,
+            912
+          ],
+          "expectedPixels": [
+            1620,
+            912
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\mixed-sizes\\export-3\\pdf\\page-2.png",
+          "errors": [],
+          "meanAbsoluteChannelError": 0.0,
+          "blurredMeanAbsoluteChannelError": 0.0,
+          "pixelsOver48Fraction": 0.0,
+          "expectedForegroundBounds": [
+            0,
+            0,
+            1619,
+            911
+          ],
+          "actualForegroundBounds": [
+            0,
+            0,
+            1619,
+            911
+          ],
+          "maxForegroundBoundsShiftPx": 0,
+          "foregroundCoverageRatio": 1.0,
+          "weightedInkCoverageRatio": 1.0,
+          "colorLandmarks": [
+            {
+              "name": "top-border-green",
+              "roi": [
+                0,
+                0,
+                1620,
+                26
+              ],
+              "rgb": [
+                24,
+                61,
+                56
+              ],
+              "expectedBounds": [
+                0,
+                0,
+                1619,
+                14
+              ],
+              "actualBounds": [
+                0,
+                0,
+                1619,
+                14
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-left-orange",
+              "roi": [
+                0,
+                881,
+                83,
+                912
+              ],
+              "rgb": [
+                210,
+                87,
+                49
+              ],
+              "expectedBounds": [
+                0,
+                10,
+                71,
+                29
+              ],
+              "actualBounds": [
+                0,
+                10,
+                71,
+                29
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-right-blue",
+              "roi": [
+                1569,
+                847,
+                1620,
+                912
+              ],
+              "rgb": [
+                49,
+                100,
+                187
+              ],
+              "expectedBounds": [
+                11,
+                11,
+                50,
+                63
+              ],
+              "actualBounds": [
+                11,
+                11,
+                50,
+                63
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            }
+          ],
+          "status": "passed"
+        },
+        {
+          "page": 3,
+          "widthPt": 480.0,
+          "heightPt": 480.0,
+          "expectedWidthPt": 480,
+          "expectedHeightPt": 480,
+          "actualPixels": [
+            1080,
+            1080
+          ],
+          "expectedPixels": [
+            1080,
+            1080
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\mixed-sizes\\export-3\\pdf\\page-3.png",
+          "errors": [],
+          "meanAbsoluteChannelError": 0.0,
+          "blurredMeanAbsoluteChannelError": 0.0,
+          "pixelsOver48Fraction": 0.0,
+          "expectedForegroundBounds": [
+            0,
+            0,
+            1079,
+            1079
+          ],
+          "actualForegroundBounds": [
+            0,
+            0,
+            1079,
+            1079
+          ],
+          "maxForegroundBoundsShiftPx": 0,
+          "foregroundCoverageRatio": 1.0,
+          "weightedInkCoverageRatio": 1.0,
+          "colorLandmarks": [
+            {
+              "name": "top-border-green",
+              "roi": [
+                0,
+                0,
+                1080,
+                26
+              ],
+              "rgb": [
+                24,
+                61,
+                56
+              ],
+              "expectedBounds": [
+                0,
+                0,
+                1079,
+                14
+              ],
+              "actualBounds": [
+                0,
+                0,
+                1079,
+                14
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-left-orange",
+              "roi": [
+                0,
+                1049,
+                83,
+                1080
+              ],
+              "rgb": [
+                210,
+                87,
+                49
+              ],
+              "expectedBounds": [
+                0,
+                11,
+                71,
+                30
+              ],
+              "actualBounds": [
+                0,
+                11,
+                71,
+                30
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-right-blue",
+              "roi": [
+                1029,
+                1016,
+                1080,
+                1080
+              ],
+              "rgb": [
+                49,
+                100,
+                187
+              ],
+              "expectedBounds": [
+                11,
+                10,
+                50,
+                63
+              ],
+              "actualBounds": [
+                11,
+                10,
+                50,
+                63
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            }
+          ],
+          "status": "passed"
+        }
+      ],
+      "errors": [],
+      "status": "passed",
+      "case": "mixed-sizes",
+      "run": "export-3",
+      "format": "pdf",
+      "renderer": "PDFium"
+    },
+    {
+      "case": "mixed-sizes",
+      "source": "tmp\\office-qa\\fixtures\\final-run\\mixed-sizes\\export-1.docx",
+      "format": "docx",
+      "pdf": "tmp\\office-qa\\roundtrip-final\\mixed-sizes\\export-1\\docx\\rendered.pdf",
+      "status": "passed",
+      "renderer": "Microsoft Word",
+      "version": "16.0",
+      "build": "16.0.4266",
+      "pageCount": 3,
+      "sectionCount": 3,
+      "run": "export-1",
+      "expectedPageCount": 3,
+      "pages": [
+        {
+          "page": 1,
+          "widthPt": 360.0,
+          "heightPt": 540.0,
+          "expectedWidthPt": 360,
+          "expectedHeightPt": 540,
+          "actualPixels": [
+            810,
+            1215
+          ],
+          "expectedPixels": [
+            810,
+            1215
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\mixed-sizes\\export-1\\docx\\page-1.png",
+          "errors": [],
+          "meanAbsoluteChannelError": 0.817267,
+          "blurredMeanAbsoluteChannelError": 0.699119,
+          "pixelsOver48Fraction": 0.007997,
+          "expectedForegroundBounds": [
+            0,
+            0,
+            809,
+            1214
+          ],
+          "actualForegroundBounds": [
+            0,
+            0,
+            809,
+            1214
+          ],
+          "maxForegroundBoundsShiftPx": 0,
+          "foregroundCoverageRatio": 1.0,
+          "weightedInkCoverageRatio": 0.995374,
+          "colorLandmarks": [
+            {
+              "name": "top-border-green",
+              "roi": [
+                0,
+                0,
+                810,
+                26
+              ],
+              "rgb": [
+                24,
+                61,
+                56
+              ],
+              "expectedBounds": [
+                0,
+                0,
+                809,
+                14
+              ],
+              "actualBounds": [
+                0,
+                0,
+                809,
+                13
+              ],
+              "maxBoundsShiftPx": 1,
+              "centroidShiftPx": 0.5,
+              "coverageRatio": 0.933333
+            },
+            {
+              "name": "bottom-left-orange",
+              "roi": [
+                0,
+                1184,
+                83,
+                1215
+              ],
+              "rgb": [
+                210,
+                87,
+                49
+              ],
+              "expectedBounds": [
+                0,
+                11,
+                71,
+                30
+              ],
+              "actualBounds": [
+                0,
+                11,
+                71,
+                30
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-right-blue",
+              "roi": [
+                759,
+                1151,
+                810,
+                1215
+              ],
+              "rgb": [
+                49,
+                100,
+                187
+              ],
+              "expectedBounds": [
+                11,
+                10,
+                50,
+                63
+              ],
+              "actualBounds": [
+                11,
+                10,
+                50,
+                63
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            }
+          ],
+          "status": "passed"
+        },
+        {
+          "page": 2,
+          "widthPt": 720.0,
+          "heightPt": 405.0,
+          "expectedWidthPt": 720,
+          "expectedHeightPt": 405,
+          "actualPixels": [
+            1620,
+            912
+          ],
+          "expectedPixels": [
+            1620,
+            912
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\mixed-sizes\\export-1\\docx\\page-2.png",
+          "errors": [],
+          "meanAbsoluteChannelError": 0.744291,
+          "blurredMeanAbsoluteChannelError": 0.658709,
+          "pixelsOver48Fraction": 0.006359,
+          "expectedForegroundBounds": [
+            0,
+            0,
+            1619,
+            911
+          ],
+          "actualForegroundBounds": [
+            0,
+            0,
+            1619,
+            911
+          ],
+          "maxForegroundBoundsShiftPx": 0,
+          "foregroundCoverageRatio": 1.091073,
+          "weightedInkCoverageRatio": 0.992542,
+          "colorLandmarks": [
+            {
+              "name": "top-border-green",
+              "roi": [
+                0,
+                0,
+                1620,
+                26
+              ],
+              "rgb": [
+                24,
+                61,
+                56
+              ],
+              "expectedBounds": [
+                0,
+                0,
+                1619,
+                14
+              ],
+              "actualBounds": [
+                0,
+                0,
+                1619,
+                13
+              ],
+              "maxBoundsShiftPx": 1,
+              "centroidShiftPx": 0.5,
+              "coverageRatio": 0.933333
+            },
+            {
+              "name": "bottom-left-orange",
+              "roi": [
+                0,
+                881,
+                83,
+                912
+              ],
+              "rgb": [
+                210,
+                87,
+                49
+              ],
+              "expectedBounds": [
+                0,
+                10,
+                71,
+                29
+              ],
+              "actualBounds": [
+                0,
+                10,
+                71,
+                29
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-right-blue",
+              "roi": [
+                1569,
+                847,
+                1620,
+                912
+              ],
+              "rgb": [
+                49,
+                100,
+                187
+              ],
+              "expectedBounds": [
+                11,
+                11,
+                50,
+                63
+              ],
+              "actualBounds": [
+                11,
+                11,
+                50,
+                63
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            }
+          ],
+          "status": "passed"
+        },
+        {
+          "page": 3,
+          "widthPt": 480.0,
+          "heightPt": 480.0,
+          "expectedWidthPt": 480,
+          "expectedHeightPt": 480,
+          "actualPixels": [
+            1080,
+            1080
+          ],
+          "expectedPixels": [
+            1080,
+            1080
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\mixed-sizes\\export-1\\docx\\page-3.png",
+          "errors": [],
+          "meanAbsoluteChannelError": 0.787569,
+          "blurredMeanAbsoluteChannelError": 0.685806,
+          "pixelsOver48Fraction": 0.007661,
+          "expectedForegroundBounds": [
+            0,
+            0,
+            1079,
+            1079
+          ],
+          "actualForegroundBounds": [
+            0,
+            0,
+            1079,
+            1079
+          ],
+          "maxForegroundBoundsShiftPx": 0,
+          "foregroundCoverageRatio": 1.060863,
+          "weightedInkCoverageRatio": 0.993263,
+          "colorLandmarks": [
+            {
+              "name": "top-border-green",
+              "roi": [
+                0,
+                0,
+                1080,
+                26
+              ],
+              "rgb": [
+                24,
+                61,
+                56
+              ],
+              "expectedBounds": [
+                0,
+                0,
+                1079,
+                14
+              ],
+              "actualBounds": [
+                0,
+                0,
+                1079,
+                13
+              ],
+              "maxBoundsShiftPx": 1,
+              "centroidShiftPx": 0.5,
+              "coverageRatio": 0.933333
+            },
+            {
+              "name": "bottom-left-orange",
+              "roi": [
+                0,
+                1049,
+                83,
+                1080
+              ],
+              "rgb": [
+                210,
+                87,
+                49
+              ],
+              "expectedBounds": [
+                0,
+                11,
+                71,
+                30
+              ],
+              "actualBounds": [
+                0,
+                11,
+                71,
+                30
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-right-blue",
+              "roi": [
+                1029,
+                1016,
+                1080,
+                1080
+              ],
+              "rgb": [
+                49,
+                100,
+                187
+              ],
+              "expectedBounds": [
+                11,
+                10,
+                50,
+                63
+              ],
+              "actualBounds": [
+                11,
+                10,
+                50,
+                63
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            }
+          ],
+          "status": "passed"
+        }
+      ],
+      "errors": []
+    },
+    {
+      "case": "mixed-sizes",
+      "source": "tmp\\office-qa\\fixtures\\final-run\\mixed-sizes\\export-1.pptx",
+      "format": "pptx",
+      "pdf": "tmp\\office-qa\\roundtrip-final\\mixed-sizes\\export-1\\pptx\\rendered.pdf",
+      "status": "passed",
+      "renderer": "Microsoft PowerPoint",
+      "version": "16.0",
+      "build": "4266",
+      "pageCount": 3,
+      "widthPt": 720.0,
+      "heightPt": 540.0,
+      "run": "export-1",
+      "expectedPageCount": 3,
+      "pages": [
+        {
+          "page": 1,
+          "widthPt": 720.0,
+          "heightPt": 540.0,
+          "expectedWidthPt": 720,
+          "expectedHeightPt": 540,
+          "actualPixels": [
+            1620,
+            1215
+          ],
+          "expectedPixels": [
+            1620,
+            1215
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\mixed-sizes\\export-1\\pptx\\page-1.png",
+          "errors": [],
+          "meanAbsoluteChannelError": 0.408634,
+          "blurredMeanAbsoluteChannelError": 0.349559,
+          "pixelsOver48Fraction": 0.003998,
+          "expectedForegroundBounds": [
+            405,
+            0,
+            1214,
+            1214
+          ],
+          "actualForegroundBounds": [
+            405,
+            0,
+            1214,
+            1214
+          ],
+          "maxForegroundBoundsShiftPx": 0,
+          "foregroundCoverageRatio": 1.0,
+          "weightedInkCoverageRatio": 0.995374,
+          "colorLandmarks": [
+            {
+              "name": "top-border-green",
+              "roi": [
+                395,
+                0,
+                1226,
+                26
+              ],
+              "rgb": [
+                24,
+                61,
+                56
+              ],
+              "expectedBounds": [
+                10,
+                0,
+                819,
+                14
+              ],
+              "actualBounds": [
+                10,
+                0,
+                819,
+                13
+              ],
+              "maxBoundsShiftPx": 1,
+              "centroidShiftPx": 0.5,
+              "coverageRatio": 0.933333
+            },
+            {
+              "name": "bottom-left-orange",
+              "roi": [
+                395,
+                1184,
+                488,
+                1215
+              ],
+              "rgb": [
+                210,
+                87,
+                49
+              ],
+              "expectedBounds": [
+                10,
+                11,
+                81,
+                30
+              ],
+              "actualBounds": [
+                10,
+                11,
+                81,
+                30
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-right-blue",
+              "roi": [
+                1164,
+                1151,
+                1226,
+                1215
+              ],
+              "rgb": [
+                49,
+                100,
+                187
+              ],
+              "expectedBounds": [
+                11,
+                10,
+                50,
+                63
+              ],
+              "actualBounds": [
+                11,
+                10,
+                50,
+                63
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            }
+          ],
+          "status": "passed"
+        },
+        {
+          "page": 2,
+          "widthPt": 720.0,
+          "heightPt": 540.0,
+          "expectedWidthPt": 720,
+          "expectedHeightPt": 540,
+          "actualPixels": [
+            1620,
+            1215
+          ],
+          "expectedPixels": [
+            1620,
+            1215
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\mixed-sizes\\export-1\\pptx\\page-2.png",
+          "errors": [],
+          "meanAbsoluteChannelError": 0.367111,
+          "blurredMeanAbsoluteChannelError": 0.315775,
+          "pixelsOver48Fraction": 0.002415,
+          "expectedForegroundBounds": [
+            0,
+            152,
+            1619,
+            1062
+          ],
+          "actualForegroundBounds": [
+            0,
+            152,
+            1619,
+            1063
+          ],
+          "maxForegroundBoundsShiftPx": 1,
+          "foregroundCoverageRatio": 0.917898,
+          "weightedInkCoverageRatio": 1.001899,
+          "colorLandmarks": [
+            {
+              "name": "top-border-green",
+              "roi": [
+                0,
+                141,
+                1620,
+                178
+              ],
+              "rgb": [
+                24,
+                61,
+                56
+              ],
+              "expectedBounds": [
+                0,
+                11,
+                1619,
+                25
+              ],
+              "actualBounds": [
+                0,
+                11,
+                1619,
+                25
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-left-orange",
+              "roi": [
+                0,
+                1032,
+                83,
+                1074
+              ],
+              "rgb": [
+                210,
+                87,
+                49
+              ],
+              "expectedBounds": [
+                0,
+                11,
+                71,
+                29
+              ],
+              "actualBounds": [
+                0,
+                11,
+                71,
+                30
+              ],
+              "maxBoundsShiftPx": 1,
+              "centroidShiftPx": 0.5,
+              "coverageRatio": 1.052632
+            },
+            {
+              "name": "bottom-right-blue",
+              "roi": [
+                1569,
+                999,
+                1620,
+                1074
+              ],
+              "rgb": [
+                49,
+                100,
+                187
+              ],
+              "expectedBounds": [
+                11,
+                10,
+                50,
+                62
+              ],
+              "actualBounds": [
+                11,
+                11,
+                50,
+                63
+              ],
+              "maxBoundsShiftPx": 1,
+              "centroidShiftPx": 1.0,
+              "coverageRatio": 1.0
+            }
+          ],
+          "status": "passed"
+        },
+        {
+          "page": 3,
+          "widthPt": 720.0,
+          "heightPt": 540.0,
+          "expectedWidthPt": 720,
+          "expectedHeightPt": 540,
+          "actualPixels": [
+            1620,
+            1215
+          ],
+          "expectedPixels": [
+            1620,
+            1215
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\mixed-sizes\\export-1\\pptx\\page-3.png",
+          "errors": [],
+          "meanAbsoluteChannelError": 0.237972,
+          "blurredMeanAbsoluteChannelError": 0.211229,
+          "pixelsOver48Fraction": 0.001584,
+          "expectedForegroundBounds": [
+            270,
+            67,
+            1349,
+            1146
+          ],
+          "actualForegroundBounds": [
+            270,
+            67,
+            1349,
+            1147
+          ],
+          "maxForegroundBoundsShiftPx": 1,
+          "foregroundCoverageRatio": 0.97518,
+          "weightedInkCoverageRatio": 0.998441,
+          "colorLandmarks": [
+            {
+              "name": "top-border-green",
+              "roi": [
+                260,
+                57,
+                1361,
+                94
+              ],
+              "rgb": [
+                24,
+                61,
+                56
+              ],
+              "expectedBounds": [
+                10,
+                10,
+                1089,
+                24
+              ],
+              "actualBounds": [
+                10,
+                10,
+                1089,
+                24
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-left-orange",
+              "roi": [
+                260,
+                1117,
+                353,
+                1158
+              ],
+              "rgb": [
+                210,
+                87,
+                49
+              ],
+              "expectedBounds": [
+                10,
+                11,
+                81,
+                29
+              ],
+              "actualBounds": [
+                10,
+                11,
+                81,
+                30
+              ],
+              "maxBoundsShiftPx": 1,
+              "centroidShiftPx": 0.5,
+              "coverageRatio": 1.052632
+            },
+            {
+              "name": "bottom-right-blue",
+              "roi": [
+                1299,
+                1083,
+                1361,
+                1158
+              ],
+              "rgb": [
+                49,
+                100,
+                187
+              ],
+              "expectedBounds": [
+                11,
+                11,
+                50,
+                63
+              ],
+              "actualBounds": [
+                11,
+                11,
+                50,
+                64
+              ],
+              "maxBoundsShiftPx": 1,
+              "centroidShiftPx": 0.5,
+              "coverageRatio": 1.018868
+            }
+          ],
+          "status": "passed"
+        }
+      ],
+      "errors": []
+    },
+    {
+      "case": "mixed-sizes",
+      "source": "tmp\\office-qa\\fixtures\\final-run\\mixed-sizes\\export-2.docx",
+      "format": "docx",
+      "pdf": "tmp\\office-qa\\roundtrip-final\\mixed-sizes\\export-2\\docx\\rendered.pdf",
+      "status": "passed",
+      "renderer": "Microsoft Word",
+      "version": "16.0",
+      "build": "16.0.4266",
+      "pageCount": 3,
+      "sectionCount": 3,
+      "run": "export-2",
+      "expectedPageCount": 3,
+      "pages": [
+        {
+          "page": 1,
+          "widthPt": 360.0,
+          "heightPt": 540.0,
+          "expectedWidthPt": 360,
+          "expectedHeightPt": 540,
+          "actualPixels": [
+            810,
+            1215
+          ],
+          "expectedPixels": [
+            810,
+            1215
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\mixed-sizes\\export-2\\docx\\page-1.png",
+          "errors": [],
+          "meanAbsoluteChannelError": 0.817267,
+          "blurredMeanAbsoluteChannelError": 0.699119,
+          "pixelsOver48Fraction": 0.007997,
+          "expectedForegroundBounds": [
+            0,
+            0,
+            809,
+            1214
+          ],
+          "actualForegroundBounds": [
+            0,
+            0,
+            809,
+            1214
+          ],
+          "maxForegroundBoundsShiftPx": 0,
+          "foregroundCoverageRatio": 1.0,
+          "weightedInkCoverageRatio": 0.995374,
+          "colorLandmarks": [
+            {
+              "name": "top-border-green",
+              "roi": [
+                0,
+                0,
+                810,
+                26
+              ],
+              "rgb": [
+                24,
+                61,
+                56
+              ],
+              "expectedBounds": [
+                0,
+                0,
+                809,
+                14
+              ],
+              "actualBounds": [
+                0,
+                0,
+                809,
+                13
+              ],
+              "maxBoundsShiftPx": 1,
+              "centroidShiftPx": 0.5,
+              "coverageRatio": 0.933333
+            },
+            {
+              "name": "bottom-left-orange",
+              "roi": [
+                0,
+                1184,
+                83,
+                1215
+              ],
+              "rgb": [
+                210,
+                87,
+                49
+              ],
+              "expectedBounds": [
+                0,
+                11,
+                71,
+                30
+              ],
+              "actualBounds": [
+                0,
+                11,
+                71,
+                30
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-right-blue",
+              "roi": [
+                759,
+                1151,
+                810,
+                1215
+              ],
+              "rgb": [
+                49,
+                100,
+                187
+              ],
+              "expectedBounds": [
+                11,
+                10,
+                50,
+                63
+              ],
+              "actualBounds": [
+                11,
+                10,
+                50,
+                63
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            }
+          ],
+          "status": "passed"
+        },
+        {
+          "page": 2,
+          "widthPt": 720.0,
+          "heightPt": 405.0,
+          "expectedWidthPt": 720,
+          "expectedHeightPt": 405,
+          "actualPixels": [
+            1620,
+            912
+          ],
+          "expectedPixels": [
+            1620,
+            912
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\mixed-sizes\\export-2\\docx\\page-2.png",
+          "errors": [],
+          "meanAbsoluteChannelError": 0.744291,
+          "blurredMeanAbsoluteChannelError": 0.658709,
+          "pixelsOver48Fraction": 0.006359,
+          "expectedForegroundBounds": [
+            0,
+            0,
+            1619,
+            911
+          ],
+          "actualForegroundBounds": [
+            0,
+            0,
+            1619,
+            911
+          ],
+          "maxForegroundBoundsShiftPx": 0,
+          "foregroundCoverageRatio": 1.091073,
+          "weightedInkCoverageRatio": 0.992542,
+          "colorLandmarks": [
+            {
+              "name": "top-border-green",
+              "roi": [
+                0,
+                0,
+                1620,
+                26
+              ],
+              "rgb": [
+                24,
+                61,
+                56
+              ],
+              "expectedBounds": [
+                0,
+                0,
+                1619,
+                14
+              ],
+              "actualBounds": [
+                0,
+                0,
+                1619,
+                13
+              ],
+              "maxBoundsShiftPx": 1,
+              "centroidShiftPx": 0.5,
+              "coverageRatio": 0.933333
+            },
+            {
+              "name": "bottom-left-orange",
+              "roi": [
+                0,
+                881,
+                83,
+                912
+              ],
+              "rgb": [
+                210,
+                87,
+                49
+              ],
+              "expectedBounds": [
+                0,
+                10,
+                71,
+                29
+              ],
+              "actualBounds": [
+                0,
+                10,
+                71,
+                29
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-right-blue",
+              "roi": [
+                1569,
+                847,
+                1620,
+                912
+              ],
+              "rgb": [
+                49,
+                100,
+                187
+              ],
+              "expectedBounds": [
+                11,
+                11,
+                50,
+                63
+              ],
+              "actualBounds": [
+                11,
+                11,
+                50,
+                63
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            }
+          ],
+          "status": "passed"
+        },
+        {
+          "page": 3,
+          "widthPt": 480.0,
+          "heightPt": 480.0,
+          "expectedWidthPt": 480,
+          "expectedHeightPt": 480,
+          "actualPixels": [
+            1080,
+            1080
+          ],
+          "expectedPixels": [
+            1080,
+            1080
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\mixed-sizes\\export-2\\docx\\page-3.png",
+          "errors": [],
+          "meanAbsoluteChannelError": 0.787569,
+          "blurredMeanAbsoluteChannelError": 0.685806,
+          "pixelsOver48Fraction": 0.007661,
+          "expectedForegroundBounds": [
+            0,
+            0,
+            1079,
+            1079
+          ],
+          "actualForegroundBounds": [
+            0,
+            0,
+            1079,
+            1079
+          ],
+          "maxForegroundBoundsShiftPx": 0,
+          "foregroundCoverageRatio": 1.060863,
+          "weightedInkCoverageRatio": 0.993263,
+          "colorLandmarks": [
+            {
+              "name": "top-border-green",
+              "roi": [
+                0,
+                0,
+                1080,
+                26
+              ],
+              "rgb": [
+                24,
+                61,
+                56
+              ],
+              "expectedBounds": [
+                0,
+                0,
+                1079,
+                14
+              ],
+              "actualBounds": [
+                0,
+                0,
+                1079,
+                13
+              ],
+              "maxBoundsShiftPx": 1,
+              "centroidShiftPx": 0.5,
+              "coverageRatio": 0.933333
+            },
+            {
+              "name": "bottom-left-orange",
+              "roi": [
+                0,
+                1049,
+                83,
+                1080
+              ],
+              "rgb": [
+                210,
+                87,
+                49
+              ],
+              "expectedBounds": [
+                0,
+                11,
+                71,
+                30
+              ],
+              "actualBounds": [
+                0,
+                11,
+                71,
+                30
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-right-blue",
+              "roi": [
+                1029,
+                1016,
+                1080,
+                1080
+              ],
+              "rgb": [
+                49,
+                100,
+                187
+              ],
+              "expectedBounds": [
+                11,
+                10,
+                50,
+                63
+              ],
+              "actualBounds": [
+                11,
+                10,
+                50,
+                63
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            }
+          ],
+          "status": "passed"
+        }
+      ],
+      "errors": []
+    },
+    {
+      "case": "mixed-sizes",
+      "source": "tmp\\office-qa\\fixtures\\final-run\\mixed-sizes\\export-2.pptx",
+      "format": "pptx",
+      "pdf": "tmp\\office-qa\\roundtrip-final\\mixed-sizes\\export-2\\pptx\\rendered.pdf",
+      "status": "passed",
+      "renderer": "Microsoft PowerPoint",
+      "version": "16.0",
+      "build": "4266",
+      "pageCount": 3,
+      "widthPt": 720.0,
+      "heightPt": 540.0,
+      "run": "export-2",
+      "expectedPageCount": 3,
+      "pages": [
+        {
+          "page": 1,
+          "widthPt": 720.0,
+          "heightPt": 540.0,
+          "expectedWidthPt": 720,
+          "expectedHeightPt": 540,
+          "actualPixels": [
+            1620,
+            1215
+          ],
+          "expectedPixels": [
+            1620,
+            1215
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\mixed-sizes\\export-2\\pptx\\page-1.png",
+          "errors": [],
+          "meanAbsoluteChannelError": 0.408634,
+          "blurredMeanAbsoluteChannelError": 0.349559,
+          "pixelsOver48Fraction": 0.003998,
+          "expectedForegroundBounds": [
+            405,
+            0,
+            1214,
+            1214
+          ],
+          "actualForegroundBounds": [
+            405,
+            0,
+            1214,
+            1214
+          ],
+          "maxForegroundBoundsShiftPx": 0,
+          "foregroundCoverageRatio": 1.0,
+          "weightedInkCoverageRatio": 0.995374,
+          "colorLandmarks": [
+            {
+              "name": "top-border-green",
+              "roi": [
+                395,
+                0,
+                1226,
+                26
+              ],
+              "rgb": [
+                24,
+                61,
+                56
+              ],
+              "expectedBounds": [
+                10,
+                0,
+                819,
+                14
+              ],
+              "actualBounds": [
+                10,
+                0,
+                819,
+                13
+              ],
+              "maxBoundsShiftPx": 1,
+              "centroidShiftPx": 0.5,
+              "coverageRatio": 0.933333
+            },
+            {
+              "name": "bottom-left-orange",
+              "roi": [
+                395,
+                1184,
+                488,
+                1215
+              ],
+              "rgb": [
+                210,
+                87,
+                49
+              ],
+              "expectedBounds": [
+                10,
+                11,
+                81,
+                30
+              ],
+              "actualBounds": [
+                10,
+                11,
+                81,
+                30
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-right-blue",
+              "roi": [
+                1164,
+                1151,
+                1226,
+                1215
+              ],
+              "rgb": [
+                49,
+                100,
+                187
+              ],
+              "expectedBounds": [
+                11,
+                10,
+                50,
+                63
+              ],
+              "actualBounds": [
+                11,
+                10,
+                50,
+                63
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            }
+          ],
+          "status": "passed"
+        },
+        {
+          "page": 2,
+          "widthPt": 720.0,
+          "heightPt": 540.0,
+          "expectedWidthPt": 720,
+          "expectedHeightPt": 540,
+          "actualPixels": [
+            1620,
+            1215
+          ],
+          "expectedPixels": [
+            1620,
+            1215
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\mixed-sizes\\export-2\\pptx\\page-2.png",
+          "errors": [],
+          "meanAbsoluteChannelError": 0.367111,
+          "blurredMeanAbsoluteChannelError": 0.315775,
+          "pixelsOver48Fraction": 0.002415,
+          "expectedForegroundBounds": [
+            0,
+            152,
+            1619,
+            1062
+          ],
+          "actualForegroundBounds": [
+            0,
+            152,
+            1619,
+            1063
+          ],
+          "maxForegroundBoundsShiftPx": 1,
+          "foregroundCoverageRatio": 0.917898,
+          "weightedInkCoverageRatio": 1.001899,
+          "colorLandmarks": [
+            {
+              "name": "top-border-green",
+              "roi": [
+                0,
+                141,
+                1620,
+                178
+              ],
+              "rgb": [
+                24,
+                61,
+                56
+              ],
+              "expectedBounds": [
+                0,
+                11,
+                1619,
+                25
+              ],
+              "actualBounds": [
+                0,
+                11,
+                1619,
+                25
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-left-orange",
+              "roi": [
+                0,
+                1032,
+                83,
+                1074
+              ],
+              "rgb": [
+                210,
+                87,
+                49
+              ],
+              "expectedBounds": [
+                0,
+                11,
+                71,
+                29
+              ],
+              "actualBounds": [
+                0,
+                11,
+                71,
+                30
+              ],
+              "maxBoundsShiftPx": 1,
+              "centroidShiftPx": 0.5,
+              "coverageRatio": 1.052632
+            },
+            {
+              "name": "bottom-right-blue",
+              "roi": [
+                1569,
+                999,
+                1620,
+                1074
+              ],
+              "rgb": [
+                49,
+                100,
+                187
+              ],
+              "expectedBounds": [
+                11,
+                10,
+                50,
+                62
+              ],
+              "actualBounds": [
+                11,
+                11,
+                50,
+                63
+              ],
+              "maxBoundsShiftPx": 1,
+              "centroidShiftPx": 1.0,
+              "coverageRatio": 1.0
+            }
+          ],
+          "status": "passed"
+        },
+        {
+          "page": 3,
+          "widthPt": 720.0,
+          "heightPt": 540.0,
+          "expectedWidthPt": 720,
+          "expectedHeightPt": 540,
+          "actualPixels": [
+            1620,
+            1215
+          ],
+          "expectedPixels": [
+            1620,
+            1215
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\mixed-sizes\\export-2\\pptx\\page-3.png",
+          "errors": [],
+          "meanAbsoluteChannelError": 0.237972,
+          "blurredMeanAbsoluteChannelError": 0.211229,
+          "pixelsOver48Fraction": 0.001584,
+          "expectedForegroundBounds": [
+            270,
+            67,
+            1349,
+            1146
+          ],
+          "actualForegroundBounds": [
+            270,
+            67,
+            1349,
+            1147
+          ],
+          "maxForegroundBoundsShiftPx": 1,
+          "foregroundCoverageRatio": 0.97518,
+          "weightedInkCoverageRatio": 0.998441,
+          "colorLandmarks": [
+            {
+              "name": "top-border-green",
+              "roi": [
+                260,
+                57,
+                1361,
+                94
+              ],
+              "rgb": [
+                24,
+                61,
+                56
+              ],
+              "expectedBounds": [
+                10,
+                10,
+                1089,
+                24
+              ],
+              "actualBounds": [
+                10,
+                10,
+                1089,
+                24
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-left-orange",
+              "roi": [
+                260,
+                1117,
+                353,
+                1158
+              ],
+              "rgb": [
+                210,
+                87,
+                49
+              ],
+              "expectedBounds": [
+                10,
+                11,
+                81,
+                29
+              ],
+              "actualBounds": [
+                10,
+                11,
+                81,
+                30
+              ],
+              "maxBoundsShiftPx": 1,
+              "centroidShiftPx": 0.5,
+              "coverageRatio": 1.052632
+            },
+            {
+              "name": "bottom-right-blue",
+              "roi": [
+                1299,
+                1083,
+                1361,
+                1158
+              ],
+              "rgb": [
+                49,
+                100,
+                187
+              ],
+              "expectedBounds": [
+                11,
+                11,
+                50,
+                63
+              ],
+              "actualBounds": [
+                11,
+                11,
+                50,
+                64
+              ],
+              "maxBoundsShiftPx": 1,
+              "centroidShiftPx": 0.5,
+              "coverageRatio": 1.018868
+            }
+          ],
+          "status": "passed"
+        }
+      ],
+      "errors": []
+    },
+    {
+      "case": "mixed-sizes",
+      "source": "tmp\\office-qa\\fixtures\\final-run\\mixed-sizes\\export-3.docx",
+      "format": "docx",
+      "pdf": "tmp\\office-qa\\roundtrip-final\\mixed-sizes\\export-3\\docx\\rendered.pdf",
+      "status": "passed",
+      "renderer": "Microsoft Word",
+      "version": "16.0",
+      "build": "16.0.4266",
+      "pageCount": 3,
+      "sectionCount": 3,
+      "run": "export-3",
+      "expectedPageCount": 3,
+      "pages": [
+        {
+          "page": 1,
+          "widthPt": 360.0,
+          "heightPt": 540.0,
+          "expectedWidthPt": 360,
+          "expectedHeightPt": 540,
+          "actualPixels": [
+            810,
+            1215
+          ],
+          "expectedPixels": [
+            810,
+            1215
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\mixed-sizes\\export-3\\docx\\page-1.png",
+          "errors": [],
+          "meanAbsoluteChannelError": 0.817267,
+          "blurredMeanAbsoluteChannelError": 0.699119,
+          "pixelsOver48Fraction": 0.007997,
+          "expectedForegroundBounds": [
+            0,
+            0,
+            809,
+            1214
+          ],
+          "actualForegroundBounds": [
+            0,
+            0,
+            809,
+            1214
+          ],
+          "maxForegroundBoundsShiftPx": 0,
+          "foregroundCoverageRatio": 1.0,
+          "weightedInkCoverageRatio": 0.995374,
+          "colorLandmarks": [
+            {
+              "name": "top-border-green",
+              "roi": [
+                0,
+                0,
+                810,
+                26
+              ],
+              "rgb": [
+                24,
+                61,
+                56
+              ],
+              "expectedBounds": [
+                0,
+                0,
+                809,
+                14
+              ],
+              "actualBounds": [
+                0,
+                0,
+                809,
+                13
+              ],
+              "maxBoundsShiftPx": 1,
+              "centroidShiftPx": 0.5,
+              "coverageRatio": 0.933333
+            },
+            {
+              "name": "bottom-left-orange",
+              "roi": [
+                0,
+                1184,
+                83,
+                1215
+              ],
+              "rgb": [
+                210,
+                87,
+                49
+              ],
+              "expectedBounds": [
+                0,
+                11,
+                71,
+                30
+              ],
+              "actualBounds": [
+                0,
+                11,
+                71,
+                30
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-right-blue",
+              "roi": [
+                759,
+                1151,
+                810,
+                1215
+              ],
+              "rgb": [
+                49,
+                100,
+                187
+              ],
+              "expectedBounds": [
+                11,
+                10,
+                50,
+                63
+              ],
+              "actualBounds": [
+                11,
+                10,
+                50,
+                63
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            }
+          ],
+          "status": "passed"
+        },
+        {
+          "page": 2,
+          "widthPt": 720.0,
+          "heightPt": 405.0,
+          "expectedWidthPt": 720,
+          "expectedHeightPt": 405,
+          "actualPixels": [
+            1620,
+            912
+          ],
+          "expectedPixels": [
+            1620,
+            912
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\mixed-sizes\\export-3\\docx\\page-2.png",
+          "errors": [],
+          "meanAbsoluteChannelError": 0.744291,
+          "blurredMeanAbsoluteChannelError": 0.658709,
+          "pixelsOver48Fraction": 0.006359,
+          "expectedForegroundBounds": [
+            0,
+            0,
+            1619,
+            911
+          ],
+          "actualForegroundBounds": [
+            0,
+            0,
+            1619,
+            911
+          ],
+          "maxForegroundBoundsShiftPx": 0,
+          "foregroundCoverageRatio": 1.091073,
+          "weightedInkCoverageRatio": 0.992542,
+          "colorLandmarks": [
+            {
+              "name": "top-border-green",
+              "roi": [
+                0,
+                0,
+                1620,
+                26
+              ],
+              "rgb": [
+                24,
+                61,
+                56
+              ],
+              "expectedBounds": [
+                0,
+                0,
+                1619,
+                14
+              ],
+              "actualBounds": [
+                0,
+                0,
+                1619,
+                13
+              ],
+              "maxBoundsShiftPx": 1,
+              "centroidShiftPx": 0.5,
+              "coverageRatio": 0.933333
+            },
+            {
+              "name": "bottom-left-orange",
+              "roi": [
+                0,
+                881,
+                83,
+                912
+              ],
+              "rgb": [
+                210,
+                87,
+                49
+              ],
+              "expectedBounds": [
+                0,
+                10,
+                71,
+                29
+              ],
+              "actualBounds": [
+                0,
+                10,
+                71,
+                29
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-right-blue",
+              "roi": [
+                1569,
+                847,
+                1620,
+                912
+              ],
+              "rgb": [
+                49,
+                100,
+                187
+              ],
+              "expectedBounds": [
+                11,
+                11,
+                50,
+                63
+              ],
+              "actualBounds": [
+                11,
+                11,
+                50,
+                63
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            }
+          ],
+          "status": "passed"
+        },
+        {
+          "page": 3,
+          "widthPt": 480.0,
+          "heightPt": 480.0,
+          "expectedWidthPt": 480,
+          "expectedHeightPt": 480,
+          "actualPixels": [
+            1080,
+            1080
+          ],
+          "expectedPixels": [
+            1080,
+            1080
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\mixed-sizes\\export-3\\docx\\page-3.png",
+          "errors": [],
+          "meanAbsoluteChannelError": 0.787569,
+          "blurredMeanAbsoluteChannelError": 0.685806,
+          "pixelsOver48Fraction": 0.007661,
+          "expectedForegroundBounds": [
+            0,
+            0,
+            1079,
+            1079
+          ],
+          "actualForegroundBounds": [
+            0,
+            0,
+            1079,
+            1079
+          ],
+          "maxForegroundBoundsShiftPx": 0,
+          "foregroundCoverageRatio": 1.060863,
+          "weightedInkCoverageRatio": 0.993263,
+          "colorLandmarks": [
+            {
+              "name": "top-border-green",
+              "roi": [
+                0,
+                0,
+                1080,
+                26
+              ],
+              "rgb": [
+                24,
+                61,
+                56
+              ],
+              "expectedBounds": [
+                0,
+                0,
+                1079,
+                14
+              ],
+              "actualBounds": [
+                0,
+                0,
+                1079,
+                13
+              ],
+              "maxBoundsShiftPx": 1,
+              "centroidShiftPx": 0.5,
+              "coverageRatio": 0.933333
+            },
+            {
+              "name": "bottom-left-orange",
+              "roi": [
+                0,
+                1049,
+                83,
+                1080
+              ],
+              "rgb": [
+                210,
+                87,
+                49
+              ],
+              "expectedBounds": [
+                0,
+                11,
+                71,
+                30
+              ],
+              "actualBounds": [
+                0,
+                11,
+                71,
+                30
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-right-blue",
+              "roi": [
+                1029,
+                1016,
+                1080,
+                1080
+              ],
+              "rgb": [
+                49,
+                100,
+                187
+              ],
+              "expectedBounds": [
+                11,
+                10,
+                50,
+                63
+              ],
+              "actualBounds": [
+                11,
+                10,
+                50,
+                63
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            }
+          ],
+          "status": "passed"
+        }
+      ],
+      "errors": []
+    },
+    {
+      "case": "mixed-sizes",
+      "source": "tmp\\office-qa\\fixtures\\final-run\\mixed-sizes\\export-3.pptx",
+      "format": "pptx",
+      "pdf": "tmp\\office-qa\\roundtrip-final\\mixed-sizes\\export-3\\pptx\\rendered.pdf",
+      "status": "passed",
+      "renderer": "Microsoft PowerPoint",
+      "version": "16.0",
+      "build": "4266",
+      "pageCount": 3,
+      "widthPt": 720.0,
+      "heightPt": 540.0,
+      "run": "export-3",
+      "expectedPageCount": 3,
+      "pages": [
+        {
+          "page": 1,
+          "widthPt": 720.0,
+          "heightPt": 540.0,
+          "expectedWidthPt": 720,
+          "expectedHeightPt": 540,
+          "actualPixels": [
+            1620,
+            1215
+          ],
+          "expectedPixels": [
+            1620,
+            1215
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\mixed-sizes\\export-3\\pptx\\page-1.png",
+          "errors": [],
+          "meanAbsoluteChannelError": 0.408634,
+          "blurredMeanAbsoluteChannelError": 0.349559,
+          "pixelsOver48Fraction": 0.003998,
+          "expectedForegroundBounds": [
+            405,
+            0,
+            1214,
+            1214
+          ],
+          "actualForegroundBounds": [
+            405,
+            0,
+            1214,
+            1214
+          ],
+          "maxForegroundBoundsShiftPx": 0,
+          "foregroundCoverageRatio": 1.0,
+          "weightedInkCoverageRatio": 0.995374,
+          "colorLandmarks": [
+            {
+              "name": "top-border-green",
+              "roi": [
+                395,
+                0,
+                1226,
+                26
+              ],
+              "rgb": [
+                24,
+                61,
+                56
+              ],
+              "expectedBounds": [
+                10,
+                0,
+                819,
+                14
+              ],
+              "actualBounds": [
+                10,
+                0,
+                819,
+                13
+              ],
+              "maxBoundsShiftPx": 1,
+              "centroidShiftPx": 0.5,
+              "coverageRatio": 0.933333
+            },
+            {
+              "name": "bottom-left-orange",
+              "roi": [
+                395,
+                1184,
+                488,
+                1215
+              ],
+              "rgb": [
+                210,
+                87,
+                49
+              ],
+              "expectedBounds": [
+                10,
+                11,
+                81,
+                30
+              ],
+              "actualBounds": [
+                10,
+                11,
+                81,
+                30
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-right-blue",
+              "roi": [
+                1164,
+                1151,
+                1226,
+                1215
+              ],
+              "rgb": [
+                49,
+                100,
+                187
+              ],
+              "expectedBounds": [
+                11,
+                10,
+                50,
+                63
+              ],
+              "actualBounds": [
+                11,
+                10,
+                50,
+                63
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            }
+          ],
+          "status": "passed"
+        },
+        {
+          "page": 2,
+          "widthPt": 720.0,
+          "heightPt": 540.0,
+          "expectedWidthPt": 720,
+          "expectedHeightPt": 540,
+          "actualPixels": [
+            1620,
+            1215
+          ],
+          "expectedPixels": [
+            1620,
+            1215
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\mixed-sizes\\export-3\\pptx\\page-2.png",
+          "errors": [],
+          "meanAbsoluteChannelError": 0.367111,
+          "blurredMeanAbsoluteChannelError": 0.315775,
+          "pixelsOver48Fraction": 0.002415,
+          "expectedForegroundBounds": [
+            0,
+            152,
+            1619,
+            1062
+          ],
+          "actualForegroundBounds": [
+            0,
+            152,
+            1619,
+            1063
+          ],
+          "maxForegroundBoundsShiftPx": 1,
+          "foregroundCoverageRatio": 0.917898,
+          "weightedInkCoverageRatio": 1.001899,
+          "colorLandmarks": [
+            {
+              "name": "top-border-green",
+              "roi": [
+                0,
+                141,
+                1620,
+                178
+              ],
+              "rgb": [
+                24,
+                61,
+                56
+              ],
+              "expectedBounds": [
+                0,
+                11,
+                1619,
+                25
+              ],
+              "actualBounds": [
+                0,
+                11,
+                1619,
+                25
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-left-orange",
+              "roi": [
+                0,
+                1032,
+                83,
+                1074
+              ],
+              "rgb": [
+                210,
+                87,
+                49
+              ],
+              "expectedBounds": [
+                0,
+                11,
+                71,
+                29
+              ],
+              "actualBounds": [
+                0,
+                11,
+                71,
+                30
+              ],
+              "maxBoundsShiftPx": 1,
+              "centroidShiftPx": 0.5,
+              "coverageRatio": 1.052632
+            },
+            {
+              "name": "bottom-right-blue",
+              "roi": [
+                1569,
+                999,
+                1620,
+                1074
+              ],
+              "rgb": [
+                49,
+                100,
+                187
+              ],
+              "expectedBounds": [
+                11,
+                10,
+                50,
+                62
+              ],
+              "actualBounds": [
+                11,
+                11,
+                50,
+                63
+              ],
+              "maxBoundsShiftPx": 1,
+              "centroidShiftPx": 1.0,
+              "coverageRatio": 1.0
+            }
+          ],
+          "status": "passed"
+        },
+        {
+          "page": 3,
+          "widthPt": 720.0,
+          "heightPt": 540.0,
+          "expectedWidthPt": 720,
+          "expectedHeightPt": 540,
+          "actualPixels": [
+            1620,
+            1215
+          ],
+          "expectedPixels": [
+            1620,
+            1215
+          ],
+          "renderedPng": "tmp\\office-qa\\roundtrip-final\\mixed-sizes\\export-3\\pptx\\page-3.png",
+          "errors": [],
+          "meanAbsoluteChannelError": 0.237972,
+          "blurredMeanAbsoluteChannelError": 0.211229,
+          "pixelsOver48Fraction": 0.001584,
+          "expectedForegroundBounds": [
+            270,
+            67,
+            1349,
+            1146
+          ],
+          "actualForegroundBounds": [
+            270,
+            67,
+            1349,
+            1147
+          ],
+          "maxForegroundBoundsShiftPx": 1,
+          "foregroundCoverageRatio": 0.97518,
+          "weightedInkCoverageRatio": 0.998441,
+          "colorLandmarks": [
+            {
+              "name": "top-border-green",
+              "roi": [
+                260,
+                57,
+                1361,
+                94
+              ],
+              "rgb": [
+                24,
+                61,
+                56
+              ],
+              "expectedBounds": [
+                10,
+                10,
+                1089,
+                24
+              ],
+              "actualBounds": [
+                10,
+                10,
+                1089,
+                24
+              ],
+              "maxBoundsShiftPx": 0,
+              "centroidShiftPx": 0.0,
+              "coverageRatio": 1.0
+            },
+            {
+              "name": "bottom-left-orange",
+              "roi": [
+                260,
+                1117,
+                353,
+                1158
+              ],
+              "rgb": [
+                210,
+                87,
+                49
+              ],
+              "expectedBounds": [
+                10,
+                11,
+                81,
+                29
+              ],
+              "actualBounds": [
+                10,
+                11,
+                81,
+                30
+              ],
+              "maxBoundsShiftPx": 1,
+              "centroidShiftPx": 0.5,
+              "coverageRatio": 1.052632
+            },
+            {
+              "name": "bottom-right-blue",
+              "roi": [
+                1299,
+                1083,
+                1361,
+                1158
+              ],
+              "rgb": [
+                49,
+                100,
+                187
+              ],
+              "expectedBounds": [
+                11,
+                11,
+                50,
+                63
+              ],
+              "actualBounds": [
+                11,
+                11,
+                50,
+                64
+              ],
+              "maxBoundsShiftPx": 1,
+              "centroidShiftPx": 0.5,
+              "coverageRatio": 1.018868
+            }
+          ],
+          "status": "passed"
+        }
+      ],
+      "errors": []
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "date": "2026-10-21",
+  "version": "1.3.0",
+  "status": "passed",
+  "scope": "Actual browser UI, real local application server, loopback synthetic proxy and translation service; no corporate credentials or paid API",
+  "unitAndIntegrationTests": { "passed": 110, "failed": 0 },
+  "checks": [
+    "Invalid proxy URL is rejected with a readable error and retains typed fields",
+    "Saving preserves edited document text, model name, API mode and reasoning selection",
+    "Successful save clears the password input and indicates stored credentials",
+    "A translation started from the UI uses the newly saved proxy without restarting",
+    "A fresh browser tab restores URL, empty NO_PROXY, local-use selection and saved-password indicator",
+    "Saved password is never filled into the browser input",
+    "Explicit password removal updates the UI to no saved password"
+  ],
+  "translationTransportCounts": { "proxy": 1, "direct": 0 },
+  "screenshots": ["proxy-settings-ui.jpg"]
+}

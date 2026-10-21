@@ -1,0 +1,32 @@
+name: PDF Lingua
+
+on:
+  push:
+    paths:
+      - 'pdf-translator-studio/**'
+      - '.github/workflows/pdf-translator-studio.yml'
+  pull_request:
+    paths:
+      - 'pdf-translator-studio/**'
+      - '.github/workflows/pdf-translator-studio.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: pdf-translator-studio
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+      - name: Test document processing, API requests, proxy settings and local server
+        run: npm test

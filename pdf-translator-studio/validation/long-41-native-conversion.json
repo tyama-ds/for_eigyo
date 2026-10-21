@@ -1,0 +1,33 @@
+[
+  {
+    "document": "long-41-translated",
+    "format": "docx",
+    "source": ".\\tmp\\long-pdf-qa\\long-41-translated.docx",
+    "sourceSha256": "89785323ce258c28ce36437b101163cdb9ea2519bf5485ce5c41dcefd44c3bd4",
+    "pdf": ".\\tmp\\long-pdf-qa\\validation\\long-41-translated\\docx\\native-rendered.pdf",
+    "status": "passed",
+    "openedAtUtc": "2026-10-21T05:19:45.9993464Z",
+    "renderer": "Microsoft Word",
+    "version": "16.0",
+    "build": "16.0.4266",
+    "pageCount": 41,
+    "sectionCount": 41,
+    "nativePdfSha256": "1ff864b26086c3e3fd1a28442363892efa2e43ec1e7a2938c066a366d6926002"
+  },
+  {
+    "document": "long-41-translated",
+    "format": "pptx",
+    "source": ".\\tmp\\long-pdf-qa\\long-41-translated.pptx",
+    "sourceSha256": "0cafaa4db10d80e3d92708627e38fd6df0f42c424fc7c6f5be6679edbe8b717a",
+    "pdf": ".\\tmp\\long-pdf-qa\\validation\\long-41-translated\\pptx\\native-rendered.pdf",
+    "status": "passed",
+    "openedAtUtc": "2026-10-21T05:19:54.8297826Z",
+    "renderer": "Microsoft PowerPoint",
+    "version": "16.0",
+    "build": "4266",
+    "pageCount": 41,
+    "widthPt": 480.0,
+    "heightPt": 480.0,
+    "nativePdfSha256": "aa3f8e7c80e22ec671f4bf5132f7228dfa24593d3dd1ac2674e5d7ae46f94599"
+  }
+]

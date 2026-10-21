@@ -1,0 +1,363 @@
+{
+  "completed": [
+    "41 pages: lazy navigation, editing persistence, partial JSON roundtrip, unread page extraction",
+    "all-page translation includes all 41 pages, including pages never opened; deterministic test double only"
+  ],
+  "documents": [
+    {
+      "name": "41-page mixed-size fixture",
+      "source": "long-41-source.pdf",
+      "pageCount": 41,
+      "outputs": [
+        {
+          "format": "pdf",
+          "filename": "long-41-translated.pdf",
+          "bytes": 309738,
+          "sha256": "08f12b5208506e3f330d2d23bb0bd9839c739cb5556c4c3dae030d2935c9d310",
+          "seconds": 11.953,
+          "validation": {
+            "pages": 41,
+            "images": 41,
+            "maxPageSizeErrorPt": 0,
+            "pageSizes": "pass"
+          }
+        },
+        {
+          "format": "docx",
+          "filename": "long-41-translated.docx",
+          "bytes": 990796,
+          "sha256": "b3c5e851b5dd3792d93d9c33b93a93540233fb9960ccb58149389943aaa8599f",
+          "seconds": 2.41,
+          "validation": {
+            "pageSections": 41,
+            "images": 41,
+            "pageAndImageSizes": "pass",
+            "archiveCRC": "pass"
+          }
+        },
+        {
+          "format": "pptx",
+          "filename": "long-41-translated.pptx",
+          "bytes": 1032363,
+          "sha256": "b5942341854700937c1a35932d2a5ecace8fc8af7755e0001a4dd6c70b464a23",
+          "seconds": 2.436,
+          "validation": {
+            "slides": 41,
+            "images": 41,
+            "pageAndImageSizes": "pass",
+            "archiveCRC": "pass"
+          }
+        }
+      ]
+    }
+  ],
+  "pageErrors": [],
+  "externalRequests": [],
+  "mockApiCalls": [
+    {
+      "blocks": [
+        {
+          "id": "p1-b1",
+          "text": "Page 1 original text"
+        },
+        {
+          "id": "p2-b1",
+          "text": "Page 2 original text"
+        },
+        {
+          "id": "p3-b1",
+          "text": "Page 3 original text"
+        },
+        {
+          "id": "p4-b1",
+          "text": "Page 4 original text"
+        },
+        {
+          "id": "p5-b1",
+          "text": "Page 5 original text"
+        },
+        {
+          "id": "p6-b1",
+          "text": "Page 6 original text"
+        },
+        {
+          "id": "p7-b1",
+          "text": "Page 7 original text"
+        },
+        {
+          "id": "p8-b1",
+          "text": "Page 8 original text"
+        },
+        {
+          "id": "p9-b1",
+          "text": "Page 9 original text"
+        },
+        {
+          "id": "p10-b1",
+          "text": "Page 10 original text"
+        },
+        {
+          "id": "p11-b1",
+          "text": "Page 11 original text"
+        },
+        {
+          "id": "p12-b1",
+          "text": "Page 12 original text"
+        },
+        {
+          "id": "p13-b1",
+          "text": "Page 13 original text"
+        },
+        {
+          "id": "p14-b1",
+          "text": "Page 14 original text"
+        },
+        {
+          "id": "p15-b1",
+          "text": "Page 15 original text"
+        },
+        {
+          "id": "p16-b1",
+          "text": "Page 16 original text"
+        },
+        {
+          "id": "p17-b1",
+          "text": "Page 17 original text"
+        },
+        {
+          "id": "p18-b1",
+          "text": "Page 18 original text"
+        },
+        {
+          "id": "p19-b1",
+          "text": "Page 19 original text"
+        },
+        {
+          "id": "p20-b1",
+          "text": "Page 20 original text"
+        },
+        {
+          "id": "p21-b1",
+          "text": "Page 21 original text"
+        },
+        {
+          "id": "p22-b1",
+          "text": "Page 22 original text"
+        },
+        {
+          "id": "p23-b1",
+          "text": "Page 23 original text"
+        },
+        {
+          "id": "p24-b1",
+          "text": "Page 24 original text"
+        }
+      ],
+      "config": {
+        "provider": "local",
+        "model": "qa-local-model",
+        "sourceLanguage": "auto",
+        "targetLanguage": "Japanese",
+        "apiMode": "chat"
+      }
+    },
+    {
+      "blocks": [
+        {
+          "id": "p25-b1",
+          "text": "Page 25 original text"
+        },
+        {
+          "id": "p26-b1",
+          "text": "Page 26 original text"
+        },
+        {
+          "id": "p27-b1",
+          "text": "Page 27 original text"
+        },
+        {
+          "id": "p28-b1",
+          "text": "Page 28 original text"
+        },
+        {
+          "id": "p29-b1",
+          "text": "Page 29 original text"
+        },
+        {
+          "id": "p30-b1",
+          "text": "Page 30 original text"
+        },
+        {
+          "id": "p31-b1",
+          "text": "Page 31 original text"
+        },
+        {
+          "id": "p32-b1",
+          "text": "Page 32 original text"
+        },
+        {
+          "id": "p33-b1",
+          "text": "Page 33 original text"
+        },
+        {
+          "id": "p34-b1",
+          "text": "Page 34 original text"
+        },
+        {
+          "id": "p35-b1",
+          "text": "Page 35 original text"
+        },
+        {
+          "id": "p36-b1",
+          "text": "Page 36 original text"
+        },
+        {
+          "id": "p37-b1",
+          "text": "Page 37 original text"
+        },
+        {
+          "id": "p38-b1",
+          "text": "Page 38 original text"
+        },
+        {
+          "id": "p39-b1",
+          "text": "Page 39 original text"
+        },
+        {
+          "id": "p40-b1",
+          "text": "Page 40 original text"
+        },
+        {
+          "id": "p41-b1",
+          "text": "Page 41 original text"
+        }
+      ],
+      "config": {
+        "provider": "local",
+        "model": "qa-local-model",
+        "sourceLanguage": "auto",
+        "targetLanguage": "Japanese",
+        "apiMode": "chat"
+      }
+    }
+  ],
+  "canvasSamples": [
+    {
+      "label": "41 pages initial load",
+      "retainedLargeCanvases": 3,
+      "retainedPixels": 1166400,
+      "dimensions": [
+        [
+          540,
+          720
+        ],
+        [
+          540,
+          720
+        ],
+        [
+          540,
+          720
+        ]
+      ]
+    },
+    {
+      "label": "41 pages repeated navigation",
+      "retainedLargeCanvases": 3,
+      "retainedPixels": 1166400,
+      "dimensions": [
+        [
+          540,
+          720
+        ],
+        [
+          540,
+          720
+        ],
+        [
+          540,
+          720
+        ]
+      ]
+    },
+    {
+      "label": "41 pages after all-page translation",
+      "retainedLargeCanvases": 3,
+      "retainedPixels": 1166400,
+      "dimensions": [
+        [
+          720,
+          540
+        ],
+        [
+          720,
+          540
+        ],
+        [
+          720,
+          540
+        ]
+      ]
+    },
+    {
+      "label": "long-41-translated after pdf",
+      "retainedLargeCanvases": 3,
+      "retainedPixels": 1166400,
+      "dimensions": [
+        [
+          720,
+          540
+        ],
+        [
+          720,
+          540
+        ],
+        [
+          720,
+          540
+        ]
+      ]
+    },
+    {
+      "label": "long-41-translated after docx",
+      "retainedLargeCanvases": 3,
+      "retainedPixels": 1166400,
+      "dimensions": [
+        [
+          720,
+          540
+        ],
+        [
+          720,
+          540
+        ],
+        [
+          720,
+          540
+        ]
+      ]
+    },
+    {
+      "label": "long-41-translated after pptx",
+      "retainedLargeCanvases": 3,
+      "retainedPixels": 1166400,
+      "dimensions": [
+        [
+          720,
+          540
+        ],
+        [
+          720,
+          540
+        ],
+        [
+          720,
+          540
+        ]
+      ]
+    }
+  ],
+  "realApiCalls": 0,
+  "status": "passed",
+  "seconds": 28.783
+}

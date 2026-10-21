@@ -1,0 +1,444 @@
+{
+  "status": "passed",
+  "scope": "Removal of fixed 30-page input restriction; lazy page processing, retained edits, all-page selection and exports",
+  "documents": [
+    {
+      "name": "41-page mixed-size fixture",
+      "source": "long-41-source.pdf",
+      "pageCount": 41,
+      "outputs": [
+        {
+          "format": "pdf",
+          "filename": "long-41-translated.pdf",
+          "bytes": 309738,
+          "sha256": "27076ef25897f0276851b2663dfb3f63f155696d17d34adb7ad3b267ad4d3e0e",
+          "seconds": 13.073,
+          "validation": {
+            "pages": 41,
+            "images": 41,
+            "pageSizes": "pass"
+          }
+        },
+        {
+          "format": "docx",
+          "filename": "long-41-translated.docx",
+          "bytes": 990796,
+          "sha256": "89785323ce258c28ce36437b101163cdb9ea2519bf5485ce5c41dcefd44c3bd4",
+          "seconds": 2.324,
+          "validation": {
+            "pageSections": 41,
+            "images": 41,
+            "pageAndImageSizes": "pass",
+            "archiveCRC": "pass"
+          }
+        },
+        {
+          "format": "pptx",
+          "filename": "long-41-translated.pptx",
+          "bytes": 1032363,
+          "sha256": "0cafaa4db10d80e3d92708627e38fd6df0f42c424fc7c6f5be6679edbe8b717a",
+          "seconds": 2.487,
+          "validation": {
+            "slides": 41,
+            "images": 41,
+            "pageAndImageSizes": "pass",
+            "archiveCRC": "pass"
+          }
+        }
+      ],
+      "sourceSha256": "696e743f01a825a96796dc15ff007315cb08bf963ebc9b6fc835fcdb8b3693bd"
+    },
+    {
+      "name": "real annual report; manual QA edit only, not translated",
+      "source": ".\\tmp\\user-examples\\cn\\original.pdf",
+      "pageCount": 269,
+      "outputs": [
+        {
+          "format": "pdf",
+          "filename": "long-real-qa.pdf",
+          "bytes": 81165521,
+          "sha256": "e0990335f7b09737cd97863f278e617ffd2f864d078b3697680935e15adc170b",
+          "validation": {
+            "pages": 269,
+            "page_images": 269,
+            "max_page_size_error_pt": 0.0,
+            "uniquePaintedImages": 269,
+            "method": "pypdf in independent Python process; PDFium last-page render visually checked"
+          }
+        },
+        {
+          "format": "docx",
+          "filename": "long-real-qa.docx",
+          "bytes": 103718981,
+          "sha256": "78675532ae4cf783750232a679861f98eaf4bf554d5266fdf76a1fda600272c9",
+          "seconds": 38.031,
+          "validation": {
+            "pageSections": 269,
+            "images": 269,
+            "pageAndImageSizes": "pass",
+            "archiveCRC": "pass"
+          }
+        },
+        {
+          "format": "pptx",
+          "filename": "long-real-qa.pptx",
+          "bytes": 103984135,
+          "sha256": "a255c802f7ee0c5499dbb4a65dbb4c7640341de5ccf4c4a38c0eea354c831237",
+          "seconds": 30.883,
+          "validation": {
+            "slides": 269,
+            "images": 269,
+            "pageAndImageSizes": "pass",
+            "archiveCRC": "pass"
+          }
+        }
+      ],
+      "sourceSha256": "10476f0cf2fdc0727c0a2ea9ae6641a1f5170f23a5b408d3154c50b9ef66c1b4"
+    }
+  ],
+  "mockTranslation": {
+    "requests": 2,
+    "blocks": 41,
+    "pages": 41,
+    "realApiRequests": 0
+  },
+  "realDocumentTranslation": "No translation service called. Only the first text region was manually set to 検証 for edit-persistence QA; the annual report was not translated.",
+  "canvasSamples": [
+    {
+      "label": "41 pages initial load",
+      "retainedLargeCanvases": 3,
+      "retainedPixels": 1166400,
+      "dimensions": [
+        [
+          540,
+          720
+        ],
+        [
+          540,
+          720
+        ],
+        [
+          540,
+          720
+        ]
+      ]
+    },
+    {
+      "label": "41 pages repeated navigation",
+      "retainedLargeCanvases": 3,
+      "retainedPixels": 1166400,
+      "dimensions": [
+        [
+          540,
+          720
+        ],
+        [
+          540,
+          720
+        ],
+        [
+          540,
+          720
+        ]
+      ]
+    },
+    {
+      "label": "41 pages after all-page translation",
+      "retainedLargeCanvases": 3,
+      "retainedPixels": 1166400,
+      "dimensions": [
+        [
+          720,
+          540
+        ],
+        [
+          720,
+          540
+        ],
+        [
+          720,
+          540
+        ]
+      ]
+    },
+    {
+      "label": "long-41-translated after pdf",
+      "retainedLargeCanvases": 3,
+      "retainedPixels": 1166400,
+      "dimensions": [
+        [
+          720,
+          540
+        ],
+        [
+          720,
+          540
+        ],
+        [
+          720,
+          540
+        ]
+      ]
+    },
+    {
+      "label": "long-41-translated after docx",
+      "retainedLargeCanvases": 3,
+      "retainedPixels": 1166400,
+      "dimensions": [
+        [
+          720,
+          540
+        ],
+        [
+          720,
+          540
+        ],
+        [
+          720,
+          540
+        ]
+      ]
+    },
+    {
+      "label": "long-41-translated after pptx",
+      "retainedLargeCanvases": 3,
+      "retainedPixels": 1166400,
+      "dimensions": [
+        [
+          720,
+          540
+        ],
+        [
+          720,
+          540
+        ],
+        [
+          720,
+          540
+        ]
+      ]
+    },
+    {
+      "label": "269 pages initial load",
+      "retainedLargeCanvases": 3,
+      "retainedPixels": 3383577,
+      "dimensions": [
+        [
+          893,
+          1263
+        ],
+        [
+          893,
+          1263
+        ],
+        [
+          893,
+          1263
+        ]
+      ]
+    },
+    {
+      "label": "269 pages repeated navigation",
+      "retainedLargeCanvases": 3,
+      "retainedPixels": 3383577,
+      "dimensions": [
+        [
+          893,
+          1263
+        ],
+        [
+          893,
+          1263
+        ],
+        [
+          893,
+          1263
+        ]
+      ]
+    },
+    {
+      "label": "269 pages initial load",
+      "retainedLargeCanvases": 3,
+      "retainedPixels": 3383577,
+      "dimensions": [
+        [
+          893,
+          1263
+        ],
+        [
+          893,
+          1263
+        ],
+        [
+          893,
+          1263
+        ]
+      ]
+    },
+    {
+      "label": "269 pages repeated navigation",
+      "retainedLargeCanvases": 3,
+      "retainedPixels": 3383577,
+      "dimensions": [
+        [
+          893,
+          1263
+        ],
+        [
+          893,
+          1263
+        ],
+        [
+          893,
+          1263
+        ]
+      ]
+    },
+    {
+      "label": "long-real-qa after docx",
+      "retainedLargeCanvases": 3,
+      "retainedPixels": 3383577,
+      "dimensions": [
+        [
+          893,
+          1263
+        ],
+        [
+          893,
+          1263
+        ],
+        [
+          893,
+          1263
+        ]
+      ]
+    },
+    {
+      "label": "long-real-qa after pptx",
+      "retainedLargeCanvases": 3,
+      "retainedPixels": 3383577,
+      "dimensions": [
+        [
+          893,
+          1263
+        ],
+        [
+          893,
+          1263
+        ],
+        [
+          893,
+          1263
+        ]
+      ]
+    }
+  ],
+  "pageErrors": [],
+  "externalRequests": [],
+  "nativeOffice": [
+    {
+      "document": "long-41-translated",
+      "format": "docx",
+      "source": ".\\tmp\\long-pdf-qa\\long-41-translated.docx",
+      "sourceSha256": "89785323ce258c28ce36437b101163cdb9ea2519bf5485ce5c41dcefd44c3bd4",
+      "pdf": ".\\tmp\\long-pdf-qa\\validation\\long-41-translated\\docx\\native-rendered.pdf",
+      "status": "passed",
+      "openedAtUtc": "2026-10-21T05:19:45.9993464Z",
+      "renderer": "Microsoft Word",
+      "version": "16.0",
+      "build": "16.0.4266",
+      "pageCount": 41,
+      "sectionCount": 41,
+      "nativePdfSha256": "1ff864b26086c3e3fd1a28442363892efa2e43ec1e7a2938c066a366d6926002"
+    },
+    {
+      "document": "long-41-translated",
+      "format": "pptx",
+      "source": ".\\tmp\\long-pdf-qa\\long-41-translated.pptx",
+      "sourceSha256": "0cafaa4db10d80e3d92708627e38fd6df0f42c424fc7c6f5be6679edbe8b717a",
+      "pdf": ".\\tmp\\long-pdf-qa\\validation\\long-41-translated\\pptx\\native-rendered.pdf",
+      "status": "passed",
+      "openedAtUtc": "2026-10-21T05:19:54.8297826Z",
+      "renderer": "Microsoft PowerPoint",
+      "version": "16.0",
+      "build": "4266",
+      "pageCount": 41,
+      "widthPt": 480.0,
+      "heightPt": 480.0,
+      "nativePdfSha256": "aa3f8e7c80e22ec671f4bf5132f7228dfa24593d3dd1ac2674e5d7ae46f94599"
+    },
+    {
+      "document": "long-real-qa",
+      "format": "docx",
+      "source": ".\\tmp\\long-pdf-qa\\long-real-qa.docx",
+      "sourceSha256": "78675532ae4cf783750232a679861f98eaf4bf554d5266fdf76a1fda600272c9",
+      "pdf": ".\\tmp\\long-pdf-qa\\validation\\long-real-qa\\docx\\native-rendered.pdf",
+      "status": "passed",
+      "openedAtUtc": "2026-10-21T05:25:01.2544332Z",
+      "renderer": "Microsoft Word",
+      "version": "16.0",
+      "build": "16.0.4266",
+      "pageCount": 269,
+      "sectionCount": 269,
+      "nativePdfSha256": "a177f309d6724f7a3d1ee986a2cfc2d9a263b28071bacc31efff95619286b9a2"
+    },
+    {
+      "document": "long-real-qa",
+      "format": "pptx",
+      "source": ".\\tmp\\long-pdf-qa\\long-real-qa.pptx",
+      "sourceSha256": "a255c802f7ee0c5499dbb4a65dbb4c7640341de5ccf4c4a38c0eea354c831237",
+      "pdf": ".\\tmp\\long-pdf-qa\\validation\\long-real-qa\\pptx\\native-rendered.pdf",
+      "status": "passed",
+      "openedAtUtc": "2026-10-21T05:26:22.0951395Z",
+      "renderer": "Microsoft PowerPoint",
+      "version": "16.0",
+      "build": "4266",
+      "pageCount": 269,
+      "widthPt": 841.875,
+      "heightPt": 841.875,
+      "nativePdfSha256": "d49a9488235c774213dd61a859d71590506b17dba052ca3120547e327fbc88a0"
+    }
+  ],
+  "nativePageGeometry": [
+    {
+      "document": "long-41-translated",
+      "format": "docx",
+      "pages": 41,
+      "largest_page_size_error_pt": 0.0,
+      "result": "pass"
+    },
+    {
+      "document": "long-41-translated",
+      "format": "pptx",
+      "pages": 41,
+      "largest_page_size_error_pt": 0.0,
+      "result": "pass"
+    },
+    {
+      "document": "long-real-qa",
+      "format": "docx",
+      "pages": 269,
+      "largest_page_size_error_pt": 0.020000000000095497,
+      "result": "pass"
+    },
+    {
+      "document": "long-real-qa",
+      "format": "pptx",
+      "pages": 269,
+      "largest_page_size_error_pt": 0.01999999999998181,
+      "result": "pass"
+    }
+  ],
+  "testHarnessIncident": {
+    "stage": "After successful 269-page PDF download and app idle confirmation, while the test loaded the 81 MB exported PDF into the same browser renderer for operator-list inspection",
+    "observation": "page.evaluate: Target page, context or browser has been closed",
+    "cause": "Not proven; additional memory pressure from the test parser is a possible cause.",
+    "resolution": "Validated the saved PDF in independent Python/PDFium processes; performed 269-page DOCX/PPTX UI exports in a fresh browser. The updated regression script uses independent Python PDF validation.",
+    "retainedRecord": "initial-run-report.json"
+  },
+  "limitations": [
+    "41-page translation coverage uses a deterministic mock provider, not a real LLM.",
+    "269-page full API translation was not tested.",
+    "Exports retain the existing flattened page-image design; this test does not assert universal pixel-identical source preservation."
+  ]
+}

@@ -1,0 +1,2 @@
+# Preserve upstream assets and license notices verbatim.
+dist/vendor/** -text -whitespace linguist-vendored

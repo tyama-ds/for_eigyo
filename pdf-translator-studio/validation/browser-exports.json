@@ -1,0 +1,798 @@
+{
+  "repetitions": 3,
+  "fixtureCases": [
+    {
+      "name": "demo-a4",
+      "description": "A4 designed document: colored title, paragraphs, rounded panel, table, vector illustrations and CJK translation",
+      "sourcePdf": "source.pdf",
+      "sourceSha256": "ae4d33d3c6db2cad58d2e1c5c722a778e4649fec274959d9e76dde8d0aa5d13e",
+      "scale": 2.25,
+      "slide": {
+        "widthPt": 595.28,
+        "heightPt": 841.89
+      },
+      "pages": [
+        {
+          "pageNumber": 1,
+          "widthPt": 595.28,
+          "heightPt": 841.89,
+          "pixelWidth": 1340,
+          "pixelHeight": 1895,
+          "originalTextCount": 23,
+          "translatedCount": 21,
+          "unsupportedCount": 0,
+          "slidePixelWidth": 1340,
+          "slidePixelHeight": 1895,
+          "canonicalPng": "canonical-page-1.png",
+          "canonicalSha256": "f60ec1964ea9e122e0889efee7d2ea0494fb34afe558b24569fd2677a50d9db7",
+          "canonicalSlidePng": "canonical-slide-1.png",
+          "canonicalSlideSha256": "c2f272e7bc8db08f039882839118d050fe93b644fa57c0e82c00300771a6f676",
+          "registrationMarks": [
+            {
+              "name": "green-header-left-edge",
+              "x": 0,
+              "y": 0,
+              "width": 20,
+              "height": 190,
+              "rgb": [
+                30,
+                92,
+                81
+              ]
+            },
+            {
+              "name": "gold-circle",
+              "x": 478,
+              "y": 687,
+              "width": 54,
+              "height": 54,
+              "rgb": [
+                233,
+                215,
+                173
+              ]
+            }
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "file": "export-1.pdf",
+          "format": "pdf",
+          "repetition": 1,
+          "byteLength": 126670,
+          "sha256": "595c2dd1749b5552192241681e94e92728334c7d0076c4dee05c68d671c6001b",
+          "mimeType": "application/pdf",
+          "pdfPages": [
+            {
+              "widthPt": 595.28,
+              "heightPt": 841.89,
+              "pixelWidth": 1340,
+              "pixelHeight": 1895,
+              "textItems": 0,
+              "meanMaxChannelError": 0.9540712007246092,
+              "changedPixelFraction": 0.015403457645807899
+            }
+          ]
+        },
+        {
+          "file": "export-1.docx",
+          "format": "docx",
+          "repetition": 1,
+          "byteLength": 207793,
+          "sha256": "7ccf9409c1a3e2f5ca424607bb3ba2ef50a5ec58492fef737a785dae682bef20",
+          "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "mediaCount": 1,
+          "pageSections": 1,
+          "exactImageHashes": true
+        },
+        {
+          "file": "export-1.pptx",
+          "format": "pptx",
+          "repetition": 1,
+          "byteLength": 210768,
+          "sha256": "f5d405fb19c0c2d8cd7bd62bde27df39ba609184628bbfc06d3c2b82a3b683a5",
+          "mimeType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+          "mediaCount": 1,
+          "slideCount": 1,
+          "exactImageHashes": true
+        },
+        {
+          "file": "export-2.pdf",
+          "format": "pdf",
+          "repetition": 2,
+          "byteLength": 126670,
+          "sha256": "2b302e7d87c089eb8a6badfb5a58afb948567a4ffed476bfec42bafcc9ca530a",
+          "mimeType": "application/pdf",
+          "pdfPages": [
+            {
+              "widthPt": 595.28,
+              "heightPt": 841.89,
+              "pixelWidth": 1340,
+              "pixelHeight": 1895,
+              "textItems": 0,
+              "meanMaxChannelError": 0.9540712007246092,
+              "changedPixelFraction": 0.015403457645807899
+            }
+          ]
+        },
+        {
+          "file": "export-2.docx",
+          "format": "docx",
+          "repetition": 2,
+          "byteLength": 207793,
+          "sha256": "b21fe8e50da5f4c3367e91b8e5b2c30d572013e2ad53e069f24fa7d2737a2f11",
+          "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "mediaCount": 1,
+          "pageSections": 1,
+          "exactImageHashes": true
+        },
+        {
+          "file": "export-2.pptx",
+          "format": "pptx",
+          "repetition": 2,
+          "byteLength": 210768,
+          "sha256": "990ad14b5ac2eabc96c9f06f44bf237b05ddc27bad83acd38fa61031ce11f39f",
+          "mimeType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+          "mediaCount": 1,
+          "slideCount": 1,
+          "exactImageHashes": true
+        },
+        {
+          "file": "export-3.pdf",
+          "format": "pdf",
+          "repetition": 3,
+          "byteLength": 126670,
+          "sha256": "893646af8403490e8e3ed9c74b20e6f033aeaaa8c474f234943a0b3811a280c4",
+          "mimeType": "application/pdf",
+          "pdfPages": [
+            {
+              "widthPt": 595.28,
+              "heightPt": 841.89,
+              "pixelWidth": 1340,
+              "pixelHeight": 1895,
+              "textItems": 0,
+              "meanMaxChannelError": 0.9540712007246092,
+              "changedPixelFraction": 0.015403457645807899
+            }
+          ]
+        },
+        {
+          "file": "export-3.docx",
+          "format": "docx",
+          "repetition": 3,
+          "byteLength": 207793,
+          "sha256": "1c7b8cebec2902b4a1336bb4ef1735e81a91494d3e747d068421aff14981477a",
+          "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "mediaCount": 1,
+          "pageSections": 1,
+          "exactImageHashes": true
+        },
+        {
+          "file": "export-3.pptx",
+          "format": "pptx",
+          "repetition": 3,
+          "byteLength": 210768,
+          "sha256": "932aa68d5ab3351321c308d6ca0746a0b0aec456d31c7bccf8aac0f988b424d8",
+          "mimeType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+          "mediaCount": 1,
+          "slideCount": 1,
+          "exactImageHashes": true
+        }
+      ]
+    },
+    {
+      "name": "layout-colors",
+      "description": "Landscape, edge registration marks, white text on dark fill, table lines, serif/mono text, diacritics, multiline CJK and preserved rotated text",
+      "sourcePdf": "source.pdf",
+      "sourceSha256": "4fde2d9ab2d269922e38285026401739c97d37b4e14a3ec7b74816748a093cf1",
+      "scale": 2.25,
+      "slide": {
+        "widthPt": 720,
+        "heightPt": 450
+      },
+      "pages": [
+        {
+          "pageNumber": 1,
+          "widthPt": 720,
+          "heightPt": 450,
+          "pixelWidth": 1620,
+          "pixelHeight": 1013,
+          "originalTextCount": 18,
+          "translatedCount": 17,
+          "unsupportedCount": 1,
+          "slidePixelWidth": 1620,
+          "slidePixelHeight": 1013,
+          "canonicalPng": "canonical-page-1.png",
+          "canonicalSha256": "ea44bfc078c415cc995fb92e66c070855a99c6123cd708def4e0df236fe037d7",
+          "canonicalSlidePng": "canonical-slide-1.png",
+          "canonicalSlideSha256": "e46e54cabda868ce89c8095d38721bd4dfd0e09ec1b0bd9fbb3bf11bdaee86d3",
+          "registrationMarks": [
+            {
+              "name": "top-left-red",
+              "x": 0,
+              "y": 0,
+              "width": 26,
+              "height": 9,
+              "rgb": [
+                240,
+                44,
+                49
+              ]
+            },
+            {
+              "name": "top-right-blue",
+              "x": 708,
+              "y": 0,
+              "width": 12,
+              "height": 23,
+              "rgb": [
+                19,
+                90,
+                244
+              ]
+            },
+            {
+              "name": "bottom-left-green",
+              "x": 0,
+              "y": 431,
+              "width": 10,
+              "height": 19,
+              "rgb": [
+                18,
+                168,
+                111
+              ]
+            },
+            {
+              "name": "bottom-right-purple",
+              "x": 689,
+              "y": 440,
+              "width": 31,
+              "height": 10,
+              "rgb": [
+                158,
+                64,
+                221
+              ]
+            }
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "file": "export-1.pdf",
+          "format": "pdf",
+          "repetition": 1,
+          "byteLength": 68045,
+          "sha256": "4f97e53fc0a06a2ef0b48e86d26f1a715c20738737aa0fc652515fb8d951a8b7",
+          "mimeType": "application/pdf",
+          "pdfPages": [
+            {
+              "widthPt": 720,
+              "heightPt": 450,
+              "pixelWidth": 1620,
+              "pixelHeight": 1013,
+              "textItems": 0,
+              "meanMaxChannelError": 0,
+              "changedPixelFraction": 0
+            }
+          ]
+        },
+        {
+          "file": "export-1.docx",
+          "format": "docx",
+          "repetition": 1,
+          "byteLength": 111591,
+          "sha256": "52a11f8ea8df9bb88b35d10eb023e0a4a0b99c2721368af4e6034a8aadbc0cad",
+          "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "mediaCount": 1,
+          "pageSections": 1,
+          "exactImageHashes": true
+        },
+        {
+          "file": "export-1.pptx",
+          "format": "pptx",
+          "repetition": 1,
+          "byteLength": 114569,
+          "sha256": "55766e4a7117be338125258e21979b05b02b81eeda2aa0040d9b5d05c36e7fd2",
+          "mimeType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+          "mediaCount": 1,
+          "slideCount": 1,
+          "exactImageHashes": true
+        },
+        {
+          "file": "export-2.pdf",
+          "format": "pdf",
+          "repetition": 2,
+          "byteLength": 68045,
+          "sha256": "6978a9b22357a6eff912b2ae0a3b43c46b59aae32f1a037a6bea1a7084e8a53e",
+          "mimeType": "application/pdf",
+          "pdfPages": [
+            {
+              "widthPt": 720,
+              "heightPt": 450,
+              "pixelWidth": 1620,
+              "pixelHeight": 1013,
+              "textItems": 0,
+              "meanMaxChannelError": 0,
+              "changedPixelFraction": 0
+            }
+          ]
+        },
+        {
+          "file": "export-2.docx",
+          "format": "docx",
+          "repetition": 2,
+          "byteLength": 111591,
+          "sha256": "17eae18a7a6229b89051f36631c29b31937536b6f6108ec5fbfce1819b54c90f",
+          "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "mediaCount": 1,
+          "pageSections": 1,
+          "exactImageHashes": true
+        },
+        {
+          "file": "export-2.pptx",
+          "format": "pptx",
+          "repetition": 2,
+          "byteLength": 114569,
+          "sha256": "96b2e7ce51a410b434fc970612660a47053d420d6e471c2ec19385e35a53f1f8",
+          "mimeType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+          "mediaCount": 1,
+          "slideCount": 1,
+          "exactImageHashes": true
+        },
+        {
+          "file": "export-3.pdf",
+          "format": "pdf",
+          "repetition": 3,
+          "byteLength": 68045,
+          "sha256": "c91ced6b735c5bd65f1903dfee009730c188300678c5508f15d852734e563d5c",
+          "mimeType": "application/pdf",
+          "pdfPages": [
+            {
+              "widthPt": 720,
+              "heightPt": 450,
+              "pixelWidth": 1620,
+              "pixelHeight": 1013,
+              "textItems": 0,
+              "meanMaxChannelError": 0,
+              "changedPixelFraction": 0
+            }
+          ]
+        },
+        {
+          "file": "export-3.docx",
+          "format": "docx",
+          "repetition": 3,
+          "byteLength": 111591,
+          "sha256": "17eae18a7a6229b89051f36631c29b31937536b6f6108ec5fbfce1819b54c90f",
+          "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "mediaCount": 1,
+          "pageSections": 1,
+          "exactImageHashes": true
+        },
+        {
+          "file": "export-3.pptx",
+          "format": "pptx",
+          "repetition": 3,
+          "byteLength": 114569,
+          "sha256": "96b2e7ce51a410b434fc970612660a47053d420d6e471c2ec19385e35a53f1f8",
+          "mimeType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+          "mediaCount": 1,
+          "slideCount": 1,
+          "exactImageHashes": true
+        }
+      ]
+    },
+    {
+      "name": "mixed-sizes",
+      "description": "Three pages with portrait/landscape/square dimensions and colored bleed edges; PPTX centers each unchanged page on a shared slide",
+      "sourcePdf": "source.pdf",
+      "sourceSha256": "cbec73c75954a25e4a9ed64f0062bddcf582b19f0a8af7621fd80ce1b840adcb",
+      "scale": 2.25,
+      "slide": {
+        "widthPt": 720,
+        "heightPt": 540
+      },
+      "pages": [
+        {
+          "pageNumber": 1,
+          "widthPt": 360,
+          "heightPt": 540,
+          "pixelWidth": 810,
+          "pixelHeight": 1215,
+          "originalTextCount": 5,
+          "translatedCount": 5,
+          "unsupportedCount": 0,
+          "slidePixelWidth": 1620,
+          "slidePixelHeight": 1215,
+          "canonicalPng": "canonical-page-1.png",
+          "canonicalSha256": "3c03edf99e420b505e8a6fa9f3ca783e3085a021eaaf551e5decb81f730b742c",
+          "canonicalSlidePng": "canonical-slide-1.png",
+          "canonicalSlideSha256": "2a794c395948397fb4b2ed415b87bf203e414d35be8ada691ef9db3824436e96",
+          "registrationMarks": [
+            {
+              "name": "top-border-green",
+              "x": 0,
+              "y": 0,
+              "width": 360,
+              "height": 7,
+              "rgb": [
+                24,
+                61,
+                56
+              ]
+            },
+            {
+              "name": "bottom-left-orange",
+              "x": 0,
+              "y": 531,
+              "width": 32,
+              "height": 9,
+              "rgb": [
+                210,
+                87,
+                49
+              ]
+            },
+            {
+              "name": "bottom-right-blue",
+              "x": 342,
+              "y": 516,
+              "width": 18,
+              "height": 24,
+              "rgb": [
+                49,
+                100,
+                187
+              ]
+            }
+          ]
+        },
+        {
+          "pageNumber": 2,
+          "widthPt": 720,
+          "heightPt": 405,
+          "pixelWidth": 1620,
+          "pixelHeight": 912,
+          "originalTextCount": 5,
+          "translatedCount": 5,
+          "unsupportedCount": 0,
+          "slidePixelWidth": 1620,
+          "slidePixelHeight": 1215,
+          "canonicalPng": "canonical-page-2.png",
+          "canonicalSha256": "ee6879200348563fb4aaec885a88e57befa2dd3c5c25b087309ed66efe7e662f",
+          "canonicalSlidePng": "canonical-slide-2.png",
+          "canonicalSlideSha256": "d353aa2412ae575c91a1eef6fbeffac33d1d86776a84761bab604e6580a0ded3",
+          "registrationMarks": [
+            {
+              "name": "top-border-green",
+              "x": 0,
+              "y": 0,
+              "width": 720,
+              "height": 7,
+              "rgb": [
+                24,
+                61,
+                56
+              ]
+            },
+            {
+              "name": "bottom-left-orange",
+              "x": 0,
+              "y": 396,
+              "width": 32,
+              "height": 9,
+              "rgb": [
+                210,
+                87,
+                49
+              ]
+            },
+            {
+              "name": "bottom-right-blue",
+              "x": 702,
+              "y": 381,
+              "width": 18,
+              "height": 24,
+              "rgb": [
+                49,
+                100,
+                187
+              ]
+            }
+          ]
+        },
+        {
+          "pageNumber": 3,
+          "widthPt": 480,
+          "heightPt": 480,
+          "pixelWidth": 1080,
+          "pixelHeight": 1080,
+          "originalTextCount": 5,
+          "translatedCount": 5,
+          "unsupportedCount": 0,
+          "slidePixelWidth": 1620,
+          "slidePixelHeight": 1215,
+          "canonicalPng": "canonical-page-3.png",
+          "canonicalSha256": "bff8a9dd78023786fe22fa6eb93328fea56a4aa2049d9a068d0378eebbd4fd6d",
+          "canonicalSlidePng": "canonical-slide-3.png",
+          "canonicalSlideSha256": "23291846284cab5b5577bda0663aa08250bdd6fa6bc19ecbf7075f5f6d5ff4e7",
+          "registrationMarks": [
+            {
+              "name": "top-border-green",
+              "x": 0,
+              "y": 0,
+              "width": 480,
+              "height": 7,
+              "rgb": [
+                24,
+                61,
+                56
+              ]
+            },
+            {
+              "name": "bottom-left-orange",
+              "x": 0,
+              "y": 471,
+              "width": 32,
+              "height": 9,
+              "rgb": [
+                210,
+                87,
+                49
+              ]
+            },
+            {
+              "name": "bottom-right-blue",
+              "x": 462,
+              "y": 456,
+              "width": 18,
+              "height": 24,
+              "rgb": [
+                49,
+                100,
+                187
+              ]
+            }
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "file": "export-1.pdf",
+          "format": "pdf",
+          "repetition": 1,
+          "byteLength": 91303,
+          "sha256": "76f7d70e93e62740fb91bf80d7bcb01c4d33efc75918046ca7c21e8bbd87143a",
+          "mimeType": "application/pdf",
+          "pdfPages": [
+            {
+              "widthPt": 360,
+              "heightPt": 540,
+              "pixelWidth": 810,
+              "pixelHeight": 1215,
+              "textItems": 0,
+              "meanMaxChannelError": 0,
+              "changedPixelFraction": 0
+            },
+            {
+              "widthPt": 720,
+              "heightPt": 405,
+              "pixelWidth": 1620,
+              "pixelHeight": 912,
+              "textItems": 0,
+              "meanMaxChannelError": 0.4987674626380767,
+              "changedPixelFraction": 0.008595949750920512
+            },
+            {
+              "widthPt": 480,
+              "heightPt": 480,
+              "pixelWidth": 1080,
+              "pixelHeight": 1080,
+              "textItems": 0,
+              "meanMaxChannelError": 0,
+              "changedPixelFraction": 0
+            }
+          ]
+        },
+        {
+          "file": "export-1.docx",
+          "format": "docx",
+          "repetition": 1,
+          "byteLength": 174343,
+          "sha256": "a8c1d5b40ae5f99b67e5c75397c6b2d08c235860eb3d7d9e4186cde074d23aa3",
+          "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "mediaCount": 3,
+          "pageSections": 3,
+          "exactImageHashes": true
+        },
+        {
+          "file": "export-1.pptx",
+          "format": "pptx",
+          "repetition": 1,
+          "byteLength": 179192,
+          "sha256": "c94b786b0d8d7a708c2dfc0def693f24dc9c564a454ae29f994804eb328fc903",
+          "mimeType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+          "mediaCount": 3,
+          "slideCount": 3,
+          "exactImageHashes": true
+        },
+        {
+          "file": "export-2.pdf",
+          "format": "pdf",
+          "repetition": 2,
+          "byteLength": 91303,
+          "sha256": "e82e7172af3a42586febba84d7441b5c5f21afbd983f92c0a49224b4987f5352",
+          "mimeType": "application/pdf",
+          "pdfPages": [
+            {
+              "widthPt": 360,
+              "heightPt": 540,
+              "pixelWidth": 810,
+              "pixelHeight": 1215,
+              "textItems": 0,
+              "meanMaxChannelError": 0,
+              "changedPixelFraction": 0
+            },
+            {
+              "widthPt": 720,
+              "heightPt": 405,
+              "pixelWidth": 1620,
+              "pixelHeight": 912,
+              "textItems": 0,
+              "meanMaxChannelError": 0.4987674626380767,
+              "changedPixelFraction": 0.008595949750920512
+            },
+            {
+              "widthPt": 480,
+              "heightPt": 480,
+              "pixelWidth": 1080,
+              "pixelHeight": 1080,
+              "textItems": 0,
+              "meanMaxChannelError": 0,
+              "changedPixelFraction": 0
+            }
+          ]
+        },
+        {
+          "file": "export-2.docx",
+          "format": "docx",
+          "repetition": 2,
+          "byteLength": 174343,
+          "sha256": "57a70ec9f7b47690fef3c93d2ce627810da1da32f4472e2984dbf046f6347369",
+          "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "mediaCount": 3,
+          "pageSections": 3,
+          "exactImageHashes": true
+        },
+        {
+          "file": "export-2.pptx",
+          "format": "pptx",
+          "repetition": 2,
+          "byteLength": 179192,
+          "sha256": "b97f69cc91c11f700d65acc4bfec57fa4f4f6893a1b108e2519a85f004302c71",
+          "mimeType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+          "mediaCount": 3,
+          "slideCount": 3,
+          "exactImageHashes": true
+        },
+        {
+          "file": "export-3.pdf",
+          "format": "pdf",
+          "repetition": 3,
+          "byteLength": 91303,
+          "sha256": "48bb380f9501ddac21a9dc7892ff6bdb18b882f8d52f3d77b8882066b66edaec",
+          "mimeType": "application/pdf",
+          "pdfPages": [
+            {
+              "widthPt": 360,
+              "heightPt": 540,
+              "pixelWidth": 810,
+              "pixelHeight": 1215,
+              "textItems": 0,
+              "meanMaxChannelError": 0,
+              "changedPixelFraction": 0
+            },
+            {
+              "widthPt": 720,
+              "heightPt": 405,
+              "pixelWidth": 1620,
+              "pixelHeight": 912,
+              "textItems": 0,
+              "meanMaxChannelError": 0.4987674626380767,
+              "changedPixelFraction": 0.008595949750920512
+            },
+            {
+              "widthPt": 480,
+              "heightPt": 480,
+              "pixelWidth": 1080,
+              "pixelHeight": 1080,
+              "textItems": 0,
+              "meanMaxChannelError": 0,
+              "changedPixelFraction": 0
+            }
+          ]
+        },
+        {
+          "file": "export-3.docx",
+          "format": "docx",
+          "repetition": 3,
+          "byteLength": 174343,
+          "sha256": "a9f9e283ada035ad1b4e1d5d8e97df8886512c624949f7990e0f8e2f06c6a4e9",
+          "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "mediaCount": 3,
+          "pageSections": 3,
+          "exactImageHashes": true
+        },
+        {
+          "file": "export-3.pptx",
+          "format": "pptx",
+          "repetition": 3,
+          "byteLength": 179192,
+          "sha256": "fd3ad3244fb15da70710695a53bcb639aa8659047c33aa2e96ce3234fcfd2cb6",
+          "mimeType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+          "mediaCount": 3,
+          "slideCount": 3,
+          "exactImageHashes": true
+        }
+      ]
+    }
+  ],
+  "uiDownloads": [
+    {
+      "format": "pdf",
+      "suggestedFilename": "fieldnotes-sample-translated.pdf",
+      "byteLength": 136107
+    },
+    {
+      "format": "docx",
+      "suggestedFilename": "fieldnotes-sample-translated.docx",
+      "byteLength": 222543
+    },
+    {
+      "format": "pptx",
+      "suggestedFilename": "fieldnotes-sample-translated.pptx",
+      "byteLength": 225518
+    }
+  ],
+  "pageErrors": [],
+  "externalRequests": [],
+  "translationRequests": 0,
+  "overflowRejections": [
+    {
+      "format": "pdf",
+      "rejected": true,
+      "code": "TEXT_OVERFLOW",
+      "blockIds": [
+        "p1-b1"
+      ],
+      "progress": [],
+      "expectedId": "p1-b1"
+    },
+    {
+      "format": "docx",
+      "rejected": true,
+      "code": "TEXT_OVERFLOW",
+      "blockIds": [
+        "p1-b1"
+      ],
+      "progress": [],
+      "expectedId": "p1-b1"
+    },
+    {
+      "format": "pptx",
+      "rejected": true,
+      "code": "TEXT_OVERFLOW",
+      "blockIds": [
+        "p1-b1"
+      ],
+      "progress": [],
+      "expectedId": "p1-b1"
+    }
+  ],
+  "totalEngineExports": 27,
+  "totalUiExports": 3,
+  "completed": true
+}

@@ -1,0 +1,12 @@
+{
+  "status": "passed",
+  "provider": "local",
+  "model": "google/gemma-3n-e4b",
+  "source": "User-provided original 269-page annual report, page 1",
+  "expectedRegions": 9,
+  "translatedIndicator": "9 / 9",
+  "completionMessage": "9領域を翻訳しました。文字の収まりと内容を確認してください。",
+  "quality": "文字位置をクリックして編集",
+  "observedCompleteAfterMs": 70366,
+  "realApi": true
+}
