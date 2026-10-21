@@ -136,6 +136,7 @@ function responseError(status, body) {
     404: 'API の URL とモデル名を確認してください。',
     413: '翻訳対象が大きすぎます。バッチ文字数を小さくしてください。',
     429: '利用制限に達しました。時間をおいて再試行してください。',
+    504: 'API の応答待ち時間を超えました。接続設定の API 待ち時間を長くするか、1回の翻訳量を減らしてください。',
   };
   return new TranslationError(`翻訳 API が HTTP ${status} を返しました。${hints[status] || 'しばらく待って再試行してください。'}${detail ? ` ${detail}` : ''}`, {
     code: 'HTTP_ERROR', status, retryable: status === 429 || status === 503,
@@ -164,6 +165,7 @@ async function requestBatch(batch, config, { signal, fetchImpl }) {
           targetLanguage: config.targetLanguage,
           apiMode: config.apiMode,
           ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
+          ...(config.providerTimeoutMs !== undefined ? { providerTimeoutMs: config.providerTimeoutMs } : {}),
         },
       }),
     }), controller.signal);
@@ -194,10 +196,14 @@ async function requestBatch(batch, config, { signal, fetchImpl }) {
 
 /**
  * @param {Array<{id: string|number, text: string}>} blocks
- * @param {{provider:'local'|'openai',model:string,sourceLanguage?:string,targetLanguage:string,apiMode?:'auto'|'responses'|'chat',reasoningEffort?:string}} config
+ * @param {{provider:'local'|'openai',model:string,sourceLanguage?:string,targetLanguage:string,apiMode?:'auto'|'responses'|'chat',reasoningEffort?:string,providerTimeoutMs?:number}} config
+ * @param {{signal?:AbortSignal,onProgress?:Function,onBatch?:Function,fetchImpl?:Function}} options
+ * onBatch is an opt-in checkpoint hook for each completely validated API batch.
+ * It receives {translations, blocks, completed, total, batch, totalBatches} and is
+ * awaited before continuing. Without this hook, failures expose no partial result.
  * @returns {Promise<Record<string,string>>} All translations, keyed by original id.
  */
-export async function translateBlocks(blocks, config = {}, { signal, onProgress, fetchImpl = globalThis.fetch } = {}) {
+export async function translateBlocks(blocks, config = {}, { signal, onProgress, onBatch, fetchImpl = globalThis.fetch } = {}) {
   checkAbort(signal);
   const normalized = normalizeBlocks(blocks);
   const pending = normalized.filter((block) => block.text.trim());
@@ -217,6 +223,8 @@ export async function translateBlocks(blocks, config = {}, { signal, onProgress,
     retryDelayMs: integerOption(config.retryDelayMs, 750, 0, 10000, '再試行待機時間'),
     // The server owns provider timeouts; no shorter client timer should trigger a duplicate paid request.
     requestTimeoutMs: integerOption(config.requestTimeoutMs, 0, 0, 900000, 'タイムアウト'),
+    providerTimeoutMs: config.providerTimeoutMs === undefined ? undefined
+      : integerOption(config.providerTimeoutMs, undefined, 1000, 1800000, 'API 待ち時間'),
   };
   if (!['local', 'openai'].includes(settings.provider)) throw new TranslationError('接続先の種類を選択してください。', { code: 'INVALID_CONFIG' });
   if (!['auto', 'responses', 'chat'].includes(settings.apiMode)) throw new TranslationError('API の形式を選択してください。', { code: 'INVALID_CONFIG' });
@@ -225,8 +233,8 @@ export async function translateBlocks(blocks, config = {}, { signal, onProgress,
   if (typeof fetchImpl !== 'function') throw new TranslationError('このブラウザーは fetch に対応していません。', { code: 'UNSUPPORTED_BROWSER' });
   // Smaller requests keep local models responsive without changing cloud throughput.
   const batches = batchBlocks(pending, {
-    maxBatchCharacters: config.maxBatchCharacters ?? (settings.provider === 'local' ? 1500 : 6000),
-    maxBatchBlocks: config.maxBatchBlocks ?? (settings.provider === 'local' ? 8 : 24),
+    maxBatchCharacters: config.maxBatchCharacters ?? (settings.provider === 'local' ? 1000 : 6000),
+    maxBatchBlocks: config.maxBatchBlocks ?? (settings.provider === 'local' ? 4 : 24),
   });
   let completed = result.size;
   onProgress?.({ completed, total: normalized.length, batch: 0, totalBatches: batches.length });
@@ -247,6 +255,14 @@ export async function translateBlocks(blocks, config = {}, { signal, onProgress,
     checkAbort(signal);
     for (const block of batch) result.set(block.id, translated[block.id]);
     completed += batch.length;
+    if (onBatch) {
+      await onBatch({
+        translations: { ...translated },
+        blocks: batch.map(block => ({ ...block })),
+        completed, total: normalized.length, batch: index + 1, totalBatches: batches.length,
+      });
+      checkAbort(signal);
+    }
     onProgress?.({ completed, total: normalized.length, batch: index + 1, totalBatches: batches.length });
   }
   checkAbort(signal);

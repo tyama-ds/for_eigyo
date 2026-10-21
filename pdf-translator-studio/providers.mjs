@@ -44,6 +44,11 @@ export function buildRequest(payload, env = process.env) {
   const config = payload.config || {};
   if (!['local', 'openai'].includes(config.provider)) throw publicError('翻訳先を選択してください。', 400);
   const local = config.provider === 'local';
+  if (Object.hasOwn(config, 'providerTimeoutMs') && (!Number.isInteger(config.providerTimeoutMs) || config.providerTimeoutMs < 1000 || config.providerTimeoutMs > 1800000)) {
+    throw publicError('APIの応答待ち時間は1000〜1800000ミリ秒の整数で指定してください。', 400);
+  }
+  const legacyTimeout = Number(env.REQUEST_TIMEOUT_MS);
+  const timeoutMs = config.providerTimeoutMs ?? (Number.isInteger(legacyTimeout) && legacyTimeout >= 1000 && legacyTimeout <= 1800000 ? legacyTimeout : (local ? 600000 : 180000));
   const model = String(config.model || (local ? env.LOCAL_LLM_MODEL : env.OPENAI_MODEL) || (local ? '' : 'gpt-4o')).trim();
   if (!model || model.length > 200 || /[\r\n]/.test(model)) throw publicError('モデル名を設定してください。', 400);
   const choice = config.apiMode || (local ? 'auto' : env.OPENAI_API_MODE) || 'auto';
@@ -78,7 +83,7 @@ export function buildRequest(payload, env = process.env) {
   const key = local ? env.LOCAL_LLM_API_KEY : env.OPENAI_API_KEY;
   if (!local && !key) throw publicError('.env に OPENAI_API_KEY を設定し、サーバーを再起動してください。', 400);
   const base = baseUrl(local ? env.LOCAL_LLM_BASE_URL || 'http://127.0.0.1:11434/v1' : env.OPENAI_BASE_URL || 'https://api.openai.com/v1', local);
-  return { blocks, apiMode, model, local, localJsonMode, body, url: `${base}/${apiMode === 'responses' ? 'responses' : 'chat/completions'}`, headers: key ? { Authorization: `Bearer ${key}` } : {}, useProxy: !local || env.LOCAL_LLM_USE_PROXY === 'true' };
+  return { blocks, apiMode, model, local, localJsonMode, timeoutMs, body, url: `${base}/${apiMode === 'responses' ? 'responses' : 'chat/completions'}`, headers: key ? { Authorization: `Bearer ${key}` } : {}, useProxy: !local || env.LOCAL_LLM_USE_PROXY === 'true' };
 }
 
 export function readResponse(data, apiMode, blocks) {
@@ -105,7 +110,13 @@ export function readResponse(data, apiMode, blocks) {
   } catch { throw responseError('翻訳結果のIDまたはJSON形式が不正です。モデルを変更するか、対象領域を減らしてください。', 'INVALID_TRANSLATION_RESPONSE'); }
 }
 
-export async function translateBatch(payload, { signal, env = process.env, request = requestJson } = {}) {
+export async function translateBatch(payload, { signal, env = process.env, request = requestJson, translationSettings } = {}) {
+  // A browser job may pin its timeout so saving new settings cannot alter a
+  // running job. Older clients receive the current app-saved provider setting.
+  if (translationSettings && payload?.config && !Object.hasOwn(payload.config, 'providerTimeoutMs')) {
+    const seconds = payload.config.provider === 'local' ? translationSettings.localTimeoutSeconds : translationSettings.openaiTimeoutSeconds;
+    payload = { ...payload, config: { ...payload.config, providerTimeoutMs: seconds * 1000 } };
+  }
   const initial = buildRequest(payload, env);
   let effectiveJsonMode = initial.localJsonMode;
   const checkAbort = () => { if (signal?.aborted) throw Object.assign(new Error('翻訳を中止しました。'), { name: 'AbortError', public: true, status: 499 }); };
@@ -113,7 +124,7 @@ export async function translateBatch(payload, { signal, env = process.env, reque
   async function run(spec, depth = 0) {
     checkAbort();
     try {
-      const data = await request(spec.url, spec.body, { headers: spec.headers, signal, env, useProxy: spec.useProxy, timeoutMs: positive(env.REQUEST_TIMEOUT_MS, 180000, 900000) });
+      const data = await request(spec.url, spec.body, { headers: spec.headers, signal, env, useProxy: spec.useProxy, timeoutMs: spec.timeoutMs });
       checkAbort();
       return readResponse(data, spec.apiMode, spec.blocks);
     } catch (error) {

@@ -250,6 +250,7 @@ try {
   report.completed.push('41 pages: lazy navigation, editing persistence, partial JSON roundtrip, unread page extraction');
 
   await page.locator('#scope').selectOption('all');
+  await page.locator('#skip-translated').uncheck(); // This case deliberately replaces all three manual edits.
   await page.locator('#translate-button').click();
   await page.waitForFunction(() => document.querySelector('#toast').textContent.includes('翻訳が完了しました'), null, { timeout: 180000 });
   await idle();

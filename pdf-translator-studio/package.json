@@ -1,5 +1,5 @@
 {
-  "name": "pdf-lingua-studio", "version": "1.3.0", "private": true, "type": "module",
+  "name": "pdf-lingua-studio", "version": "1.3.1", "private": true, "type": "module",
   "engines": {"node": ">=24.5.0"},
   "scripts": {"start": "node launch.mjs", "test": "node --test tests/*.test.mjs"}
 }

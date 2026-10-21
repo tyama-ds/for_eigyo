@@ -136,7 +136,7 @@ export async function requestJson(url, body, { headers = {}, signal, env = proce
     });
   } catch (error) {
     if (signal?.aborted) throw Object.assign(new Error('翻訳を中止しました。'), { name: 'AbortError', public: true, status: 499 });
-    if (timeout.aborted) throw publicError('API接続がタイムアウトしました。REQUEST_TIMEOUT_MS または接続先を確認してください。', 504);
+    if (timeout.aborted) throw classifiedError(`APIの応答を${Math.ceil(timeoutMs / 1000)}秒待ちましたが完了しませんでした。接続設定の「応答待ち時間」を延ばすか、ローカルLLMでは一度に翻訳する領域・文字数を減らしてください。接続先の稼働状態も確認してください。`, 504, 'REQUEST_TIMEOUT');
     if (error.public) throw error;
     throw networkError(error);
   } finally { agent.destroy(); }

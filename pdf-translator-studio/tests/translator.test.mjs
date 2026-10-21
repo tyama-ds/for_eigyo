@@ -32,7 +32,7 @@ test('batches by character and block budget without slicing text or losing surro
   assert.deepEqual(batchBlocks(source, { maxBatchCharacters: 100, maxBatchBlocks: 2 }).flat(), source);
 });
 
-test('local requests default to 8 blocks and 1500 characters while cloud and helper defaults stay unchanged', async () => {
+test('local requests default to 4 blocks and 1000 characters while cloud and helper defaults stay unchanged', async () => {
   const source = Array.from({ length: 25 }, (_, i) => ({ id: `block-${i}`, text: 'Text' }));
   const collect = async (input, options = {}) => {
     const requests = [];
@@ -44,11 +44,11 @@ test('local requests default to 8 blocks and 1500 characters while cloud and hel
     });
     return requests.map(batch => batch.length);
   };
-  assert.deepEqual(await collect(source), [8, 8, 8, 1]);
+  assert.deepEqual(await collect(source), [4, 4, 4, 4, 4, 4, 1]);
   assert.deepEqual(await collect(source, { provider: 'openai' }), [24, 1]);
   assert.deepEqual(batchBlocks(source).map(batch => batch.length), [24, 1]);
   const longBlocks = source.slice(0, 4).map(block => ({ ...block, text: 'x'.repeat(600) }));
-  assert.deepEqual(await collect(longBlocks), [2, 2]);
+  assert.deepEqual(await collect(longBlocks), [1, 1, 1, 1]);
   assert.deepEqual(await collect(longBlocks, { provider: 'openai' }), [4]);
   assert.deepEqual(await collect(source, { maxBatchBlocks: 12 }), [12, 12, 1]);
   assert.deepEqual(await collect(longBlocks, { maxBatchCharacters: 3000 }), [4]);
@@ -114,6 +114,109 @@ test('fails atomically when a later batch is incomplete', async () => {
     fetchImpl: async () => (++calls === 1 ? response([{ id: 'title', text: '題名' }]) : response([])),
   }), { code: 'INVALID_RESPONSE' });
   assert.equal(calls, 2);
+});
+
+test('checkpoint hook retains only validated batches before a 504 and never repeats the timed-out request', async () => {
+  const source = [...blocks, { id: 'last', text: 'Last paragraph' }];
+  const checkpoints = [];
+  let calls = 0;
+  await assert.rejects(translateBlocks(source, { ...config, maxBatchBlocks: 1, maxRetries: 2, retryDelayMs: 0 }, {
+    onBatch: checkpoint => checkpoints.push(checkpoint),
+    fetchImpl: async (_url, options) => {
+      calls += 1;
+      if (calls === 3) return new Response('{"error":{"message":"API接続がタイムアウトしました。"}}', { status: 504 });
+      const { blocks } = JSON.parse(options.body);
+      return response(blocks.map(({ id }) => ({ id, text: `翻訳 ${id}` })));
+    },
+  }), error => error.status === 504 && /API 待ち時間/.test(error.message) && !/しばらく待って再試行/.test(error.message));
+  assert.equal(calls, 3);
+  assert.deepEqual(checkpoints, [
+    { translations: { title: '翻訳 title' }, blocks: [blocks[0]], completed: 1, total: 3, batch: 1, totalBatches: 3 },
+    { translations: { body: '翻訳 body' }, blocks: [blocks[1]], completed: 2, total: 3, batch: 2, totalBatches: 3 },
+  ]);
+});
+
+test('invalid or incomplete batches never create checkpoints', async () => {
+  const checkpoints = [];
+  let calls = 0;
+  await assert.rejects(translateBlocks(blocks, { ...config, maxBatchBlocks: 1 }, {
+    onBatch: checkpoint => checkpoints.push(checkpoint),
+    fetchImpl: async () => (++calls === 1 ? response([{ id: 'title', text: '題名' }]) : response([{ id: 'wrong', text: '本文' }])),
+  }), { code: 'INVALID_RESPONSE' });
+  assert.equal(calls, 2);
+  assert.deepEqual(checkpoints.map(value => value.translations), [{ title: '題名' }]);
+});
+
+test('awaits checkpoint persistence, isolates callback mutations, and stops on cancellation before the next request', async () => {
+  const controller = new AbortController();
+  let releaseCheckpoint;
+  let enteredCheckpoint;
+  const checkpointStarted = new Promise(resolve => { enteredCheckpoint = resolve; });
+  const saved = [];
+  let calls = 0;
+  const pending = translateBlocks(blocks, { ...config, maxBatchBlocks: 1 }, {
+    signal: controller.signal,
+    onBatch: async checkpoint => {
+      await new Promise(resolve => { releaseCheckpoint = resolve; enteredCheckpoint(); });
+      saved.push(checkpoint.translations);
+      controller.abort();
+    },
+    fetchImpl: async () => { calls += 1; return response([{ id: 'title', text: '題名' }]); },
+  });
+  await checkpointStarted;
+  assert.equal(calls, 1);
+  assert.deepEqual(saved, []);
+  releaseCheckpoint();
+  await assert.rejects(pending, { name: 'AbortError' });
+  assert.equal(calls, 1);
+  assert.deepEqual(saved, [{ title: '題名' }]);
+
+  const result = await translateBlocks([blocks[0]], config, {
+    onBatch: checkpoint => { checkpoint.translations.title = '改変'; checkpoint.blocks[0].text = '改変'; },
+    fetchImpl: async () => response([{ id: 'title', text: '題名' }]),
+  });
+  assert.deepEqual(result, { title: '題名' });
+  assert.equal(blocks[0].text, 'Hello 🌍');
+});
+
+test('cancellation while reading a successful response prevents checkpoint exposure', async () => {
+  const controller = new AbortController();
+  const checkpoints = [];
+  await assert.rejects(translateBlocks([blocks[0]], config, {
+    signal: controller.signal,
+    onBatch: checkpoint => checkpoints.push(checkpoint),
+    fetchImpl: async () => ({ ok: true, text: async () => {
+      controller.abort();
+      return JSON.stringify({ translations: [{ id: 'title', text: '題名' }] });
+    } }),
+  }), { name: 'AbortError' });
+  assert.deepEqual(checkpoints, []);
+});
+
+test('checkpoint persistence failures stop without sending or retrying another batch', async () => {
+  let calls = 0;
+  const persistenceError = new Error('Unable to save checkpoint');
+  await assert.rejects(translateBlocks(blocks, { ...config, maxBatchBlocks: 1, maxRetries: 2 }, {
+    onBatch: async () => { throw persistenceError; },
+    fetchImpl: async () => { calls += 1; return response([{ id: 'title', text: '題名' }]); },
+  }), error => error === persistenceError);
+  assert.equal(calls, 1);
+});
+
+test('provider wait time is optional, validated, and forwarded independently from the browser timer', async () => {
+  for (const timeout of [1000, 1800000]) {
+    let received;
+    await translateBlocks([blocks[0]], { ...config, providerTimeoutMs: timeout, requestTimeoutMs: 5000 }, {
+      fetchImpl: async (_url, options) => { received = JSON.parse(options.body); return response([{ id: 'title', text: '題名' }]); },
+    });
+    assert.equal(received.config.providerTimeoutMs, timeout);
+    assert.equal(received.config.requestTimeoutMs, undefined);
+  }
+  for (const providerTimeoutMs of [0, 999, 1800001, 1500.5, '180000', null]) {
+    await assert.rejects(translateBlocks(blocks, { ...config, providerTimeoutMs }, {
+      fetchImpl: () => { throw new Error('Must not send'); },
+    }), { code: 'INVALID_CONFIG' });
+  }
 });
 
 test('HTTP auth errors give useful Japanese messages and do not retry', async () => {

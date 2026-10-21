@@ -4,6 +4,7 @@ import { realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createProxySettingsStore } from './proxy-settings.mjs';
+import { createTranslationSettingsStore } from './translation-settings.mjs';
 
 const defaultRoot = fileURLToPath(new URL('./dist/', import.meta.url));
 const envPath = fileURLToPath(new URL('./.env', import.meta.url));
@@ -78,7 +79,7 @@ function readJson(request, limit = maxJsonBytes) {
     request.resume();
     return Promise.reject(publicError(415, 'Content-Type は application/json を指定してください。'));
   }
-  const sizeError = () => publicError(413, limit === maxJsonBytes ? 'リクエストが大きすぎます。1 MB 以下に分割してください。' : 'プロキシ設定が大きすぎます。16 KB 以下にしてください。');
+  const sizeError = () => publicError(413, limit === maxJsonBytes ? 'リクエストが大きすぎます。1 MB 以下に分割してください。' : '設定が大きすぎます。16 KB 以下にしてください。');
   if (Number(request.headers['content-length']) > limit) {
     request.resume();
     return Promise.reject(sizeError());
@@ -117,9 +118,10 @@ function readJson(request, limit = maxJsonBytes) {
 }
 
 /** Loopback server; credentials stay in the server-side provider module. */
-export function createStaticServer({ root = defaultRoot, providers, env = process.env, proxySettingsPath, proxySettingsStore } = {}) {
+export function createStaticServer({ root = defaultRoot, providers, env = process.env, proxySettingsPath, proxySettingsStore, translationSettingsPath, translationSettingsStore } = {}) {
   const resolvedRoot = path.resolve(root);
   const proxySettings = proxySettingsStore || createProxySettingsStore({ filePath: proxySettingsPath });
+  const translationSettings = translationSettingsStore || createTranslationSettingsStore({ filePath: translationSettingsPath, env });
   let providerImport;
   const getProviders = () => providers || (providerImport ||= import('./providers.mjs'));
   const server = http.createServer(async (request, response) => {
@@ -168,13 +170,21 @@ export function createStaticServer({ root = defaultRoot, providers, env = proces
           } else {
             respondJson(request, response, 405, { error: 'Method not allowed' }, { Allow: 'GET, HEAD, PUT' });
           }
+        } else if (pathname === '/api/translation-settings') {
+          if (request.method === 'GET' || request.method === 'HEAD') {
+            respondJson(request, response, 200, await translationSettings.get());
+          } else if (request.method === 'PUT') {
+            respondJson(request, response, 200, await translationSettings.save(await readJson(request, 16 * 1024)));
+          } else {
+            respondJson(request, response, 405, { error: 'Method not allowed' }, { Allow: 'GET, HEAD, PUT' });
+          }
         } else if (pathname === '/api/translate-batch') {
           if (request.method !== 'POST') {
             respondJson(request, response, 405, { error: 'Method not allowed' }, { Allow: 'POST' });
           } else {
             const payload = await readJson(request);
             const service = await getProviders();
-            const result = await service.translateBatch(payload, { signal: controller.signal, env: await proxySettings.effectiveEnv(env) });
+            const result = await service.translateBatch(payload, { signal: controller.signal, env: await proxySettings.effectiveEnv(env), translationSettings: await translationSettings.get() });
             respondJson(request, response, 200, result);
           }
         } else {
@@ -183,7 +193,10 @@ export function createStaticServer({ root = defaultRoot, providers, env = proces
       } catch (error) {
         const safe = error?.public === true;
         const status = safe && Number.isInteger(error.status) && error.status >= 400 && error.status <= 599 ? error.status : 500;
-        respondJson(request, response, status, { error: safe ? error.message : '翻訳処理に失敗しました。サーバー設定と翻訳サービスの状態を確認してください。' });
+        respondJson(request, response, status, {
+          error: safe ? error.message : '翻訳処理に失敗しました。サーバー設定と翻訳サービスの状態を確認してください。',
+          ...(safe && error.code === 'REQUEST_TIMEOUT' ? { code: 'REQUEST_TIMEOUT' } : {}),
+        });
       } finally {
         response.off('close', onClose);
         request.resume();

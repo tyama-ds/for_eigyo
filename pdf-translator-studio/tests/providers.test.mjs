@@ -272,3 +272,30 @@ test('translateBatch retains cancellation and provider failures from the request
   await assert.rejects(translateBatch(payload({ provider: 'unsupported' }), { env: environment, request: async () => { called = true; } }), { status: 400 });
   assert.equal(called, false);
 });
+
+test('provider deadlines have local and OpenAI defaults, validated overrides and legacy compatibility', () => {
+  assert.equal(buildRequest(payload({ provider: 'local', model: 'local-model' }), {}).timeoutMs, 600000);
+  assert.equal(buildRequest(payload(), environment).timeoutMs, 180000);
+  assert.equal(buildRequest(payload(), { ...environment, REQUEST_TIMEOUT_MS: '1200000' }).timeoutMs, 1200000);
+  assert.equal(buildRequest(payload({ providerTimeoutMs: 900000 }), { ...environment, REQUEST_TIMEOUT_MS: '240000' }).timeoutMs, 900000);
+  for (const providerTimeoutMs of [null, 0, 999, 1800001, 1000.5, '600000', NaN]) {
+    assert.throws(() => buildRequest(payload({ providerTimeoutMs }), environment), error => error.public && error.status === 400);
+  }
+  for (const REQUEST_TIMEOUT_MS of ['999', 'bad', '1800001']) {
+    assert.equal(buildRequest(payload(), { ...environment, REQUEST_TIMEOUT_MS }).timeoutMs, 180000);
+  }
+});
+
+test('app-saved timeouts reach local and OpenAI calls, and timeouts never retry inference', async () => {
+  const settings = { localTimeoutSeconds: 900, openaiTimeoutSeconds: 300 };
+  for (const provider of ['local', 'openai']) {
+    let calls = 0;
+    const timeout = Object.assign(new Error('timed out'), { public: true, status: 504, code: 'REQUEST_TIMEOUT' });
+    await assert.rejects(translateBatch(payload({ provider }), { env: environment, translationSettings: settings, request: async (_url, _body, options) => {
+      calls++;
+      assert.equal(options.timeoutMs, provider === 'local' ? 900000 : 300000);
+      throw timeout;
+    } }), error => error === timeout);
+    assert.equal(calls, 1);
+  }
+});

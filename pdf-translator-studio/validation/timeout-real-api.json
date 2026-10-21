@@ -1,0 +1,79 @@
+{
+  "checkedAt": "2026-10-21T09:22:47.180Z",
+  "model": "google/gemma-3n-e4b",
+  "status": "passed",
+  "scope": "Four synthetic English regions via a real local model. No full-document translation, OpenAI or corporate proxy validation.",
+  "providerTimeoutMs": 600000,
+  "localBatchBlocks": 4,
+  "localBatchCharacters": 1000,
+  "inputs": [
+    {
+      "id": "title",
+      "original": "Annual report",
+      "translation": "",
+      "enabled": true,
+      "supported": true
+    },
+    {
+      "id": "sales",
+      "original": "Revenue increased by 12% compared with the previous year.",
+      "translation": "",
+      "enabled": true,
+      "supported": true
+    },
+    {
+      "id": "meeting",
+      "original": "The board approved the report on March 24, 2026.",
+      "translation": "",
+      "enabled": true,
+      "supported": true
+    },
+    {
+      "id": "safety",
+      "original": "Please review the figures before publication.",
+      "translation": "",
+      "enabled": true,
+      "supported": true
+    }
+  ],
+  "requests": [
+    {
+      "startedAfterMs": 76,
+      "blockCount": 4,
+      "timeoutMs": 600000,
+      "durationMs": 32581,
+      "status": "response"
+    }
+  ],
+  "checkpoints": [
+    {
+      "completed": 4,
+      "total": 4,
+      "batch": 1,
+      "count": 4,
+      "elapsedMs": 32671
+    }
+  ],
+  "localBaseUrl": "http://127.0.0.1:11434/v1",
+  "completed": 4,
+  "remaining": 0,
+  "output": [
+    {
+      "id": "title",
+      "text": "年次報告"
+    },
+    {
+      "id": "sales",
+      "text": "前年比で売上高は12％増加しました。"
+    },
+    {
+      "id": "meeting",
+      "text": "取締役会は2026年3月24日の報告書を承認しました。"
+    },
+    {
+      "id": "safety",
+      "text": "公開前に数値を確認してください。"
+    }
+  ],
+  "durationMs": 32671
+}

@@ -16,6 +16,7 @@ const context = await browser.newContext({ viewport: { width: 1440, height: 1100
 const page = await context.newPage();
 const pageErrors = [], externalRequests = [], apiCalls = [], completed = [];
 let apiMode = 'success', releasePending, holdAtCall;
+let translationSettings = { localTimeoutSeconds: 600, localBatchBlocks: 4, localBatchCharacters: 1000, openaiTimeoutSeconds: 180 };
 page.on('pageerror', error => pageErrors.push(error.message));
 page.on('dialog', dialog => dialog.accept());
 await context.route('**/*', async route => {
@@ -29,6 +30,10 @@ await page.route(origin + '/api/config', route => route.fulfill({ json: {
   openai: { baseUrl: 'https://openai.test.invalid/v1', model: 'gpt-4o', configured: true, apiMode: 'auto' },
   proxy: { configured: true, noProxy: 'localhost,.internal' }, apiModes: ['auto', 'chat', 'responses'],
 } }));
+await page.route(origin + '/api/translation-settings', route => {
+  if (route.request().method() === 'PUT') translationSettings = route.request().postDataJSON();
+  return route.fulfill({ json: translationSettings });
+});
 await page.route(origin + '/api/translate-batch', async route => {
   const payload = route.request().postDataJSON();
   apiCalls.push(payload);
@@ -119,6 +124,13 @@ try {
   completed.push('literal markup stays inert; PDF export download');
 
   await page.locator('#scope').selectOption('selected');
+  assert.equal(await page.locator('#skip-translated').isChecked(), true, 'manual translations are protected by default');
+  const beforeSkip = apiCalls.length;
+  await page.locator('#translate-button').click();
+  await idle();
+  assert.equal(apiCalls.length, beforeSkip, 'an already translated selected region is skipped');
+  assert.equal(await value('#translation-text'), '編集テスト');
+  await page.locator('#skip-translated').uncheck();
   await page.locator('#translate-button').click();
   await toast('翻訳が完了しました');
   await idle();
@@ -135,7 +147,8 @@ try {
   assert.equal(await value('#translation-text'), '翻訳済み');
   const errorStatus = await page.locator('#status').textContent();
   assert.ok(errorStatus.includes('QA: モデルの応答形式が不正です。'));
-  assert.ok(errorStatus.includes('今回の翻訳結果は反映していません。'));
+  assert.equal(await page.locator('#resume-translation').isVisible(), true);
+  assert.equal(await page.locator('#resume-translation').isEnabled(), true);
   await page.locator('#toast').waitFor({ state: 'hidden' });
   assert.equal(await page.locator('#status').textContent(), errorStatus, 'error details persist after the toast disappears and progress timer stops');
   apiMode = 'hold';
@@ -147,19 +160,50 @@ try {
   await page.waitForFunction(() => !document.querySelector('#cancel-button').hidden);
   assert.equal(await page.locator('#translation-text').isDisabled(), true);
   assert.equal(await page.locator('#zoom').isDisabled(), true);
-  await page.waitForFunction(() => /翻訳中 8 \/ 23 領域 · バッチ 2 \/ 3 · [1-9]\d*秒経過/.test(document.querySelector('#status').textContent));
-  assert.equal(apiCalls.at(-2).blocks.length, 8, 'local UI requests use the smaller default batch');
+  await page.waitForFunction(() => /翻訳中 4 \/ 23 領域 · バッチ 2 \/ 6 · [1-9]\d*秒経過/.test(document.querySelector('#status').textContent));
+  assert.equal(apiCalls.at(-2).blocks.length, 4, 'local UI requests use the smaller default batch');
+  assert.equal(apiCalls.at(-2).config.providerTimeoutMs, 600000, 'local UI requests use the saved wait time');
   assert.equal(apiCalls.length, beforeAbort + 2, 'elapsed-time progress never sends another API request');
-  assert.equal(await value('#translation-text'), '取消前の訳文', 'completed early batch has not been partially applied');
+  const completedBeforeCancel = apiCalls.at(-2).blocks.map(block => block.id);
+  const selectedId = await heading.getAttribute('data-block');
+  const expectedSelected = completedBeforeCancel.includes(selectedId) ? '翻訳済み' : '取消前の訳文';
   await page.locator('#cancel-button').click();
   await toast('翻訳を中止しました');
   await idle();
-  assert.equal(await value('#translation-text'), '取消前の訳文');
+  assert.equal(await value('#translation-text'), expectedSelected, 'cancel retains completed translations');
   releasePending?.(); releasePending = undefined; apiMode = 'success';
   const cancelledStatus = await page.locator('#status').textContent();
   await page.waitForTimeout(1200);
   assert.equal(await page.locator('#status').textContent(), cancelledStatus, 'cancel clears the elapsed-time interval');
-  completed.push('mock translation success/error/abort, atomic application, busy controls, elapsed batch progress, persistent error details');
+  assert.equal(await page.locator('#resume-translation').isEnabled(), true);
+  assert.ok((await page.locator('#resume-translation').textContent()).includes('19'));
+  const checkpoint = JSON.parse(await readFile(await clickDownload('#save-project', 'cancelled-checkpoint.lingua.json'), 'utf8'));
+  for (const id of completedBeforeCancel) assert.equal(checkpoint.pages[0].blocks.find(block => block.id === id).translation, '翻訳済み');
+
+  // A failure on the next pending batch must preserve the earlier checkpoint.
+  apiMode = 'error';
+  const beforeResumeError = apiCalls.length;
+  await page.locator('#resume-translation').click();
+  await toast('QA: モデルの応答形式');
+  await idle();
+  assert.equal(apiCalls.length, beforeResumeError + 1);
+  assert.ok(apiCalls.at(-1).blocks.every(block => !completedBeforeCancel.includes(block.id)), 'resume never sends a finished region again');
+  const retained = JSON.parse(await readFile(await clickDownload('#save-project', 'error-checkpoint.lingua.json'), 'utf8'));
+  assert.deepEqual(retained.pages, checkpoint.pages, 'failed batch cannot undo or replace any validated translation');
+  assert.equal(await page.locator('#resume-translation').isEnabled(), true);
+
+  apiMode = 'success';
+  const beforeResumeSuccess = apiCalls.length;
+  await page.locator('#resume-translation').click();
+  await toast('翻訳が完了しました');
+  await idle();
+  const resumedIds = apiCalls.slice(beforeResumeSuccess).flatMap(call => call.blocks.map(block => block.id));
+  assert.equal(resumedIds.length, 19);
+  assert.equal(new Set(resumedIds).size, 19, 'remaining regions are sent exactly once');
+  assert.ok(resumedIds.every(id => !completedBeforeCancel.includes(id)));
+  assert.equal(await page.locator('#resume-translation').isVisible(), false);
+  assert.equal(await page.locator('#translated-count').textContent(), '23 / 23');
+  completed.push('default skip preserves manual text; mock success/error/cancel; validated batch retention and export; resume sends only remaining regions; busy controls, elapsed progress and persistent errors');
 
   await page.locator('#scope').selectOption('selected');
   await page.locator('#provider').selectOption('openai');
@@ -172,7 +216,7 @@ try {
   await page.locator('#translate-button').click();
   await toast('翻訳が完了しました');
   await idle();
-  assert.deepEqual(apiCalls.at(-1).config, { provider: 'openai', model: 'gpt-5', sourceLanguage: 'auto', targetLanguage: 'Japanese', apiMode: 'chat', reasoningEffort: 'low' });
+  assert.deepEqual(apiCalls.at(-1).config, { provider: 'openai', model: 'gpt-5', sourceLanguage: 'auto', targetLanguage: 'Japanese', apiMode: 'chat', reasoningEffort: 'low', providerTimeoutMs: 180000 });
   completed.push('OpenAI selection, model and explicit API/reasoning settings');
   await capture('desktop-edited');
   await page.setViewportSize({ width: 390, height: 844 });

@@ -2,10 +2,13 @@ import { loadPdf, renderTranslatedCanvas, exportPdf, createDemoPdf } from './pdf
 import { createPageStore } from './page-store.js';
 import { exportOffice } from './office-export.js';
 import { translateBlocks } from './translator.js';
+import { createTranslationJob, getPendingJobBlocks, applyTranslationBatch } from './translation-job.js';
 
 const $ = id => document.getElementById(id);
 const state = { doc:null, store:null, pages:[], current:0, selected:null, busy:false, controller:null, filename:'', hash:'', config:null, renderVersion:0, previewPromise:Promise.resolve() };
 const proxyState = { loaded:false, loading:false, saving:false, passwordConfigured:false, noProxyInitialized:false };
+const translationSettingsState = { value:null, loading:false, saving:false };
+const translationSettingFields = { localTimeoutSeconds:'local-timeout-seconds', openaiTimeoutSeconds:'openai-timeout-seconds', localBatchBlocks:'local-batch-blocks', localBatchCharacters:'local-batch-characters' };
 let toastTimer, renderTimer;
 const allBlocks = () => state.pages.flatMap(p => p.blocks);
 const currentPage = () => state.pages[state.current];
@@ -19,6 +22,7 @@ function busy(value, message) {
   $('page-list').querySelectorAll('button').forEach(el=>el.disabled=value);
   $('progress').hidden=!value; if(!value)$('progress').value=0;
   updateProxyControls();
+  updateTranslationSettingsControls();updateResumeControls();$('skip-translated').disabled=value;
   if(message)status(message);
 }
 function download(blob, name) { const url=URL.createObjectURL(blob); const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),30000); }
@@ -38,6 +42,52 @@ function updateProvider({preserveSelection=false}={}) {
     const container=$('connection-details');container.replaceChildren();
     for (const line of [`社内LLM：${state.config.local.baseUrl}`,`OpenAI：${state.config.openai.baseUrl}`,`APIキー：${state.config.openai.configured?'設定済み':'未設定'}`,`外部プロキシ：${state.config.proxy.configured?'設定あり':'未設定（直接接続）'}`]){const p=document.createElement('div');p.textContent=line;container.append(p);}
   }
+  updateResumeControls();
+}
+function translationConfig(){
+  const config={provider:$('provider').value,model:$('model').value.trim(),sourceLanguage:$('source-language').value,targetLanguage:$('target-language').value,apiMode:$('provider').value==='openai'?$('api-mode').value:'chat'};
+  if(config.provider==='openai'&&$('reasoning').value)config.reasoningEffort=$('reasoning').value;
+  return config;
+}
+function translationContext(config=translationConfig()){
+  const scope=$('scope').value;
+  return JSON.stringify({hash:state.hash,...config,endpoint:state.config?.[config.provider]?.baseUrl,scope,page:scope==='page'?currentPage()?.pageNumber:null,selected:scope==='selected'?state.selected:null});
+}
+function updateResumeControls(){
+  const job=state.translationJob,pending=job?job.total-job.completed.size:0,compatible=job?.contextKey===translationContext();
+  $('resume-translation').hidden=!pending;$('resume-note').hidden=!pending;
+  $('resume-translation').disabled=state.busy||!compatible;
+  $('resume-translation').textContent=`続きから翻訳（残り${pending}領域）`;
+  $('resume-note').textContent=compatible?`${job.completed.size}領域の完了分を保持しています。画面を閉じる前に「編集データ保存」で保存できます。`:'翻訳先・モデル・言語・範囲を元に戻すと再開できます。訳文がある領域をスキップして新たに翻訳することもできます。';
+}
+function clearTranslationJob(){state.translationJob=null;updateResumeControls();}
+function translationSettingsStatus(message,error=false){$('translation-settings-status').textContent=message;$('translation-settings-status').classList.toggle('error',error);}
+function updateTranslationSettingsControls(){
+  const locked=state.busy||translationSettingsState.loading||translationSettingsState.saving;
+  for(const id of Object.values(translationSettingFields))$(id).disabled=locked||!translationSettingsState.value;
+  $('translation-settings-save').disabled=locked||!translationSettingsState.value;
+  $('translation-settings-reload').disabled=locked;
+}
+function applyTranslationSettings(value){
+  if(!value||Object.keys(translationSettingFields).some(key=>!Number.isInteger(value[key])))throw Error('翻訳設定の応答を読み取れませんでした。サーバーを最新版で起動してください。');
+  translationSettingsState.value={...value};for(const [key,id] of Object.entries(translationSettingFields))$(id).value=value[key];
+}
+async function translationSettingsResponse(response){const data=await response.json().catch(()=>null);if(!response.ok)throw Error(data?.error||'翻訳設定を取得できません。サーバーを最新版で起動してください。');return data;}
+async function loadTranslationSettings(){
+  if(translationSettingsState.loading||translationSettingsState.saving)return false;
+  translationSettingsState.loading=true;translationSettingsStatus('翻訳設定を読み込み中…');$('translation-settings-reload').hidden=true;updateTranslationSettingsControls();
+  try{applyTranslationSettings(await translationSettingsResponse(await fetch('/api/translation-settings',{cache:'no-store'})));translationSettingsStatus('保存済みの設定を読み込みました。');return true;}
+  catch(error){translationSettingsStatus(error.message,true);$('translation-settings-reload').hidden=false;return false;}
+  finally{translationSettingsState.loading=false;updateTranslationSettingsControls();}
+}
+async function saveTranslationSettings(){
+  if(state.busy||translationSettingsState.loading||translationSettingsState.saving||!translationSettingsState.value)return;
+  for(const id of Object.values(translationSettingFields))if(!$(id).reportValidity())return;
+  const value=Object.fromEntries(Object.entries(translationSettingFields).map(([key,id])=>[key,Number($(id).value)]));
+  translationSettingsState.saving=true;busy(true);translationSettingsStatus('翻訳設定を保存中…');
+  try{applyTranslationSettings(await translationSettingsResponse(await fetch('/api/translation-settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)})));translationSettingsStatus('保存しました。次の翻訳・再開から反映されます。');}
+  catch(error){translationSettingsStatus(error.message,true);}
+  finally{translationSettingsState.saving=false;busy(false);renderInspector();}
 }
 function proxyStatus(message,error=false){$('proxy-status').textContent=message;$('proxy-status').classList.toggle('error',error);}
 function updateProxyControls(){
@@ -122,6 +172,7 @@ async function openDocument(bytes, name, demo=false) {
     state.renderVersion++;
     if(state.store)await state.store.dispose();
     state.doc=doc;state.store=store;state.pages=store.pages;state.current=0;state.selected=null;state.filename=name;state.hash=hash;
+    clearTranslationJob();
     $('filename').textContent=name;$('sample-tag').hidden=!demo;$('empty-state').hidden=true;$('preview').hidden=false;
     $('page-total').textContent=state.pages.length;$('page-jump').max=state.pages.length;renderPages();updateExportFormat();
     if(demo)applySampleTranslation();
@@ -141,7 +192,7 @@ async function showPage(index,{manageBusy=true}={}){
     const p=await state.store.ensurePage(index);
     const previous=currentPage();state.current=index;state.selected=null;
     if(previous&&previous!==p)state.store.releasePage(previous);
-    renderPages();renderInspector();await renderPreview();documentStatus();
+    renderPages();renderInspector();await renderPreview();documentStatus();updateResumeControls();
   }catch(error){notify(error.message,true);}
   finally{if(manageBusy){busy(false);renderInspector();}}
 }
@@ -169,7 +220,7 @@ function renderPreview(){
   });
   return state.previewPromise;
 }
-function selectBlock(id){if(state.busy)return;state.selected=id;document.querySelectorAll('.text-box').forEach(b=>b.classList.toggle('selected',b.dataset.block===id));renderInspector();}
+function selectBlock(id){if(state.busy)return;state.selected=id;document.querySelectorAll('.text-box').forEach(b=>b.classList.toggle('selected',b.dataset.block===id));renderInspector();updateResumeControls();}
 function renderInspector(){const b=selectedBlock();$('inspector-empty').hidden=Boolean(b);$('block-editor').hidden=!b;if(!b)return;
   $('block-number').textContent=`領域 ${b.id.split('-b')[1].padStart(2,'0')}`;$('original-text').value=b.original;$('translation-text').value=b.translation||'';$('block-enabled').checked=b.enabled;
   $('font-size').value=+b.fontSize.toFixed(1);$('font-family').value=b.fontFamily?.includes('mono')?'monospace':b.fontFamily==='serif'?'serif':'sans-serif';
@@ -183,19 +234,22 @@ function updateBlockStatus(){const b=selectedBlock();if(!b)return;$('block-statu
 function editBlock(){const b=selectedBlock();if(!b||state.busy)return;const p=currentPage();b.translation=$('translation-text').value;b.enabled=$('block-enabled').checked;b.fontSize=Math.min(200,Math.max(4,Number($('font-size').value)||b.fontSize));b.fontFamily=$('font-family').value;b.color=$('text-color').value;b.background=$('background-color').value;
   for(const prop of ['x','y','width','height']){const n=Number($(`block-${prop}`).value);if(Number.isFinite(n))b[prop]=n;}
   b.x=Math.max(0,Math.min(p.width-1,b.x));b.y=Math.max(0,Math.min(p.height-1,b.y));b.width=Math.max(1,Math.min(p.width-b.x,b.width));b.height=Math.max(1,Math.min(p.height-b.y,b.height));
-  clearTimeout(renderTimer);renderTimer=setTimeout(renderPreview,180);
+  clearTranslationJob();clearTimeout(renderTimer);renderTimer=setTimeout(renderPreview,180);
 }
-async function translate(){
+async function translate({resume=false}={}){
   if(state.busy||!state.pages.length)return;
-  const config={provider:$('provider').value,model:$('model').value.trim(),sourceLanguage:$('source-language').value,targetLanguage:$('target-language').value,apiMode:$('provider').value==='openai'?$('api-mode').value:'chat'};
-  if(config.provider==='openai'&&$('reasoning').value)config.reasoningEffort=$('reasoning').value;
+  const config=translationConfig();
   if(!config.model)return notify('利用するモデル名を入力してください。',true);
-  const scope=$('scope').value;
-  let progressTimer;
+  const scope=$('scope').value,contextKey=translationContext(config);
+  let progressTimer,job;
   clearTimeout(renderTimer);state.controller=new AbortController();busy(true,'翻訳を準備しています…');$('cancel-button').hidden=false;
   try{
+    if(!translationSettingsState.value&&!await loadTranslationSettings())throw Error('接続設定で翻訳設定を読み直してください。サーバーを最新版で起動してください。');
+    const settings=translationSettingsState.value;
+    config.providerTimeoutMs=1000*(config.provider==='local'?settings.localTimeoutSeconds:settings.openaiTimeoutSeconds);
+    if(config.provider==='local'){config.maxBatchBlocks=settings.localBatchBlocks;config.maxBatchCharacters=settings.localBatchCharacters;}
     await state.previewPromise;
-    if(scope==='all'){
+    if(!resume&&scope==='all'){
       for(let i=0;i<state.pages.length;i++){
         if(state.controller.signal.aborted)throw new DOMException('翻訳を中止しました。','AbortError');
         const p=state.pages[i];
@@ -204,22 +258,37 @@ async function translate(){
       }
       renderPages();
     }
-    let blocks=scope==='all'?allBlocks():scope==='selected'?[selectedBlock()].filter(Boolean):currentPage().blocks;
-    blocks=blocks.filter(b=>b.enabled&&b.supported!==false&&b.original.trim());
-    if(!blocks.length){notify('翻訳できる文字領域を選択してください。',true);documentStatus();return;}
+    if(resume){
+      job=state.translationJob;if(!job||job.contextKey!==contextKey)throw Error('翻訳先・モデル・言語・範囲を元に戻してから再開してください。');
+    }else{
+      let candidates=scope==='all'?allBlocks():scope==='selected'?[selectedBlock()].filter(Boolean):currentPage().blocks;
+      candidates=candidates.filter(b=>b.enabled&&b.supported!==false&&b.original.trim());
+      if(!candidates.length){notify('翻訳できる文字領域を選択してください。',true);documentStatus();return;}
+      if($('skip-translated').checked)candidates=candidates.filter(b=>!b.translation?.trim());
+      if(!candidates.length){const message='未翻訳の領域はありません。訳し直す場合は「訳文がある領域をスキップ」を解除してください。';notify(message);status(message);return;}
+      job=createTranslationJob(candidates,contextKey);state.translationJob=job;
+    }
+    const blocks=getPendingJobBlocks(job),previousCompleted=job.completed.size;
     const snapshot=blocks.map(b=>({id:b.id,text:b.original}));
     const started=performance.now();let latestProgress;
     const updateProgress=()=>{
       if(!latestProgress)return;
-      const {completed,total,batch,totalBatches}=latestProgress;
-      status(`翻訳中 ${completed} / ${total} 領域 · バッチ ${Math.max(1,batch)} / ${totalBatches} · ${Math.floor((performance.now()-started)/1000)}秒経過`);
-      $('progress').value=total?completed/total*100:0;
+      const {completed,batch,totalBatches}=latestProgress;
+      status(`翻訳中 ${previousCompleted+completed} / ${job.total} 領域 · バッチ ${Math.max(1,batch)} / ${totalBatches} · ${Math.floor((performance.now()-started)/1000)}秒経過`);
+      $('progress').value=job.total?(previousCompleted+completed)/job.total*100:0;
     };
     progressTimer=setInterval(updateProgress,1000);
-    const results=await translateBlocks(snapshot,config,{signal:state.controller.signal,onProgress:progress=>{latestProgress=progress;updateProgress();}});
+    await translateBlocks(snapshot,config,{signal:state.controller.signal,onProgress:progress=>{latestProgress=progress;updateProgress();},onBatch:async batch=>{
+      applyTranslationBatch(job,batch);await renderPreview();updateResumeControls();
+    }});
     clearInterval(progressTimer);
-    blocks.forEach(b=>b.translation=results[b.id]);await renderPreview();renderInspector();status(`${blocks.length}領域を翻訳しました。文字の収まりと内容を確認してください。`);notify('翻訳が完了しました。');
-  }catch(error){const message=error.name==='AbortError'?'翻訳を中止しました。':error.message;notify(message,error.name!=='AbortError');status(`${message} 今回の翻訳結果は反映していません。`);}
+    clearTranslationJob();await renderPreview();status(`${job.total}領域を翻訳しました。文字の収まりと内容を確認してください。`);notify('翻訳が完了しました。');
+  }catch(error){
+    const message=error.name==='AbortError'?'翻訳を中止しました。':error.message;
+    const remaining=job?job.total-job.completed.size:0;
+    const retained=job?` ${job.completed.size}領域の完了分を保持しています。${remaining?`残り${remaining}領域は「続きから翻訳」で再開できます。`:''}画面を閉じる前に編集データを保存してください。`:'';
+    if(job&&!remaining)clearTranslationJob();notify(message,error.name!=='AbortError');status(message+retained);
+  }
   finally{clearInterval(progressTimer);state.controller=null;$('cancel-button').hidden=true;busy(false);renderInspector();}
 }
 const exportNames = {pdf:'PDF',docx:'Word',pptx:'PowerPoint'};
@@ -262,7 +331,7 @@ async function restoreProject(file){if(!file||state.busy)return;busy(true,'編�
     }finally{if(target!==currentPage())state.store.releasePage(target);}
     status(`編集データを読み込み中 ${seenPages.size} / ${data.pages.length} ページ`);$('progress').value=seenPages.size/data.pages.length*100;
   }
-  updates.forEach(([b,values])=>Object.assign(b,values));await renderPreview();renderInspector();notify('編集データを復元しました。');
+  updates.forEach(([b,values])=>Object.assign(b,values));clearTranslationJob();await renderPreview();renderInspector();notify('編集データを復元しました。');
 }catch(error){notify(error.message,true);}finally{$('project-input').value='';renderPages();documentStatus();busy(false);renderInspector();}}
 function applySampleTranslation(){
   const pairs=[['FIELDNOTES / RESEARCH BRIEF','FIELDNOTES / 調査レポート'],['Design across languages','言語を超えるデザイン'],['Keep the structure. Make the message travel.','構成を保ち、伝えたいことを世界へ。'],['OCTOBER 2026','2026年10月'],['A document is more than its words.','文書は、言葉だけではできていない。'],['Every page carries a visual rhythm: a heading, a quiet margin,','見出し、余白、そして画像。'],['an image, and the precise relationship between them.','その配置が、ページのリズムをつくります。'],['Translation should respect that rhythm.','翻訳も、そのリズムを大切に。'],['THE APPROACH','翻訳の考え方'],['Translate the text. Preserve the composition.','言葉を訳し、構成を保つ。'],['Review each region before exporting your translated PDF.','領域ごとに確認して、翻訳PDFに保存しましょう。'],['Built for a careful review','細部まで、確かめながら'],['ELEMENT','要素'],['WHAT TO CHECK','確認するポイント'],['Page geometry','ページ構成'],['Size, spacing, and alignment','大きさ、余白、位置'],['Typography','文字の表現'],['Font size and text fit','文字サイズと枠への収まり'],['Visual context','視覚的な要素'],['Images, rules, and background colors','画像、罫線、背景色'],['A little care makes every language feel at home.','どの言語でも、自然に伝わる文書へ。']];
@@ -271,19 +340,22 @@ function applySampleTranslation(){
 
 for(const id of ['upload-button','empty-upload'])$(id).onclick=()=>$('file-input').click();
 $('file-input').onchange=e=>readFile(e.target.files[0]);$('demo-button').onclick=()=>{if(!state.busy)openDocument(createDemoPdf(),'fieldnotes-sample.pdf',true);};
-$('settings-button').onclick=()=>{$('settings-dialog').showModal();if(!proxyState.loaded)loadProxySettings();else updateProxyControls();};$('provider').onchange=()=>updateProvider();
+$('settings-button').onclick=()=>{$('settings-dialog').showModal();if(!proxyState.loaded)loadProxySettings();else updateProxyControls();if(!translationSettingsState.value)loadTranslationSettings();else updateTranslationSettingsControls();};$('provider').onchange=()=>updateProvider();
+for(const id of ['model','source-language','target-language','scope','api-mode','reasoning'])$(id).addEventListener('input',updateResumeControls);
+for(const id of Object.values(translationSettingFields))$(id).addEventListener('input',()=>translationSettingsStatus('変更はまだ保存されていません。'));
+$('translation-settings-save').onclick=saveTranslationSettings;$('translation-settings-reload').onclick=loadTranslationSettings;
 $('proxy-mode').onchange=()=>{if($('proxy-mode').value==='custom'&&!proxyState.noProxyInitialized){$('proxy-no-proxy').value='localhost,127.0.0.1,::1,.internal';proxyState.noProxyInitialized=true;}proxyStatus('変更はまだ保存されていません。');updateProxyControls();};
 $('proxy-no-proxy').addEventListener('input',()=>{proxyState.noProxyInitialized=true;});
 for(const id of ['proxy-url','proxy-no-proxy','proxy-username','proxy-password','proxy-clear-password','proxy-use-for-local'])$(id).addEventListener('input',()=>{proxyStatus('変更はまだ保存されていません。');updateProxyControls();});
 $('proxy-save').onclick=saveProxySettings;$('proxy-reload').onclick=loadProxySettings;
-$('translate-button').onclick=translate;$('cancel-button').onclick=()=>state.controller?.abort();$('export-button').onclick=saveDocument;$('export-format').onchange=updateExportFormat;
+$('translate-button').onclick=()=>translate();$('resume-translation').onclick=()=>translate({resume:true});$('cancel-button').onclick=()=>state.controller?.abort();$('export-button').onclick=saveDocument;$('export-format').onchange=updateExportFormat;
 $('show-boxes').onchange=()=>$('preview').classList.toggle('hide-boxes',!$('show-boxes').checked);$('zoom').onchange=()=>{if(!state.busy)renderPreview();};
 $('block-editor').onsubmit=e=>e.preventDefault();$('block-editor').addEventListener('input',editBlock);
-$('reset-block').onclick=()=>{const b=selectedBlock();if(!b||state.busy)return;const original=currentPage().originalBlocks.find(item=>item.id===b.id);if(original)Object.assign(b,structuredClone(original));renderInspector();renderPreview();};
+$('reset-block').onclick=()=>{const b=selectedBlock();if(!b||state.busy)return;const original=currentPage().originalBlocks.find(item=>item.id===b.id);if(original)Object.assign(b,structuredClone(original));clearTranslationJob();renderInspector();renderPreview();};
 $('page-jump-form').onsubmit=e=>{e.preventDefault();if(state.busy||!state.pages.length)return;const page=Number($('page-jump').value);if(!Number.isInteger(page)||page<1||page>state.pages.length)return notify(`1〜${state.pages.length}のページ番号を入力してください。`,true);showPage(page-1);};
 $('save-project').onclick=saveProject;$('restore-project').onclick=()=>$('project-input').click();$('project-input').onchange=e=>restoreProject(e.target.files[0]);
 let sync=false;for(const [a,b] of [['original-scroll','translated-scroll'],['translated-scroll','original-scroll']])$(a).addEventListener('scroll',()=>{if(sync)return;sync=true;$(b).scrollTop=$(a).scrollTop;$(b).scrollLeft=$(a).scrollLeft;requestAnimationFrame(()=>sync=false);});
 let dragDepth=0;document.addEventListener('dragover',e=>e.preventDefault());document.addEventListener('dragenter',e=>{e.preventDefault();dragDepth++;document.body.classList.add('drag-over');});document.addEventListener('dragleave',()=>{if(--dragDepth<=0)document.body.classList.remove('drag-over');});document.addEventListener('drop',e=>{e.preventDefault();dragDepth=0;document.body.classList.remove('drag-over');readFile(e.dataTransfer.files[0]);});
 let resizeTimer;window.addEventListener('resize',()=>{clearTimeout(resizeTimer);resizeTimer=setTimeout(()=>{if(!state.busy)renderPreview();},200);});
 window.addEventListener('beforeunload',e=>{if(allBlocks().some(b=>b.translation)){e.preventDefault();e.returnValue='';}});
-updateExportFormat();getConfig();
+updateExportFormat();getConfig();loadTranslationSettings();
