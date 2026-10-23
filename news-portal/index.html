@@ -585,7 +585,8 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
 /* ローカルLLMの処理設定・外部資料（Phase 5） */
 #aiLocalTuning[hidden]{display:none}
 .tune{display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center}
-.tune label{display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--text-2); font-weight:500}
+.tune label{display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--text-2); font-weight:500; max-width:100%; min-width:0}
+.tune label select{min-width:0; flex:1 1 auto}   /* 長い選択肢（本文取得の「方式」）でもスマホ幅で設定画面がはみ出さない */
 .tune input[type=number]{width:96px; padding:5px 8px; border-radius:7px; border:1px solid var(--line); background:var(--surface); color:var(--text); font:inherit; font-size:12px}
 .tune input[type=number]:focus{border-color:var(--accent); outline:none}
 .setrow .tune input[type=checkbox]{width:auto; padding:0; margin:0; accent-color:var(--accent)}
@@ -728,6 +729,8 @@ body.arc-on .topbar .search{visibility:hidden}
 .arc__count{font-size:13px; color:var(--text-2); display:flex; flex-wrap:wrap; gap:4px 12px; align-items:baseline; min-height:22px}
 .arc__count b{color:var(--accent); font-family:var(--font-serif); font-size:17px}
 .arc__count .seg2{color:var(--text-3); font-size:12px}
+.arc__count .seg2.warn{color:var(--cat-世界); font-weight:600}
+:root[data-theme="light"] .arc__count .seg2.warn{color:#a8360a}
 .arc__count .seg2 b{font-size:12px; font-family:inherit; color:var(--text-2)}
 .arc__results{min-width:0}
 .arc__list{display:flex; flex-direction:column; gap:8px}
@@ -845,6 +848,8 @@ body.arc-on .topbar .search{visibility:hidden}
 .setrow input, .setrow select{padding:10px 12px; border-radius:10px; background:var(--surface-2);
   border:1px solid var(--line); color:var(--text); font-size:13.5px; outline:none}
 .setrow input:focus, .setrow select:focus{border-color:var(--accent)}
+/* ラジオ・チェックボックスは枠線を描かないので、キーボード操作のときだけ外側に輪を出す */
+.setrow input[type=radio]:focus-visible, .setrow input[type=checkbox]:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
 .setrow input:disabled{opacity:.5; cursor:not-allowed; background:var(--surface)}
 .setrow .hint{font-size:11.5px; color:var(--text-3)}
 .setnote{font-size:12px; color:var(--text-3); background:var(--surface-2); border:1px solid var(--line);
@@ -854,6 +859,24 @@ body.arc-on .topbar .search{visibility:hidden}
   text-transform:uppercase; border-bottom:1px solid var(--line); padding-bottom:6px; margin-top:4px}
 #proxyTestOut.ok{color:var(--cat-スポーツ); font-weight:600}
 #proxyTestOut.err{color:var(--cat-世界); font-weight:600}
+/* 過去ログの保存（件数／期間／無制限） */
+.retset{border:none; margin:0; padding:0; min-width:0; display:flex; flex-direction:column; gap:8px}
+.retset legend{padding:0; margin:0 0 6px; font-size:12.5px; color:var(--text-2); font-weight:600}
+.retopt{display:flex; align-items:center; gap:6px 14px; flex-wrap:wrap; min-width:0}
+.setrow .retopt label{display:inline-flex; align-items:center; gap:7px; font-size:13px; color:var(--text); font-weight:600; cursor:pointer; min-width:8.5em}
+.setrow .retopt input[type=radio]{width:auto; padding:0; margin:0; accent-color:var(--accent); cursor:pointer}
+.retval{display:inline-flex; align-items:center; gap:6px; font-size:12.5px; color:var(--text-2); min-width:0}
+.setrow .retval input[type=number]{width:124px; max-width:40vw; padding:6px 9px; border-radius:8px; font-size:13px; font-variant-numeric:tabular-nums}
+.setrow .retval input[aria-invalid="true"]{border-color:var(--cat-世界)}
+.retstate{font-size:12px; color:var(--text-2); font-variant-numeric:tabular-nums; overflow-wrap:anywhere}
+.retstate b{color:var(--text); font-weight:700}
+.retstate .retpause{display:block; margin-top:3px; color:var(--cat-世界); font-weight:600}
+:root[data-theme="light"] .retstate .retpause{color:#a8360a}
+.retpv{font-size:12.5px; font-weight:600; color:var(--text-2); overflow-wrap:anywhere; min-height:1.2em}
+.retpv.warn{color:var(--cat-世界)}
+:root[data-theme="light"] .retpv.warn, :root[data-theme="light"] .setrow .retval input[aria-invalid="true"]{color:#a8360a; border-color:#a8360a}   /* 明るい背景でも読める濃さ */
+.retpv.busy{opacity:.6}
+.retpv .sub{display:block; font-weight:500; color:var(--text-2); margin-top:2px}   /* 残る件数も読める濃さ（AA 4.5:1 以上） */
 
 /* toast */
 .toasts{position:fixed; left:50%; bottom:26px; transform:translateX(-50%); z-index:90;
@@ -1306,7 +1329,7 @@ body.arc-on .topbar .search{visibility:hidden}
 
 <!-- AI 設定モーダル -->
 <div class="modal" id="aiSettings" role="dialog" aria-modal="true" aria-hidden="true">
-  <div class="modal__head"><h2>設定 — 生成AI / プロキシ</h2>
+  <div class="modal__head"><h2>設定 — 生成AI / プロキシ / 過去ログ</h2>
     <button class="iconbtn" data-close aria-label="閉じる"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
   </div>
   <div class="modal__body">
@@ -1403,6 +1426,29 @@ body.arc-on .topbar .search{visibility:hidden}
         <input id="pdfFont" type="text" autocomplete="off" spellcheck="false"
                placeholder="例: C:\Windows\Fonts\YuGothM.ttc（空=自動検出: Yu Gothic / Meiryo / MS ゴシック / IPA ゴシック）">
         <span class="hint">リサーチの「書き出し」で PDF を作るときにサブセット化して埋め込みます。通常は<b>空でOK</b>。<span id="pdfFontState"></span></span>
+      </div>
+      <div class="sethead" id="retHead">過去ログの保存</div>
+      <div class="setrow" id="retRow">
+        <fieldset class="retset" aria-describedby="retState retPreview">
+          <legend>古い記事をいつまで残すか</legend>
+          <div class="retopt">
+            <label><input type="radio" name="retMode" value="count" id="retModeCount"> 件数で残す</label>
+            <span class="retval">最新 <input id="retCount" type="number" min="1000" max="2000000" step="1" inputmode="numeric"
+              aria-label="残す件数（最新の何件を残すか・1,000〜2,000,000）" aria-describedby="retPreview"> 件</span>
+          </div>
+          <div class="retopt">
+            <label><input type="radio" name="retMode" value="days" id="retModeDays"> 期間で残す</label>
+            <span class="retval">直近 <input id="retDays" type="number" min="7" max="3650" step="1" inputmode="numeric"
+              aria-label="残す日数（直近の何日分を残すか・7〜3,650）" aria-describedby="retPreview"> 日</span>
+          </div>
+          <div class="retopt">
+            <label><input type="radio" name="retMode" value="unlimited" id="retModeUnl"> 無制限（削除しない）</label>
+          </div>
+        </fieldset>
+        <div class="retstate" id="retState" aria-live="polite">保存の状況を読み込み中…</div>
+        <div class="retpv" id="retPreview" aria-live="polite"></div>
+        <span class="hint" id="retUnlNote" hidden>無制限では古い記事を削除しないため、過去ログのファイル（<code>archive.sqlite3</code>）が増え続けます<span id="retUnlRate"></span>。ディスクの空きに注意し、大きくなりすぎたら件数か期間で残す設定に戻してください。</span>
+        <span class="hint">取得した記事は過去ログに自動で保存され、この設定を超えた古い記事から削除されます（期間は公開日時、無ければ保存した日時で数えます）。<b>削除した記事は元に戻せません</b>。設定を下げて保存すると、削除される件数を確認してからすぐに削除します。削除してもファイルはすぐには小さくならず、空いた領域は以後の保存に使われます。</span>
       </div>
       <div class="setnote">AI 呼び出しと RSS 取得はいずれも<b>サーバー側の <code>urllib</code></b>で行われ、上のプロキシ設定に従います（他のアプリ／llmlab と同じ流儀）。取得できない情報源は「情報源」画面の各行の<b>診断ボタン</b>（脈波アイコン）で原因を切り分けられます。APIキーはこの端末の <code>settings.json</code> にのみ保存され、画面には再表示されません。</div>
       <div class="mrow" style="display:flex; gap:9px; justify-content:flex-end">
@@ -2464,7 +2510,8 @@ function arRenderResults(){
   const box=$("#arcResults"); box.innerHTML=""; box.classList.remove("is-loading"); box.setAttribute("aria-busy","false");
   if(AR.error){ box.append(arStateEl("err","過去ログの検索に失敗しました",AR.error,"再試行",()=>arSearch())); return; }
   if(!AR.items.length){
-    if(AR.stats && !AR.stats.count) box.append(arStateEl("","過去ログはまだありません","記事を取得すると、ここに自動で保存されます（最大2万件）"));
+    if(AR.stats && !AR.stats.count) box.append(arStateEl("","過去ログはまだありません","記事を取得すると、ここに自動で保存されます"+
+                                                (AR.stats.retention ? "（保存: "+retPolicyText(AR.stats.retention)+"）" : "")));
     else box.append(arStateEl("","条件に一致する記事はありません","期間を広げるか、キーワード・情報源・カテゴリを変えてみてください",
                               (AR.f.days!=="all") ? "期間を「すべて」にして探す" : null, ()=>arSetPeriod("all")));
     return;
@@ -2555,6 +2602,15 @@ function arRenderCount(){
     const sp=el("span",{class:"seg2"}); sp.append(document.createTextNode("保存期間 "), el("b",{text:localDay(new Date(st.oldest*1000))}),
       document.createTextNode(" 〜 "), el("b",{text:localDay(new Date(st.newest*1000))}));
     c.append(sp);
+  }
+  // 保存の設定（設定画面の「過去ログの保存」）: 「保存: 最新 100,000 件まで」「保存: 直近 365 日」「保存: 無制限」
+  if(st.retention){
+    let t="保存: "+retPolicyText(st.retention);
+    if(st.retention_paused) t+="（削除を停止中・設定を確認してください）";
+    else if(st.retention.mode==="count" && st.count>st.retention.max_count) t+="（少しの超過は数分ごとにまとめて削除）";
+    c.append(el("span",{class:"seg2 arc__ret"+(st.retention_paused?" warn":""),
+                        title: st.retention_paused ? "古い記事の削除を止めています: "+st.retention_paused : "過去ログの保存の設定（設定画面の「過去ログの保存」で変更できます）",
+                        text:t}));
   }
 }
 function arRenderExpand(){   // 同義語辞書での展開を表示（リサーチ画面と同じ辞書）
@@ -2706,7 +2762,7 @@ const PROVIDER_DEFAULTS = {
     modelHint:"ローカルにあるモデル名。例: llama3.1 / qwen2.5 / gpt-oss" },
 };
 
-async function loadAiSettings(){ try{ const d=await api("/api/settings"); AI.config=d.ai; AI.proxy=d.proxy; AI.browser=d.browser; AI.fulltext=d.fulltext; AI.pdfFont=d.pdf_font||""; AI.pdfFontFound=!!d.pdf_font_found; }catch(e){ AI.config=null; } }
+async function loadAiSettings(){ try{ const d=await api("/api/settings"); AI.config=d.ai; AI.proxy=d.proxy; AI.browser=d.browser; AI.fulltext=d.fulltext; AI.pdfFont=d.pdf_font||""; AI.pdfFontFound=!!d.pdf_font_found; AI.archive=d.archive||null; AI.archivePaused=d.archive_paused||""; }catch(e){ AI.config=null; } }
 function aiReady(){ return !!(AI.config && (AI.config.has_key || AI.config.provider==="local")); }
 
 function setAiContext(a){
@@ -2854,7 +2910,7 @@ function fillAiForm(){
   $("#ftFollow").value = ft.follow||"auto"; $("#ftMaxPages").value = ft.max_pages||6;
   const pf=$("#pdfFont"); if(pf) pf.value=AI.pdfFont||"";
   const ps=$("#pdfFontState"); if(ps) ps.textContent = AI.pdfFontFound ? "現在: 日本語フォントを検出済みです。" : "現在: フォントが見つかりません。パスを指定してください。";
-  toggleProxyUrl(); applyProviderHints();
+  toggleProxyUrl(); applyProviderHints(); retFill();
 }
 function proxyPayload(){ const on=$("#aiUseProxy").checked; return { use_proxy:on, proxy_url: on ? $("#aiProxyUrl").value.trim() : "", ca_bundle: $("#aiCaBundle").value.trim(),
   browser_binary: $("#brBinary").value.trim(), driver_path: $("#brDriver").value.trim(), pdf_font: ($("#pdfFont")?$("#pdfFont").value.trim():""),
@@ -2862,6 +2918,126 @@ function proxyPayload(){ const on=$("#aiUseProxy").checked; return { use_proxy:o
   follow_pages: $("#ftFollow").value, max_pages: parseInt($("#ftMaxPages").value,10)||0,
   stream: $("#aiStream").checked, no_think: $("#aiNoThink").checked }; }
 function openAiSettings(){ fillAiForm(); openOverlay($("#aiSettings")); }
+
+// ---- 過去ログの保存（件数で残す／期間で残す／無制限）
+// 削除は元に戻せないので、設定を変えるとその場で「この設定では古い記事 N 件が削除されます」を数え直して見せ、
+// 保存のときに N>0 なら confirm で確かめる（キャンセルなら何も送らない）。変えていなければ送らない（何も消えない）。
+const RET={cur:null, seq:0, t:null, paused:""};   // paused: settings.json を読めない・値が不正で、サーバーが削除を止めている理由
+const RET_LIM={count:[1000,2000000], days:[7,3650]};
+function retPolicyText(c){   // 「最新 100,000 件まで」「直近 365 日」「無制限」（過去ログタブの件数欄と共用）
+  if(!c) return "";
+  return c.mode==="unlimited" ? "無制限" : c.mode==="days" ? "直近 "+arNum(c.max_days)+" 日" : "最新 "+arNum(c.max_count)+" 件まで";
+}
+function fmtMB(b){ const mb=(Number(b)||0)/1048576; return (mb>=100 ? Math.round(mb).toLocaleString("ja-JP") : mb>=10 ? mb.toFixed(1) : mb.toFixed(2))+" MB"; }
+function retMode(){ const r=$('input[name="retMode"]:checked'); return r ? r.value : "count"; }
+function retForm(){ return {mode:retMode(), max_count:$("#retCount").valueAsNumber, max_days:$("#retDays").valueAsNumber}; }
+function retChanged(f){   // 今の設定から変えたか（選んだ方式で使う値だけ比べる）。削除を止めているときは、保存すれば設定し直す
+  const c=RET.cur; if(!c) return false; f=f||retForm();
+  if(RET.paused) return true;
+  if(f.mode!==c.mode) return true;
+  return f.mode==="count" ? f.max_count!==c.max_count : f.mode==="days" ? f.max_days!==c.max_days : false;
+}
+function retInvalid(f){
+  const chk=(v,[lo,hi],what,unit)=>(Number.isInteger(v) && v>=lo && v<=hi) ? "" : what+"は "+arNum(lo)+"〜"+arNum(hi)+" "+unit+"の範囲（整数）で入力してください";
+  return f.mode==="count" ? chk(f.max_count, RET_LIM.count, "残す件数", "件") : f.mode==="days" ? chk(f.max_days, RET_LIM.days, "残す日数", "日") : "";
+}
+function retPayload(f){ const o={mode:f.mode}; if(f.mode==="count") o.max_count=f.max_count; if(f.mode==="days") o.max_days=f.max_days; return o; }
+function retFetch(f){   // この設定にしたら何件削除されるか（サーバーは何も変更しない）
+  const p=new URLSearchParams({mode:f.mode});
+  if(f.mode==="count") p.set("max_count", String(f.max_count));
+  if(f.mode==="days") p.set("max_days", String(f.max_days));
+  return api("/api/archive/retention?"+p.toString());
+}
+function retSyncInputs(){   // 数値の欄は選んだ方式のものだけ使える
+  const m=retMode();
+  $("#retCount").disabled=m!=="count"; $("#retDays").disabled=m!=="days";
+  $("#retUnlNote").hidden=m!=="unlimited";
+}
+function retSetInvalid(msg){
+  const m=retMode();
+  $("#retCount").setAttribute("aria-invalid", String(!!msg && m==="count"));
+  $("#retDays").setAttribute("aria-invalid", String(!!msg && m==="days"));
+}
+function retRenderState(d){   // 保存中 M 件・最古 YYYY-MM-DD・ファイル約 X MB
+  // #retState は読み上げ領域（aria-live）なので、表示が変わらないときは書き換えない（入力のたびに読み直させない）
+  const s=$("#retState");
+  if(d && d.paused!==undefined) RET.paused=d.paused||"";
+  const parts=d ? [arNum(d.count), d.oldest ? localDay(new Date(d.oldest*1000)) : "", fmtMB(d.db_bytes), d.current ? retPolicyText(d.current) : "", RET.paused] : null;
+  const key=parts ? JSON.stringify(parts) : "error";
+  if(s.dataset.key===key) return;
+  s.dataset.key=key; s.innerHTML="";
+  if(!d){ s.textContent="保存の状況を読み込めませんでした"; return; }
+  s.append(document.createTextNode("保存中 "), el("b",{text:parts[0]}), document.createTextNode(" 件"));
+  if(parts[1]) s.append(document.createTextNode("・最古 "), el("b",{text:parts[1]}));
+  s.append(document.createTextNode("・ファイル約 "), el("b",{text:parts[2]}));
+  if(parts[3]) s.append(document.createTextNode("（現在の設定: "+parts[3]+"）"));
+  if(RET.paused) s.append(el("span",{class:"retpause", text:"⚠ 古い記事の削除を止めています（"+RET.paused+"）。settings.json を直すか、ここで設定して保存すると再開します"}));
+  $("#retUnlRate").textContent = (d.count>=1000 && d.db_bytes>0) ? "（いまの記事なら 1万件あたり約 "+fmtMB(d.db_bytes/d.count*10000)+"）" : "";
+}
+function retRenderPreview(kind, text, sub){
+  const p=$("#retPreview"); p.className="retpv"+(kind?" "+kind:""); p.innerHTML="";
+  p.append(document.createTextNode(text||""));
+  if(sub) p.append(el("span",{class:"sub",text:sub}));
+}
+function retShowPreview(d, f){
+  // would_delete: 保存するとすぐに消える件数（今の設定と同じ・増やす・延ばす・無制限なら 0）
+  // over_limit: 保存では消さないが設定を超えている件数（件数で残すときの少しの超過は数分ごとにまとめて、期間は次の取得時に消える）
+  f=f||retForm();
+  const n=d.would_delete||0, over=d.over_limit||0, mode=f.mode;
+  const slack=Math.min(200, Math.floor((Number(f.max_count)||0)/100));   // サーバーが保存のたびには消さない超過の幅
+  if(n>0) retRenderPreview("warn", "この設定では古い記事 "+arNum(n)+" 件が削除されます（元に戻せません）",
+    "残るのは "+arNum(d.keep)+" 件"+(d.oldest_after ? "（"+localDay(new Date(d.oldest_after*1000))+" 以降）" : "")+"です。");
+  else if(over>0) retRenderPreview("", "今すぐ削除される記事はありません",
+    mode==="days" ? "期間を過ぎた古い記事 "+arNum(over)+" 件は、次の取得時に削除されます"
+    : over<=slack ? "上限を少し超えた古い記事 "+arNum(over)+" 件は、このあとの取得時にまとめて削除されます（少しの超過は数分ごとにまとめて削除します）"
+    : "設定を超えた古い記事 "+arNum(over)+" 件は、次の取得時に削除されます");
+  else retRenderPreview("", "削除される記事はありません");
+}
+async function retPreview(){   // 入力のたびに（まとめて1回）削除件数を数え直す
+  clearTimeout(RET.t);
+  const f=retForm(), seq=++RET.seq, bad=retInvalid(f);
+  retSetInvalid(bad);
+  if(bad){ retRenderPreview("warn", bad); return; }
+  $("#retPreview").classList.add("busy");
+  try{
+    const d=await retFetch(f);
+    if(seq!==RET.seq) return;
+    retRenderState(d); retShowPreview(d, f);
+  }catch(e){
+    if(seq!==RET.seq) return;
+    retRenderPreview("warn", e.server ? e.message : "削除される件数を確かめられませんでした（サーバーに接続できません）");
+  }
+}
+function retPreviewSoon(){ clearTimeout(RET.t); RET.t=setTimeout(retPreview, 250); }
+function retSetForm(c){
+  ($('input[name="retMode"][value="'+c.mode+'"]') || $("#retModeCount")).checked=true;
+  $("#retCount").value=c.max_count||100000; $("#retDays").value=c.max_days||365;
+  retSyncInputs(); retSetInvalid("");
+}
+function retFill(){   // 設定画面を開いたとき: 今の設定を入れ、保存の状況とプレビューを読み込む
+  const c=AI.archive||{mode:"count", max_count:100000, max_days:365};
+  RET.cur=AI.archive||null; RET.paused=AI.archivePaused||"";
+  retSetForm(c);
+  $("#retState").textContent="保存の状況を読み込み中…"; $("#retState").dataset.key=""; retRenderPreview("", "");
+  clearTimeout(RET.t);
+  const seq=++RET.seq;
+  retFetch(retForm()).then(d=>{
+    if(seq!==RET.seq) return;
+    if(d.current){
+      RET.cur=d.current; AI.archive=d.current;
+      // 別のタブなどで設定が変わっていたら、サーバーの今の設定で入れ直して数え直す
+      if(d.current.mode!==c.mode || d.current.max_count!==c.max_count || d.current.max_days!==c.max_days){ retSetForm(d.current); retPreview(); return; }
+    }
+    retRenderState(d); retShowPreview(d, retForm());
+  }).catch(()=>{ if(seq===RET.seq){ retRenderState(null); retRenderPreview("", ""); } });
+}
+$$('input[name="retMode"]').forEach(r=>r.addEventListener("change", ()=>{ retSyncInputs(); retPreview(); }));
+["#retCount","#retDays"].forEach(s=>$(s).addEventListener("input", retPreviewSoon));
+// 数値の欄で Enter を押しても設定全体を保存しない（削除の確認がすぐ出て、続けて Enter で消えてしまうため）。プレビューだけ数え直す
+["#retCount","#retDays"].forEach(s=>$(s).addEventListener("keydown", e=>{
+  if(e.key==="Enter" && !e.isComposing){ e.preventDefault(); retPreview(); }
+}));
+
 $("#aiProvider").addEventListener("change", applyProviderHints);
 $("#aiProvider").addEventListener("change", ()=>{ $("#aiLocalTuning").hidden = $("#aiProvider").value!=="local"; });
 $("#aiUseProxy").addEventListener("change", toggleProxyUrl);
@@ -2888,16 +3064,45 @@ $("#aiProbeBtn").onclick=async ()=>{   // ローカルLLMの接続先を診断�
   }catch(e){ out.textContent="✗ "+(e.server?e.message:"診断に失敗しました"); }
   finally{ b.disabled=false; }
 };
+let aiSaving=false;
 $("#aiForm").addEventListener("submit", async (e)=>{
   e.preventDefault();
+  if(aiSaving) return;   // 二重送信しない（過去ログの削除を伴う保存は数秒かかることがある）
   const payload={ provider:$("#aiProvider").value, base_url:$("#aiBase").value.trim(),
                   model:$("#aiModel").value.trim(), ...proxyPayload() };
   const key=$("#aiKey").value.trim(); if(key) payload.api_key=key;
+  const sb=$("#aiForm button[type=submit]");
+  aiSaving=true; sb.disabled=true;
   try{
+    // 過去ログの保存: 変えたときだけ送る。古い記事が消える設定なら、保存の直前に数え直した件数を見せて確かめる
+    // （キャンセルなら何も保存しない＝何も消えない）
+    const rf=retForm();
+    if(retChanged(rf)){
+      const bad=retInvalid(rf);
+      if(bad){ retSetInvalid(bad); retRenderPreview("warn", bad); toast(bad,"err"); try{ $(rf.mode==="days" ? "#retDays" : "#retCount").focus(); }catch(e2){} return; }
+      let pv;
+      try{ pv=await retFetch(rf); }catch(e2){ toast(e2.server ? e2.message : "削除される件数を確かめられませんでした","err"); return; }
+      retRenderState(pv); retShowPreview(pv, rf);
+      if(pv.would_delete>0 && !confirm("過去ログの保存を「"+retPolicyText(pv.proposed)+"」にすると、古い記事 "+arNum(pv.would_delete)+" 件を削除します"+
+          "（保存中 "+arNum(pv.count)+" 件 → "+arNum(pv.keep)+" 件）。\n削除した記事は元に戻せません。\n\nこの設定で保存しますか？")) return;
+      payload.archive=retPayload(rf);
+      sb.textContent="保存中…";
+    }
     const d=await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
-    if(d.ok){ AI.config=d.ai; AI.proxy=d.proxy; AI.browser=d.browser; AI.fulltext=d.fulltext; AI.pdfFont=d.pdf_font||""; AI.pdfFontFound=!!d.pdf_font_found; toast("AI・プロキシ設定を保存しました"); closeOverlays(); openAI(); }
+    if(d.ok){
+      AI.config=d.ai; AI.proxy=d.proxy; AI.browser=d.browser; AI.fulltext=d.fulltext; AI.pdfFont=d.pdf_font||""; AI.pdfFontFound=!!d.pdf_font_found;
+      if(d.archive){ AI.archive=d.archive; RET.cur=d.archive; }
+      if(d.archive_paused!==undefined){ AI.archivePaused=d.archive_paused||""; RET.paused=AI.archivePaused; }
+      const n=d.archive_deleted||0;
+      if(d.archive_error) toast("設定は保存しましたが、過去ログの古い記事の削除に失敗しました（次の取得時にもう一度試みます）","err");
+      else if(n>0) toast("設定を保存し、過去ログの古い記事 "+arNum(n)+" 件を削除しました");
+      else toast(payload.archive ? "設定を保存しました（過去ログの保存: "+retPolicyText(AI.archive)+"）" : "AI・プロキシ設定を保存しました");
+      if(payload.archive && AR.active) arSearch();   // 過去ログタブの件数・保存の設定を新しく
+      closeOverlays(); openAI();
+    }
     else toast(d.error||"保存に失敗しました","err");
   }catch(e){ toast(e.server ? e.message : "保存に失敗しました","err"); }
+  finally{ aiSaving=false; sb.disabled=false; sb.textContent="保存"; }
 });
 $("#aiClearKey").onclick=async ()=>{
   try{
@@ -3562,7 +3767,7 @@ async function loadSynonyms(){
 async function saveSynonyms(){
   try{ const d=await api("/api/research/synonyms",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:$("#rsSynText").value})});
        $("#rsSynText").value=d.text||""; toast("同義語辞書を保存しました（"+(d.groups||[]).length+"グループ）"); closeRsPanels(); researchSearch(true); }
-  catch(e){ toast("同義語辞書を保存できませんでした","err"); }
+  catch(e){ toast(e.server ? e.message : "同義語辞書を保存できませんでした","err"); }
 }
 
 // ---- テーマ（保存した検索条件）・新着差分・ブリーフ ----
