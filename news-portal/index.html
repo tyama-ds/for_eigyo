@@ -3195,7 +3195,19 @@ $("#aiClearKey").onclick=async ()=>{
     const d=await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({ provider:$("#aiProvider").value, base_url:$("#aiBase").value.trim(),
                             model:$("#aiModel").value.trim(), clear_key:true, ...proxyPayload() })});
-    if(d.ok){ AI.config=d.ai; AI.proxy=d.proxy; AI.browser=d.browser; $("#aiKey").value=""; $("#aiKeyStatus").textContent=""; toast("APIキーを削除しました"); }
+    if(d.ok){
+      AI.config=d.ai; AI.proxy=d.proxy; AI.browser=d.browser; $("#aiKey").value=""; $("#aiKeyStatus").textContent="";
+      // 保存できた＝settings.json を読めた: 前の 409 の消えない警告を消し、保存の設定の欄もサーバーの今の状態で使えるように戻す
+      // （画面は開いたまま。保存の設定の欄を操作していなければ、読めた今の設定を入れ直す）
+      AI.settingsError=d.settings_error||""; AI.saveError="";
+      if(d.archive_paused!==undefined){ AI.archivePaused=d.archive_paused||""; AI.archivePausedKind=d.archive_paused_kind||(AI.archivePaused?"invalid":""); RET.paused=AI.archivePaused; RET.kind=AI.archivePausedKind; }
+      if(d.archive && !AI.archivePaused){
+        AI.archive=d.archive;
+        if(!RET.touched && !retSameCfg(d.archive, RET.cur)){ RET.cur=d.archive; retSetForm(d.archive); }
+      }
+      retSyncInputs(); renderSetErr(); retPreview();
+      toast("APIキーを削除しました");
+    }
   }catch(e){ settingsRefused(e); toast(e.server ? e.message : "削除に失敗しました","err"); }
 };
 $("#setReload").onclick=async ()=>{   // settings.json を直した後: サーバーから読み直してフォームを入れ直す（入力していた変更は元に戻る）
