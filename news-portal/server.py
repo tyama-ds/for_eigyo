@@ -179,16 +179,24 @@ DEFAULT_SOURCES = [
 _cache_lock = threading.Lock()      # _cache の読み書きを保護
 _refresh_lock = threading.Lock()    # 取得(refresh)を直列化しスタンピードを防ぐ
 _sources_lock = threading.Lock()    # feeds.json の read-modify-write を保護
-_settings_lock = threading.Lock()   # settings.json の read-modify-write を保護
+_settings_lock = threading.Lock()   # settings.json の読み・書き1回ずつを保護
+# settings.json の read-modify-write（読んでから書き戻すまで）を通しで直列化する。書き戻す処理（設定画面の保存・同義語辞書の
+# 保存）はすべてこの中で読み書きする（片方が読んだ後に別の保存が書いた値を、古い値で書き戻して消さないように）。
+# ロックの順番は _archive_lock → _settings_rmw_lock → _settings_lock（逆順には取らない）
+_settings_rmw_lock = threading.Lock()
 _archive_lock = threading.Lock()    # archive.sqlite3 への書き込み/初期化を直列化
 _archive_ready = False              # テーブル作成・旧JSONL取り込み済みフラグ
 # 過去ログの件数の控え（保存のたびに COUNT(*) しないため。_archive_lock 内で読み書き）。db=どの DB の件数か、
 # at=最後に数えた時刻、pruned_at=最後に上限まで削除した時刻、swept_at=最後に孤児の本文キャッシュを掃除した時刻、
-# paused=古い記事の削除を止めている理由（警告を1回だけ出すため）、applying=設定の適用（まとめて削除）の最中、
-# apply_gen=適用の世代（新しい適用が始まったら古い適用は次の区切りで止める）、bg=残りを消す別スレッドが動いている
-_archive_n: dict = {"db": "", "count": None, "at": 0.0, "pruned_at": 0.0, "swept_at": 0.0, "paused": "",
-                    "applying": False, "apply_gen": 0, "bg": False}
+# paused=古い記事の削除を止めている理由（警告を1回だけ出すため）、note=控えた設定で動いていることを知らせたか、
+# applying=設定の適用（まとめて削除）の最中、waiters=適用の順番を待っている設定画面の保存の数（動いている適用は
+# 次の区切りで止めて譲る）、bg=残りを消す別スレッドが動いている
+_archive_n: dict = {"db": "", "count": None, "at": 0.0, "pruned_at": 0.0, "swept_at": 0.0, "paused": "", "note": "",
+                    "applying": False, "waiters": 0, "bg": False}
 _archive_apply_lock = threading.Lock()   # 保存の設定の適用（古い記事のまとめての削除）を直列化
+# archive.sqlite3 に控えた保存の設定（meta 表の archive_policy）: (どの DB か, 設定 or None)。_archive_lock 内で書き換える
+# （1つの値の代入なので、ロックの外から読んでも DB と設定の組が食い違わない）
+_archive_policy_cache: tuple = ("", None)
 _cache: dict = {"articles": [], "errors": {}, "offline": None, "updated": None, "ts": 0.0}
 DEMO = False                        # --demo 起動時 True（常にデモ記事を返す）
 
@@ -1386,6 +1394,7 @@ def _archive_init_locked() -> None:
         conn.execute("""CREATE TABLE IF NOT EXISTS doc_chunks(
             id INTEGER PRIMARY KEY, doc_id TEXT, idx INTEGER, heading TEXT, text TEXT)""")   # 資料の抜粋（チャンク）
         conn.execute("CREATE INDEX IF NOT EXISTS ix_doc_chunks_doc ON doc_chunks(doc_id, idx)")
+        conn.execute("""CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT)""")   # 過去ログの控え（保存の設定など）
         conn.execute("""CREATE TABLE IF NOT EXISTS llm_cache(
             key TEXT PRIMARY KEY, created_at REAL, out TEXT, meta TEXT)""")   # レポート生成の各段の結果（再実行で再利用）
         if "meta" not in {r[1] for r in conn.execute("PRAGMA table_info(llm_cache)")}:
@@ -1414,9 +1423,11 @@ def _archive_init_locked() -> None:
         _fts_setup(conn)   # 全文索引（件数が合わなければ再構築）
         _doc_fts_setup(conn)   # 外部資料の抜粋の索引
         conn.commit()
+        policy = _archive_policy_read(conn)
     finally:
         conn.close()
     _archive_n.update(db="", count=None, at=0.0)   # 件数の控えは次に使うときに数え直す（DB の切り替え・初期化）
+    _archive_policy_set_cache(policy)
     _archive_ready = True
 
 
@@ -1427,7 +1438,8 @@ def archive_add(articles: list[dict]) -> int:
     残らないことが分かっている記事（期間より前の日付・件数が上限のときに最も古い記事より古い日付）は入れない
     （入れてすぐ消すと、取得のたびに「新しく保存された記事」として数え直されるため）。
     保存の設定は _archive_lock の中で読む（設定画面の保存もこのロックの中で書くので、保存より前の設定では消さない）。
-    settings.json を読めない・値が不正なときは削除しない（_archive_prune_cfg）。
+    settings.json を読めない・値が不正なときは削除しない（_archive_prune_info）。settings.json の "archive" を読めたら
+    archive.sqlite3 にも控える（settings.json が無くなっても、その設定で動くように）。
     デモ記事は保存しない。戻り値は新規追加件数。"""
     now = time.time()
     fresh = [a for a in articles if a.get("id") and a.get("source_id") != "demo"]
@@ -1436,9 +1448,13 @@ def archive_add(articles: list[dict]) -> int:
     more = False
     with _archive_lock:
         _archive_init_locked()
-        cfg = _archive_prune_cfg()   # None = 削除を止めている
+        info = _archive_prune_info()
+        cfg = None if info["paused"] else info["cfg"]   # None = 削除を止めている
         conn = _db()
         try:
+            record = info["source"] == "settings" and info["cfg"] != _archive_saved_policy()
+            if record:
+                _archive_policy_write_locked(conn, info["cfg"])   # 同じ transaction で（commit の後で控えを新しく）
             max_rowid = conn.execute("SELECT coalesce(MAX(rowid), 0) FROM articles").fetchone()[0]
             ins = "INSERT OR IGNORE INTO articles VALUES (?,?,?,?,?,?,?,?,?,?,?)"
             rows = [_archive_row(a, now) for a in fresh]
@@ -1464,12 +1480,21 @@ def archive_add(articles: list[dict]) -> int:
             if new_rows:
                 conn.executemany("INSERT INTO articles_fts(rowid, text) VALUES (?,?)", _fts_rows(new_rows))
                 _archive_n_add(len(new_rows))
-            if cfg is not None and not _archive_n["applying"]:   # 適用（まとめての削除）の最中はそちらに任せる
+            # 適用（まとめての削除）の最中・設定画面の保存が適用の順番を待っている間は、そちらに任せる
+            # （applying は適用のロックを握っている間だけ有効。万一立ったまま残っても、削除が止まり続けないように）
+            busy = (_archive_n["applying"] and _archive_apply_lock.locked()) or _archive_n["waiters"] > 0
+            if cfg is not None and not busy:
                 more = _archive_prune_locked(conn, cfg, now)[1]
             conn.commit()
+            if record:
+                _archive_policy_set_cache(info["cfg"])
             if more:
                 more = not _archive_n["bg"]
                 _archive_n["bg"] = True
+        except BaseException:
+            # 途中で失敗した（容量不足など）: 足し引きした件数の控えは commit されなかった分を含むので、次に使うときに数え直す
+            _archive_n.update(count=None, pruned_at=0.0)
+            raise
         finally:
             conn.close()
     if more:   # 1回分（ARCHIVE_DELETE_CHUNK 件）より多く超えている: 残りは別スレッドで少しずつ消す
@@ -1492,11 +1517,13 @@ def _int_value(v) -> int | None:
     return None
 
 
-def _archive_settings_check(s: dict | None, err: str = "") -> tuple[dict, str]:
+def _archive_settings_check(s: dict | None, err: str = "", saved: dict | None = None) -> tuple[dict, str]:
     """settings.json の中身 s（読めなかったときは None と理由 err）から
     (検証した保存の設定 {"mode", "max_count", "max_days"}, 古い記事の削除を止める理由) を返す。理由が "" なら削除してよい。
-    - ファイルが無い・"archive" キーが無い（以前からの利用者）: 既定（最新 ARCHIVE_MAX 件）。以前の固定上限 2万件より
-      多く残るので、更新しても余分には消えない。省いた項目も既定。
+    - ファイルが無い・"archive" キーが無い: archive.sqlite3 に控えた前回の設定 saved（画面で保存した・settings.json から
+      読めた設定）があればそれ。settings.json を無くした・別の場所へ移した・入れ直したときに、既定の 10万件と取り違えて
+      無制限や 200万件を選んでいた人の記事を消さないように。控えも無ければ（初めての起動・以前からの利用者）既定
+      （最新 ARCHIVE_MAX 件）。以前の固定上限 2万件より多く残るので、更新しても余分には消えない。省いた項目も既定。
     - ファイルはあるのに読めない・壊れている／"archive" が {...} でない／mode が count・days・unlimited のどれでもない／
       選んだ方式の値が範囲外・整数でない: 表示用には既定（範囲を超えた値は上限）を返すが、削除は止める。
       読み違えた設定（既定を含む）で、利用者が残すつもりの記事を消さないように（無制限や 200万件を選んでいた人が
@@ -1506,7 +1533,7 @@ def _archive_settings_check(s: dict | None, err: str = "") -> tuple[dict, str]:
         return d, err or "settings.json を読み込めません"
     x = s.get("archive")
     if x is None:
-        return d, ""
+        return dict(saved) if saved else d, ""
     if not isinstance(x, dict):
         return d, 'settings.json の "archive" が {"mode", "max_count", "max_days"} の形になっていません'
     m = x.get("mode")
@@ -1530,39 +1557,120 @@ def _archive_settings_check(s: dict | None, err: str = "") -> tuple[dict, str]:
     return out, why
 
 
-def archive_config_state() -> tuple[dict, str]:
-    """(保存の設定, 古い記事の削除を止める理由)。settings.json を読めないときも表示用の設定は返す。"""
+def archive_config_info() -> dict:
+    """保存の設定と、その出どころ: {"cfg": 設定, "paused": 古い記事の削除を止める理由（"" なら止めていない）,
+    "kind": 止めている種類（"unreadable" = settings.json を読めない・壊れている／"invalid" = 読めたが "archive" の値が不正／""）,
+    "source": 設定の出どころ（"settings" = settings.json の "archive"／"saved" = archive.sqlite3 に控えた前回の設定／
+    "default" = 既定）}。止めているときの cfg は表示用の既定で、利用者の設定ではない。"""
+    saved = _archive_saved_policy()
     try:
         s = load_settings_strict()
     except SettingsReadError as e:
-        return _archive_settings_check(None, str(e))
-    return _archive_settings_check(s)
+        cfg, why = _archive_settings_check(None, str(e))
+        return {"cfg": cfg, "paused": why, "kind": "unreadable", "source": "default"}
+    cfg, why = _archive_settings_check(s, saved=saved)
+    if why:
+        return {"cfg": cfg, "paused": why, "kind": "invalid", "source": "default"}
+    src = "settings" if s.get("archive") is not None else ("saved" if saved else "default")
+    return {"cfg": cfg, "paused": "", "kind": "", "source": src}
+
+
+def archive_config_state() -> tuple[dict, str]:
+    """(保存の設定, 古い記事の削除を止める理由)。settings.json を読めないときも表示用の設定は返す。"""
+    info = archive_config_info()
+    return info["cfg"], info["paused"]
+
+
+# ---- archive.sqlite3 に控えた保存の設定（settings.json が無くなっても、前回の設定で動くように）
+
+_ARC_POLICY_KEY = "archive_policy"
+_ARC_SIZE_KEY = "archive_size_est"   # 1件あたりの大きさの目安（まとめて削除する前に測った値）
+
+
+def _archive_policy_parse(raw) -> dict | None:
+    try:
+        x = json.loads(raw) if isinstance(raw, str) else None
+    except ValueError:
+        return None
+    cfg, why = _archive_settings_check({"archive": x}) if isinstance(x, dict) else (None, "x")
+    return None if why else cfg
+
+
+def _archive_policy_read(conn) -> dict | None:
+    """meta 表に控えた保存の設定（無い・読めない・値が不正なら None）。"""
+    try:
+        row = conn.execute("SELECT value FROM meta WHERE key = ?", (_ARC_POLICY_KEY,)).fetchone()
+    except sqlite3.Error:
+        return None
+    return _archive_policy_parse(row[0]) if row else None
+
+
+def _archive_policy_set_cache(policy: dict | None) -> None:
+    global _archive_policy_cache
+    _archive_policy_cache = (str(ARCHIVE_DB), dict(policy) if policy else None)
+
+
+def _archive_saved_policy() -> dict | None:
+    """archive.sqlite3 に控えた前回の保存の設定。初期化後は控え（_archive_policy_cache）を使う。
+    初期化前（別の DB に切り替えた直後など）は DB を読むだけで、控えは書き換えない（書き換えは _archive_lock 内だけ）。"""
+    db, policy = _archive_policy_cache
+    if db == str(ARCHIVE_DB):
+        return dict(policy) if policy else None
+    if not ARCHIVE_DB.exists():
+        return None
+    try:
+        conn = sqlite3.connect(ARCHIVE_DB, timeout=2)
+    except sqlite3.Error:
+        return None
+    try:
+        return _archive_policy_read(conn)
+    finally:
+        conn.close()
+
+
+def _archive_policy_write_locked(conn, cfg: dict) -> None:
+    """保存の設定を meta 表に控える（呼び出し側で commit してから _archive_policy_set_cache）。_archive_lock 内。"""
+    v = {"mode": cfg["mode"], "max_count": cfg["max_count"], "max_days": cfg["max_days"]}
+    conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)", (_ARC_POLICY_KEY, json.dumps(v)))
 
 
 def archive_config() -> dict:
     """過去ログの保存の設定（settings.json の "archive"）を検証して返す: {"mode", "max_count", "max_days"}（表示・API 用）。
     - mode: count（最新 max_count 件を残す）／ days（直近 max_days 日を残す）／ unlimited（削除しない）
-    - キーが無い（以前からの利用者）・読めない・壊れているときは既定（最新 ARCHIVE_MAX 件）。
+    - キーが無いときは archive.sqlite3 に控えた前回の設定、控えも無ければ（以前からの利用者）既定（最新 ARCHIVE_MAX 件）。
+      読めない・壊れているときは既定（表示用）。
     - 不正な値は既定に戻す。ただし範囲の上を超えた値は上限にする（既定より多く残す側）。範囲の下を下回る値を
       下限に寄せることもしない（既定の方が多く残る）。
-    実際に削除するかどうかは _archive_prune_cfg（読めない・不正なら削除しない）で決める。"""
+    実際に削除するかどうかは _archive_prune_info（読めない・不正なら削除しない）で決める。"""
     return archive_config_state()[0]
 
 
-def _archive_prune_cfg() -> dict | None:
-    """古い記事の削除に使う設定。settings.json を読めない・保存の設定が不正なときは None（削除しない）。
-    止めたとき・再開したときにコンソールへ1回だけ知らせる。_archive_lock 内で呼ぶ。"""
-    cfg, why = archive_config_state()
+def _archive_prune_info() -> dict:
+    """古い記事の削除に使う設定（archive_config_info）。paused が "" でなければ削除しない（settings.json を読めない・
+    保存の設定が不正）。止めたとき・再開したとき・控えた前回の設定で動き始めたときにコンソールへ1回だけ知らせる。
+    _archive_lock 内で呼ぶ。"""
+    info = archive_config_info()
+    why, cfg = info["paused"], info["cfg"]
     if why:
         if _archive_n["paused"] != why:
             _archive_n["paused"] = why
-            _console(f"[Prism] 警告: {why}。読み違えた設定で記事を消さないよう、過去ログの古い記事の削除を止めています"
-                     "（設定画面の「過去ログの保存」で保存し直すか、settings.json を直すと再開します）")
-        return None
+            if info["kind"] == "unreadable":
+                hint = ("settings.json を直すと再開します。直すまで設定画面・同義語辞書の保存もできません。"
+                        "APIキーなどほかの設定も入っているので、消したり別の場所へ移したりせずに直してください")
+            else:
+                hint = "設定画面の「過去ログの保存」で残し方を選んで保存し直すか、settings.json の \"archive\" を直すと再開します"
+            _console(f"[Prism] 警告: {why}。読み違えた設定で記事を消さないよう、過去ログの古い記事の削除を止めています（{hint}）")
+        return info
+    note = archive_retention_text(cfg) if info["source"] == "saved" else ""
     if _archive_n["paused"]:
         _archive_n["paused"] = ""
-        _console(f"[Prism] 過去ログの保存の設定（{archive_retention_text(cfg)}）を読み込めたので、古い記事の削除を再開します")
-    return cfg
+        _console(f"[Prism] 過去ログの保存の設定（{archive_retention_text(cfg)}"
+                 + ("・settings.json に無いため、過去ログに控えた前回の設定" if note else "")
+                 + "）を読み込めたので、古い記事の削除を再開します")
+    elif note and _archive_n["note"] != note:
+        _console(f"[Prism] settings.json に過去ログの保存の設定が無いため、過去ログに控えた前回の設定（{note}）で動いています")
+    _archive_n["note"] = note
+    return info
 
 
 def _archive_keeps_more(new: dict, cur: dict | None) -> bool:
@@ -1708,6 +1816,50 @@ def archive_db_bytes() -> int:
     return total
 
 
+def _archive_used_bytes(conn) -> int:
+    """archive.sqlite3 のうち使っているページの大きさ（削除で空いたページは数えない）。"""
+    pc = int(conn.execute("PRAGMA page_count").fetchone()[0])
+    fl = int(conn.execute("PRAGMA freelist_count").fetchone()[0])
+    return max(0, pc - fl) * int(conn.execute("PRAGMA page_size").fetchone()[0])
+
+
+def _archive_size_est_read(conn) -> dict | None:
+    """まとめて削除する前に測って控えた1件あたりの大きさ {"per": バイト, "count": 測ったときの件数}（無ければ None）。"""
+    try:
+        row = conn.execute("SELECT value FROM meta WHERE key = ?", (_ARC_SIZE_KEY,)).fetchone()
+        x = json.loads(row[0]) if row else None
+    except (sqlite3.Error, ValueError, TypeError):
+        return None
+    if (isinstance(x, dict) and isinstance(x.get("per"), (int, float)) and x["per"] > 0
+            and isinstance(x.get("count"), int) and x["count"] > 0):
+        return {"per": float(x["per"]), "count": x["count"]}
+    return None
+
+
+def _archive_size_capture_locked(conn, total: int) -> None:
+    """まとめて削除する直前に、いまの1件あたりの大きさ（使っているページ ÷ 件数）を meta 表に控える（呼び出し側で commit）。
+    削除してもファイルは小さくならず、全文索引（FTS5）にも削除の印が残るので、削除の後に「ファイル ÷ 件数」で測ると
+    1件あたりが何倍にも膨らむため。前回測ったときより件数が少ないとき（削除の後でまだ戻っていない）は上書きしない。"""
+    if total < 1000:
+        return
+    est = _archive_size_est_read(conn)
+    if est and total < est["count"]:
+        return
+    conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
+                 (_ARC_SIZE_KEY, json.dumps({"per": _archive_used_bytes(conn) / total, "count": total})))
+
+
+def _archive_est_per_10k(conn, total: int) -> float:
+    """1万件あたりの大きさの目安（無制限にしたときの増え方）。まとめて削除した後、件数がそのときより少ない間は
+    削除の前に測った値を使う（空いた領域・削除の印を記事の大きさと取り違えない）。"""
+    if total <= 0:
+        return 0.0
+    est = _archive_size_est_read(conn)
+    if est and total < est["count"]:
+        return est["per"] * 10000
+    return _archive_used_bytes(conn) / total * 10000
+
+
 def archive_retention_preview(cfg: dict | None = None) -> dict:
     """保存の設定 cfg（省略時は今の設定）にしたら何件削除されるか（何も変更しない）。
     設定画面のプレビュー（GET /api/archive/retention）用。
@@ -1716,15 +1868,21 @@ def archive_retention_preview(cfg: dict | None = None) -> dict:
       無制限）なら 0（上げても消えない）。
     - over_limit: would_delete が 0 でも、その設定を超えている古い記事の件数（上限を少し超えた分など。
       保存では消さず、ふだんの取得時の削除でまとめて消える）。
-    - paused: settings.json を読めない・保存の設定が不正なため、古い記事の削除を止めている理由（"" なら止めていない）。"""
+    - paused: settings.json を読めない・保存の設定が不正なため、古い記事の削除を止めている理由（"" なら止めていない）。
+      paused_kind はその種類（"unreadable" = 読めない・壊れている＝直すまで設定を保存できない／"invalid" = "archive" の値が
+      不正＝画面で残し方を選んで保存すれば再開）。止めているときの current は表示用の既定で、利用者の設定ではない。
+    - settings_error: settings.json を読めない理由（読めるときは ""）。
+    - est_bytes_per_10k: 1万件あたりの大きさの目安（_archive_est_per_10k）。"""
     now = time.time()
     with _archive_lock:
         _archive_init_locked()
-        cur_cfg, paused = archive_config_state()
+        info = archive_config_info()
+        cur_cfg, paused = info["cfg"], info["paused"]
         cfg = cfg or cur_cfg
         conn = _db()
         try:
             total = _archive_total_locked(conn, exact=True)
+            est = _archive_est_per_10k(conn, total)
             lo = conn.execute("SELECT MIN(sort_ts) FROM articles").fetchone()[0]
             hi = conn.execute("SELECT MAX(sort_ts) FROM articles").fetchone()[0]
             over, cutoff = 0, None
@@ -1747,7 +1905,8 @@ def archive_retention_preview(cfg: dict | None = None) -> dict:
             conn.close()
     return {"ok": True, "current": cur_cfg, "proposed": cfg, "would_delete": n, "over_limit": over - n, "count": total,
             "keep": total - n, "oldest": lo, "newest": hi, "oldest_after": after, "db_bytes": archive_db_bytes(),
-            "text": archive_retention_text(cfg), "paused": paused}
+            "est_bytes_per_10k": est, "text": archive_retention_text(cfg), "paused": paused, "paused_kind": info["kind"],
+            "settings_error": paused if info["kind"] == "unreadable" else "", "source": info["source"]}
 
 
 def archive_apply_retention(cfg: dict | None = None, save=None, background: bool = False) -> int:
@@ -1760,57 +1919,85 @@ def archive_apply_retention(cfg: dict | None = None, save=None, background: bool
       プレビューの would_delete もこの数え方。save なしで cfg を渡したときも、今の設定と違ってより多く残すだけの設定なら
       消さない。cfg を省いたとき・今の設定と同じ cfg のときは、その設定でそのまま消しきる（上限を少し超えた分も）。
     - 消すのは ARCHIVE_DELETE_CHUNK 件ずつ。1回ごとに commit して _archive_lock を手放すので、数十万件を消す間も
-      検索・取得の保存・ほかの画面は待たされない。途中で別の適用が始まった・保存の設定が変わったら、そこで止める。
-      その間、取得の保存（archive_add）は自分では削除しない（二重に数えて多く消さないように）。
+      検索・取得の保存・ほかの画面は待たされない。設定画面の保存が適用の順番を待っている（_archive_n["waiters"]）・
+      保存の設定が変わったら、そこで止めて譲る。その間、取得の保存（archive_add）は自分では削除しない
+      （二重に数えて多く消さないように）。
     - background=True（_archive_trim_bg）: ほかの適用が動いていれば何もしない（設定画面の保存を止めない）。
-    - 件数で残すとき消す件数は始める直前に数え直すので、プレビュー（archive_retention_preview）の would_delete と一致する。"""
-    deleted, now = 0, time.time()
+    - 件数で残すとき消す件数は始める直前に数え直すので、プレビュー（archive_retention_preview）の would_delete と一致する。
+    - 保存した設定・settings.json から読めた設定は archive.sqlite3 にも控える（settings.json が無くなったときに使う）。"""
+    deleted, now, failed = 0, time.time(), False
     if background:
         if not _archive_apply_lock.acquire(blocking=False):
             return 0
     else:
-        with _archive_lock:   # 動いている適用（別スレッドの残りの削除など）に、新しい適用が来たことを知らせる
-            _archive_n["apply_gen"] += 1
-        _archive_apply_lock.acquire()
+        # 動いている適用（別スレッドの残りの削除など）に、順番を待っている保存があることを知らせる（次の区切りで止めて譲る）。
+        # 世代の番号ではなく待っている数で知らせる（知らせた後・ロックを取る前に別の適用が始まっても、その適用にも伝わる）
+        with _archive_lock:
+            _archive_n["waiters"] += 1
+        try:
+            _archive_apply_lock.acquire()
+        finally:
+            with _archive_lock:
+                _archive_n["waiters"] -= 1
     try:
         with _archive_lock:
             _archive_init_locked()
-            run = True
+            run, info = True, None
             if save is not None:
                 cur, why = archive_config_state()
                 save()
                 run = cfg is not None and not _archive_keeps_more(cfg, None if why else cur)
             elif cfg is None:
-                cfg = _archive_prune_cfg()
+                info = _archive_prune_info()
+                cfg = None if info["paused"] else info["cfg"]
                 run = cfg is not None
             else:   # 保存していない設定を直接渡されたとき: 今の設定より多く残すだけの設定なら消さない（プレビューと同じ）
                 cur, why = archive_config_state()
                 run = not (not why and cfg != cur and _archive_keeps_more(cfg, cur))
             if not run or cfg["mode"] not in ("count", "days"):
-                if not background:   # 消す記事が無くても、以前の版で残った孤児の本文キャッシュは掃除する
-                    conn = _db()
+                run = False
+                if background:
+                    return 0
+            conn = _db()   # applying を立てる前に開く（開けなかったときに applying が立ったまま残り、削除が止まらないように）
+            ready = False
+            try:
+                record = cfg if save is not None and cfg is not None else (
+                    info["cfg"] if info and info["source"] == "settings" and info["cfg"] != _archive_saved_policy() else None)
+                if record is not None:   # 保存した・読めた設定を archive.sqlite3 に控える（失敗しても設定の保存は済んでいる）
+                    try:
+                        _archive_policy_write_locked(conn, record)
+                        conn.commit()
+                        _archive_policy_set_cache(record)
+                    except sqlite3.Error as e:
+                        conn.rollback()
+                        _console(f"[Prism] 警告: 過去ログの保存の設定を archive.sqlite3 に控えられませんでした（{type(e).__name__}: {str(e)[:120]}）")
+                if not run:   # 消す記事が無くても、以前の版で残った孤児の本文キャッシュは掃除する
                     try:
                         _archive_sweep_pages_locked(conn, time.time())
                         conn.commit()
                     except sqlite3.Error:
                         pass
-                    finally:
-                        conn.close()
-                return 0
-            state0 = archive_config_state()
-            _archive_n["apply_gen"] += 1
-            gen = _archive_n["apply_gen"]
-            _archive_n["applying"] = True
-            conn = _db()
+                    return 0
+                total0 = _archive_total_locked(conn, exact=True)
+                plan = total0 - cfg["max_count"] if cfg["mode"] == "count" else None
+                try:   # 削除の前の1件あたりの大きさ（無制限にしたときの増え方の目安）を控える
+                    _archive_size_capture_locked(conn, total0)
+                    conn.commit()
+                except sqlite3.Error:
+                    conn.rollback()
+                state0 = archive_config_state()
+                _archive_n["applying"] = True
+                ready = True
+            finally:
+                if not ready:
+                    conn.close()
         try:
-            plan, cutoff = None, now - cfg["max_days"] * 86400
+            cutoff = now - cfg["max_days"] * 86400
             while True:
                 with _archive_lock:
-                    if _archive_n["apply_gen"] != gen or archive_config_state() != state0:
-                        break   # 別の適用が始まった・保存の設定が変わった
+                    if _archive_n["waiters"] > 0 or archive_config_state() != state0:
+                        break   # 設定画面の保存が順番を待っている・保存の設定が変わった
                     if cfg["mode"] == "count":
-                        if plan is None:
-                            plan = _archive_total_locked(conn, exact=True) - cfg["max_count"]
                         # 間に新着が入っても始めに数えた件数より多くは消さない（控えで上限を超えていなければ止める）
                         k = min(plan - deleted, _archive_total_locked(conn) - cfg["max_count"], ARCHIVE_DELETE_CHUNK)
                         n = _archive_delete_locked(conn, _ARC_OLDEST_SQL, (k,)) if k > 0 else 0
@@ -1822,10 +2009,15 @@ def archive_apply_retention(cfg: dict | None = None, save=None, background: bool
                     if n <= 0 or n < k:
                         break
                 time.sleep(0.003)   # 待っている検索・取得の保存に先を譲る（Lock は待っている側に順番を渡さないため）
+        except BaseException:
+            failed = True
+            raise
         finally:
             with _archive_lock:
                 try:
                     conn.rollback()   # 途中で失敗した1回分は取り消す（済んだ回は commit 済み。記事と索引は揃ったまま）
+                    if failed:   # 取り消した回の分も件数の控えから引いてあるので、次に使うときに数え直す
+                        _archive_n["count"] = None
                     _archive_n["pruned_at"] = time.time()
                     try:
                         _archive_sweep_pages_locked(conn, time.time())   # 以前の版で残った孤児の本文キャッシュも
@@ -1833,7 +2025,10 @@ def archive_apply_retention(cfg: dict | None = None, save=None, background: bool
                     except sqlite3.Error:
                         conn.rollback()
                     if deleted:
-                        try:   # 大量に消したときに膨らんだ -wal を縮める（読み取り中なら次の機会に）
+                        try:   # 大量に消したときに膨らんだ -wal を縮める。ほかの接続（DB を開いている別のツールなど）が
+                            # 読み取り中なら待たずに諦める（TRUNCATE は読み取りが終わるまで待つので、待つとその間
+                            # _archive_lock を握ったまま検索・取得の保存を止めてしまう）
+                            conn.execute("PRAGMA busy_timeout = 0")
                             conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()
                         except sqlite3.Error:
                             pass
@@ -1867,11 +2062,14 @@ _stats_cache: dict = {"key": None, "srcs": [], "cats": []}   # 情報源別・�
 def archive_stats() -> dict:
     """件数・期間に加え、フィルタUI用に情報源別/カテゴリ別の件数と保存の設定（retention）を返す。
     retention_paused は settings.json を読めない・保存の設定が不正なため古い記事の削除を止めている理由（"" なら止めていない）。
+    retention_paused_kind はその種類（"unreadable"／"invalid"／""）。止めているときの retention は表示用の既定で、
+    利用者の設定ではない（画面では「削除を停止中」と出す）。
     情報源別・カテゴリ別の集計は全件を読むため（10万件で 0.1 秒台）、件数・最後の rowid・期間が前回と同じなら
     前回の結果を使う（過去ログタブは検索のたびにこれを呼ぶ）。"""
-    cfg, paused = archive_config_state()
     with _archive_lock:
         _archive_init_locked()
+        info = archive_config_info()   # 初期化の後で（archive.sqlite3 に控えた前回の設定も使う）
+        cfg, paused = info["cfg"], info["paused"]
         conn = _db()
         try:
             n = int(conn.execute("SELECT COUNT(*) FROM articles").fetchone()[0])
@@ -1891,7 +2089,7 @@ def archive_stats() -> dict:
         finally:
             conn.close()
     return {"count": n, "oldest": lo, "newest": hi, "sources": srcs, "categories": cats, "fts": _fts_ok,
-            "retention": cfg, "retention_paused": paused}
+            "retention": cfg, "retention_paused": paused, "retention_paused_kind": info["kind"]}
 
 
 # ---- 検索語の解釈（AND / OR / 除外 / 同義語辞書）
@@ -1905,6 +2103,16 @@ MAX_QUERY_GROUPS = 10
 def synonym_groups() -> list[list[str]]:
     g = load_settings().get("synonyms")
     return g if isinstance(g, list) else [list(x) for x in DEFAULT_SYNONYMS]
+
+
+def settings_read_problem() -> str:
+    """settings.json を読めない・壊れているときはその理由（読めるとき・ファイルが無いときは ""）。
+    このとき画面に返す設定（AI・プロキシ・同義語辞書など）は既定で、利用者の設定ではない。"""
+    try:
+        load_settings_strict()
+    except SettingsReadError as e:
+        return str(e)
+    return ""
 
 
 def parse_synonyms_text(text: str) -> list[list[str]]:
@@ -1929,12 +2137,13 @@ def synonyms_text(groups: list[list[str]] | None = None) -> str:
 
 def save_synonyms(text: str) -> dict:
     groups = parse_synonyms_text(text)
-    try:
-        s = load_settings_strict()   # 読めないまま書き戻すと、ほかの設定（APIキー・過去ログの保存など）が消える
-    except SettingsReadError as e:
-        return {"ok": False, "error": settings_read_error_text(e), "settings_error": True}
-    s["synonyms"] = groups
-    save_settings(s)
+    with _settings_rmw_lock:   # 読んでから書き戻すまで通しで（ほかの保存が間に書いた値を古い値で消さない）
+        try:
+            s = load_settings_strict()   # 読めないまま書き戻すと、ほかの設定（APIキー・過去ログの保存など）が消える
+        except SettingsReadError as e:
+            return {"ok": False, "error": settings_read_error_text(e), "settings_error": True}
+        s["synonyms"] = groups
+        save_settings(s)
     return {"ok": True, "groups": groups, "text": synonyms_text(groups), "fts": _fts_ok}
 
 
@@ -2391,9 +2600,11 @@ def load_settings_strict() -> dict:
 
 
 def settings_read_error_text(e: Exception) -> str:
-    """settings.json を読めないため保存を断るときの説明（画面に出す）。"""
+    """settings.json を読めないため保存を断るときの説明（画面に出す）。ファイルを消す・移すようには勧めない
+    （APIキーなど画面からは戻せない設定が入っている。過去ログの保存の設定も、無くなると前回の控えか既定で動く）。"""
     return (f"{e}。ほかの設定（APIキー・過去ログの保存など）を消さないよう、保存しませんでした。"
-            "settings.json を直すか別の場所へ移してから、もう一度保存してください")
+            f"settings.json（{SETTINGS_FILE}）をメモ帳などで直してから（消したり別の場所へ移したりせずに）、"
+            "設定を読み込み直して、もう一度保存してください")
 
 
 def load_settings() -> dict:
@@ -7036,7 +7247,11 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if u.path == "/api/research/synonyms":   # 同義語辞書（1行1グループのテキスト）
-            self._json({"ok": True, "groups": synonym_groups(), "text": synonyms_text(), "fts": _fts_ok})
+            # settings_error: settings.json を読めない理由（このとき groups/text は既定で、利用者の辞書ではない）
+            err = settings_read_problem()
+            groups = synonym_groups()
+            self._json({"ok": True, "groups": groups, "text": synonyms_text(groups), "fts": _fts_ok,
+                        "settings_error": err or settings_read_problem()})
             return
 
         if u.path == "/api/research/reports":   # 保存済みレポート一覧
@@ -7092,11 +7307,17 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if u.path == "/api/settings":
-            arc_cfg, arc_paused = archive_config_state()
-            self._json({"ai": ai_status(), "proxy": proxy_config(),
-                        "browser": browser_settings_raw(), "fulltext": fulltext_config(),
-                        "pdf_font": str(load_settings().get("pdf_font") or ""), "pdf_font_found": bool(_pdf_font_path()),
-                        "archive": arc_cfg, "archive_paused": arc_paused})
+            # settings_error: settings.json を読めない理由（"" なら読めた）。このとき ai・proxy などは既定で、利用者の設定ではない
+            # （画面はそれを見て保存を止める。既定を利用者の設定として書き戻さないように）
+            # 項目ごとに読み直すので、読む前と後の両方で確かめる（途中で読めなくなった・直った場合も、既定の混ざった値を
+            # 利用者の設定として返さない）
+            err = settings_read_problem()
+            arc = archive_config_info()
+            d = {"ai": ai_status(), "proxy": proxy_config(),
+                 "browser": browser_settings_raw(), "fulltext": fulltext_config(),
+                 "pdf_font": str(load_settings().get("pdf_font") or ""), "pdf_font_found": bool(_pdf_font_path()),
+                 "archive": arc["cfg"], "archive_paused": arc["paused"], "archive_paused_kind": arc["kind"]}
+            self._json({**d, "settings_error": err or settings_read_problem(), "settings_path": str(SETTINGS_FILE)})
             return
 
         self._json({"error": "not found"}, 404)
@@ -7234,30 +7455,36 @@ class Handler(BaseHTTPRequestHandler):
             saved: dict = {}
 
             def write_settings():
-                # 読めない・壊れた settings.json を {} と取り違えて書き戻すと、APIキー・過去ログの保存の設定などが消える
-                settings = load_settings_strict()
-                settings["ai"] = ai
-                settings["proxy"] = {"use_proxy": use_proxy, "proxy_url": purl, "ca_bundle": ca_bundle}
-                # 本文取得のヘッドレスブラウザ設定（いずれも任意・空=自動検出）
-                settings["browser"] = {"binary": (body.get("browser_binary") or "").strip(),
-                                       "driver": (body.get("driver_path") or "").strip()}
-                if "pdf_font" in body:   # PDF 書き出し用の日本語 TrueType フォント（任意・空=自動検出）
-                    settings["pdf_font"] = str(body.get("pdf_font") or "").strip()
-                if "follow_pages" in body or "max_pages" in body:   # 本文取得: 続きページのたどり方・最大ページ数
-                    ft = fulltext_config()
-                    if body.get("follow_pages") in FOLLOW_MODES:
-                        ft["follow"] = body["follow_pages"]
-                    try:
-                        mp = int(body.get("max_pages") or 0)
-                    except (TypeError, ValueError):
-                        mp = 0
-                    if 1 <= mp <= PAGES_MAX_LIMIT:
-                        ft["max_pages"] = mp
-                    settings["fulltext"] = ft
-                if arc is not None:
-                    settings["archive"] = arc
-                save_settings(settings)
-                saved.update(settings)
+                # 読めない・壊れた settings.json を {} と取り違えて書き戻すと、APIキー・過去ログの保存の設定などが消える。
+                # 読んでから書き戻すまで通しで _settings_rmw_lock の中で（同義語辞書の保存・別のタブの保存が間に書いた
+                # 過去ログの保存の設定などを、古い値で書き戻して消さないように）
+                with _settings_rmw_lock:
+                    settings = load_settings_strict()
+                    if not new_key and not body.get("clear_key"):   # 保存してあるキーは、いま厳密に読んだファイルから引き継ぐ
+                        prev = settings.get("ai")
+                        ai["api_key"] = (prev.get("api_key") or "") if isinstance(prev, dict) else ""
+                    settings["ai"] = ai
+                    settings["proxy"] = {"use_proxy": use_proxy, "proxy_url": purl, "ca_bundle": ca_bundle}
+                    # 本文取得のヘッドレスブラウザ設定（いずれも任意・空=自動検出）
+                    settings["browser"] = {"binary": (body.get("browser_binary") or "").strip(),
+                                           "driver": (body.get("driver_path") or "").strip()}
+                    if "pdf_font" in body:   # PDF 書き出し用の日本語 TrueType フォント（任意・空=自動検出）
+                        settings["pdf_font"] = str(body.get("pdf_font") or "").strip()
+                    if "follow_pages" in body or "max_pages" in body:   # 本文取得: 続きページのたどり方・最大ページ数
+                        ft = fulltext_config()
+                        if body.get("follow_pages") in FOLLOW_MODES:
+                            ft["follow"] = body["follow_pages"]
+                        try:
+                            mp = int(body.get("max_pages") or 0)
+                        except (TypeError, ValueError):
+                            mp = 0
+                        if 1 <= mp <= PAGES_MAX_LIMIT:
+                            ft["max_pages"] = mp
+                        settings["fulltext"] = ft
+                    if arc is not None:
+                        settings["archive"] = arc
+                    save_settings(settings)
+                    saved.update(settings)
 
             deleted, arc_err = 0, ""
             try:
@@ -7278,10 +7505,12 @@ class Handler(BaseHTTPRequestHandler):
                 return
             settings = saved
             _EXTRAS_REJECTED.clear()   # 接続先・モデルを変えたら、思考を抑える指定をもう一度試す
+            arc_info = archive_config_info()
             self._json({"ok": True, "ai": ai_status(), "proxy": proxy_config(),
                         "browser": browser_settings_raw(), "fulltext": fulltext_config(), "pdf_font": settings.get("pdf_font", ""),
-                        "pdf_font_found": bool(_pdf_font_path()), "archive": archive_config(),
-                        "archive_paused": archive_config_state()[1], "archive_deleted": deleted, "archive_error": arc_err})
+                        "pdf_font_found": bool(_pdf_font_path()), "archive": arc_info["cfg"],
+                        "archive_paused": arc_info["paused"], "archive_paused_kind": arc_info["kind"],
+                        "settings_error": settings_read_problem(), "archive_deleted": deleted, "archive_error": arc_err})
             return
 
         if u.path == "/api/ai/probe":  # ローカルLLMの接続先の診断（文脈長・速さ・思考の有無。保存しない）
