@@ -40,7 +40,8 @@ class Worker:
     def start(self) -> None:  # noqa: D401
         pass
 
-    def new_chat(self) -> None:
+    def new_chat(self, model: str | None = None) -> None:
+        """新しい会話を始める。model は画面で選ぶモデルの表示名（無ければそのまま）。"""
         raise NotImplementedError
 
     def send(self, text: str) -> str:

@@ -87,6 +87,25 @@ bridge が workbench の検証規則に合わせていること:
 ツール結果は `max_tool_result_chars`（既定 12,000）で中央を省略する。`patch_text` の `find` は原文と一致する必要が
 あるので、長いファイルを扱うときは上限を上げるか、`search_text` で範囲を絞る依頼にする。
 
+### 書式を守らせる仕組み（普通の受け答えに戻ってしまうとき）
+
+長い作業方針（workbench 等）の後ろに書式が埋もれると、Copilot は普通の文章で答えてしまう。そこで:
+
+- 書式ルールを冒頭に置き、作業方針は「参考情報（ツールの呼び方は【書式】が優先）」として続け、**末尾にも念押し**を置く
+- 操作が不要なときは回答の先頭に **`【最終回答】`**（英語版は `[FINAL]`）と書かせる。印も `<tool_call>` も無い回答は書式違反として
+  言い直させる（`nudge_retries`、既定 2 回）。印は API の応答からは取り除く
+
+### モデルの切り替え（GPT / Claude など）
+
+Copilot の画面にモデル選択があれば、API の `model` 名で切り替えられる。`config.json` に表示名の対応を書く:
+
+```json
+"models": {"gpt": "GPT-5", "opus": "Claude Opus", "sonnet": "Claude Sonnet"}
+```
+
+`/v1/models` にこれらの名前が並び、呼び出し元（workbench のプロファイルの「モデル名」）で選ぶ。会話を新しく作るときに
+画面で切り替える（`selectors.model_button` / `model_item`。実機の画面に合わせて調整。切り替えに失敗しても今のモデルで続ける）。
+
 ### Codex CLI から使う（`~/.codex/config.toml`）
 
 ```toml

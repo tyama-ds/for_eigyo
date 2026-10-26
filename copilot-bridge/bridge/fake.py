@@ -24,11 +24,13 @@ class FakeWorker(Worker):
     def __init__(self, index: int, cfg):
         super().__init__(index, cfg)
         self.chats = 0
+        self.models_selected: list = []
         self.sent_texts: list[str] = []
         self._lock = threading.Lock()
 
-    def new_chat(self) -> None:
+    def new_chat(self, model: str | None = None) -> None:
         self.chats += 1
+        self.models_selected.append(model)
 
     def send(self, text: str) -> str:
         with self._lock:

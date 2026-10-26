@@ -6,7 +6,7 @@
 
 エンドポイント:
   POST /v1/chat/completions   OpenAI Chat Completions 形式（tools / stream 対応）
-  GET  /v1/models             モデル一覧（model_name 1 件）
+  GET  /v1/models             モデル一覧（model_name と config.models の名前）
   GET  /status                ウインドウと会話の状態
   GET  /health
 """
@@ -69,6 +69,7 @@ class Bridge:
         if not isinstance(messages, list) or not messages:
             raise BadRequest("messages が空です")
         tools = body.get("tools") or []
+        model_label = self._model_label(body.get("model"))
         session, norm, delta = self.store.resolve(messages, key=conversation_key)
         # 届いた文字が化けていないか（PowerShell の ???? 等）をコンソールで確認できるようにする
         last_user = next((m["text"] for m in reversed(norm) if m["role"] == "user"), "")
@@ -81,7 +82,7 @@ class Bridge:
                 fresh = not delta or not worker.resumed or not session.sent
                 lang = self.cfg.prompt_lang
                 if fresh:
-                    worker.new_chat()
+                    worker.new_chat(model=model_label)
                     text = render_opening(norm, tools,
                                           max_tool_result_chars=self.cfg.max_tool_result_chars,
                                           max_chars=self.cfg.max_resend_chars, lang=lang)
@@ -95,7 +96,7 @@ class Bridge:
                         # ブラウザが再起動された → 会話を作り直して 1 回だけやり直す
                         print(f"{e} → 会話を作り直してやり直します", flush=True)
                         fresh = True
-                        worker.new_chat()
+                        worker.new_chat(model=model_label)
                         text = render_opening(norm, tools,
                                               max_tool_result_chars=self.cfg.max_tool_result_chars,
                                               max_chars=self.cfg.max_resend_chars, lang=lang)
@@ -150,6 +151,23 @@ class Bridge:
             finally:
                 self.pool.release(worker, detach=detach)
         return self._completion(body, assistant, calls)
+
+    def _model_label(self, name) -> str | None:
+        """API の model 名を Copilot 画面のモデル表示名にする（config.models）。無ければ切り替えない。"""
+        if not name or not self.cfg.models:
+            return None
+        name = str(name)
+        if name in self.cfg.models:
+            return str(self.cfg.models[name]) or None
+        low = name.lower()
+        for key, label in self.cfg.models.items():
+            if str(key).lower() == low or str(label).lower() == low:
+                return str(label) or None
+        return None
+
+    def model_ids(self) -> list[str]:
+        ids = [self.cfg.model_name] + [str(k) for k in self.cfg.models.keys() if str(k) != self.cfg.model_name]
+        return ids
 
     def _completion(self, body: dict, assistant: dict, calls: list) -> dict:
         return {
@@ -225,8 +243,8 @@ def make_handler(bridge: Bridge):
                 self._json(200, {"ok": True, "version": __version__})
             elif path == "/v1/models":
                 self._json(200, {"object": "list", "data": [
-                    {"id": bridge.cfg.model_name, "object": "model", "created": int(bridge.started),
-                     "owned_by": "copilot-bridge"}]})
+                    {"id": mid, "object": "model", "created": int(bridge.started), "owned_by": "copilot-bridge"}
+                    for mid in bridge.model_ids()]})
             elif path == "/status":
                 self._json(200, bridge.status())
             else:

@@ -96,7 +96,7 @@ class EdgeMockTests(unittest.TestCase):
             "type": "object", "properties": {"path": {"type": "string"}}}}}]
         r1 = w.send(render_opening(msgs, tools))
         self.assertIn("head=あなたは", r1)   # 規則文の先頭
-        self.assertIn("tail=行3 END", r1)        # 2 万字を越えて末尾まで届いた
+        self.assertIn("tail=戻されます。", r1)   # 2 万字を越えて末尾（念押し文）まで届いた
         _, calls = parse_reply(r1)
         self.assertEqual(calls[0]["function"]["name"], "read_file")
         r2 = w.send(render_delta([normalize_message(
@@ -132,6 +132,16 @@ class EdgeMockTests(unittest.TestCase):
             self.assertNotIn("[user", r2)        # 自分の発言を含まない
         finally:
             w.close()
+
+    def test_select_model(self):
+        from selenium.webdriver.common.by import By
+
+        w = self.workers[0]
+        w.new_chat(model="Claude Opus")
+        self.assertEqual(w.driver.find_element(By.ID, "model").text, "Claude Opus")
+        self.assertEqual(w.current_model, "Claude Opus")
+        ok, why = w.select_model("No Such Model")
+        self.assertFalse(ok)
 
     def test_parallel_windows_do_not_mix(self):
         ws = self.workers[1:]

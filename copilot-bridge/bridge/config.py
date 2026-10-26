@@ -30,6 +30,9 @@ DEFAULT_SELECTORS = {
     "confirm_delete": "//*[@role='dialog' or @role='alertdialog']//button[contains(., '削除') or contains(., 'Delete')]",
     # 会話一覧が畳まれているときに開くボタン（任意）
     "history_button": "//button[contains(@aria-label,'ナビゲーション') or contains(@aria-label,'履歴') or contains(@aria-label,'チャット')]",
+    # モデル切り替え（未確認。models を設定したときだけ使う）: 選択ボタンと、ラベルを含む項目（{label} を置換）
+    "model_button": "//button[contains(@aria-label,'モデル') or contains(@aria-label,'Model') or contains(@aria-label,'model') or contains(@data-testid,'model')]",
+    "model_item": "//*[@role='menuitem' or @role='menuitemradio' or @role='option' or @role='radio'][contains(., '{label}')]",
 }
 
 # 回答にこれらが含まれていたら、その担当は制限や障害に当たったとみなす
@@ -47,6 +50,9 @@ class Config:
     host: str = "127.0.0.1"
     port: int = 8800
     model_name: str = "copilot"
+    # API の model 名 → Copilot 画面のモデル表示名。例 {"gpt": "GPT-5", "opus": "Claude Opus", "sonnet": "Claude Sonnet"}。
+    # 空なら切り替えない。会話を新しく作るときに選ぶ（selectors.model_button / model_item）
+    models: dict = field(default_factory=dict)
     # edge: Selenium で Edge を操作 / fake: ブラウザ無し（テスト・開発用）
     backend: str = "edge"
     # 同時に開くウインドウ数（＝同時に進められる会話数）

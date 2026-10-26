@@ -101,7 +101,8 @@ class ParseTests(unittest.TestCase):
     def test_refusal_needs_nudge(self):
         from bridge.protocol import needs_nudge, render_opening
         self.assertTrue(needs_nudge("この環境では read_file という中継ツールは利用できないため、架空の <tool_call> は出力できません。", [], TOOLS))
-        self.assertFalse(needs_nudge("完了しました。", [], TOOLS))
+        self.assertFalse(needs_nudge("【最終回答】完了しました。", [], TOOLS))
+        self.assertTrue(needs_nudge("完了しました。", [], TOOLS))   # 印も操作も無い普通の受け答え
         self.assertFalse(needs_nudge("ファイルは存在しません", [], None))
         en = render_opening([normalize_message({"role": "user", "content": "hi"})], TOOLS, lang="en")
         self.assertIn("[Actions the operator can perform]", en)

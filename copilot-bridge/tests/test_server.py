@@ -66,7 +66,7 @@ class ChatTests(ServerTestCase):
         def responder(text, worker):
             seen.append(text)
             if "<tool_result name=" in text:
-                return "読みました。中身は hello です。"
+                return "【最終回答】読みました。中身は hello です。"
             return 'ファイルを読みます。\n<tool_call>\n{"name": "read_file", "arguments": {"path": "a.txt"}}\n</tool_call>'
 
         FakeWorker.responder = staticmethod(responder)
@@ -151,7 +151,7 @@ class RestartTests(ServerTestCase):
         r = self.post({"messages": [{"role": "system", "content": "R"}, {"role": "user", "content": "r1"}]})
         self.assertEqual(r["choices"][0]["message"]["content"], "復帰後の回答")
         self.assertEqual(len(seen), 2)
-        self.assertIn("【元の指示】\nR", seen[1])   # 会話を作り直して送り直している
+        self.assertIn("優先です。\nR\n", seen[1])   # 会話を作り直して送り直している
         w = self.get("/status")["windows"][0]
         self.assertEqual(w["chats"], 2)
 
@@ -249,6 +249,54 @@ class ValidationTests(ServerTestCase):
         self.assertTrue(any(s["key"] == "run-1/pm" for s in st["sessions"]))
 
 
+class FinalMarkTests(ServerTestCase):
+    windows = 1
+
+    def test_plain_chat_without_mark_is_nudged_then_accepted(self):
+        seen = []
+
+        def responder(text, worker):
+            seen.append(text)
+            if len(seen) == 1:
+                return "はい、承知しました。ファイルを確認して進めますね。"   # 普通の受け答え（書式違反）
+            return "【最終回答】作業は不要です。"
+
+        FakeWorker.responder = staticmethod(responder)
+        r = self.post({"messages": [{"role": "user", "content": "fm1"}], "tools": TOOLS})
+        self.assertEqual(len(seen), 2)
+        self.assertIn("書式が守られていません", seen[1])
+        self.assertEqual(r["choices"][0]["finish_reason"], "stop")
+        self.assertEqual(r["choices"][0]["message"]["content"], "作業は不要です。")   # 印は除く
+        self.assertIn("【念押し】", seen[0])
+        self.assertIn("【元の指示（参考情報）】", seen[0])
+
+    def test_no_tools_plain_chat_is_not_nudged(self):
+        seen = []
+        FakeWorker.responder = staticmethod(lambda text, w: (seen.append(text), "普通の答え")[1])
+        r = self.post({"messages": [{"role": "user", "content": "fm2"}]})
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(r["choices"][0]["message"]["content"], "普通の答え")
+
+
+class ModelSelectTests(ServerTestCase):
+    windows = 1
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.cfg.models = {"gpt": "GPT-5", "opus": "Claude Opus"}
+
+    def test_models_listed_and_label_passed_to_new_chat(self):
+        ids = [m["id"] for m in self.get("/v1/models")["data"]]
+        self.assertEqual(ids, ["copilot", "gpt", "opus"])
+        FakeWorker.responder = staticmethod(lambda text, w: "【最終回答】ok")
+        self.post({"model": "opus", "messages": [{"role": "user", "content": "ms1"}]})
+        self.post({"model": "Claude Opus", "messages": [{"role": "user", "content": "ms2"}]})
+        self.post({"model": "copilot", "messages": [{"role": "user", "content": "ms3"}]})
+        w = self.bridge.pool.workers[0]
+        self.assertEqual(w.models_selected[-3:], ["Claude Opus", "Claude Opus", None])
+
+
 class EvictionTests(ServerTestCase):
     windows = 1
 
@@ -261,7 +309,7 @@ class EvictionTests(ServerTestCase):
         self.post({"messages": b})          # 唯一のウインドウを B が取る
         a2 = a + [ra["choices"][0]["message"], {"role": "user", "content": "a2"}]
         self.post({"messages": a2})         # A は会話を作り直して全履歴を送る
-        self.assertIn("【元の指示】\nA", seen[2])
+        self.assertIn("優先です。\nA\n", seen[2])
         self.assertIn("a1", seen[2])
         self.assertIn("<assistant>", seen[2])
         self.assertIn("a2", seen[2])
