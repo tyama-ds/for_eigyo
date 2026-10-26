@@ -20,6 +20,12 @@ body{font-family:sans-serif;margin:20px}
   <button onclick="document.getElementById('deleted').textContent='1';this.parentNode.style.display='none'">削除</button>
 </div>
 <span id="deleted">0</span>
+<!-- モデル切り替え（Fluent のメニューを模したもの） -->
+<button aria-label="モデルを選択" onclick="document.getElementById('models').style.display='block'">モデル: <span id="model">既定</span></button>
+<div id="models" role="menu" style="display:none">
+  <div role="menuitemradio" onclick="document.getElementById('model').textContent='GPT-5';this.parentNode.style.display='none'">GPT-5</div>
+  <div role="menuitemradio" onclick="document.getElementById('model').textContent='Claude Opus';this.parentNode.style.display='none'">Claude Opus</div>
+</div>
 <div id="log"></div>
 <button id="stop" aria-label="生成を停止する" style="display:none">■</button>
 <div id="m365-chat-editor-target-element" contenteditable="true"></div>

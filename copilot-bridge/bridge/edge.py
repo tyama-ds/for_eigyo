@@ -34,6 +34,7 @@ class EdgeWorker(Worker):
         self.driver = None
         self.launch_mode = ""
         self.chat_turns = 0   # 今の Copilot 会話で送った回数（削除要否の判定用）
+        self.current_model = ""   # 画面で選んだモデルの表示名
         self.clipboard_lock = clipboard_lock or WorkerPool.clipboard_lock
         self.sel = cfg.selectors
 
@@ -291,12 +292,40 @@ class EdgeWorker(Worker):
                 raise
             return False, msg
 
-    def new_chat(self, timeout: float | None = None) -> None:
-        """チャット画面を開き直して新しい会話にする。入力欄が出るまで待つ（SSO/手動ログイン込み）。"""
+    def select_model(self, label: str) -> tuple[bool, str]:
+        """画面のモデル切り替えで label を含む項目を選ぶ（selectors.model_button / model_item）。"""
+        if not label:
+            return True, ""
+        try:
+            self.driver.switch_to.default_content()
+            btn = self._find(self.sel.get("model_button", ""), 5.0) if self.sel.get("model_button") else None
+            if btn is None:
+                return False, "モデル選択ボタン（selectors.model_button）が見つからない"
+            btn.click()
+            time.sleep(0.8)
+            item = self._find(self.sel.get("model_item", "").replace("{label}", label), 5.0)
+            if item is None:
+                return False, f"モデル項目「{label}」（selectors.model_item）が見つからない"
+            item.click()
+            time.sleep(0.8)
+            self.current_model = label
+            self._log(f"モデルを「{label}」に切り替えました")
+            return True, ""
+        except Exception as e:  # noqa: BLE001
+            msg = str(e).splitlines()[0] if str(e) else type(e).__name__
+            if _is_disconnect(msg):
+                raise
+            return False, msg
+
+    def new_chat(self, timeout: float | None = None, model: str | None = None) -> None:
+        """チャット画面を開き直して新しい会話にする。入力欄が出るまで待つ（SSO/手動ログイン込み）。
+        model（画面の表示名）があれば、開いた後にモデルを切り替える。"""
         ok, reason = self._alive()
         if not ok:
             # 接続が切れていれば起動し直す（start() が new_chat() を呼ぶのでここで戻る）
             self._restart(reason)
+            if model:
+                self.select_model(model)
             return
         if self.cfg.delete_chat_on_close and self.chat_turns > 0:
             done, why = self.delete_current_chat()
@@ -313,6 +342,10 @@ class EdgeWorker(Worker):
         # 読み込み直後にページが自分でタブを開き直すことがあるので、少し待ってもう一度 Copilot のタブへ寄せる
         time.sleep(2.0)
         self._focus_chat_window()
+        if model:
+            done, why = self.select_model(model)
+            if not done:
+                self._log(f"モデルを切り替えられませんでした（{why}）。今のモデルのまま続けます")
         try:
             n = len(self.driver.window_handles)
         except Exception:  # noqa: BLE001

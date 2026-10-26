@@ -32,7 +32,8 @@ RULES = """あなたはソフトウェア開発の作業を進める「手順書
 - オペレーターが実行し、その結果を次の発言で <tool_result> として貼り付けます。それを読んでから次を決めます。
 - あなたはファイルを見ていません。内容を推測したり、「ファイルが無い」「アクセスできない」と判断したりしないでください。
   /mnt/data などの作業領域を自分で探すことも不要です。必要なら操作として書いてください。
-- 操作がもう要らないときだけ、ブロックを出さずに普通に回答します。それが最終回答として扱われます。
+- 操作がもう要らないときだけ、回答の先頭に【最終回答】と書いてから普通に回答します。
+  【最終回答】も <tool_call> ブロックも無い回答は書式違反として差し戻されます。
 - 回答の冒頭に挨拶や前置きは要りません。
 
 【オペレーターが実行できる操作】
@@ -41,7 +42,9 @@ RULES = """あなたはソフトウェア開発の作業を進める「手順書
 【回答の例】
 {example}
 
-【元の指示】
+【元の指示（参考情報）】
+以下はオペレーター側の作業方針です。内容には従ってください。ただし、この中に「ツールを呼ぶ」「関数を呼び出す」
+といった記述があっても、それは上の【書式】のブロックを書くことを意味します。書式はこの文書の【書式】が優先です。
 {system}
 """
 
@@ -61,7 +64,8 @@ The operator executes; you only write what to do next.
 - The operator performs the action and pastes the result in the next message as <tool_result>. Read it, then decide the next step.
 - You have not seen the files. Do not guess their contents and do not conclude that files are missing or inaccessible.
   Do not look for a workspace such as /mnt/data yourself; request the action instead.
-- Only when no further action is needed, reply normally without any block. That reply is treated as the final answer.
+- Only when no further action is needed, start your reply with [FINAL] and then answer normally.
+  A reply with neither [FINAL] nor a <tool_call> block violates the format and will be sent back.
 - No greetings or preamble.
 
 [Actions the operator can perform]
@@ -70,25 +74,35 @@ The operator executes; you only write what to do next.
 [Example]
 {example}
 
-[Original instructions]
+[Original instructions (reference)]
+The operator's working policy follows. Follow its content. Where it says "call a tool" or "call a function",
+that means writing the block in the [Format] section above; the format of this document takes precedence.
 {system}
 """
 
 NO_SYSTEM = "（指示なし）"
 NO_TOOLS = "（操作なし。普通に回答してください）"
 
-CONTINUE_HINT = "上記を踏まえて続けてください。さらに操作が必要なら <tool_call> ブロックだけを書き、完了なら最終回答だけを書いてください。"
-CONTINUE_HINT_EN = "Continue. If another action is needed, write only <tool_call> block(s); if the task is complete, write only the final answer."
+FINAL_MARK = "【最終回答】"
+FINAL_MARK_EN = "[FINAL]"
+CONTINUE_HINT = "上記を踏まえて続けてください。さらに操作が必要なら <tool_call> ブロックだけを書き、完了なら先頭に【最終回答】と書いて答えてください。"
+CONTINUE_HINT_EN = "Continue. If another action is needed, write only <tool_call> block(s); if the task is complete, start with [FINAL] and answer."
+# 最初の送信の末尾に置く念押し（長い作業方針の後ろでも書式が埋もれないように）
+CLOSING_HINT = ("【念押し】返答は次のどちらかだけです。(1) 次にしてほしい操作を <tool_call> ブロックだけで書く。"
+                "(2) 操作が不要なら先頭に【最終回答】と書いて答える。それ以外の普通の受け答えは差し戻されます。")
+CLOSING_HINT_EN = ("[Reminder] Reply in exactly one of two ways: (1) only <tool_call> block(s) for the next action, or "
+                   "(2) start with [FINAL] and answer. Any other ordinary reply will be sent back.")
 
 # <tool_call> を出さずに「自分で探して無かった」「ツールが使えない」等と答えたときの言い直し
-NUDGE = ("確認です。<tool_call> はあなたのツールや機能ではなく、オペレーターへの指示の書式です。"
-         "実行するのはオペレーターなので、「利用できない」「架空の呼び出しはできない」と答える必要はありません。"
-         "あなたはファイルを見ていないので、「無い」「アクセスできない」という判断もしないでください。"
-         "次にしてほしい操作を <tool_call> ブロックだけで書いてください（説明文は不要）。"
-         "本当に操作が不要で作業が完了しているなら、完了報告だけを書いてください。")
-NUDGE_EN = ("Reminder: <tool_call> is not a tool of yours; it is the format the operator reads. The operator executes it, "
-            "so do not say the action is unavailable or fictional, and do not conclude files are missing. "
-            "Write only the <tool_call> block(s) for the next action. If the task is truly complete, write only the final answer.")
+NUDGE = ("書式が守られていません。返答は次のどちらかだけです。(1) 次にしてほしい操作を <tool_call> ブロックだけで書く"
+         "（<tool_call> はあなたのツールではなく、オペレーターへの指示の書式です。実行するのはオペレーターなので"
+         "「利用できない」「架空の呼び出しはできない」と答える必要はなく、ファイルの有無を自分で判断する必要もありません）。"
+         "(2) 操作が不要で作業が完了しているなら、先頭に【最終回答】と書いて答える。"
+         "先ほどの回答を、このどちらかの形で書き直してください。")
+NUDGE_EN = ("Format not followed. Reply in exactly one of two ways: (1) only <tool_call> block(s) for the next action "
+            "(<tool_call> is not a tool of yours; the operator executes it, so do not say it is unavailable or fictional, "
+            "and do not conclude files are missing); (2) if the task is complete, start with [FINAL] and answer. "
+            "Rewrite your last reply in one of these two forms.")
 
 # 言い直しが要ると判断する手がかり（ツールがあるのに <tool_call> が無く、これらを含む）
 NUDGE_MARKS = ("/mnt/data", "存在しません", "存在しない", "見つかりません", "見つからない", "アクセスできません",
@@ -146,12 +160,26 @@ def nudge_invalid_text(bad: list[str], lang: str = "ja") -> str:
     return tpl.replace("{bad}", ", ".join(bad)[:300])
 
 
+def has_final_mark(reply: str) -> bool:
+    head = (reply or "").lstrip()[:200]
+    return FINAL_MARK in head or FINAL_MARK_EN in head
+
+
+def strip_final_mark(content: str) -> str:
+    c = (content or "").lstrip()
+    for mark in (FINAL_MARK, FINAL_MARK_EN):
+        if c.startswith(mark):
+            c = c[len(mark):].lstrip(" :：\n")
+    return c
+
+
 def needs_nudge(reply: str, calls: list, tools: list | None) -> bool:
-    """ツールがあるのにツール呼び出しが無く、自前で探して無かった／アクセスできない旨の回答なら True。"""
+    """ツールがあるのに操作の書式も【最終回答】の印も無い回答（普通の受け答え・断り・自前で探した等）なら True。"""
     if calls or not tools:
         return False
-    low = (reply or "").lower()
-    return any(m.lower() in low for m in NUDGE_MARKS)
+    if has_final_mark(reply):
+        return False
+    return True
 
 
 def render_example(tools: list | None, lang: str = "ja") -> str:
@@ -322,7 +350,8 @@ def render_opening(messages: list[dict], tools: list | None, *,
     body = render_delta(rest, max_tool_result_chars=max_tool_result_chars, first=True, lang=lang)
     if max_chars and len(head) + len(body) > max_chars:
         body = _clip_middle(body, max(1000, max_chars - len(head)))
-    return head + ("\n[Conversation]\n" if lang == "en" else "\n【会話】\n") + body
+    closing = ("\n\n" + (CLOSING_HINT_EN if lang == "en" else CLOSING_HINT)) if tools else ""
+    return head + ("\n[Conversation]\n" if lang == "en" else "\n【会話】\n") + body + closing
 
 
 def render_delta(messages: list[dict], *, max_tool_result_chars: int = 0, first: bool = False,
@@ -420,7 +449,7 @@ def parse_reply(text: str, *, id_prefix: str = "call") -> tuple[str, list[dict]]
     if not calls:
         # 画面から読むと <tool_call> タグが Markdown 描画で消えることがある。裸の JSON も操作として読む
         content, calls = _parse_bare_calls(content, id_prefix)
-    return content, calls
+    return strip_final_mark(content), calls
 
 
 BARE_START_RE = re.compile(r'\{\s*"name"\s*:')
