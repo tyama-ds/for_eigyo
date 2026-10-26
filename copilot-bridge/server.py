@@ -41,6 +41,12 @@ from bridge.protocol import (  # noqa: E402
 from bridge.session import SessionStore  # noqa: E402
 
 
+def _next_midnight() -> float:
+    """ローカル時刻の次の 0 時（枠切れのモデルを戻す時刻）。"""
+    lt = time.localtime()
+    return time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1)) + 86400
+
+
 class BadRequest(ValueError):
     """要求の形が不正（HTTP 400）。"""
 
@@ -57,6 +63,7 @@ class Bridge:
         self.started = time.time()
         self._log_lock = threading.Lock()
         self._cooldown: dict[str, float] = {}   # 画面の表示名 → この時刻まで使わない
+        self._stalls: dict[str, int] = {}       # 画面の表示名 → 今日の詰まり回数（成功でリセット）
         self._cool_lock = threading.Lock()
 
     def start(self) -> None:
@@ -162,6 +169,7 @@ class Bridge:
                                       "呼び出し元の再試行で続けてください")
                 if bad:
                     print(f"[{session.id}] 不正な操作を除外: {bad}", flush=True)
+                self._mark_ok(model_label)
                 assistant = {"role": "assistant", "content": content or None}
                 if calls:
                     assistant["tool_calls"] = calls
@@ -209,11 +217,29 @@ class Bridge:
         return warm + cool
 
     def _mark_cooldown(self, label) -> None:
-        if not label or not self.cfg.model_cooldown_sec:
+        """詰まったモデルを冷却する。規定回数続いたら「今日の枠切れ」として日付が変わるまで外す。"""
+        if not label:
             return
         with self._cool_lock:
-            self._cooldown[label] = time.time() + float(self.cfg.model_cooldown_sec)
-        print(f"モデル「{label}」を {self.cfg.model_cooldown_sec:.0f} 秒のあいだ使いません", flush=True)
+            n = self._stalls.get(label, 0) + 1
+            self._stalls[label] = n
+            limit = int(self.cfg.model_exhaust_after or 0)
+            if limit and n >= limit:
+                until = _next_midnight()
+                self._cooldown[label] = until
+                print(f"モデル「{label}」は {n} 回続けて詰まったため、今日の枠切れとみなし日付が変わるまで"
+                      f"（{time.strftime('%m/%d %H:%M', time.localtime(until))}）使いません", flush=True)
+                return
+            if self.cfg.model_cooldown_sec:
+                self._cooldown[label] = time.time() + float(self.cfg.model_cooldown_sec)
+                print(f"モデル「{label}」を {self.cfg.model_cooldown_sec:.0f} 秒のあいだ使いません（詰まり {n} 回目）", flush=True)
+
+    def _mark_ok(self, label) -> None:
+        """正常に返事が返ったら、そのモデルの詰まり回数をリセットする。"""
+        if not label:
+            return
+        with self._cool_lock:
+            self._stalls.pop(label, None)
 
     def model_ids(self) -> list[str]:
         ids = [self.cfg.model_name] + [str(k) for k in self.cfg.models.keys() if str(k) != self.cfg.model_name]
@@ -265,6 +291,7 @@ class Bridge:
                 "uptime_sec": round(time.time() - self.started),
                 "windows": self.pool.describe(),
                 "cooldown": {k: round(v - time.time()) for k, v in self._cooldown.items() if v > time.time()},
+                "stalls": dict(self._stalls),
                 "sessions": [s.to_dict() for s in self.store.all()]}
 
 

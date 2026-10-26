@@ -82,6 +82,9 @@ class Config:
     model_fallbacks: list = field(default_factory=list)
     # 詰まったモデルを使わない時間（秒）。その間の要求は最初から次のモデルへ回す
     model_cooldown_sec: float = 600.0
+    # 冷却を挟んでもこの回数詰まり続けたら「その日の枠を使い切った」とみなし、日付が変わる（ローカル 0 時）か
+    # サーバを再起動するまで切り替えたままにする。0 で無効（毎回 cooldown だけ）
+    model_exhaust_after: int = 2
     # 空きウインドウを待つ上限
     acquire_timeout_sec: float = 900.0
     # 画面なしで Edge を動かす（--headless=new）。コピーボタンがクリップボードに届かないことがあるので

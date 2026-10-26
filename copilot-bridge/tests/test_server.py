@@ -328,6 +328,33 @@ class FallbackTests(ServerTestCase):
         self.post({"model": "opus", "messages": [{"role": "user", "content": "fb2"}]})
         self.assertEqual(seen, ["GPT-5"])
 
+    def test_repeated_stall_switches_until_midnight(self):
+        from bridge.pool import ModelStalled
+
+        self.bridge._cooldown.clear(); self.bridge._stalls.clear()
+        self.cfg.model_exhaust_after = 2
+
+        def responder(text, worker):
+            if worker.models_selected[-1] == "Claude Opus":
+                raise ModelStalled("枠切れ")
+            return "【最終回答】gpt"
+
+        FakeWorker.responder = staticmethod(responder)
+        self.post({"model": "opus", "messages": [{"role": "user", "content": "ex1"}]})
+        self.assertLess(self.get("/status")["cooldown"]["Claude Opus"], 700)       # 1 回目は短い冷却
+        self.bridge._cooldown["Claude Opus"] = 0                                   # 冷却明けを再現
+        self.post({"model": "opus", "messages": [{"role": "user", "content": "ex2"}]})
+        st = self.get("/status")
+        self.assertGreater(st["cooldown"]["Claude Opus"], 700)                     # 2 回目で日付が変わるまで
+        self.assertEqual(st["stalls"]["Claude Opus"], 2)
+        self.bridge._cooldown.clear(); self.bridge._stalls.clear()
+
+    def test_success_resets_stall_count(self):
+        self.bridge._cooldown.clear(); self.bridge._stalls["GPT-5"] = 1
+        FakeWorker.responder = staticmethod(lambda text, w: "【最終回答】ok")
+        self.post({"model": "gpt", "messages": [{"role": "user", "content": "rs1"}]})
+        self.assertNotIn("GPT-5", self.get("/status")["stalls"])
+
     def test_all_models_stalled_is_503(self):
         from bridge.pool import ModelStalled
 
@@ -338,7 +365,7 @@ class FallbackTests(ServerTestCase):
         with self.assertRaises(urllib.error.HTTPError) as cm:
             self.post({"model": "gpt", "messages": [{"role": "user", "content": "fb3"}]})
         self.assertEqual(cm.exception.code, 503)
-        self.bridge._cooldown.clear()
+        self.bridge._cooldown.clear(); self.bridge._stalls.clear()
 
 
 class EvictionTests(ServerTestCase):
