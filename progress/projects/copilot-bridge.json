@@ -74,6 +74,10 @@
   "log": [
     {
       "date": "2026-10-26",
+      "summary": "Copilot 側のモデルが詰まる（返事をしなくなる）対策: 生成が始まらない・終わらない・空・制限の文言を「詰まり」として検出し、model_fallbacks の順に別モデルへ切り替えて会話を作り直してやり直す。詰まったモデルは model_cooldown_sec のあいだ使わない（/status の cooldown に表示）"
+    },
+    {
+      "date": "2026-10-26",
       "summary": "agent-workbench 経由で Copilot が書式を守らず普通に受け答えする問題に対処: 作業方針を参考情報扱いにして書式を冒頭と末尾に置き、最終回答には【最終回答】の印を義務づけ、印も操作も無い回答は言い直させる。API の model 名で Copilot 画面のモデル（GPT / Claude 等）を切り替える設定 models を追加（/v1/models に列挙）"
     },
     {

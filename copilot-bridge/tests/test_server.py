@@ -297,6 +297,50 @@ class ModelSelectTests(ServerTestCase):
         self.assertEqual(w.models_selected[-3:], ["Claude Opus", "Claude Opus", None])
 
 
+class FallbackTests(ServerTestCase):
+    windows = 1
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.cfg.models = {"gpt": "GPT-5", "opus": "Claude Opus"}
+        cls.cfg.model_fallbacks = ["opus", "gpt"]
+        cls.cfg.model_cooldown_sec = 600
+
+    def test_stalled_model_falls_back_and_cools_down(self):
+        from bridge.pool import ModelStalled
+
+        seen = []
+
+        def responder(text, worker):
+            seen.append(worker.models_selected[-1])
+            if worker.models_selected[-1] == "Claude Opus":
+                raise ModelStalled("w0: 90 秒たっても生成が始まりません")
+            return "【最終回答】gpt で回答"
+
+        FakeWorker.responder = staticmethod(responder)
+        r = self.post({"model": "opus", "messages": [{"role": "user", "content": "fb1"}]})
+        self.assertEqual(r["choices"][0]["message"]["content"], "gpt で回答")
+        self.assertEqual(seen, ["Claude Opus", "GPT-5"])      # opus で詰まり → gpt で作り直し
+        self.assertIn("Claude Opus", self.get("/status")["cooldown"])
+        # 冷却中は最初から gpt へ
+        seen.clear()
+        self.post({"model": "opus", "messages": [{"role": "user", "content": "fb2"}]})
+        self.assertEqual(seen, ["GPT-5"])
+
+    def test_all_models_stalled_is_503(self):
+        from bridge.pool import ModelStalled
+
+        def responder(text, worker):
+            raise ModelStalled("詰まり")
+
+        FakeWorker.responder = staticmethod(responder)
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            self.post({"model": "gpt", "messages": [{"role": "user", "content": "fb3"}]})
+        self.assertEqual(cm.exception.code, 503)
+        self.bridge._cooldown.clear()
+
+
 class EvictionTests(ServerTestCase):
     windows = 1
 

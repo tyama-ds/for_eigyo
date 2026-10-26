@@ -75,6 +75,13 @@ class Config:
     login_timeout_sec: float = 300.0
     # 1 回の回答を待つ上限
     reply_timeout_sec: float = 600.0
+    # 送信後、これだけ待っても生成が始まらなければ「モデルが詰まった」とみなす（0 で無効）
+    start_timeout_sec: float = 90.0
+    # モデルが詰まったときに切り替える順（API の model 名または画面の表示名）。例 ["opus", "gpt"]。
+    # 要求されたモデルが詰まったら、この並びで次のものへ。空なら切り替えない
+    model_fallbacks: list = field(default_factory=list)
+    # 詰まったモデルを使わない時間（秒）。その間の要求は最初から次のモデルへ回す
+    model_cooldown_sec: float = 600.0
     # 空きウインドウを待つ上限
     acquire_timeout_sec: float = 900.0
     # 画面なしで Edge を動かす（--headless=new）。コピーボタンがクリップボードに届かないことがあるので
