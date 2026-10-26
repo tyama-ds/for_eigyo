@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import time
 
-from .pool import BridgeError, Worker, WorkerPool, WorkerRestarted
+from .pool import BridgeError, ModelStalled, Worker, WorkerPool, WorkerRestarted
 
 THROTTLE_FLAGS = [
     "--disable-background-timer-throttling",
@@ -452,9 +452,13 @@ class EdgeWorker(Worker):
 
         start = time.monotonic()
         saw_stop = False
+        start_limit = float(self.cfg.start_timeout_sec or 0)
         while True:
-            if time.monotonic() - start > timeout:
-                raise BridgeError(f"{self.id}: {timeout:.0f} 秒以内に回答が終わりませんでした")
+            elapsed = time.monotonic() - start
+            if elapsed > timeout:
+                raise ModelStalled(f"{self.id}: {timeout:.0f} 秒以内に回答が終わりませんでした")
+            if start_limit and not saw_stop and elapsed > start_limit:
+                raise ModelStalled(f"{self.id}: {start_limit:.0f} 秒たっても生成が始まりません（モデルが詰まった可能性）")
             try:
                 visible = [e for e in self.driver.find_elements(By.CSS_SELECTOR, self.sel["stop_button"])
                            if e.is_displayed()]
@@ -584,11 +588,11 @@ class EdgeWorker(Worker):
         self.turns += 1
         self.chat_turns += 1
         if not reply:
-            raise BridgeError(f"{self.id}: 回答を読み取れませんでした（コピーボタン/DOM とも空）")
+            raise ModelStalled(f"{self.id}: 回答を読み取れませんでした（コピーボタン/DOM とも空）")
         for phrase in self.cfg.error_phrases:
             if phrase and phrase in reply:
                 self.error = phrase
-                raise BridgeError(f"{self.id}: Copilot が制限・障害を返しました（{phrase}）")
+                raise ModelStalled(f"{self.id}: Copilot が制限・障害を返しました（{phrase}）")
         self.error = ""
         return reply
 

@@ -106,6 +106,27 @@ Copilot の画面にモデル選択があれば、API の `model` 名で切り�
 `/v1/models` にこれらの名前が並び、呼び出し元（workbench のプロファイルの「モデル名」）で選ぶ。会話を新しく作るときに
 画面で切り替える（`selectors.model_button` / `model_item`。実機の画面に合わせて調整。切り替えに失敗しても今のモデルで続ける）。
 
+### モデルが詰まったときの自動切り替え
+
+Copilot 側のモデルが返事をしなくなることがある（例: Claude 系で止まり、GPT に変えると返る）。bridge は次を
+「モデルが詰まった」とみなし、別のモデルに切り替えて会話を作り直し、同じ要求をやり直す:
+
+- 送信後 `start_timeout_sec`（既定 90 秒）たっても生成が始まらない
+- `reply_timeout_sec`（既定 600 秒）以内に回答が終わらない
+- 回答が空、または制限・障害の文言（`error_phrases`）を含む
+
+```json
+"models": {"gpt": "GPT-5", "opus": "Claude Opus"},
+"model_fallbacks": ["opus", "gpt"],
+"model_cooldown_sec": 600
+```
+
+要求されたモデル → `model_fallbacks` の順に試す。詰まったモデルは `model_cooldown_sec` のあいだ使わず、その間の
+要求は最初から次のモデルへ回す（毎回 90 秒待たされない）。冷却を挟んでも `model_exhaust_after`（既定 2）回
+詰まり続けたら「その日の枠を使い切った」とみなし、**日付が変わる（ローカル 0 時）かサーバを再起動するまで**
+切り替えたままにする。正常に返事が返れば詰まり回数はリセット。状況は `/status` の `cooldown`（残り秒）と `stalls` に出る。
+全候補が詰まったら 503 を返す（呼び出し元の再試行に任せる）。
+
 ### Codex CLI から使う（`~/.codex/config.toml`）
 
 ```toml

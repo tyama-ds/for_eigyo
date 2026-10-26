@@ -33,12 +33,18 @@ for _stream in (sys.stdout, sys.stderr):
 
 from bridge import __version__  # noqa: E402
 from bridge.config import load_config  # noqa: E402
-from bridge.pool import BridgeError, WorkerPool, WorkerRestarted  # noqa: E402
+from bridge.pool import BridgeError, ModelStalled, WorkerPool, WorkerRestarted  # noqa: E402
 from bridge.protocol import (  # noqa: E402
     needs_nudge, normalize_message, nudge_invalid_text, nudge_text, parse_reply, render_delta,
     render_opening, validate_calls,
 )
 from bridge.session import SessionStore  # noqa: E402
+
+
+def _next_midnight() -> float:
+    """ローカル時刻の次の 0 時（枠切れのモデルを戻す時刻）。"""
+    lt = time.localtime()
+    return time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1)) + 86400
 
 
 class BadRequest(ValueError):
@@ -56,6 +62,9 @@ class Bridge:
         self.pool = WorkerPool([W(i, cfg) for i in range(max(1, int(cfg.windows)))])
         self.started = time.time()
         self._log_lock = threading.Lock()
+        self._cooldown: dict[str, float] = {}   # 画面の表示名 → この時刻まで使わない
+        self._stalls: dict[str, int] = {}       # 画面の表示名 → 今日の詰まり回数（成功でリセット）
+        self._cool_lock = threading.Lock()
 
     def start(self) -> None:
         self.pool.start_all()
@@ -69,7 +78,8 @@ class Bridge:
         if not isinstance(messages, list) or not messages:
             raise BadRequest("messages が空です")
         tools = body.get("tools") or []
-        model_label = self._model_label(body.get("model"))
+        candidates = self._model_candidates(body.get("model"))
+        model_label = candidates[0] if candidates else None
         session, norm, delta = self.store.resolve(messages, key=conversation_key)
         # 届いた文字が化けていないか（PowerShell の ???? 等）をコンソールで確認できるようにする
         last_user = next((m["text"] for m in reversed(norm) if m["role"] == "user"), "")
@@ -90,17 +100,33 @@ class Bridge:
                     text = render_delta(delta, max_tool_result_chars=self.cfg.max_tool_result_chars, lang=lang)
                 t0 = time.time()
                 try:
-                    try:
-                        reply = worker.send(text)
-                    except WorkerRestarted as e:
-                        # ブラウザが再起動された → 会話を作り直して 1 回だけやり直す
-                        print(f"{e} → 会話を作り直してやり直します", flush=True)
-                        fresh = True
-                        worker.new_chat(model=model_label)
-                        text = render_opening(norm, tools,
-                                              max_tool_result_chars=self.cfg.max_tool_result_chars,
-                                              max_chars=self.cfg.max_resend_chars, lang=lang)
-                        reply = worker.send(text)
+                    reply = None
+                    remaining = list(candidates[1:]) if candidates else []
+                    while reply is None:
+                        try:
+                            reply = worker.send(text)
+                        except WorkerRestarted as e:
+                            # ブラウザが再起動された → 会話を作り直して 1 回だけやり直す
+                            print(f"{e} → 会話を作り直してやり直します", flush=True)
+                            fresh = True
+                            worker.new_chat(model=model_label)
+                            text = render_opening(norm, tools,
+                                                  max_tool_result_chars=self.cfg.max_tool_result_chars,
+                                                  max_chars=self.cfg.max_resend_chars, lang=lang)
+                            reply = worker.send(text)
+                        except ModelStalled as e:
+                            # モデルが詰まった → 冷却して、次の候補で会話を作り直してやり直す
+                            self._mark_cooldown(model_label)
+                            if not remaining:
+                                raise
+                            nxt = remaining.pop(0)
+                            print(f"{e} → モデルを「{model_label or '既定'}」から「{nxt}」に切り替えてやり直します", flush=True)
+                            model_label = nxt
+                            fresh = True
+                            worker.new_chat(model=model_label)
+                            text = render_opening(norm, tools,
+                                                  max_tool_result_chars=self.cfg.max_tool_result_chars,
+                                                  max_chars=self.cfg.max_resend_chars, lang=lang)
                 except BridgeError as e:
                     print(f"{e}", flush=True)
                     detach = True
@@ -114,6 +140,8 @@ class Bridge:
                     try:
                         reply = worker.send(nudge_text(lang))
                     except BridgeError as e:
+                        if isinstance(e, ModelStalled):
+                            self._mark_cooldown(model_label)
                         print(f"{e}", flush=True)
                         detach = True
                         raise
@@ -127,6 +155,8 @@ class Bridge:
                     try:
                         reply = worker.send(nudge_invalid_text(bad, lang))
                     except BridgeError as e:
+                        if isinstance(e, ModelStalled):
+                            self._mark_cooldown(model_label)
                         print(f"{e}", flush=True)
                         detach = True
                         raise
@@ -139,6 +169,7 @@ class Bridge:
                                       "呼び出し元の再試行で続けてください")
                 if bad:
                     print(f"[{session.id}] 不正な操作を除外: {bad}", flush=True)
+                self._mark_ok(model_label)
                 assistant = {"role": "assistant", "content": content or None}
                 if calls:
                     assistant["tool_calls"] = calls
@@ -146,6 +177,7 @@ class Bridge:
                 session.worker_id = worker.id
                 session.turns += 1
                 self._log({"session": session.id, "worker": worker.id, "fresh": fresh, "nudges": nudges,
+                           "model": model_label,
                            "sent": text, "reply": reply, "latency_sec": round(time.time() - t0, 1)},
                           session=session)
             finally:
@@ -164,6 +196,50 @@ class Bridge:
             if str(key).lower() == low or str(label).lower() == low:
                 return str(label) or None
         return None
+
+    def _model_candidates(self, name) -> list:
+        """要求されたモデルを先頭に、model_fallbacks の順で続ける候補列（冷却中のものは後ろへ回す）。
+        表示名の対応（config.models）が無いときは [None]（切り替えない）。"""
+        first = self._model_label(name)
+        chain = [first] if first else []
+        for item in self.cfg.model_fallbacks or []:
+            label = self._model_label(item)
+            if label and label not in chain:
+                chain.append(label)
+        if not chain:
+            return [None]
+        now = time.time()
+        with self._cool_lock:
+            cool = [c for c in chain if self._cooldown.get(c, 0) > now]
+            warm = [c for c in chain if c not in cool]
+        if cool and warm:
+            print(f"モデル {cool} は冷却中のため後回しにします", flush=True)
+        return warm + cool
+
+    def _mark_cooldown(self, label) -> None:
+        """詰まったモデルを冷却する。規定回数続いたら「今日の枠切れ」として日付が変わるまで外す。"""
+        if not label:
+            return
+        with self._cool_lock:
+            n = self._stalls.get(label, 0) + 1
+            self._stalls[label] = n
+            limit = int(self.cfg.model_exhaust_after or 0)
+            if limit and n >= limit:
+                until = _next_midnight()
+                self._cooldown[label] = until
+                print(f"モデル「{label}」は {n} 回続けて詰まったため、今日の枠切れとみなし日付が変わるまで"
+                      f"（{time.strftime('%m/%d %H:%M', time.localtime(until))}）使いません", flush=True)
+                return
+            if self.cfg.model_cooldown_sec:
+                self._cooldown[label] = time.time() + float(self.cfg.model_cooldown_sec)
+                print(f"モデル「{label}」を {self.cfg.model_cooldown_sec:.0f} 秒のあいだ使いません（詰まり {n} 回目）", flush=True)
+
+    def _mark_ok(self, label) -> None:
+        """正常に返事が返ったら、そのモデルの詰まり回数をリセットする。"""
+        if not label:
+            return
+        with self._cool_lock:
+            self._stalls.pop(label, None)
 
     def model_ids(self) -> list[str]:
         ids = [self.cfg.model_name] + [str(k) for k in self.cfg.models.keys() if str(k) != self.cfg.model_name]
@@ -214,6 +290,8 @@ class Bridge:
         return {"version": __version__, "backend": self.cfg.backend, "model": self.cfg.model_name,
                 "uptime_sec": round(time.time() - self.started),
                 "windows": self.pool.describe(),
+                "cooldown": {k: round(v - time.time()) for k, v in self._cooldown.items() if v > time.time()},
+                "stalls": dict(self._stalls),
                 "sessions": [s.to_dict() for s in self.store.all()]}
 
 
