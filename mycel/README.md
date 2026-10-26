@@ -36,7 +36,7 @@ Windows は `mycel/start.bat` をダブルクリックでも起動できます�
 | 人物・組織 | ノート・資料に出てくる人と会社を自動で見つけ、[[リンク]] を書かなくても「同じ人が出てくる文書」としてつなぐ。人物ごとに登場する文書と立場・所属（推定）・一緒に出てくる人・名前は出ないが関係がありそうな文書を表示し、ローカル LLM で人物像を推定。誤りは文書ごとに外す・まとめる・戻すで直せる |
 | つながり | 資料同士（資料とノートも）を「つながり」で結ぶ。説明（改訂版・添付など）を付けられ、グラフに点線で出る。AI が似ている資料を探して関係を判断、フォルダ内の近い資料の組をまとめて提案 |
 | 資料 | 資料を読み取り専用で表示・検索・AI の根拠に。「アプリで開く」「ダウンロード」「ノートとして取り込む」。`[[見積書.docx]]` でリンクも可 |
-| 画像 | PNG / JPEG / GIF / WebP を資料として読み込み・表示。ノートに `![[添付/図.png]]`・`![説明](添付/図.png)` で埋め込み（編集中の貼り付け・ドロップで添付フォルダに保存して自動挿入）。**VLM**（設定 `vlm_model`。llava / qwen2.5vl / gemma3 など）で説明文を作ると、検索と質問の根拠になる。「まとめて読む」ジョブも |
+| 画像 | PNG / JPEG / GIF / WebP を資料として読み込み・表示。ノートに `![[添付/図.png]]`・`![説明](添付/図.png)` で埋め込み（貼り付け・ドロップで添付フォルダに保存して自動挿入。**分割**モードなら左で貼った画像が右にすぐ表示され、閲覧モードで貼ると末尾に追加されてその場で表示）。索引の更新前でも画像は表示する。**VLM**（設定 `vlm_model`。llava / qwen2.5vl / gemma3 など）で説明文を作ると、検索と質問の根拠になる。「まとめて読む」ジョブも |
 | 文書・文献管理 | 報告書・論文を「文書」として登録し、文書だけを対象に RAG 検索・質問（全体／1 件だけ）。**AI の気づき**（要点・関連文書との共通点や相違点・残る疑問・次の一手）、Vault 全体から未登録の関連資料も提示 |
 | 検索の深さ | 候補の深さ（`rag_pool`）・LLM に渡す段落数（`rag_top_k`）・**LLM リランク**（`rag_rerank=llm`: 下位の候補も LLM が採点して並べ直す）を設定の「LLM → 検索（RAG）の深さ」で調整 |
 | Vault の切り替え | 「ファイル」横のボタンで最近使った Vault へ移動、パス指定で開く、新しい Vault（文書管理専用など）を作成 |
@@ -278,9 +278,26 @@ GraphRAG は文書全体にまたがる「誰と誰がどうつながってい�
 
   | モデル | 上限 | temperature | reasoning_effort |
   |---|---|---|---|
-  | gpt-5 / gpt-5-mini / gpt-5-nano、o1 / o3 / o3-mini / o4-mini（推論モデル） | `max_completion_tokens`（4096 以上。推論トークンも含まれるため） | 送らない（既定値 1 以外を拒否するため） | 設定「推論の深さ」の値（gpt-5 系は minimal も可。auto なら送らない） |
+  | gpt-5 / gpt-5-mini / gpt-5-nano、o1 / o3 / o3-mini / o4-mini（推論モデル） | `max_completion_tokens`（4096 以上。推論トークンも含まれるため。空のまま上限に達したら 16384 まで増やして 1 回やり直す） | 送らない（既定値 1 以外を拒否するため） | 設定「推論の深さ」の値（gpt-5 系は minimal も可。auto なら送らない）。gpt-5 系は「回答の長さ」（`verbosity`）も |
   | gpt-4o / gpt-4o-mini / gpt-4.1 / gpt-5-chat-latest（OpenAI・Azure） | `max_completion_tokens`（`max_tokens` は非推奨） | 送る | 送らない |
   | Ollama / LM Studio / vLLM などローカルの互換サーバ | `max_tokens` | 送る | 送らない（gpt-oss など推論モデル名のときは推論モデル扱い） |
+
+  - API が HTTP 400 で拒否したパラメータ（`max_tokens` / `max_completion_tokens` / `temperature` / `top_p` / `reasoning_effort` / `verbosity`、`system` ロール）は返事の文面から推定し、置き換える・外す・user に畳み込むをしてやり直します
+  - **Responses API**（設定「API の形式」`ext_api_style=responses`）にも対応。パラメータ名が Chat Completions と異なるため、次のように変換して `/responses` に送ります。
+    Chat Completions で「このモデルは Responses API でしか使えない」と返されたときは自動で切り替えます
+
+    | Chat Completions | Responses API |
+    |---|---|
+    | `messages`（system / user / assistant） | `instructions`（system をまとめる）＋ `input`（`input_text` / `output_text` / 画像は `input_image`） |
+    | `max_tokens` / `max_completion_tokens` | `max_output_tokens`（空のまま切れたら 16384 まで増やして再試行） |
+    | `reasoning_effort` | `reasoning: {effort}` |
+    | `verbosity` | `text: {verbosity}` |
+    | 応答 `choices[0].message.content` | `output[]` の `message` → `content[]` の `output_text`（`status: incomplete` も扱う） |
+    | （保存なし） | `store: false` を明示（サーバ側に会話を残さない） |
+
+    Azure では `/openai/responses?api-version=2025-03-01-preview` 以降（古い版は自動で 2025-04-01-preview）で、body の `model` にデプロイ名を入れます
+  - Azure の推論モデルは `api-version` が 2024-12-01-preview より古いと使えないため、推論モデルへの要求だけ自動で 2025-04-01-preview を使います（既定も 2025-04-01-preview）
+  - 設定の「保存して接続テスト（外部）」は、送信先・モデル・**実際に送ったパラメータ**・自動調整の内容を表示します。gpt-5-mini などで失敗したときは、この表示とエラー文を控えてください
 - 設定は `mycel/mycel.config.json` に保存されます（API キーを含むため .gitignore 済み。画面にはキーを返しません）
 
 | 接続先 | 接続方式 | Base URL の例 | モデル |

@@ -3,6 +3,8 @@ __pycache__/
 settings.json
 settings.json.tmp
 feeds.json.tmp
+feeds.json.broken-*
+feeds.json.before-utf8-*
 archive.jsonl
 archive.jsonl.tmp
 archive.jsonl.imported

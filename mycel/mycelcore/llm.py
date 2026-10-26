@@ -42,9 +42,12 @@ def payload_style(cfg: dict, model: str) -> dict:
     reasoning = is_reasoning_model(model)
     official = cfg.get("provider") == "azure" or host.endswith(_OPENAI_HOSTS)
     effort = (cfg.get("reasoning_effort") or "").strip().lower()
+    gpt5 = (model or "").lower().startswith("gpt-5") and not (model or "").lower().startswith("gpt-5-chat")
+    verbosity = (cfg.get("verbosity") or "").strip().lower()
     return {"tokens_key": "max_completion_tokens" if (official or reasoning) else "max_tokens",
             "temperature": not reasoning, "reasoning": reasoning,
-            "reasoning_effort": effort if (reasoning and effort and effort != "auto") else ""}
+            "reasoning_effort": effort if (reasoning and effort and effort != "auto") else "",
+            "verbosity": verbosity if (gpt5 and verbosity in ("low", "medium", "high")) else ""}
 
 
 def _param_problem(msg: str) -> str | None:
@@ -60,6 +63,10 @@ def _param_problem(msg: str) -> str | None:
         return "temperature"
     if "top_p" in low and ("unsupported" in low or "not supported" in low):
         return "top_p"
+    if "verbosity" in low and ("unrecognized" in low or "unknown" in low or "unsupported" in low or "not supported" in low):
+        return "verbosity"
+    if "'system'" in low or "system message" in low or ("role" in low and "system" in low and ("unsupported" in low or "not supported" in low)):
+        return "system"
     return None
 
 _THINK_BLOCK_RE = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL | re.IGNORECASE)
@@ -146,7 +153,7 @@ class LLMClient:
     def _endpoint(self, kind: str) -> tuple[str, dict, str]:
         """(URL, ヘッダ, payload に入れる model 名) を返す。kind は chat / embed。"""
         cfg = self.cfg
-        if kind == "chat":
+        if kind in ("chat", "responses"):
             base, key, model = cfg.get("base_url", ""), cfg.get("api_key", ""), cfg.get("model", "")
             if not (base and model):
                 raise LLMError("LLM が未設定です（設定の「LLM」で URL とモデルを登録してください）")
@@ -158,12 +165,20 @@ class LLMClient:
                 raise LLMError("埋め込みモデルが未設定です")
         base = base.rstrip("/")
         headers = {"Content-Type": "application/json"}
-        path = "chat/completions" if kind == "chat" else "embeddings"
+        path = {"chat": "chat/completions", "responses": "responses", "embed": "embeddings"}[kind]
         if cfg.get("provider") == "azure":
             if base.endswith("/openai"):
                 base = base[: -len("/openai")]
-            ver = urllib.parse.quote(cfg.get("api_version") or "2024-10-21")
-            url = f"{base}/openai/deployments/{urllib.parse.quote(model)}/{path}?api-version={ver}"
+            api_ver = cfg.get("api_version") or "2024-10-21"
+            if kind in ("chat", "responses") and is_reasoning_model(model) and api_ver[:10] < "2024-12-01":
+                api_ver = "2025-04-01-preview"          # 推論モデルは古い GA 版の api-version では使えない
+            if kind == "responses" and api_ver[:10] < "2025-03-01":
+                api_ver = "2025-04-01-preview"          # Responses API は 2025-03-01-preview 以降
+            ver = urllib.parse.quote(api_ver)
+            if kind == "responses":
+                url = f"{base}/openai/responses?api-version={ver}"      # Azure の Responses API はデプロイ名を body の model に入れる
+            else:
+                url = f"{base}/openai/deployments/{urllib.parse.quote(model)}/{path}?api-version={ver}"
             if key:
                 headers["api-key"] = key
         else:
@@ -173,7 +188,8 @@ class LLMClient:
         return url, headers, model
 
     def _post(self, url: str, headers: dict, payload: dict) -> dict:
-        kind = "embed" if url.split("?")[0].endswith("/embeddings") else "chat"
+        p = url.split("?")[0]
+        kind = "embed" if p.endswith("/embeddings") else "responses" if p.endswith("/responses") else "chat"
         try:
             data = self._post_raw(url, headers, payload)
         except LLMError as e:
@@ -210,12 +226,108 @@ class LLMClient:
         raise LLMError(f"LLM に接続できません: {last}") from last
 
     # ------------------------------------------------------------ API
+    # ------------------------------------------------------------ Responses API（/responses）
+    @staticmethod
+    def _to_responses_input(messages: list[dict]) -> tuple[str, list[dict]]:
+        """Chat 形式の messages を Responses API の instructions / input に変換する（画像は input_image）。"""
+        instructions, items = [], []
+        for m in messages:
+            role, c = m.get("role", "user"), m.get("content")
+            if role == "system":
+                instructions.append(c if isinstance(c, str) else " ".join(p.get("text", "") for p in c if isinstance(p, dict)))
+                continue
+            if isinstance(c, list):
+                parts = []
+                for part in c:
+                    if not isinstance(part, dict):
+                        continue
+                    if part.get("type") == "text":
+                        parts.append({"type": "input_text" if role == "user" else "output_text", "text": part.get("text", "")})
+                    elif part.get("type") == "image_url":
+                        u = part.get("image_url")
+                        parts.append({"type": "input_image", "image_url": u.get("url") if isinstance(u, dict) else u})
+                items.append({"role": role, "content": parts})
+            else:
+                items.append({"role": role, "content": [{"type": "input_text" if role == "user" else "output_text", "text": c or ""}]})
+        return "\n\n".join(instructions), items
+
+    @staticmethod
+    def _responses_text(data: dict) -> tuple[str, str]:
+        """Responses API の応答から本文を取り出す。(本文, 途中で切れた理由) を返す。"""
+        texts = []
+        for item in data.get("output") or []:
+            if item.get("type") != "message":
+                continue
+            for part in item.get("content") or []:
+                if part.get("type") in ("output_text", "text") and part.get("text"):
+                    texts.append(part["text"])
+                elif part.get("type") == "refusal" and part.get("refusal"):
+                    texts.append(part["refusal"])
+        if not texts and isinstance(data.get("output_text"), str):
+            texts.append(data["output_text"])
+        reason = ""
+        if data.get("status") == "incomplete":
+            reason = (data.get("incomplete_details") or {}).get("reason", "incomplete")
+        return "\n".join(texts).strip(), reason
+
+    def _chat_responses(self, messages: list[dict], model: str, style: dict, budget: int, temperature: float | None) -> str:
+        url, headers, _ = self._endpoint("responses")
+        instructions, items = self._to_responses_input(messages)
+        payload: dict = {"model": model, "input": items, "max_output_tokens": budget, "store": False}   # store=false: サーバ側に会話を残さない
+        if instructions:
+            payload["instructions"] = instructions
+        if style["temperature"]:
+            payload["temperature"] = float(self.cfg.get("temperature", 0.2) if temperature is None else temperature)
+        if style["reasoning_effort"]:
+            payload["reasoning"] = {"effort": style["reasoning_effort"]}
+        if style["verbosity"]:
+            payload["text"] = {"verbosity": style["verbosity"]}
+        self.last_payload_keys = sorted(k for k in payload if k != "input")
+        for _ in range(4):
+            try:
+                data = self._post(url, headers, payload)
+            except LLMError as e:
+                problem = _param_problem(str(e)) if "HTTP 400" in str(e) else None
+                if problem == "temperature" and "temperature" in payload:
+                    payload.pop("temperature")
+                elif problem == "reasoning_effort" and "reasoning" in payload:
+                    payload.pop("reasoning")
+                elif problem == "verbosity" and "text" in payload:
+                    payload.pop("text")
+                elif "store" in str(e).lower() and ("unrecognized" in str(e).lower() or "unknown" in str(e).lower() or "unsupported" in str(e).lower()) and "store" in payload:
+                    payload.pop("store")
+                else:
+                    raise
+                self.last_adjustments.append(problem)
+                self.last_payload_keys = sorted(k for k in payload if k != "input")
+                continue
+            if isinstance(data.get("error"), dict):
+                raise LLMError(f"LLM API エラー: {data['error'].get('message', data['error'])}")
+            text, reason = self._responses_text(data)
+            text = strip_think(text)
+            if not text and reason == "max_output_tokens" and payload["max_output_tokens"] < 16384:
+                payload["max_output_tokens"] = min(16384, payload["max_output_tokens"] * 4)
+                self.last_adjustments.append(f"max_output_tokens={payload['max_output_tokens']}")
+                continue
+            if not text and reason:
+                raise LLMError(f"応答が空のまま終わりました（{reason}）。設定の Max tokens を増やすか、推論の深さを下げてください")
+            return text
+        raise LLMError("LLM の応答を得られませんでした（Responses API）")
+
     def chat(self, messages: list[dict] | str, *, system: str = "",
              max_tokens: int | None = None, temperature: float | None = None) -> str:
         if isinstance(messages, str):
             messages = [{"role": "user", "content": messages}]
         if system:
             messages = [{"role": "system", "content": system}] + messages
+        self.last_adjustments: list[str] = []
+        if (self.cfg.get("api_style") or "chat") == "responses":
+            model = self.cfg.get("model", "")
+            style = payload_style(self.cfg, model)
+            budget = int(max_tokens or self.cfg.get("max_tokens") or 2048)
+            if style["reasoning"]:
+                budget = max(budget, 4096)
+            return self._chat_responses(messages, model, style, budget, temperature)
         url, headers, model = self._endpoint("chat")
         style = payload_style(self.cfg, model)
         budget = int(max_tokens or self.cfg.get("max_tokens") or 2048)
@@ -226,34 +338,54 @@ class LLMClient:
             payload["temperature"] = float(self.cfg.get("temperature", 0.2) if temperature is None else temperature)
         if style["reasoning_effort"]:
             payload["reasoning_effort"] = style["reasoning_effort"]
+        if style["verbosity"]:
+            payload["verbosity"] = style["verbosity"]
         if self.cfg.get("provider") != "azure":
             payload["model"] = model
         self.last_payload_keys = sorted(k for k in payload if k != "messages")
         data = None
-        for _ in range(4):                                # モデルが受け付けないパラメータは API の返事を見て外し、やり直す
+        for _ in range(6):                                # モデルが受け付けないパラメータは API の返事を見て外し、やり直す
             try:
                 data = self._post(url, headers, payload)
             except LLMError as e:
+                low = str(e).lower()
+                if ("v1/responses" in low or "responses api" in low or "/responses" in low) and ("chat/completions" in low or "not supported" in low or "only supported" in low):
+                    self.last_adjustments.append("api_style=responses")   # Responses API でしか使えないモデル: 切り替えてやり直す
+                    return self._chat_responses(messages, model, style, budget, temperature)
                 problem = _param_problem(str(e)) if "HTTP 400" in str(e) else None
                 if problem == "max_tokens" and "max_tokens" in payload:
                     payload["max_completion_tokens"] = payload.pop("max_tokens")
                 elif problem == "max_completion_tokens" and "max_completion_tokens" in payload:
                     payload["max_tokens"] = payload.pop("max_completion_tokens")
-                elif problem in ("temperature", "top_p", "reasoning_effort") and problem in payload:
+                elif problem in ("temperature", "top_p", "reasoning_effort", "verbosity") and problem in payload:
                     payload.pop(problem)
+                elif problem == "system" and payload["messages"] and payload["messages"][0].get("role") == "system":
+                    sys_msg = payload["messages"][0]["content"]          # system を受け付けないモデル（古い o1-mini など）: 先頭の user に畳み込む
+                    rest = payload["messages"][1:]
+                    if rest and isinstance(rest[0].get("content"), str):
+                        rest[0] = {**rest[0], "content": f"{sys_msg}\n\n{rest[0]['content']}"}
+                    else:
+                        rest = [{"role": "user", "content": sys_msg}] + rest
+                    payload["messages"] = rest
                 else:
                     raise
+                self.last_adjustments.append(problem)
                 self.last_payload_keys = sorted(k for k in payload if k != "messages")
                 continue
-            break
-        if isinstance(data.get("error"), dict):
-            raise LLMError(f"LLM API エラー: {data['error'].get('message', data['error'])}")
-        choices = data.get("choices") or []
-        msg = (choices[0].get("message") or {}) if choices else {}
-        text = strip_think(msg.get("content") or "")
-        if not text and choices and choices[0].get("finish_reason") == "length":
-            raise LLMError("応答が空のまま上限に達しました（推論トークンで使い切った可能性）。設定の Max tokens を増やすか、推論の深さを下げてください")
-        return text
+            if isinstance(data.get("error"), dict):
+                raise LLMError(f"LLM API エラー: {data['error'].get('message', data['error'])}")
+            choices = data.get("choices") or []
+            msg = (choices[0].get("message") or {}) if choices else {}
+            text = strip_think(msg.get("content") or "")
+            if not text and choices and choices[0].get("finish_reason") == "length":
+                key = "max_completion_tokens" if "max_completion_tokens" in payload else "max_tokens"
+                if style["reasoning"] and payload[key] < 16384:           # 推論トークンで使い切った: 上限を増やして 1 回だけやり直す
+                    payload[key] = min(16384, payload[key] * 4)
+                    self.last_adjustments.append(f"{key}={payload[key]}")
+                    continue
+                raise LLMError("応答が空のまま上限に達しました（推論トークンで使い切った可能性）。設定の Max tokens を増やすか、推論の深さを下げてください")
+            return text
+        raise LLMError("LLM の応答を得られませんでした（パラメータの調整を繰り返しても受け付けられませんでした）")
 
     def list_models(self) -> list[str]:
         """使えるモデル名の一覧（OpenAI 互換の /models、だめなら Ollama の /api/tags）。"""

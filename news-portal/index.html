@@ -160,6 +160,44 @@ button{font-family:inherit; cursor:pointer}
 .badge-offline{color:var(--cat-ビジネス); border:1px solid color-mix(in srgb,var(--cat-ビジネス) 45%,transparent);
   padding:2px 9px; border-radius:99px; font-weight:700; cursor:pointer}
 .badge-err{color:var(--cat-世界); cursor:pointer; font-weight:600}
+.badge-err:focus-visible{outline:2px solid var(--accent); outline-offset:2px; border-radius:4px}
+
+/* feeds.json を読み込めないときの警告（メイン画面の帯・情報源パネル） */
+.srcalert{display:flex; align-items:center; gap:12px; margin:2px 0 16px; padding:12px 14px; border-radius:12px; cursor:pointer;
+  border:1px solid color-mix(in srgb,var(--cat-世界) 55%,transparent);
+  background:color-mix(in srgb,var(--cat-世界) 12%,var(--surface)); color:var(--text)}
+.srcalert[hidden]{display:none}   /* display 指定が hidden 属性を打ち消さないように */
+.srcalert__ic{flex:0 0 auto; display:inline-flex; color:var(--cat-世界)}
+.srcalert__ic svg{width:20px; height:20px}
+.srcalert__c{flex:1; min-width:0}
+.srcalert__t{font-weight:700; font-size:14px}
+.srcalert__m{font-size:12.5px; color:var(--text-2); margin-top:2px; overflow-wrap:anywhere}
+.srcalert .btn{flex:0 0 auto}
+@media(max-width:600px){ .srcalert{flex-wrap:wrap} .srcalert .btn{width:100%} }
+.srcprob{border:1px solid color-mix(in srgb,var(--cat-世界) 55%,transparent); border-radius:12px; padding:14px 16px;
+  background:color-mix(in srgb,var(--cat-世界) 9%,var(--surface)); font-size:13px; line-height:1.7; color:var(--text)}
+.srcprob h3{margin:0 0 4px; font-size:15px; display:flex; align-items:center; gap:8px}
+.srcprob p{margin:0 0 8px; overflow-wrap:anywhere}
+.srcprob__where{font-size:12px; color:var(--text-2); font-weight:600}
+.srcprob__code{margin:4px 0 10px; padding:8px 10px; border-radius:8px; background:var(--surface-2); border:1px solid var(--line);
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; line-height:1.6; white-space:pre-wrap;
+  overflow-wrap:anywhere; color:var(--text)}
+.srcprob__code .ln{color:var(--text-3); user-select:none}
+.srcprob__code .dim{color:var(--text-3)}
+.srcprob__code mark{background:color-mix(in srgb,var(--cat-世界) 26%,transparent); color:var(--text); border-radius:3px; padding:0 2px}
+.srcprob__path{font-size:12px; color:var(--text-2); overflow-wrap:anywhere}
+.srcprob__path code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11.5px; color:var(--text)}
+.srcprob__sub{font-size:12px; font-weight:700; color:var(--text-2); margin-top:10px}
+.srcprob ul{margin:4px 0 8px; padding-left:20px; color:var(--text-2); font-size:12.5px}
+.srcprob ul b{color:var(--text); font-weight:700}
+.srcprob__note{font-size:12px; color:var(--text-2)}
+.srcprob__acts, .srcempty__acts{display:flex; flex-wrap:wrap; gap:8px; margin-top:12px}
+.srcempty__acts{justify-content:center}
+.srcprob .btn, .srcempty__acts .btn{max-width:100%}
+.srctools .btn:disabled, .addform .btn:disabled, .srcprob .btn:disabled, .srcempty__acts .btn:disabled{opacity:.45; cursor:not-allowed; filter:none; transform:none}
+.addform input:disabled, .addform select:disabled{opacity:.5; cursor:not-allowed}
+.srcnote{font-size:12px; color:var(--text-2); line-height:1.6; padding:7px 11px; margin-bottom:10px; border-radius:9px;
+  background:color-mix(in srgb,var(--accent) 10%,transparent); border:1px solid color-mix(in srgb,var(--accent) 22%,transparent)}
 
 /* ============================================================ main */
 main{max-width:1360px; margin:0 auto; padding:16px 22px 80px}
@@ -544,6 +582,27 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
 .spark{display:inline-flex; align-items:flex-end; gap:1px; height:18px; width:72px; flex:0 0 auto}
 .spark i{flex:1; background:var(--accent); opacity:.7; border-radius:1px; min-height:1px}
 .spark i.last{opacity:1}
+/* ローカルLLMの処理設定・外部資料（Phase 5） */
+#aiLocalTuning[hidden]{display:none}
+.tune{display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center}
+.tune label{display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--text-2); font-weight:500; max-width:100%; min-width:0}
+.tune label select{min-width:0; flex:1 1 auto}   /* 長い選択肢（本文取得の「方式」）でもスマホ幅で設定画面がはみ出さない */
+.tune input[type=number]{width:96px; padding:5px 8px; border-radius:7px; border:1px solid var(--line); background:var(--surface); color:var(--text); font:inherit; font-size:12px}
+.tune input[type=number]:focus{border-color:var(--accent); outline:none}
+.setrow .tune input[type=checkbox]{width:auto; padding:0; margin:0; accent-color:var(--accent)}
+.tune select{padding:5px 8px; border-radius:7px; border:1px solid var(--line); background:var(--surface); color:var(--text); font:inherit; font-size:12px; max-width:100%}
+.tune select:focus{border-color:var(--accent); outline:none}
+#rsRDocK{width:52px; padding:2px 5px; border-radius:6px; border:1px solid var(--line); background:var(--surface); color:var(--text); font:inherit; font-size:12px}
+.rs__docpanel{min-width:380px; max-width:520px}
+.rs__docpanel input[type=file]{font-size:12px; max-width:100%}
+.rs__doc{display:flex; gap:8px; align-items:center; font-size:12.5px; padding:4px 6px; border-radius:7px}
+.rs__doc:hover{background:var(--surface-2)}
+.rs__doc input{accent-color:var(--accent)}
+.rs__doc .n{flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.rs__doc .k{font-size:10px; color:#fff; border-radius:4px; padding:0 5px; background:var(--accent)}
+.rs__doc .c{font-size:11px; color:var(--text-3); white-space:nowrap}
+.rs__docpaste{display:flex; flex-direction:column; gap:4px; padding:4px 6px 6px}
+.rs__docpaste textarea, .rs__docpaste input{width:100%; box-sizing:border-box; padding:5px 8px; border-radius:7px; border:1px solid var(--line); background:var(--surface); color:var(--text); font:inherit; font-size:12px}
 /* 文書生成（Phase 4） */
 #rsExSlides{width:56px; padding:3px 6px; border-radius:6px; border:1px solid var(--line); background:var(--surface); color:var(--text); font:inherit; font-size:12px}
 #rsExSlidesWrap[hidden]{display:none}
@@ -619,6 +678,111 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
 .gempty{text-align:center; color:var(--text-3); padding:38px 10px; font-size:13.5px}
 @media (max-width:560px){ .gsub{display:none} }
 
+/* ============================================================ 過去ログ（タブ表示） */
+/* 過去ログ表示中はフィード（#lead/#grid）とトレンド行を隠すだけ。フィードは裏で更新され続ける */
+body.arc-on #lead, body.arc-on #grid, body.arc-on .subbar{display:none !important}
+/* 上部の検索欄は隠れたフィードを絞り込むだけなので、過去ログ表示中は隠す（過去ログには専用のキーワード欄がある）。
+   幅の広い画面では場所を残してボタンの位置を変えない */
+body.arc-on .topbar .search{visibility:hidden}
+@media(max-width:600px){ body.arc-on .topbar .search{display:none} }
+.iconbtn[aria-pressed="true"]{color:var(--accent); border-color:color-mix(in srgb,var(--accent) 55%,transparent);
+  background:color-mix(in srgb,var(--accent) 13%,var(--surface))}
+.chip .chip__ic{display:inline-flex; width:15px; height:15px}
+.chip .chip__ic svg{width:15px; height:15px}
+.arc{display:flex; flex-direction:column; gap:12px; margin-top:4px; min-width:0}
+.arc[hidden]{display:none}   /* display 指定が hidden 属性を打ち消さないように */
+.arc__head{display:flex; align-items:center; gap:8px 12px; flex-wrap:wrap}
+.arc__title{display:flex; align-items:center; gap:9px; margin:0; font-family:var(--font-serif); font-size:22px; font-weight:700; outline:none}
+.arc__title svg{width:22px; height:22px; color:var(--accent); flex:0 0 auto}
+.arc__sub{font-size:12.5px; color:var(--text-3); min-width:0}
+.arc__back{margin-left:auto; display:inline-flex; align-items:center; gap:6px; white-space:nowrap}
+.arc__back svg{width:15px; height:15px}
+.arc__panel{background:var(--surface); border:1px solid var(--line); border-radius:var(--r); padding:14px;
+  display:flex; flex-direction:column; gap:11px; box-shadow:var(--shadow-sm); min-width:0}
+.arc__row{display:flex; align-items:center; gap:8px 10px; flex-wrap:wrap; min-width:0}
+.arc__q{flex:1 1 320px; min-width:0}
+.arc__q input{font-size:15px; padding:12px 14px 12px 44px}
+.arc__lbl{font-size:11.5px; font-weight:700; color:var(--text-3); letter-spacing:.04em; white-space:nowrap}
+.arc__chips{display:flex; gap:6px; flex-wrap:wrap}
+.pchip{padding:5px 12px; border-radius:99px; border:1px solid var(--line-2); background:transparent; color:var(--text-2);
+  font-size:12.5px; font-weight:700; transition:.18s var(--ease)}
+.pchip:hover{color:var(--text); border-color:var(--text-3)}
+.pchip[aria-pressed="true"]{color:var(--text); border-color:transparent;
+  background:color-mix(in srgb,var(--accent) 18%,transparent); box-shadow:inset 0 0 0 1.5px var(--accent)}
+.arc__range{display:inline-flex; align-items:center; gap:5px; flex-wrap:wrap; min-width:0}
+.arc__range.on input{border-color:var(--accent)}
+.arc__tilde{font-size:12px; color:var(--text-3)}
+.arc select, .arc input[type=date]{padding:7px 10px; border-radius:9px; background:var(--surface-2); border:1px solid var(--line);
+  color:var(--text); font:inherit; font-size:12.5px; outline:none; max-width:100%; min-width:0}
+.arc select:focus, .arc input[type=date]:focus{border-color:var(--accent)}
+:root[data-theme="dark"] .arc input[type=date]{color-scheme:dark}
+.arc__sel{max-width:min(260px,100%)}
+.arc__clear{margin-left:auto}
+.seg{display:inline-flex; border:1px solid var(--line-2); border-radius:11px; overflow:hidden; background:var(--surface-2); flex:0 0 auto}
+.seg button{border:none; background:transparent; color:var(--text-2); padding:9px 13px; font-size:13px; font-weight:700;
+  display:inline-flex; align-items:center; gap:6px; transition:.18s var(--ease)}
+.seg button + button{border-left:1px solid var(--line-2)}
+.seg button:hover{color:var(--text)}
+.seg button[aria-pressed="true"]{background:var(--accent); color:#05101d}
+:root[data-theme="light"] .seg button[aria-pressed="true"]{color:#fff}
+.seg svg{width:15px; height:15px}
+.arc__count{font-size:13px; color:var(--text-2); display:flex; flex-wrap:wrap; gap:4px 12px; align-items:baseline; min-height:22px}
+.arc__count b{color:var(--accent); font-family:var(--font-serif); font-size:17px}
+.arc__count .seg2{color:var(--text-3); font-size:12px}
+.arc__count .seg2.warn{color:var(--cat-世界); font-weight:600}
+:root[data-theme="light"] .arc__count .seg2.warn{color:#a8360a}
+.arc__count .seg2 b{font-size:12px; font-family:inherit; color:var(--text-2)}
+.arc__results{min-width:0}
+.arc__list{display:flex; flex-direction:column; gap:8px}
+.arow{display:grid; grid-template-columns:96px minmax(0,1fr) auto; gap:4px 14px; align-items:start;
+  padding:11px 10px 11px 14px; background:var(--surface); border:1px solid var(--line); border-left:3px solid var(--c,var(--accent));
+  border-radius:12px; cursor:pointer; transition:background .18s, border-color .18s, opacity .2s}
+.arow:hover{background:var(--surface-2); border-color:var(--line-2); border-left-color:var(--c,var(--accent))}
+.arow.read{opacity:.6}
+.arow.read:hover{opacity:1}
+.arow:focus, .arc .card:focus{outline:none}
+.arow:focus-visible, .arc .card:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+.arow__date{display:flex; flex-direction:column; font-size:12px; color:var(--text-3); line-height:1.4; font-variant-numeric:tabular-nums; padding-top:1px}
+.arow__date b{color:var(--text); font-weight:700; font-size:12.5px}
+.arow__main{min-width:0; display:flex; flex-direction:column; gap:3px}
+.arow__meta{display:flex; align-items:center; gap:4px 9px; font-size:11.5px; color:var(--text-3); flex-wrap:wrap; min-width:0}
+.arow__cat{display:inline-flex; align-items:center; gap:5px; font-weight:700; color:var(--c,var(--accent))}
+.arow__cat .dot{width:7px; height:7px; border-radius:99px; background:var(--c,var(--accent))}
+.arow__src{color:var(--text-2); font-weight:600; overflow-wrap:anywhere}
+.arow__title{font-size:15px; font-weight:700; line-height:1.42; color:var(--text); margin:0; overflow-wrap:anywhere}
+.arow__link{color:inherit; text-decoration:none}
+.arow__link:hover{color:var(--accent); text-decoration:underline; text-underline-offset:3px}
+.arow__link:focus-visible{outline:2px solid var(--accent); outline-offset:2px; border-radius:4px}
+.arc__results.is-loading{opacity:.55; transition:opacity .2s; pointer-events:none}
+.arow__sum{font-size:12.5px; color:var(--text-3); line-height:1.55; margin:0; overflow-wrap:anywhere;
+  display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden}
+.arow__acts{display:flex; gap:2px; align-items:center}
+.arow mark, .arc .card mark{background:color-mix(in srgb,var(--accent) 34%,transparent); color:inherit; border-radius:3px; padding:0 1px}
+.arow.sk{cursor:default; border-left-color:var(--line-2)}
+.arc__state{text-align:center; padding:48px 16px; color:var(--text-3); grid-column:1/-1}
+.arc__state svg{width:48px; height:48px; opacity:.5; margin-bottom:10px}
+.arc__state h3{color:var(--text-2); font-weight:700; margin:0 0 6px; font-size:16.5px}
+.arc__state .btn{margin-top:14px}
+.arc__state.err h3{color:var(--cat-世界)}
+:root[data-theme="light"] .arc__state.err h3{color:#a8360a}   /* 明るい背景でも読める濃さ（--cat-世界 のままでは約 1.9:1） */
+.arc__more{display:flex; justify-content:center; padding:4px 0 8px}
+.arc__more[hidden]{display:none}
+.arc__more .btn{min-width:200px}
+.arc__expand{font-size:11.5px; color:var(--text-3)}
+.arc__expand b{color:var(--accent); font-weight:600}
+@media(max-width:600px){
+  .arc__title{font-size:19px}
+  .arc__sub{display:none}
+  .arc__panel{padding:11px}
+  .arc__chips{flex:1 1 200px; min-width:0}   /* 「期間」ラベルと同じ行に並べ、ボタンは中で折り返す */
+  .arc__clear{margin-left:0}
+  .arc__range input[type=date]{flex:1 1 120px}
+  .arow{grid-template-columns:minmax(0,1fr) auto; padding:10px 6px 10px 11px; gap:3px 8px}
+  .arow__date{grid-column:1 / -1; flex-direction:row; gap:7px}
+  .arow__acts{grid-row:2; grid-column:2; align-self:start}
+  .arow__acts .act{width:30px; height:30px}
+}
+
 /* ============================================================ AI パネル */
 .drawer.wide{width:min(600px,96vw)}
 /* パネル本体は #aiBody で指定する。クラス .ai だと assistant バブル
@@ -684,6 +848,8 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
 .setrow input, .setrow select{padding:10px 12px; border-radius:10px; background:var(--surface-2);
   border:1px solid var(--line); color:var(--text); font-size:13.5px; outline:none}
 .setrow input:focus, .setrow select:focus{border-color:var(--accent)}
+/* ラジオ・チェックボックスは枠線を描かないので、キーボード操作のときだけ外側に輪を出す */
+.setrow input[type=radio]:focus-visible, .setrow input[type=checkbox]:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
 .setrow input:disabled{opacity:.5; cursor:not-allowed; background:var(--surface)}
 .setrow .hint{font-size:11.5px; color:var(--text-3)}
 .setnote{font-size:12px; color:var(--text-3); background:var(--surface-2); border:1px solid var(--line);
@@ -693,6 +859,32 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
   text-transform:uppercase; border-bottom:1px solid var(--line); padding-bottom:6px; margin-top:4px}
 #proxyTestOut.ok{color:var(--cat-スポーツ); font-weight:600}
 #proxyTestOut.err{color:var(--cat-世界); font-weight:600}
+/* 過去ログの保存（件数／期間／無制限） */
+.retset{border:none; margin:0; padding:0; min-width:0; display:flex; flex-direction:column; gap:8px}
+.retset legend{padding:0; margin:0 0 6px; font-size:12.5px; color:var(--text-2); font-weight:600}
+.retopt{display:flex; align-items:center; gap:6px 14px; flex-wrap:wrap; min-width:0}
+.setrow .retopt label{display:inline-flex; align-items:center; gap:7px; font-size:13px; color:var(--text); font-weight:600; cursor:pointer; min-width:8.5em}
+.setrow .retopt input[type=radio]{width:auto; padding:0; margin:0; accent-color:var(--accent); cursor:pointer}
+.retval{display:inline-flex; align-items:center; gap:6px; font-size:12.5px; color:var(--text-2); min-width:0}
+.setrow .retval input[type=number]{width:124px; max-width:40vw; padding:6px 9px; border-radius:8px; font-size:13px; font-variant-numeric:tabular-nums}
+.setrow .retval input[aria-invalid="true"]{border-color:var(--cat-世界)}
+.retstate{font-size:12px; color:var(--text-2); font-variant-numeric:tabular-nums; overflow-wrap:anywhere}
+.retstate b{color:var(--text); font-weight:700}
+.retstate .retpause{display:block; margin-top:3px; color:var(--cat-世界); font-weight:600}
+:root[data-theme="light"] .retstate .retpause{color:#a8360a}
+.retpv{font-size:12.5px; font-weight:600; color:var(--text-2); overflow-wrap:anywhere; min-height:1.2em}
+.retpv.warn{color:var(--cat-世界)}
+:root[data-theme="light"] .retpv.warn, :root[data-theme="light"] .setrow .retval input[aria-invalid="true"]{color:#a8360a; border-color:#a8360a}   /* 明るい背景でも読める濃さ */
+.retpv.busy{opacity:.6}
+.retpv .sub{display:block; font-weight:500; color:var(--text-2); margin-top:2px}   /* 残る件数も読める濃さ（AA 4.5:1 以上） */
+/* settings.json を読めない・保存できないとき（設定画面・同義語辞書）: 消えないで残る警告（トーストは数秒で消えるため） */
+.setwarn{display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px; font-size:12.5px; line-height:1.6; font-weight:600;
+  color:var(--cat-世界); background:var(--surface-2); border:1px solid var(--cat-世界); border-radius:10px; padding:10px 12px;
+  overflow-wrap:anywhere; min-width:0}
+.setwarn[hidden]{display:none}
+.setwarn > span{flex:1 1 240px; min-width:0}
+:root[data-theme="light"] .setwarn{color:#a8360a; border-color:#a8360a}
+.rs__synpanel .setwarn{margin:6px 0; font-size:12px}
 
 /* toast */
 .toasts{position:fixed; left:50%; bottom:26px; transform:translateX(-50%); z-index:90;
@@ -760,6 +952,9 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
       <button class="iconbtn" id="researchBtn" title="リサーチ（現在＋過去ログを検索してAIに質問）" aria-label="リサーチ">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5.5" rx="8" ry="2.5"/><path d="M4 5.5v6c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5v-6"/><path d="M4 11.5v6c0 1.4 3.6 2.5 8 2.5 1.2 0 2.4-.08 3.4-.23"/><path d="M18.5 15.5l2.5 2.5-2.5 2.5M21 18h-5"/></svg>
       </button>
+      <button class="iconbtn" id="archiveBtn" title="過去ログ (H)" aria-label="過去ログ" aria-pressed="false" aria-controls="archive">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 12a8.5 8.5 0 1 0 2.5-6"/><path d="M3 3.5V8h4.5"/><path d="M12 7.5V12l3 2"/></svg>
+      </button>
       <button class="iconbtn pill" id="autoBtn" title="自動更新の間隔を切り替え">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2" stroke-linecap="round"/></svg>
         <span id="autoLbl">自動: オフ</span>
@@ -804,8 +999,61 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
 
 <!-- ============================================ main -->
 <main>
+  <!-- feeds.json を読み込めないときの警告（クリックで情報源パネルを開く） -->
+  <div id="srcAlert" class="srcalert" role="alert" hidden></div>
   <section id="lead" class="lead" hidden></section>
   <section id="grid" class="grid"></section>
+  <!-- 過去ログ（タブ表示）: キーワード×期間×情報源×カテゴリで過去ログを検索し、リスト／パネルで閲覧 -->
+  <section id="archive" class="arc" hidden aria-labelledby="arcTitle">
+    <div class="arc__head">
+      <h2 class="arc__title" id="arcTitle" tabindex="-1">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 12a8.5 8.5 0 1 0 2.5-6"/><path d="M3 3.5V8h4.5"/><path d="M12 7.5V12l3 2"/></svg>
+        過去ログ
+      </h2>
+      <span class="arc__sub" id="arcSub">保存された記事を期間・キーワードで検索（/ でキーワード欄へ）</span>
+      <button class="btn ghost sm arc__back" type="button" id="arcBack" aria-label="フィードに戻る（Esc）" title="フィードに戻る（Esc）">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>フィードに戻る
+      </button>
+    </div>
+    <div class="arc__panel" role="search" aria-label="過去ログの検索条件">
+      <div class="arc__row">
+        <div class="gsearch arc__q">
+          <svg class="gsearch__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3" stroke-linecap="round"/></svg>
+          <input id="arcQ" type="search" enterkeyhint="search" placeholder="キーワード（スペース=AND・|=OR・-語=除外。例: 高炉|電炉 水素 -株価）" autocomplete="off" spellcheck="false" aria-keyshortcuts="/" aria-label="過去ログのキーワード（スペース区切りでAND、|でOR、先頭に-で除外。/ キーでここへ）">
+        </div>
+        <div class="seg" role="group" aria-label="表示形式">
+          <button type="button" id="arcViewList" aria-pressed="true" aria-label="リスト表示" title="リスト表示（L）">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="3.5" cy="6" r="1" fill="currentColor"/><circle cx="3.5" cy="12" r="1" fill="currentColor"/><circle cx="3.5" cy="18" r="1" fill="currentColor"/></svg>リスト
+          </button>
+          <button type="button" id="arcViewPanel" aria-pressed="false" aria-label="パネル表示" title="パネル表示（L）">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>パネル
+          </button>
+        </div>
+      </div>
+      <div class="arc__expand" id="arcExpand" hidden></div>
+      <div class="arc__row">
+        <span class="arc__lbl" id="arcPerLbl">期間</span>
+        <div class="arc__chips" id="arcPeriods" role="group" aria-labelledby="arcPerLbl"></div>
+        <span class="arc__range" id="arcRange">
+          <input type="date" id="arcFrom" aria-label="開始日（指定すると期間ボタンは解除）"><span class="arc__tilde" aria-hidden="true">〜</span><input type="date" id="arcTo" aria-label="終了日（指定すると期間ボタンは解除）">
+        </span>
+      </div>
+      <div class="arc__row">
+        <select id="arcSrc" class="arc__sel" aria-label="情報源"><option value="">すべての情報源</option></select>
+        <select id="arcCat" class="arc__sel" aria-label="カテゴリ"><option value="">すべてのカテゴリ</option></select>
+        <select id="arcOrder" aria-label="並び順" title="関連順はキーワード（3文字以上の語）で検索したときに使えます">
+          <option value="new">新しい順</option>
+          <option value="rel">関連順</option>
+        </select>
+        <button type="button" class="lnkbtn arc__clear" id="arcReset" title="キーワード・期間・情報源・カテゴリ・並び順を初期状態（直近30日）に戻す">条件をリセット</button>
+      </div>
+    </div>
+    <div class="arc__count" id="arcCount" role="status" aria-live="polite" aria-atomic="true"></div>
+    <div class="arc__results" id="arcResults" aria-busy="false" aria-label="過去ログの検索結果"></div>
+    <div class="arc__more" id="arcMoreWrap" hidden>
+      <button class="btn ghost" type="button" id="arcMore">さらに読み込む</button>
+    </div>
+  </section>
 </main>
 
 <!-- ============================================ overlays -->
@@ -885,17 +1133,18 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
   </div>
   <div class="modal__body">
     <div class="kbd-list">
-      <div class="kbd-row"><kbd>/</kbd> 検索にフォーカス</div>
+      <div class="kbd-row"><kbd>/</kbd> 検索にフォーカス（過去ログではキーワード欄）</div>
       <div class="kbd-row"><kbd>F</kbd> 横断検索（全カテゴリ）</div>
       <div class="kbd-row"><kbd>R</kbd> 記事を再取得</div>
       <div class="kbd-row"><kbd>T</kbd> ライト / ダーク切替</div>
-      <div class="kbd-row"><kbd>L</kbd> グリッド / リスト切替</div>
+      <div class="kbd-row"><kbd>L</kbd> グリッド / リスト切替（過去ログではリスト / パネル）</div>
+      <div class="kbd-row"><kbd>H</kbd> 過去ログを開く / フィードに戻る</div>
       <div class="kbd-row"><kbd>B</kbd> 保存済みを開く</div>
       <div class="kbd-row"><kbd>S</kbd> 情報源を開く</div>
       <div class="kbd-row"><kbd>V</kbd> ソース別に表示</div>
       <div class="kbd-row"><kbd>A</kbd> AIアシスタント</div>
       <div class="kbd-row"><kbd>1</kbd>〜<kbd>9</kbd> カテゴリ切替</div>
-      <div class="kbd-row"><kbd>Esc</kbd> 閉じる / 検索クリア</div>
+      <div class="kbd-row"><kbd>Esc</kbd> 閉じる / 過去ログからフィードに戻る / 検索クリア</div>
     </div>
   </div>
 </div>
@@ -950,6 +1199,12 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
           <button type="button" class="btn ghost sm" id="rsSrcBtn" aria-haspopup="true" aria-expanded="false">情報源: すべて ▾</button>
           <div class="rs__srcpanel" id="rsSrcPanel" hidden></div>
         </div>
+        <select id="rsLimit" aria-label="表示件数" title="検索結果の表示上限（レポートは選択した全件が対象。多いほど検索と描画に時間がかかります）">
+          <option value="200">表示: 200件</option>
+          <option value="500" selected>表示: 500件</option>
+          <option value="1000">表示: 1000件</option>
+          <option value="2000">表示: 2000件</option>
+        </select>
         <select id="rsOrder" aria-label="並び順" title="関連順は FTS5 全文検索が使え、3文字以上の語で検索したときに選べます">
           <option value="new">並び: 新着順</option>
           <option value="rel">並び: 関連順</option>
@@ -966,6 +1221,8 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
           <button type="button" class="btn ghost sm" id="rsSynBtn" aria-haspopup="true" aria-expanded="false" title="同義語辞書: 検索語がグループに含まれると同じ行の語を OR で自動展開">同義語</button>
           <div class="rs__srcpanel rs__synpanel" id="rsSynPanel" hidden>
             <div class="rs__srchead"><span>同義語辞書（1行1グループ・「,」区切り）</span><span id="rsFtsNote"></span></div>
+            <div class="setwarn" id="rsSynErr" role="alert" hidden><span id="rsSynErrText"></span>
+              <button class="btn ghost sm" type="button" id="rsSynReload">読み込み直す</button></div>
             <textarea id="rsSynText" rows="7" spellcheck="false" aria-label="同義語辞書" placeholder="高炉, ブラストファーネス&#10;EV, 電気自動車, BEV"></textarea>
             <div class="rs__formrow"><span class="hint">検索語が行に含まれると、同じ行の語を OR で自動展開します（全角/半角・大小文字は区別しません）</span><span style="flex:1"></span><button class="btn sm" type="button" id="rsSynSave">保存</button></div>
           </div>
@@ -1000,7 +1257,12 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
           <button class="btn ghost sm" type="button" id="rsExpBtn">書き出し済み <span id="rsExpN"></span></button>
           <div class="rs__srcpanel rs__savedpanel right" id="rsExpPanel" hidden></div>
         </div>
+        <div class="rs__src">
+          <button class="btn ghost sm" type="button" id="rsDocBtn" aria-haspopup="true" aria-expanded="false" title="外部資料（PDF / Word / PowerPoint / Excel / テキスト）を登録し、レポート生成や会話で問いに関連する抜粋を記事と一緒に使う（RAG）">資料 <span id="rsDocN"></span>▾</button>
+          <div class="rs__srcpanel rs__docpanel right" id="rsDocPanel" hidden></div>
+        </div>
         <label class="rs__chk" title="左の「本文を取得」で取得済みの本文抜粋を会話に添えます（上から最大10件）"><input type="checkbox" id="rsUseFull"> 会話に本文を使う</label>
+        <label class="rs__chk" title="登録した外部資料から、問いに関連する抜粋（最大6件）を会話に添えます"><input type="checkbox" id="rsUseDocs"> 会話に資料を使う</label>
         <span class="rs__count">選択した記事すべてを部分要約→統合し、出典番号つきのレポートに</span>
       </div>
       <div class="rs__form" id="rsExportForm" hidden>
@@ -1037,6 +1299,7 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
       <div class="rs__form" id="rsReportForm" hidden>
         <input id="rsRQ" type="text" placeholder="調査の問い（例: 高炉の水素還元に関する直近の動き）" aria-label="調査の問い" autocomplete="off">
         <label class="rs__chk" title="選択記事（新しい順に最大80件）のページ本文を取得してから要約します。取得済みはキャッシュを使い、時間がかかる場合があります"><input type="checkbox" id="rsRFull"> 本文も取得して要約する（要約だけでなく記事ページの本文を根拠にする）</label>
+        <label class="rs__chk" title="右上の「資料」で登録した PDF / Word / Excel 等から、問い・検索語・主要な固有名詞に関連する抜粋を選び、記事と同じ出典番号で引用します（RAG）"><input type="checkbox" id="rsRDocs"> 外部資料も使う（関連する抜粋を最大 <input type="number" id="rsRDocK" min="1" max="60" value="20" aria-label="抜粋件数"> 件・登録 <span id="rsRDocsN">0</span> 件）</label>
         <div class="rs__formrow">
           <select id="rsRT" aria-label="レポート形式">
             <option value="overview">概況レポート</option>
@@ -1076,11 +1339,13 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
 
 <!-- AI 設定モーダル -->
 <div class="modal" id="aiSettings" role="dialog" aria-modal="true" aria-hidden="true">
-  <div class="modal__head"><h2>設定 — 生成AI / プロキシ</h2>
+  <div class="modal__head"><h2>設定 — 生成AI / プロキシ / 過去ログ</h2>
     <button class="iconbtn" data-close aria-label="閉じる"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
   </div>
   <div class="modal__body">
     <form class="setform" id="aiForm">
+      <div class="setwarn" id="setErr" role="alert" hidden><span id="setErrText"></span>
+        <button class="btn ghost sm" type="button" id="setReload">読み込み直す</button></div>
       <div class="sethead">生成AI</div>
       <div class="setrow">
         <label for="aiProvider">プロバイダ</label>
@@ -1099,6 +1364,23 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
         <label for="aiModel">モデル</label>
         <input id="aiModel" type="text" autocomplete="off" spellcheck="false">
         <span class="hint" id="aiModelHint"></span>
+      </div>
+      <div class="setrow" id="aiLocalTuning" hidden>
+        <label>ローカルLLMの処理設定（レポート生成・文書生成）</label>
+        <div class="tune">
+          <label>文脈長（トークン）<input id="aiCtx" type="number" min="1024" max="2000000" step="512"></label>
+          <label>並列数<input id="aiPar" type="number" min="1" max="8"></label>
+          <label>タイムアウト（秒）<input id="aiTimeout" type="number" min="30" max="7200" step="30"></label>
+        </div>
+        <div class="tune">
+          <label><input type="checkbox" id="aiStream"> 応答を少しずつ受け取る（ストリーミング・推奨）</label>
+          <label><input type="checkbox" id="aiNoThink"> レポート・文書生成では推論モデルの思考を抑える（推奨）</label>
+        </div>
+        <div class="tune">
+          <button class="btn ghost sm" type="button" id="aiProbeBtn">接続先を診断</button>
+          <span class="hint" id="aiProbeOut" aria-live="polite" style="flex:1; min-width:220px"></span>
+        </div>
+        <span class="hint">文脈長はサーバー側の設定に合わせてください（Ollama: 環境変数 <code>OLLAMA_CONTEXT_LENGTH</code> か Modelfile の <code>num_ctx</code>、LM Studio: コンテキスト長。既定は 4096）。1回に渡す記事量・本文の長さ・統合の段数はここから自動で決まり、超えると切り詰め／タイムアウトの原因になります。並列数は Ollama など同時に1件しか処理しないサーバーでは 1 のまま。タイムアウトは最初の文字が出るまでの上限です（ストリーミングでは、生成が進んでいる限り打ち切りません）。「接続先を診断」で接続先の実際の文脈長・速さ・思考の有無を確かめられます。</span>
       </div>
       <div class="setrow key">
         <label for="aiKey">APIキー <span id="aiKeyOpt" class="hint" style="display:none">（ローカルLLMでは通常不要）</span></label>
@@ -1127,7 +1409,19 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
         </div>
         <span class="hint">上のフォームの値（保存前でも可）で arXiv への取得を試し、失敗理由（407認証/403遮断/TLS/未到達）を判定します。</span>
       </div>
-      <div class="sethead">本文取得のヘッドレスブラウザ（任意）</div>
+      <div class="sethead">本文取得（続きページ・ヘッドレスブラウザ）</div>
+      <div class="setrow">
+        <label for="ftFollow">続きページ（2ページ目以降・全文表示）の取得</label>
+        <div class="tune">
+          <label>方式<select id="ftFollow">
+            <option value="auto">自動（規則で判定し、迷うときは生成AIが判断）</option>
+            <option value="rules">規則のみ（生成AIを使わない）</option>
+            <option value="off">1ページ目だけ</option>
+          </select></label>
+          <label>最大ページ数<input id="ftMaxPages" type="number" min="1" max="20"></label>
+        </div>
+        <span class="hint">記事が複数ページに分かれているとき、<code>rel=next</code>・ページ番号だけが違うURL（<code>?page=2</code>・<code>_2.html</code> など）・「次のページへ」などの規則で続きをたどり、本文を連結します（同じサイトのページだけ・「全文表示」リンクがあればそれを優先）。規則で決めきれないときは「自動」なら生成AIに候補リンクのどれが続きかを番号で選ばせます（候補の外のURLへは行きません）。続きが有料・ログイン必須のページは取らずに止めます。設定前に取得した本文は、本文取得の完了表示の「取り直す」で続きページ込みに更新できます。</span>
+      </div>
       <div class="setrow">
         <label for="brBinary">ブラウザ実行ファイルのパス</label>
         <input id="brBinary" type="text" autocomplete="off" spellcheck="false"
@@ -1139,11 +1433,34 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
                placeholder="例: C:\tools\chromedriver.exe（空=Selenium Managerが自動解決）">
         <span class="hint">urllib で本文が取れないとき、ヘッドレスブラウザで再取得します（<code>pip install selenium</code> が必要）。通常は両方とも<b>空でOK</b>（インストール済みの Chrome/Edge とドライバ自動解決を使用）。ドライバの自動ダウンロードがプロキシで失敗する環境では、手動配置した WebDriver のパスをここに指定してください。</span>
       </div>
-      <div class="field">
+      <div class="setrow">
         <label for="pdfFont">PDF 書き出し用の日本語フォント（TrueType）のパス</label>
         <input id="pdfFont" type="text" autocomplete="off" spellcheck="false"
                placeholder="例: C:\Windows\Fonts\YuGothM.ttc（空=自動検出: Yu Gothic / Meiryo / MS ゴシック / IPA ゴシック）">
         <span class="hint">リサーチの「書き出し」で PDF を作るときにサブセット化して埋め込みます。通常は<b>空でOK</b>。<span id="pdfFontState"></span></span>
+      </div>
+      <div class="sethead" id="retHead">過去ログの保存</div>
+      <div class="setrow" id="retRow">
+        <fieldset class="retset" aria-describedby="retState retPreview">
+          <legend>古い記事をいつまで残すか</legend>
+          <div class="retopt">
+            <label><input type="radio" name="retMode" value="count" id="retModeCount"> 件数で残す</label>
+            <span class="retval">最新 <input id="retCount" type="number" min="1000" max="2000000" step="1" inputmode="numeric"
+              aria-label="残す件数（最新の何件を残すか・1,000〜2,000,000）" aria-describedby="retPreview"> 件</span>
+          </div>
+          <div class="retopt">
+            <label><input type="radio" name="retMode" value="days" id="retModeDays"> 期間で残す</label>
+            <span class="retval">直近 <input id="retDays" type="number" min="7" max="3650" step="1" inputmode="numeric"
+              aria-label="残す日数（直近の何日分を残すか・7〜3,650）" aria-describedby="retPreview"> 日</span>
+          </div>
+          <div class="retopt">
+            <label><input type="radio" name="retMode" value="unlimited" id="retModeUnl"> 無制限（削除しない）</label>
+          </div>
+        </fieldset>
+        <div class="retstate" id="retState" aria-live="polite">保存の状況を読み込み中…</div>
+        <div class="retpv" id="retPreview" aria-live="polite"></div>
+        <span class="hint" id="retUnlNote" hidden>無制限では古い記事を削除しないため、過去ログのファイル（<code>archive.sqlite3</code>）が増え続けます<span id="retUnlRate"></span>。ディスクの空きに注意し、大きくなりすぎたら件数か期間で残す設定に戻してください。</span>
+        <span class="hint">取得した記事は過去ログに自動で保存され、この設定を超えた古い記事から削除されます（期間は公開日時、無ければ保存した日時で数えます）。<b>削除した記事は元に戻せません</b>。設定を下げて保存すると、削除される件数を確認してからすぐに削除します。削除してもファイルはすぐには小さくならず、空いた領域は以後の保存に使われます。</span>
       </div>
       <div class="setnote">AI 呼び出しと RSS 取得はいずれも<b>サーバー側の <code>urllib</code></b>で行われ、上のプロキシ設定に従います（他のアプリ／llmlab と同じ流儀）。取得できない情報源は「情報源」画面の各行の<b>診断ボタン</b>（脈波アイコン）で原因を切り分けられます。APIキーはこの端末の <code>settings.json</code> にのみ保存され、画面には再表示されません。</div>
       <div class="mrow" style="display:flex; gap:9px; justify-content:flex-end">
@@ -1190,15 +1507,19 @@ function relTime(ts){
   const d=Math.floor(h/24); if(d<7) return d+"日前";
   const dt=new Date(ts*1000); return (dt.getMonth()+1)+"月"+dt.getDate()+"日";
 }
-// テキスト中の検索語を安全にハイライト（textNode + <mark> のみ）
+// テキスト中の検索語を安全にハイライト（textNode + <mark> のみ）。q は語1つか語の配列（過去ログの AND/OR 語）
 function highlight(text, q){
   const frag=document.createDocumentFragment();
-  if(!q){ frag.append(document.createTextNode(text)); return frag; }
-  const lc=text.toLowerCase(), lq=q.toLowerCase(); let i=0, idx;
-  while((idx=lc.indexOf(lq,i))!==-1){
+  const terms=[].concat(q||[]).map(t=>String(t||"").toLowerCase()).filter(Boolean);
+  if(!terms.length){ frag.append(document.createTextNode(text)); return frag; }
+  const lc=text.toLowerCase(); let i=0;
+  while(i<text.length){
+    let idx=-1, len=0;   // 最も手前で一致する語（同じ位置なら長い語）
+    for(const t of terms){ const k=lc.indexOf(t,i); if(k!==-1 && (idx===-1 || k<idx || (k===idx && t.length>len))){ idx=k; len=t.length; } }
+    if(idx===-1) break;
     if(idx>i) frag.append(document.createTextNode(text.slice(i,idx)));
-    frag.append(el("mark",{text:text.slice(idx,idx+q.length)}));
-    i=idx+q.length;
+    frag.append(el("mark",{text:text.slice(idx,idx+len)}));
+    i=idx+len;
   }
   frag.append(document.createTextNode(text.slice(i)));
   return frag;
@@ -1217,6 +1538,7 @@ function copyText(t){
 // ============================================================ state
 const S = {
   articles:[], sources:[], categories:[], offline:false, updated:null, errors:{},
+  srcProblem:null, srcNote:[], srcRestored:"",   // feeds.json を読み込めない理由・注記・初期化の結果
   cat: store.get("cat","すべて"), q:"",
   source:null, sourceName:"",        // 情報源フィルタ（ソース別表示）
   layout: store.get("layout","grid"),
@@ -1242,7 +1564,7 @@ applyTheme(store.get("theme", matchMedia("(prefers-color-scheme: light)").matche
 async function api(path, opts){
   const r = await fetch(path, opts);
   let data=null; try{ data=await r.json(); }catch(e){}
-  if(!r.ok){ const err=new Error((data&&data.error)||("HTTP "+r.status)); err.server=!!(data&&data.error); throw err; }
+  if(!r.ok){ const err=new Error((data&&data.error)||("HTTP "+r.status)); err.server=!!(data&&data.error); err.status=r.status; err.data=data; throw err; }
   return data;
 }
 async function loadArticles(force){
@@ -1250,9 +1572,21 @@ async function loadArticles(force){
     const d = await api("/api/articles"+(force?"?refresh=1":""));
     S.articles=d.articles||[]; S.sources=d.sources||[]; S.categories=d.categories||[];
     S.offline=!!d.offline; S.updated=d.updated; S.errors=d.errors||{}; S.loading=false;
+    S.srcProblem=d.sources_problem||null; S.srcNote=d.sources_note||[]; S.srcLoadFailed=false;
     renderAll();
+    if($("#srcModal").classList.contains("show")) renderSources();   // 開いている情報源パネルも最新に
     return d;
-  }catch(e){ S.loading=false; renderCats(); renderTrend(); renderStatus(); renderGrid(); syncBmBadge(); toast("読み込みに失敗しました", "err"); return null; }
+  }catch(e){
+    S.loading=false;
+    // 記事の取得が失敗しても情報源の一覧は別に読む（「情報源がありません」と誤って見せない・診断ができるように）
+    try{ const s=await api("/api/sources"); S.sources=s.sources||S.sources; if(s.categories) S.categories=s.categories;
+         S.srcProblem=s.sources_problem||null; S.srcNote=s.sources_note||[]; S.srcLoadFailed=false; }
+    catch(_){ S.srcLoadFailed=true; }   // サーバーが応答しない: 一覧が空でも「feeds.json が空」とは言わない
+    renderAll();
+    if($("#srcModal").classList.contains("show")) renderSources();
+    toast("記事の読み込みに失敗しました"+(e.server?"（"+e.message+"）":"（サーバーから応答がありません。起動した画面のエラー表示を確認してください）"), "err");
+    return null;
+  }
 }
 
 // ============================================================ derived
@@ -1289,33 +1623,55 @@ function trending(){
 }
 
 // ============================================================ render
-function renderAll(){ renderCats(); renderTrend(); renderStatus(); renderGrid(); syncBmBadge(); }
+function renderAll(){ renderCats(); renderTrend(); renderStatus(); renderSrcAlert(); renderGrid(); syncBmBadge(); }
 
 function renderCats(){
-  const box=$("#cats"); box.innerHTML="";
+  const box=$("#cats"), keep=box.scrollLeft; box.innerHTML="";   // 描き直しても横スクロールの位置は保つ
   if(S.source){   // 情報源フィルタ中：解除できるアクティブなソースチップを先頭に表示
-    const sc=el("button",{class:"chip active srcchip", title:"情報源フィルタを解除"});
+    const sc=el("button",{class:"chip srcchip"+(AR.active?"":" active"), title:AR.active?"フィードに戻る（情報源フィルタ中）":"情報源フィルタを解除"});
     sc.style.setProperty("--c", catColor((S.articles.find(matchSource)||{}).category||"総合"));
     sc.append(el("span",{class:"dot"}), el("span",{text:"情報源: "+(S.sourceName||S.source)}),
               el("span",{class:"cnt",text:String(S.articles.filter(matchSource).length)}),
               el("span",{class:"x",html:'&times;'}));
-    sc.onclick=clearSourceFilter;
+    sc.onclick=()=>{ if(AR.active){ exitArchive(); return; } clearSourceFilter(); };   // 過去ログ表示中は「フィードに戻る」
     box.append(sc);
   }
   const cats=["すべて",...S.categories,"保存済み"];
   cats.forEach((c,i)=>{
-    const active=!S.source && c===S.cat, isSpecial=c==="すべて"||c==="保存済み";
+    const active=!AR.active && !S.source && c===S.cat, isSpecial=c==="すべて"||c==="保存済み";
     const chip=el("button",{class:"chip"+(active?" active":""), title:c+" ("+catCount(c)+")"});
+    if(active) chip.setAttribute("aria-current","page");
     chip.style.setProperty("--c", isSpecial? "var(--accent)":catColor(c));
     if(c==="保存済み"){
       chip.append(el("span",{class:"dot"}), el("span",{html:'★',style:"font-size:12px"}), el("span",{text:"保存済み"}), el("span",{class:"cnt",text:String(catCount(c))}));
     }else{
       chip.append(el("span",{class:"dot"}), el("span",{text:c}), el("span",{class:"cnt",text:String(catCount(c))}));
     }
-    chip.onclick=()=>{ S.source=null; S.sourceName=""; S.cat=c; store.set("cat",c); renderAll(); };
+    chip.onclick=()=>{ const back=AR.active; if(back) exitArchive({silent:true});   // 過去ログ表示中ならフィードに戻ってそのカテゴリへ
+      S.source=null; S.sourceName=""; S.cat=c; store.set("cat",c); renderAll();
+      if(back) focusActiveChip(); };
     box.append(chip);
   });
+  // 過去ログタブ（末尾）: main をフィードから過去ログの検索・閲覧に切り替える
+  const ac=el("button",{class:"chip arcchip"+(AR.active?" active":""), id:"arcTab", type:"button",
+                        title:"過去ログを検索・閲覧 (H)", "aria-controls":"archive"});
+  ac.style.setProperty("--c","var(--accent-2)");
+  if(AR.active) ac.setAttribute("aria-current","page");
+  ac.append(el("span",{class:"chip__ic",html:ICON_ARCHIVE}), el("span",{text:"過去ログ"}));
+  ac.onclick=()=>{ if(!AR.active) enterArchive(); };
+  box.append(ac);
+  box.scrollLeft=keep;
+  if(AR.active) revealChip(ac);   // 過去ログタブは列の末尾。狭い画面（1280px 以下など）でも表示中のタブが見えるように
 }
+// 横にスクロールするカテゴリ列の中で、chip が見える位置までスクロールする（ページ自体は縦にも横にも動かさない）
+function revealChip(c){
+  const box=$("#cats"); if(!c || !box || !box.contains(c)) return;
+  const cs=getComputedStyle(box), padL=parseFloat(cs.paddingLeft)||0, padR=parseFloat(cs.paddingRight)||0;
+  const br=box.getBoundingClientRect(), r=c.getBoundingClientRect();
+  if(r.right > br.right-padR) box.scrollLeft += r.right-(br.right-padR);
+  else if(r.left < br.left+padL) box.scrollLeft -= (br.left+padL)-r.left;
+}
+function focusActiveChip(){ const c=$("#cats .chip.active"); if(c) try{ c.focus(); }catch(e){} }
 function renderTrend(){
   const box=$("#trend"); box.innerHTML="";
   const words=trending();
@@ -1338,12 +1694,38 @@ function renderStatus(){
   if(S.updated){ box.append(el("span",{class:"sep"})); box.append(el("span",{text:"更新 "+relTime(new Date(S.updated).getTime()/1000)})); }
   const errN=Object.keys(S.errors).length;
   if(errN){ box.append(el("span",{class:"sep"})); const e=el("span",{class:"badge-err",text:"⚠ "+errN+"件の取得エラー"}); e.onclick=openSources; box.append(e); }
+  if(S.srcProblem){   // feeds.json を読み込めない（情報源が0件に見える原因）
+    box.append(el("span",{class:"sep"}));
+    const w=el("span",{class:"badge-err", role:"button", tabindex:"0", text:"⚠ feeds.json を読み込めません",
+                       title:"情報源ファイルを読み込めません。クリックで原因と対処を表示"});
+    w.onclick=openSources; w.onkeydown=(e)=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); openSources(); } };
+    box.append(w);
+  }
   if(S.offline){ const o=el("span",{class:"badge-offline",text:"オフラインデモ"}); o.title="情報源に接続できないため、サンプル記事を表示しています。クリックで情報源を確認"; o.onclick=openSources; box.append(o); }
+}
+
+// ============================================================ feeds.json の警告
+const WARN_SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>';
+let srcAlertSig="";
+function renderSrcAlert(){   // メイン画面の帯（情報源パネルを開かなくても気付けるように）
+  const box=$("#srcAlert"), p=S.srcProblem;
+  const sig=p ? [p.kind,p.line,p.col,p.message].join("|") : "";
+  if(sig===srcAlertSig) return;   // 同じ内容なら描き直さない（読み上げを繰り返さない）
+  srcAlertSig=sig; box.innerHTML=""; box.hidden=!p;
+  if(!p) return;
+  const c=el("div",{class:"srcalert__c"});
+  c.append(el("div",{class:"srcalert__t",text:"情報源ファイル（feeds.json）を読み込めません"}),
+           el("div",{class:"srcalert__m",text:p.message}));
+  const b=el("button",{class:"btn sm", type:"button", text:"原因と対処を見る", "aria-label":"情報源ファイルを読み込めない原因と対処を見る（情報源を開く）"});
+  b.onclick=(e)=>{ e.stopPropagation(); openSources(); };
+  box.onclick=openSources;
+  box.append(el("span",{class:"srcalert__ic", "aria-hidden":"true", html:WARN_SVG}), c, b);
 }
 
 // ============================================================ ソース別表示
 function setSourceFilter(name){
   if(!name) return;
+  if(AR.active) exitArchive({silent:true});   // 過去ログ表示中に（ソース別ピッカー等から）選んだらフィードへ戻して表示
   S.source=name; S.sourceName=name; S.cat="すべて"; S.q=""; if($("#q")) $("#q").value="";
   closeOverlays(); renderAll();
   try{ window.scrollTo({top:0, behavior:"smooth"}); }catch(e){}
@@ -1507,16 +1889,17 @@ function srcSpan(name, cls){
   return s;
 }
 
-function card(a){
+function card(a, hl){   // hl: ハイライトする語（省略時はインスタント検索の語。過去ログは検索語の配列）
+  const q = hl===undefined ? S.q : hl;
   const c=el("article",{class:"card"+(S.seen.has(a.id)?" read":"")});
   c.style.setProperty("--c", catColor(a.category));
   c.append(mediaEl(a));
   const body=el("div",{class:"card__body"});
   const top=el("div",{class:"card__top"});
-  const cat=el("span",{class:"card__cat"}); cat.append(el("span",{class:"dot"}), document.createTextNode(a.category));
+  const cat=el("span",{class:"card__cat"}); cat.append(el("span",{class:"dot"}), document.createTextNode(a.category||""));
   top.append(cat, srcSpan(a.source,"card__src"), el("span",{class:"card__time",text:timeMeta(a)}));
-  const title=el("h3",{class:"card__title"}); title.append(highlight(a.title, S.q));
-  const sum=el("p",{class:"card__sum"}); sum.append(highlight(a.summary||"", S.q));
+  const title=el("h3",{class:"card__title"}); title.append(highlight(a.title||"", q));
+  const sum=el("p",{class:"card__sum"}); sum.append(highlight(a.summary||"", q));
   body.append(top,title); if(a.summary) body.append(sum);
   c.append(body, cardFoot(a));
   if(a.link){ c.style.cursor="pointer"; c.addEventListener("click",(e)=>{ if(e.target.closest(".card__foot"))return; openArticle(a); }); }
@@ -1636,7 +2019,30 @@ function renderSources(){
   const list=filteredSources();
   const cnt=$("#srcCount");
   if(cnt){ cnt.innerHTML=""; cnt.append(document.createTextNode("有効 "), el("b",{text:String(on)}), document.createTextNode(" / 全 "+total+(list.length!==total?"（表示 "+list.length+"）":""))); }
-  if(!S.sources.length){ box.append(el("div",{class:"empty",style:"padding:30px",html:'<h3>情報源がありません</h3>'})); return; }
+  // feeds.json を読み込めない間は書き込み系を止める（サーバーも 409 で断る。壊れたファイルを空の一覧で上書きしないため）
+  const locked=!!S.srcProblem;
+  [$("#srcAllOn"),$("#srcAllOff")].forEach(b=>{ b.disabled=locked; });
+  $$("#addForm input, #addForm select, #addForm button").forEach(x=>{ x.disabled=locked; });
+  const notes=(S.srcRestored?[S.srcRestored]:[]).concat(S.srcNote||[]);   // 読み込めたが知らせたいこと
+  notes.forEach(t=>box.append(el("div",{class:"srcnote", role:"status", text:"ℹ "+t})));
+  if(locked){ box.append(srcProblemBox(S.srcProblem)); return; }
+  if(!S.sources.length && S.srcLoadFailed){   // サーバーから一覧を取れなかった（feeds.json の中身は分からない）
+    const e=el("div",{class:"empty",style:"padding:30px"});
+    const re=el("button",{class:"btn ghost sm", type:"button", text:"読み込み直す", title:"サーバーからもう一度読み込む"});
+    re.onclick=async()=>{ re.disabled=true; const d=await loadArticles(true); re.disabled=false; renderSources(); srcPanelFocus();
+      if(d) toast("情報源の一覧を読み込みました"); };
+    e.append(el("h3",{text:"サーバーから情報源の一覧を取得できません"}),
+             el("div",{text:"Prism のサーバーが応答していません。起動した画面（コンソール）にエラーが出ていないか確認し、サーバーを起動し直してから「読み込み直す」を押してください。"}),
+             el("div",{class:"srcempty__acts"},[re]));
+    box.append(e); return;
+  }
+  if(!S.sources.length){
+    const e=el("div",{class:"empty",style:"padding:30px"});
+    e.append(el("h3",{text:"情報源がありません"}),
+             el("div",{text:"feeds.json に情報源が1件もありません。下の欄から追加するか、初期の情報源に戻せます。"}),
+             el("div",{class:"srcempty__acts"},[restoreSrcBtn()]));
+    box.append(e); return;
+  }
   if(!list.length){ box.append(el("div",{class:"empty",style:"padding:26px",html:'<h3>該当する情報源がありません</h3>'})); return; }
   const artCnt=new Map();   // 表示中（パネルに載っている）記事数を情報源ごとに集計
   for(const a of S.articles) artCnt.set(a.source_id,(artCnt.get(a.source_id)||0)+1);
@@ -1653,13 +2059,13 @@ function renderSources(){
     n.append(cntpill);
     c.append(n, el("div",{class:"src__u",text:s.url}));
     const sw=el("button",{class:"switch"+(s.enabled?" on":""), title:s.enabled?"無効にする":"有効にする", "aria-label":"有効切替"});
-    sw.onclick=async()=>{ sw.classList.toggle("on"); try{ const d=await api("/api/sources/toggle?id="+encodeURIComponent(s.id),{method:"POST"}); S.sources=d.sources; renderSources(); toast("情報源を更新しました。再取得します"); loadArticles(true);}catch(e){ sw.classList.toggle("on"); toast("更新に失敗","err"); } };
+    sw.onclick=async()=>{ sw.classList.toggle("on"); try{ const d=await api("/api/sources/toggle?id="+encodeURIComponent(s.id),{method:"POST"}); S.sources=d.sources; renderSources(); toast("情報源を更新しました。再取得します"); loadArticles(true);}catch(e){ sw.classList.toggle("on"); srcWriteFailed(e,"更新に失敗"); } };
     const diag=el("button",{class:"act", title:"診断（取得できるか確認）", "aria-label":"診断"});
     diag.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2 5 4-12 2 7h6"/></svg>';
     diag.onclick=(e)=>{ e.stopPropagation(); diagnoseSource(s); };
     const del=el("button",{class:"act", title:"削除", "aria-label":"削除"});
     del.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>';
-    del.onclick=async()=>{ try{ const d=await api("/api/sources?id="+encodeURIComponent(s.id),{method:"DELETE"}); S.sources=d.sources; renderSources(); renderCats(); toast("情報源を削除しました"); loadArticles(true);}catch(e){ toast(e.server ? e.message : "削除に失敗","err"); } };
+    del.onclick=async()=>{ try{ const d=await api("/api/sources?id="+encodeURIComponent(s.id),{method:"DELETE"}); S.sources=d.sources; renderSources(); renderCats(); toast("情報源を削除しました"); loadArticles(true);}catch(e){ srcWriteFailed(e,"削除に失敗"); } };
     row.append(dot,c,sw,diag,del); box.append(row);
   });
 }
@@ -1671,8 +2077,73 @@ $("#addForm").addEventListener("submit", async (e)=>{
     const d=await api("/api/sources",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name,url,category})});
     if(d.ok){ S.sources=d.sources; renderSources(); renderCats(); $("#addForm").reset(); toast("情報源を追加しました。再取得します"); loadArticles(true); }
     else toast(d.error||"追加に失敗","err");
-  }catch(e){ toast(e.server ? e.message : "追加に失敗","err"); }
+  }catch(e){ srcWriteFailed(e,"追加に失敗"); }
 });
+// 情報源の書き込みに失敗したとき。feeds.json を読み込めなくなっていれば（409）警告の表示に切り替える
+function srcWriteFailed(e, fallback){
+  if(e && e.data && e.data.sources_problem){
+    S.srcProblem=e.data.sources_problem; S.sources=[];
+    renderSources(); renderSrcAlert(); renderStatus();
+  }
+  toast(e && e.server ? e.message : fallback, "err");
+}
+// 読み込めない理由の表示（情報源パネル）。ファイルの内容は textContent でのみ描画する
+function srcProblemBox(p){
+  const w=el("div",{class:"srcprob"});
+  const h=el("h3"); h.append(el("span",{class:"srcalert__ic", "aria-hidden":"true", html:WARN_SVG}), document.createTextNode("情報源ファイル（feeds.json）を読み込めません"));
+  w.append(h, el("p",{text:p.message||""}));
+  if(p.line){
+    w.append(el("div",{class:"srcprob__where",text:p.line+" 行目"+(p.col?" "+p.col+" 文字目":"")+" 付近:"}));
+    const pre=el("pre",{class:"srcprob__code"});
+    if(p.before && p.before_line) pre.append(el("span",{class:"ln",text:p.before_line+" │ "}), el("span",{class:"dim",text:p.before}), document.createTextNode("\n"));
+    pre.append(el("span",{class:"ln",text:p.line+" │ "}), el("mark",{text:p.excerpt||"（空の行）"}));
+    w.append(pre);
+  }
+  w.append(el("div",{class:"srcprob__path"},["ファイル: ", el("code",{text:p.path||"feeds.json"})]));
+  const ul=el("ul");
+  [p.kind==="mixed_encoding"   // UTF-8 と Shift_JIS が混ざったファイルは、メモ帳で全体を保存し直すと残りの行が文字化けする
+     ? ["文字コード","一部の行だけ Shift_JIS（ANSI）になっています。表示された行の日本語を、UTF-8 で開けるエディタ（VS Code など）で入力し直して保存する（メモ帳でファイル全体を保存し直さない）"]
+     : ["文字コード","メモ帳などで開き「名前を付けて保存」→ 文字コード「UTF-8」を選んで保存し直す（Shift_JIS は自動で読み込みます）"],
+   ...(p.kind==="corrupt" ? [["見えない文字","NUL などの見えない文字が入っている・中身が NUL だけのときは、ファイルが壊れています。控えから戻すか、初期の情報源に戻す"]] : []),
+   ["カンマ","項目の間のカンマ（,）の抜け・最後の項目の後の余分なカンマ・// コメントが無いか確認する"],
+   ["競合の印","<<<<<<< ／ ======= ／ >>>>>>> の行が残っていれば、どちらか一方の内容を残して印の行を消す"],
+   ["使用中","OneDrive・ウイルス対策・エディタ・Excel などが開いていれば閉じる"]].forEach(([k,v])=>{
+    const li=el("li"); li.append(el("b",{text:k+"："}), document.createTextNode(v)); ul.append(li); });
+  w.append(el("div",{class:"srcprob__sub",text:"よくある原因と直し方"}), ul,
+           el("div",{class:"srcprob__note",text:"直すまでは、ファイルを守るため情報源の追加・切替・削除はできません。直して保存したら「読み込み直す」を押してください。"}));
+  const re=el("button",{class:"btn ghost sm", type:"button", text:"読み込み直す", title:"feeds.json をもう一度読み込む"});
+  re.onclick=async()=>{ re.disabled=true; const d=await loadArticles(true); re.disabled=false; srcPanelFocus();
+    if(d) toast(d.sources_problem ? "まだ読み込めません（"+(d.sources_problem.line ? d.sources_problem.line+" 行目" : "理由は情報源の画面に表示")+"）" : "情報源ファイルを読み込みました", d.sources_problem ? "err" : undefined); };
+  w.append(el("div",{class:"srcprob__acts"},[restoreSrcBtn(), re]));
+  return w;
+}
+// パネルを描き直すと押したボタンが消えるので、フォーカスをパネルの中に戻す（キーボード・読み上げ利用者向け）
+function srcPanelFocus(){
+  if(!$("#srcModal").classList.contains("show")) return;
+  const t=$("#srcList .srcprob .btn.ghost") || $("#srcQ");
+  try{ t.focus(); }catch(e){}
+}
+function restoreSrcBtn(){
+  const b=el("button",{class:"btn sm", type:"button", text:"初期の情報源に戻す（今のファイルは控えを残す）"});
+  b.onclick=()=>restoreDefaultSources(b);
+  return b;
+}
+// 初期の情報源に戻す。今の feeds.json は同じフォルダに feeds.json.broken-日時 として控えが残る
+async function restoreDefaultSources(btn){
+  const msg = S.srcProblem
+    ? "情報源ファイル（feeds.json）を初期の情報源に戻します。\n\n今のファイルは同じフォルダに「feeds.json.broken-日時」という名前で控えを残します（自分で直したい場合は控えから内容を写せます）。\n\n初期の情報源に戻しますか？"
+    : "初期の情報源を登録します。今の feeds.json（情報源 0 件）は同じフォルダに「feeds.json.broken-日時」という名前で控えを残します。\n\n初期の情報源に戻しますか？";
+  if(!confirm(msg)) return;
+  if(btn) btn.disabled=true;
+  try{
+    const d=await api("/api/sources/restore-defaults",{method:"POST"});
+    S.sources=d.sources||[]; S.srcProblem=null; S.srcNote=[];
+    S.srcRestored="初期の情報源（"+S.sources.length+" 件）に戻しました"+(d.backup?"。元のファイルの控え: "+d.backup:"");
+    renderSources(); renderSrcAlert(); renderStatus(); renderCats();
+    toast("初期の情報源に戻しました。再取得します");
+    await loadArticles(true); srcPanelFocus();
+  }catch(e){ if(btn) btn.disabled=false; toast(e.server ? e.message : "初期の情報源に戻せませんでした","err"); }
+}
 // 情報源の絞り込み・一括 ON/OFF
 $("#srcQ").addEventListener("input", renderSources);
 $("#srcCat").addEventListener("change", renderSources);
@@ -1684,7 +2155,7 @@ async function bulkEnableSources(enabled){
     S.sources=d.sources; renderSources(); renderCats();
     if(d.changed){ toast("表示中の"+d.changed+"件を"+(enabled?"有効化":"無効化")+"しました。再取得します"); loadArticles(true); }
     else toast("変更はありませんでした");
-  }catch(e){ toast(e.server ? e.message : "更新に失敗","err"); }
+  }catch(e){ srcWriteFailed(e,"更新に失敗"); }
 }
 $("#srcAllOn").onclick=()=>bulkEnableSources(true);
 $("#srcAllOff").onclick=()=>bulkEnableSources(false);
@@ -1712,6 +2183,9 @@ function diagVerdict(diag){
   if(p.status===403||p.status===407||errl.includes("forbidden")||errl.includes("proxy authentication")) return ["warn","アクセス拒否（HTTP "+(p.status||"?")+"）。社内プロキシのカテゴリ制限／認証の可能性が高いです。管理者に news.google.com / bing.com の許可を依頼するか、代替を利用してください。"];
   if(errl.includes("urlerror")||errl.includes("timed out")||errl.includes("timeout")||errl.includes("refused")||errl.includes("name or service")||errl.includes("getaddrinfo")) return ["warn","接続できません（"+(p.error||"")+"）。プロキシ未経由／ブロック／DNS の可能性。プロキシ設定を確認してください。"];
   if(p.ok && !p.looks_like_feed) return ["warn","フィードではない応答（同意ページ／ブロックページの可能性。HTTP "+(p.status||"?")+", "+(p.content_type||"?")+"）。"];
+  if(p.parse_error && p.parse_error_kind==="internal")   // 配信元の XML の誤りではなく、Prism 側の処理で読めなかった
+    return ["warn","フィードは取得できましたが、Prism 側の処理で読み込めませんでした（"+p.parse_error+"）。配信元の不具合とは限りません。この表示を添えて Prism の管理者に連絡してください（ほかの情報源には影響しません）。"];
+  if(p.parse_error) return ["warn","配信元のフィードの書式が壊れていて読めません（"+p.parse_error+"）。配信元の不具合です。直るまでこの情報源をオフにしてください。"];
   return ["warn", p.error ? ("取得エラー: "+p.error) : "記事0件（フィードが空、または内容が想定と異なります）。"];
 }
 function probeCard(title, pr){
@@ -1727,6 +2201,7 @@ function probeCard(title, pr){
   add("フィード形式", pr.looks_like_feed?"はい":"いいえ");
   add("記事数", pr.items);
   if(pr.error) add("エラー", pr.error);
+  if(pr.parse_error) add("解析エラー", pr.parse_error);
   if(pr.snippet) add("先頭抜粋", pr.snippet, true);
   w.append(dl); return w;
 }
@@ -1767,7 +2242,7 @@ function closeTop(){   // 一番上の overlay だけ閉じる
 }
 function closeOverlays(){ while(overlayStack.length) closeTop(); }
 function openBookmarks(){ renderBookmarks(); openOverlay($("#bmDrawer")); }
-function openSources(){ renderSources(); openOverlay($("#srcModal")); }
+function openSources(){ S.srcRestored=""; renderSources(); openOverlay($("#srcModal")); }
 function openHelp(){ openOverlay($("#helpModal")); }
 
 // ============================================================ 横断検索（全カテゴリ・全情報源）
@@ -1846,6 +2321,411 @@ $("#scrim").onclick=closeTop;
 $$("[data-close]").forEach(b=>b.onclick=closeTop);
 $("#bmClear").onclick=()=>{ S.bookmarks.clear(); store.set("bm",[]); syncBmBadge(); renderCats(); renderBookmarks(); if(S.cat==="保存済み")renderGrid(); toast("保存済みをすべて削除しました"); };
 
+// ============================================================ 過去ログ（タブ表示）
+// 過去ログ（SQLite）を キーワード × 期間 × 情報源 × カテゴリ で検索し、リスト／パネルで閲覧する。
+// main のフィード（#lead/#grid）は隠すだけで裏で更新され続け、「フィードに戻る」でそのまま戻る。
+// 条件は URL ハッシュ（#archive?q=…&days=30&view=list）と sessionStorage に残し、再読み込みでも復元する。
+const ICON_ARCHIVE='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 12a8.5 8.5 0 1 0 2.5-6"/><path d="M3 3.5V8h4.5"/><path d="M12 7.5V12l3 2"/></svg>';
+const AR_PERIODS=[["today","今日"],["3","3日"],["7","7日"],["30","30日"],["90","90日"],["365","1年"],["all","すべて"]];
+const AR_PAGE=30;   // 1回に読む件数（「さらに読み込む」で次の30件）
+const AR_DEFAULT={q:"", days:"30", from:"", to:"", src:"", cat:"", order:"new"};
+const AR={active:false, f:Object.assign({},AR_DEFAULT), view:(store.get("arView","list")==="panel"?"panel":"list"),
+          items:[], ids:new Set(), next:0, total:0, hasMore:false, stats:null, expanded:[],
+          seq:0, loading:false, loadingMore:false, error:"", feedScroll:0, qT:null, selSig:"",
+          qp:null, snap:null, orderUsed:"new", fts:true, qPending:false};   // qp/snap: ページ送りの間は1ページ目の条件・基準時刻を使う
+const pad2=n=>String(n).padStart(2,"0");
+function localDay(d){ return d.getFullYear()+"-"+pad2(d.getMonth()+1)+"-"+pad2(d.getDate()); }
+function validDay(s){ s=String(s||""); return (/^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(new Date(s+"T00:00:00").getTime())) ? s : ""; }
+function arTs(a){ return a.published_ts || a.sort_ts || a.archived_at || 0; }
+function arDate(a, withTime){ const t=arTs(a); if(!t) return ""; const d=new Date(t*1000); return localDay(d)+(withTime?" "+pad2(d.getHours())+":"+pad2(d.getMinutes()):""); }
+function arNum(n){ return Number(n||0).toLocaleString("ja-JP"); }
+function safeHref(u){ u=String(u||""); return /^https?:\/\//i.test(u) ? u : ""; }
+
+// ---- 条件（検証・URL ハッシュ・sessionStorage）
+function arSanitize(f){   // ハッシュ／sessionStorage から来た条件を検証して正規化
+  const o=Object.assign({}, AR_DEFAULT);
+  if(!f || typeof f!=="object") return o;
+  o.q=String(f.q||"").slice(0,200);
+  o.from=validDay(f.from); o.to=validDay(f.to);
+  if(o.from && o.to && o.from>o.to){ const t=o.from; o.from=o.to; o.to=t; }
+  o.days=(o.from||o.to) ? "" : (AR_PERIODS.some(p=>p[0]===String(f.days)) ? String(f.days) : AR_DEFAULT.days);
+  o.src=String(f.src||"").slice(0,200); o.cat=String(f.cat||"").slice(0,40);
+  o.order=f.order==="rel" ? "rel" : "new";
+  return o;
+}
+function isArchiveHash(h){ return /^#archive(\?|$)/.test(h==null ? location.hash : h); }
+function arParseHash(h){
+  const i=h.indexOf("?"), p=new URLSearchParams(i>=0 ? h.slice(i+1) : ""), v=p.get("view");
+  return { f:arSanitize({q:p.get("q"), days:p.get("days"), from:p.get("from"), to:p.get("to"),
+                         src:p.get("src"), cat:p.get("cat"), order:p.get("order")}),
+           view:(v==="list"||v==="panel") ? v : null };
+}
+// 日付範囲（開始＞終了なら入れ替えた順）。入力欄は利用者が入力したとおりに残し、検索・URL でだけ並べ替える
+function arRange(){ const f=AR.f.from, t=AR.f.to; return (f && t && f>t) ? [t,f] : [f,t]; }
+function arHash(){
+  const f=AR.f, p=new URLSearchParams(), [from,to]=arRange();
+  if(f.q) p.set("q",f.q);
+  if(from||to){ if(from) p.set("from",from); if(to) p.set("to",to); }
+  else p.set("days",f.days||AR_DEFAULT.days);
+  if(f.src) p.set("src",f.src);
+  if(f.cat) p.set("cat",f.cat);
+  if(f.order==="rel") p.set("order","rel");
+  p.set("view",AR.view);
+  return "#archive?"+p.toString();
+}
+function arSaveState(){   // 再読み込み・再訪で条件を復元（URL ハッシュ＋同じタブの sessionStorage）
+  try{ sessionStorage.setItem("prism.archive", JSON.stringify(AR.f)); }catch(e){}
+  if(AR.active){ try{ history.replaceState({prism:"archive"}, "", arHash()); }catch(e){} }
+}
+function arLoadSaved(){ try{ const v=sessionStorage.getItem("prism.archive"); return v ? arSanitize(JSON.parse(v)) : null; }catch(e){ return null; } }
+function arParams(offset){   // 条件 → /api/archive/search のクエリ
+  const f=AR.f, q=f.q.trim(), [from,to]=arRange();
+  const p=new URLSearchParams({q, limit:String(AR_PAGE), offset:String(offset||0), dedup:"0",
+                               order:(f.order==="rel" && q) ? "rel" : "new"});
+  if(from||to){ if(from) p.set("from",from); if(to) p.set("to",to); }
+  else if(f.days==="today") p.set("from", localDay(new Date()));   // 今日 = 今日の0時（ローカル）以降
+  else if(f.days && f.days!=="all") p.set("days", f.days);
+  if(f.src) p.set("sources", f.src);
+  if(f.cat) p.set("category", f.cat);
+  return p;
+}
+function arTerms(){   // ハイライトする語: AND/OR の語（除外語・記号は除く）＋同義語で展開された語
+  const out=[];
+  for(const t of (AR.f.q.match(/-?"[^"]*"|\S+/g)||[])){
+    if(t.startsWith("-")) continue;
+    t.split("|").forEach(w=>{ w=w.replace(/"/g,"").trim(); if(w) out.push(w); });
+  }
+  (AR.expanded||[]).forEach(x=>(x.to||[]).forEach(w=>out.push(String(w))));
+  return [...new Set(out)].slice(0,40);
+}
+function arPeriodText(){
+  const f=AR.f, [from,to]=arRange();
+  if(from||to) return (from||"…")+" 〜 "+(to||"…");
+  if(f.days==="all") return "すべての期間";
+  if(f.days==="today") return "今日";
+  return "直近"+((AR_PERIODS.find(p=>p[0]===f.days)||[0,f.days+"日"])[1]);
+}
+
+// ---- 表示の切替（フィード ⇄ 過去ログ）
+function syncArcToggles(){
+  $("#archiveBtn").setAttribute("aria-pressed", String(AR.active));
+  const t=$("#arcTab");
+  if(t){ t.classList.toggle("active",AR.active); if(AR.active) t.setAttribute("aria-current","page"); else t.removeAttribute("aria-current"); }
+}
+function enterArchive(opts){
+  opts=opts||{};
+  if(overlayStack.length) closeOverlays();
+  if(opts.filters) AR.f=arSanitize(opts.filters);
+  else if(!AR.active){ const saved=arLoadSaved(); if(saved) AR.f=saved; }   // 同じタブで前回の条件を復元
+  if(opts.view && opts.view!==AR.view){ AR.view=opts.view; store.set("arView",AR.view); }
+  if(AR.active){ arFillControls(); arSearch(); return; }   // 履歴の移動などで条件だけ変わった
+  AR.active=true; AR.feedScroll=window.scrollY||0;
+  document.body.classList.add("arc-on"); $("#archive").hidden=false;
+  $("#q").disabled=true;   // 上部の検索欄（隠れたフィードの絞り込み）は過去ログ表示中は使わない
+  renderCats(); syncArcToggles(); arFillControls();
+  if(opts.history!==false){ try{ history.pushState({prism:"archive"}, "", arHash()); }catch(e){} }   // 「戻る」でフィードへ
+  window.scrollTo(0,0);
+  arSearch();
+  // フォーカスは見出しへ（キーワード欄には入れない）。開いた直後の H（フィードに戻る）・L（リスト／パネル）が
+  // 入力欄に文字として入って検索・保存されないように。キーワード欄へは「/」かクリックで
+  if(opts.focus!==false) setTimeout(()=>{ try{ $("#arcTitle").focus({preventScroll:true}); }catch(e){} }, 30);
+}
+function exitArchive(opts){
+  opts=opts||{};
+  if(!AR.active) return;
+  AR.active=false; AR.seq++; AR.loading=AR.loadingMore=false; clearTimeout(AR.qT);   // 応答待ちの検索は捨てる
+  document.body.classList.remove("arc-on"); $("#archive").hidden=true;
+  $("#q").disabled=false;
+  if(opts.history!==false){ try{ history.pushState({prism:"feed"}, "", location.pathname+location.search); }catch(e){} }
+  syncArcToggles();
+  if(!opts.silent){ renderCats(); revealChip($("#cats .chip.active")); }
+  window.scrollTo(0, AR.feedScroll||0);   // フィードは元のスクロール位置のまま
+  if(opts.focus) setTimeout(()=>{ try{ $(opts.focus).focus({preventScroll:true}); }catch(e){} }, 30);
+}
+function toggleArchive(){ if(AR.active) exitArchive({focus:"#archiveBtn"}); else enterArchive(); }
+window.addEventListener("popstate", ()=>{   // ブラウザの戻る／進む
+  if(isArchiveHash()){ const h=arParseHash(location.hash); enterArchive({filters:h.f, view:h.view, history:false, focus:false}); }
+  else if(AR.active) exitArchive({history:false});
+});
+
+// ---- 検索
+async function arSearch(more){
+  if(!AR.active) return;
+  clearTimeout(AR.qT);
+  if(more && AR.qPending) more=false;   // 条件を変えた直後（検索待ち）なら、続きではなく新しい条件で1ページ目から
+  AR.qPending=false;
+  if(more && (AR.loading || !AR.hasMore)) return;
+  const seq=++AR.seq, offset=more ? AR.next : 0;   // 連続操作で古い応答が新しい結果を上書きしないよう、最新だけ採用
+  // 「さらに読み込む」は1ページ目と同じ条件で続きを読む: 「今日」の日付・「直近N日」の基準時刻（as_of）・
+  // その時点までに保存された記事（upto）を固定し、関連順で境目の記事が抜けたり日付をまたいで期間が変わったりしないように
+  if(!more || !AR.qp){ AR.qp=arParams(0).toString(); AR.snap=null; }
+  const p=new URLSearchParams(AR.qp); p.set("offset", String(offset));
+  if(more && AR.snap){ p.set("as_of", AR.snap.as_of); p.set("upto", AR.snap.upto); }
+  AR.loading=true; AR.loadingMore=!!more; AR.error="";
+  if(more) arSyncMore(); else { arSaveState(); arRenderLoading(); }
+  try{
+    const d=await api("/api/archive/search?"+p.toString());
+    if(seq!==AR.seq || !AR.active) return;
+    const rows=d.articles||[];
+    if(!more){
+      AR.items=[]; AR.ids=new Set();
+      AR.snap=(d.as_of!=null && d.upto!=null) ? {as_of:String(d.as_of), upto:String(d.upto)} : null;
+      AR.orderUsed=d.order_used || "new"; AR.fts=d.fts!==false;
+    }
+    const fresh=rows.filter(a=>a && a.id && !AR.ids.has(a.id));   // 念のため重複は除く
+    fresh.forEach(a=>{ AR.ids.add(a.id); AR.items.push(a); });
+    AR.next=offset+rows.length; AR.total=d.total||0; AR.hasMore=!!d.has_more && rows.length>0;
+    AR.stats=d.stats||AR.stats; AR.expanded=d.expanded||[];
+    AR.loading=AR.loadingMore=false;
+    arFillSelects(); arSyncOrder(); arRenderCount(); arRenderExpand();
+    if(more) arAppend(fresh, null, true); else arRenderResults();
+    arSyncMore();
+  }catch(e){
+    if(seq!==AR.seq) return;
+    AR.loading=AR.loadingMore=false;
+    if(more){ toast("続きの読み込みに失敗しました","err"); arSyncMore(); return; }
+    AR.error=(e && e.server) ? e.message : "サーバーに接続できませんでした";
+    AR.items=[]; AR.ids=new Set(); AR.total=0; AR.hasMore=false;
+    arRenderCount(); arRenderResults(); arSyncMore();
+  }
+}
+function arSearchSoon(){ clearTimeout(AR.qT); AR.qPending=true; AR.qT=setTimeout(()=>arSearch(), 300); }   // 入力中はまとめて1回
+
+// ---- 描画
+function arRenderLoading(){
+  const box=$("#arcResults"); box.setAttribute("aria-busy","true");
+  $("#arcMoreWrap").hidden=true;
+  if(box.querySelector(".arc__grid .card, .arc__list .arow:not(.sk)")){ box.classList.add("is-loading"); return; }   // 前の結果を薄く残す（ちらつき防止）
+  box.innerHTML=""; box.classList.remove("is-loading");
+  if(!$("#arcCount").textContent) $("#arcCount").textContent="検索中…";
+  const wrap=AR.view==="panel" ? el("div",{class:"grid arc__grid"}) : el("div",{class:"arc__list"});
+  for(let i=0;i<6;i++) wrap.append(AR.view==="panel" ? skeleton() : arSkeletonRow());
+  box.append(wrap);
+}
+function arSkeletonRow(){
+  const r=el("div",{class:"arow sk","aria-hidden":"true"});
+  const d=el("div",{class:"arow__date"}); d.append(el("div",{class:"sk__l shimmer",style:"width:72px"}));
+  const m=el("div",{class:"arow__main"});
+  m.append(el("div",{class:"sk__l shimmer",style:"width:30%"}), el("div",{class:"sk__l shimmer",style:"height:16px;width:85%"}), el("div",{class:"sk__l shimmer",style:"width:65%"}));
+  r.append(d, m, el("div")); return r;
+}
+function arStateEl(kind, title, sub, btnText, onBtn){
+  const w=el("div",{class:"arc__state"+(kind?" "+kind:"")});
+  w.innerHTML = kind==="err"
+    ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.5v.5"/></svg>'
+    : ICON_ARCHIVE;
+  w.append(el("h3",{text:title}), el("div",{text:sub}));
+  if(btnText){ const b=el("button",{type:"button",class:"btn ghost",text:btnText}); b.onclick=onBtn; w.append(b); }
+  return w;
+}
+function arRenderResults(){
+  const box=$("#arcResults"); box.innerHTML=""; box.classList.remove("is-loading"); box.setAttribute("aria-busy","false");
+  if(AR.error){ box.append(arStateEl("err","過去ログの検索に失敗しました",AR.error,"再試行",()=>arSearch())); return; }
+  if(!AR.items.length){
+    if(AR.stats && !AR.stats.count) box.append(arStateEl("","過去ログはまだありません","記事を取得すると、ここに自動で保存されます"+
+                                                (AR.stats.retention ? "（保存: "+(AR.stats.retention_paused ? "削除を停止中" : retPolicyText(AR.stats.retention))+"）" : "")));
+    else box.append(arStateEl("","条件に一致する記事はありません","期間を広げるか、キーワード・情報源・カテゴリを変えてみてください",
+                              (AR.f.days!=="all") ? "期間を「すべて」にして探す" : null, ()=>arSetPeriod("all")));
+    return;
+  }
+  const wrap=AR.view==="panel" ? el("div",{class:"grid arc__grid"}) : el("div",{class:"arc__list"});
+  box.append(wrap);
+  arAppend(AR.items, wrap, false);
+}
+function arAppend(list, wrap, focusFirst){
+  wrap=wrap || $("#arcResults .arc__grid, #arcResults .arc__list");
+  if(!wrap){ arRenderResults(); return; }
+  const terms=arTerms(), nodes=list.map(a=>AR.view==="panel" ? arCard(a,terms) : arRow(a,terms));
+  nodes.forEach((n,i)=>{ if(n.classList.contains("card")) n.style.transitionDelay=Math.min(i,12)*22+"ms"; wrap.append(n); });
+  void wrap.offsetWidth;   // 初期状態を確定させてからフェードイン
+  nodes.forEach(n=>n.classList.add("in"));
+  if(focusFirst && nodes.length){   // 「さらに読み込む」の後は続きの先頭へフォーカス（ボタンは消えることがある）
+    nodes[0].tabIndex=-1; try{ nodes[0].focus({preventScroll:true}); }catch(e){}
+  }
+}
+function arSrcLink(node, a){   // 過去ログ内の情報源名は「この情報源に絞り込む」（フィードのソース別表示ではなく）
+  if(!node || !a.source_id) return;
+  const pick=(e)=>{ e.preventDefault(); e.stopPropagation();
+    if(AR.f.src===a.source_id) return;
+    AR.f.src=a.source_id; arFillSelects(); arSearch(); try{ window.scrollTo({top:0, behavior:"smooth"}); }catch(e2){} };
+  node.title="この情報源に絞り込む"; node.onclick=pick;
+  node.onkeydown=(e)=>{ if(e.key==="Enter"||e.key===" ") pick(e); };
+}
+function arCard(a, terms){   // パネル表示: フィードと同じカード（保存・コピー・AI・開く・既読がそのまま使える）
+  const c=card(a, terms);
+  const t=c.querySelector(".card__time"); if(t){ t.textContent=arDate(a); t.title=arDate(a,true)+"（"+relTime(arTs(a))+"）"; }
+  arSrcLink(c.querySelector(".card__src"), a);
+  c.addEventListener("click",()=>{ if(S.seen.has(a.id)) c.classList.add("read"); });
+  return c;
+}
+const BM_SVG_ON='<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z"/></svg>';
+const BM_SVG_OFF='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z"/></svg>';
+function arRow(a, terms){   // リスト表示: 日付・情報源・タイトル・短い要約の1行
+  const r=el("article",{class:"arow"+(S.seen.has(a.id)?" read":"")});
+  r.style.setProperty("--c", catColor(a.category));
+  const d=el("div",{class:"arow__date"}), ts=arTs(a);
+  if(ts){ const dt=new Date(ts*1000); d.append(el("b",{text:localDay(dt)}), el("span",{text:pad2(dt.getHours())+":"+pad2(dt.getMinutes())})); d.title=relTime(ts); }
+  else d.append(el("span",{text:"日付なし"}));
+  const main=el("div",{class:"arow__main"}), meta=el("div",{class:"arow__meta"});
+  if(a.category){ const cat=el("span",{class:"arow__cat"}); cat.append(el("span",{class:"dot"}), document.createTextNode(a.category)); meta.append(cat); }
+  const src=srcSpan(a.source||a.source_id||"", "arow__src"); arSrcLink(src, a); meta.append(src);
+  const href=safeHref(a.link), h=el("h3",{class:"arow__title"});
+  if(href){
+    const lk=el("a",{class:"arow__link", href, target:"_blank", rel:"noopener noreferrer"});
+    lk.append(highlight(a.title||"（無題）", terms));
+    lk.addEventListener("click",(e)=>{ e.stopPropagation(); markSeen(a); r.classList.add("read"); });
+    h.append(lk);
+  } else h.append(highlight(a.title||"（無題）", terms));
+  main.append(meta, h);
+  if(a.summary){
+    const s=String(a.summary), p=el("p",{class:"arow__sum"});
+    p.append(highlight(s.length>180 ? s.slice(0,180)+"…" : s, terms)); main.append(p);
+  }
+  const acts=el("div",{class:"arow__acts"});
+  const saved=S.bookmarks.has(a.id);
+  const bm=el("button",{type:"button", class:"act"+(saved?" saved":""), title:saved?"保存を解除":"保存", "aria-label":"保存", "aria-pressed":String(saved)});
+  bm.innerHTML=saved ? BM_SVG_ON : BM_SVG_OFF;
+  bm.onclick=(e)=>{ e.stopPropagation(); toggleBookmark(a, bm); const on=S.bookmarks.has(a.id); bm.setAttribute("aria-pressed",String(on)); bm.title=on?"保存を解除":"保存"; };
+  const ai=el("button",{type:"button", class:"act", title:"この記事についてAIに聞く", "aria-label":"AIに聞く"});
+  ai.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"><path d="M12 3l1.9 4.6L18.5 9l-4.6 1.9L12 15l-1.9-4.1L5.5 9l4.6-1.4z"/></svg>';
+  ai.onclick=(e)=>{ e.stopPropagation(); openAI(a); };
+  acts.append(bm, ai);
+  r.append(d, main, acts);
+  if(href) r.addEventListener("click",(e)=>{ if(e.target.closest("a,button,.srclink")) return; openArticle(a); r.classList.add("read"); });
+  else r.style.cursor="default";
+  return r;
+}
+function arRenderCount(){
+  const c=$("#arcCount"); c.innerHTML="";
+  if(AR.error){ c.textContent="検索に失敗しました"; return; }
+  const st=AR.stats||{};
+  const n=el("span"); n.append(el("b",{text:arNum(AR.total)}), document.createTextNode(" 件（全 "+arNum(st.count)+" 件中）"));
+  c.append(n);
+  if(AR.total) c.append(el("span",{class:"seg2",text:"表示 "+arNum(AR.items.length)+" 件"}));
+  const conds=[arPeriodText()];
+  if(AR.f.src){ const s=(st.sources||[]).find(x=>x.id===AR.f.src); conds.push(s ? (s.name||s.id) : AR.f.src); }
+  if(AR.f.cat) conds.push(AR.f.cat);
+  if(AR.f.order==="rel" && AR.f.q.trim()){   // サーバーが実際に使った並び（短い語だけなら関連順にならない）
+    conds.push(AR.orderUsed==="rel" ? "関連順"
+      : AR.fts ? "新しい順で表示（関連順は3文字以上の語で使えます）" : "新しい順で表示（この環境では関連順を使えません）");
+  }
+  c.append(el("span",{class:"seg2",text:conds.join(" · ")}));
+  if(st.oldest){
+    const sp=el("span",{class:"seg2"}); sp.append(document.createTextNode("保存期間 "), el("b",{text:localDay(new Date(st.oldest*1000))}),
+      document.createTextNode(" 〜 "), el("b",{text:localDay(new Date(st.newest*1000))}));
+    c.append(sp);
+  }
+  // 保存の設定（設定画面の「過去ログの保存」）: 「保存: 最新 100,000 件まで」「保存: 直近 365 日」「保存: 無制限」
+  // 削除を止めているときは、表示用の既定（利用者の設定ではない）を出さずに、止めていることと短い理由を見える文字で出す
+  // （タッチ操作では title を見られないため。詳しい理由は title と設定画面に）
+  if(st.retention){
+    let t="保存: "+retPolicyText(st.retention);
+    if(st.retention_paused) t="保存: 削除を停止中（"+retPausedShort(st.retention_paused_kind)+"・設定画面で確認してください）";
+    else if(st.retention.mode==="count" && st.count>st.retention.max_count) t+="（少しの超過は数分ごとにまとめて削除）";
+    c.append(el("span",{class:"seg2 arc__ret"+(st.retention_paused?" warn":""),
+                        title: st.retention_paused ? "古い記事の削除を止めています: "+st.retention_paused : "過去ログの保存の設定（設定画面の「過去ログの保存」で変更できます）",
+                        text:t}));
+  }
+}
+function arRenderExpand(){   // 同義語辞書での展開を表示（リサーチ画面と同じ辞書）
+  const box=$("#arcExpand"), ex=AR.expanded||[];
+  box.innerHTML=""; box.hidden=!ex.length;
+  if(!ex.length) return;
+  box.append(document.createTextNode("同義語で展開: "));
+  ex.forEach((x,i)=>{ if(i) box.append(document.createTextNode(" ／ ")); box.append(el("b",{text:x.term}), document.createTextNode(" → "+(x.to||[]).join("・"))); });
+}
+function arSyncMore(){
+  const w=$("#arcMoreWrap"), b=$("#arcMore");
+  w.hidden=!(AR.hasMore && !AR.error && AR.items.length>0 && !(AR.loading && !AR.loadingMore));
+  b.disabled=AR.loadingMore;
+  b.setAttribute("aria-busy", String(AR.loadingMore));
+  b.textContent=AR.loadingMore ? "読み込み中…" : "さらに読み込む（残り "+arNum(Math.max(0,AR.total-AR.next))+" 件）";
+}
+
+// ---- 検索条件のコントロール
+function arBuildPeriods(){
+  const box=$("#arcPeriods");
+  AR_PERIODS.forEach(([v,label])=>{
+    const b=el("button",{type:"button", class:"pchip", text:label, "aria-pressed":"false",
+                         title:v==="all" ? "期間を限定しない" : v==="today" ? "今日（0時以降）" : "直近"+label});
+    b.dataset.days=v; b.onclick=()=>arSetPeriod(v); box.append(b);
+  });
+}
+function arSyncPeriods(){
+  const custom=!!(AR.f.from||AR.f.to);
+  $$("#arcPeriods .pchip").forEach(b=>b.setAttribute("aria-pressed", String(!custom && b.dataset.days===AR.f.days)));
+  // 入力中（フォーカスのある）日付欄には書き戻さない（キーボードで入力している途中の値を消さない）
+  [["#arcFrom","from"],["#arcTo","to"]].forEach(([sel,k])=>{ const i=$(sel);
+    if(i!==document.activeElement && (i.value!==AR.f[k] || (i.validity && i.validity.badInput))) i.value=AR.f[k]; });
+  $("#arcRange").classList.toggle("on", custom);
+}
+function arSetPeriod(v){ AR.f.days=v; AR.f.from=""; AR.f.to=""; arSyncPeriods(); arSearch(); }
+function arFillSelects(){   // 情報源・カテゴリの選択肢は過去ログの集計（archive_stats）から
+  const st=AR.stats||{}, srcs=st.sources||[], cmap=new Map((st.categories||[]).filter(c=>c.name).map(c=>[c.name,c.count]));
+  const sig=JSON.stringify([srcs, st.categories||[], AR.f.src, AR.f.cat]);
+  if(sig!==AR.selSig){
+    AR.selSig=sig;
+    const ss=$("#arcSrc"); ss.innerHTML=""; ss.append(el("option",{value:"",text:"すべての情報源"}));
+    srcs.forEach(s=>ss.append(el("option",{value:s.id, text:(s.name||s.id)+"（"+arNum(s.count)+"）"})));
+    if(AR.f.src && !srcs.some(s=>s.id===AR.f.src)) ss.append(el("option",{value:AR.f.src, text:AR.f.src}));
+    const cs=$("#arcCat"); cs.innerHTML=""; cs.append(el("option",{value:"",text:"すべてのカテゴリ"}));
+    const names=[...ALL_CATS.filter(c=>cmap.has(c)), ...[...cmap.keys()].filter(c=>!ALL_CATS.includes(c))];
+    names.forEach(c=>cs.append(el("option",{value:c, text:c+"（"+arNum(cmap.get(c))+"）"})));
+    if(AR.f.cat && !names.includes(AR.f.cat)) cs.append(el("option",{value:AR.f.cat, text:AR.f.cat}));
+  }
+  $("#arcSrc").value=AR.f.src; $("#arcCat").value=AR.f.cat;
+}
+function arSyncOrder(){   // 関連順はキーワードがあるときだけ（全文索引 FTS5 が無い環境では使えない）
+  const has=!!AR.f.q.trim() && AR.fts!==false, sel=$("#arcOrder");
+  sel.querySelector('option[value="rel"]').disabled=!has;
+  if(!has && AR.f.order==="rel") AR.f.order="new";
+  sel.value=AR.f.order;
+}
+function arSyncView(){
+  $("#arcViewList").setAttribute("aria-pressed", String(AR.view==="list"));
+  $("#arcViewPanel").setAttribute("aria-pressed", String(AR.view==="panel"));
+}
+function arSetView(v){
+  if((v!=="list" && v!=="panel") || v===AR.view) return;
+  AR.view=v; store.set("arView",v); arSyncView(); arSaveState();
+  if(AR.loading && !AR.loadingMore){ $("#arcResults").innerHTML=""; arRenderLoading(); }
+  else arRenderResults();   // 読み込み済みの結果をそのまま描き直す
+}
+function arFillControls(){
+  $("#arcQ").value=AR.f.q;
+  arSyncPeriods(); arFillSelects(); arSyncOrder(); arSyncView();
+}
+arBuildPeriods();
+$("#archiveBtn").onclick=toggleArchive;
+$("#arcBack").onclick=()=>exitArchive({focus:"#archiveBtn"});
+$("#arcQ").addEventListener("input",(e)=>{ if(e.isComposing) return; AR.f.q=$("#arcQ").value; arSyncOrder(); arSearchSoon(); });
+$("#arcQ").addEventListener("compositionend",()=>{ AR.f.q=$("#arcQ").value; arSyncOrder(); arSearchSoon(); });   // 日本語入力の確定後に検索
+$("#arcQ").addEventListener("keydown",(e)=>{ if(e.key==="Enter" && !e.isComposing && e.keyCode!==229){ e.preventDefault(); AR.f.q=$("#arcQ").value; arSyncOrder(); arSearch(); } });
+// 日付欄の値。キーボード入力の途中（一部の欄が空・年が 0002 など）は undefined＝まだ条件に反映しない
+// （Chromium は入力の途中でも日付として成り立つたびに change を出すため）
+function arDateVal(inp){
+  if(inp.validity && inp.validity.badInput) return undefined;
+  if(!inp.value) return "";
+  const d=validDay(inp.value), y=d ? +d.slice(0,4) : 0;
+  return (y>=1970 && y<=2100) ? d : undefined;
+}
+const arRangeChanged=(e)=>{   // 日付を指定すると期間ボタンは解除。開始＞終了は検索のときに並べ替える（入力欄は書き換えない）
+  const inp=e.target, v=arDateVal(inp), k=inp.id==="arcFrom" ? "from" : "to";
+  if(v===undefined || AR.f[k]===v) return;
+  AR.f[k]=v;
+  if(AR.f.from||AR.f.to) AR.f.days=""; else if(!AR.f.days) AR.f.days=AR_DEFAULT.days;
+  arSyncPeriods(); arSearchSoon();   // 続けて入力しても検索は最後の1回だけ
+};
+$("#arcFrom").addEventListener("change", arRangeChanged);
+$("#arcTo").addEventListener("change", arRangeChanged);
+$("#arcSrc").addEventListener("change",()=>{ AR.f.src=$("#arcSrc").value; arSearch(); });
+$("#arcCat").addEventListener("change",()=>{ AR.f.cat=$("#arcCat").value; arSearch(); });
+$("#arcOrder").addEventListener("change",()=>{ AR.f.order=$("#arcOrder").value==="rel" ? "rel" : "new"; arSearch(); });
+$("#arcViewList").onclick=()=>arSetView("list");
+$("#arcViewPanel").onclick=()=>arSetView("panel");
+$("#arcReset").onclick=()=>{ AR.f=Object.assign({},AR_DEFAULT); arFillControls(); arSearch(); try{ $("#arcQ").focus(); }catch(e){} };
+$("#arcMore").onclick=()=>arSearch(true);
+
 // ============================================================ toasts
 let toastT=null;
 function toast(msg, kind){
@@ -1854,13 +2734,16 @@ function toast(msg, kind){
                              : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
   t.append(document.createTextNode(msg));
   $("#toasts").append(t); requestAnimationFrame(()=>t.classList.add("show"));
-  setTimeout(()=>{ t.classList.remove("show"); setTimeout(()=>t.remove(),400); }, 2600);
+  // エラーは読み終えられるよう長めに（対処の説明が付くことがある）
+  setTimeout(()=>{ t.classList.remove("show"); setTimeout(()=>t.remove(),400); }, kind==="err" ? 7000 : 2600);
 }
 
 // ============================================================ refresh / auto
 async function doRefresh(){
   const btn=$("#refreshBtn"); btn.classList.add("spin");
-  try{ const d=await loadArticles(true); toast(d.offline?"オフライン: デモ記事を表示中":("最新 "+d.count+" 件を取得しました")); }
+  try{ const d=await loadArticles(true); if(!d) return;
+    if(d.sources_problem) toast("情報源ファイル（feeds.json）を読み込めません","err");
+    else toast(d.offline?"オフライン: デモ記事を表示中":("最新 "+d.count+" 件を取得しました")); }
   catch(e){}
   finally{ setTimeout(()=>btn.classList.remove("spin"),600); }
 }
@@ -1873,7 +2756,9 @@ function setAuto(min){
 $("#autoBtn").onclick=()=>{ const i=(AUTO_STEPS.indexOf(S.auto)+1)%AUTO_STEPS.length; setAuto(AUTO_STEPS[i]); toast("自動更新: "+(AUTO_STEPS[i]?AUTO_STEPS[i]+"分ごと":"オフ")); };
 $("#refreshBtn").onclick=doRefresh;
 $("#themeBtn").onclick=()=>applyTheme(document.documentElement.getAttribute("data-theme")==="dark"?"light":"dark");
-$("#layoutBtn").onclick=()=>{ S.layout=S.layout==="grid"?"list":"grid"; store.set("layout",S.layout); renderGrid(); };
+$("#layoutBtn").onclick=()=>{
+  if(AR.active){ arSetView(AR.view==="list"?"panel":"list"); return; }   // 過去ログ表示中はリスト／パネルを切替（フィードとは別に記憶）
+  S.layout=S.layout==="grid"?"list":"grid"; store.set("layout",S.layout); renderGrid(); };
 $("#bmBtn").onclick=openBookmarks;
 $("#srcBtn").onclick=openSources;
 $("#srcViewBtn").onclick=openSourcePicker;
@@ -1892,7 +2777,8 @@ const PROVIDER_DEFAULTS = {
     modelHint:"ローカルにあるモデル名。例: llama3.1 / qwen2.5 / gpt-oss" },
 };
 
-async function loadAiSettings(){ try{ const d=await api("/api/settings"); AI.config=d.ai; AI.proxy=d.proxy; AI.browser=d.browser; AI.pdfFont=d.pdf_font||""; AI.pdfFontFound=!!d.pdf_font_found; }catch(e){ AI.config=null; } }
+// settingsError: settings.json を読めない理由（このとき返ってくる AI・プロキシ・保存の設定などは既定で、利用者の設定ではない）
+async function loadAiSettings(){ try{ const d=await api("/api/settings"); AI.config=d.ai; AI.proxy=d.proxy; AI.browser=d.browser; AI.fulltext=d.fulltext; AI.pdfFont=d.pdf_font||""; AI.pdfFontFound=!!d.pdf_font_found; AI.archive=d.archive||null; AI.archivePaused=d.archive_paused||""; AI.archivePausedKind=d.archive_paused_kind||(d.archive_paused?"invalid":""); AI.settingsError=d.settings_error||""; AI.settingsPath=d.settings_path||""; AI.loaded=true; return true; }catch(e){ if(!AI.loaded) AI.config=null; return false; } }
 function aiReady(){ return !!(AI.config && (AI.config.has_key || AI.config.provider==="local")); }
 
 function setAiContext(a){
@@ -1997,7 +2883,7 @@ async function sendAi(text){
   const ctxPayload = ctxAtSend.kind==="article"
     ? { kind:"article", title:ctxAtSend.title, source:ctxAtSend.source, category:ctxAtSend.category,
         published:ctxAtSend.published, summary:ctxAtSend.summary, link:ctxAtSend.link }
-    : { kind:"list", items: filtered().slice(0,25).map(a=>({title:a.title, source:a.source, category:a.category, summary:a.summary})) };
+    : { kind:"list", items: (AR.active ? AR.items : filtered()).slice(0,25).map(a=>({title:a.title, source:a.source, category:a.category, summary:a.summary})) };   // 過去ログ表示中はその検索結果が「表示中の記事一覧」
   AI.msgs.push({role:"user", text}); AI.busy=true; renderAiMessages();
   let res;
   try{
@@ -2026,6 +2912,9 @@ function toggleProxyUrl(){ $("#aiProxyUrl").disabled = !$("#aiUseProxy").checked
 function fillAiForm(){
   const c=AI.config||{provider:"anthropic",base_url:"",model:"",has_key:false};
   $("#aiProvider").value=c.provider||"anthropic";
+  $("#aiLocalTuning").hidden = (c.provider||"anthropic")!=="local";
+  $("#aiCtx").value=c.ctx_tokens||4096; $("#aiPar").value=c.parallel||1; $("#aiTimeout").value=c.timeout_s||600;
+  $("#aiStream").checked = c.stream!==false; $("#aiNoThink").checked = c.no_think!==false; $("#aiProbeOut").textContent="";
   $("#aiBase").value=c.base_url||""; $("#aiModel").value=c.model||""; $("#aiKey").value="";
   $("#aiKeyStatus").textContent = c.has_key ? "✓ キー登録済み（変更する場合のみ入力）" : "";
   const p=AI.proxy||{use_proxy:true, proxy_url:"", ca_bundle:""};
@@ -2033,33 +2922,302 @@ function fillAiForm(){
   $("#aiCaBundle").value = p.ca_bundle||"";
   const br=AI.browser||{binary:"", driver:""};
   $("#brBinary").value = br.binary||""; $("#brDriver").value = br.driver||"";
+  const ft=AI.fulltext||{follow:"auto", max_pages:6};
+  $("#ftFollow").value = ft.follow||"auto"; $("#ftMaxPages").value = ft.max_pages||6;
   const pf=$("#pdfFont"); if(pf) pf.value=AI.pdfFont||"";
   const ps=$("#pdfFontState"); if(ps) ps.textContent = AI.pdfFontFound ? "現在: 日本語フォントを検出済みです。" : "現在: フォントが見つかりません。パスを指定してください。";
-  toggleProxyUrl(); applyProviderHints();
+  // settings.json を読めなかったときの値（既定）で入れたフォームは保存させない（既定を利用者の設定として書き戻さない）。
+  // 直したら「読み込み直す」で読み直してから保存する
+  AI.formFromError = AI.settingsError || (!AI.loaded ? "サーバーから設定を読み込めませんでした" : "");
+  AI.saveError="";
+  toggleProxyUrl(); applyProviderHints(); retFill(); renderSetErr();
+}
+function setErrAdvice(){
+  return "settings.json"+(AI.settingsPath ? "（"+AI.settingsPath+"）" : "")+"をメモ帳などで直してから（APIキーなどほかの設定も入っているので、消したり別の場所へ移したりせずに）、「読み込み直す」を押してください。";
+}
+function renderSetErr(){   // 設定画面の上の消えない警告と、保存できるかどうか
+  const blocked=!!AI.formFromError;
+  const msg = blocked ? (!AI.settingsError
+                          ? "⚠ サーバーから設定を読み込めませんでした。いま表示している値は既定で、あなたの設定ではないので保存できません。「読み込み直す」を押してください。"
+                          : "⚠ settings.json を読み込めません（"+AI.formFromError+"）。いま表示している値は既定で、あなたの設定ではありません。"+
+                            "APIキーなどほかの設定を消さないよう、直すまで保存できません。"+setErrAdvice())
+            : AI.saveError ? "⚠ "+AI.saveError
+            : RET.kind==="unreadable" ? "⚠ settings.json を読み込めません（"+RET.paused+"）。直すまで設定は保存できません。"+setErrAdvice()
+            : "";
+  $("#setErr").hidden=!msg; $("#setErrText").textContent=msg;
+  $("#aiForm button[type=submit]").disabled = blocked || aiSaving;
+  $("#aiClearKey").disabled = blocked;
+}
+async function openAiSettings(){   // 開くたびにサーバーから読み直す（前に読めなかった・別のタブで変わった値で保存しないように）
+  await loadAiSettings(); fillAiForm(); openOverlay($("#aiSettings"));
 }
 function proxyPayload(){ const on=$("#aiUseProxy").checked; return { use_proxy:on, proxy_url: on ? $("#aiProxyUrl").value.trim() : "", ca_bundle: $("#aiCaBundle").value.trim(),
-  browser_binary: $("#brBinary").value.trim(), driver_path: $("#brDriver").value.trim(), pdf_font: ($("#pdfFont")?$("#pdfFont").value.trim():"") }; }
-function openAiSettings(){ fillAiForm(); openOverlay($("#aiSettings")); }
+  browser_binary: $("#brBinary").value.trim(), driver_path: $("#brDriver").value.trim(), pdf_font: ($("#pdfFont")?$("#pdfFont").value.trim():""),
+  ctx_tokens: parseInt($("#aiCtx").value,10)||0, parallel: parseInt($("#aiPar").value,10)||0, timeout_s: parseInt($("#aiTimeout").value,10)||0,
+  follow_pages: $("#ftFollow").value, max_pages: parseInt($("#ftMaxPages").value,10)||0,
+  stream: $("#aiStream").checked, no_think: $("#aiNoThink").checked }; }
+
+// ---- 過去ログの保存（件数で残す／期間で残す／無制限）
+// 削除は元に戻せないので、設定を変えるとその場で「この設定では古い記事 N 件が削除されます」を数え直して見せ、
+// 保存のときに N>0 なら confirm で確かめる（キャンセルなら何も送らない）。この欄を操作して変えたときだけ送る
+// （操作していなければ、ほかの設定だけ保存しても保存の設定は送らない＝何も消えない・止めている削除も止めたまま）。
+// paused: settings.json を読めない・値が不正で、サーバーが削除を止めている理由。kind: "unreadable"（読めない＝直すまで
+// 保存できない）／"invalid"（値が不正＝ここで残し方を選んで保存すれば再開）。止めているときサーバーが返す設定は表示用の
+// 既定なので、今の設定（cur）として扱わず、方式も選ばない状態にする。touched: 開いてからこの欄を操作したか
+const RET={cur:null, seq:0, t:null, paused:"", kind:"", touched:false};
+const RET_LIM={count:[1000,2000000], days:[7,3650]};
+function retPolicyText(c){   // 「最新 100,000 件まで」「直近 365 日」「無制限」（過去ログタブの件数欄と共用）
+  if(!c) return "";
+  return c.mode==="unlimited" ? "無制限" : c.mode==="days" ? "直近 "+arNum(c.max_days)+" 日" : "最新 "+arNum(c.max_count)+" 件まで";
+}
+function retPausedShort(kind){   // 削除を止めている理由の短い説明（過去ログタブの件数欄）
+  return kind==="unreadable" ? "settings.json を読み込めません" : "settings.json の保存の設定の値が不正です";
+}
+function fmtMB(b){ const mb=(Number(b)||0)/1048576; return (mb>=100 ? Math.round(mb).toLocaleString("ja-JP") : mb>=10 ? mb.toFixed(1) : mb.toFixed(2))+" MB"; }
+function retMode(){ const r=$('input[name="retMode"]:checked'); return r ? r.value : ""; }   // "" = まだ選んでいない（止めているとき）
+function retForm(){ return {mode:retMode(), max_count:$("#retCount").valueAsNumber, max_days:$("#retDays").valueAsNumber}; }
+function retChanged(f){   // 保存の設定を送るか: この欄を操作して、今の設定から変えたとき（選んだ方式で使う値だけ比べる）。
+  f=f||retForm();          // 削除を止めているときは、操作して選んだ設定を送れば（その設定で）再開する
+  if(!RET.touched || !f.mode) return false;
+  const c=RET.cur;
+  if(RET.paused || !c) return true;
+  if(f.mode!==c.mode) return true;
+  return f.mode==="count" ? f.max_count!==c.max_count : f.mode==="days" ? f.max_days!==c.max_days : false;
+}
+function retInvalid(f){
+  const chk=(v,[lo,hi],what,unit)=>(Number.isInteger(v) && v>=lo && v<=hi) ? "" : what+"は "+arNum(lo)+"〜"+arNum(hi)+" "+unit+"の範囲（整数）で入力してください";
+  return f.mode==="count" ? chk(f.max_count, RET_LIM.count, "残す件数", "件") : f.mode==="days" ? chk(f.max_days, RET_LIM.days, "残す日数", "日") : "";
+}
+function retPayload(f){ const o={mode:f.mode}; if(f.mode==="count") o.max_count=f.max_count; if(f.mode==="days") o.max_days=f.max_days; return o; }
+function retFetch(f){   // この設定にしたら何件削除されるか（サーバーは何も変更しない）。方式を選んでいなければ今の状況だけ
+  const p=new URLSearchParams();
+  if(f.mode) p.set("mode", f.mode);
+  if(f.mode==="count") p.set("max_count", String(f.max_count));
+  if(f.mode==="days") p.set("max_days", String(f.max_days));
+  return api("/api/archive/retention?"+p.toString());
+}
+function retSyncInputs(){   // 数値の欄は選んだ方式のものだけ使える。settings.json を読めない間は全部使えない（保存できないため）
+  const m=retMode(), off=RET.kind==="unreadable" || !!AI.formFromError;
+  $$('input[name="retMode"]').forEach(r=>{ r.disabled=off; });
+  $("#retCount").disabled=off || m!=="count"; $("#retDays").disabled=off || m!=="days";
+  $("#retUnlNote").hidden=m!=="unlimited";
+}
+function retSetInvalid(msg){
+  const m=retMode();
+  $("#retCount").setAttribute("aria-invalid", String(!!msg && m==="count"));
+  $("#retDays").setAttribute("aria-invalid", String(!!msg && m==="days"));
+}
+function retTakeState(d){   // サーバーが返した「削除を止めているか」を覚える（設定画面・過去ログタブで共有）
+  if(!d || d.paused===undefined) return;
+  RET.paused=d.paused||""; RET.kind=d.paused_kind||(RET.paused?"invalid":"");
+  AI.archivePaused=RET.paused; AI.archivePausedKind=RET.kind;
+}
+function retRenderState(d){   // 保存中 M 件・最古 YYYY-MM-DD・ファイル約 X MB
+  // #retState は読み上げ領域（aria-live）なので、表示が変わらないときは書き換えない（入力のたびに読み直させない）
+  const s=$("#retState");
+  retTakeState(d);
+  // 止めているときの current は表示用の既定（利用者の設定ではない）なので「現在の設定」としては出さない
+  const parts=d ? [arNum(d.count), d.oldest ? localDay(new Date(d.oldest*1000)) : "", fmtMB(d.db_bytes),
+                   (d.current && !RET.paused) ? retPolicyText(d.current) : "", RET.paused, RET.kind] : null;
+  retSyncInputs(); renderSetErr();
+  const key=parts ? JSON.stringify(parts) : "error";
+  if(s.dataset.key===key) return;
+  s.dataset.key=key; s.innerHTML="";
+  if(!d){ s.textContent="保存の状況を読み込めませんでした"; return; }
+  s.append(document.createTextNode("保存中 "), el("b",{text:parts[0]}), document.createTextNode(" 件"));
+  if(parts[1]) s.append(document.createTextNode("・最古 "), el("b",{text:parts[1]}));
+  s.append(document.createTextNode("・ファイル約 "), el("b",{text:parts[2]}));
+  if(parts[3]) s.append(document.createTextNode("（現在の設定: "+parts[3]+"）"));
+  if(RET.paused) s.append(el("span",{class:"retpause", text: RET.kind==="unreadable"
+    ? "⚠ settings.json を読み込めないため、古い記事の削除を止めています（"+RET.paused+"）。直すまで設定は保存できません。"+
+      "settings.json をメモ帳などで直してから（消したり別の場所へ移したりせずに）、この画面の上の「読み込み直す」を押してください"
+    : "⚠ settings.json の保存の設定の値が不正なため、古い記事の削除を止めています（"+RET.paused+"）。いまの設定は読み取れないので、"+
+      "上で残し方を選んで保存すると、その設定で再開します（ほかの設定だけ保存しても止めたままです）"}));
+  // 1万件あたりの大きさ: サーバーの目安（まとめて削除した後も、削除の前に測った値。空いた領域・索引の削除の印を数えない）
+  const per=Number(d.est_bytes_per_10k)||0;
+  $("#retUnlRate").textContent = (d.count>=1000 && per>0) ? "（いまの記事なら 1万件あたり約 "+fmtMB(per)+"）" : "";
+}
+function retRenderPreview(kind, text, sub){
+  const p=$("#retPreview"); p.className="retpv"+(kind?" "+kind:""); p.innerHTML="";
+  p.append(document.createTextNode(text||""));
+  if(sub) p.append(el("span",{class:"sub",text:sub}));
+}
+function retShowPreview(d, f){
+  // would_delete: 保存するとすぐに消える件数（今の設定と同じ・増やす・延ばす・無制限なら 0）
+  // over_limit: 保存では消さないが設定を超えている件数（件数で残すときの少しの超過は数分ごとにまとめて、期間は次の取得時に消える）
+  f=f||retForm();
+  const n=d.would_delete||0, over=d.over_limit||0, mode=f.mode;
+  const slack=Math.min(200, Math.floor((Number(f.max_count)||0)/100));   // サーバーが保存のたびには消さない超過の幅
+  // settings.json を読めない間は保存できないので、削除される件数は出さない（保存しても消えない・確認も出さない）
+  if(RET.kind==="unreadable") return retRenderPreview("", "settings.json を直すまで、保存の設定は変えられません（いまは何も削除しません）");
+  if(!mode) return retRenderPreview("", RET.paused ? "残し方を選ぶと、削除される件数を表示します" : "");
+  if(n>0) retRenderPreview("warn", "この設定では古い記事 "+arNum(n)+" 件が削除されます（元に戻せません）",
+    "残るのは "+arNum(d.keep)+" 件"+(d.oldest_after ? "（"+localDay(new Date(d.oldest_after*1000))+" 以降）" : "")+"です。");
+  else if(over>0) retRenderPreview("", "今すぐ削除される記事はありません",
+    mode==="days" ? "期間を過ぎた古い記事 "+arNum(over)+" 件は、次の取得時に削除されます"
+    : over<=slack ? "上限を少し超えた古い記事 "+arNum(over)+" 件は、このあとの取得時にまとめて削除されます（少しの超過は数分ごとにまとめて削除します）"
+    : "設定を超えた古い記事 "+arNum(over)+" 件は、次の取得時に削除されます");
+  else retRenderPreview("", "削除される記事はありません");
+}
+async function retPreview(){   // 入力のたびに（まとめて1回）削除件数を数え直す
+  clearTimeout(RET.t);
+  const f=retForm(), seq=++RET.seq, bad=f.mode ? retInvalid(f) : "";
+  retSetInvalid(bad);
+  if(bad){ retRenderPreview("warn", bad); return; }
+  $("#retPreview").classList.add("busy");
+  try{
+    const d=await retFetch(f);
+    if(seq!==RET.seq) return;
+    retRenderState(d); retShowPreview(d, f);
+  }catch(e){
+    if(seq!==RET.seq) return;
+    retRenderPreview("warn", e.server ? e.message : "削除される件数を確かめられませんでした（サーバーに接続できません）");
+  }
+}
+function retPreviewSoon(){ clearTimeout(RET.t); RET.t=setTimeout(retPreview, 250); }
+function retSetForm(c){   // c=null: 方式を選ばない（止めているとき。表示用の既定を利用者の設定のように見せない）
+  $$('input[name="retMode"]').forEach(r=>{ r.checked=false; });
+  if(c) ($('input[name="retMode"][value="'+c.mode+'"]') || $("#retModeCount")).checked=true;
+  $("#retCount").value=(c && c.max_count)||100000; $("#retDays").value=(c && c.max_days)||365;
+  retSyncInputs(); retSetInvalid("");
+}
+function retSameCfg(a, b){ return !!a && !!b && a.mode===b.mode && a.max_count===b.max_count && a.max_days===b.max_days; }
+function retFill(){   // 設定画面を開いたとき: 今の設定を入れ、保存の状況とプレビューを読み込む
+  RET.paused=AI.archivePaused||""; RET.kind=AI.archivePausedKind||(RET.paused?"invalid":""); RET.touched=false;
+  RET.cur=(!RET.paused && !AI.formFromError && AI.archive) ? AI.archive : null;   // 止めている・読めないときの値は既定（利用者の設定ではない）
+  retSetForm(RET.cur);
+  $("#retState").textContent="保存の状況を読み込み中…"; $("#retState").dataset.key=""; retRenderPreview("", "");
+  clearTimeout(RET.t);
+  const seq=++RET.seq;
+  retFetch(retForm()).then(d=>{
+    if(seq!==RET.seq) return;
+    if(d.current && !d.paused){
+      AI.archive=d.current;
+      // 別のタブなどで設定が変わっていたら（読めた設定のときだけ）、サーバーの今の設定で入れ直して数え直す
+      if(!RET.touched && !AI.formFromError && !retSameCfg(d.current, RET.cur)){ RET.cur=d.current; retTakeState(d); retSetForm(d.current); retPreview(); return; }
+    } else if(d.paused && !RET.touched){
+      // 開いた後で読めなくなった・値が不正: 返ってきた既定を今の設定として扱わない（フォームにも入れない）
+      RET.cur=null; retTakeState(d); retSetForm(null);
+    }
+    retRenderState(d); retShowPreview(d, retForm());
+  }).catch(()=>{ if(seq===RET.seq){ retRenderState(null); retRenderPreview("", ""); } });
+}
+$$('input[name="retMode"]').forEach(r=>r.addEventListener("change", ()=>{ RET.touched=true; retSyncInputs(); retPreview(); }));
+["#retCount","#retDays"].forEach(s=>$(s).addEventListener("input", ()=>{ RET.touched=true; retPreviewSoon(); }));
+// 数値の欄で Enter を押しても設定全体を保存しない（削除の確認がすぐ出て、続けて Enter で消えてしまうため）。プレビューだけ数え直す
+["#retCount","#retDays"].forEach(s=>$(s).addEventListener("keydown", e=>{
+  if(e.key==="Enter" && !e.isComposing){ e.preventDefault(); retPreview(); }
+}));
+
 $("#aiProvider").addEventListener("change", applyProviderHints);
+$("#aiProvider").addEventListener("change", ()=>{ $("#aiLocalTuning").hidden = $("#aiProvider").value!=="local"; });
 $("#aiUseProxy").addEventListener("change", toggleProxyUrl);
+$("#aiProbeBtn").onclick=async ()=>{   // ローカルLLMの接続先を診断（フォームの値で・保存しない）
+  const out=$("#aiProbeOut"); out.textContent="診断中…（短い依頼を1回送ります）";
+  const b=$("#aiProbeBtn"); b.disabled=true;
+  try{
+    const d=await api("/api/ai/probe",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+      base_url:$("#aiBase").value.trim(), model:$("#aiModel").value.trim(), ctx_tokens:parseInt($("#aiCtx").value,10)||0,
+      timeout_s:parseInt($("#aiTimeout").value,10)||0, stream:$("#aiStream").checked})});
+    out.innerHTML="";
+    if(!d.ok){ out.textContent="✗ "+(d.error||"診断に失敗しました"); return; }
+    const parts=[];
+    parts.push(d.ctx_server ? "接続先の文脈長 "+d.ctx_server+"（"+d.ctx_source+"）" : "接続先の文脈長は読み取れませんでした"+(d.ctx_source?"（"+d.ctx_source+"）":""));
+    if(d.ctx_model_max) parts.push("モデルの最大 "+d.ctx_model_max);
+    parts.push("最初の文字まで "+d.first_s+"秒・全体 "+d.elapsed_s+"秒"); parts.push(d.thinks ? "思考するモデル" : "思考なし");
+    out.append(el("div",{text:"✓ "+parts.join("／")}));
+    (d.warnings||[]).forEach(w=>out.append(el("div",{text:"⚠ "+w})));
+    if(d.ctx_server && d.ctx_exact && d.ctx_server!==parseInt($("#aiCtx").value,10)){   // 設定のモデルの値と確かなときだけ
+      const fix=el("button",{type:"button",class:"lnkbtn",text:"文脈長を "+d.ctx_server+" にする"});
+      fix.onclick=()=>{ $("#aiCtx").value=d.ctx_server; fix.remove(); toast("文脈長を "+d.ctx_server+" にしました（保存で反映）"); };
+      out.append(fix);
+    }
+  }catch(e){ out.textContent="✗ "+(e.server?e.message:"診断に失敗しました"); }
+  finally{ b.disabled=false; }
+};
+let aiSaving=false;
+function settingsRefused(e){   // 409（settings.json を読めないので保存を断った）: 消えない警告に出し、保存の設定の欄も止める
+  if(!(e && e.status===409 && e.data && e.data.settings_error)) return false;
+  AI.saveError=e.message; RET.kind="unreadable"; retSyncInputs(); renderSetErr();
+  if(retMode() || RET.paused) retPreview();   // 「N 件が削除されます」を出したままにしない
+  return true;
+}
 $("#aiForm").addEventListener("submit", async (e)=>{
   e.preventDefault();
+  if(aiSaving) return;   // 二重送信しない（過去ログの削除を伴う保存は数秒かかることがある）
+  if(AI.formFromError){   // 読めなかったときの既定で入れたフォームは送らない
+    renderSetErr(); toast("settings.json を読み込めなかったため、表示している値は既定です。直してから「読み込み直す」を押してください","err"); return;
+  }
   const payload={ provider:$("#aiProvider").value, base_url:$("#aiBase").value.trim(),
                   model:$("#aiModel").value.trim(), ...proxyPayload() };
   const key=$("#aiKey").value.trim(); if(key) payload.api_key=key;
+  const sb=$("#aiForm button[type=submit]");
+  aiSaving=true; sb.disabled=true;
   try{
+    // 過去ログの保存: この欄を操作して変えたときだけ送る。古い記事が消える設定なら、保存の直前に数え直した件数を見せて
+    // 確かめる（キャンセルなら何も保存しない＝何も消えない）
+    const rf=retForm();
+    if(retChanged(rf)){
+      const bad=retInvalid(rf);
+      if(bad){ retSetInvalid(bad); retRenderPreview("warn", bad); toast(bad,"err"); try{ $(rf.mode==="days" ? "#retDays" : "#retCount").focus(); }catch(e2){} return; }
+      let pv;
+      try{ pv=await retFetch(rf); }catch(e2){ toast(e2.server ? e2.message : "削除される件数を確かめられませんでした","err"); return; }
+      retRenderState(pv); retShowPreview(pv, rf);
+      // いま settings.json を読めない: 保存は断られるので、削除の確認も出さずに止める（直してから保存してもらう）
+      if(pv.paused_kind==="unreadable"){ toast("settings.json を読み込めないため、保存できません（"+(pv.settings_error||pv.paused)+"）","err"); return; }
+      if(pv.would_delete>0 && !confirm("過去ログの保存を「"+retPolicyText(pv.proposed)+"」にすると、古い記事 "+arNum(pv.would_delete)+" 件を削除します"+
+          "（保存中 "+arNum(pv.count)+" 件 → "+arNum(pv.keep)+" 件）。\n削除した記事は元に戻せません。\n\nこの設定で保存しますか？")){
+        toast("保存を取り消しました（ほかの設定も保存していません）"); return;
+      }
+      payload.archive=retPayload(rf);
+      sb.textContent="保存中…";
+    }
     const d=await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
-    if(d.ok){ AI.config=d.ai; AI.proxy=d.proxy; AI.browser=d.browser; AI.pdfFont=d.pdf_font||""; AI.pdfFontFound=!!d.pdf_font_found; toast("AI・プロキシ設定を保存しました"); closeOverlays(); openAI(); }
+    if(d.ok){
+      AI.config=d.ai; AI.proxy=d.proxy; AI.browser=d.browser; AI.fulltext=d.fulltext; AI.pdfFont=d.pdf_font||""; AI.pdfFontFound=!!d.pdf_font_found;
+      AI.settingsError=d.settings_error||""; AI.saveError="";
+      if(d.archive_paused!==undefined){ AI.archivePaused=d.archive_paused||""; AI.archivePausedKind=d.archive_paused_kind||(AI.archivePaused?"invalid":""); RET.paused=AI.archivePaused; RET.kind=AI.archivePausedKind; }
+      if(d.archive){ AI.archive=d.archive; RET.cur=AI.archivePaused ? null : d.archive; }
+      const n=d.archive_deleted||0;
+      if(d.archive_error) toast("設定は保存しましたが、過去ログの古い記事の削除に失敗しました（次の取得時にもう一度試みます）","err");
+      else if(n>0) toast("設定を保存し、過去ログの古い記事 "+arNum(n)+" 件を削除しました");
+      else toast(payload.archive ? "設定を保存しました（過去ログの保存: "+retPolicyText(AI.archive)+"）" : "AI・プロキシ設定を保存しました");
+      if(payload.archive && AR.active) arSearch();   // 過去ログタブの件数・保存の設定を新しく
+      closeOverlays(); openAI();
+    }
     else toast(d.error||"保存に失敗しました","err");
-  }catch(e){ toast(e.server ? e.message : "保存に失敗しました","err"); }
+  }catch(e){ settingsRefused(e); toast(e.server ? e.message : "保存に失敗しました","err"); }
+  finally{ aiSaving=false; sb.disabled=!!AI.formFromError; sb.textContent="保存"; }
 });
 $("#aiClearKey").onclick=async ()=>{
+  if(AI.formFromError){ renderSetErr(); toast("settings.json を読み込めなかったため、いまは保存できません。直してから「読み込み直す」を押してください","err"); return; }
   try{
     const d=await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({ provider:$("#aiProvider").value, base_url:$("#aiBase").value.trim(),
                             model:$("#aiModel").value.trim(), clear_key:true, ...proxyPayload() })});
-    if(d.ok){ AI.config=d.ai; AI.proxy=d.proxy; AI.browser=d.browser; $("#aiKey").value=""; $("#aiKeyStatus").textContent=""; toast("APIキーを削除しました"); }
-  }catch(e){ toast(e.server ? e.message : "削除に失敗しました","err"); }
+    if(d.ok){
+      AI.config=d.ai; AI.proxy=d.proxy; AI.browser=d.browser; $("#aiKey").value=""; $("#aiKeyStatus").textContent="";
+      // 保存できた＝settings.json を読めた: 前の 409 の消えない警告を消し、保存の設定の欄もサーバーの今の状態で使えるように戻す
+      // （画面は開いたまま。保存の設定の欄を操作していなければ、読めた今の設定を入れ直す）
+      AI.settingsError=d.settings_error||""; AI.saveError="";
+      if(d.archive_paused!==undefined){ AI.archivePaused=d.archive_paused||""; AI.archivePausedKind=d.archive_paused_kind||(AI.archivePaused?"invalid":""); RET.paused=AI.archivePaused; RET.kind=AI.archivePausedKind; }
+      if(d.archive && !AI.archivePaused){
+        AI.archive=d.archive;
+        if(!RET.touched && !retSameCfg(d.archive, RET.cur)){ RET.cur=d.archive; retSetForm(d.archive); }
+      }
+      retSyncInputs(); renderSetErr(); retPreview();
+      toast("APIキーを削除しました");
+    }
+  }catch(e){ settingsRefused(e); toast(e.server ? e.message : "削除に失敗しました","err"); }
+};
+$("#setReload").onclick=async ()=>{   // settings.json を直した後: サーバーから読み直してフォームを入れ直す（入力していた変更は元に戻る）
+  const b=$("#setReload"); b.disabled=true;
+  try{
+    if(!await loadAiSettings()){ toast("設定を読み込めませんでした（サーバーに接続できません）","err"); return; }
+    fillAiForm();
+    if(AI.settingsError) toast("settings.json はまだ読み込めません（"+AI.settingsError+"）","err");
+    else toast("設定を読み込み直しました（入力していた変更は元に戻りました。必要ならもう一度入力して保存してください）");
+  }finally{ b.disabled=false; }
 };
 $("#aiBtn").onclick=()=>{ setAiContext(null); openAI(); };
 $("#aiSettingsBtn").onclick=openAiSettings;
@@ -2074,7 +3232,10 @@ $("#proxyTestBtn").onclick=async()=>{
                                           body:JSON.stringify(proxyPayload())});
     if(d.ok){
       out.className="hint ok";
-      out.textContent="✓ 接続OK — "+d.proxy_mode+" で "+d.items+"件取得（"+d.elapsed_ms+"ms）。保存して再取得してください。";
+      out.textContent="✓ 接続OK — "+d.proxy_mode+" で "+d.items+"件取得（"+d.elapsed_ms+"ms）。保存して再取得してください。"
+        +(d.parse_error ? (d.parse_error_kind==="internal"
+            ? "（このフィードは Prism 側の処理で読み込めませんでした: "+d.parse_error+"）"
+            : "（このフィードは配信元の書式が壊れています: "+d.parse_error+"）") : "");
     }else{
       const e=(d.error||"").toLowerCase(); let hint="";
       if(d.status===407||e.includes("407")) hint="プロキシ認証(407)。URLを http://ユーザー名:パスワード@proxy:8080 形式にするか、px/cntlm の利用をご検討ください。";
@@ -2095,15 +3256,16 @@ $("#proxyTestBtn").onclick=async()=>{
 const RS={results:[], sel:new Set(), srcSel:new Set(), msgs:[], busy:false, stats:null, filters:null, seq:0,
           job:null, jobTimer:null, reports:[],
           theme:null, newOnly:false, themes:[], fetchJob:null, fetchTimer:null,   // テーマ・本文取得
-          hist:null, histOpen:true, openDups:new Set(), expanded:[], dupGroups:0, fts:false, synLoaded:false,   // 分布・類似束・同義語
+          hist:null, histOpen:true, openDups:new Set(), expanded:[], dupGroups:0, fts:false, synLoaded:false, synFromError:"", synSaveErr:"",   // 分布・類似束・同義語（synFromError: 読めなかった理由）
           watchTrends:null, cands:null, candsAi:null, candsBusy:false,   // 企業・製品ウォッチ
-          exports:[]};   // 文書生成（Word/Excel/PowerPoint/PDF）
+          exports:[],   // 文書生成（Word/Excel/PowerPoint/PDF）
+          docs:[], docSel:new Set()};   // 外部資料（RAG）
 const RS_QUICK=["期間内の動きを時系列で要約","情報源ごとに要点を整理","共通するテーマと相違点を比較","重要トピック3つと根拠"];
 function openResearch(){
   openOverlay($("#researchModal"));
   fillRsCats();
   if(!RS.results.length) researchSearch();
-  renderRsLog(); renderRsQuick(); loadReports(); loadThemes(); loadSynonyms(); loadExports();
+  renderRsLog(); renderRsQuick(); loadReports(); loadThemes(); loadSynonyms(); loadExports(); loadDocs();
   setTimeout(()=>{ try{ $("#rsQ").focus(); }catch(e){} }, 90);
 }
 function fillRsCats(){
@@ -2117,7 +3279,8 @@ function rsFilterParams(){   // 現在のフィルタ → APIクエリ と 表�
   else if(per){ days=parseInt(per,10)||0; }
   const cat=$("#rsCat").value||"";
   const srcs=[...RS.srcSel];
-  const p=new URLSearchParams({q, limit:"200"});
+  const limit=parseInt($("#rsLimit").value,10)||500;
+  const p=new URLSearchParams({q, limit:String(limit)});
   if(days) p.set("days",String(days));
   if(from) p.set("from",from);
   if(to) p.set("to",to);
@@ -2127,7 +3290,7 @@ function rsFilterParams(){   // 現在のフィルタ → APIクエリ と 表�
   if(archived) p.set("archived", String(archived));
   const order=$("#rsOrder").value==="rel" ? "rel" : "new"; p.set("order",order);
   const dedup=$("#rsDedup").checked; p.set("dedup", dedup?"1":"0");
-  return {p, q, days, from, to, cat, srcs, archived, order, dedup};
+  return {p, q, days, from, to, cat, srcs, archived, order, dedup, limit};
 }
 function rsFiltersPayload(){   // AI/レポートへ渡す検索条件（表示名ベース）
   const f=RS.filters||rsFilterParams();
@@ -2151,8 +3314,10 @@ async function researchSearch(keepSel){
 }
 function syncRsCount(){
   const c=$("#rsCount");
-  c.textContent = RS.results.length+"件ヒット"+((RS.filters&&RS.filters.dedup&&RS.dupGroups)?"（類似 "+RS.dupGroups+"束）":"")+" ／ "+RS.sel.size+"件選択";
-  c.title = "会話は選択の上から最大30件、レポートは選択全件が対象"+((RS.filters&&RS.filters.dedup&&RS.dupGroups)?"。類似記事は代表1件にまとめて表示しています":"");
+  const capped = !!(RS.filters && RS.results.length >= (RS.filters.limit||500));
+  c.textContent = RS.results.length+"件ヒット"+(capped?"（表示上限）":"")+((RS.filters&&RS.filters.dedup&&RS.dupGroups)?"（類似 "+RS.dupGroups+"束）":"")+" ／ "+RS.sel.size+"件選択";
+  c.title = "会話は選択の上から最大30件、レポートは選択全件が対象（最大1000件）"+((RS.filters&&RS.filters.dedup&&RS.dupGroups)?"。類似記事は代表1件にまとめて表示しています":"")
+            +(capped?"。ヒットが表示上限に達しています。「表示: N件」で上限を増やせます":"");
   const rc=$("#rsRCount"); if(rc) rc.textContent=String(RS.sel.size);
 }
 function rsSrcName(id){ const s=(RS.stats&&RS.stats.sources||[]).find(x=>x.id===id); return s ? s.name : id; }
@@ -2197,7 +3362,11 @@ function renderRsList(){
     const cc=el("span",{class:"c",text:a.category||""}); cc.style.color=catColor(a.category);
     m.append(cc, el("span",{text:a.source||""}));
     const d=String(a.published||"").slice(0,10); if(d) m.append(el("span",{text:d}));
-    if(a.has_text) m.append(el("span",{class:"tx",text:"本文",title:"ページ本文を取得済み（レポート・会話の根拠に使えます）"}));
+    if(a.has_text){
+      const np=a.text_pages||1;
+      m.append(el("span",{class:"tx",text:np>1?"本文 "+np+"p":"本文",
+        title:(np>1?"続きページを含め "+np+" ページ分の本文を取得済み":"ページ本文を取得済み")+"（レポート・会話の根拠に使えます）"+(a.text_note?"\n"+a.text_note:"")}));
+    }
     if(dedup && a.dups && a.dups.length){   // 類似記事の束: 代表行に「+N 類似」ボタン（展開／折りたたみ）
       const open=RS.openDups.has(a.id);
       const b=el("button",{type:"button",class:"dupn",text:(open?"− ":"+ ")+a.dups.length+" 類似",title:"タイトルが似た記事（別媒体など）を"+(open?"折りたたむ":"表示する")});
@@ -2224,7 +3393,7 @@ function renderRsLog(){
     h.append(el("div",{text:"左で 期間・情報源・カテゴリ・キーワード を組み合わせて絞り込み、「レポート生成」で出典つきの調査レポートを作るか、下の欄で質問できます。"}));
     log.append(h);
   }
-  RS.msgs.forEach(m=>log.append(m.role==="report" ? reportEl(m.report) : m.role==="progress" ? progressEl() : m.role==="compare" ? compareEl(m.data) : m.role==="export" ? exportEl(m.data) : bubbleEl(m)));
+  RS.msgs.forEach(m=>log.append(m.role==="report" ? reportEl(m.report) : m.role==="progress" ? progressEl() : m.role==="compare" ? compareEl(m.data) : m.role==="export" ? exportEl(m.data) : (m.role==="error" && m.retry) ? retryEl(m) : bubbleEl(m)));
   if(RS.busy) log.append(el("div",{class:"bubble think", html:'<span class="dots"><span></span><span></span><span></span></span>'}));
   const sb=$("#rsSend"); if(sb) sb.disabled=RS.busy;
   log.scrollTop=log.scrollHeight;
@@ -2251,7 +3420,7 @@ async function sendRs(text){
   let res;
   try{
     const d=await api("/api/ai/chat",{method:"POST", headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({question:text, history, context:{kind:"research", items, filters}, fulltext})});
+      body:JSON.stringify({question:text, history, context:{kind:"research", items, filters}, fulltext, use_docs:!!($("#rsUseDocs")&&$("#rsUseDocs").checked)})});
     res = d.ok ? {role:"assistant", text:d.answer, reasoning:(d.reasoning||""), note:(d.page_note||"")}
                : {role:"error", text:"⚠ "+(d.error||"エラーが発生しました")};
   }catch(e){ res={role:"error", text:"⚠ "+(e.server?e.message:"通信に失敗しました")}; }
@@ -2268,7 +3437,15 @@ function defaultQuestion(){
 }
 function toggleReportForm(show){
   const f=$("#rsReportForm"); f.hidden=!show;
-  if(show){ const q=$("#rsRQ"); if(!q.value.trim()) q.value=defaultQuestion(); $("#rsRCount").textContent=String(RS.sel.size); q.focus(); q.select(); }
+  if(show){ const q=$("#rsRQ"); if(!q.value.trim()) q.value=defaultQuestion(); $("#rsRCount").textContent=String(RS.sel.size); q.focus(); q.select();
+            $("#rsRDocsN").textContent=String(RS.docs.length); $("#rsRDocs").disabled=!RS.docs.length; if(!RS.docs.length) $("#rsRDocs").checked=false; }
+}
+function retryEl(m){   // 失敗したレポート生成: 同じ条件で再実行（完了した部分要約・統合は再利用される）
+  const w=el("div",{}); w.append(bubbleEl(m));
+  const b=el("button",{type:"button",class:"btn sm",text:"同じ条件で再実行（完了した部分は再利用）",
+    title:"部分要約・統合など完了した段の結果はサーバーに保存されています。同じ条件で再実行すると、そこから先だけを行います"});
+  b.onclick=()=>{ const i=RS.msgs.indexOf(m); if(i>=0) RS.msgs.splice(i,1); runReport(Object.assign({}, m.retry, {reuse:true})); };
+  w.append(b); return w;
 }
 async function startReport(){
   if(RS.job && !["done","error"].includes(RS.job.state)){ toast("生成中のレポートがあります。完了をお待ちください","err"); return; }
@@ -2276,10 +3453,18 @@ async function startReport(){
   const ids=RS.results.filter(a=>RS.sel.has(a.id)).map(a=>a.id);
   if(!ids.length){ toast("記事を1件以上選択してください","err"); return; }
   const question=($("#rsRQ").value||"").trim(), template=$("#rsRT").value, fulltext=$("#rsRFull").checked;
+  const useDocs=$("#rsRDocs").checked && RS.docs.length>0;
+  const docs = useDocs ? (RS.docSel.size>=RS.docs.length ? "all" : [...RS.docSel]) : undefined;
+  if(useDocs && Array.isArray(docs) && !docs.length){ toast("「資料」で使う資料にチェックを入れてください","err"); return; }
+  const doc_k=parseInt($("#rsRDocK").value,10)||20;
+  runReport({ids, question, template, filters:rsFiltersPayload(), fulltext, docs, doc_k});
+}
+async function runReport(payload){
+  if(RS.job && !["done","error"].includes(RS.job.state)){ toast("生成中のレポートがあります。完了をお待ちください","err"); return; }
   try{
-    const d=await api("/api/research/report",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({ids, question, template, filters:rsFiltersPayload(), fulltext})});
-    RS.job={id:d.job_id, state:"queued", total:0, done:0, articles:ids.length, fulltext};
+    const d=await api("/api/research/report",{method:"POST",headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)});
+    const base=Object.assign({}, payload); delete base.reuse;   // 再実行ボタンは毎回 reuse を付け直す
+    RS.job={id:d.job_id, state:"queued", total:0, done:0, articles:payload.ids.length, fulltext:payload.fulltext, payload:base};
     toggleReportForm(false);
     RS.msgs.push({role:"progress"}); renderRsLog();
     pollReport();
@@ -2296,12 +3481,18 @@ async function pollReport(){
     if(s.state==="done"){
       const r=await api("/api/research/report?id="+encodeURIComponent(s.report_id));
       replaceProgress({role:"report", report:r.report}); loadReports(); loadThemes();   // ブリーフならテーマの「前回ブリーフ」も更新
+      const st=(r.report&&r.report.stats)||{};
+      if(st.fallback && RS.job.payload){   // 最終段だけ失敗: 同じ条件で再実行すると完了した段を再利用して最終段だけやり直せる
+        RS.msgs.push({role:"error", text:"⚠ 最終段の文章化に失敗したため、抽出した要点を掲載しました。", retry:RS.job.payload}); renderRsLog();
+      }
       if(RS.job.fulltext) researchSearch(true);   // 本文を取得したので一覧の「本文」バッジを反映（選択は維持）
       return;
     }
-    if(s.state==="error"){ replaceProgress({role:"error", text:"⚠ "+(s.kind==="export"?"文書の作成":"レポート生成")+"に失敗しました: "+(s.error||"")}); return; }
+    if(s.state==="error"){ replaceProgress({role:"error", text:"⚠ "+(s.kind==="export"?"文書の作成":"レポート生成")+"に失敗しました: "+(s.error||""),
+                                             retry: s.kind==="export" ? null : RS.job.payload}); return; }
     renderRsLog();
-  }catch(e){ replaceProgress({role:"error", text:"⚠ 進捗の取得に失敗しました（サーバーが再起動した可能性）。保存済みレポートを確認してください"}); return; }
+  }catch(e){ replaceProgress({role:"error", text:"⚠ 進捗の取得に失敗しました（サーバーが再起動した可能性）。保存済みレポートを確認し、無ければ同じ条件で再実行してください",
+                              retry: RS.job && RS.job.kind!=="export" ? RS.job.payload : null}); if(RS.job) RS.job.state="error"; return; }
   RS.jobTimer=setTimeout(pollReport, 1500);
 }
 function replaceProgress(msg){
@@ -2321,19 +3512,24 @@ function progressEl(){
     w.append(el("div",{class:"hint",text:"内容の構成・要約・数値抽出はローカルLLMが担当します。完了したファイルは「書き出し済み」からいつでも再ダウンロードできます。"}));
     return w;
   }
+  let eta="";   // 部分要約の残り時間の目安（経過時間 ÷ 完了チャンク × 残り）
+  if(j.state==="mapping" && j.done>0 && j.elapsed){ const remain=Math.round((j.elapsed/j.done)*((j.total||0)-j.done)); if(remain>0) eta="・残り約"+fmtDur(remain); }
+  const fails = (j.failed?"・失敗 "+j.failed:"")+(j.retries?"・再試行 "+j.retries:"")+(j.cached?"・再利用 "+j.cached:"")+(j.gen?"・"+j.gen:"");
   const stage = j.state==="queued" ? "準備中…"
               : j.state==="fetching" ? ("本文取得 "+(j.done||0)+" / "+(j.total||"?")+" 件"+(j.sub?"（"+j.sub+"）":""))
-              : j.state==="mapping" ? ("部分要約 "+(j.done||0)+" / "+(j.total||"?")+" チャンク")
-              : j.state==="reducing" ? "統合レポートを作成中…" : "処理中…";
+              : j.state==="retrieving" ? "外部資料から関連する抜粋を検索中…"
+              : j.state==="mapping" ? ("部分要約 "+(j.done||0)+" / "+(j.total||"?")+" チャンク"+eta+fails+(j.sub?"（"+j.sub+"）":""))
+              : j.state==="reducing" ? ((j.sub||"統合レポートを作成中")+(j.mtotal?"（"+(j.mdone||0)+"/"+j.mtotal+"）":"")+(j.gen?"・"+j.gen:"")+"…") : "処理中…";
   const mapLo = j.fulltext ? 35 : 5;   // 本文取得つきは前半 3〜33% を取得に充てる
   const pct = j.state==="fetching" ? (j.total ? Math.round(3+30*(j.done||0)/j.total) : 3)
-            : j.state==="mapping" && j.total ? Math.round(mapLo+(90-mapLo)*(j.done||0)/j.total)
-            : j.state==="reducing" ? 95 : 3;
-  w.append(el("div",{class:"rpt-progress__t",text:"レポート生成中（記事 "+(j.articles||0)+" 件）— "+stage}));
+            : j.state==="mapping" && j.total ? Math.round(mapLo+(88-mapLo)*(j.done||0)/j.total)
+            : j.state==="reducing" ? (j.mtotal ? Math.round(89+6*(j.mdone||0)/j.mtotal) : 96) : 3;
+  w.append(el("div",{class:"rpt-progress__t",text:"レポート生成中（記事 "+(j.articles||0)+" 件"+(j.docs?"＋外部資料":"")+"）— "+stage+(j.elapsed?"　経過 "+fmtDur(j.elapsed):"")}));
   const bar=el("div",{class:"pbar"}); const fill=el("i"); fill.style.width=pct+"%"; bar.append(fill); w.append(bar);
-  w.append(el("div",{class:"hint",text:"ローカルLLMでは数分かかることがあります。この画面を閉じても生成は続き、完了後は「保存済みレポート」から開けます。"}));
+  w.append(el("div",{class:"hint",text:"ローカルLLMでは数分〜数十分かかることがあります。失敗したチャンクは再試行→分割→スキップして先へ進みます。途中で止まっても、同じ条件で再実行すると完了した部分は再利用されます。時間がかかりすぎる／タイムアウトする場合は、設定の「接続先を診断」で文脈長と速さを確認してください。この画面を閉じても生成は続きます。"}));
   return w;
 }
+function fmtDur(s){ s=Math.max(0,Math.round(s)); return s<90 ? s+"秒" : s<5400 ? Math.round(s/60)+"分" : (Math.round(s/360)/10)+"時間"; }
 function mdInline(text, sources){   // 太字と出典番号 [n] だけを安全に DOM 化（textContent 描画）
   const byN=new Map((sources||[]).map(s=>[s.n,s]));
   const frag=document.createDocumentFragment(); const re=/(\*\*[^*]+\*\*|\[\d{1,3}\])/g; let last=0, m;
@@ -2391,7 +3587,17 @@ function reportEl(rep){
   const d=new Date((rep.created_at||0)*1000);
   const st=rep.stats||{}; const meta=[d.toLocaleString("ja-JP"), "記事 "+(rep.sources||[]).length+"件"];
   if(st.chunks) meta.push("部分要約 "+st.chunks+"回");
-  if(st.fulltext) meta.push("本文 "+st.fulltext+"件"+(st.fulltext_failed?"（取得不可 "+st.fulltext_failed+"）":""));
+  if(st.fulltext){ const ex=[]; if(st.fulltext_multi) ex.push("複数ページ "+st.fulltext_multi); if(st.fulltext_failed) ex.push("取得不可 "+st.fulltext_failed);
+    meta.push("本文 "+st.fulltext+"件"+(ex.length?"（"+ex.join("・")+"）":"")); }
+  if(st.docs) meta.push("外部資料の抜粋 "+st.docs+"件");
+  if(st.failed_chunks) meta.push("⚠ 部分要約の失敗 "+st.failed_chunks+"チャンク（内容に反映されず。再試行 "+(st.retries||0)+"回）");
+  if(st.truncated) meta.push("⚠ 文脈長の都合でメモを一部省略");
+  if(st.fallback) meta.push("⚠ 最終段の文章化に失敗（抽出した要点を掲載。同じ条件で再実行すると最終段だけやり直します）");
+  else if(st.sections_failed && st.sections_failed.length) meta.push("⚠ 生成できなかった見出し "+st.sections_failed.length+"件");
+  if(st.sectioned) meta.push("見出しごとに分けて生成"+(st.final_reason?"（"+st.final_reason+"）":""));
+  if(st.continued) meta.push("続きを書かせた回数 "+st.continued);
+  if(st.cached_steps) meta.push("再利用 "+st.cached_steps+"段");
+  if(st.elapsed_s) meta.push("所要 "+fmtDur(st.elapsed_s));
   if(rep.model) meta.push(rep.model);
   w.append(el("div",{class:"rpt__meta",text:meta.join(" ／ ")}));
   w.append(el("div",{class:"rpt__q",text:"問い: "+(rep.question||"")}));
@@ -2660,15 +3866,31 @@ function renderHist(){   // 日付×情報源の積み上げ棒（SVG を DOM AP
   if(h.other){ const sp=el("span"); sp.style.cursor="default"; const dot=el("i"); dot.style.background=HIST_COLORS[HIST_COLORS.length-1]; sp.append(dot, el("span",{text:"その他 "+h.other})); lg.append(sp); }
   if(sel) lg.append(el("span",{text:"（薄い棒は選択中の期間の外）"}));
 }
-async function loadSynonyms(){
-  if(RS.synLoaded) return;
-  try{ const d=await api("/api/research/synonyms"); $("#rsSynText").value=d.text||""; RS.fts=!!d.fts; RS.synLoaded=true;
-       $("#rsFtsNote").textContent = d.fts ? "全文検索: FTS5" : "FTS5 なし（部分一致で動作）"; }catch(e){}
+// synFromError: settings.json を読めなかったときに入れた辞書（既定。利用者の辞書ではない）なので保存させない。
+// synSaveErr: 保存を断られた（409）理由。どちらもパネルの中に消えない警告で出す
+async function loadSynonyms(force){
+  if(RS.synLoaded && !force) return;
+  try{ const d=await api("/api/research/synonyms"); $("#rsSynText").value=d.text||""; RS.fts=!!d.fts;
+       RS.synFromError=d.settings_error||""; RS.synSaveErr=""; RS.synLoaded=!RS.synFromError;   // 読めなかったら次に開いたときにも読み直す
+       $("#rsFtsNote").textContent = d.fts ? "全文検索: FTS5" : "FTS5 なし（部分一致で動作）"; renderSynErr(); }catch(e){}
+}
+function renderSynErr(){
+  const msg = RS.synFromError ? "⚠ settings.json を読み込めません（"+RS.synFromError+"）。表示しているのは既定の辞書で、あなたの辞書ではありません。"+
+                                "APIキーなどほかの設定を消さないよう、直すまで保存できません。settings.json をメモ帳などで直してから"+
+                                "（消したり別の場所へ移したりせずに）、「読み込み直す」を押してください。"
+            : RS.synSaveErr ? "⚠ "+RS.synSaveErr : "";
+  $("#rsSynErr").hidden=!msg; $("#rsSynErrText").textContent=msg;
+  $("#rsSynSave").disabled=!!RS.synFromError;
 }
 async function saveSynonyms(){
+  if(RS.synFromError){ renderSynErr(); toast("settings.json を読み込めなかったため、表示している辞書は既定です。直してから「読み込み直す」を押してください","err"); return; }
   try{ const d=await api("/api/research/synonyms",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:$("#rsSynText").value})});
+       RS.synSaveErr=""; renderSynErr();
        $("#rsSynText").value=d.text||""; toast("同義語辞書を保存しました（"+(d.groups||[]).length+"グループ）"); closeRsPanels(); researchSearch(true); }
-  catch(e){ toast("同義語辞書を保存できませんでした","err"); }
+  catch(e){
+    if(e.status===409 && e.data && e.data.settings_error){ RS.synSaveErr=e.message; renderSynErr(); }
+    toast(e.server ? e.message : "同義語辞書を保存できませんでした","err");
+  }
 }
 
 // ---- テーマ（保存した検索条件）・新着差分・ブリーフ ----
@@ -2853,14 +4075,71 @@ function renderWatchPanel(){
   p.append(box);
 }
 
+// ---- 外部資料（RAG）: 登録・一覧・削除 ----
+async function loadDocs(){
+  try{ const d=await api("/api/research/docs"); RS.docs=d.docs||[]; }catch(e){ RS.docs=RS.docs||[]; }
+  const ids=new Set(RS.docs.map(x=>x.id));
+  if(!RS.docSel.size || [...RS.docSel].some(id=>!ids.has(id))) RS.docSel=new Set(RS.docs.map(x=>x.id));   // 既定は全部
+  $("#rsDocN").textContent = RS.docs.length ? "("+RS.docs.length+") " : "";
+  const n=$("#rsRDocsN"); if(n) n.textContent=String(RS.docs.length);
+  const cb=$("#rsRDocs"); if(cb){ cb.disabled=!RS.docs.length; if(!RS.docs.length) cb.checked=false; }
+  renderDocPanel();
+}
+function renderDocPanel(){
+  const p=$("#rsDocPanel"); if(!p) return; p.innerHTML="";
+  const up=el("div",{class:"rs__themesave"});
+  const fi=el("input",{type:"file",id:"rsDocFile",multiple:true,accept:".pdf,.docx,.pptx,.xlsx,.txt,.md,.csv,.tsv,.json","aria-label":"資料ファイル"});
+  fi.onchange=()=>uploadDocs(fi.files);
+  up.append(fi); p.append(up);
+  p.append(el("div",{class:"hint",text:"PDF（pypdf が必要）/ Word / PowerPoint / Excel / テキスト（最大40MB・200件）。本文を抜粋に分けて索引化し、レポート・会話では問いに関連する抜粋だけを記事と同じ出典番号で渡します。",style:"padding:0 6px 6px; display:block"}));
+  const det=el("details"); det.append(el("summary",{class:"rs__srcrow",text:"テキストを貼り付けて登録…"}));
+  const pf=el("div",{class:"rs__docpaste"});
+  const nm=el("input",{type:"text",id:"rsDocPasteName",placeholder:"資料名（例: 社内メモ 2026-10）",maxLength:120});
+  const tx=el("textarea",{id:"rsDocPasteText",rows:5,placeholder:"本文を貼り付け"});
+  const bt=el("button",{type:"button",class:"btn sm",text:"登録",style:"align-self:flex-end"});
+  bt.onclick=async()=>{ if(!tx.value.trim()){ toast("本文を貼り付けてください","err"); return; }
+    try{ await api("/api/research/docs",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:nm.value.trim()||"貼り付けテキスト", text:tx.value})});
+         toast("資料を登録しました"); tx.value=""; nm.value=""; loadDocs(); }catch(e){ toast(e.server?e.message:"登録に失敗しました","err"); } };
+  pf.append(nm,tx,bt); det.append(pf); p.append(det);
+  const head=el("div",{class:"rs__srchead"}); head.append(el("span",{text:"登録済み（"+RS.docs.length+"）— チェックした資料をレポートで使います"}));
+  if(RS.docs.length){ const all=el("button",{type:"button",text: RS.docSel.size>=RS.docs.length ? "すべて外す" : "すべて選ぶ"});
+    all.onclick=(e)=>{ e.stopPropagation(); if(RS.docSel.size>=RS.docs.length) RS.docSel.clear(); else RS.docSel=new Set(RS.docs.map(x=>x.id)); renderDocPanel(); }; head.append(all); }
+  p.append(head);
+  if(!RS.docs.length){ p.append(el("div",{class:"rs__srcrow",text:"登録した資料はありません"})); return; }
+  RS.docs.forEach(d=>{
+    const row=el("label",{class:"rs__doc"});
+    const cb=el("input",{type:"checkbox"}); cb.checked=RS.docSel.has(d.id); cb.onchange=()=>{ if(cb.checked) RS.docSel.add(d.id); else RS.docSel.delete(d.id); };
+    row.append(cb, el("span",{class:"k",text:(d.kind||"").toUpperCase()}), el("span",{class:"n",text:d.name,title:d.name}),
+               el("span",{class:"c",text:d.chunks+"抜粋・"+Math.round((d.chars||0)/1000)+"千字・"+new Date(d.created_at*1000).toLocaleDateString("ja-JP")}));
+    const del=el("button",{type:"button",class:"lnkbtn danger",text:"削除"});
+    del.onclick=async(e)=>{ e.preventDefault(); e.stopPropagation(); if(!confirm("資料「"+d.name+"」を削除しますか？")) return;
+      try{ await api("/api/research/docs?id="+encodeURIComponent(d.id),{method:"DELETE"}); RS.docSel.delete(d.id); loadDocs(); toast("削除しました"); }catch(err){ toast("削除に失敗しました","err"); } };
+    row.append(del); p.append(row);
+  });
+}
+async function uploadDocs(files){
+  const list=[...(files||[])]; if(!list.length) return;
+  let okN=0;
+  for(const f of list){
+    try{
+      const r=await fetch("/api/research/docs/upload?name="+encodeURIComponent(f.name),{method:"POST",headers:{"Content-Type":"application/octet-stream"},body:f});
+      const d=await r.json().catch(()=>({}));
+      if(r.ok && d.ok){ okN++; toast("「"+f.name+"」を登録しました（"+d.doc.chunks+" 抜粋）"); }
+      else toast("「"+f.name+"」: "+(d.error||("HTTP "+r.status)),"err");
+    }catch(e){ toast("「"+f.name+"」のアップロードに失敗しました","err"); }
+  }
+  if(okN) loadDocs();
+}
+
 // ---- 本文一括取得（選択記事・キャッシュつき・進捗表示） ----
-async function startFetch(){
+async function startFetch(force){
+  force = force===true;
   if(RS.fetchJob && !["done","error"].includes(RS.fetchJob.state)){ toast("本文取得を実行中です","err"); return; }
-  const ids=RS.results.filter(a=>RS.sel.has(a.id)).map(a=>a.id);
+  const ids=(force && RS.fetchJob && RS.fetchJob.ids) ? RS.fetchJob.ids : RS.results.filter(a=>RS.sel.has(a.id)).map(a=>a.id);
   if(!ids.length){ toast("記事を1件以上選択してください","err"); return; }
   try{
-    const d=await api("/api/research/fulltext",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ids})});
-    RS.fetchJob={id:d.job_id, state:"queued", total:0, done:0, articles:d.articles};
+    const d=await api("/api/research/fulltext",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ids, force})});
+    RS.fetchJob={id:d.job_id, state:"queued", total:0, done:0, articles:d.articles, ids, force};
     renderFetchBar(); pollFetch();
   }catch(e){ toast(e.server?e.message:"本文取得を開始できませんでした","err"); }
 }
@@ -2872,10 +4151,12 @@ async function pollFetch(){
     renderFetchBar();
     if(s.state==="done"){
       const m=s.summary||{};
-      toast("本文取得: 成功 "+(m.ok||0)+"件"+(m.partial?"・一部 "+m.partial+"件":"")+(m.failed?"・取得不可 "+m.failed+"件":"")+(m.selenium?"（ブラウザ経由 "+m.selenium+"）":""),
+      toast("本文取得: 成功 "+(m.ok||0)+"件"+(m.partial?"・一部 "+m.partial+"件":"")+(m.failed?"・取得不可 "+m.failed+"件":"")+(m.selenium?"（ブラウザ経由 "+m.selenium+"）":"")
+            +(m.multi?"・続きページあり "+m.multi+"件":""),
             (m.failed && !m.ok) ? "err" : undefined);
       researchSearch(true);   // 「本文」バッジを反映（選択は維持）
-      setTimeout(()=>{ if(RS.fetchJob&&RS.fetchJob.state==="done") $("#rsFetchBar").hidden=true; }, 8000);
+      const jid=RS.fetchJob.id;
+      setTimeout(()=>{ if(RS.fetchJob&&RS.fetchJob.id===jid&&RS.fetchJob.state==="done") $("#rsFetchBar").hidden=true; }, m.cached?20000:8000);
       return;
     }
     if(s.state==="error"){ toast("本文取得に失敗しました: "+(s.error||""),"err"); return; }
@@ -2887,17 +4168,22 @@ function renderFetchBar(){
   if(!j){ b.hidden=true; return; }
   b.hidden=false; b.innerHTML="";
   const m=j.summary||{};
-  const txt = j.state==="done" ? ("本文取得 完了: 成功 "+(m.ok||0)+" ／ 一部 "+(m.partial||0)+" ／ 取得不可 "+(m.failed||0)+(m.cached?"（キャッシュ "+m.cached+"）":""))
+  const extra=[]; if(m.multi) extra.push("続きページあり "+m.multi+"件（+"+(m.pages_extra||0)+"p）"); if(m.ai_judged) extra.push("AI 判定 "+m.ai_judged+"件"); if(m.paywall) extra.push("続きが有料 "+m.paywall+"件");
+  const txt = j.state==="done" ? ("本文取得 完了: 成功 "+(m.ok||0)+" ／ 一部 "+(m.partial||0)+" ／ 取得不可 "+(m.failed||0)+(m.cached?"（キャッシュ "+m.cached+"）":"")+(extra.length?" ／ "+extra.join("・"):""))
             : j.state==="error" ? "本文取得 失敗"
             : ("本文取得中 "+(j.done||0)+" / "+(j.total||j.articles||"?")+" 件"+(j.sub?"（"+j.sub+"）":""));
   b.append(el("span",{text:txt}));
   const bar=el("div",{class:"pbar"}); const fill=el("i");
   fill.style.width = j.state==="done" ? "100%" : (j.total ? Math.round(100*(j.done||0)/j.total) : 3)+"%";
   bar.append(fill); b.append(bar);
+  if(j.state==="done" && m.cached){   // キャッシュを使った記事がある → 続きページ込みで取り直せる
+    const rb=el("button",{type:"button",class:"lnkbtn",id:"rsRefetch",text:"取り直す",title:"キャッシュを使わず、続きページも含めて本文を取り直します（以前に取得した本文の更新）"});
+    rb.onclick=()=>startFetch(true); b.append(rb);
+  }
 }
 function closeRsPanels(){
-  for(const id of ["#rsSrcPanel","#rsSavedPanel","#rsThemePanel","#rsSynPanel","#rsWatchPanel","#rsExpPanel"]){ const p=$(id); if(p && !p.hidden) p.hidden=true; }
-  for(const id of ["#rsSrcBtn","#rsThemeBtn","#rsSynBtn","#rsWatchBtn"]) $(id).setAttribute("aria-expanded","false");
+  for(const id of ["#rsSrcPanel","#rsSavedPanel","#rsThemePanel","#rsSynPanel","#rsWatchPanel","#rsExpPanel","#rsDocPanel"]){ const p=$(id); if(p && !p.hidden) p.hidden=true; }
+  for(const id of ["#rsSrcBtn","#rsThemeBtn","#rsSynBtn","#rsWatchBtn","#rsDocBtn"]) $(id).setAttribute("aria-expanded","false");
 }
 $("#researchBtn").onclick=openResearch;
 let rsT=null;
@@ -2923,6 +4209,9 @@ $("#rsExKind").addEventListener("change", syncExportForm);
 $("#rsExInst").addEventListener("keydown",(e)=>{ if(e.key==="Enter"){ e.preventDefault(); startExport(); } });
 $("#rsExpBtn").onclick=(e)=>{ e.stopPropagation(); const p=$("#rsExpPanel"); const open=p.hidden; closeRsPanels(); p.hidden=!open; if(!p.hidden) loadExports(); };
 $("#rsExpPanel").addEventListener("click",(e)=>e.stopPropagation());
+$("#rsDocBtn").onclick=(e)=>{ e.stopPropagation(); const p=$("#rsDocPanel"); const open=p.hidden; closeRsPanels(); p.hidden=!open;
+  $("#rsDocBtn").setAttribute("aria-expanded", String(!p.hidden)); if(!p.hidden) loadDocs(); };
+$("#rsDocPanel").addEventListener("click",(e)=>e.stopPropagation());
 $("#rsCmpCancel").onclick=()=>toggleCmpForm(false);
 $("#rsCmpStart").onclick=startCompare;
 $("#rsRCancel").onclick=()=>toggleReportForm(false);
@@ -2935,13 +4224,20 @@ $("#rsThemeBtn").onclick=(e)=>{ e.stopPropagation(); const p=$("#rsThemePanel");
   $("#rsThemeBtn").setAttribute("aria-expanded", String(!p.hidden));
   if(!p.hidden){ loadThemes(); const i=$("#rsThemeName"); if(i) setTimeout(()=>i.focus(),30); } };   // 開くたびに新着件数を更新
 $("#rsThemePanel").addEventListener("click",(e)=>e.stopPropagation());
-$("#rsFetchBtn").onclick=startFetch;
+$("#rsFetchBtn").onclick=()=>startFetch(false);
 $("#rsOrder").addEventListener("change", ()=>researchSearch(true));
+$("#rsLimit").addEventListener("change", ()=>researchSearch(true));
 $("#rsDedup").addEventListener("change", ()=>researchSearch(true));
 $("#rsSynBtn").onclick=(e)=>{ e.stopPropagation(); const p=$("#rsSynPanel"); const open=p.hidden; closeRsPanels(); p.hidden=!open;
-  $("#rsSynBtn").setAttribute("aria-expanded", String(!p.hidden)); if(!p.hidden) setTimeout(()=>$("#rsSynText").focus(),30); };
+  $("#rsSynBtn").setAttribute("aria-expanded", String(!p.hidden));
+  if(!p.hidden){ if(!RS.synLoaded) loadSynonyms(true); setTimeout(()=>$("#rsSynText").focus(),30); } };   // 前に読めなかったら読み直す
 $("#rsSynPanel").addEventListener("click",(e)=>e.stopPropagation());
 $("#rsSynSave").onclick=saveSynonyms;
+$("#rsSynReload").onclick=async ()=>{   // settings.json を直した後: 辞書を読み直す（入力していた変更は元に戻る）
+  await loadSynonyms(true);
+  if(RS.synFromError) toast("settings.json はまだ読み込めません（"+RS.synFromError+"）","err");
+  else toast("同義語辞書を読み込み直しました（入力していた変更は元に戻りました）");
+};
 $("#rsWatchBtn").onclick=(e)=>{ e.stopPropagation(); const p=$("#rsWatchPanel"); const open=p.hidden; closeRsPanels(); p.hidden=!open;
   $("#rsWatchBtn").setAttribute("aria-expanded", String(!p.hidden)); if(!p.hidden){ RS.cands=null; renderWatchPanel(); loadThemes(); loadWatchTrends(); loadCands(); } };
 $("#rsWatchPanel").addEventListener("click",(e)=>e.stopPropagation());
@@ -2956,10 +4252,19 @@ $("#q").addEventListener("keydown",(e)=>{ if(e.key==="Enter"){ e.preventDefault(
 // ============================================================ keyboard
 document.addEventListener("keydown",(e)=>{
   const ae=document.activeElement; const typing=!!ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName);
-  if(e.key==="Escape"){ if(overlayStack.length) closeTop(); else if($("#q").value){ $("#q").value=""; S.q=""; renderGrid(); renderStatus(); renderTrend(); } $("#q").blur(); return; }
+  if(e.key==="Escape"){
+    if(overlayStack.length) closeTop();
+    else if(AR.active){   // 過去ログ: 入力欄では既定動作（キーワードのクリア）かフォーカスを外すだけ、それ以外はフィードに戻る
+      if(typing){ if(!(ae.id==="arcQ" && ae.value)) ae.blur(); }   // （隠れたフィードの検索語はここでは消さない）
+      else exitArchive({focus:"#archiveBtn"});
+    }
+    else if($("#q").value){ $("#q").value=""; S.q=""; renderGrid(); renderStatus(); renderTrend(); }
+    $("#q").blur(); return;
+  }
   if(typing) return;
   if(e.ctrlKey||e.metaKey||e.altKey) return;   // ブラウザのショートカット(Ctrl+T等)と衝突させない
-  if(e.key==="/"){ e.preventDefault(); $("#q").focus(); }
+  if(e.key==="/"){ e.preventDefault(); if(AR.active){ $("#arcQ").focus(); $("#arcQ").select(); } else $("#q").focus(); }
+  else if(e.key==="h"||e.key==="H"){ e.preventDefault(); toggleArchive(); }
   else if(e.key==="f"||e.key==="F"){ e.preventDefault(); openSearchAll(); }
   else if(e.key==="r"||e.key==="R") doRefresh();
   else if(e.key==="t"||e.key==="T") $("#themeBtn").click();
@@ -2969,7 +4274,9 @@ document.addEventListener("keydown",(e)=>{
   else if(e.key==="v"||e.key==="V") openSourcePicker();
   else if(e.key==="a"||e.key==="A"){ setAiContext(null); openAI(); }
   else if(e.key==="?") openHelp();
-  else if(/^[1-9]$/.test(e.key)){ S.source=null; S.sourceName=""; const cats=["すべて",...S.categories,"保存済み"]; const c=cats[parseInt(e.key)-1]; if(c){ S.cat=c; store.set("cat",c); renderAll(); } }
+  else if(/^[1-9]$/.test(e.key)){ const cats=["すべて",...S.categories,"保存済み"]; const c=cats[parseInt(e.key)-1];
+    if(c && AR.active) exitArchive({silent:true});   // カテゴリを選んだらフィードに戻る
+    S.source=null; S.sourceName=""; if(c){ S.cat=c; store.set("cat",c); renderAll(); } }
 });
 
 // ============================================================ boot
@@ -2980,6 +4287,7 @@ document.addEventListener("keydown",(e)=>{
   if(!["すべて","保存済み",...ALL_CATS].includes(S.cat)) S.cat="すべて";
   $$(".modal,.drawer").forEach(n=>{ n.inert=true; });   // 非表示の overlay をタブ順/AT から外す
   renderGrid();                 // スケルトン即表示
+  if(isArchiveHash()){ const h=arParseHash(location.hash); enterArchive({filters:h.f, view:h.view, history:false}); }   // #archive?… で開いた／再読み込み
   loadAiSettings();
   loadArticles(false).then(()=>setAuto(S.auto)).catch(()=>setAuto(S.auto));
   // 相対時刻を反映するためステータスを定期更新（記事カードは再取得時に更新）

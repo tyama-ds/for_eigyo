@@ -4,10 +4,10 @@
   "path": "mycel/",
   "summary": "ローカルの Markdown フォルダを [[リンク]] でつなぐ Obsidian 風ノートアプリ。Word・PDF・画像などの資料も読み込み、ローカル LLM による質問（標準 RAG と選択式の GraphRAG、LLM リランク）・AI 取り込み・資料同士のつながり・人物・組織、文書・文献管理モード（文書限定の RAG と AI の気づき）に対応。",
   "status": "active",
-  "phase": "v0.6.4: グラフ上でのリンクの結合・削除（個人利用）",
+  "phase": "v0.6.7: 画像の貼り付け表示（分割モード）と外部 API の Responses API 対応（個人利用）",
   "progress": 87,
   "started": "2026-09-25",
-  "version": "0.6.4",
+  "version": "0.6.7",
   "ports": [
     8795
   ],
@@ -92,6 +92,11 @@
       "date": "2026-10-13"
     },
     {
+      "title": "外部 API の Responses API 対応と、画像の貼り付け即時表示（分割モード・読み込み範囲の自動移行）",
+      "state": "done",
+      "date": "2026-10-19"
+    },
+    {
       "title": "実際のノートでの試用とフィードバック反映",
       "state": "todo"
     },
@@ -117,6 +122,18 @@
     "外部 API を既定にすると要約・取り込みなど一括処理も社外に送られる（設定画面で警告、右下に常時表示）"
   ],
   "log": [
+    {
+      "date": "2026-10-19",
+      "summary": "画像を貼り付けても表示されない不具合を修正。原因は画像対応より前に保存した読み込み範囲（types に image が無い）で画像が索引に入らなかったこと → 後から増えた種類を自動で有効化（types_known）。索引に無い画像も表示を試みる。右上に「分割」モード（左で編集・右に即時表示）を追加し、閲覧モードでの貼り付け・ドロップにも対応"
+    },
+    {
+      "date": "2026-10-16",
+      "summary": "外部 API に Responses API（/responses）を追加。パラメータ名を変換（instructions / input・max_output_tokens・reasoning.effort・text.verbosity・store:false）、応答は output の output_text から取り出し、Chat Completions で「Responses API でしか使えない」と返されたモデルは自動で切り替え。Azure の Responses URL にも対応"
+    },
+    {
+      "date": "2026-10-16",
+      "summary": "gpt-5 系への対応を強化（推論トークンで空応答になったら上限を増やして再試行、system を受け付けないモデルは user に畳み込み、gpt-5 の verbosity、Azure の推論モデルは新しい api-version を自動使用、接続テストに送ったパラメータと自動調整の表示）"
+    },
     {
       "date": "2026-10-14",
       "summary": "グラフ上でリンクを結合・削除できるようにした（Shift＋ドラッグで結ぶ: [[リンク]]／つながり／人物の登場／文献の関係に自動で振り分け。線をクリックで種類と両端を表示して外す。元に戻すつき。文献の分解グラフも対応）"
@@ -171,5 +188,5 @@
       "ref": "#50"
     }
   ],
-  "updated": "2026-10-14"
+  "updated": "2026-10-19"
 }
