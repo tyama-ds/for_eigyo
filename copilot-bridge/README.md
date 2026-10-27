@@ -100,11 +100,15 @@ bridge が workbench の検証規則に合わせていること:
 Copilot の画面にモデル選択があれば、API の `model` 名で切り替えられる。`config.json` に表示名の対応を書く:
 
 ```json
-"models": {"gpt": "GPT-5", "opus": "Claude Opus", "sonnet": "Claude Sonnet"}
+"models": {"opus": "Opus5.5", "sonnet": "Sonnet5.5", "sonnet5": "Sonnet5", "gpt": "GPT-6",
+           "gpt-6.1": "GPT-6.1 Sol", "gpt-quick": "GPT-5.6 Sol Quick", "gpt-think": "GPT-5.6 Sol Think Deeper"}
 ```
 
-`/v1/models` にこれらの名前が並び、呼び出し元（workbench のプロファイルの「モデル名」）で選ぶ。会話を新しく作るときに
-画面で切り替える（`selectors.model_button` / `model_item`。実機の画面に合わせて調整。切り替えに失敗しても今のモデルで続ける）。
+右側は Copilot 画面の表示名そのまま（実機で確認した名前）。`/v1/models` に左側の名前が並び、呼び出し元
+（workbench のプロファイルの「モデル名」）で選ぶ。会話を新しく作るときに画面で切り替える。
+実機の DOM: ボタンは `aria-label="<今のモデル>、モデル セレクター"`、選択肢は `div[role=menuitem]`。
+ボタンの aria-label から今のモデルを読み、すでに目的のモデルなら何もしない。項目は完全一致 → 部分一致の順に探す
+（`Sonnet5` と `Sonnet5.5` を取り違えない）。切り替えに失敗しても今のモデルで続ける。
 
 ### モデルが詰まったときの自動切り替え
 

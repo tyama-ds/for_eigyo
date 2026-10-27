@@ -30,9 +30,11 @@ DEFAULT_SELECTORS = {
     "confirm_delete": "//*[@role='dialog' or @role='alertdialog']//button[contains(., '削除') or contains(., 'Delete')]",
     # 会話一覧が畳まれているときに開くボタン（任意）
     "history_button": "//button[contains(@aria-label,'ナビゲーション') or contains(@aria-label,'履歴') or contains(@aria-label,'チャット')]",
-    # モデル切り替え（未確認。models を設定したときだけ使う）: 選択ボタンと、ラベルを含む項目（{label} を置換）
-    "model_button": "//button[contains(@aria-label,'モデル') or contains(@aria-label,'Model') or contains(@aria-label,'model') or contains(@data-testid,'model')]",
-    "model_item": "//*[@role='menuitem' or @role='menuitemradio' or @role='option' or @role='radio'][contains(., '{label}')]",
+    # モデル切り替え（実機で確認済み）: ボタンの aria-label は「<今のモデル>、モデル セレクター」、選択肢は div[role=menuitem]。
+    # 項目はまず名前の完全一致で探し（Sonnet5 と Sonnet5.5 の取り違え防止）、無ければ部分一致
+    "model_button": "//button[contains(@aria-label,'モデル セレクター') or contains(@aria-label,'model selector')]",
+    "model_item": "//*[@role='menuitem' or @role='menuitemradio' or @role='option'][normalize-space(.)='{label}']",
+    "model_item_loose": "//*[@role='menuitem' or @role='menuitemradio' or @role='option'][contains(., '{label}')]",
 }
 
 # 回答にこれらが含まれていたら、その担当は制限や障害に当たったとみなす

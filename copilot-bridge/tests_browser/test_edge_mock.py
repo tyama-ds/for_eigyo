@@ -140,6 +140,12 @@ class EdgeMockTests(unittest.TestCase):
         w.new_chat(model="Claude Opus")
         self.assertEqual(w.driver.find_element(By.ID, "model").text, "Claude Opus")
         self.assertEqual(w.current_model, "Claude Opus")
+        self.assertEqual(w.current_model_label(), "Claude Opus")   # aria-label から今のモデルを読める
+        ok, _ = w.select_model("Sonnet5")                           # Sonnet5.5 ではなく完全一致の Sonnet5
+        self.assertTrue(ok)
+        self.assertEqual(w.driver.find_element(By.ID, "model").text, "Sonnet5")
+        ok, _ = w.select_model("Sonnet5")                           # すでに選択済みなら何もしない
+        self.assertTrue(ok)
         ok, why = w.select_model("No Such Model")
         self.assertFalse(ok)
 

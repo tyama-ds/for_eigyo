@@ -73,6 +73,10 @@
   ],
   "log": [
     {
+      "date": "2026-10-27",
+      "summary": "モデル切り替えを実機の DOM（ボタン aria-label「<今のモデル>、モデル セレクター」、選択肢 div[role=menuitem]）に合わせ、今のモデルの読み取り・完全一致優先（Sonnet5/Sonnet5.5）・選択済みなら省略に対応。config.example.json に実機のモデル名（Opus5.5 / Sonnet5.5 / Sonnet5 / GPT-6 / GPT-6.1 Sol / GPT-5.6 Sol Quick / Think Deeper）。probe models でメニューの選択肢と切り替え結果を確認できるようにした"
+    },
+    {
       "date": "2026-10-26",
       "summary": "Copilot 側のモデルが詰まる（その日の枠切れ等）対策: 生成が始まらない・終わらない・空・制限の文言を「詰まり」として検出し、model_fallbacks の順に別モデルへ切り替えて会話を作り直してやり直す。1 回目は短い冷却、model_exhaust_after 回続いたら日付が変わる（0 時）かサーバ再起動まで切り替えたまま。成功で回数リセット（/status の cooldown / stalls）"
     },
@@ -151,5 +155,5 @@
       "ref": "#65"
     }
   ],
-  "updated": "2026-10-26"
+  "updated": "2026-10-27"
 }
