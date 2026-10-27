@@ -292,24 +292,54 @@ class EdgeWorker(Worker):
                 raise
             return False, msg
 
+    def current_model_label(self) -> str:
+        """モデル選択ボタンの aria-label「<今のモデル>、モデル セレクター」から今のモデル名を読む（無ければ空）。"""
+        try:
+            self.driver.switch_to.default_content()
+            btn = self._find(self.sel.get("model_button", ""), 2.0) if self.sel.get("model_button") else None
+            if btn is None:
+                return ""
+            label = (btn.get_attribute("aria-label") or "").strip()
+            for sep in ("、", ",", "，"):
+                if sep in label:
+                    return label.split(sep, 1)[0].strip()
+            return label
+        except Exception:  # noqa: BLE001
+            return ""
+
     def select_model(self, label: str) -> tuple[bool, str]:
-        """画面のモデル切り替えで label を含む項目を選ぶ（selectors.model_button / model_item）。"""
+        """画面のモデル切り替えで label を選ぶ（selectors.model_button / model_item）。
+        すでにそのモデルなら何もしない。項目は完全一致 → 部分一致の順に探す。"""
         if not label:
             return True, ""
         try:
+            now = self.current_model_label()
+            if now and now == label:
+                self.current_model = label
+                return True, ""
             self.driver.switch_to.default_content()
             btn = self._find(self.sel.get("model_button", ""), 5.0) if self.sel.get("model_button") else None
             if btn is None:
                 return False, "モデル選択ボタン（selectors.model_button）が見つからない"
             btn.click()
             time.sleep(0.8)
-            item = self._find(self.sel.get("model_item", "").replace("{label}", label), 5.0)
+            item = None
+            for key in ("model_item", "model_item_loose"):
+                sel = self.sel.get(key, "")
+                if sel:
+                    item = self._find(sel.replace("{label}", label), 3.0)
+                if item is not None:
+                    break
             if item is None:
+                try:
+                    btn.click()   # メニューを閉じる
+                except Exception:  # noqa: BLE001
+                    pass
                 return False, f"モデル項目「{label}」（selectors.model_item）が見つからない"
             item.click()
             time.sleep(0.8)
             self.current_model = label
-            self._log(f"モデルを「{label}」に切り替えました")
+            self._log(f"モデルを「{now or '?'}」から「{label}」に切り替えました")
             return True, ""
         except Exception as e:  # noqa: BLE001
             msg = str(e).splitlines()[0] if str(e) else type(e).__name__

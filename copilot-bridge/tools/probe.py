@@ -6,6 +6,7 @@
   python tools/probe.py followup              # 同じ会話の続きで文脈が保たれるか
   python tools/probe.py parallel --windows 3  # 複数ウインドウ同時で取り違え・遅れが無いか
   python tools/probe.py cleanup               # 会話を 1 つ作って削除できるか（履歴の掃除の確認）
+  python tools/probe.py models                # モデル切り替え: 今のモデル・メニューの選択肢・各モデルへの切り替え結果
 
 --driver-path / --chat-url / --config は server.py と同じ。結果は JSON で標準出力に出す。
 """
@@ -247,6 +248,41 @@ def _common_options(for_sub: bool) -> argparse.ArgumentParser:
     return c
 
 
+def probe_models(cfg, a):
+    """モデル切り替えの確認: 今のモデル、メニューに並ぶ選択肢の名前、設定した各モデルへの切り替え結果。"""
+    from selenium.webdriver.common.by import By
+
+    (w,) = start_workers(cfg, 1)
+    out = {"current": "", "menu_items": [], "button_aria_label": "", "switch": {}}
+    try:
+        out["current"] = w.current_model_label()
+        btn = w._find(cfg.selectors.get("model_button", ""), 5.0)
+        if btn is None:
+            out["error"] = "モデル選択ボタン（selectors.model_button）が見つからない。画面のボタンの aria-label を教えてください"
+        else:
+            out["button_aria_label"] = btn.get_attribute("aria-label") or ""
+            btn.click()
+            time.sleep(1.0)
+            items = w.driver.find_elements(By.XPATH, "//*[@role='menuitem' or @role='menuitemradio' or @role='option']")
+            out["menu_items"] = [i.text.strip() for i in items if i.is_displayed() and i.text.strip()]
+            try:
+                btn.click()   # 閉じる
+            except Exception:  # noqa: BLE001
+                pass
+            time.sleep(0.5)
+            for key, label in (cfg.models or {}).items():
+                ok, why = w.select_model(label)
+                out["switch"][f"{key} → {label}"] = "OK" if ok else why
+                time.sleep(0.5)
+            out["current_after"] = w.current_model_label()
+        print(json.dumps(out, ensure_ascii=False, indent=1))
+        if out.get("error") or any(v != "OK" for v in out["switch"].values()):
+            print("menu_items に出た名前に合わせて config.json の models を直してください", file=sys.stderr)
+            input("画面を確認したら Enter で閉じます > ")
+    finally:
+        w.close()
+
+
 def main(argv=None):
     top, sub_common = _common_options(False), _common_options(True)
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -262,6 +298,7 @@ def main(argv=None):
     s = sub.add_parser("parallel", parents=[sub_common])
     s.add_argument("--windows", type=int, default=3)
     sub.add_parser("cleanup", parents=[sub_common])
+    sub.add_parser("models", parents=[sub_common])
     a = p.parse_args(argv)
     cfg = load_config(a.config, {"driver_path": a.driver_path, "chat_url": a.chat_url,
                                  "profile_mode": a.profile_mode, "input_mode": a.input_mode,
@@ -271,7 +308,8 @@ def main(argv=None):
     # （同じ --user-data-dir を 2 つ目の Edge が開くと "Chrome instance exited" で即終了する）
     cfg.profile_dir = str(cfg.resolved_profile_dir() / "probe")
     {"login": probe_login, "long": probe_long, "toolcall": probe_toolcall,
-     "followup": probe_followup, "parallel": probe_parallel, "cleanup": probe_cleanup}[a.cmd](cfg, a)
+     "followup": probe_followup, "parallel": probe_parallel, "cleanup": probe_cleanup,
+     "models": probe_models}[a.cmd](cfg, a)
 
 
 if __name__ == "__main__":

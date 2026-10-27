@@ -7,7 +7,19 @@
   "chat_url": "https://m365.cloud.microsoft/chat/?auth=2",
   "login_timeout_sec": 300,
   "reply_timeout_sec": 600,
-  "log_dir": "",
+  "log_dir": "logs",
+  "models": {
+    "opus": "Opus5.5",
+    "sonnet": "Sonnet5.5",
+    "sonnet5": "Sonnet5",
+    "gpt": "GPT-6",
+    "gpt-6.1": "GPT-6.1 Sol",
+    "gpt-quick": "GPT-5.6 Sol Quick",
+    "gpt-think": "GPT-5.6 Sol Think Deeper"
+  },
+  "model_fallbacks": ["opus", "gpt"],
+  "model_cooldown_sec": 600,
+  "model_exhaust_after": 2,
   "selectors": {
     "editor": "#m365-chat-editor-target-element",
     "stop_button": "button[aria-label='生成を停止する']",
