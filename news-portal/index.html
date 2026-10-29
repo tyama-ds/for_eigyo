@@ -4,7 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Prism — ニュースポータル</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cpath d='M24 6 L42 38 H6 Z' fill='none' stroke='%237c9cff' stroke-width='3' stroke-linejoin='round'/%3E%3Cpath d='M6 24 H22' stroke='%23e9edf7' stroke-width='3' stroke-linecap='round'/%3E%3Cpath d='M26 20 L44 12' stroke='%23ff8f5e' stroke-width='3' stroke-linecap='round'/%3E%3Cpath d='M26 24 L44 24' stroke='%23f5b83b' stroke-width='3' stroke-linecap='round'/%3E%3Cpath d='M26 28 L44 36' stroke='%2346d17f' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="icon" href="/favicon.ico" sizes="16x16 24x24 32x32 48x48 64x64 128x128 256x256">
+<link rel="icon" href="/icons/prism-small.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icons/prism-180.png">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#090b11">
 <script>
 /* 初回描画前にテーマを確定してフラッシュ（ダーク→ライトの一瞬の切替）を防ぐ */
 try{var _t=localStorage.getItem("prism.theme");_t=_t?JSON.parse(_t):(matchMedia("(prefers-color-scheme: light)").matches?"light":"dark");document.documentElement.setAttribute("data-theme",_t);}catch(e){}
@@ -1554,6 +1558,8 @@ let autoTimer=null;
 function applyTheme(t){
   document.documentElement.setAttribute("data-theme", t);
   store.set("theme", t);
+  const tc = document.querySelector('meta[name="theme-color"]');   // アプリとしてインストールしたときのタイトルバーの色
+  if(tc) tc.content = t==="dark" ? "#090b11" : "#eaeef6";
   $("#themeIcon").innerHTML = t==="dark"
     ? '<circle cx="12" cy="12" r="4.5"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M19.1 4.9l-1.8 1.8M6.7 17.3l-1.8 1.8" stroke-linecap="round"/>'
     : '<path d="M20 14.5A8 8 0 0 1 9.5 4 7 7 0 1 0 20 14.5z"/>';
