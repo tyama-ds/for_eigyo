@@ -13,6 +13,25 @@ python news-portal/server.py --demo          # ネットワークを使わずデ
 App Portal（`launcher/`）にも `Prism ニュースポータル` として登録済み。
 カードをクリックすれば起動 → ブラウザで開く。
 
+### アイコン（`icons/`）
+
+アプリのアイコンを同梱している。ブラウザのタブ・ブックマークには自動で使われる（`/favicon.ico`・`/icons/…`）。
+
+| ファイル | 用途 |
+|----------|------|
+| `icons/prism.ico` | Windows のショートカット用（16・24・32・48・64・128・256 px を1つに収録） |
+| `icons/prism.svg` | 元の図柄（拡大縮小しても劣化しない。資料・ポータルに貼る用） |
+| `icons/prism-small.svg` | 16〜48 px 向けに線を太くした図柄（ブラウザのタブ） |
+| `icons/prism-16.png`〜`prism-512.png` | 16・32・48・192・512 px の PNG |
+| `icons/prism-180.png`・`prism-maskable-*.png`・`prism-maskable.svg` | スマートフォンのホーム画面・「アプリとしてインストール」用（四隅まで塗った版） |
+| `icons/manifest.webmanifest` | 「アプリとしてインストール」用の設定（`/manifest.webmanifest`） |
+
+- **アプリとしてインストール**: Edge / Chrome で Prism を開き、アドレスバー右の「アプリをインストール」
+  （または メニュー → アプリ → このサイトをアプリとしてインストール）。Prism のアイコンで、独立したウィンドウで開ける
+  （サーバー `server.py` は別に起動しておく）。
+- **デスクトップのショートカット**: ショートカットを作り（例: リンク先 `http://127.0.0.1:8780`、または起動用の
+  `.bat`）、プロパティ →「アイコンの変更」→ `news-portal\icons\prism.ico` を選ぶ。
+
 ## できること
 
 - **束ねて分光** — 複数フィードを 1 グリッドに集約。カテゴリ（総合 / テクノロジー /
@@ -457,6 +476,7 @@ UI の「情報源」から自由に 追加 / 無効化 / 削除でき、URL も
 | メソッド | パス | 内容 |
 |----------|------|------|
 | GET | `/api/articles` | 記事一覧 + 情報源の状態 + カテゴリ + 更新時刻（`?refresh=1` で強制再取得） |
+| GET | `/favicon.ico`・`/icons/<名前>`・`/manifest.webmanifest` | 同梱のアイコン（`icons/` 直下の .ico / .svg / .png）と「アプリとしてインストール」用のマニフェスト |
 | GET | `/api/sources` | 登録フィードの一覧と状態（`sources_problem`: feeds.json を読み込めない理由 `{kind, message, line, col, excerpt, path}`・正常なら null、`sources_note[]`: 文字コード・読み飛ばし件数などの注記。`/api/articles` にも同じ項目） |
 | POST | `/api/sources` | フィード追加（JSON: `name`, `url`, `category`） |
 | POST | `/api/sources/toggle?id=<id>` | 有効 / 無効の切替（1件） |
@@ -521,6 +541,7 @@ UI の「情報源」から自由に 追加 / 無効化 / 削除でき、URL も
 news-portal/
 ├── server.py    # サーバ本体（標準ライブラリのみ・RSS/Atom取得と解析・API・AI中継）
 ├── index.html   # ポータルUI（単一ファイル・inline CSS/JS・生成SVG・AIパネル・演出込み）
+├── icons/       # アプリのアイコン（.ico / .svg / .png）と「アプリとしてインストール」用のマニフェスト
 ├── feeds.json   # フィード登録（初回起動時に自動生成 / UIからも編集される）
 ├── settings.json# AI API 設定・過去ログの保存の設定（"archive"）など（初回保存時に生成・.gitignore 対象・APIキーを含む）
 └── README.md

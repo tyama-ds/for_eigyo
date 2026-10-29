@@ -54,6 +54,7 @@ import docgen   # 標準ライブラリだけの Word/Excel/PowerPoint/PDF 生�
 BASE = Path(__file__).resolve().parent
 FEEDS_FILE = BASE / "feeds.json"
 UI_FILE = BASE / "index.html"
+ICONS_DIR = BASE / "icons"   # アプリのアイコン（タブ・ショートカット・「アプリとしてインストール」用）とマニフェスト
 ARCHIVE_DB = BASE / "archive.sqlite3"   # 過去記事の自動保存先（SQLite・条件検索用の索引つき）
 ARCHIVE_FILE = BASE / "archive.jsonl"   # 旧形式。存在すれば初回起動時に SQLite へ取り込む
 
@@ -7012,6 +7013,11 @@ def source_status(sources: list[dict], errors: dict[str, str]) -> list[dict]:
     } for s in sources]
 
 
+_ICON_NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,63}\.(svg|png|ico|webmanifest)")
+_ICON_TYPES = {"svg": "image/svg+xml", "png": "image/png", "ico": "image/x-icon",
+               "webmanifest": "application/manifest+json; charset=utf-8"}
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_a):  # 静かに
         pass
@@ -7056,6 +7062,25 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Disposition", "attachment; filename*=UTF-8''" + quote(filename))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _send_icon(self, path: str) -> None:
+        """icons/ のアイコンとマニフェストを返す。/favicon.ico → prism.ico、/manifest.webmanifest → manifest.webmanifest。
+        icons/ 直下の決まった形の名前（英小文字・数字・ハイフン＋拡張子）だけを返す（../ などで外のファイルを読ませない）。"""
+        name = {"/favicon.ico": "prism.ico", "/manifest.webmanifest": "manifest.webmanifest"}.get(path, path[len("/icons/"):])
+        m = _ICON_NAME_RE.fullmatch(name)
+        try:
+            data = (ICONS_DIR / name).read_bytes() if m else None
+        except OSError:
+            data = None
+        if data is None:
+            self._json({"error": "not found"}, 404)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", _ICON_TYPES[m.group(1)])
+        self.send_header("Cache-Control", "max-age=86400")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
@@ -7114,6 +7139,10 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+            return
+
+        if u.path in ("/favicon.ico", "/manifest.webmanifest") or u.path.startswith("/icons/"):
+            self._send_icon(u.path)
             return
 
         if u.path == "/api/articles":

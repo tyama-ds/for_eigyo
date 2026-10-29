@@ -1,0 +1,18 @@
+{
+  "name": "Prism ニュースポータル",
+  "short_name": "Prism",
+  "description": "RSS/Atom をカテゴリ別に束ねて読むニュース収集ポータル（過去ログ・リサーチつき）",
+  "lang": "ja",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#090b11",
+  "theme_color": "#090b11",
+  "icons": [
+    {"src": "/icons/prism.svg", "sizes": "any", "type": "image/svg+xml"},
+    {"src": "/icons/prism-192.png", "sizes": "192x192", "type": "image/png"},
+    {"src": "/icons/prism-512.png", "sizes": "512x512", "type": "image/png"},
+    {"src": "/icons/prism-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable"},
+    {"src": "/icons/prism-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+  ]
+}

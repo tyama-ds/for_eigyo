@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <title>Prism ニュースポータル</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1d2538"/><stop offset="1" stop-color="#090b11"/>
+    </linearGradient>
+    <linearGradient id="pg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7c9cff"/><stop offset="1" stop-color="#57e3c9"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#bg)"/>
+  <g transform="translate(83 98) scale(7)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M24 5 L43 39 H5 Z" stroke="url(#pg)" stroke-width="2.8"/>
+    <path d="M4 24 H20" stroke="#e9edf7" stroke-width="2.6"/>
+    <path d="M28 20 L45 12" stroke="#ff8f5e" stroke-width="2.6"/>
+    <path d="M28 23 L46 20" stroke="#f5b83b" stroke-width="2.6"/>
+    <path d="M28 26 L45 28" stroke="#46d17f" stroke-width="2.6"/>
+    <path d="M27 29 L44 36" stroke="#7c9cff" stroke-width="2.6"/>
+  </g>
+</svg>
