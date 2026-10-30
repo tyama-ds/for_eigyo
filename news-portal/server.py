@@ -2166,9 +2166,18 @@ def _query_tokens(q_norm: str) -> list[str]:
 
 
 def quote_term(w: str) -> str:
-    """空白を含む語を検索構文用に引用符で囲む（企業名の別表記などを | で並べるとき用）。"""
-    w = str(w or "").strip().replace('"', "")
-    return f'"{w}"' if " " in w else w
+    """空白を含む語を検索構文用に引用符で囲む（企業名の別表記などを | で並べるとき用）。
+    全角スペース（U+3000・日本語入力の既定）やノーブレークスペース（U+00A0・貼り付け）も、検索（parse_query）は NFKC で
+    半角の空白にして語を分けるので、先に NFKC にしてから空白の有無を見る（以前は半角の空白だけを見ていたため、
+    「Nippon　Steel」が引用されずに AND になり、別表記の OR が崩れていた）。全角の ＂ も NFKC で " になるので、その後で除く。"""
+    w = unicodedata.normalize("NFKC", str(w or "")).strip().replace('"', "")
+    return f'"{w}"' if re.search(r"\s", w) else w
+
+
+def _pick(v, choices, default):
+    """選択肢（dict・tuple）にある文字列ならそれ、無ければ default。JSON の配列・オブジェクトは dict の in で
+    TypeError（unhashable）になるため、文字列かを先に確かめる。"""
+    return v if isinstance(v, str) and v in choices else default
 
 
 def parse_query(q: str, syn: dict | None = None) -> dict:
@@ -4518,7 +4527,8 @@ def ai_chat(payload: dict) -> dict:
             C = _chat_context(cfg, kind, question, items, f, history,
                               kind == "research" and bool(payload.get("fulltext")),
                               kind == "research" and bool(payload.get("use_docs")))
-            o = _step_opts(_budgets(cfg), C["system"], C["prompt"], OUT_CHAT)
+            B = _budgets(cfg)
+            o = _chat_fit_opts(_step_opts(B, C["system"], C["prompt"], OUT_CHAT), B, C["system"], C["prompt"])
             o["_stats"] = {}
             answer, reasoning = _split_reasoning(call_ai(cfg, C["system"], C["prompt"], [], opts=o))
             answer, bad = _chat_answer_post(answer, C["n_src"], o["_stats"])
@@ -4700,9 +4710,12 @@ def _report_fetch(ids: list) -> list[dict]:
 
 
 def _article_line(n: int, a: dict, text: str | None = None, per: int = 0, tag: str = "",
-                  terms: list[str] | None = None) -> str:
+                  terms: list[str] | None = None, cat: bool = False) -> str:
+    """記事1件の行「[n] 日付 媒体｜見出し」＋要約（＋本文抜粋）。cat=True なら媒体の後ろにカテゴリを添える
+    「[n] 日付 媒体（カテゴリ）｜見出し」（会話用。「カテゴリ別に要約」に答えられるように。｜の後ろは見出しのまま）。"""
     d = str(a.get("published") or "")[:10]
-    s = f"[{n}] {tag}{d} {a.get('source') or ''}｜{a.get('title') or ''}"
+    c = _one_line(a.get("category"), 20) if cat else ""
+    s = f"[{n}] {tag}{d} {a.get('source') or ''}{'（' + c + '）' if c else ''}｜{a.get('title') or ''}"
     if a.get("summary"):
         s += "\n   " + str(a["summary"])[:300]
     if text and per > 0:   # 本文一括取得で得たページ本文（抜粋）。長い本文は冒頭＋問い・検索語を含む文を拾う
@@ -5052,6 +5065,26 @@ def _step_opts(B: dict, system: str, prompt: str, out: int, on_progress=None) ->
     room = B["ctx"] - _est_tokens(system) - _est_tokens(prompt)
     return {"no_think": B.get("no_think", False), "ans_cap": int(out * 2.5), "ctx_left": max(out, room),
             "think_cap": max(300, room - out), "wall_s": B.get("wall") or 0, "on_progress": on_progress}
+
+
+CHAT_MIN_ANSWER = 200   # 会話の回答に最低限空ける量（トークン）。文脈長がこれも残せないほど小さければ答えない
+
+
+def _chat_fit_opts(o: dict, B: dict, system: str, prompt: str) -> dict:
+    """会話の1回の上限（_step_opts の結果）を文脈長に収める。_step_opts は回答に OUT_CHAT を必ず空けるが、文脈長が
+    ごく小さい（1024 など）と、最上位の1件だけを渡した指示文でも 入力＋OUT_CHAT が文脈長を超える。そのときは思考＋回答の
+    上限を文脈長の残りまで下げる（短い回答になる）。残りが CHAT_MIN_ANSWER 未満なら RuntimeError（文脈長が小さすぎる）。"""
+    if not B.get("ctx"):
+        return o
+    room = B["ctx"] - _est_tokens(system) - _est_tokens(prompt)
+    if room >= OUT_CHAT:
+        return o
+    if room < CHAT_MIN_ANSWER:
+        raise RuntimeError(f"文脈長（{B['ctx']}）が小さすぎて回答できません。設定の文脈長を大きくしてください")
+    o["ctx_left"] = room
+    o["think_cap"] = max(1, room - CHAT_MIN_ANSWER)
+    o["ans_cap"] = min(int(o.get("ans_cap") or room * 3), int(room * 2.5))
+    return o
 
 
 def _llm_cache_key(cfg: dict, system: str, prompt: str, opts: dict | None = None) -> str:
@@ -5549,7 +5582,7 @@ def start_report_job(body: dict) -> dict:
         return {"ok": False, "error": "記事を1件以上選択してください"}
     filters = body.get("filters") if isinstance(body.get("filters"), dict) else {}
     question = (str(body.get("question") or "")).strip()[:300] or _default_question(filters)
-    template = body.get("template") if body.get("template") in REPORT_TEMPLATES else ("compare" if groups else "overview")
+    template = _pick(body.get("template"), REPORT_TEMPLATES, "compare" if groups else "overview")
     fulltext = bool(body.get("fulltext"))
     theme_id = body.get("theme_id") if isinstance(body.get("theme_id"), str) and _ID_RE.fullmatch(body["theme_id"]) else None
     title = str(body.get("title") or "")[:80]
@@ -5778,7 +5811,7 @@ def _chat_context(cfg: dict, kind: str, question: str, items: list, filters: dic
     def add_lines(limit: int) -> None:
         nonlocal used_a, nxt
         while nxt < len(ranked):
-            line = _article_line(len(entries) + 1, ranked[nxt])
+            line = _article_line(len(entries) + 1, ranked[nxt], cat=True)
             c = msr(line)
             if used_a + c > limit:
                 return
@@ -5809,7 +5842,7 @@ def _chat_context(cfg: dict, kind: str, question: str, items: list, filters: dic
         add_lines(a_room)
     if not entries and ranked:   # 文脈長がごく小さい: 最上位の1件だけは見出しで渡す
         a = ranked[0]
-        entries.append([a, f"[1] {str(a.get('published') or '')[:10]} {a.get('source') or ''}｜{str(a.get('title') or '')[:120]}", ""])
+        entries.append([a, _article_line(1, {**a, "title": str(a.get("title") or "")[:120], "summary": ""}, cat=True), ""])
     n = len(entries)
 
     parts = []
@@ -5892,9 +5925,14 @@ def _run_ask(job_id: str, question: str, items: list, filters: dict, history: li
                     gen_t[0] = time.time()
                     upd(gen=f"生成中 {ans}字" + (f"（思考 {think}字）" if think else ""))
             o = _step_opts(B, C["system"], C["prompt"], OUT_CHAT, live)
-            o["_stats"] = {}
-            answer, err = _llm_retry(cfg, C["system"], C["prompt"], None if local else 1500, upd, "回答を", opts=o, tries=2)
-            answer, bad = _chat_answer_post(answer, C["n_src"], o["_stats"]) if answer else ("", 0)
+            try:
+                o = _chat_fit_opts(o, B, C["system"], C["prompt"])
+            except RuntimeError as e:   # 文脈長が小さすぎる: 生成AIは呼ばず、記事の一覧で答える（下の fallback）
+                o, err = None, str(e)
+            if o is not None:
+                o["_stats"] = {}
+                answer, err = _llm_retry(cfg, C["system"], C["prompt"], None if local else 1500, upd, "回答を", opts=o, tries=2)
+                answer, bad = _chat_answer_post(answer, C["n_src"], o["_stats"]) if answer else ("", 0)
         fallback = not answer
         note = C["note"]
         if fallback:
@@ -6229,12 +6267,25 @@ def _clean_filters(f) -> dict:
     except (TypeError, ValueError):
         days = 0
     fr, to = f.get("from"), f.get("to")
-    return {"q": str(f.get("q") or "").strip()[:100],
-            "sources": [s.strip()[:60] for s in srcs if isinstance(s, str) and s.strip()][:50],
-            "category": f.get("category") if f.get("category") in CATEGORIES else "",
-            "days": days,
-            "from": fr.strip()[:10] if isinstance(fr, str) and _parse_day(fr) is not None else "",
-            "to": to.strip()[:10] if isinstance(to, str) and _parse_day(to) is not None else ""}
+    out = {"q": str(f.get("q") or "").strip()[:100],
+           "sources": [s.strip()[:60] for s in srcs if isinstance(s, str) and s.strip()][:50],
+           "category": _pick(f.get("category"), CATEGORIES, ""),
+           "days": days,
+           "from": fr.strip()[:10] if isinstance(fr, str) and _parse_day(fr) is not None else "",
+           "to": to.strip()[:10] if isinstance(to, str) and _parse_day(to) is not None else ""}
+    period = _pick(f.get("period"), CAL_PERIODS, "")
+    if period:   # 暦の期間（今月など）: 保存した日付ではなく、使うときの期間で数える（_theme_row）
+        out["period"] = period
+    return out
+
+
+def _theme_filters_now(f: dict) -> dict:
+    """テーマの条件の期間を今の時点に合わせる: 暦の期間（period=今月など）なら from/to をいまの期間に置き換える
+    （保存した日付のままだと、翌月からは新着が入らなくなる）。それ以外はそのまま。"""
+    if not isinstance(f, dict) or not isinstance(f.get("period"), str) or f["period"] not in CAL_PERIODS:
+        return f
+    A, _ = calendar_windows(f["period"])
+    return {**f, "from": A["from"], "to": A["to"], "days": 0}
 
 
 def _source_names_conn(conn, ids: list[str]) -> list[str]:
@@ -6259,13 +6310,15 @@ def _source_names(ids: list[str]) -> list[str]:
 
 
 def _theme_row(conn, r, syn: dict | None = None) -> dict:
-    f = json.loads(r["filters_json"] or "{}")
+    f = _theme_filters_now(json.loads(r["filters_json"] or "{}"))   # 件数・比較・書き出しは、いまの期間（暦の期間のとき）で
     t = {"id": r["id"], "name": r["name"], "filters": f,
          "created_at": r["created_at"], "updated_at": r["updated_at"],
          "last_seen_at": r["last_seen_at"], "last_brief_at": r["last_brief_at"],
          "last_brief_id": r["last_brief_id"],
          "kind": (r["kind"] if "kind" in r.keys() else None) or "theme"}
     t["conds"] = _filters_conds({**f, "sources": _source_names_conn(conn, f.get("sources") or [])})
+    if isinstance(f.get("period"), str) and f["period"] in CAL_PERIOD_NAMES:   # 「期間: 今月（2026-10-01〜2026-10-30）」
+        t["conds"] = [f"期間: {CAL_PERIOD_NAMES[f['period']]}（{c[4:]}）" if c.startswith("期間: ") else c for c in t["conds"]]
     since, until = _filters_window(f)
     parsed = parse_query(f.get("q", ""), syn)
     where, params, _ = _search_where(f.get("q", ""), f.get("sources"), since, until,
@@ -6403,7 +6456,7 @@ def start_theme_brief(body: dict) -> dict:
                           since if use_last else None)
     if not arts:
         return {"ok": False, "error": f"{period}に該当する記事がありません"}
-    template = body.get("template") if body.get("template") in REPORT_TEMPLATES else "brief"
+    template = _pick(body.get("template"), REPORT_TEMPLATES, "brief")
     filters = {"theme": t["name"], "q": f.get("q", ""), "sources": _source_names(f.get("sources") or []),
                "category": f.get("category", ""), "hit": len(arts),
                **({"from": d0, "to": d1, "days": 0} if use_last else {"days": days, "from": "", "to": ""})}
@@ -6511,19 +6564,46 @@ def _watch_alias_terms(name: str) -> list[str]:
     return out
 
 
+def _alias_ai_parse(txt: str) -> list | None:
+    """別表記の応答を JSON 配列として読む。読めなければ None（_parse_json_array は読めないときも [] を返すので、
+    本当に [] と答えたのか区別する）。"""
+    v = _parse_json_array(txt)
+    if v:
+        return v
+    t = re.sub(r"```(?:json)?", "", txt or "")
+    return [] if re.search(r"\[\s*\]", t) else None
+
+
 def _alias_ai(cfg: dict, name: str) -> list[str]:
     """生成AIに会社名の略称・旧称・英語表記などを JSON 配列で挙げさせる（会社名ごとにキャッシュし、2回目からは呼ばない。
-    再試行しない）。実在しない表記は呼び出し側で「過去ログに1件以上」で落とす。接続できない等は RuntimeError。"""
+    再試行しない）。実在しない表記は呼び出し側で「過去ログに1件以上」で落とす。接続できない等は RuntimeError。
+    - キャッシュに残すのは JSON 配列として読めた応答だけ（文章での回答・途中で切れた配列を残すと、同じ会社名では
+      以後ずっと生成AIを呼ばずに何も見つからなくなる）。読めない応答は RuntimeError（画面に ⚠ を出す）
+    - 保存してあった応答が読めない（以前の版で残ったもの）なら1回だけ作り直す（compose_mail と同じ）
+    - 画面が応答を待つ同期の呼び出しなので、最初の文字までの待ち時間も ALIAS_AI_WALL_S 秒まで（設定のタイムアウトは
+      既定 600 秒。単一スロットのローカルLLMがレポートを生成中だと、ボタンが10分回り続けていた）"""
     local = cfg["provider"] == "local"
+    c2 = dict(cfg)
+    c2["timeout_s"] = min(float(cfg.get("timeout_s") or AI_TIMEOUT_LOCAL), float(ALIAS_AI_WALL_S))
+    system = _json_system(local)
     prompt = (f"企業・組織「{name}」の略称・旧称・英語表記・よく使われる別表記を JSON 配列（文字列のみ・最大8件）で出力してください。"
               "グループ会社・子会社・取引先の名前は含めない。知らなければ [] を出力。")
-    txt, err = _llm_retry(cfg, _json_system(local), prompt, 400,
-                          opts={**_quick_opts(cfg), "ans_cap": 1200, "wall_s": ALIAS_AI_WALL_S},
-                          cache=True, reuse=True, tries=1)
+    opts = {**_quick_opts(cfg), "ans_cap": 1200, "wall_s": ALIAS_AI_WALL_S}
+    st: dict = {}
+    txt, err = _llm_retry(c2, system, prompt, 400, opts=opts, reuse=True, stats=st, tries=1)
+    arr = None if err else _alias_ai_parse(txt)
+    if arr is None and not err and st.get("cached"):   # 保存してあった応答が読めない: 1回だけ作り直す
+        st = {}
+        txt, err = _llm_retry(c2, system, prompt, 400, opts=opts, stats=st, tries=1)
+        arr = None if err else _alias_ai_parse(txt)
     if err:
         raise RuntimeError(err)
+    if arr is None:
+        raise RuntimeError("応答を JSON 配列として読み取れませんでした")
+    if not st.get("cached"):   # 読めた応答だけを保存する（キーは _llm_retry と同じ。timeout_s はキーに含まれない）
+        _llm_cache_put(_llm_cache_key(c2, system, prompt, opts), txt)
     out: list[str] = []
-    for x in _parse_json_array(txt):
+    for x in arr:
         if isinstance(x, str) and _alias_term_ok(x.strip()):
             out.append(x.strip())
         if len(out) >= ALIAS_AI_MAX:
@@ -6534,9 +6614,10 @@ def _alias_ai(cfg: dict, name: str) -> list[str]:
 def resolve_aliases(name, days=None, ai: bool = False) -> dict:
     """POST /api/research/aliases: 会社名の別表記の候補と、それぞれの過去ログの件数。
     候補の順: 会社名 → 同義語辞書の同じ行 → ウォッチの条件の語 → （ai=True で生成AIが使えるとき）生成AIの候補。
-    _norm で重複を除き最大 10 件。件数は検索と同じ数え方（同義語辞書の展開も効く）。生成AIの候補で 0 件のものは
+    _norm で重複を除き最大 10 件。件数はその語だけの件数（同義語辞書では展開しない。辞書に会社名の行があると、展開した
+    件数ではどのチップも同じ数になり、チェックを外しても同じ行の語がまた入ってしまうため）。生成AIの候補で 0 件のものは
     excluded_zero に回して使わない（実在しない表記を混ぜない）。q = 会社名（0件でも必ず）＋件数のある別表記を | でつないだもの。
-    total は q の件数、dedup_total は類似記事（別媒体の同じニュース）を代表1件に数えた件数（先頭 1000 件で数える。
+    total は q の件数（展開しない）、dedup_total は類似記事（別媒体の同じニュース）を代表1件に数えた件数（先頭 1000 件で数える。
     超えたら dedup_partial）。生成AIに接続できないときも、同義語とウォッチの候補で答える（llm_used=False・ai_error）。"""
     name = _alias_name(name)
     days = _days_arg(days, None, 1, 3650)
@@ -6569,7 +6650,7 @@ def resolve_aliases(name, days=None, ai: bool = False) -> dict:
     aliases: list[dict] = []
     excluded: list[str] = []
     for w, frm in cands:
-        n = archive_count(quote_term(w), None, since)
+        n = archive_count(quote_term(w), None, since, parsed=parse_query(quote_term(w), {}))
         if frm == "ai" and n <= 0:
             excluded.append(w)
             continue
@@ -6583,8 +6664,9 @@ def resolve_aliases(name, days=None, ai: bool = False) -> dict:
             continue
         q_terms.append(a["term"])
     q = "|".join(quote_term(t) for t in q_terms)
-    total = archive_count(q, None, since)
-    rows = archive_search(q, ALIAS_SCAN, None, since)
+    pq = parse_query(q, {})   # チェックした語だけで数える（同義語辞書で展開しない）
+    total = archive_count(q, None, since, parsed=pq)
+    rows = archive_search(q, ALIAS_SCAN, None, since, parsed=pq)
     group_duplicates(rows)
     out = {"ok": True, "name": name, "days": days, "aliases": aliases, "excluded_zero": excluded, "q": q,
            "total": total, "dedup_total": sum(1 for r in rows if not r.get("dup_of")), "dedup_partial": total > ALIAS_SCAN,
@@ -6622,7 +6704,10 @@ def start_account_brief(body: dict) -> dict:
         q = resolve_aliases(name, days)["q"]
     terms = _query_surface_terms(q)
     since = time.time() - days * 86400
-    rows = archive_search(q, ALIAS_SCAN, None, since, order="rel" if _fts_ok else "new")
+    # 別表記のチップから作った条件（OR の1グループだけ）は、チェックした語だけで集める（同義語辞書で展開すると、外した語が
+    # 同じ辞書の行からまた入る）。ウォッチの AND 条件などはこれまでどおり展開する（ウォッチの検索結果と揃える）
+    pq = parse_query(q, {}) if _single_group_terms(q) else None
+    rows = archive_search(q, ALIAS_SCAN, None, since, order="rel" if _fts_ok else "new", parsed=pq)
     group_duplicates(rows)   # 別媒体の同じニュースは代表1件だけ
     heads = [r for r in rows if not r.get("dup_of")]
     ids = [a["id"] for a in rank_for_question(heads, terms)[:ACCOUNT_MAX_ARTICLES]]
@@ -6979,11 +7064,11 @@ def _change_args(body) -> dict:
     """POST /api/research/change(/report) の本文を検証する（不正なら ValueError）。情報源は id、カテゴリは完全一致。"""
     body = body if isinstance(body, dict) else {}
     period = body.get("period")
-    if period not in CAL_PERIODS:
+    if not isinstance(period, str) or period not in CAL_PERIODS:
         raise ValueError("期間（period）は 今週・先週・今月・先月・今四半期・前四半期"
                          "（this_week / last_week / this_month / last_month / this_quarter / last_quarter）のいずれかを指定してください")
     base = body.get("base") or "prev"
-    if base not in CHANGE_BASES:
+    if not isinstance(base, str) or base not in CHANGE_BASES:   # 配列・オブジェクトは in で TypeError（500）になるので先に弾く
         raise ValueError("比べる期間（base）は prev（前の期間）か year_ago（前年同期）を指定してください")
     q = body.get("q").strip() if isinstance(body.get("q"), str) else ""
     if len(q) > CHANGE_Q_MAX:
@@ -7567,6 +7652,10 @@ SLIDES_MAX = 20
 OUT_SUMMARY, OUT_SLIDES, OUT_MAIL = 600, 1500, 600
 FIT_MARGIN = 200               # 見積もりの誤差に空けておく量（トークン）
 FIT_MAX_CHARS = 12000          # レポート本文の上限（文字。クラウドは常にここまで、ローカルも文脈長が大きくてもここまで）
+FIT_MIN_ROOM = 400             # レポート本文に空けられる量がこれ未満で本文が入りきらないなら、生成AIに渡さない（トークン）
+# 文脈長が小さすぎるとき（_fit_tokens が None）の注記。空の【レポート】を渡すと、生成AIは出典番号だけを見て内容を作ってしまう
+FIT_TOO_SMALL = "文脈長が小さすぎてレポートを生成AIに渡せないため"
+FIT_TOO_SMALL_HINT = "（設定の文脈長を大きくすると、生成AIで作れます）"
 # 社内共有メールの下書き
 MAIL_TONES = {"boss": "上長への報告", "team": "チームへの共有"}
 MAIL_LENGTHS = {"short": ("短め: 要点3〜4件", 4), "normal": ("標準: 要点5〜6件", 6)}
@@ -7576,12 +7665,36 @@ MAIL_NEED_REPORT = "メール下書きは保存済みレポート（会話の回
 _EXPORT_UNFINISHED = ("レポートの最終段（文章化）が完了していないため、文書にできません。リサーチでレポートを生成し直し"
                       "（失敗した直後なら「同じ条件で再実行」）、完成したレポートから書き出してください")
 _CTRL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")   # 制御文字（改行・タブを含む）。件名に入れるとヘッダーを書き換えられる
+_SURROGATE_RE = re.compile(r"[\ud800-\udfff]")   # 対になっていないサロゲート（UTF-8 に符号化できない）
+# 生成AIが書いた文（件名・冒頭の要約・要点・結び）に入った URL・メールアドレス。メールで URL を載せるのは Python が組み立てる
+# 出典の欄だけにする（記事に仕込まれた指示に従った生成AIが、出典と見分けのつかないリンクを社内メールに混ぜるのを防ぐ）。
+# 日本語は URL の後に空白を置かないことが多いので、URL に使える ASCII の文字だけを対象にする（[n] や後ろの日本語は残す）。
+# 対象: scheme://（http・https・ftp・file・smb など全部）、// の無いスキーム（file:・mailto:・javascript: など。「EBITDA:120億円」は
+# 消さないよう名前を決めて）、www.、UNC（\\host\share。Outlook はリンクにし、開くと Windows の資格情報が相手に送られる）、
+# //host/share、ドメイン＋パスまたはポート（evil.example/login・host:8080）、IPv4＋パス、3つ以上のラベルのドメイン
+# （intranet-login.evil.example）。2つのラベルだけの語（Node.js・Amazon.com・ASP.NET・report.pdf）はパスが無ければ残す
+_MAIL_URL_CH = r"A-Za-z0-9\-._~:/?#@!$&'*+,;=%"
+_MAIL_URL_RE = re.compile(
+    r"(?<![A-Za-z0-9+.\-])[A-Za-z][A-Za-z0-9+.\-]{0,30}://[" + _MAIL_URL_CH + r"\\]*"
+    r"|(?<![A-Za-z0-9+.\-])(?:file|mailto|tel|sms|sips?|callto|javascript|vbscript|data|onenote|outlook|notes|news|nntp"
+    r"|ms-[A-Za-z0-9\-]+):[" + _MAIL_URL_CH + r"\\]+"
+    r"|www\.[" + _MAIL_URL_CH + r"]+"
+    r"|\\\\[A-Za-z0-9\-._~%$]+(?:\\[" + _MAIL_URL_CH + r"$]*)*"
+    r"|(?<![A-Za-z0-9\-._@/])//[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)+[" + _MAIL_URL_CH + r"]*"
+    r"|(?<![A-Za-z0-9\-._@])(?:[A-Za-z0-9][A-Za-z0-9\-]*\.)+[A-Za-z]{2,24}(?=/|:\d)[" + _MAIL_URL_CH + r"]*"
+    r"|(?<![A-Za-z0-9\-._@])\d{1,3}(?:\.\d{1,3}){3}(?=/|:\d)[" + _MAIL_URL_CH + r"]*"
+    r"|(?<![A-Za-z0-9\-._@])[A-Za-z0-9][A-Za-z0-9\-]*\.(?:[A-Za-z0-9][A-Za-z0-9\-]+\.)+[A-Za-z]{2,24}(?![A-Za-z0-9\-])",
+    re.I)
+_MAIL_ADDR_RE = re.compile(r"(?<![A-Za-z0-9._%+\-])[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)+")   # 語の途中から始めない（長い英数字の行で遅くならない）
+_MAIL_HEADERISH_RE = re.compile(r"(?<![A-Za-z0-9])[A-Za-z][A-Za-z0-9\-]{0,30}:(?!//)")   # 「Reply-To:」「Bcc:」のようなヘッダー風の語
 
 
-def _fit_tokens(cfg: dict, text: str, out: int, *fixed: str) -> str:
+def _fit_tokens(cfg: dict, text: str, out: int, *fixed: str) -> str | None:
     """LLM に渡す本文（レポートの Markdown など）を文脈長に収める。
     - ローカルLLM: 固定の部分（システム文・指示文など。fixed）と合わせて、入力＋回答（out）＋思考 ≤ 文脈長 − FIT_MARGIN に
       なるよう行の境目で切る（1行目だけで超えるときはその行を文字で切る）。大きな文脈長でも FIT_MAX_CHARS 字まで
+    - 本文が入りきらず、空けられる量が FIT_MIN_ROOM 未満なら None（呼び出し側は生成AIを使わずに作る。以前は空の本文を
+      渡していたため、文脈長 2048 のスライドなどで、生成AIが出典番号だけを見て作った要点がそのまま残っていた）
     - クラウド: FIT_MAX_CHARS 字まで
     見積もりは予算と同じ物差し（_est_tokens。日本語は1文字≒1トークン）。"""
     t = (text or "")[:FIT_MAX_CHARS]
@@ -7591,6 +7704,8 @@ def _fit_tokens(cfg: dict, text: str, out: int, *fixed: str) -> str:
     room = B["ctx"] - FIT_MARGIN - int(out) - int(B.get("think") or 0) - sum(_est_tokens(x) for x in fixed)
     if _est_tokens(t) <= room:
         return t
+    if room < FIT_MIN_ROOM:
+        return None
     kept: list[str] = []
     cjk = other = 0
     for line in t.split("\n"):
@@ -7694,7 +7809,10 @@ def compose_summary(cfg: dict, rep: dict, instructions: str) -> dict:
             "{\"summary\": [\"1文（60字以内）。末尾に出典番号 [n]\", ...（3〜5件）], \"keywords\": [\"キーワード\", ...（5件以内）]}"
             + (f"\n想定読者・体裁の指示: {instructions}" if instructions else ""))
     # ローカルLLMは文脈長に収まる分だけ渡す（以前は一律 6000 字。文脈長 4096 では入力だけで文脈からはみ出していた）
-    prompt = "【レポート】\n" + _fit_tokens(cfg, rep["markdown"], OUT_SUMMARY, system, "【レポート】\n" + tail) + tail
+    body = _fit_tokens(cfg, rep["markdown"], OUT_SUMMARY, system, "【レポート】\n" + tail)
+    if body is None:   # 文脈長が小さすぎる: サマリーは付けない（注記を書き出しの結果に出す）
+        return {"note": f"⚠ {FIT_TOO_SMALL}、エグゼクティブサマリーは付けていません{FIT_TOO_SMALL_HINT}"}
+    prompt = "【レポート】\n" + body + tail
     try:
         txt, _ = _split_reasoning(call_ai(cfg, system, prompt, [], max_tokens=1200, opts=_quick_opts(cfg)))
     except Exception:
@@ -7706,8 +7824,10 @@ def compose_summary(cfg: dict, rep: dict, instructions: str) -> dict:
     return {"summary": summ, "keywords": kws}
 
 
-def compose_slides(cfg: dict, rep: dict, instructions: str, n_slides: int) -> list[dict]:
-    """レポートからスライド構成（見出し・箇条書き・発表者ノート）を LLM で作る。表紙・出典は Python 側で付ける。"""
+def compose_slides(cfg: dict, rep: dict, instructions: str, n_slides: int, info: dict | None = None) -> list[dict]:
+    """レポートからスライド構成（見出し・箇条書き・発表者ノート）を LLM で作る。表紙・出典は Python 側で付ける。
+    文脈長が小さすぎてレポートを渡せないときは LLM を呼ばずに []（build_export_pptx がレポートの要点からスライドを作る）。
+    そのときは info["note"] に注記を入れる。"""
     local = cfg["provider"] == "local"
     n = len(rep.get("sources") or [])
     n_slides = max(2, min(int(n_slides or SLIDES_DEFAULT), SLIDES_MAX))
@@ -7718,7 +7838,12 @@ def compose_slides(cfg: dict, rep: dict, instructions: str, n_slides: int) -> li
             "\"notes\": \"発表者ノート（2〜3文）\"} の形。\n"
             "1枚目は全体像（要点）、最後は示唆・次に注目すべき点にする。表紙と出典一覧はこちらで付けるので含めない。レポートに無い事実を加えない。"
             + (f"\n想定読者・体裁の指示: {instructions}" if instructions else ""))
-    prompt = "【レポート】\n" + _fit_tokens(cfg, rep["markdown"], OUT_SLIDES, system, "【レポート】\n" + tail) + tail
+    body = _fit_tokens(cfg, rep["markdown"], OUT_SLIDES, system, "【レポート】\n" + tail)
+    if body is None:
+        if info is not None:
+            info["note"] = f"⚠ {FIT_TOO_SMALL}、スライドはレポートの要点から作りました{FIT_TOO_SMALL_HINT}"
+        return []
+    prompt = "【レポート】\n" + body + tail
     try:
         txt, _ = _split_reasoning(call_ai(cfg, system, prompt, [], max_tokens=3000, opts=_quick_opts(cfg)))
     except Exception:
@@ -7743,20 +7868,30 @@ def _one_line(s, limit: int = 300) -> str:
     return _WS_RE.sub(" ", _CTRL_RE.sub(" ", str(s or ""))).strip()[:limit]
 
 
+def _mail_strip_links(s) -> str:
+    """URL・メールアドレスを「（URL省略）」「（アドレス省略）」に置き換える（メールの URL は出典の欄だけ。_MAIL_URL_RE を参照）。"""
+    return _MAIL_ADDR_RE.sub("（アドレス省略）", _MAIL_URL_RE.sub("（URL省略）", str(s or "")))
+
+
 def _mail_line(s, limit: int) -> str:
-    """1行に整えて limit 字に収める（Markdown の装飾と行頭の箇条書きの記号は外す。切るときも末尾の [n] は残す）。"""
-    s = _one_line(_md_plain(str(s or "")), 2000)
+    """1行に整えて limit 字に収める（Markdown の装飾と行頭の箇条書きの記号は外す。切るときも末尾の [n] は残す）。
+    URL・メールアドレスは切る前に除く（生成AIの文にもレポートの本文から作るときにも効く）。"""
+    s = _one_line(_mail_strip_links(_md_plain(str(s or ""))), 2000)
     s = re.sub(r"^(?:[-*+]\s+|[・●■□◆▪]\s*|\d{1,2}[.)．]\s+)", "", s).strip()
     if len(s) <= limit:
         return s
     cites = " ".join(list(dict.fromkeys(m.group(0) for m in _CITE_RE.finditer(s)))[:3])
-    core = _CITE_RE.sub("", s).strip()
+    core = _mail_strip_links(_CITE_RE.sub("", s)).strip()   # 出典番号を外すと URL がつながる（https[2]://…）ので、外した後にもう一度除く
     return core[:max(10, limit - len(cites) - 2)].rstrip() + "…" + (" " + cites if cites else "")
 
 
 def _mail_subject(s) -> str:
-    """件名: 制御文字（CR・LF・TAB など）は空白にしてまとめ、出典番号は外し、MAIL_SUBJECT_MAX 字まで（ヘッダーの差し込みを防ぐ）。"""
-    return _WS_RE.sub(" ", _CITE_RE.sub("", _CTRL_RE.sub(" ", str(s or "")))).strip()[:MAIL_SUBJECT_MAX].strip()
+    """件名: 制御文字（CR・LF・TAB など）は空白にしてまとめ、出典番号は外し、MAIL_SUBJECT_MAX 字まで（ヘッダーの差し込みを防ぐ）。
+    URL・メールアドレスは除き（_mail_strip_links）、対になっていないサロゲート（LLM の JSON の \\udcff など）も除く
+    （UTF-8 に符号化できず .eml を作れないため）。"""
+    s = _SURROGATE_RE.sub("", _CTRL_RE.sub(" ", str(s or "")))
+    # 出典番号を先に外してから URL を除く（逆の順では「https[1]://evil…」が外した後に URL になって残っていた）
+    return _WS_RE.sub(" ", _mail_strip_links(_CITE_RE.sub("", s))).strip()[:MAIL_SUBJECT_MAX].strip()
 
 
 def _has_cite(s: str, n: int) -> bool:
@@ -7779,7 +7914,12 @@ def _mail_from_json(obj: dict, rep: dict, tone: str, max_b: int) -> dict | None:
     if not bullets:
         return None
     lead = [x for x in (_mail_line(_strip_bad_cites(s, n)[0], 120) for s in strs(obj.get("lead"))) if _has_cite(x, n)]
-    closing = _mail_line(_CITE_RE.sub("", str(obj.get("closing") or "")), 80)
+    closing = _CITE_RE.sub("", str(obj.get("closing") or ""))
+    # 結びは出典番号も要らない自由な文なので、URL・UNC・メールアドレス・ドメイン・ヘッダー風の語（Reply-To: など）があれば決まり文句にする
+    if (_MAIL_URL_RE.search(closing) or _MAIL_ADDR_RE.search(closing) or "@" in closing or _MAIL_HEADERISH_RE.search(closing)
+            or re.search(r"[A-Za-z0-9\-]+\.[A-Za-z]{2,}/", closing) or "\\\\" in closing):
+        closing = ""
+    closing = _mail_line(closing, 80)
     return {"subject": _mail_subject(obj.get("subject")) or _mail_subject(rep.get("title")) or "共有",
             "lead": lead[:3], "bullets": bullets[:max_b], "closing": closing or MAIL_CLOSING[tone]}
 
@@ -7847,8 +7987,8 @@ def compose_mail(cfg: dict | None, rep: dict, tone: str = "boss", length: str = 
     - 出典番号は Python で確かめる（範囲外は除き、有効な [n] の無い要点・要約は捨てる）
     - 生成AIが未設定（cfg=None）・失敗・JSON が読めない・要点が残らないときは _mail_fallback（fallback=True）
     戻り値 {subject, lead, bullets, closing, fallback, reason}（reason: 生成AIを使わなかった理由）"""
-    tone = tone if tone in MAIL_TONES else "boss"
-    length = length if length in MAIL_LENGTHS else "short"
+    tone = _pick(tone, MAIL_TONES, "boss")
+    length = _pick(length, MAIL_LENGTHS, "short")
     max_b = MAIL_LENGTHS[length][1]
     reason = "生成AIが未設定のため"
     if cfg is not None:
@@ -7861,7 +8001,10 @@ def compose_mail(cfg: dict | None, rep: dict, tone: str = "boss", length: str = 
                 "\"bullets\": [\"要点（1文80字以内。末尾に出典番号 [n]）\", …], \"closing\": \"結び（1文）\"}。"
                 "レポートに無い事実を加えない。社内向けの丁寧語で書く。"
                 + (f"\n想定読者・体裁の指示: {instructions}" if instructions else ""))
-        prompt = head + _fit_tokens(cfg, rep.get("markdown") or "", OUT_MAIL, system, head + tail) + tail
+        body = _fit_tokens(cfg, rep.get("markdown") or "", OUT_MAIL, system, head + tail)
+        if body is None:   # 文脈長が小さすぎる: 生成AIを使わずにレポートの本文から作る
+            return {**_mail_fallback(rep, tone, max_b), "fallback": True, "reason": FIT_TOO_SMALL}
+        prompt = head + body + tail
         opts = {**_quick_opts(cfg), **_step_opts(_budgets(cfg), system, prompt, OUT_MAIL)}
         st: dict = {}
         txt, err = _llm_retry(cfg, system, prompt, 1200, opts=opts, cache=True, reuse=True, stats=st)
@@ -7887,7 +8030,7 @@ def build_mail_text(rep: dict, parts: dict) -> tuple[str, list[int]]:
     """メール本文（プレーンテキスト）と、本文で引用した出典番号（昇順）を返す。
     あいさつ（Python）→ 冒頭の要約 → ■ 要点 → 結び → 区切り線 → 出典（引用した番号だけ。[n] 媒体 日付 タイトル＋URL）→ 署名。
     番号→出典はレポートに保存した出典の控え（引き直さない）。"""
-    tone = parts.get("tone") if parts.get("tone") in MAIL_TONES else "boss"
+    tone = _pick(parts.get("tone"), MAIL_TONES, "boss")
     srcs = [s for s in (rep.get("sources") or []) if isinstance(s, dict) and isinstance(s.get("n"), int)]
     by_n = {s["n"]: s for s in srcs}
     n = len(rep.get("sources") or [])
@@ -7919,12 +8062,17 @@ def build_mail_text(rep: dict, parts: dict) -> tuple[str, list[int]]:
 
 
 def build_eml(subject: str, text: str) -> bytes:
-    """.eml（RFC 5322・CRLF）。件名は RFC 2047 で自動的に符号化、本文は UTF-8（base64）。X-Unsent: 1 で Outlook は
-    編集できる下書きとして開く。宛先・差出人・日付は入れない（送信はしない）。"""
+    """.eml（RFC 5322・CRLF）。件名は RFC 2047 で符号化、本文は UTF-8（base64）。X-Unsent: 1 で Outlook は
+    編集できる下書きとして開く。宛先・差出人・日付は入れない（送信はしない）。
+    件名は email.header.Header で符号化して、そのまま書く（set_raw）。標準の折り返し（policy）は、符号化した語の境目を
+    ちょうど空白の位置に置くことがあり、RFC 2047 では語の間の空白は無視されるため「高炉 水素還元」が「高炉水素還元」と
+    読まれていた。Header は空白も符号化した語の中に入れる（header_name を渡すと1行目を「Subject: 」込みで 78 字に収める）。
+    改行は Header 自身の折り返しだけ（件名の制御文字は _mail_subject で除いてあり、本文も全体を符号化する）。"""
     from email.message import EmailMessage
+    from email.header import Header
     from email import policy as _policy
     msg = EmailMessage(policy=_policy.SMTP)
-    msg["Subject"] = _mail_subject(subject) or "共有"
+    msg.set_raw("Subject", Header(_mail_subject(subject) or "共有", "utf-8", header_name="Subject").encode(linesep="\r\n"))
     msg["X-Unsent"] = "1"
     msg.set_content(text, charset="utf-8", cte="base64")
     return msg.as_bytes()
@@ -8205,10 +8353,14 @@ def _run_export(job_id: str, kind: str, body: dict) -> None:
             except (TypeError, ValueError):
                 n_slides = SLIDES_DEFAULT
             upd(state="composing", label="スライド構成を作成中", total=0, done=0)
-            slides = compose_slides(cfg, rep, instructions, n_slides)
+            sinfo: dict = {}
+            slides = compose_slides(cfg, rep, instructions, n_slides, info=sinfo)
         upd(state="building", label="ファイルを組み立て中")
         meta = {"facts": len(facts), "summary": len(summary.get("summary") or []), "slides": len(slides), "articles": len(arts),
                 "missing": missing}   # missing: レポートの出典のうち過去ログから消えた記事の件数（出典一覧には残る）
+        note = summary.get("note") or (sinfo.get("note") if kind == "pptx" and rep else "")
+        if note:   # 文脈長が小さすぎて生成AIに渡せなかった（サマリー・スライド）
+            meta["note"] = note
         if kind == "docx":
             data = docgen.build_docx(report_doc_model(rep, summary, facts))
         elif kind == "pdf":
@@ -8239,8 +8391,8 @@ def _export_mail(job_id: str, body: dict, upd) -> None:
         raise RuntimeError("対象のレポートが見つかりません（削除された可能性があります）")
     if (rep.get("stats") or {}).get("fallback"):
         raise RuntimeError(_EXPORT_UNFINISHED)
-    tone = body.get("tone") if body.get("tone") in MAIL_TONES else "boss"
-    length = body.get("length") if body.get("length") in MAIL_LENGTHS else "short"
+    tone = _pick(body.get("tone"), MAIL_TONES, "boss")
+    length = _pick(body.get("length"), MAIL_LENGTHS, "short")
     instructions = str(body.get("instructions") or "").strip()[:300]
     upd(state="composing", label="メールの文面を作成中", total=0, done=0)
     parts = compose_mail(cfg if ready else None, rep, tone, length, instructions)
@@ -8260,7 +8412,7 @@ def _export_mail(job_id: str, body: dict, upd) -> None:
 
 def start_export_job(body: dict) -> dict:
     kind = body.get("kind")
-    if kind not in EXPORT_KINDS:
+    if not isinstance(kind, str) or kind not in EXPORT_KINDS:
         return {"ok": False, "error": "kind は docx / xlsx / pptx / pdf / mail のいずれかです"}
     if kind == "mail" and not (isinstance(body.get("report_id"), str) and body["report_id"].strip()):
         return {"ok": False, "error": MAIL_NEED_REPORT}   # 記事やテーマからは作らない（先にレポートか Q&A を保存）
@@ -8274,22 +8426,51 @@ def start_export_job(body: dict) -> dict:
     return {"ok": True, "job_id": job_id, "kind": kind}
 
 
-_MAIL_INTENT_RE = r"メール(?!マガジン|アドレス)|e-?mail"   # メールマガジン・メールアドレスは除く
+_MAIL_INTENT_RE = r"(?:メール(?!マガジン|アドレス)|e-?mail)"   # メールマガジン・メールアドレスは除く
+# メールが「作るもの」のときだけメール下書きにする（index.html の MAIL_INTENT と同じ規則）。以前は「メール」という語があるだけで
+# メールにしていたため、「Wordにして、メールに添付したい」（形式は Word）や「フィッシングメールの文面の特徴は？」「標的型メールの
+# 被害を時系列にまとめて」（ふつうの質問）までメール下書きのフォームになっていた
+_MAIL_DRAFT_RE = _MAIL_INTENT_RE + r"\s*の?\s*下書き"                                       # 「メールの下書き」（それだけで依頼）
+_MAIL_BODY_RE = (_MAIL_INTENT_RE + r"\s*の?\s*文面\s*(?:を|に|で|として)?\s*"             # 「メールの文面を作って」「メール文面にして」
+                 r"(?:して|作|書|まとめ|起こ|出力|変換|用意|考え)")
+_MAIL_BODY_ONLY_RE = (r"^\s*(?:.{0,20}?(?:向け|用)の?)?" + _MAIL_INTENT_RE              # 「上長向けのメール文面」「メール文面」だけの入力
+                      + r"\s*の?\s*文面[\s。.!！?？]*$")
+_MAIL_OBJ_RE = (_MAIL_INTENT_RE + r"\s*(?:の?\s*(?:文章|本文)\s*)?(?:[をの]\s*)?"             # 「報告メールを作って」「メールの文章を書いて」「メール作成」「メールの作成をお願い」
+                r"(?:作って|作成して|書いて|用意して|生成して|起こして|出力して|(?:作成|生成)\s*(?:を\s*)?(?:お願い|頼)"
+                r"|(?:作成|生成)(?=[\s。.!！]*$))"                                               # 「作成」「生成」は文末のときだけ（「メールを作成する手口」は話題）
+                r"(?!(?:くれる|もらう|もらえる|いる|いた)[^\s。.!！?？、])")                         # 「メールを作ってくれるAI」「メールを作成している企業」は話題
+_MAIL_FORM_RE = (_MAIL_INTENT_RE + r"\s*(?:形式|本文|文|用の?文章?|の文章)\s*(?:に|で|として)\s*"   # 「メール形式にして」「メール用の文章にして」
+                 r"(?:して|変換|まとめ|作|出力|化し|起こ)")
+_MAIL_TARGET_RE = (_MAIL_INTENT_RE + r"\s*(?:に|で|として|用に?|向けに)\s*"                 # 「この内容をメールにして」「PDFをメールにまとめて」
+                   r"(?:して|変換|まとめ|作|書き出|書い|出力|化し|起こ)")
+_MAIL_SEND_RE = (_MAIL_INTENT_RE + r"\s*で\s*(?:共有|送)"                                   # 「メールで送れる形にして」（形式の語が無いときだけ）
+                 r"(?:する|できる|して|したい|しやすい|れる|る|りたい|ります|します)")
+_EXPORT_VERB_RE = r"にして|に変換|で出力|で書き出|書き出し|作って|作成|生成|エクスポート|出して|化して|にまとめ"
+_EXPORT_FORMATS = [("pptx", r"pptx|パワポ|パワーポイント|powerpoint|スライド|プレゼン"), ("xlsx", r"xlsx|excel|エクセル|スプレッドシート|表計算"),
+                   ("docx", r"docx|word|ワード(?!プレス)"), ("pdf", r"pdf")]
 
 
 def detect_export_intent(text: str) -> dict | None:
-    """会話文から「〜を pptx にして」のような書き出し意図を拾う（形式と指示）。該当しなければ None。"""
+    """会話文から「〜を pptx にして」のような書き出し意図を拾う（形式と指示）。該当しなければ None。判定の順:
+    1) メールの下書き・文面を作る依頼（依頼の言い回しが無くても）、「メールを作って」「メール形式にして」→ mail
+    2) 依頼の言い回し（にして・作って・にまとめ など）が無ければ None
+    3) メールが作るもの（「メールにして」「メールにまとめて」）→ mail（「PDFをメールにして」も mail）
+    4) 形式の語（pptx・xlsx・docx・pdf）→ その形式（「Wordにして、メールに添付したい」は docx。メールは送る手段）
+    5) 形式の語が無く「メールで送れる形にまとめて」→ mail。「メール」がただの話題（フィッシングメール等）なら None"""
     t = str(text or "")
-    kinds = [("mail", _MAIL_INTENT_RE),   # 社内共有メールの下書き（最初に判定。「この内容をメールにして」）
-             ("pptx", r"pptx|パワポ|パワーポイント|powerpoint|スライド|プレゼン"), ("xlsx", r"xlsx|excel|エクセル|スプレッドシート|表計算"),
-             ("docx", r"docx|word|ワード(?!プレス)"), ("pdf", r"pdf")]
-    if re.search(r"(?:" + _MAIL_INTENT_RE + r")の?(?:下書き|文面)", t, re.I):   # 「メールの下書き」「メール文面」は依頼の言い回しが無くても
+    if (re.search(_MAIL_DRAFT_RE, t, re.I) or re.search(_MAIL_BODY_RE, t, re.I)
+            or re.search(_MAIL_BODY_ONLY_RE, t.strip(), re.I)
+            or re.search(_MAIL_OBJ_RE, t, re.I) or re.search(_MAIL_FORM_RE, t, re.I)):
         return {"kind": "mail", "instructions": t[:300]}
-    if not re.search(r"にして|に変換|で出力|で書き出|書き出し|作って|作成|生成|エクスポート|出して|化して|にまとめ", t, re.I):
+    if not re.search(_EXPORT_VERB_RE, t, re.I):
         return None
-    for k, pat in kinds:
+    if re.search(_MAIL_TARGET_RE, t, re.I):
+        return {"kind": "mail", "instructions": t[:300]}
+    for k, pat in _EXPORT_FORMATS:
         if re.search(pat, t, re.I):
             return {"kind": k, "instructions": t[:300]}
+    if re.search(_MAIL_SEND_RE, t, re.I):
+        return {"kind": "mail", "instructions": t[:300]}
     return None
 
 
@@ -8492,7 +8673,8 @@ class Handler(BaseHTTPRequestHandler):
     # ------------------------------------------------------------------ GET
     def _do_GET(self):
         u = urlparse(self.path)
-        if u.path in ("/", "/index.html"):
+        # /research（/research/）はリサーチを別タブで開くための同じ画面（index.html が URL を見て切り替える）
+        if u.path in ("/", "/index.html", "/research", "/research/"):
             try:
                 body = UI_FILE.read_bytes()
             except OSError:

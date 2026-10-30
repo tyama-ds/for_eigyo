@@ -12,6 +12,8 @@
 <script>
 /* 初回描画前にテーマを確定してフラッシュ（ダーク→ライトの一瞬の切替）を防ぐ */
 try{var _t=localStorage.getItem("prism.theme");_t=_t?JSON.parse(_t):(matchMedia("(prefers-color-scheme: light)").matches?"light":"dark");document.documentElement.setAttribute("data-theme",_t);}catch(e){}
+/* /research（リサーチを別タブで開いたとき）: 初回描画の前に判定し、フィードを一瞬も出さない */
+try{ if(/^\/research\/?$/.test(location.pathname)){ document.documentElement.classList.add("rs-standalone"); document.title="リサーチ — Prism"; } }catch(e){}
 </script>
 <style>
 /* ============================================================ tokens */
@@ -520,7 +522,9 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
 .rrow__c{flex:1; min-width:0}
 .rrow__t{font-size:13px; font-weight:600; line-height:1.4; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden}
 .rrow__m{font-size:11px; color:var(--text-3); display:flex; gap:7px; margin-top:2px}
-.rrow__m .c{font-weight:700}
+.rrow__m .c{font-weight:700; color:var(--c, inherit)}
+/* ライト: カテゴリの色（暗い背景向けの明るい色）は文字には薄すぎる（専門 1.9:1）ので、色相を保ったまま黒と半々に（白・選択行で 4.8:1 以上） */
+:root[data-theme="light"] .rrow__m .c{color:color-mix(in srgb, var(--c, currentColor) 50%, #000)}
 .rs__chat{display:flex; flex-direction:column; min-height:0; min-width:0}
 .rs__hint{padding:8px 16px 0; font-size:11.5px; color:var(--text-3)}
 /* テーマ（保存した検索条件）・新着差分・本文取得 */
@@ -694,6 +698,7 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
 .achip .c{color:var(--text-3); font-size:11px; white-space:nowrap}
 .achip .k{font-size:9.5px; color:var(--text-3); border:1px solid var(--line); border-radius:4px; padding:0 3px; white-space:nowrap}
 .achip.zero{opacity:.6}
+.achip.lock{border-style:dashed; cursor:default}   /* 同義語辞書の行の語（検索で常に含まれるので外せない） */
 .rs__thin{font-size:12px; padding:6px 10px; gap:6px 10px}
 .rs__qtools{display:flex; align-items:center; gap:8px; flex-wrap:wrap; min-width:0}
 .rs__qtools[hidden]{display:none}
@@ -726,6 +731,446 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
   /* ボタンから開くパネルはモーダルの下端に左右いっぱいで出す（モーダルは transform を持つので fixed はモーダル基準） */
   .rs .rs__srcpanel, .rs .rs__srcpanel.right{position:fixed; left:16px; right:16px; bottom:16px; top:auto;
     min-width:0; max-width:none; max-height:60vh; z-index:20}
+}
+/* リサーチのモーダル: 「別タブで開く」リンク（スマホ幅はアイコンだけ）・ヘルプの一覧の切替 */
+.rs-popout{text-decoration:none}
+@media (max-width:600px){ .iconbtn.pill.rs-popout{width:40px; padding:0} .rs-popout span{display:none} }
+.kbd-list[hidden]{display:none}
+
+/* ============================================================ リサーチ（別タブ /research）— Analyst workbench
+   html.rs-standalone のときだけ。#researchModal をそのまま全画面のアプリにする（DOM は起動時に枠へ移すだけ）。
+   どのルールも html.rs-standalone か #researchModal.rsapp で始める（id の詳細度でモーダル用・ライト用の .btn などに勝つ）。
+   パネル（.rs__srcpanel）の祖先には transform / filter / backdrop-filter / mask / contain を付けない（下からのシート・レールの横に出す位置がずれる） */
+:root.rs-standalone{
+  color-scheme:dark;
+  --wb-head-h:56px; --wb-rail-w:clamp(264px,18vw,300px); --wb-ai-w:clamp(480px,38vw,760px); --wb-pad:24px;
+  --wb-r:12px; --wb-r-sm:9px; --wb-r-lg:14px; --wb-ctl:36px; --wb-ctl-sm:32px;
+  --wb-rail:#0d1019; --wb-main:#0a0c13; --wb-pane:#121622; --wb-field:#171d2b; --wb-elev:#1d2536; --wb-seg:#10141e; --wb-form:#151a27;
+  --wb-muted:#8b94a9;   /* 小さい文字は --text-3 でなくこれ（暗: #121622 上で 5.9:1） */
+  --wb-sel:color-mix(in srgb,var(--accent) 10%,transparent); --wb-sel-line:color-mix(in srgb,var(--accent) 32%,transparent);
+  --wb-ring:0 0 0 3px color-mix(in srgb,var(--accent) 35%,transparent);
+  --wb-caret:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M0 0h10L5 6z' fill='%237d869a'/%3E%3C/svg%3E");
+}
+:root.rs-standalone[data-theme="light"]{
+  color-scheme:light;
+  --wb-rail:#f4f7fc; --wb-main:#eef2f8; --wb-pane:#ffffff; --wb-field:#ffffff; --wb-elev:#ffffff; --wb-seg:#e6ebf4; --wb-form:#f7f9fd;
+  --wb-muted:#586174;   /* 明: #eef2f8 上で 5.6:1・白で 6.2:1・選択行（--wb-sel）で 4.85:1 */
+}
+/* ポータルの部分は描かない（初回描画の前から）。リサーチは組み立てが終わるまで見せない */
+html.rs-standalone :is(.topbar,.catbar,.subbar,main,#bmDrawer,#srcPickDrawer,#aiPanel,#srcModal,#diagModal,#searchModal){display:none !important}
+html.rs-standalone #researchModal:not(.rsapp){visibility:hidden}
+html.rs-standalone body{height:100vh; height:100dvh; overflow:hidden; background-color:var(--bg); background-attachment:scroll;
+  background-image:radial-gradient(900px 300px at 85% -120px, color-mix(in srgb,var(--accent) 14%,transparent), transparent 70%),
+                   radial-gradient(700px 260px at 10% -140px, color-mix(in srgb,var(--accent-2) 10%,transparent), transparent 70%)}
+html.rs-standalone :focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+html.rs-standalone .rsapp__skip{position:absolute; left:8px; top:-40px; z-index:100; padding:8px 14px; border-radius:10px; background:var(--accent);
+  color:#05101d; font-size:13px; font-weight:700; text-decoration:none}
+html.rs-standalone[data-theme="light"] .rsapp__skip{color:#fff}
+html.rs-standalone .rsapp__skip:focus{top:8px}
+#researchModal.rsapp{position:static; transform:none; opacity:1; pointer-events:auto; transition:none; z-index:auto;
+  width:100%; height:100vh; height:100dvh; max-height:none; border:0; border-radius:0; box-shadow:none; background:transparent;
+  display:flex; flex-direction:column; overflow:hidden; font-size:13px}
+#researchModal.rsapp .vh{position:absolute; width:1px; height:1px; margin:-1px; padding:0; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; border:0}
+/* ---- ヘッダー（.modal__head）: ガラスはここだけ。下にプリズムのグラデーションの細線 */
+#researchModal.rsapp .modal__head{position:relative; z-index:20; flex:0 0 56px; height:56px; display:flex; align-items:center; gap:14px; padding:0 18px 0 16px;
+  background:var(--glass); -webkit-backdrop-filter:blur(16px) saturate(1.3); backdrop-filter:blur(16px) saturate(1.3); border-bottom:1px solid var(--line)}
+#researchModal.rsapp .modal__head::after{content:""; position:absolute; left:0; right:0; bottom:-1px; height:1px; opacity:.55; pointer-events:none;
+  background:linear-gradient(90deg, transparent, var(--accent-2) 18%, var(--accent) 50%, #b48bff 82%, transparent)}
+#researchModal.rsapp .modal__head > svg{width:18px; height:18px; flex:0 0 auto; color:var(--accent); margin-right:-6px}
+#researchModal.rsapp .modal__head h2{flex:0 0 auto; margin:0; font:700 15px/1.2 var(--font-sans); white-space:nowrap}
+#researchModal.rsapp #rsStats{flex:0 1 auto; min-width:0; font-size:12px; color:var(--wb-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+#researchModal.rsapp .modal__head [data-close], #researchModal.rsapp #rsPopout{display:none}
+#researchModal.rsapp .rsapp__brand{display:inline-flex; align-items:center; gap:9px; flex:0 0 auto; color:var(--text); text-decoration:none; border-radius:8px}
+#researchModal.rsapp .rsapp__brand svg{width:26px; height:26px}
+#researchModal.rsapp .rsapp__brand b{font:700 18px/1 var(--font-serif); letter-spacing:.2px}
+#researchModal.rsapp .rsapp__sep{width:1px; height:20px; flex:0 0 auto; background:var(--line-2)}
+#researchModal.rsapp .rsapp__sp{flex:1 1 auto; min-width:0}
+#researchModal.rsapp .rsapp__ib{height:34px; min-width:34px; padding:0 10px; display:inline-flex; align-items:center; justify-content:center; gap:7px; flex:0 0 auto;
+  border-radius:10px; border:1px solid var(--line); background:var(--surface); color:var(--text-2); font:600 12.5px/1 var(--font-sans); text-decoration:none; white-space:nowrap; cursor:pointer}
+#researchModal.rsapp .rsapp__ib:hover{color:var(--text); border-color:var(--line-2)}
+#researchModal.rsapp .rsapp__ib svg{width:16px; height:16px; flex:0 0 auto}
+#researchModal.rsapp .rsapp__view, #researchModal.rsapp .rsapp__toai{display:none}
+/* 実行中のジョブ（リング＝進み具合、回答の生成中は回るリング） */
+#researchModal.rsapp .rsapp__job{display:inline-flex; align-items:center; gap:8px; height:32px; padding:0 12px 0 10px; flex:0 1 auto; min-width:0; border-radius:99px;
+  border:1px solid var(--wb-sel-line); background:var(--wb-sel); color:var(--text); font:600 12px/1 var(--font-sans); white-space:nowrap; cursor:pointer; overflow:hidden}
+#researchModal.rsapp .rsapp__job[hidden]{display:none}
+#researchModal.rsapp .rsapp__job .t{overflow:hidden; text-overflow:ellipsis}
+#researchModal.rsapp .rsapp__job small{color:var(--wb-muted); font-weight:500; font-size:11.5px}
+#researchModal.rsapp .rsapp__job small:empty{display:none}
+#researchModal.rsapp .rsapp__job .ring{width:16px; height:16px; flex:0 0 auto}
+#researchModal.rsapp .rsapp__job .ring circle{fill:none; stroke-width:3}
+#researchModal.rsapp .rsapp__job .ring .tr{stroke:var(--line-2)}
+#researchModal.rsapp .rsapp__job .ring .pg{stroke:var(--accent-2); transition:stroke-dashoffset .4s}
+#researchModal.rsapp .rsapp__job.ind .ring{animation:spin 1s linear infinite}
+#researchModal.rsapp .rsapp__job.ind .ring .pg{stroke-dasharray:12 47.1}
+#researchModal.rsapp .rsapp__job .ok{display:none; width:16px; height:16px; color:var(--accent-2)}
+#researchModal.rsapp .rsapp__job.done{background:color-mix(in srgb,var(--accent-2) 14%,transparent); border-color:color-mix(in srgb,var(--accent-2) 40%,transparent)}
+#researchModal.rsapp .rsapp__job.done .ring{display:none}
+#researchModal.rsapp .rsapp__job.done .ok{display:block}
+/* ---- 3ペイン（1280px 以上）: レール｜結果｜AI。901〜1279px は 結果｜AI */
+#researchModal.rsapp .rs{flex:1 1 auto; min-height:0; display:grid; grid-template-rows:minmax(0,1fr); grid-template-columns:minmax(0,1fr) clamp(380px,42vw,520px)}
+#researchModal.rsapp .rs__rail{display:none}
+@media (min-width:1280px){
+  #researchModal.rsapp .rs{grid-template-columns:var(--wb-rail-w) minmax(0,1fr) var(--wb-ai-w)}
+  #researchModal.rsapp .rs__rail{position:relative; z-index:5; overflow:visible; display:flex; flex-direction:column; min-height:0; min-width:0;
+    padding:18px 16px 0; background:var(--wb-rail); border-right:1px solid var(--line)}
+  #researchModal.rsapp[data-wide] .rs{grid-template-columns:minmax(0,1fr) clamp(560px,58vw,1100px)}
+  #researchModal.rsapp[data-wide] .rs__rail{display:none}
+  #researchModal.rsapp[data-wide] .rpt__body{max-width:46em}
+}
+/* ---- レール: 絞り込み（select と同じ見た目の情報源ボタン）・保存した条件（ナビの行）・キー操作 */
+#researchModal.rsapp .rs__railh{display:none}
+#researchModal.rsapp .rs__rail .rs__railh{display:flex; align-items:center; gap:8px; margin:2px 2px 0; font-size:11.5px; font-weight:700; letter-spacing:.12em; color:var(--wb-muted)}
+#researchModal.rsapp .rs__rail .rs__railh::after{content:""; flex:1; height:1px; background:var(--line)}
+#researchModal.rsapp .rs__rail .rs__railh.lib{margin-top:14px}
+#researchModal.rsapp .rs__rail .rs__filters{display:flex; flex-direction:column; flex-wrap:nowrap; align-items:stretch; gap:8px}
+#researchModal.rsapp .rs__rail .rs__filters :is(select, input[type=date]), #researchModal.rsapp .rs__rail #rsSrcBtn{width:100%; height:36px; border-radius:9px;
+  border:1px solid var(--line); background-color:var(--wb-field); color:var(--text); font:13px var(--font-sans)}
+#researchModal.rsapp .rs__rail #rsSrcBtn{display:block; text-align:left; padding:0 10px; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+#researchModal.rsapp .rs__rail #rsSrcBtn:hover, #researchModal.rsapp .rs__rail .rs__filters select:hover{border-color:var(--line-2); filter:none; transform:none}
+#researchModal.rsapp .rs__rail .rs__range{display:grid; grid-template-columns:1fr auto 1fr; gap:6px; align-items:center}
+#researchModal.rsapp .rs__rail .rs__range[hidden]{display:none}
+#researchModal.rsapp .rs__rail .rs__range input[type=date]{padding:0 6px; font-size:12px; min-width:0}
+#researchModal.rsapp .rs__rail .rs__duo{display:grid; grid-template-columns:1fr 1fr; gap:8px}
+#researchModal.rsapp .rs__rail .rs__duo select{font-size:12.5px; padding-right:22px; background-position:calc(100% - 9px) 50%}
+#researchModal.rsapp .rs__rail .rs__lib{display:flex; flex-direction:column; gap:2px}
+#researchModal.rsapp .rs__rail .rs__src{position:static}
+#researchModal.rsapp .rs__rail .rs__lib > .rs__src > .btn{width:100%; height:36px; display:flex; align-items:center; gap:9px; padding:0 10px; border-radius:9px;
+  border:1px solid transparent; background:transparent; color:var(--text-2); font:600 13px/1 var(--font-sans); text-align:left; white-space:nowrap}
+#researchModal.rsapp .rs__rail .rs__lib > .rs__src > .btn:hover{background:color-mix(in srgb,var(--text) 5%,transparent); color:var(--text); filter:none; transform:none}
+#researchModal.rsapp .rs__rail .rs__lib > .rs__src > .btn[aria-expanded="true"]{background:var(--wb-sel); border-color:var(--wb-sel-line); color:var(--text)}
+#researchModal.rsapp .rs__lib .ico{width:16px; height:16px; flex:0 0 auto; opacity:.8}
+#researchModal.rsapp .rs__search .rs__lib .ico{display:none}
+#researchModal.rsapp :is(#rsThemeN,#rsWatchN){font-size:11.5px; font-weight:600; color:var(--wb-muted)}
+#researchModal.rsapp .rs__lib .caret{margin-left:auto; font-size:11px; color:var(--wb-muted); transition:transform .2s var(--ease)}
+#researchModal.rsapp .rs__search .rs__lib .caret{margin-left:2px}
+#researchModal.rsapp .rs__lib .btn[aria-expanded="true"] .caret{transform:rotate(180deg)}
+/* レールのパネルはレールの右に開く（AI の欄にはかからない） */
+#researchModal.rsapp .rs__rail .rs__srcpanel{position:absolute; top:12px; left:calc(100% + 8px); right:auto; z-index:30; min-width:0; max-width:none;
+  width:min(500px, calc(100vw - var(--wb-rail-w) - var(--wb-ai-w) - 24px)); max-height:calc(100% - 24px); overflow:auto;
+  padding:10px; background:var(--wb-elev); border:1px solid var(--line-2); border-radius:12px; box-shadow:var(--shadow)}
+#researchModal.rsapp .rsapp__keys{margin:auto -16px 0; padding:10px 16px 12px; display:flex; flex-wrap:wrap; gap:4px 10px; font-size:11.5px; color:var(--wb-muted);
+  border-top:1px solid var(--line); background:var(--wb-rail)}
+#researchModal.rsapp .rsapp__keys span{display:inline-flex; align-items:center; gap:3px; white-space:nowrap}
+#researchModal.rsapp .rsapp__keys kbd{font-size:10.5px; padding:0 5px; min-width:18px; line-height:1.6}
+/* ---- 結果の欄（1本のスクロール）: 検索欄・別表記・絞り込み（1280px 未満）・テーマ・グラフ・件数の行（固定）・一覧 */
+#researchModal.rsapp .rs__search{min-width:0; min-height:0; overflow-y:auto; overscroll-behavior:contain; display:flex; flex-direction:column; gap:10px;
+  padding:18px 24px 32px; background:var(--wb-main); border:0}
+#researchModal.rsapp .rs__search > *{flex-shrink:0; min-width:0}
+#researchModal.rsapp .gsearch{position:relative}
+#researchModal.rsapp .gsearch__icon{left:16px; width:19px; height:19px; color:var(--wb-muted)}
+#researchModal.rsapp .gsearch input{height:50px; padding:0 52px 0 46px; border-radius:13px; background:var(--wb-pane); border:1px solid var(--line-2);
+  font-size:17px; font-weight:500; color:var(--text)}
+#researchModal.rsapp .gsearch input::placeholder{color:var(--wb-muted); font-weight:400}
+#researchModal.rsapp .gsearch input:focus{border-color:color-mix(in srgb,var(--accent) 65%,transparent); box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 14%,transparent); outline:none}
+#researchModal.rsapp .rsapp__k{position:absolute; right:14px; top:50%; transform:translateY(-50%); pointer-events:none; font-size:11px; padding:0 6px; min-width:20px; line-height:1.6; color:var(--wb-muted)}
+#researchModal.rsapp .gsearch input:focus ~ .rsapp__k{display:none}
+#researchModal.rsapp .rs__qtools{gap:10px}
+#researchModal.rsapp #rsExpand{font-size:12px; color:var(--wb-muted)}
+#researchModal.rsapp #rsAliasBtn{height:30px; padding:0 12px; font-size:12.5px}
+#researchModal.rsapp .rs__aliasrow{border-radius:11px; border:1px dashed var(--line-2); background:var(--wb-field); padding:8px 12px; font-size:12.5px; gap:6px 8px}
+#researchModal.rsapp .rs__aliasrow .hint{color:var(--wb-muted)}
+#researchModal.rsapp .achip{font-size:12.5px; padding:3px 10px 3px 7px; border:1px solid var(--line-2); background:var(--wb-pane)}
+#researchModal.rsapp .achip .c{color:var(--wb-muted)}
+#researchModal.rsapp .achip:has(input:checked), #researchModal.rsapp .achip.on{border-color:var(--wb-sel-line); background:var(--wb-sel)}
+/* 1280px 未満・広げたとき: 絞り込みは検索欄の下に横並び（パネルはその行の下に、欄からはみ出さない幅で） */
+#researchModal.rsapp .rs__search .rs__filters{position:relative; display:flex; flex-wrap:wrap; align-items:center; gap:6px}
+#researchModal.rsapp .rs__search .rs__duo, #researchModal.rsapp .rs__search .rs__lib{display:contents}
+#researchModal.rsapp .rs__search .rs__src{position:static}
+#researchModal.rsapp .rs__search .rs__filters :is(select, input[type=date]){height:32px; border-radius:9px; border:1px solid var(--line); background-color:var(--wb-field);
+  color:var(--text); font:12.5px var(--font-sans); width:auto; max-width:100%}
+#researchModal.rsapp .rs__search .rs__filters > .rs__src > .btn, #researchModal.rsapp .rs__search .rs__lib > .rs__src > .btn{height:32px; padding:0 10px; display:inline-flex;
+  align-items:center; gap:6px; border-radius:9px; border:1px solid var(--line-2); background:var(--wb-field); color:var(--text-2); font:600 12.5px/1 var(--font-sans); white-space:nowrap}
+#researchModal.rsapp .rs__search .rs__filters .btn:hover{color:var(--text); filter:none; transform:none}
+#researchModal.rsapp .rs__search .rs__filters .rs__srcpanel{top:calc(100% + 6px); left:0; right:auto; width:min(480px,100%); min-width:0; max-width:none; max-height:min(420px,60vh);
+  z-index:8; padding:10px; background:var(--wb-elev); border:1px solid var(--line-2); border-radius:12px; box-shadow:var(--shadow)}
+/* select は独自の矢印（OS の見た目に左右されない） */
+#researchModal.rsapp :is(.rs__filters, .rs__form) select{appearance:none; -webkit-appearance:none; padding:0 28px 0 10px; background-image:var(--wb-caret);
+  background-repeat:no-repeat; background-position:calc(100% - 11px) 50%; background-size:8px 5px}
+#researchModal.rsapp :is(.rs__filters, .rs__form) :is(select, input:not([type=checkbox]):not([type=radio]), textarea):focus{border-color:var(--accent); box-shadow:var(--wb-ring); outline:none}
+#researchModal.rsapp .rs__filters input[type=date]{padding:0 8px}
+/* テーマ／ウォッチの帯・報道量のグラフ（高さ 84px は renderHist の viewBox と同じ） */
+#researchModal.rsapp .rs__strip{border-radius:11px; border:1px solid var(--wb-sel-line); background:var(--wb-sel); padding:8px 12px; font-size:12.5px; gap:6px 10px}
+#researchModal.rsapp .rs__strip .n{font-size:13.5px; font-weight:700}
+#researchModal.rsapp .rs__strip .lnkbtn{font-size:12px}
+#researchModal.rsapp .rs__hist{padding:10px 14px 9px; gap:5px; border:1px solid var(--line); border-radius:12px; background:var(--wb-pane)}
+#researchModal.rsapp .rs__histhead{font-size:12px; color:var(--wb-muted)}
+#researchModal.rsapp .rs__histhead .lnkbtn{flex:0 0 auto; white-space:nowrap; font-size:12px}
+#researchModal.rsapp .rs__histbody svg{height:84px}
+#researchModal.rsapp .rs__histbody text{fill:var(--wb-muted)}
+#researchModal.rsapp .rs__histlegend{font-size:11.5px; gap:3px 12px; color:var(--wb-muted)}
+#researchModal.rsapp .rs__histlegend i{width:9px; height:9px}
+#researchModal.rsapp .rs__bar{position:sticky; top:-18px; /* 結果の欄の上の余白（18px）の分。欄の上端で止まる */ z-index:3; margin:0 -24px; padding:10px 24px; flex-wrap:wrap; row-gap:8px; background:var(--wb-main); border-bottom:1px solid var(--line)}
+#researchModal.rsapp #rsCount{flex:1 1 auto; min-width:0; font-size:13px; color:var(--text-2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+#researchModal.rsapp .rs__baracts{display:inline-flex; align-items:center; gap:8px; margin-left:auto; flex:0 0 auto}
+#researchModal.rsapp .rs__baracts .btn{height:30px; padding:0 10px; font-size:12.5px; display:inline-flex; align-items:center}
+#researchModal.rsapp .rs__baracts .rs__chk{font-size:12.5px}
+#researchModal.rsapp .rs__fetch{font-size:12px; color:var(--wb-muted)}
+/* 一覧: 大きめの文字（タイトルはゴシック）・選択・J/K のカーソル */
+#researchModal.rsapp #rsList{flex:none; overflow:visible; max-height:none; min-height:0; gap:4px}
+#researchModal.rsapp .rrow{gap:12px; padding:10px 12px; border-radius:11px; border:1px solid transparent; scroll-margin-block:96px 16px}
+#researchModal.rsapp .rrow:hover{background:color-mix(in srgb,var(--surface-2) 80%,transparent)}
+#researchModal.rsapp .rrow.on{background:var(--wb-sel)}
+#researchModal.rsapp .rrow.kb{border-color:var(--wb-sel-line); box-shadow:inset 3px 0 0 var(--accent)}
+#researchModal.rsapp .rrow:focus-within{outline:2px solid var(--wb-sel-line); outline-offset:0}
+#researchModal.rsapp .rrow input{width:16px; height:16px; margin:4px 0 0}
+#researchModal.rsapp .rrow__t{font-family:var(--font-sans); font-size:14.5px; font-weight:600; line-height:1.5}
+#researchModal.rsapp .rrow__m{font-size:12px; color:var(--wb-muted); flex-wrap:wrap; gap:3px 10px; margin-top:3px; align-items:center}
+#researchModal.rsapp .rrow__m .tx{font-size:11px; font-weight:700; color:var(--accent); border:1px solid var(--wb-sel-line); border-radius:5px; padding:0 5px; line-height:1.5}
+#researchModal.rsapp .rrow__m .dupn{font-size:11px; padding:0 7px; line-height:1.6}
+#researchModal.rsapp .rrow.dup{margin-left:28px}
+#researchModal.rsapp #rsList[aria-busy="true"]:empty{min-height:360px; border-radius:11px; animation:rsappPulse 1.2s ease-in-out infinite;
+  background:repeating-linear-gradient(to bottom, var(--wb-field) 0 54px, transparent 54px 64px)}
+#researchModal.rsapp #rsList[aria-busy="true"]:not(:empty){opacity:.55; transition:opacity .15s}
+@keyframes rsappPulse{0%,100%{opacity:.55} 50%{opacity:1}}
+#researchModal.rsapp #rsList .gempty{padding:56px 16px; text-align:center; font-size:13.5px; color:var(--wb-muted)}
+#researchModal.rsapp #rsList .gempty::before{content:""; display:block; width:40px; height:40px; margin:0 auto 12px; background:currentColor; opacity:.5;
+  -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='M21 21l-4.3-4.3'/%3E%3C/svg%3E") center/contain no-repeat;
+          mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='M21 21l-4.3-4.3'/%3E%3C/svg%3E") center/contain no-repeat}
+@media (min-width:2560px){   /* 結果の本文は 980px までで中央に */
+  #researchModal.rsapp .rs__search{padding-inline:max(24px, calc((100% - 980px) / 2))}
+  #researchModal.rsapp .rs__bar{margin-inline:0; padding-inline:0; box-shadow:0 0 0 100vmax var(--wb-main); clip-path:inset(0 -100vmax)}
+}
+/* ---- AI ワークスペース: 見出し＋保存物、作る（5つの切替）、フォームの置き場、出力、入力欄 */
+#researchModal.rsapp .rs__chat{display:flex; flex-direction:column; min-height:0; min-width:0; background:var(--wb-pane); border-left:1px solid var(--line)}
+#researchModal.rsapp .rs__tools{flex:0 0 auto; display:grid; grid-template-columns:minmax(0,1fr) auto; grid-template-areas:"title lib" "make make"; align-items:center;
+  gap:10px 6px; padding:10px 16px 12px; border-bottom:1px solid var(--line)}
+#researchModal.rsapp .rs__tools > .rs__count{display:none}
+#researchModal.rsapp .rs__panetitle{grid-area:title; display:flex; align-items:center; gap:7px; min-width:0; font-size:13px; font-weight:700; white-space:nowrap}
+#researchModal.rsapp .rs__panetitle > svg{width:17px; height:17px; flex:0 0 auto; color:var(--accent-2)}
+#researchModal.rsapp .rs__panetitle > span{overflow:hidden; text-overflow:ellipsis}
+#researchModal.rsapp #rsappWide{height:30px; min-width:30px; padding:0 7px}
+#researchModal.rsapp #rsappWide svg{width:14px; height:14px}
+#researchModal.rsapp #rsappWide[aria-pressed="true"]{color:var(--accent); border-color:var(--wb-sel-line); background:var(--wb-sel)}
+#researchModal.rsapp .rs__libR{grid-area:lib; display:flex; gap:5px; justify-content:flex-end; min-width:0}
+#researchModal.rsapp .rs__libR .btn{height:30px; padding:0 7px; display:inline-flex; align-items:center; gap:5px; border-radius:9px; border:1px solid var(--line);
+  background:transparent; color:var(--text-2); font:600 11.5px/1 var(--font-sans); white-space:nowrap}
+#researchModal.rsapp .rs__libR .btn:hover{color:var(--text); border-color:var(--line-2); filter:none; transform:none}
+#researchModal.rsapp .rs__libR .btn > svg{width:14px; height:14px; flex:0 0 auto; opacity:.8}
+#researchModal.rsapp .rs__libR .btn span{color:var(--wb-muted); font-size:11px}
+#researchModal.rsapp .rs__libR .btn .caret{display:none}
+#researchModal.rsapp .rs__libR .btn[aria-expanded="true"]{background:var(--wb-sel); border-color:var(--wb-sel-line); color:var(--text)}
+#researchModal.rsapp .rs__libR .rs__srcpanel{left:auto; right:0; top:calc(100% + 6px); z-index:30; width:min(440px, calc(var(--wb-ai-w) - 32px), calc(100vw - 32px)); min-width:0; max-width:none;
+  max-height:min(520px, calc(100dvh - 140px)); padding:10px; background:var(--wb-elev); border:1px solid var(--line-2); border-radius:12px; box-shadow:var(--shadow)}
+#researchModal.rsapp .rs__make{grid-area:make; display:flex; flex-wrap:wrap; gap:4px; padding:3px; border-radius:12px; background:var(--wb-seg); border:1px solid var(--line)}
+#researchModal.rsapp .rs__make .btn{flex:1 1 auto; min-width:max-content; height:34px; padding:0 7px; display:inline-flex; align-items:center; justify-content:center; gap:5px;
+  border-radius:9px; border:1px solid transparent; background:transparent; color:var(--text-2); font:600 12.5px/1 var(--font-sans); white-space:nowrap}
+#researchModal.rsapp .rs__make .btn > svg{width:15px; height:15px; flex:0 0 auto}
+#researchModal.rsapp .rs__make .btn:hover{background:color-mix(in srgb,var(--text) 5%,transparent); color:var(--text); filter:none; transform:none}
+#researchModal.rsapp .rs__make .btn[aria-expanded="true"]{background:var(--wb-pane); color:var(--accent); border-color:var(--line-2); box-shadow:var(--shadow-sm)}
+/* フォームの置き場（開くのは1つだけ。低い画面ではここがスクロールし、出力の欄を残す） */
+#researchModal.rsapp .rs__formzone{flex:0 1 auto; min-height:0; overflow:auto; overscroll-behavior:contain; padding:12px 16px; border-bottom:1px solid var(--line);
+  background:color-mix(in srgb,var(--surface-2) 30%,var(--wb-pane))}
+#researchModal.rsapp .rs__formzone.is-empty{display:none}
+#researchModal.rsapp .rs__form{margin:0; padding:14px 16px; gap:10px; border-radius:14px; border:1px solid var(--line-2); background:var(--wb-form); box-shadow:none; scroll-margin-top:64px}
+#researchModal.rsapp .rs__formhead{display:flex; align-items:baseline; gap:4px 10px; flex-wrap:wrap}
+#researchModal.rsapp .rs__formhead b{font-size:14.5px; font-weight:700}
+#researchModal.rsapp .rs__formhead span{flex:1 1 220px; font-size:12px; line-height:1.6; color:var(--wb-muted)}
+#researchModal.rsapp .rs__formhead kbd{margin-left:auto; font-size:10.5px; padding:0 6px; color:var(--wb-muted)}
+#researchModal.rsapp .rs__form :is(input[type=text], input:not([type])){height:38px; padding:0 12px; font-size:13.5px}
+#researchModal.rsapp .rs__form :is(input[type=text], input:not([type]), input[type=number], select, textarea){border-radius:9px; border:1px solid var(--line); background-color:var(--wb-pane); color:var(--text); font-family:var(--font-sans)}
+#researchModal.rsapp .rs__form select{height:36px; font-size:13px; max-width:100%}
+#researchModal.rsapp .rs__form textarea{min-height:64px; line-height:1.6; padding:8px 12px; font-size:13.5px}
+#researchModal.rsapp .rs__form input[type=number]{height:28px; padding:0 6px; font-size:12.5px}
+#researchModal.rsapp #rsAcctName{flex:1 1 220px; font-size:14px; font-weight:600}
+#researchModal.rsapp .rs__form .hint{font-size:12px; color:var(--wb-muted)}
+#researchModal.rsapp .rs__form .rs__chk{font-size:12.5px; gap:7px}
+#researchModal.rsapp .rs__formacts{display:flex; align-items:center; justify-content:flex-end; gap:8px}
+#researchModal.rsapp .rs__formacts .btn{height:32px; padding:0 14px; font-size:12.5px; display:inline-flex; align-items:center}
+/* 901px 以上: 閉じる＋実行は置き場（スクロールする）の下に貼り付ける（1366×768 などでは置き場が 200px 前後になり、作成ボタンが見えなかった） */
+@media (min-width:901px){
+  #researchModal.rsapp .rs__formzone{scroll-padding-bottom:64px}
+  #researchModal.rsapp .rs__form > .rs__formacts{position:sticky; bottom:-12px; z-index:2; margin:0 -16px -14px; padding:8px 16px 12px;
+    background:var(--wb-form); border-top:1px solid var(--line); border-radius:0 0 14px 14px}
+}
+/* 出力（上端は薄くぼかす）・「↓ 新しい出力」 */
+#researchModal.rsapp .rs__logwrap{position:relative; display:flex; flex:1 1 0; min-height:clamp(140px,28vh,240px)}
+#researchModal.rsapp .rs__logwrap::before{content:""; position:absolute; top:0; left:0; right:0; height:14px; z-index:1; pointer-events:none; background:linear-gradient(var(--wb-pane), transparent)}
+#researchModal.rsapp #rsLog{flex:1 1 auto; min-width:0; min-height:0; overflow:auto; padding:18px 20px 12px; gap:14px}
+/* 低い画面（1366×768 のノート PC など）: 会話が空のままフォームを開いたら「何を作りますか？」のカード（上の「作る」の切替と同じもの）を隠し、
+   出力の欄の最小の高さを外してフォームに高さを回す（以前はフォームの欄が 110px ほどで、別表記のチップやメモが隠れていた）。
+   会話があるときは出力の欄の高さを保つ */
+@media (min-width:901px) and (max-height:820px){
+  #researchModal.rsapp .rs__chat.has-form .rsapp__hello{display:none}
+  #researchModal.rsapp .rs__chat.has-form .rs__logwrap:has(> #rsLog > .rsapp__hello:only-child){min-height:0}
+  #researchModal.rsapp .rs__chat.has-form #rsLog:has(> .rsapp__hello:only-child){padding:0}
+}
+#researchModal.rsapp .rsapp__newout{position:absolute; bottom:12px; left:50%; transform:translateX(-50%); z-index:2; height:30px; padding:0 14px; border:0; border-radius:99px;
+  background:var(--accent); color:#05101d; font:700 12px/1 var(--font-sans); box-shadow:var(--shadow-sm); cursor:pointer}
+html.rs-standalone[data-theme="light"] #researchModal.rsapp .rsapp__newout{color:#fff}
+#researchModal.rsapp .rsapp__newout[hidden]{display:none}
+/* ポータルからの申し出（開いているこのタブを前へ出したとき）: ヘッダーの下に浮かべる（レイアウトは動かさない） */
+#researchModal.rsapp .rsapp__offer{position:fixed; top:64px; left:50%; transform:translateX(-50%); z-index:45; display:flex; align-items:center; flex-wrap:wrap;
+  gap:8px 12px; width:max-content; max-width:min(760px, calc(100vw - 32px)); padding:10px 14px; border:1px solid var(--wb-sel-line); border-radius:12px;
+  background:var(--elevated); color:var(--text); box-shadow:0 10px 30px rgba(0,0,0,.28); font-size:13px; line-height:1.5}
+#researchModal.rsapp .rsapp__offer[hidden]{display:none}
+#researchModal.rsapp .rsapp__offer .t{flex:1 1 240px; min-width:0; overflow-wrap:anywhere}
+#researchModal.rsapp .bubble{font-size:14px; line-height:1.7; padding:11px 14px; border-radius:14px; max-width:86%}
+#researchModal.rsapp .bubble.me{border-bottom-right-radius:5px}
+html.rs-standalone[data-theme="light"] #researchModal.rsapp .bubble.ai{background:#f7f9fd}
+#researchModal.rsapp :is(.bubble.rpt, .bubble.ans, .bubble.exp, .bubble.cmp, .bubble.rpt-progress){width:100%; max-width:100%}
+#researchModal.rsapp .bubble-note{font-size:11.5px; color:var(--wb-muted)}
+#researchModal.rsapp .rpt__body{font-size:14px; line-height:1.8}
+#researchModal.rsapp .rpt__body h3.rpt__h{font-size:14.5px; margin:14px 0 4px}
+#researchModal.rsapp .cite{font-size:10.5px; font-weight:600}
+#researchModal.rsapp .rpt__src{font-size:12.5px}
+#researchModal.rsapp .rpt__src .n{font-family:ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--accent); font-weight:700}
+#researchModal.rsapp :is(.rpt__meta, .rpt__q, .exp__meta, .cmp__col .meta, .chg__cov, .rpt-progress .hint, .bubble .hint){color:var(--wb-muted)}
+#researchModal.rsapp .rpt__acts{gap:6px; margin-top:12px}
+#researchModal.rsapp .rpt__acts .btn{min-height:30px; padding:5px 11px; font-size:12px}
+#researchModal.rsapp .rpt__title{font-size:17px; line-height:1.45}
+#researchModal.rsapp .rpt-progress__t{line-height:1.6; margin-bottom:8px}
+#researchModal.rsapp .pbar{background:color-mix(in srgb,var(--text) 8%,transparent); border:0}
+#researchModal.rsapp .pbar i{background:linear-gradient(90deg,var(--accent-2),var(--accent)); border-radius:99px}
+#researchModal.rsapp .chg__big{font-size:21px}
+#researchModal.rsapp .exp__mailbody{font-size:13px; line-height:1.7}
+/* 会話が空のとき: 「作る」5種類のカード */
+#researchModal.rsapp .rsapp__hello{padding:8px 4px}
+#researchModal.rsapp .rsapp__lead{font-size:12.5px; font-weight:700; letter-spacing:.06em; color:var(--wb-muted); margin:0 0 10px}
+#researchModal.rsapp .rsapp__cards{display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:10px}
+#researchModal.rsapp .rsapp__card{position:relative; display:flex; flex-direction:column; gap:6px; text-align:left; padding:14px; border-radius:12px; border:1px solid var(--line);
+  background:var(--wb-field); color:var(--text); font-family:var(--font-sans); cursor:pointer; transition:border-color .15s}
+#researchModal.rsapp .rsapp__card:hover{border-color:color-mix(in srgb,var(--accent) 40%,transparent)}
+#researchModal.rsapp .rsapp__card b{display:flex; align-items:center; gap:8px; font-size:14px; font-weight:700; padding-right:24px}
+#researchModal.rsapp .rsapp__card b svg{width:18px; height:18px; color:var(--accent)}
+#researchModal.rsapp .rsapp__card span{font-size:12px; line-height:1.6; color:var(--wb-muted)}
+#researchModal.rsapp .rsapp__card kbd{position:absolute; top:12px; right:12px; font-size:10.5px; padding:0 5px; min-width:18px; line-height:1.6}
+#researchModal.rsapp .rsapp__foot{margin:12px 0 0; font-size:12.5px; line-height:1.7; color:var(--wb-muted)}
+/* 入力欄: 候補（横に流れる1行）＋入力の枠（::before で枠を描く。候補は枠の上） */
+#researchModal.rsapp .rs__composer{flex:0 0 auto; position:relative; display:grid; grid-template-columns:minmax(0,1fr); margin:10px 16px 16px}
+#researchModal.rsapp .rs__composer::before{content:""; position:absolute; grid-row:2 / 4; grid-column:1 / 2; inset:0; pointer-events:none;   /* 終わりの線も明示（auto だと余白の端まで広がる） */
+  border:1px solid var(--line-2); border-radius:14px; background:var(--wb-field); transition:border-color .2s, box-shadow .2s}
+#researchModal.rsapp .rs__composer:focus-within::before{border-color:color-mix(in srgb,var(--accent) 60%,transparent); box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 12%,transparent)}
+#researchModal.rsapp .rs__composer > *{position:relative; grid-column:1; min-width:0}
+#researchModal.rsapp #rsQuick{grid-row:1; display:flex; flex-wrap:nowrap; gap:7px; padding:0 0 10px; overflow-x:auto; scrollbar-width:none;
+  -webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 48px),transparent); mask-image:linear-gradient(90deg,#000 calc(100% - 48px),transparent)}
+#researchModal.rsapp #rsQuick::-webkit-scrollbar{display:none}
+#researchModal.rsapp .qchip{flex:0 0 auto; height:30px; padding:0 12px; font-size:12.5px; white-space:nowrap; background:transparent}
+#researchModal.rsapp .qchip:hover{transform:none}
+#researchModal.rsapp .rs__composer .ai__input{grid-row:2; padding:8px 8px 4px 14px; border:0; gap:8px}
+#researchModal.rsapp #rsInput{min-height:44px; max-height:160px; padding:10px 0; border:0; border-radius:0; background:transparent; font-size:14.5px; line-height:1.55; outline:none; box-shadow:none}
+#researchModal.rsapp #rsInput::placeholder{color:var(--wb-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+#researchModal.rsapp #rsSend{width:40px; height:40px; border-radius:11px}
+#researchModal.rsapp .rs__chatopts{grid-row:3; display:flex; flex-wrap:wrap; align-items:center; gap:6px 14px; padding:6px 14px 9px; border-top:1px dashed var(--line);
+  font-size:12px; color:var(--wb-muted)}
+#researchModal.rsapp #rsappCtx{font-weight:600; color:var(--text-2)}
+#researchModal.rsapp .rs__chatopts small{font-size:11.5px; color:var(--wb-muted); margin-left:2px}
+#researchModal.rsapp .rs__chatopts .rs__chk{font-size:12px; color:var(--text-2); gap:7px; white-space:nowrap}
+#researchModal.rsapp .rs__chatopts .sp{flex:1}
+#researchModal.rsapp .rs__keyhint{margin-left:auto; white-space:nowrap}
+#researchModal.rsapp .rs__keyhint kbd{font-size:10.5px; padding:0 5px; min-width:0; line-height:1.6}
+/* スイッチ（本物のチェックボックスのまま見た目だけ） */
+#researchModal.rsapp :is(#rsUseFull,#rsUseDocs,#rsAcctWord,#rsAcctFull,#rsRFull){appearance:none; -webkit-appearance:none; position:relative; flex:0 0 auto; width:30px; height:18px; margin:0;
+  border-radius:99px; background:var(--line-2); cursor:pointer; transition:background .2s}
+#researchModal.rsapp :is(#rsUseFull,#rsUseDocs,#rsAcctWord,#rsAcctFull,#rsRFull)::before{content:""; position:absolute; top:2px; left:2px; width:14px; height:14px; border-radius:50%;
+  background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.35); transition:transform .2s}
+#researchModal.rsapp :is(#rsUseFull,#rsUseDocs,#rsAcctWord,#rsAcctFull,#rsRFull):checked{background:var(--accent)}
+#researchModal.rsapp :is(#rsUseFull,#rsUseDocs,#rsAcctWord,#rsAcctFull,#rsRFull):checked::before{transform:translateX(12px)}
+#researchModal.rsapp :is(#rsUseFull,#rsUseDocs,#rsAcctWord,#rsAcctFull,#rsRFull):focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+#researchModal.rsapp :is(#rsUseFull,#rsUseDocs,#rsAcctWord,#rsAcctFull,#rsRFull):disabled{opacity:.5; cursor:default}
+@media (forced-colors:active){
+  #researchModal.rsapp :is(#rsUseFull,#rsUseDocs,#rsAcctWord,#rsAcctFull,#rsRFull){appearance:auto; -webkit-appearance:auto}
+  #researchModal.rsapp :is(#rsUseFull,#rsUseDocs,#rsAcctWord,#rsAcctFull,#rsRFull)::before{display:none}
+}
+/* パネル（情報源・テーマ・ウォッチ・同義語・保存済み・書き出し済み・資料）の中身を少し大きく */
+#researchModal.rsapp .rs__srcrow{font-size:13px; padding:5px 7px}
+#researchModal.rsapp :is(.rs__srcrow .c, .rs__srchead, .rs__theme .d, .rs__watch .d, .rs__wsec, .rs__doc .c, .cand .c, .rs__synpanel .hint){color:var(--wb-muted)}
+#researchModal.rsapp :is(.rs__theme, .rs__watch){padding:8px; border-radius:10px}
+#researchModal.rsapp :is(.rs__theme .t, .rs__watch .t){font-size:13px}
+#researchModal.rsapp .rs__themesave input{height:32px; padding:0 10px; border-radius:8px; background:var(--wb-field); font-size:12.5px}
+#researchModal.rsapp .rs__synpanel textarea{padding:8px 10px; border-radius:9px; background:var(--wb-field); font-size:12.5px; line-height:1.6}
+#researchModal.rsapp .rs__docpaste :is(input, textarea){background:var(--wb-field)}
+/* 低い画面: 候補はフォームを開いている間は隠す・キー操作の一覧は隠す */
+@media (max-height:760px) and (min-width:901px){ #researchModal.rsapp .rs__chat.has-form #rsQuick{display:none} }
+@media (max-height:640px){ #researchModal.rsapp .rsapp__keys{display:none} }
+/* 1699px 以下: 保存物のボタンのアイコンを省く（見出しの行に「AI ワークスペース」を残す）。入力欄の下は 件数とキーの案内／スイッチ の2行に */
+@media (max-width:1699px){
+  #researchModal.rsapp .rs__libR .btn > svg{display:none}
+  #researchModal.rsapp .rs__chatopts::after{content:""; order:3; flex-basis:100%; height:0}
+  #researchModal.rsapp .rs__chatopts > .rs__chk{order:4}
+}
+/* 1280〜1439px: 作るの・保存物のアイコン、「AI ワークスペース」の文字、入力欄のキーの案内を省く */
+@media (max-width:1439px){
+  #researchModal.rsapp :is(.rs__make, .rs__libR) .btn > svg, #researchModal.rsapp .rs__panetitle > span, #researchModal.rsapp .rs__keyhint{display:none}
+}
+/* 901〜1279px: 2ペイン（絞り込みは横並び）。ヘッダーの説明文・AI の見出しと ⤢ は省く */
+@media (max-width:1279px){
+  #researchModal.rsapp #rsStats{display:none}
+  #researchModal.rsapp .rs__tools{grid-template-columns:minmax(0,1fr); grid-template-areas:"lib" "make"}
+  #researchModal.rsapp .rs__panetitle{display:none}
+  #researchModal.rsapp .rs__libR{justify-content:flex-start; flex-wrap:wrap}
+  #researchModal.rsapp .rs__make .btn{padding:0 6px; font-size:12px}
+  #researchModal.rsapp .rs__formhead kbd{display:none}
+  #researchModal.rsapp .gsearch input{height:44px; font-size:15.5px}
+  #researchModal.rsapp .rs__chatopts{column-gap:12px}
+  #researchModal.rsapp .rs__chatopts .rs__chk{font-size:11.5px; gap:6px}
+}
+/* 900px 以下: 1ペイン＋「結果／AI」の切替（ページ全体が縦にスクロール。パネルは画面下のシート） */
+@media (max-width:900px){
+  html.rs-standalone body{height:auto; overflow:auto}
+  #researchModal.rsapp{height:auto; min-height:100vh; min-height:100dvh; overflow:visible}
+  #researchModal.rsapp .modal__head{position:sticky; top:0; z-index:40; flex:0 0 52px; height:52px; padding:0 12px; gap:10px}
+  #researchModal.rsapp :is(.rsapp__brand b, .rsapp__sep, .modal__head > svg, #rsStats, #rsappJob, #rsappHelp, #rsappPortal span, .rsapp__sp){display:none}
+  #researchModal.rsapp .rsapp__view{display:inline-flex; flex:0 0 auto; margin-left:auto; padding:3px; gap:2px; border-radius:10px; background:var(--surface-2); border:1px solid var(--line); white-space:nowrap}
+  #researchModal.rsapp .rsapp__view button{height:32px; padding:0 13px; display:inline-flex; align-items:center; gap:6px; border:0; border-radius:8px; background:transparent;
+    color:var(--text-2); font:700 12.5px/1 var(--font-sans)}
+  #researchModal.rsapp .rsapp__view button b{font-weight:500; opacity:.8}
+  #researchModal.rsapp .rsapp__view button[aria-pressed="true"]{background:var(--wb-pane); color:var(--text); box-shadow:var(--shadow-sm)}
+  #researchModal.rsapp #rsappAiDot{display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--accent-2)}
+  #researchModal.rsapp #rsappAiDot[hidden]{display:none}
+  #researchModal.rsapp .rs{display:block; overflow:visible}   /* モーダルの 600px 以下の「.rs をスクロール」は使わない（固定の行・入力欄はページ基準） */
+  #researchModal.rsapp[data-view="results"] .rs__chat, #researchModal.rsapp[data-view="ai"] .rs__search{display:none}
+  #researchModal.rsapp .rs__search{overflow:visible; padding:12px 12px 84px; min-height:calc(100dvh - 52px)}
+  #researchModal.rsapp .rs__search .rs__filters{flex-wrap:nowrap; overflow-x:auto; scrollbar-width:none; margin:0 -12px; padding:2px 12px 4px}
+  #researchModal.rsapp .rs__search .rs__filters::-webkit-scrollbar{display:none}
+  #researchModal.rsapp .rs__search .rs__filters > *, #researchModal.rsapp .rs__search .rs__lib > .rs__src{flex:0 0 auto}
+  #researchModal.rsapp .rs__search .rs__filters::after{content:""; position:sticky; right:0; z-index:1; flex:0 0 24px; align-self:stretch; pointer-events:none;
+    background:linear-gradient(90deg, transparent, var(--wb-main))}
+  #researchModal.rsapp .rs__bar{top:52px; margin:0 -12px; padding:8px 12px}
+  #researchModal.rsapp #rsList{min-height:0}
+  #researchModal.rsapp .rsapp__toai{display:flex; position:fixed; left:12px; right:12px; bottom:12px; z-index:35; height:48px; align-items:center; justify-content:center; gap:10px;
+    border:0; border-radius:14px; background:var(--accent); color:#05101d; font:700 14px/1.2 var(--font-sans); cursor:pointer;
+    box-shadow:0 14px 30px -12px color-mix(in srgb,var(--accent) 70%,transparent)}
+  html.rs-standalone[data-theme="light"] #researchModal.rsapp .rsapp__toai{color:#fff}
+  #researchModal.rsapp[data-view="ai"] .rsapp__toai{display:none}
+  #researchModal.rsapp .rs__chat{border-left:0; min-height:calc(100dvh - 52px)}
+  #researchModal.rsapp .rs__tools{padding:10px 12px}
+  #researchModal.rsapp .rs__make .btn{flex:1 1 30%; height:40px; min-width:0}
+  #researchModal.rsapp .rs__formzone{overflow:visible; padding:10px 12px}
+  #researchModal.rsapp .rs__logwrap{flex:1 0 auto; min-height:0}
+  #researchModal.rsapp #rsLog{overflow:visible; max-height:none; min-height:40vh; padding:14px 12px}
+  #researchModal.rsapp .rs__composer{position:sticky; bottom:0; z-index:30; margin:0; padding:8px 12px 12px; border-top:1px solid var(--line); background:var(--wb-pane)}
+  /* 出力を見せるとき（scrollIntoView）: 下は固定の入力欄、上は固定のヘッダーの分を空ける */
+  #researchModal.rsapp #rsLog > *{scroll-margin-bottom:calc(var(--rsapp-comp-h, 200px) + 12px); scroll-margin-top:64px}
+  #researchModal.rsapp .rsapp__newout{position:fixed; bottom:calc(var(--rsapp-comp-h, 200px) + 12px)}
+  #researchModal.rsapp .rsapp__offer{top:60px; left:16px; right:16px; transform:none; width:auto; max-width:none}
+  #researchModal.rsapp .rs__srcpanel, #researchModal.rsapp .rs__search .rs__filters .rs__srcpanel, #researchModal.rsapp .rs__libR .rs__srcpanel{position:fixed; left:12px; right:12px; bottom:12px; top:auto;
+    width:auto; min-width:0; max-width:none; max-height:60vh; z-index:60; padding:10px; background:var(--wb-elev); border:1px solid var(--line-2); border-radius:12px; box-shadow:var(--shadow)}
+  html.rs-standalone .toasts{bottom:76px}
+}
+@media (max-width:600px){
+  #researchModal.rsapp .rs__bar #rsCount{flex-basis:100%; white-space:normal}
+  #researchModal.rsapp .rs__baracts{margin-left:0; flex-wrap:wrap}
+  #researchModal.rsapp .cmp__grid{grid-template-columns:1fr}
+  #researchModal.rsapp .rs__libR{width:100%}
+  #researchModal.rsapp .rs__libR > .rs__src{flex:1 1 0; min-width:0}
+  #researchModal.rsapp .rs__libR .btn{width:100%; justify-content:center; padding:0 6px}
+  #researchModal.rsapp .rsapp__k{display:none}
+  #researchModal.rsapp .gsearch input{height:46px; padding-right:16px}
+  #researchModal.rsapp .rrow{padding:10px 8px}
+  #researchModal.rsapp .rrow__t{font-size:14px}
+  #researchModal.rsapp .bubble{max-width:94%}
+}
+@media (max-width:480px){
+  #researchModal.rsapp #rsappPortal{display:none}
+  #researchModal.rsapp #rsAcctName{flex:0 0 auto}   /* 縦並び（モーダルの 480px 以下の規則）では 220px の flex-basis が高さになるため */
+  #researchModal.rsapp .rs__formhead kbd{display:none}
+  #researchModal.rsapp .rs__formhead span{flex-basis:100%}
+}
+@media (prefers-reduced-motion: reduce){
+  #researchModal.rsapp .rsapp__job.ind .ring, #researchModal.rsapp #rsList[aria-busy="true"]:empty{animation:none}
+  #researchModal.rsapp .rs__lib .caret, #researchModal.rsapp .rs__composer::before{transition:none}
+  html.rs-standalone, html.rs-standalone *{scroll-behavior:auto !important}
 }
 .search-modal .modal__head h2{flex:0 0 auto}
 .gsub{font-size:12px; color:var(--text-3)}
@@ -1217,7 +1662,7 @@ body.arc-on .topbar .search{visibility:hidden}
     <button class="iconbtn" data-close aria-label="閉じる"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
   </div>
   <div class="modal__body">
-    <div class="kbd-list">
+    <div class="kbd-list" id="helpPortal">
       <div class="kbd-row"><kbd>/</kbd> 検索にフォーカス（過去ログではキーワード欄）</div>
       <div class="kbd-row"><kbd>F</kbd> 横断検索（全カテゴリ）</div>
       <div class="kbd-row"><kbd>R</kbd> 記事を再取得</div>
@@ -1229,8 +1674,23 @@ body.arc-on .topbar .search{visibility:hidden}
       <div class="kbd-row"><kbd>V</kbd> ソース別に表示</div>
       <div class="kbd-row"><kbd>A</kbd> AIアシスタント</div>
       <div class="kbd-row"><kbd>G</kbd> リサーチ（過去ログを検索してAIに質問・レポート）</div>
+      <div class="kbd-row"><kbd>Shift</kbd>+<kbd>G</kbd> リサーチを別タブで開く（大きな画面）</div>
       <div class="kbd-row"><kbd>1</kbd>〜<kbd>9</kbd> カテゴリ切替</div>
       <div class="kbd-row"><kbd>Esc</kbd> 閉じる / 過去ログからフィードに戻る / 検索クリア</div>
+    </div>
+    <!-- リサーチを別タブ（/research）で開いたときのショートカット（ポータルでは隠す） -->
+    <div class="kbd-list" id="helpResearch" hidden>
+      <div class="kbd-row"><kbd>/</kbd> 検索欄へ</div>
+      <div class="kbd-row"><kbd>J</kbd> / <kbd>K</kbd> 記事を移動</div>
+      <div class="kbd-row"><kbd>X</kbd>（<kbd>Space</kbd>）選択を切り替え</div>
+      <div class="kbd-row"><kbd>C</kbd> 質問の入力欄へ</div>
+      <div class="kbd-row"><kbd>1</kbd>〜<kbd>5</kbd> 商談ブリーフ／レポート生成／比較／変化ブリーフ／書き出し</div>
+      <div class="kbd-row"><kbd>Ctrl</kbd>+<kbd>Enter</kbd> フォームを実行</div>
+      <div class="kbd-row"><kbd>Enter</kbd> 送信・<kbd>Shift</kbd>+<kbd>Enter</kbd> 改行</div>
+      <div class="kbd-row"><kbd>W</kbd> AI の欄を広げる／戻す</div>
+      <div class="kbd-row"><kbd>T</kbd> ライト／ダーク</div>
+      <div class="kbd-row"><kbd>?</kbd> この一覧</div>
+      <div class="kbd-row"><kbd>Esc</kbd> パネル → フォーム → 入力欄の順に閉じる</div>
     </div>
   </div>
 </div>
@@ -1259,6 +1719,7 @@ body.arc-on .topbar .search{visibility:hidden}
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5.5" rx="8" ry="2.5"/><path d="M4 5.5v6c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5v-6"/><path d="M4 11.5v6c0 1.4 3.6 2.5 8 2.5 1.2 0 2.4-.08 3.4-.23"/><path d="M18.5 15.5l2.5 2.5-2.5 2.5M21 18h-5"/></svg>
     <h2>リサーチ</h2>
     <span class="gsub" id="rsStats">現在＋過去ログを横断検索し、選んだ記事をAIに渡して作業</span>
+    <a class="iconbtn pill rs-popout" id="rsPopout" href="/research" target="prism-research" title="別タブで開く（Shift+G）— 大きな画面で使えます" aria-label="リサーチを別タブで開く（Shift+G）"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg><span>別タブで開く</span></a>
     <button class="iconbtn" data-close aria-label="閉じる" style="margin-left:auto"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
   </div>
   <div class="rs">
@@ -1652,6 +2113,9 @@ function el(tag, props={}, kids=[]){
 const CAT_COLORS = {"総合":"#7c9cff","テクノロジー":"#3fd8c3","ビジネス":"#f5b83b","科学":"#b48bff","専門":"#22b8cf","世界":"#ff8f5e","スポーツ":"#46d17f","エンタメ":"#ff7bb0"};
 const ALL_CATS = ["総合","テクノロジー","ビジネス","科学","専門","世界","スポーツ","エンタメ"];
 const catColor = c => CAT_COLORS[c] || "#7c9cff";
+// /research（リサーチを別タブで開いた画面）か。head のスクリプトが初回描画の前に html.rs-standalone を付けている
+const RS_STANDALONE = document.documentElement.classList.contains("rs-standalone");
+const RS_SETTINGS_HINT = RS_STANDALONE ? "設定（右上の歯車）" : "設定（トップバーの設定ボタン）";   // 「生成AIが未設定です」の案内
 
 function relTime(ts){
   if(!ts) return "";
@@ -1711,11 +2175,18 @@ function applyTheme(t){
   store.set("theme", t);
   const tc = document.querySelector('meta[name="theme-color"]');   // アプリとしてインストールしたときのタイトルバーの色
   if(tc) tc.content = t==="dark" ? "#090b11" : "#eaeef6";
-  $("#themeIcon").innerHTML = t==="dark"
+  const icon = t==="dark"
     ? '<circle cx="12" cy="12" r="4.5"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M19.1 4.9l-1.8 1.8M6.7 17.3l-1.8 1.8" stroke-linecap="round"/>'
     : '<path d="M20 14.5A8 8 0 0 1 9.5 4 7 7 0 1 0 20 14.5z"/>';
+  $("#themeIcon").innerHTML = icon;
+  const ri=$("#rsappThemeIcon"); if(ri) ri.innerHTML = icon;   // リサーチ（別タブ）のヘッダーのボタン
 }
 applyTheme(store.get("theme", matchMedia("(prefers-color-scheme: light)").matches ? "light":"dark"));
+// 別のタブ（ポータル／リサーチ）でテーマを切り替えたら、このタブも合わせる（localStorage の変更通知）
+window.addEventListener("storage",(e)=>{
+  if(e.key!=="prism.theme" || !e.newValue) return;
+  try{ const v=JSON.parse(e.newValue); if((v==="light"||v==="dark") && v!==document.documentElement.getAttribute("data-theme")) applyTheme(v); }catch(_){}
+});
 
 // ============================================================ API
 async function api(path, opts){
@@ -2378,7 +2849,7 @@ function renderDiag(diag){
 // ============================================================ overlays（重ね対応）
 let lastTrigger=null;
 const overlayStack=[];
-function _bgInert(on){ $$(".topbar,.catbar,.subbar,main").forEach(n=>{ n.inert=on; }); }  // 背面をフォーカス不能に
+function _bgInert(on){ $$(".topbar,.catbar,.subbar,main,#researchModal.rsapp,.rsapp__skip").forEach(n=>{ n.inert=on; }); }  // 背面をフォーカス不能に（リサーチの別タブでは画面全体と body 直下のスキップリンク）
 function _focusFirst(node,d){ const f=node.querySelector('input,select,textarea,button,[href]'); if(f) setTimeout(()=>{ try{ f.focus(); }catch(e){} }, d); }
 function openOverlay(node){
   const prev=overlayStack[overlayStack.length-1];
@@ -2601,6 +3072,7 @@ function exitArchive(opts){
 }
 function toggleArchive(){ if(AR.active) exitArchive({focus:"#archiveBtn"}); else enterArchive(); }
 window.addEventListener("popstate", ()=>{   // ブラウザの戻る／進む
+  if(RS_STANDALONE) return;   // リサーチの別タブには過去ログのタブ表示が無い
   if(isArchiveHash()){ const h=arParseHash(location.hash); enterArchive({filters:h.f, view:h.view, history:false, focus:false}); }
   else if(AR.active) exitArchive({history:false});
 });
@@ -3356,7 +3828,12 @@ $("#aiForm").addEventListener("submit", async (e)=>{
       else if(n>0) toast("設定を保存し、過去ログの古い記事 "+arNum(n)+" 件を削除しました");
       else toast(payload.archive ? "設定を保存しました（過去ログの保存: "+retPolicyText(AI.archive)+"）" : "AI・プロキシ設定を保存しました");
       if(payload.archive && AR.active) arSearch();   // 過去ログタブの件数・保存の設定を新しく
-      closeOverlays(); openAI();
+      rsSettingsSaved();   // ほかのタブ（ポータル・リサーチの別タブ）も読み直す
+      closeOverlays();
+      // リサーチの別タブには AI アシスタントの引き出しが無い（CSS で隠している）。開くと見えない引き出しの下で画面全体がぼけて
+      // 操作できなくなるので、別タブでは開かず、開いている商談ブリーフのフォームだけ新しい設定で描き直す
+      if(!RS_STANDALONE) openAI();
+      else{ const f=$("#rsAcctForm"); if(f && !f.hidden) renderAcct(); }
     }
     else toast(d.error||"保存に失敗しました","err");
   }catch(e){ settingsRefused(e); toast(e.server ? e.message : "保存に失敗しました","err"); }
@@ -3370,6 +3847,7 @@ $("#aiClearKey").onclick=async ()=>{
                             model:$("#aiModel").value.trim(), clear_key:true, ...proxyPayload() })});
     if(d.ok){
       AI.config=d.ai; AI.proxy=d.proxy; AI.browser=d.browser; $("#aiKey").value=""; $("#aiKeyStatus").textContent="";
+      rsSettingsSaved();
       // 保存できた＝settings.json を読めた: 前の 409 の消えない警告を消し、保存の設定の欄もサーバーの今の状態で使えるように戻す
       // （画面は開いたまま。保存の設定の欄を操作していなければ、読めた今の設定を入れ直す）
       AI.settingsError=d.settings_error||""; AI.saveError="";
@@ -3436,14 +3914,17 @@ const RS={results:[], sel:new Set(), srcSel:new Set(), msgs:[], busy:false, stat
           ask:null, askTimer:null, persistT:null, opened:false,   // 根拠つき会話のジョブ（レポートのジョブ RS.job とは別に進む）・会話の控えの書き込み・このページで画面を開いたか
           alias:null};   // 検索欄の「別表記」の候補 {q, data}
 const RS_QUICK=["期間内の動きを時系列で要約","情報源ごとに要点を整理","共通するテーマと相違点を比較","重要トピック3つと根拠"];
-function openResearch(){
-  if(document.title.startsWith(DONE_MARK)) document.title=document.title.slice(DONE_MARK.length);   // 「(✓) 」は画面を開いたら消す
-  openOverlay($("#researchModal"));
+function rsMount(){   // リサーチの中身を準備（モーダルを開いたとき・別タブ /research の起動時に共通）
   fillRsCats();
   if(!RS.msgs.length) rsRestore();   // 再読み込みの後: 会話・検索条件を戻し、途中のジョブの進捗を追い直す
   RS.opened=true;   // 戻す前に控えを書き込むと、前の会話を空で上書きしてしまう
-  if(!RS.results.length) researchSearch();
+  if(!RS.results.length) researchSearch(RS.sel.size ? true : undefined);   // 戻した選択があれば保つ
   renderRsLog(); renderRsQuick(); loadReports(); loadThemes(); loadSynonyms(); loadExports(); loadDocs();
+}
+function openResearch(){
+  if(document.title.startsWith(DONE_MARK)) document.title=document.title.slice(DONE_MARK.length);   // 「(✓) 」は画面を開いたら消す
+  openOverlay($("#researchModal"));
+  rsMount();
   setTimeout(()=>{ try{ $("#rsQ").focus(); }catch(e){} }, 90);
 }
 function fillRsCats(){
@@ -3498,16 +3979,18 @@ async function researchSearch(keepSel){
   const f=rsFilterParams();
   const seq=++RS.seq;   // 連続操作で古い応答が新しい結果を上書きしないよう、最新リクエストのみ採用
   const hp=new URLSearchParams({q:f.q}); if(f.cat) hp.set("category",f.cat); if(f.srcs.length) hp.set("sources",f.srcs.join(","));
+  const list=$("#rsList"); list.setAttribute("aria-busy","true");   // 検索中（最新の応答を反映するか失敗したら外す）
   try{
     const [d,h]=await Promise.all([api("/api/archive/search?"+f.p.toString()),
                                    api("/api/archive/histogram?"+hp.toString()).catch(()=>null)]);   // 分布は期間以外の条件で取る
     if(seq!==RS.seq) return;
+    list.removeAttribute("aria-busy");
     RS.results=d.articles||[]; RS.stats=d.stats||null; RS.filters=f; RS.hist=h;
     RS.fts=!!d.fts; RS.expanded=d.expanded||[]; RS.dupGroups=d.dup_groups||0;
     if(keepSel===true){ const ids=new Set(RS.results.map(a=>a.id)); RS.sel=new Set([...RS.sel].filter(id=>ids.has(id))); }   // 再読込は選択を維持
     else RS.sel=new Set(RS.results.filter(a=>!(f.dedup&&a.dup_of)).slice(0,20).map(a=>a.id));   // 上位20件（類似束は代表のみ）を既定で選択
     renderRsList(); renderRsSrcPanel(); renderThemeStrip(); renderExpand(); syncAliasBtn(); syncOrder(); renderHist(); rsPersistSoon();
-  }catch(e){ $("#rsCount").textContent="検索に失敗しました"; }
+  }catch(e){ if(seq===RS.seq) list.removeAttribute("aria-busy"); $("#rsCount").textContent="検索に失敗しました"; }
 }
 function syncRsCount(){
   const c=$("#rsCount");
@@ -3517,6 +4000,8 @@ function syncRsCount(){
             +(capped?"。ヒットが表示上限に達しています。「表示: N件」で上限を増やせます":"");
   const rc=$("#rsRCount"); if(rc) rc.textContent=String(RS.sel.size);
   syncRThin();
+  rsPersistSoon();   // 選択の変更も控えに（再読み込み・別タブへの引き継ぎで戻す）
+  if(RS_STANDALONE) rsappSync();
 }
 function syncRThin(){   // レポート生成のフォーム: 選択が3件未満なら「内容が薄くなります」と知らせる
   const w=$("#rsRThin"); if(!w) return; const n=RS.sel.size;
@@ -3552,7 +4037,8 @@ function renderRsList(){
     $("#rsStats").textContent="過去ログ "+RS.stats.count+"件"+(RS.stats.oldest?"（"+fmt(RS.stats.oldest)+"〜"+fmt(RS.stats.newest)+"）":"")+"を条件検索";
   }
   syncRsCount();
-  if(!RS.results.length){ box.append(el("div",{class:"gempty",text:"該当する記事がありません（条件を緩めるか、記事を取得すると過去ログに自動保存されます）"})); return; }
+  if(!RS.results.length){ box.append(el("div",{class:"gempty",text:"該当する記事がありません（条件を緩めるか、記事を取得すると過去ログに自動保存されます）"}));
+    if(RS_STANDALONE) rsappRestoreCursor(); return; }
   const dedup=!!(RS.filters&&RS.filters.dedup); const byId=new Map(RS.results.map(a=>[a.id,a]));
   const render=(a,isDup)=>{
     const row=el("label",{class:"rrow"+(RS.sel.has(a.id)?" on":"")+(isDup?" dup":"")});
@@ -3562,7 +4048,7 @@ function renderRsList(){
     const c=el("div",{class:"rrow__c"});
     c.append(el("div",{class:"rrow__t",text:a.title||""}));
     const m=el("div",{class:"rrow__m"});
-    const cc=el("span",{class:"c",text:a.category||""}); cc.style.color=catColor(a.category);
+    const cc=el("span",{class:"c",text:a.category||""}); cc.style.setProperty("--c", catColor(a.category));   // 色は CSS（ライトでは文字用に暗くする）
     m.append(cc, el("span",{text:a.source||""}));
     const d=String(a.published||"").slice(0,10); if(d) m.append(el("span",{text:d}));
     if(a.has_text){
@@ -3583,14 +4069,19 @@ function renderRsList(){
     render(a,false);
     if(dedup && a.dups && RS.openDups.has(a.id)) a.dups.forEach(id=>{ const x=byId.get(id); if(x) render(x,true); });
   });
+  if(RS_STANDALONE) rsappRestoreCursor();   // J/K のカーソルを描き直した一覧に戻す
 }
 function renderRsQuick(){
   const box=$("#rsQuick"); if(!box) return; box.innerHTML="";
   RS_QUICK.forEach(t=>{ const b=el("button",{class:"qchip",type:"button",text:t}); b.onclick=()=>sendRs(t); box.append(b); });
 }
 function renderRsLog(){
-  const log=$("#rsLog"); if(!log) return; log.innerHTML="";
-  if(!RS.msgs.length){
+  const log=$("#rsLog"); if(!log) return;
+  const prev={top:log.scrollTop, near:log.scrollHeight-log.scrollTop-log.clientHeight<=120, len:log.childElementCount};   // 描き直す前の読んでいる位置
+  if(RS_STANDALONE) prev.pageNear=rsappPageNear();   // 別タブのスマホ幅はページ全体がスクロールする（描き直す前に測る）
+  log.innerHTML="";
+  if(!RS.msgs.length && RS_STANDALONE) log.append(rsappHello());   // 別タブ: 「作る」5種類のカード
+  else if(!RS.msgs.length){
     const h=el("div",{class:"ai__hello"});
     h.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5.5" rx="8" ry="2.5"/><path d="M4 5.5v6c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5v-6"/><path d="M4 11.5v6c0 1.4 3.6 2.5 8 2.5 1.2 0 2.4-.08 3.4-.23"/></svg>';
     h.append(el("div",{text:"左で 期間・情報源・カテゴリ・キーワード を組み合わせて絞り込み、「レポート生成」で出典つきの調査レポートを作るか、下の欄で質問できます。"}));
@@ -3603,7 +4094,8 @@ function renderRsLog(){
   });
   if(RS.busy) log.append(el("div",{class:"bubble think", html:'<span class="dots"><span></span><span></span><span></span></span>'}));
   const sb=$("#rsSend"); if(sb) sb.disabled=RS.busy||!!RS.ask;   // 回答の生成中は次の質問を待ってもらう（書き出しの指示は受け付ける）
-  log.scrollTop=log.scrollHeight;
+  if(RS_STANDALONE) rsappScrollLog(log, prev);   // 別タブ: 上の方を読んでいる間は位置を動かさず「↓ 新しい出力」を出す
+  else log.scrollTop=log.scrollHeight;
   rsPersistSoon();
 }
 async function sendRs(text){
@@ -3727,13 +4219,20 @@ function exportTarget(){   // 書き出しの対象: 会話の中で一番新し
 const RS_STORE="prism.rs.v1", RS_STORE_MAX=1500000, RS_KEEP_ROLES=["user","assistant","report","compare","export","change"];
 const DONE_MARK="(✓) ";
 function rsPersistSoon(){ clearTimeout(RS.persistT); RS.persistT=setTimeout(rsPersist, 300); }
-function rsPersist(){
+function rsSnapshot(){   // 会話・検索条件・選択・途中のジョブ（sessionStorage の控えと、別タブへの引き継ぎで同じ形）
+  const msgs=RS.msgs.filter(m=>RS_KEEP_ROLES.includes(m.role) || (m.role==="error" && !m.retry)).slice(-40);
+  const j=RS.job && !["done","error"].includes(RS.job.state) ? {id:RS.job.id, kind:RS.job.kind||"report", export_kind:RS.job.export_kind||"", payload:RS.job.payload||null} : null;
+  return {v:1, msgs, q:$("#rsQ").value||"", period:$("#rsPeriod").value||"", from:$("#rsFrom").value||"", to:$("#rsTo").value||"",
+          job:j, ask: RS.ask ? {id:RS.ask.id, question:RS.ask.question} : null,
+          // 以下は後から足した項目（無い控えでも読める）: カテゴリ・情報源・表示件数・並び順・類似をまとめる・選択・資料の選択・開いているテーマ
+          cat:$("#rsCat").value||"", srcs:[...RS.srcSel], limit:$("#rsLimit").value||"500", order:$("#rsOrder").value||"new", dedup:!!$("#rsDedup").checked,
+          sel:[...RS.sel].slice(0,2000), docSel:[...RS.docSel], theme:RS.theme||null, newOnly:!!RS.newOnly};
+}
+function rsPersist(withDraft){   // withDraft: 別タブが閉じる・読み込み直す直前（pagehide）。入力中の文・開いているフォーム（訪問メモを含む）も控える
   if(!RS.opened) return;
   try{
-    const msgs=RS.msgs.filter(m=>RS_KEEP_ROLES.includes(m.role) || (m.role==="error" && !m.retry)).slice(-40);
-    const j=RS.job && !["done","error"].includes(RS.job.state) ? {id:RS.job.id, kind:RS.job.kind||"report", export_kind:RS.job.export_kind||"", payload:RS.job.payload||null} : null;
-    const st={v:1, msgs, q:$("#rsQ").value||"", period:$("#rsPeriod").value||"", from:$("#rsFrom").value||"", to:$("#rsTo").value||"",
-              job:j, ask: RS.ask ? {id:RS.ask.id, question:RS.ask.question} : null};
+    const st=rsSnapshot();
+    if(withDraft && RS_STANDALONE){ st.draft=String($("#rsInput").value||"").slice(0,4000); st.form=rsOpenForm(); }
     let s=JSON.stringify(st);
     while(s.length>RS_STORE_MAX && st.msgs.length){ st.msgs.shift(); s=JSON.stringify(st); }
     sessionStorage.setItem(RS_STORE, s);
@@ -3743,6 +4242,7 @@ function rsRestore(){
   let st=null;
   try{ const v=sessionStorage.getItem(RS_STORE); st=v ? JSON.parse(v) : null; }catch(e){ st=null; }
   if(!st || typeof st!=="object" || st.v!==1) return false;
+  const fresh=!RS.results.length;   // まだ検索していない（このページで初めて開いた・別タブの起動時）ときだけ条件と選択を戻す
   const okMsg=m=>m && typeof m==="object" && (RS_KEEP_ROLES.includes(m.role) || m.role==="error")
     && (m.role!=="report" || (m.report && typeof m.report==="object")) && (!["compare","export","change"].includes(m.role) || (m.data && typeof m.data==="object"));
   RS.msgs=(Array.isArray(st.msgs) ? st.msgs : []).filter(okMsg).map(m=>m.role==="error" ? {role:"error", text:String(m.text||"")} : m);
@@ -3752,6 +4252,7 @@ function rsRestore(){
     if(per.value==="custom"){ $("#rsFrom").value=validDay(st.from); $("#rsTo").value=validDay(st.to); }
     $("#rsRange").hidden = per.value!=="custom";
   }catch(e){}
+  if(fresh) try{ rsRestoreConds(st); }catch(e){}
   const hex=v=>typeof v==="string" && /^[0-9a-f]{16}$/.test(v);
   if(st.job && hex(st.job.id)){   // 途中だったレポート生成・書き出しの進捗を追い直す
     const p=st.job.payload && typeof st.job.payload==="object" && Array.isArray(st.job.payload.ids) ? st.job.payload : null;
@@ -3765,8 +4266,26 @@ function rsRestore(){
   }
   return true;
 }
+function rsRestoreConds(st){   // 控えのカテゴリ・情報源・表示件数・並び順・類似・選択・資料の選択・テーマ（どれも無ければそのまま）
+  const strs=(a,n)=>Array.isArray(a) ? a.filter(x=>typeof x==="string" && x && x.length<=200).slice(0,n) : null;
+  if(typeof st.cat==="string" && st.cat.length<=60){
+    const cat=$("#rsCat");
+    if(st.cat && ![...cat.options].some(o=>o.value===st.cat)) cat.append(el("option",{value:st.cat, text:st.cat}));
+    cat.value=st.cat;
+  }
+  const srcs=strs(st.srcs,50); if(srcs){ RS.srcSel=new Set(srcs); syncRsSrcBtn(); }
+  if(["200","500","1000","2000"].includes(String(st.limit))) $("#rsLimit").value=String(st.limit);
+  if(st.order==="rel"||st.order==="new") $("#rsOrder").value=st.order;
+  if(typeof st.dedup==="boolean") $("#rsDedup").checked=st.dedup;
+  const sel=strs(st.sel,2000); if(sel) RS.sel=new Set(sel);
+  const ds=strs(st.docSel,500); if(ds) RS.docSel=new Set(ds);
+  if(st.theme && typeof st.theme==="object" && typeof st.theme.id==="string" && typeof st.theme.name==="string"){
+    RS.theme=st.theme; RS.newOnly=!!st.newOnly;
+  }
+}
 function rsNotifyDone(kind){   // 画面を閉じている・別のタブを見ている間にジョブが終わったら知らせる（タブの題名に「(✓) 」）
-  let closed=true; try{ closed=document.hidden || !$("#researchModal").classList.contains("show"); }catch(e){}
+  if(RS_STANDALONE) rsappDone(kind);   // 別タブ: ヘッダーのジョブ表示を「…ができました — 開く」に
+  let closed=true; try{ closed=document.hidden || (!RS_STANDALONE && !$("#researchModal").classList.contains("show")); }catch(e){}
   if(!closed) return;
   toast(kind==="ask" ? "回答ができました" : kind==="export" ? "ファイルができました" : "レポートができました");
   if(!document.title.startsWith(DONE_MARK)) document.title=DONE_MARK+document.title;
@@ -3782,7 +4301,7 @@ function defaultQuestion(){
 }
 function toggleReportForm(show){
   const f=$("#rsReportForm"); f.hidden=!show;
-  if(show){ toggleAcctForm(false); toggleChgForm(false); syncRThin();
+  if(show){ toggleAcctForm(false); toggleChgForm(false); toggleCmpForm(false); toggleExportForm(false); syncRThin();   // 開くフォームは常に1つ
             const q=$("#rsRQ"); if(!q.value.trim()) q.value=defaultQuestion(); $("#rsRCount").textContent=String(RS.sel.size); q.focus(); q.select();
             $("#rsRDocsN").textContent=String(RS.docs.length); $("#rsRDocs").disabled=!RS.docs.length; if(!RS.docs.length) $("#rsRDocs").checked=false; }
 }
@@ -3795,7 +4314,7 @@ function retryEl(m){   // 失敗したレポート生成: 同じ条件で再実�
 }
 async function startReport(){
   if(RS.job && !["done","error"].includes(RS.job.state)){ toast("生成中のレポートがあります。完了をお待ちください","err"); return; }
-  if(!aiReady()){ RS.msgs.push({role:"error",text:"⚠ 生成AIが未設定です。設定（トップバーの設定ボタン）から登録してください。"}); renderRsLog(); return; }
+  if(!aiReady()){ RS.msgs.push({role:"error",text:"⚠ 生成AIが未設定です。"+RS_SETTINGS_HINT+"から登録してください。"}); renderRsLog(); return; }
   const ids=RS.results.filter(a=>RS.sel.has(a.id)).map(a=>a.id);
   if(!ids.length){ toast("記事を1件以上選択してください","err"); return; }
   const question=($("#rsRQ").value||"").trim(), template=$("#rsRT").value, fulltext=$("#rsRFull").checked;
@@ -3812,14 +4331,16 @@ async function runReport(payload){
     const base=Object.assign({}, payload); delete base.reuse;   // 再実行ボタンは毎回 reuse を付け直す
     RS.job={id:d.job_id, state:"queued", total:0, done:0, articles:payload.ids.length, fulltext:payload.fulltext, payload:base};
     toggleReportForm(false);
-    RS.msgs.push({role:"progress"}); renderRsLog();
+    RS.msgs.push({role:"progress"}); rsOwnOut(); renderRsLog();
     pollReport();
   }catch(e){ toast(e.server?e.message:"レポート生成を開始できませんでした","err"); }
 }
 async function pollReport(){
   clearTimeout(RS.jobTimer); if(!RS.job) return;
+  const job=RS.job;   // 応答を待つ間に別タブへ引き継いだ（RS.job=null）ら、このページでは追わない
   try{
     const s=await api("/api/research/report/status?id="+encodeURIComponent(RS.job.id));
+    if(RS.job!==job) return;
     if(s && s.ok===false){   // サーバーがジョブを知らない（再起動した・再読み込みの後で追い直したジョブが消えていた）
       RS.job.state="error"; replaceProgress({role:"error", text:"⚠ サーバーが再起動したため進捗を追えません。保存済みレポートを確認してください"}); return;
     }
@@ -3829,6 +4350,7 @@ async function pollReport(){
     }
     if(s.state==="done"){
       const r=await api("/api/research/report?id="+encodeURIComponent(s.report_id));
+      if(RS.job!==job) return;
       replaceProgress({role:"report", report:r.report}); loadReports(); loadThemes();   // ブリーフならテーマの「前回ブリーフ」も更新
       if(!s.export_job) rsNotifyDone("report");   // 書き出しが続くときは、ファイルができたときに知らせる
       const st=(r.report&&r.report.stats)||{};
@@ -3846,8 +4368,8 @@ async function pollReport(){
     }
     if(s.state==="error"){ replaceProgress({role:"error", text:"⚠ "+(s.kind==="export"?"文書の作成":"レポート生成")+"に失敗しました: "+(s.error||""),
                                              retry: s.kind==="export" ? null : RS.job.payload}); return; }
-    renderRsLog();
-  }catch(e){ replaceProgress({role:"error", text:"⚠ 進捗の取得に失敗しました（サーバーが再起動した可能性）。保存済みレポートを確認し、無ければ同じ条件で再実行してください",
+    rsRenderProgress();   // 進捗の表示だけを差し替える（開いている「出典」や読んでいる位置を 1.5 秒ごとに戻さない）
+  }catch(e){ if(RS.job!==job) return; replaceProgress({role:"error", text:"⚠ 進捗の取得に失敗しました（サーバーが再起動した可能性）。保存済みレポートを確認し、無ければ同じ条件で再実行してください",
                               retry: RS.job && RS.job.kind!=="export" ? RS.job.payload : null}); if(RS.job) RS.job.state="error"; return; }
   RS.jobTimer=setTimeout(pollReport, 1500);
 }
@@ -3856,13 +4378,22 @@ function replaceProgress(msg){
   if(i>=0) RS.msgs.splice(i,1,msg); else RS.msgs.push(msg);
   renderRsLog();
 }
+function rsRenderProgress(){ const n=document.querySelector("#rsLog .rpt-progress"); if(n) n.replaceWith(progressEl()); else renderRsLog(); }
+function rsJobPct(j){   // レポート生成・文書生成の進み具合（%）。進捗の帯と、別タブのヘッダーのジョブ表示で共用
+  j=j||{};
+  if(j.kind==="export") return j.state==="building" ? 92 : j.state==="composing" ? (j.total ? Math.round(50+35*(j.done||0)/j.total) : 55)
+                             : ["fetching","mapping","reducing","preparing"].includes(j.state) ? (j.total ? Math.round(8+38*(j.done||0)/j.total) : 8) : 3;
+  const mapLo = j.fulltext ? 35 : 5;   // 本文取得つきは前半 3〜33% を取得に充てる
+  return j.state==="fetching" ? (j.total ? Math.round(3+30*(j.done||0)/j.total) : 3)
+       : j.state==="mapping" && j.total ? Math.round(mapLo+(88-mapLo)*(j.done||0)/j.total)
+       : j.state==="reducing" ? (j.mtotal ? Math.round(89+6*(j.mdone||0)/j.mtotal) : 96) : 3;
+}
 function progressEl(){
   const j=RS.job||{}; const w=el("div",{class:"bubble ai rpt-progress"});
   if(j.kind==="export"){   // 文書生成: 準備（レポート生成）→ 構成（LLM）→ 組み立て
     const detail = j.state==="fetching" ? "本文取得 "+(j.done||0)+"/"+(j.total||"?") : j.state==="mapping" ? "部分要約 "+(j.done||0)+"/"+(j.total||"?")
                  : j.state==="reducing" ? "統合中" : (j.state==="composing" && j.total) ? (j.done||0)+"/"+j.total : "";
-    const pct = j.state==="building" ? 92 : j.state==="composing" ? (j.total ? Math.round(50+35*(j.done||0)/j.total) : 55)
-              : ["fetching","mapping","reducing","preparing"].includes(j.state) ? (j.total ? Math.round(8+38*(j.done||0)/j.total) : 8) : 3;
+    const pct = rsJobPct(j);
     w.append(el("div",{class:"rpt-progress__t",text:"文書を作成中（"+(EXPORT_NAMES[j.export_kind]||j.export_kind||"")+"）— "+(j.label||"準備中")+(detail?"（"+detail+"）":"")}));
     const bar=el("div",{class:"pbar"}); const fill=el("i"); fill.style.width=pct+"%"; bar.append(fill); w.append(bar);
     w.append(el("div",{class:"hint",text: j.export_kind==="mail"
@@ -3878,10 +4409,7 @@ function progressEl(){
               : j.state==="retrieving" ? "外部資料から関連する抜粋を検索中…"
               : j.state==="mapping" ? ("部分要約 "+(j.done||0)+" / "+(j.total||"?")+" チャンク"+eta+fails+(j.sub?"（"+j.sub+"）":""))
               : j.state==="reducing" ? ((j.sub||"統合レポートを作成中")+(j.mtotal?"（"+(j.mdone||0)+"/"+j.mtotal+"）":"")+(j.gen?"・"+j.gen:"")+"…") : "処理中…";
-  const mapLo = j.fulltext ? 35 : 5;   // 本文取得つきは前半 3〜33% を取得に充てる
-  const pct = j.state==="fetching" ? (j.total ? Math.round(3+30*(j.done||0)/j.total) : 3)
-            : j.state==="mapping" && j.total ? Math.round(mapLo+(88-mapLo)*(j.done||0)/j.total)
-            : j.state==="reducing" ? (j.mtotal ? Math.round(89+6*(j.mdone||0)/j.mtotal) : 96) : 3;
+  const pct = rsJobPct(j);
   w.append(el("div",{class:"rpt-progress__t",text:"レポート生成中（記事 "+(j.articles||0)+" 件"+(j.docs?"＋外部資料":"")+(j.export_after?"・完了後に "+(EXPORT_NAMES[j.export_after]||j.export_after)+" を作成":"")+"）— "+stage+(j.elapsed?"　経過 "+fmtDur(j.elapsed):"")}));
   const bar=el("div",{class:"pbar"}); const fill=el("i"); fill.style.width=pct+"%"; bar.append(fill); w.append(bar);
   w.append(el("div",{class:"hint",text:"ローカルLLMでは数分〜数十分かかることがあります。失敗したチャンクは再試行→分割→スキップして先へ進みます。途中で止まっても、同じ条件で再実行すると完了した部分は再利用されます。時間がかかりすぎる／タイムアウトする場合は、設定の「接続先を診断」で文脈長と速さを確認してください。この画面を閉じても生成は続きます。"}));
@@ -4006,10 +4534,10 @@ function reportEl(rep){
 // ---- 商談前ブリーフ（取引先ブリーフ: 別表記の候補と件数・訪問メモ・Word まで一括・入力が薄いときの警告） ----
 // 会社名を入れると別表記の候補（同義語辞書・ウォッチ。「別表記を探す（AI）」で生成AIの候補も）を件数つきのチップで示し、
 // チェックした語で集めた記事（類似記事は代表のみ・関連度順に最大120件）と訪問メモから、出典つきの取引先ブリーフを作る。
-const ACCT={seq:0, timer:null, data:null, err:"", checked:null, aiBusy:false, fixedQ:""};   // checked: チェックを変えた語（null=候補の既定のまま）
+const ACCT={seq:0, timer:null, data:null, err:"", checked:null, aiBusy:false, fixedQ:"", aiFor:"", restore:null};   // checked: チェックを変えた語（null=候補の既定のまま）・aiFor: 生成AIで別表記を探した会社名（期間を変えても AI の候補を保つ）・restore: 別タブへ引き継いだチェック
 const ALIAS_FROM={name:"入力した名前", synonym:"同義語辞書", watch:"ウォッチ", ai:"生成AI"};
 const ALIAS_BADGE={synonym:"同義語", watch:"ウォッチ", ai:"AI"};
-function quoteTerm(w){ w=String(w||"").trim().replace(/"/g,""); return /\s/.test(w) ? '"'+w+'"' : w; }   // サーバーの quote_term と同じ
+function quoteTerm(w){ w=String(w||"").normalize("NFKC").trim().replace(/"/g,""); return /\s/.test(w) ? '"'+w+'"' : w; }   // サーバーの quote_term と同じ（NFKC にしてから空白を見る。全角スペース・NBSP も引用する）
 function orGroupTerms(q){   // 「日本製鉄|"Nippon Steel"」のような OR の1グループだけの条件ならその語（AND を含めば null）
   const s=String(q||"").normalize("NFKC").trim(); if(!s) return null;
   const toks=s.replace(/"[^"]*"/g,m=>m.replace(/\s/g,"\u0000")).split(/\s+/).filter(t=>t && t.replace(/[-|"]/g,"") && !t.startsWith("-"));
@@ -4038,11 +4566,24 @@ async function acctPreview(ai){   // 別表記の候補と件数（ai=true は�
   clearTimeout(ACCT.timer);
   const name=acctName(), seq=++ACCT.seq;
   if(!name){ ACCT.data=null; ACCT.err=""; ACCT.aiBusy=false; renderAcct(); return; }
-  ACCT.aiBusy=!!ai; renderAcct();
+  // 一度 AI で探した会社名は、期間の変更・再入力の後も ai:true で聞き直す（サーバーは保存した応答から答えるので生成AIは呼ばない）。
+  // 以前は ai:false で聞き直して AI の候補が黙って消え、ブリーフの条件からも外れていた
+  const useAi=!!ai || ACCT.aiFor===name;
+  ACCT.aiBusy=useAi; renderAcct();
   try{
-    const d=await api("/api/research/aliases",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name, days:acctDays(), ai:!!ai})});
+    const d=await api("/api/research/aliases",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name, days:acctDays(), ai:useAi})});
     if(seq!==ACCT.seq) return;   // 入力が進んだ: 古い応答は使わない
+    // 同じ会社名で取り直した（期間の変更・「別表記を探す（AI）」）: 利用者が既定から変えたチェックだけを引き継ぐ。ほかの語は新しい
+    // 既定に従う（AI の新しい候補は既定でチェック、件数が 0 → ありになった語もチェック）。以前は毎回 null に戻し、外した語が黙って戻っていた
+    const prev=ACCT.data, was=ACCT.checked;
     ACCT.data=d; ACCT.err=""; ACCT.checked=null;
+    if(was && prev && prev.name===d.name){
+      const ov=new Map(prev.aliases.filter(a=>was.has(a.term)!==acctDefaultOn(a)).map(a=>[a.term, was.has(a.term)]));
+      if(ov.size) ACCT.checked=new Set(d.aliases.filter(a=>ov.has(a.term) ? ov.get(a.term) : acctDefaultOn(a)).map(a=>a.term));
+    }
+    if(useAi) ACCT.aiFor = d.llm_used ? name : "";   // AI を使えなかった（失敗・未設定）なら次からは ai:false
+    const rs=ACCT.restore; ACCT.restore=null;   // 別タブへ引き継いだチェック（外した語）を当て直す
+    if(rs && rs.name===name && Array.isArray(rs.checked)) ACCT.checked=new Set(rs.checked.filter(t=>d.aliases.some(a=>a.term===t)));
   }catch(e){ if(seq!==ACCT.seq) return; ACCT.data=null; ACCT.err=e.server?e.message:"別表記の候補を取得できませんでした"; }
   ACCT.aiBusy=false; renderAcct();
 }
@@ -4097,7 +4638,7 @@ function syncAcctCount(){
 }
 async function startAcct(){
   if(RS.job && !["done","error"].includes(RS.job.state)){ toast("生成中のレポートがあります。完了をお待ちください","err"); return; }
-  if(!aiReady()){ RS.msgs.push({role:"error",text:"⚠ 生成AIが未設定です。設定（トップバーの設定ボタン）から登録してください。"}); renderRsLog(); return; }
+  if(!aiReady()){ RS.msgs.push({role:"error",text:"⚠ 生成AIが未設定です。"+RS_SETTINGS_HINT+"から登録してください。"}); renderRsLog(); return; }
   const name=acctName(); if(!name){ toast("会社名を入力してください","err"); $("#rsAcctName").focus(); return; }
   const q=acctQuery(); if(ACCT.data && ACCT.data.name===name && !ACCT.fixedQ && !q){ toast("別表記を1つ以上チェックしてください","err"); return; }
   const memo=($("#rsAcctMemo").value||"").trim(), word=$("#rsAcctWord").checked, fulltext=$("#rsAcctFull").checked;
@@ -4107,7 +4648,7 @@ async function startAcct(){
       body:JSON.stringify({name, q:q||undefined, days:acctDays(), memo, fulltext, export:word?"docx":""})});
     RS.job={id:d.job_id, state:"queued", total:0, done:0, articles:d.articles, fulltext, export_after:word?"docx":""};
     toggleAcctForm(false); $("#rsAcctMemo").value="";
-    RS.msgs.push({role:"progress"}); renderRsLog(); pollReport();
+    RS.msgs.push({role:"progress"}); rsOwnOut(); renderRsLog(); pollReport();
     if(memo) loadDocs();   // 訪問メモは「資料」に「メモ」として入る
   }catch(e){
     if(e.data && e.data.need_setup){ RS.msgs.push({role:"error",text:"⚠ "+e.message}); renderRsLog(); }
@@ -4137,10 +4678,15 @@ function renderAliasRow(){
   const row=$("#rsAliasRow"); if(!row) return; row.innerHTML="";
   const a=RS.alias; if(!a){ row.hidden=true; return; }
   row.hidden=false; const d=a.data, cbs=[];
+  // 同義語辞書に名前の行があると、検索（/api/archive/search）はその行の語を必ず OR で展開する。名前と同義語のチップは外しても
+  // 検索結果が変わらないので、チェックしたまま外せない形で示す（外すには同義語辞書を編集）。件数はその語だけの件数
+  const synTerms=(d.aliases||[]).filter(x=>x.from==="synonym").map(x=>x.term);
+  const locked=x=>synTerms.length>0 && (x.from==="name" || x.from==="synonym");
   row.append(el("span",{text:"別表記:"}));
   (d.aliases||[]).forEach(x=>{
-    const lab=el("label",{class:"achip"+(x.count?"":" zero"), title:(ALIAS_FROM[x.from]||x.from)+"・過去ログ "+x.count+"件"});
-    const cb=el("input",{type:"checkbox"}); cb.checked=acctDefaultOn(x); cbs.push([cb,x]);
+    const lab=el("label",{class:"achip"+(x.count?"":" zero")+(locked(x)?" lock":""),
+      title:(ALIAS_FROM[x.from]||x.from)+"・過去ログ "+x.count+"件"+(locked(x)?"（同義語辞書の行の語は検索で常に含まれます）":"")});
+    const cb=el("input",{type:"checkbox"}); cb.checked=locked(x) || acctDefaultOn(x); cb.disabled=locked(x); cbs.push([cb,x]);
     lab.append(cb, el("span",{class:"t",text:x.term}), document.createTextNode(" "), el("span",{class:"c",text:x.count+"件"}));
     if(ALIAS_BADGE[x.from]) lab.append(el("span",{class:"k",text:ALIAS_BADGE[x.from]}));
     row.append(lab);
@@ -4153,6 +4699,7 @@ function renderAliasRow(){
   row.append(go, x);
   const hints=[];
   if((d.aliases||[]).length<=1) hints.push("別表記の候補は見つかりませんでした");
+  if(synTerms.length) hints.push("同義語辞書の行の語（"+[d.aliases[0].term].concat(synTerms).join("・")+"）は検索で常にまとめて含まれます（外すには「同義語」で辞書を編集）");
   if((d.excluded_zero||[]).length) hints.push("過去ログに無い候補は使いません: "+d.excluded_zero.join("・"));
   if(d.ai_error) hints.push("⚠ "+d.ai_error);
   else if(!d.llm_used) hints.push("生成AIが未設定のため、同義語とウォッチから候補を出しています");
@@ -4163,12 +4710,28 @@ function renderAliasRow(){
 const EXPORT_NAMES={docx:"Word", xlsx:"Excel", pptx:"PowerPoint", pdf:"PDF", mail:"メール下書き"};
 const EXPORT_COLORS={docx:"#2B5C8F", xlsx:"#1F8A4C", pptx:"#C2410C", pdf:"#B91C1C", mail:"#0F766E"};
 const MAIL_RE=/メール(?!マガジン|アドレス)|e-?mail/i;   // サーバー側 _MAIL_INTENT_RE と同じ（メールマガジン・メールアドレスは除く）
+// メールが「作るもの」のときだけメール下書きにする（サーバー側 detect_export_intent と同じ規則・同じ順）。「Wordにして、メールに添付したい」は Word、
+// 「フィッシングメールの文面の特徴は？」「標的型メールの被害を時系列にまとめて」はふつうの質問（以前は「メール」の語だけでメールのフォームになっていた）
+const MAIL_INTENT=(()=>{ const m="(?:"+MAIL_RE.source+")";
+  return {draft:new RegExp(m+"\\s*の?\\s*下書き","i"),
+          body:new RegExp(m+"\\s*の?\\s*文面\\s*(?:を|に|で|として)?\\s*(?:して|作|書|まとめ|起こ|出力|変換|用意|考え)","i"),
+          bodyOnly:new RegExp("^\\s*(?:.{0,20}?(?:向け|用)の?)?"+m+"\\s*の?\\s*文面[\\s。.!！?？]*$","i"),
+          // 「報告メールを作って」「メールの文章を書いて」「メール作成」。「作成」「生成」は文末のときだけ（「メールを作成する手口」は話題）・「メールを作ってくれるAI」も話題
+          obj:new RegExp(m+"\\s*(?:の?\\s*(?:文章|本文)\\s*)?(?:[をの]\\s*)?(?:作って|作成して|書いて|用意して|生成して|起こして|出力して|(?:作成|生成)\\s*(?:を\\s*)?(?:お願い|頼)"
+                         +"|(?:作成|生成)(?=[\\s。.!！]*$))(?!(?:くれる|もらう|もらえる|いる|いた)[^\\s。.!！?？、])","i"),
+          form:new RegExp(m+"\\s*(?:形式|本文|文|用の?文章?|の文章)\\s*(?:に|で|として)\\s*(?:して|変換|まとめ|作|出力|化し|起こ)","i"),   // 「メール形式にして」「メール用の文章にして」
+          target:new RegExp(m+"\\s*(?:に|で|として|用に?|向けに)\\s*(?:して|変換|まとめ|作|書き出|書い|出力|化し|起こ)","i"),
+          send:new RegExp(m+"\\s*で\\s*(?:共有|送)(?:する|できる|して|したい|しやすい|れる|る|りたい|ります|します)","i")}; })();
 const EXPORT_KIND_RES=[["mail",MAIL_RE],["pptx",/pptx|パワポ|パワーポイント|powerpoint|スライド|プレゼン/i],["xlsx",/xlsx|excel|エクセル|スプレッドシート|表計算/i],["docx",/docx|word|ワード(?!プレス)/i],["pdf",/pdf/i]];
 function detectExportIntent(text){   // 形式の判定はサーバー側 detect_export_intent と同じ規則。指示は依頼の言い回しを除いた残り
   const t=String(text||"");
-  if(new RegExp("(?:"+MAIL_RE.source+")の?(?:下書き|文面)","i").test(t)) return Object.assign({kind:"mail", instructions:exportInstructions(t)}, mailPreset(t));   // 「メールの下書き」は依頼の言い回しが無くても
+  const mail=()=>Object.assign({kind:"mail", instructions:exportInstructions(t)}, mailPreset(t));
+  if(MAIL_INTENT.draft.test(t) || MAIL_INTENT.body.test(t) || MAIL_INTENT.bodyOnly.test(t.trim())
+     || MAIL_INTENT.obj.test(t) || MAIL_INTENT.form.test(t)) return mail();   // 「メールの下書き」「メールを作って」は依頼の言い回しが無くても
   if(!/にして|に変換|で出力|で書き出|書き出し|作って|作成|生成|エクスポート|出して|化して|にまとめ/i.test(t)) return null;
-  for(const [k,re] of EXPORT_KIND_RES) if(re.test(t)) return Object.assign({kind:k, instructions:exportInstructions(t)}, k==="mail" ? mailPreset(t) : {});
+  if(MAIL_INTENT.target.test(t)) return mail();   // 「この内容をメールにして」「PDFをメールにして」
+  for(const [k,re] of EXPORT_KIND_RES.slice(1)) if(re.test(t)) return {kind:k, instructions:exportInstructions(t,k)};   // 形式の語が先（メールは送る手段）
+  if(MAIL_INTENT.send.test(t)) return mail();   // 「メールで送れる形にまとめて」（形式の語が無いとき）
   return null;
 }
 function mailPreset(t){   // 依頼の言葉からメールの宛先・長さの既定を選ぶ（「チームに共有」→チーム共有、「詳しく」→標準）
@@ -4177,9 +4740,9 @@ function mailPreset(t){   // 依頼の言葉からメールの宛先・長さの
   if(/詳しく|詳細|標準|長め/.test(t)) o.length="normal"; else if(/短く|短め|簡潔/.test(t)) o.length="short";
   return o;
 }
-function exportInstructions(text){   // 「この結果をExcelにして、数値中心で」→「数値中心で」（形式・依頼の動詞・「この回答を」などを除く）
-  let t=String(text||"");
-  EXPORT_KIND_RES.forEach(([,re])=>{ t=t.replace(new RegExp(re.source,"gi"),""); });
+function exportInstructions(text, kind){   // 「この結果をExcelにして、数値中心で」→「数値中心で」（形式・依頼の動詞・「この回答を」などを除く）
+  let t=String(text||"");   // メール以外の形式では「メール」の語は残す（「Wordにして、メールに添付したい」→「メールに添付したい」）
+  EXPORT_KIND_RES.forEach(([k,re])=>{ if(k==="mail" && kind && kind!=="mail") return; t=t.replace(new RegExp(re.source,"gi"),""); });
   t=t.replace(/にして|に変換|で出力|で書き出(し|して)?|作って|作成|生成|エクスポート|出して|化して|にまとめ(て)?/g,"");
   t=t.replace(/この(結果|回答|内容)を?|これを/g,"").replace(/^の?(下書き|文面)を?/,"");
   return t.replace(/^[、。,.\s　]+|[、。,.\s　]+$/g,"").slice(0,300);
@@ -4227,7 +4790,7 @@ async function startExport(){
   if(RS.job && !["done","error"].includes(RS.job.state)){ toast("実行中のジョブがあります。完了をお待ちください","err"); return; }
   const kind=$("#rsExKind").value, src=$("#rsExSrc").value;
   if(kind==="mail" && !src.startsWith("report:")){ toast("先にレポートを作るか、会話の回答を保存してください","err"); return; }
-  if(!aiReady() && kind!=="mail"){ RS.msgs.push({role:"error",text:"⚠ 生成AIが未設定です。設定（トップバーの設定ボタン）から登録してください。"}); renderRsLog(); return; }   // メールは未設定でもレポートの本文から作る
+  if(!aiReady() && kind!=="mail"){ RS.msgs.push({role:"error",text:"⚠ 生成AIが未設定です。"+RS_SETTINGS_HINT+"から登録してください。"}); renderRsLog(); return; }   // メールは未設定でもレポートの本文から作る
   if(!src){ toast("対象を選んでください","err"); return; }
   const body = kind==="mail" ? {kind, instructions:$("#rsExInst").value.trim(), tone:$("#rsExTone").value, length:$("#rsExLen").value}
              : {kind, instructions:$("#rsExInst").value.trim(), slides:parseInt($("#rsExSlides").value,10)||8, fulltext:$("#rsRFull").checked};
@@ -4237,7 +4800,7 @@ async function startExport(){
   try{
     const d=await api("/api/research/export",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
     RS.job={id:d.job_id, kind:"export", export_kind:kind, state:"queued", label:"準備中", total:0, done:0};
-    toggleExportForm(false); RS.msgs.push({role:"progress"}); renderRsLog(); pollReport();
+    toggleExportForm(false); RS.msgs.push({role:"progress"}); rsOwnOut(); renderRsLog(); pollReport();
   }catch(e){ toast(e.server?e.message:"文書の作成を開始できませんでした","err"); }
 }
 function exportEl(x){
@@ -4250,6 +4813,7 @@ function exportEl(x){
     if(Array.isArray(m.cited)) parts.push("引用 "+m.cited.length+"件"); }
   if(x.instructions) parts.push("指示: "+x.instructions);
   w.append(el("div",{class:"exp__meta",text:parts.join(" ／ ")}));
+  if(m.note && x.kind!=="mail") w.append(el("div",{class:"exp__note",text:String(m.note)}));   // 文脈長が小さすぎて生成AIに渡せなかった（サマリー・スライド）
   const mail = x.kind==="mail" ? mailPreviewEl(m) : null;
   if(mail) w.append(mail);
   const acts=el("div",{class:"rpt__acts"});
@@ -4300,7 +4864,10 @@ function condsText(){ const f=rsFiltersPayload(); const parts=[];
   return parts.join(" × ") || "すべての記事"; }
 function toggleCmpForm(show){
   const fm=$("#rsCmpForm"); fm.hidden=!show; if(!show) return;
-  toggleAcctForm(false); toggleChgForm(false);
+  toggleAcctForm(false); toggleChgForm(false); toggleReportForm(false); toggleExportForm(false);   // 開くフォームは常に1つ
+  fillCmpB();
+}
+function fillCmpB(){   // 比較相手〔B〕の候補（前の期間・テーマ・ウォッチ）
   $("#rsCmpA").textContent=condsText()+"（"+RS.results.length+"件）";
   const sel=$("#rsCmpB"); sel.innerHTML="";
   const f=RS.filters||rsFilterParams(); const hasPeriod=!!(f.days||f.from||f.to);
@@ -4318,7 +4885,7 @@ async function startCompare(){
   const b= v==="prev" ? {prev:true} : {theme_id:v.slice(6)};
   try{
     const d=await api("/api/research/compare",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({a,b})});
-    toggleCmpForm(false); RS.msgs.push({role:"compare", data:d}); renderRsLog();
+    toggleCmpForm(false); RS.msgs.push({role:"compare", data:d}); rsOwnOut(); renderRsLog();
   }catch(e){ toast(e.server?e.message:"比較に失敗しました","err"); }
 }
 function miniHist(h, color){   // 小さな棒グラフ（比較ビュー用・SVG）
@@ -4377,7 +4944,7 @@ async function runChange(){   // 集計だけ（生成AIは使わない。未設
   btn.disabled=true;
   try{
     const d=await api("/api/research/change",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
-    toggleChgForm(false); RS.msgs.push({role:"change", data:d}); renderRsLog();
+    toggleChgForm(false); RS.msgs.push({role:"change", data:d}); rsOwnOut(); renderRsLog();
   }catch(e){ toast(e.server?e.message:"集計に失敗しました","err"); }
   finally{ btn.disabled=false; }
 }
@@ -4420,19 +4987,19 @@ function changeEl(d){
 }
 async function startChangeReport(d, onlyA){
   if(RS.job && !["done","error"].includes(RS.job.state)){ toast("生成中のレポートがあります。完了をお待ちください","err"); return; }
-  if(!aiReady()){ RS.msgs.push({role:"error",text:"⚠ 生成AIが未設定です。設定（トップバーの設定ボタン）から登録してください（件数の集計は生成AIなしで使えます）。"}); renderRsLog(); return; }
+  if(!aiReady()){ RS.msgs.push({role:"error",text:"⚠ 生成AIが未設定です。"+RS_SETTINGS_HINT+"から登録してください（件数の集計は生成AIなしで使えます）。"}); renderRsLog(); return; }
   const fulltext=$("#rsRFull").checked;
   const body={q:d.q||"", sources:d.sources||[], category:d.category||"", period:d.period, base:d.base, fulltext};
   if(onlyA) body.only_a=true;
   try{
     const r=await api("/api/research/change/report",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
     RS.job={id:r.job_id, state:"queued", total:0, done:0, articles:r.articles, fulltext};
-    RS.msgs.push({role:"progress"}); renderRsLog(); pollReport();
+    RS.msgs.push({role:"progress"}); rsOwnOut(); renderRsLog(); pollReport();
   }catch(e){ toast(e.server?e.message:"変化ブリーフを開始できませんでした","err"); }
 }
 async function startCompareReport(d){
   if(RS.job && !["done","error"].includes(RS.job.state)){ toast("生成中のレポートがあります。完了をお待ちください","err"); return; }
-  if(!aiReady()){ RS.msgs.push({role:"error",text:"⚠ 生成AIが未設定です。設定（トップバーの設定ボタン）から登録してください。"}); renderRsLog(); return; }
+  if(!aiReady()){ RS.msgs.push({role:"error",text:"⚠ 生成AIが未設定です。"+RS_SETTINGS_HINT+"から登録してください。"}); renderRsLog(); return; }
   const fulltext=$("#rsRFull").checked;
   try{
     const r=await api("/api/research/report",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
@@ -4440,12 +5007,14 @@ async function startCompareReport(d){
       question:"〔A〕と〔B〕の報道内容を比較し、共通点・相違点・温度差を整理する",
       filters:{compare:{a:d.a.label, b:d.b.label}}, title:("比較レポート: "+d.a.label+" vs "+d.b.label).slice(0,80)})});
     RS.job={id:r.job_id, state:"queued", total:0, done:0, articles:r.articles, fulltext};
-    RS.msgs.push({role:"progress"}); renderRsLog(); pollReport();
+    RS.msgs.push({role:"progress"}); rsOwnOut(); renderRsLog(); pollReport();
   }catch(e){ toast(e.server?e.message:"比較レポートを開始できませんでした","err"); }
 }
 async function loadReports(){
   try{ const d=await api("/api/research/reports"); RS.reports=d.reports||[];
-       $("#rsSavedN").textContent = RS.reports.length ? "("+RS.reports.length+")" : ""; renderSavedPanel(); }catch(e){}
+       $("#rsSavedN").textContent = RS.reports.length ? "("+RS.reports.length+")" : ""; renderSavedPanel();
+       if(!$("#rsExportForm").hidden) fillExportSrc("", true);   // 書き出しのフォームを開いている: 保存済みレポートを対象の候補に（選んでいたものはそのまま）
+       rsappFormWant(); }catch(e){}
 }
 function renderSavedPanel(){
   const p=$("#rsSavedPanel"); p.innerHTML="";
@@ -4455,7 +5024,7 @@ function renderSavedPanel(){
     if(r.template==="qa") row.append(el("span",{class:"k",text:r.kind_name||"Q&A"}));   // 会話の回答を保存したもの
     row.append(el("span",{class:"n",text:r.title}), el("span",{class:"c",text:new Date(r.created_at*1000).toLocaleDateString("ja-JP")+"・"+r.articles+"件"}));
     row.onclick=async()=>{ try{ const x=await api("/api/research/report?id="+encodeURIComponent(r.id));
-        if(!RS.msgs.some(m=>m.role==="report"&&m.report.id===r.id)) RS.msgs.push({role:"report",report:x.report});
+        if(!RS.msgs.some(m=>m.role==="report"&&m.report.id===r.id)) RS.msgs.push({role:"report",report:x.report}); rsOwnOut();
         renderRsLog(); p.hidden=true; }catch(e){ toast("レポートの読み込みに失敗しました","err"); } };
     p.append(row);
   });
@@ -4557,6 +5126,8 @@ async function loadThemes(){
   $("#rsWatchN").textContent = watches.length ? "("+watches.length+(wn?"・新着"+wn:"")+") " : "";
   if(RS.theme){ const t=RS.themes.find(x=>x.id===RS.theme.id); if(t) RS.theme=t; else { RS.theme=null; RS.newOnly=false; } }
   renderThemePanel(); renderThemeStrip(); renderWatchPanel();
+  if(!$("#rsCmpForm").hidden){ const cur=$("#rsCmpB").value; fillCmpB(); if([...$("#rsCmpB").options].some(o=>o.value===cur)) $("#rsCmpB").value=cur; }   // 比較のフォームを開いている: テーマ・ウォッチを候補に
+  rsappFormWant();
 }
 function themeDesc(t){ return (t.conds||[]).join(" ／ ") || "条件なし"; }
 function renderThemePanel(){
@@ -4592,6 +5163,7 @@ async function saveTheme(name, id){
   name=(name||"").trim(); if(!name){ toast("テーマ名を入力してください","err"); return; }
   const f=RS.filters||rsFilterParams();
   const filters={q:f.q, sources:f.srcs, category:f.cat, days:f.days, from:f.from, to:f.to};
+  if(f.period) filters.period=f.period;   // 暦の期間（今月など）: サーバーは使うときの期間で数える（日付で固定しない）
   try{
     const d=await api("/api/research/themes",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id, name, filters})});
     RS.theme=d.theme; RS.newOnly=false; await loadThemes(); closeRsPanels();   // 保存後はパネルを閉じ、条件行（strip）で示す
@@ -4602,7 +5174,8 @@ function openTheme(t){   // テーマの条件を左のフィルタへ反映し�
   const f=t.filters||{};
   $("#rsQ").value=f.q||"";
   const per=$("#rsPeriod");
-  if(f.from||f.to){ per.value="custom"; $("#rsFrom").value=f.from||""; $("#rsTo").value=f.to||""; }
+  if(f.period && [...per.options].some(o=>o.value==="cal:"+f.period)){ per.value="cal:"+f.period; }   // 暦の期間（今月など）はそのまま（日付は使うときに計算）
+  else if(f.from||f.to){ per.value="custom"; $("#rsFrom").value=f.from||""; $("#rsTo").value=f.to||""; }
   else if(f.days && [...per.options].some(o=>o.value===String(f.days))){ per.value=String(f.days); }
   else if(f.days){ per.value="custom"; $("#rsFrom").value=isoLocal(new Date(Date.now()-f.days*86400000)); $("#rsTo").value=""; }
   else per.value="";
@@ -4634,19 +5207,19 @@ function renderThemeStrip(){
 }
 async function startBrief(t, opt){
   if(RS.job && !["done","error"].includes(RS.job.state)){ toast("生成中のレポートがあります。完了をお待ちください","err"); return; }
-  if(!aiReady()){ RS.msgs.push({role:"error",text:"⚠ 生成AIが未設定です。設定（トップバーの設定ボタン）から登録してください。"}); renderRsLog(); closeRsPanels(); return; }
+  if(!aiReady()){ RS.msgs.push({role:"error",text:"⚠ 生成AIが未設定です。"+RS_SETTINGS_HINT+"から登録してください。"}); renderRsLog(); closeRsPanels(); return; }
   const fulltext=$("#rsRFull").checked;
   try{
     const d=await api("/api/research/themes/brief",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify(Object.assign({id:t.id, fulltext}, opt||{}))});
     RS.job={id:d.job_id, state:"queued", total:0, done:0, articles:d.articles, fulltext};
-    closeRsPanels(); RS.msgs.push({role:"progress"}); renderRsLog(); pollReport();
+    closeRsPanels(); RS.msgs.push({role:"progress"}); rsOwnOut(); renderRsLog(); pollReport();
     toast("ブリーフを生成します（"+d.period+"・"+d.articles+"件）");
   }catch(e){ toast(e.server?e.message:"ブリーフを開始できませんでした","err"); }
 }
 async function openSavedReport(id){
   try{ const x=await api("/api/research/report?id="+encodeURIComponent(id));
-       if(!RS.msgs.some(m=>m.role==="report"&&m.report.id===id)) RS.msgs.push({role:"report",report:x.report});
+       if(!RS.msgs.some(m=>m.role==="report"&&m.report.id===id)) RS.msgs.push({role:"report",report:x.report}); rsOwnOut();
        renderRsLog(); closeRsPanels(); }catch(e){ toast("レポートの読み込みに失敗しました","err"); }
 }
 // ---- 企業・製品ウォッチ（固有名詞の候補 → ウォッチ保存・週別推移） ----
@@ -4741,6 +5314,7 @@ async function loadDocs(){
   const n=$("#rsRDocsN"); if(n) n.textContent=String(RS.docs.length);
   const cb=$("#rsRDocs"); if(cb){ cb.disabled=!RS.docs.length; if(!RS.docs.length) cb.checked=false; }
   renderDocPanel();
+  rsappFormWant();
 }
 function renderDocPanel(){
   const p=$("#rsDocPanel"); if(!p) return; p.innerHTML="";
@@ -4762,7 +5336,7 @@ function renderDocPanel(){
   if(RS.docs.length){ const all=el("button",{type:"button",text: RS.docSel.size>=RS.docs.length ? "すべて外す" : "すべて選ぶ"});
     all.onclick=(e)=>{ e.stopPropagation(); if(RS.docSel.size>=RS.docs.length) RS.docSel.clear(); else RS.docSel=new Set(RS.docs.map(x=>x.id)); renderDocPanel(); }; head.append(all); }
   p.append(head);
-  if(!RS.docs.length){ p.append(el("div",{class:"rs__srcrow",text:"登録した資料はありません"})); return; }
+  if(!RS.docs.length){ p.append(el("div",{class:"rs__srcrow",text:"登録した資料はありません"})); if(RS_STANDALONE) rsappSync(); return; }
   RS.docs.forEach(d=>{
     const row=el("label",{class:"rs__doc"});
     const cb=el("input",{type:"checkbox"}); cb.checked=RS.docSel.has(d.id); cb.onchange=()=>{ if(cb.checked) RS.docSel.add(d.id); else RS.docSel.delete(d.id); };
@@ -4774,6 +5348,7 @@ function renderDocPanel(){
       try{ await api("/api/research/docs?id="+encodeURIComponent(d.id),{method:"DELETE"}); RS.docSel.delete(d.id); loadDocs(); toast("削除しました"); }catch(err){ toast("削除に失敗しました","err"); } };
     row.append(del); p.append(row);
   });
+  if(RS_STANDALONE) rsappSync();   // 別タブ: 会話の「資料」の件数
 }
 async function uploadDocs(files){
   const list=[...(files||[])]; if(!list.length) return;
@@ -4843,7 +5418,10 @@ function closeRsPanels(){
   for(const id of ["#rsSrcPanel","#rsSavedPanel","#rsThemePanel","#rsSynPanel","#rsWatchPanel","#rsExpPanel","#rsDocPanel"]){ const p=$(id); if(p && !p.hidden) p.hidden=true; }
   for(const id of ["#rsSrcBtn","#rsThemeBtn","#rsSynBtn","#rsWatchBtn","#rsDocBtn"]) $(id).setAttribute("aria-expanded","false");
 }
-$("#researchBtn").onclick=openResearch;
+// リサーチのボタン: クリックは従来どおりモーダル。Shift／Ctrl（⌘）＋クリック・中クリックは別タブ（/research）で開く
+$("#researchBtn").onclick=(e)=>{ if(e && (e.shiftKey||e.ctrlKey||e.metaKey)){ e.preventDefault(); rsPopout({open:true}); return; } openResearch(); };
+$("#researchBtn").addEventListener("auxclick",(e)=>{ if(e.button===1){ e.preventDefault(); rsPopout({open:true}); } });
+$("#researchBtn").addEventListener("mousedown",(e)=>{ if(e.button===1) e.preventDefault(); });   // 中クリックの自動スクロールを始めない
 let rsT=null;
 const rsDebounced=()=>{ clearTimeout(rsT); rsT=setTimeout(researchSearch,250); };
 $("#rsQ").addEventListener("input", rsDebounced);
@@ -4916,6 +5494,863 @@ $("#rsWatchPanel").addEventListener("click",(e)=>e.stopPropagation());
 $("#rsHistToggle").onclick=()=>{ RS.histOpen=!RS.histOpen; renderHist(); };
 let rsHistT=null; window.addEventListener("resize",()=>{ clearTimeout(rsHistT); rsHistT=setTimeout(()=>{ if(RS.hist) renderHist(); },150); });
 
+// ============================================================ リサーチ（別タブ） P9-6
+// /research で開いたときは、#researchModal をそのまま全画面の作業画面（Analyst workbench）にする。
+// 同じ DOM・同じ関数を使い、既存のノードは移動するだけ（複製しない）なので、id・イベント・機能はモーダルと同じ。
+// ポータル側: 「別タブで開く」(#rsPopout)・Shift+G・Shift/Ctrl/中クリックで、会話・条件・選択・入力中の文・
+// 開いているフォーム・途中のジョブを localStorage で1回だけ引き継ぐ（別タブが受け取ったら、ポータルは追うのをやめる）。
+const RS_HANDOFF="prism.rs.handoff", RS_HANDOFF_TTL=60000, RS_TAB="prism-research", RS_VIEW_KEY="prism.rs.view";
+const RS_APP={kbId:null, lastLen:-1, lastSig:"", view:"results", wide:false, lastCollect:0, lastAlive:0, lastRefresh:0, done:null,
+              mounted:false, jobKey:"", urlT:null, scrollRes:0, formWant:null, offer:null, offerT:null};
+let rsBC=null;   // BroadcastChannel("prism")（使えないブラウザでは false）
+function rsChannel(){
+  if(rsBC===null){ try{ rsBC=new BroadcastChannel("prism"); }catch(e){ rsBC=false; } }
+  return rsBC || null;
+}
+// ---- ポータル側: 引き継ぎを書いて別タブを開く ----
+function rsReadSession(){   // このタブの会話の控え（sessionStorage）
+  try{ const v=sessionStorage.getItem(RS_STORE); const st=v ? JSON.parse(v) : null; return (st && typeof st==="object" && st.v===1) ? st : null; }catch(e){ return null; }
+}
+const RS_FORM_FIELDS=["rsAcctName","rsAcctDays","rsAcctMemo","rsRQ","rsRT","rsRDocK","rsExKind","rsExInst","rsExSrc","rsExTone","rsExLen","rsExSlides",
+                      "rsCmpB","rsChgPeriod","rsChgBase"];   // 引き継ぐ値（文字列）
+const RS_FORM_CHECKS=["rsRFull","rsRDocs","rsAcctWord","rsAcctFull"];   // 引き継ぐスイッチ（真偽）
+function rsOpenForm(){   // 開いている「作る」フォームと入力中の値（対象・宛先・長さ・枚数・スイッチ・別表記のチェックも）
+  const id=["rsAcctForm","rsReportForm","rsCmpForm","rsChgForm","rsExportForm"].find(x=>{ const f=document.getElementById(x); return f && !f.hidden; });
+  if(!id) return null;
+  const fields={}, checks={};
+  RS_FORM_FIELDS.forEach(k=>{ const n=document.getElementById(k); if(n) fields[k]=String(n.value||"").slice(0,4000); });
+  RS_FORM_CHECKS.forEach(k=>{ const n=document.getElementById(k); if(n) checks[k]=!!n.checked; });
+  const out={id, fields, checks};
+  if(id==="rsExportForm"){ const o=$("#rsExSrc").selectedOptions[0]; if(o) out.srcTitle=String(o.textContent||"").replace(/^(レポート|保存済み): /,"").slice(0,200); }
+  if(id==="rsAcctForm") out.acct={checked: ACCT.checked ? [...ACCT.checked].slice(0,20) : null, fixedQ:String(ACCT.fixedQ||"").slice(0,300),
+                                  aiFor:String(ACCT.aiFor||"").slice(0,40)};
+  return out;
+}
+function rsUrlQuery(st){   // 検索条件 → /research のクエリ（ブックマーク・再読み込みで同じ検索になる）
+  st=st||{}; const p=new URLSearchParams();
+  const q=String(st.q||"").trim().slice(0,300); if(q) p.set("q",q);
+  const per=String(st.period||""); if(per) p.set("period",per);
+  if(per==="custom"){ const f=validDay(st.from), t=validDay(st.to); if(f) p.set("from",f); if(t) p.set("to",t); }
+  if(st.cat) p.set("cat",String(st.cat).slice(0,60));
+  if(Array.isArray(st.srcs) && st.srcs.length) p.set("src",st.srcs.slice(0,50).join(","));
+  if(st.limit && String(st.limit)!=="500") p.set("limit",String(st.limit));
+  if(st.order==="rel") p.set("order","rel");
+  if(st.dedup===false) p.set("dedup","0");
+  const s=p.toString(); return s ? "?"+s : "";
+}
+function rsNonce(){
+  try{ return [...crypto.getRandomValues(new Uint8Array(8))].map(b=>b.toString(16).padStart(2,"0")).join(""); }
+  catch(e){ let s=""; while(s.length<16) s+=Math.floor(Math.random()*16).toString(16); return s; }
+}
+function rsHandoffWrite(st, nonce){   // 1.5MB まで。入らなければ会話を新しい10件、さらに会話なしで書き直す（nonce: 別タブが受け取った申し出の番号を使うとき）
+  nonce=nonce||rsNonce(); const msgs=Array.isArray(st.msgs) ? st.msgs : [];
+  for(const m of [msgs, msgs.slice(-10), []]){
+    try{
+      const s=JSON.stringify({v:1, at:Date.now(), nonce, st:Object.assign({}, st, {msgs:m})});
+      if(s.length>RS_STORE_MAX) continue;
+      localStorage.setItem(RS_HANDOFF, s); return nonce;
+    }catch(e){}
+  }
+  return null;
+}
+// 引き継ぎ（会話・入力中の文・訪問メモを含む）は localStorage に残さない: 別タブが読んだら消す（rsHandoffTake）のに加え、
+// 開けなかった・読まれなかったものもポータル側で消す（自分の書いたもの＝同じ nonce だけ。新しい引き継ぎは消さない）。
+// 起動のたびに、期限（60秒）を過ぎたものを消す（ポータルを閉じた後・ブラウザを再起動した後にも残らないように）
+function rsHandoffDrop(nonce){
+  try{
+    const raw=localStorage.getItem(RS_HANDOFF); if(raw==null) return;
+    let h=null; try{ h=JSON.parse(raw); }catch(e){}
+    if(!h || typeof h!=="object" || !nonce || h.nonce===nonce) localStorage.removeItem(RS_HANDOFF);
+  }catch(e){}
+}
+function rsHandoffSweep(){
+  try{
+    const raw=localStorage.getItem(RS_HANDOFF); if(raw==null) return;
+    let h=null; try{ h=JSON.parse(raw); }catch(e){}
+    const age=h && typeof h==="object" ? Date.now()-Number(h.at) : NaN;
+    if(!(age>=-5000 && age<RS_HANDOFF_TTL)) localStorage.removeItem(RS_HANDOFF);
+  }catch(e){}
+}
+function rsModalTop(){ return overlayStack[overlayStack.length-1]===$("#researchModal"); }
+function rsHandoffTrack(nonce){   // 渡したジョブ・質問を覚える（別タブの受領 rs-handoff-ack が来たら、ポータルは追うのをやめる）
+  RS.handoff={nonce, job: RS.job && !["done","error"].includes(RS.job.state) ? RS.job.id : null, ask: RS.ask ? RS.ask.id : null, until:Date.now()+RS_HANDOFF_TTL};
+  setTimeout(()=>{ rsHandoffDrop(nonce); if(RS.handoff && RS.handoff.nonce===nonce) RS.handoff=null; }, RS_HANDOFF_TTL+1000);   // 読まれなかった引き継ぎは期限で消す
+}
+// ---- 開いている別タブ（読み込み直さない）
+// 別タブは BroadcastChannel で「生きている」合図（rs-tab-alive: 起動時・1分ごと・表示されたとき・ポータルの合図への返事）を送り、
+// 閉じるときに rs-tab-gone を送る。合図の届いている別タブがあれば、「別タブで開く」・Shift+G は名前（RS_TAB）でそのタブを探して
+// 前へ出すだけにする（以前はタブを /research?… へ移動＝読み込み直しになり、別タブの検索条件・選択・入力中の文・開いていたフォーム・
+// 訪問メモがポータルの古い条件で上書きされていた）。ポータルで開いていた条件・会話は「申し出」として送り、別タブに
+// 「ポータルの条件で開き直す」を出す（押すまで別タブの作業はそのまま）
+const RS_TAB_ALIVE_MS=180000, RS_TABS=new Map();   // 別タブの id → 最後に合図を受けた時刻
+function rsTabSeen(){ const now=Date.now(); for(const [id,t] of RS_TABS) if(now-t>RS_TAB_ALIVE_MS) RS_TABS.delete(id); return RS_TABS.size>0; }
+function rsToLiveTab(st){   // 扱ったら true（前へ出した、または名前で届かずに新しくできた空のタブで開いた）。false なら今までの動作
+  if(!rsTabSeen()) return false;
+  let w=null; try{ w=window.open("", RS_TAB); }catch(e){ w=null; }
+  if(!w) return false;   // 開けない（ポップアップを止められた）
+  let live=false;
+  try{ live = w.location.pathname==="/research" && w.document.documentElement.classList.contains("rs-standalone"); }catch(e){ live=false; }
+  if(live){
+    try{ w.focus(); }catch(e){}
+    if(RS.opened){   // ポータルでリサーチを開いていた: その条件・会話を申し出る（ただの「別タブへ戻る」では申し出ない）
+      const bc=rsChannel(), nonce=rsNonce();
+      if(bc) try{ bc.postMessage({t:"rs-offer", ho:{v:1, at:Date.now(), nonce, st}}); rsHandoffTrack(nonce); }catch(e){}
+    }
+  }else{   // 合図はあるが名前では届かない（ブックマークから開いた別タブなど）: いまできた空のタブ（または移動したタブ）で開く
+    const nonce=rsHandoffWrite(st); if(nonce) rsHandoffTrack(nonce);
+    try{ w.location.href="/research"+rsUrlQuery(st); }catch(e){}
+  }
+  if(rsModalTop()) closeTop();
+  return true;
+}
+function rsPopout(opts){   // 引き継ぎを書く。opts.open: ここで window.open する（Shift+G など）。戻り値は開く URL（開いている別タブを前へ出したときは ""）
+  opts=opts||{};
+  let st;
+  if(RS.opened){ st=rsSnapshot(); st.draft=String($("#rsInput").value||"").slice(0,4000); st.form=rsOpenForm(); }
+  else{ st=Object.assign({}, rsReadSession() || {v:1, msgs:[]}); delete st.draft; delete st.form; }   // このページでまだリサーチを開いていない: 控えをそのまま渡す
+  if(!opts.background && rsToLiveTab(st)) return "";
+  const nonce=rsHandoffWrite(st);
+  if(nonce) rsHandoffTrack(nonce);
+  const url="/research"+rsUrlQuery(st);
+  if(opts.open){
+    let w=null; try{ w=window.open(url, RS_TAB); }catch(e){ w=null; }
+    if(!w){
+      if(nonce){ rsHandoffDrop(nonce); RS.handoff=null; }   // 開けなかった: 引き継ぎは残さない
+      toast("別タブを開けませんでした（ブラウザがポップアップを止めました）。リサーチ画面の「別タブで開く」から開いてください","err");
+    }
+    else if(rsModalTop()) closeTop();
+  }
+  return url;
+}
+function rsSettingsSaved(){ const bc=rsChannel(); if(bc) try{ bc.postMessage({t:"settings-saved", at:Date.now()}); }catch(e){} }   // 設定を保存した → ほかのタブへ
+function rsSettingsReload(){   // ほかのタブで設定（生成AI など）を保存した: 読み直す（設定の画面を開いている間は、入力中の値を守るため読まない）
+  if(overlayStack.includes($("#aiSettings"))) return;
+  loadAiSettings().then(()=>{ const f=$("#rsAcctForm"); if(f && !f.hidden) renderAcct(); });
+}
+function rsPortalBeat(){   // ポータルが開いていることを別タブに知らせる（別タブは自動更新の収集を控える）・引き継ぎの受領
+  const bc=rsChannel(); if(!bc) return;
+  const beat=()=>{ try{ bc.postMessage({t:"portal-alive", at:Date.now()}); }catch(e){} };
+  beat(); setInterval(beat, 60000);
+  document.addEventListener("visibilitychange",()=>{ if(!document.hidden) beat(); });
+  bc.addEventListener("message",(ev)=>{
+    const m=ev.data; if(m && m.t==="settings-saved"){ rsSettingsReload(); return; }
+    if(m && m.t==="rs-tab-alive" && typeof m.id==="string"){ RS_TABS.set(m.id.slice(0,32), Date.now()); return; }
+    if(m && m.t==="rs-tab-gone" && typeof m.id==="string"){ RS_TABS.delete(m.id.slice(0,32)); return; }
+    if(!m || m.t!=="rs-handoff-ack") return;
+    const h=RS.handoff; if(!h || m.nonce!==h.nonce) return;
+    RS.handoff=null; let changed=false;
+    if(m.job && RS.job && RS.job.id===m.job && !["done","error"].includes(RS.job.state)){   // 別タブが引き取ったジョブはこちらでは追わない（完了の知らせも別タブだけ）
+      clearTimeout(RS.jobTimer);
+      replaceProgress({role:"assistant", text:"このジョブの進捗は別タブ（リサーチ）に表示しています。完了したレポートは「保存済みレポート」からも開けます"});
+      RS.job=null; changed=true;
+    }
+    if(m.ask && RS.ask && RS.ask.id===m.ask){ finishAsk(RS.ask,{role:"assistant", text:"この質問の回答は別タブ（リサーチ）に表示されます"}); changed=true; }
+    if(changed) rsPersistSoon();
+  });
+}
+(function(){   // 「別タブで開く」: 本物のリンク（右クリックの「新しいタブで開く」・中クリックも同じ URL になるよう、押す直前に条件を入れる）
+  const pop=$("#rsPopout"); if(!pop) return;
+  const fresh=()=>{ try{ pop.setAttribute("href","/research"+rsUrlQuery(RS.opened ? rsSnapshot() : (rsReadSession()||{}))); }catch(e){} };
+  ["pointerdown","focus","contextmenu"].forEach(t=>pop.addEventListener(t, fresh));
+  // 右クリック（メニューの「新しいタブで開く」・リンクのコピー）では引き継ぎを書かない（タブが開くとは限らず、会話やメモを残してしまう）。
+  // メニューから開いたタブには URL の条件（検索語・期間など）が渡る
+  pop.addEventListener("auxclick",(e)=>{ if(e.button===1) rsPopout({background:true}); });
+  pop.addEventListener("click",(e)=>{
+    if(e.button!==0) return;
+    if(e.ctrlKey||e.metaKey||e.shiftKey){ rsPopout({background:true}); return; }   // 裏のタブ・新しいウィンドウ: モーダルは開いたまま
+    if(!rsPopout()){ e.preventDefault(); return; }   // 開いている別タブを前へ出した（読み込み直さない）
+    setTimeout(()=>{ if(rsModalTop()) closeTop(); }, 0);   // 既定の動作（名前つきのタブを開く）はそのまま
+  });
+})();
+
+// ---- 別タブ側: 引き継ぎ・控え・URL ----
+function rsHandoffTake(){   // 読んだらすぐ消す。60秒より古い・壊れたものは使わない
+  let raw=null;
+  try{ raw=localStorage.getItem(RS_HANDOFF); if(raw!=null) localStorage.removeItem(RS_HANDOFF); }catch(e){ return null; }
+  if(!raw) return null;
+  try{
+    const h=JSON.parse(raw), age=Date.now()-Number(h && h.at);
+    if(h && h.v===1 && age>=-5000 && age<RS_HANDOFF_TTL && h.st && typeof h.st==="object" && /^[0-9a-f]{16}$/.test(String(h.nonce||""))) return h;
+  }catch(e){}
+  return null;
+}
+function rsMsgKey(m){   // 同じメッセージの判定（引き継ぎと、ブラウザが新しいタブへ写した sessionStorage の重複を除く）
+  const id=m.job_id || (m.report&&m.report.id) || (m.data&&m.data.id) || (m.data&&m.data.report_id) || "";
+  const t=String(m.text||m.question||"").slice(0,120);
+  let d=""; if(!id && !t && m.data){ try{ d=JSON.stringify(m.data).slice(0,300); }catch(e){} }   // 比較・変化の集計は id が無い
+  return m.role+"|"+id+"|"+t+(d ? "|"+d : "");
+}
+const RS_COND_KEYS=["q","period","from","to","cat","srcs","limit","order","dedup","sel","docSel","theme","newOnly"];
+function rsMergeSession(own, ho){   // このタブの控え（own）と引き継ぎ（ho）を合わせる → {st, adopted:{job, ask}}
+  const base=(own && own.v===1) ? own : {v:1, msgs:[]};
+  const st=Object.assign({}, base);
+  if(!ho) return {st, adopted:{job:null, ask:null}};
+  const hs=ho.st||{};
+  // 条件・選択・テーマは引き継いだもの。ただし条件を1つも持たない引き継ぎ（ポータルでリサーチを開いたことが無い）では、
+  // このタブの条件を消さない（以前は {v:1, msgs:[]} で検索語・選択が既定に戻っていた）
+  if(RS_COND_KEYS.some(k=>k in hs)) RS_COND_KEYS.forEach(k=>{ if(k in hs) st[k]=hs[k]; else delete st[k]; });
+  const relay=/^(このジョブの進捗|この質問の回答)は別タブ/;   // ポータルに出した「別タブに表示」の案内は持ち込まない
+  const seen=new Set(), msgs=[];
+  [...(Array.isArray(base.msgs) ? base.msgs : []), ...(Array.isArray(hs.msgs) ? hs.msgs : [])].forEach(m=>{
+    if(!m || typeof m!=="object" || (m.role==="assistant" && relay.test(String(m.text||"")))) return;
+    const k=rsMsgKey(m); if(seen.has(k)) return; seen.add(k); msgs.push(m);
+  });
+  st.msgs=msgs.slice(-40);
+  const hex=v=>!!v && typeof v==="object" && typeof v.id==="string" && /^[0-9a-f]{16}$/.test(v.id);
+  st.job = hex(base.job) ? base.job : (hex(hs.job) ? hs.job : null);   // このタブで実行中のジョブを優先
+  st.ask = hex(base.ask) ? base.ask : (hex(hs.ask) ? hs.ask : null);
+  const adopted={job: hex(hs.job) && st.job && st.job.id===hs.job.id ? hs.job.id : null, ask: hex(hs.ask) && st.ask && st.ask.id===hs.ask.id ? hs.ask.id : null};
+  if(hex(hs.job) && !adopted.job) st.msgs.push({role:"assistant", text:"ポータルで実行中だったジョブは、完了すると「保存済みレポート」から開けます"});
+  return {st, adopted};
+}
+function rsUrlRead(){   // /research?q=…&period=… の条件（無効な値は無視）。条件のパラメータが1つも無ければ null
+  let p; try{ p=new URLSearchParams(location.search); }catch(e){ return null; }
+  if(!["q","period","from","to","cat","src","limit","order","dedup"].some(k=>p.has(k))) return null;
+  const o={q:"", period:"", from:"", to:"", cat:"", srcs:[], limit:"500", order:"new", dedup:true};
+  const q=p.get("q"); if(q) o.q=q.slice(0,300);
+  const per=p.get("period")||""; if(per && [...$("#rsPeriod").options].some(x=>x.value===per)) o.period=per;
+  if(o.period==="custom"){ o.from=validDay(p.get("from")); o.to=validDay(p.get("to")); }
+  const cat=p.get("cat"); if(cat && cat.length<=60) o.cat=cat;
+  const src=p.get("src"); if(src) o.srcs=src.split(",").map(s=>s.trim()).filter(s=>s && s.length<=200).slice(0,50);
+  const lim=p.get("limit"); if(["200","500","1000","2000"].includes(lim)) o.limit=lim;
+  if(p.get("order")==="rel") o.order="rel";
+  if(p.get("dedup")==="0") o.dedup=false;
+  return o;
+}
+function rsCondsNorm(s){   // 条件の比較用（無い項目は既定値）
+  s=s||{}; const custom=s.period==="custom";
+  return JSON.stringify([String(s.q||""), String(s.period||""), custom?validDay(s.from):"", custom?validDay(s.to):"", String(s.cat||""),
+    (Array.isArray(s.srcs)?s.srcs.slice():[]).sort().join(","), String(s.limit||"500"), s.order==="rel"?"rel":"new", s.dedup!==false]);
+}
+function rsCondsNow(){ return {q:$("#rsQ").value||"", period:$("#rsPeriod").value||"", from:$("#rsFrom").value||"", to:$("#rsTo").value||"",
+  cat:$("#rsCat").value||"", srcs:[...RS.srcSel], limit:$("#rsLimit").value||"500", order:$("#rsOrder").value||"new", dedup:!!$("#rsDedup").checked}; }
+function rsUrlSync(){   // いまの検索条件を URL に（履歴は増やさない）
+  if(!RS_STANDALONE) return;
+  const qs=rsUrlQuery(rsCondsNow());
+  try{ if(location.search!==qs || location.hash) history.replaceState(history.state, "", location.pathname+qs); }catch(e){}
+}
+
+// ---- 別タブ側: 画面の組み立て ----
+const RSAPP_SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">';
+const RSAPP_ICO={   // 定数の SVG だけ（利用者の文字は入れない）
+  acct:'<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2M3 13h18"/>',
+  report:'<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/>',
+  cmp:'<rect x="3" y="4" width="7" height="16" rx="1.5"/><rect x="14" y="4" width="7" height="16" rx="1.5"/>',
+  chg:'<path d="M3 17l6-6 4 4 8-8M15 7h6v6"/>',
+  exp:'<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>',
+  saved:'<path d="M6 3h12v18l-6-4-6 4z"/>',
+  exported:'<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M12 11v6M9.5 14.5 12 17l2.5-2.5"/>',
+  docs:'<path d="M21 11l-8.5 8.5a5 5 0 0 1-7-7L14 4a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3L15 7"/>',
+  theme:'<path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/>',
+  watch:'<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  syn:'<path d="M4 7h11M4 7l3-3M4 7l3 3M20 17H9M20 17l-3-3M20 17l-3 3"/>',
+  spark:'<path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/>',
+  portal:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+  gear:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
+  wide:'<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>',
+  check:'<path d="M20 6 9 17l-5-5"/>',
+};
+function rsappSvg(name, cls){
+  const t=document.createElement("template");
+  t.innerHTML=RSAPP_SVG+RSAPP_ICO[name]+"</svg>";
+  const s=t.content.firstElementChild; if(cls) s.setAttribute("class",cls); return s;
+}
+// 「作る」の5種類（キー 1〜5 の順）: ボタン・フォーム・実行ボタン（Ctrl+Enter）・閉じる・見出し
+const RSAPP_MAKE=[
+  {btn:"rsAcctBtn", form:"rsAcctForm", start:"rsAcctStart", cancel:"rsAcctCancel", key:"acct", ico:"acct", title:"商談ブリーフ",
+   desc:"会社名から別表記を集め、訪問メモと合わせて出典つきの取引先ブリーフ（Word まで）を作ります", toggle:s=>toggleAcctForm(s)},
+  {btn:"rsReportBtn", form:"rsReportForm", start:"rsRStart", cancel:"rsRCancel", key:"report", ico:"report", title:"レポート生成",
+   desc:"選択した記事すべてを部分要約→統合し、出典番号つきのレポートにします", toggle:s=>toggleReportForm(s)},
+  {btn:"rsCmpBtn", form:"rsCmpForm", start:"rsCmpStart", cancel:"rsCmpCancel", key:"cmp", ico:"cmp", title:"比較",
+   desc:"現在の条件〔A〕と、テーマ・ウォッチ・前の期間〔B〕を件数・情報源・固有名詞・報道量で比べます", toggle:s=>toggleCmpForm(s)},
+  {btn:"rsChangeBtn", form:"rsChgForm", start:"rsChgRun", cancel:"rsChgCancel", key:"chg", ico:"chg", title:"変化ブリーフ",
+   desc:"今期と前期（または前年同期）の件数・新しく出てきた語・収集の空白日を集計します", toggle:s=>toggleChgForm(s)},
+  {btn:"rsExportBtn", form:"rsExportForm", start:"rsExStart", cancel:"rsExCancel", key:"exp", ico:"exp", title:"書き出し",
+   desc:"レポートや選択記事から Word・Excel・PowerPoint・PDF、社内向けメールの下書き（.eml）を作ります", toggle:s=>toggleExportForm(s)},
+];
+const RSAPP_PANELS=[["#rsSrcPanel","#rsSrcBtn"],["#rsThemePanel","#rsThemeBtn"],["#rsWatchPanel","#rsWatchBtn"],["#rsSynPanel","#rsSynBtn"],
+                    ["#rsSavedPanel","#rsSavedBtn"],["#rsExpPanel","#rsExpBtn"],["#rsDocPanel","#rsDocBtn"]];
+const RS_TPL_NAMES={overview:"概況レポート", timeline:"時系列レポート", brief:"要点ブリーフ", account:"取引先ブリーフ", change:"変化ブリーフ"};
+function rsappNarrow(){ return matchMedia("(max-width:900px)").matches; }
+function rsappDesk(){ return matchMedia("(min-width:1280px)").matches; }
+function rsappBuildDom(){   // 新しく作るのは枠と見出しだけ。既存のノードは appendChild/insertBefore で移すだけ
+  const m=$("#researchModal"), head=m.querySelector(".modal__head"), rs=m.querySelector(".rs");
+  const search=m.querySelector(".rs__search"), chat=m.querySelector(".rs__chat"), tools=chat.querySelector(".rs__tools");
+  // スキップリンク（最初の Tab で見える）
+  const skip=(text, target)=>{ const a=el("a",{class:"rsapp__skip", href:"#"+target, text});
+    a.addEventListener("click",(e)=>{ e.preventDefault(); if(target==="rsInput" && rsappNarrow()) rsappSetView("ai"); if(target==="rsQ" && rsappNarrow()) rsappSetView("results"); try{ $("#"+target).focus(); }catch(_){} }); return a; };
+  document.body.prepend(skip("検索へ移動","rsQ"), skip("質問の入力欄へ移動","rsInput"));
+  // ---- ヘッダー（.modal__head をアプリのヘッダーに）
+  head.setAttribute("role","banner");
+  const brand=el("a",{id:"rsappBrand", class:"rsapp__brand", href:"/", target:"prism-portal", title:"ポータルを開く"});
+  const bt=document.createElement("template");
+  bt.innerHTML='<svg viewBox="0 0 32 32" aria-hidden="true" focusable="false"><defs><linearGradient id="rsappPg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#57e3c9"/><stop offset=".55" stop-color="#7c9cff"/><stop offset="1" stop-color="#b48bff"/></linearGradient></defs>'
+    +'<path d="M16 4.5 27.5 26h-23z" fill="none" stroke="url(#rsappPg)" stroke-width="2.4" stroke-linejoin="round"/><path d="M2 16.5 13 15.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" opacity=".8"/>'
+    +'<path d="M19 15.6 30 12.5" stroke="#57e3c9" stroke-width="1.6" stroke-linecap="round"/><path d="M19 16.4 30 16.5" stroke="#7c9cff" stroke-width="1.6" stroke-linecap="round"/><path d="M19 17.2 30 20.5" stroke="#b48bff" stroke-width="1.6" stroke-linecap="round"/></svg>';
+  brand.append(bt.content.firstElementChild, el("b",{text:"Prism"}));
+  head.prepend(brand, el("span",{class:"rsapp__sep","aria-hidden":"true"}));
+  const h2=head.querySelector("h2"); h2.setAttribute("role","heading"); h2.setAttribute("aria-level","1");
+  const view=el("div",{class:"rsapp__view", role:"group", "aria-label":"表示の切り替え"});
+  const vr=el("button",{type:"button"}); vr.dataset.view="results"; vr.append("結果 ", el("b",{id:"rsappHitN", text:"0"}));
+  const va=el("button",{type:"button"}); va.dataset.view="ai"; va.append("AI ", el("i",{id:"rsappAiDot", title:"生成中", hidden:true}));
+  [vr,va].forEach(b=>{ b.setAttribute("aria-pressed","false"); b.onclick=()=>rsappSetView(b.dataset.view); });
+  view.append(vr,va);
+  const job=el("button",{type:"button", id:"rsappJob", class:"rsapp__job", hidden:true, title:"実行中のジョブ（クリックで進捗の位置へ）", "aria-label":"実行中のジョブ"});
+  const rt=document.createElement("template");
+  rt.innerHTML='<svg class="ring" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><circle cx="10" cy="10" r="7.5" class="tr"/><circle cx="10" cy="10" r="7.5" class="pg" stroke-dasharray="47.1" stroke-dashoffset="47.1" transform="rotate(-90 10 10)" stroke-linecap="round"/></svg>';
+  job.append(rt.content.firstElementChild, rsappSvg("check","ok"), el("span",{class:"t"}), el("small",{class:"s"}));
+  job.onclick=rsappJobClick;
+  const live=el("span",{id:"rsappJobLive", class:"vh", "aria-live":"polite"});
+  const portal=el("a",{id:"rsappPortal", class:"rsapp__ib", href:"/", target:"prism-portal", title:"ポータルを開く", "aria-label":"ポータルを開く"});
+  portal.append(rsappSvg("portal"), el("span",{text:"ポータル"}));
+  [brand, portal].forEach(a=>a.addEventListener("click", rsappToPortal));
+  const gear=el("button",{type:"button", id:"rsappSettings", class:"rsapp__ib", title:"設定（生成AI・プロキシ）", "aria-label":"設定（生成AI・プロキシ）"});
+  gear.append(rsappSvg("gear")); gear.onclick=()=>openAiSettings();
+  const theme=el("button",{type:"button", id:"rsappTheme", class:"rsapp__ib", title:"ライト／ダークを切り替え（T）", "aria-label":"ライト／ダークを切り替え（T）"});
+  const ti=document.createElementNS("http://www.w3.org/2000/svg","svg");
+  ["viewBox:0 0 24 24","fill:none","stroke:currentColor","stroke-width:2","aria-hidden:true","focusable:false"].forEach(kv=>{ const i=kv.indexOf(":"); ti.setAttribute(kv.slice(0,i), kv.slice(i+1)); });
+  ti.id="rsappThemeIcon"; theme.append(ti);
+  theme.onclick=()=>applyTheme(document.documentElement.getAttribute("data-theme")==="dark"?"light":"dark");
+  const help=el("button",{type:"button", id:"rsappHelp", class:"rsapp__ib", text:"?", title:"キーボード操作（?）", "aria-label":"キーボード操作（?）"});
+  help.onclick=()=>openHelp();
+  const pop=$("#rsPopout");
+  [el("span",{class:"rsapp__sp"}), view, job, live, portal, gear, theme, help].forEach(n=>head.insertBefore(n, pop));
+  applyTheme(document.documentElement.getAttribute("data-theme")==="light" ? "light" : "dark");   // テーマのアイコンを入れる
+  // ---- 左のレール（絞り込み・保存した条件・キー操作の一覧）
+  rs.setAttribute("role","main");
+  const rail=el("aside",{class:"rs__rail", "aria-label":"絞り込みと保存した条件"});
+  rs.prepend(rail);
+  const filters=search.querySelector(".rs__filters");
+  filters.prepend(el("span",{class:"rs__railh", text:"絞り込み"}));
+  const duo=el("div",{class:"rs__duo"}); $("#rsLimit").before(duo); duo.append($("#rsLimit"), $("#rsOrder"));
+  const lib=el("div",{class:"rs__lib"});
+  duo.after(el("span",{class:"rs__railh lib", text:"保存した条件"}), lib);
+  [["#rsThemeBtn","theme"],["#rsWatchBtn","watch"],["#rsSynBtn","syn"]].forEach(([id,ico])=>{
+    const b=$(id); lib.append(b.parentNode);
+    b.prepend(rsappSvg(ico,"ico"));
+    const last=b.lastChild;
+    if(last && last.nodeType===3 && last.textContent.trim()==="▾"){ const c=el("span",{class:"caret", text:last.textContent}); last.replaceWith(c); }   // 「▾」の文字（textContent は同じ）
+    else b.append(el("span",{class:"caret", text:"▾", "aria-hidden":"true"}));
+  });
+  const keys=el("div",{class:"rsapp__keys", role:"note", "aria-label":"キーボード操作"});
+  [[["/"],"検索"],[["J","K"],"移動"],[["X"],"選択"],[["C"],"質問"],[["1","5"],"作る"],[["W"],"広げる"],[["?"],"一覧"],[["Esc"],"閉じる"]].forEach(([ks,t])=>{
+    const s=el("span"); ks.forEach((k,i)=>{ if(i) s.append(t==="作る"?"–":""); s.append(el("kbd",{text:k})); }); s.append(t); keys.append(s); });
+  rail.append(keys);
+  // ---- 結果の欄
+  search.setAttribute("role","region"); search.setAttribute("aria-label","検索結果");
+  $("#rsQ").setAttribute("aria-keyshortcuts","/");
+  $("#rsQ").after(el("kbd",{class:"rsapp__k", text:"/", "aria-hidden":"true"}));
+  const bar=search.querySelector(".rs__bar"), acts=el("span",{class:"rs__baracts"});
+  bar.append(acts); acts.append($("#rsDedup").closest("label"), $("#rsFetchBtn"), $("#rsSelAll"), $("#rsSelNone"));
+  const list=$("#rsList");
+  const kbFrom=(e)=>{ const r=e.target && e.target.closest ? e.target.closest(".rrow") : null; if(r) rsappSetKb(r); };
+  list.addEventListener("focusin", kbFrom); list.addEventListener("click", kbFrom);
+  // ---- AI ワークスペース
+  chat.setAttribute("role","region"); chat.setAttribute("aria-label","AI ワークスペース");
+  const pt=el("div",{class:"rs__panetitle"});
+  const wide=el("button",{type:"button", id:"rsappWide", class:"rsapp__ib", title:"AI の欄を広げる（W）", "aria-label":"AI の欄を広げる（W）"});
+  wide.setAttribute("aria-pressed","false"); wide.append(rsappSvg("wide")); wide.onclick=()=>rsappSetWide(!RS_APP.wide);
+  pt.append(rsappSvg("spark"), el("span",{text:"AI ワークスペース"}), wide);
+  const libR=el("div",{class:"rs__libR"});
+  [["#rsSavedBtn","#rsSavedPanel","saved"],["#rsExpBtn","#rsExpPanel","exported"],["#rsDocBtn","#rsDocPanel","docs"]].forEach(([b,p,ico])=>{
+    const btn=$(b); libR.append(btn.parentNode); btn.prepend(rsappSvg(ico));
+    const last=btn.lastChild; if(last && last.nodeType===3 && last.textContent.trim()==="▾") last.replaceWith(el("span",{class:"caret", text:last.textContent}));   // 「資料 ▾」の▾（textContent は同じ）
+    btn.setAttribute("aria-haspopup","true"); btn.setAttribute("aria-controls",p.slice(1)); btn.setAttribute("aria-expanded","false"); });
+  [["#rsSrcBtn","#rsSrcPanel"],["#rsThemeBtn","#rsThemePanel"],["#rsWatchBtn","#rsWatchPanel"],["#rsSynBtn","#rsSynPanel"]].forEach(([b,p])=>$(b).setAttribute("aria-controls",p.slice(1)));
+  const make=el("div",{class:"rs__make", role:"toolbar", "aria-label":"作る"});
+  RSAPP_MAKE.forEach(x=>{ const b=$("#"+x.btn); make.append(b); b.prepend(rsappSvg(x.ico)); b.setAttribute("aria-controls",x.form); b.setAttribute("aria-expanded","false"); });
+  tools.prepend(pt, libR, make);
+  // フォームの置き場（開くのは常に1つ。見出し・説明・Ctrl+Enter と、閉じる＋実行の組）
+  const zone=el("div",{id:"rsappForms", class:"rs__formzone is-empty"});
+  tools.after(zone);
+  ["rsExportForm","rsCmpForm","rsChgForm","rsAcctForm","rsReportForm"].forEach(id=>zone.append($("#"+id)));
+  RSAPP_MAKE.forEach(x=>{
+    const f=$("#"+x.form), fh=el("div",{class:"rs__formhead"});
+    fh.append(el("b",{id:"rsappFh-"+x.key, text:x.title}), el("span",{text:x.desc}), el("kbd",{text:"Ctrl+Enter", title:"実行（"+$("#"+x.start).textContent+"）"}));
+    f.prepend(fh); f.setAttribute("role","group"); f.setAttribute("aria-labelledby","rsappFh-"+x.key);
+    // 閉じる＋実行はフォームの最後の行（フッター）に。901px 以上では置き場の下に貼り付き、低い画面でもスクロールせずに押せる
+    const c=$("#"+x.cancel), s=$("#"+x.start), fa=el("div",{class:"rs__formacts"}); f.append(fa); fa.append(c, s);
+  });
+  // 出力の流れ（上の方を読んでいる間は動かさず「↓ 新しい出力」）
+  const log=$("#rsLog"), wrap=el("div",{class:"rs__logwrap"});
+  zone.after(wrap); wrap.append(log);
+  const nb=el("button",{type:"button", id:"rsappNewOut", class:"rsapp__newout", text:"↓ 新しい出力", hidden:true});
+  nb.onclick=()=>{ if(getComputedStyle(log).overflowY==="visible") rsappShowLast(log, false); else log.scrollTo({top:log.scrollHeight}); rsappNewOut(false); };
+  wrap.append(nb);
+  log.addEventListener("scroll",()=>{ if(log.scrollHeight-log.scrollTop-log.clientHeight<=120) rsappNewOut(false); }, {passive:true});
+  window.addEventListener("scroll",()=>{ if(!nb.hidden && getComputedStyle(log).overflowY==="visible" && rsappPageNear()) rsappNewOut(false); }, {passive:true});   // スマホ幅: ページの下まで読んだら消す
+  // 入力欄（候補・入力・会話に使うもの）
+  const comp=el("div",{class:"rs__composer"}), opts=el("div",{class:"rs__chatopts"});
+  wrap.after(comp); comp.append($("#rsQuick"), chat.querySelector(".ai__input"), opts);
+  if(window.ResizeObserver){   // スマホ幅: 画面の下に固定した入力欄の高さ（出力をその上に見せる scroll-margin・「↓ 新しい出力」の位置）。隠れている間の 0 は使わない
+    const ro=new ResizeObserver(()=>{ const h=comp.offsetHeight; if(h) m.style.setProperty("--rsapp-comp-h", h+"px"); }); ro.observe(comp);
+  }
+  $("#rsInput").setAttribute("aria-keyshortcuts","c");
+  const hint=el("span",{class:"rs__keyhint"}); hint.append(el("kbd",{text:"Enter"})," 送信・",el("kbd",{text:"Shift"}),"+",el("kbd",{text:"Enter"})," 改行");
+  const lf=$("#rsUseFull").closest("label"), ld=$("#rsUseDocs").closest("label");   // 件数はスイッチと一緒に折り返す（ラベルの中）
+  lf.append(el("small",{id:"rsappFullN"})); ld.append(el("small",{id:"rsappDocsN"}));
+  opts.append(el("span",{id:"rsappCtx"}), lf, ld, el("span",{class:"sp"}), hint);
+  $("#rsInput").addEventListener("input",()=>{ const t=$("#rsInput"); t.style.height="auto"; t.style.height=Math.min(t.scrollHeight,160)+"px"; });   // 160px まで広がる
+  // スマートフォン幅: 「選択した N件で AI に…」
+  const cta=el("button",{type:"button", id:"rsappToAi", class:"rsapp__toai"});
+  cta.append(el("span",{class:"t"}), el("span",{text:"→","aria-hidden":"true"}));
+  cta.onclick=()=>rsappSetView("ai"); m.append(cta);
+}
+function rsappToPortal(e){   // 「ポータル」・ロゴ: 開いているポータルのタブへ移る。リンクの既定（target のタブを "/" へ移動）は読み込み直しになり、
+  // スクロール位置・過去ログの画面・開いていたパネルを失うので、既にあるタブは移動させない。無ければ新しいタブで "/" を開く
+  if(e.button!==0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;   // Ctrl+クリックなどはブラウザの既定（新しいタブ）
+  let w=null; try{ w=window.open("", "prism-portal"); }catch(_){}
+  if(!w) return;   // 開けない（ポップアップを止められた）: 既定の動作に任せる
+  let blank=true; try{ blank=w.location.href==="about:blank"; }catch(_){}   // 別のオリジンへ移ったタブ（読めない）も "/" に戻す
+  e.preventDefault();
+  if(blank){ try{ w.location.href="/"; }catch(_){} }
+  else{ try{ w.focus(); }catch(_){} }
+}
+// ---- ポータルからの申し出（開いているこのタブを、ポータルが読み込み直さずに前へ出したとき。rsToLiveTab）
+// ポータルで開いていた条件・会話・書きかけがこのタブと違うときだけ、上に「ポータルの条件で開き直す」を出す。押すまでこのタブの作業はそのまま。
+// 押すと引き継ぎ（同じ番号）を書いて /research?… を開き直す（このタブの書きかけの文・開いていたフォームは控えから戻し、引き継いだものより優先）
+const RS_OFFER_MS=RS_HANDOFF_TTL-10000;   // 申し出は 50 秒まで（ポータルは 61 秒で引き継ぎを消すので、余裕を持って隠す）
+function rsappOffer(ho){
+  if(!ho || typeof ho!=="object" || ho.v!==1 || !ho.st || typeof ho.st!=="object" || !/^[0-9a-f]{16}$/.test(String(ho.nonce||""))) return;
+  const age=Date.now()-Number(ho.at); if(!(age>=-5000 && age<RS_OFFER_MS)) return;
+  const hs=ho.st, cur=rsSnapshot(), have=new Set(cur.msgs.map(rsMsgKey));
+  const nMsg=(Array.isArray(hs.msgs) ? hs.msgs : []).filter(m=>m && typeof m==="object" && RS_KEEP_ROLES.includes(m.role) && !have.has(rsMsgKey(m))).length;
+  const sortIds=a=>JSON.stringify((Array.isArray(a) ? a : []).map(String).sort());
+  const cond=RS_COND_KEYS.some(k=>k in hs) && (rsCondsNorm(hs)!==rsCondsNorm(cur) || sortIds(hs.sel)!==sortIds(cur.sel)
+    || JSON.stringify(hs.theme||null)!==JSON.stringify(cur.theme||null));
+  const job=!!(hs.job && hs.job.id) || !!(hs.ask && hs.ask.id), draft=!!String(hs.draft||"").trim() || !!(hs.form && hs.form.id);
+  if(!cond && !nMsg && !job && !draft){ rsappOfferHide(); return; }   // このタブと同じ: 何も出さない（ただ前へ出しただけ）
+  const what=[];
+  if(cond) what.push(String(hs.q||"").trim() ? "検索「"+String(hs.q).trim().slice(0,30)+"」" : "検索条件");
+  if(nMsg) what.push("会話 "+nMsg+"件");
+  if(job) what.push("生成中のジョブ");
+  if(draft) what.push("書きかけ");
+  let bar=$("#rsappOffer");
+  if(!bar){
+    bar=el("div",{id:"rsappOffer", class:"rsapp__offer", role:"region", "aria-label":"ポータルからの引き継ぎ", hidden:true});
+    const go=el("button",{type:"button", id:"rsappOfferGo", class:"btn sm", text:"ポータルの条件で開き直す",
+      title:"ポータルで開いていた検索条件・選択・会話でこのタブを開き直します（このタブの書きかけの文・開いているフォームは残ります）"});
+    const no=el("button",{type:"button", id:"rsappOfferNo", class:"lnkbtn", text:"このまま"});
+    go.onclick=rsappOfferAccept; no.onclick=rsappOfferHide;
+    bar.append(el("span",{class:"t", "aria-live":"polite"}), go, no);
+    $("#researchModal").append(bar);
+  }
+  bar.querySelector(".t").textContent="ポータルで開いていたリサーチ（"+what.join("・")+"）があります。このタブの作業はそのままです";
+  bar.hidden=false; RS_APP.offer=ho;
+  clearTimeout(RS_APP.offerT); RS_APP.offerT=setTimeout(rsappOfferHide, Math.max(1000, RS_OFFER_MS-age));
+}
+function rsappOfferHide(){
+  clearTimeout(RS_APP.offerT); RS_APP.offer=null;
+  const bar=$("#rsappOffer"); if(!bar || bar.hidden) return;
+  const had=bar.contains(document.activeElement); bar.hidden=true;
+  if(had) try{ $("#rsInput").focus({preventScroll:true}); }catch(e){}
+}
+function rsappOfferAccept(){
+  const ho=RS_APP.offer; rsappOfferHide(); if(!ho) return;
+  if(!(Date.now()-Number(ho.at)<RS_OFFER_MS)){ toast("ポータルからの引き継ぎの期限が切れました。ポータルでもう一度「別タブで開く」を押してください","err"); return; }
+  if(!rsHandoffWrite(ho.st, ho.nonce)){ toast("引き継ぎを書き込めませんでした（ブラウザの保存領域がいっぱいです）","err"); return; }
+  location.assign("/research"+rsUrlQuery(ho.st));   // 読み込み直す直前（pagehide）に、このタブの書きかけの文・フォームを控える
+}
+function rsappPlaceFilters(){   // 1280px 以上（広げていない）: 絞り込みはレール。それ以外は検索欄の下に横並び
+  const f=$(".rs__filters"), rail=$(".rs__rail"); if(!f || !rail) return;
+  const desk=rsappDesk() && !RS_APP.wide;
+  const placed = desk ? f.parentNode===rail : (f.parentNode===$(".rs__search") && f.previousElementSibling===$("#rsAliasRow"));
+  if(!placed){
+    const had=f.contains(document.activeElement) ? document.activeElement : null;
+    closeRsPanels();
+    if(desk) rail.prepend(f); else $("#rsAliasRow").after(f);
+    if(had) try{ had.focus({preventScroll:true}); }catch(e){}
+  }
+  renderHist();
+}
+function rsappSync(){   // 件数（切替・入力欄の下・スマホの案内）と URL
+  if(!RS_APP.mounted) return;
+  const hits=RS.results.length, sel=RS.sel.size;
+  $("#rsappHitN").textContent=String(hits);
+  $("#rsappCtx").textContent="対象 "+sel+"件（"+hits+"件中）";
+  $("#rsappFullN").textContent="取得済み "+RS.results.filter(a=>a.has_text && RS.sel.has(a.id)).length;
+  $("#rsappDocsN").textContent=RS.docs.length+"件";
+  $("#rsappToAi .t").textContent = sel ? "選択した "+sel+"件で AI に質問・作成" : "記事を選ぶと AI に質問・作成できます";
+  clearTimeout(RS_APP.urlT); RS_APP.urlT=setTimeout(rsUrlSync, 500);
+}
+function rsappJobState(){   // 実行中のもの（ジョブ → 回答 → 本文取得の順）
+  const out=[], j=RS.job && !["done","error"].includes(RS.job.state) ? RS.job : null;
+  if(j){
+    const pct=rsJobPct(j);
+    if(j.kind==="export") out.push({kind:"job", t:(EXPORT_NAMES[j.export_kind]||"文書")+"を作成中", s:pct+"%", pct});
+    else out.push({kind:"job", t:(RS_TPL_NAMES[(j.payload&&j.payload.template)||j.template]||"レポート")+"を作成中", s:pct+"%"+(j.elapsed ? "・経過 "+fmtDur(j.elapsed) : ""), pct});
+  }
+  if(RS.ask){ const mm=RS.msgs.find(x=>x.role==="ask" && x.job_id===RS.ask.id); const g=mm && mm.gen ? String(mm.gen).replace(/^生成中\s*/,"") : "";
+    out.push({kind:"ask", t:"回答を生成中", s:g, pct:null}); }
+  const f=RS.fetchJob;
+  if(f && !["done","error"].includes(f.state)) out.push({kind:"fetch", t:"本文を取得中", s:(f.done||0)+"/"+(f.total||f.articles||"?"), pct:f.total ? Math.round(100*(f.done||0)/f.total) : null});
+  return out;
+}
+function rsappSyncJob(){   // ヘッダーのジョブ表示（1秒ごと）
+  const b=$("#rsappJob"); if(!b) return;
+  const list=rsappJobState(), dot=$("#rsappAiDot"); if(dot) dot.hidden=!list.length;
+  const key=list.map(x=>x.kind).join(",");
+  if(key!==RS_APP.jobKey){   // 新しく始まったものだけ読み上げる
+    const prev=RS_APP.jobKey.split(","), start=list.find(x=>!prev.includes(x.kind));
+    if(start) $("#rsappJobLive").textContent=start.t;
+    RS_APP.jobKey=key;
+  }
+  if(list.length){
+    RS_APP.done=null;
+    const top=list[0];
+    rsappPill(top.t, top.s+(list.length>1 ? "　＋"+(list.length-1) : ""), top.pct, false); return;
+  }
+  const d=RS_APP.done;
+  if(d){
+    if(!document.hidden) d.left-=1000;
+    if(d.left<=0){ RS_APP.done=null; b.hidden=true; return; }
+    rsappPill((d.kind==="ask"?"回答":d.kind==="export"?"ファイル":"レポート")+"ができました — 開く", "", 100, true); return;
+  }
+  b.hidden=true;
+}
+function rsappPill(t, s, pct, done){
+  const b=$("#rsappJob"); b.hidden=false;
+  b.classList.toggle("done", !!done); b.classList.toggle("ind", !done && pct==null);
+  const pg=b.querySelector(".ring .pg"); if(pg) pg.setAttribute("stroke-dashoffset", pct==null ? "0" : (47.1*(1-Math.max(0,Math.min(100,pct))/100)).toFixed(1));
+  b.querySelector(".t").textContent=t; b.querySelector(".s").textContent=s;
+  b.setAttribute("aria-label", t+(s?" "+s:""));
+}
+function rsappDone(kind){   // ジョブの完了: 「…ができました — 開く」（見えている時間で20秒、または押すまで）
+  RS_APP.done={kind, left:20000};
+  const live=$("#rsappJobLive"); if(live) live.textContent=(kind==="ask"?"回答":kind==="export"?"ファイル":"レポート")+"ができました";
+  rsappSyncJob();
+}
+function rsappFocus(n, block){ if(!n) return; if(!n.hasAttribute("tabindex")) n.setAttribute("tabindex","-1"); try{ n.scrollIntoView({block:block||"nearest"}); n.focus({preventScroll:true}); }catch(e){} }
+function rsappJobClick(){
+  if(RS_APP.done){
+    RS_APP.done=null; rsappSyncJob();
+    if(rsappNarrow()) rsappSetView("ai");
+    const outs=$$("#rsLog .bubble.rpt, #rsLog .bubble.exp, #rsLog .bubble.ans"); rsappFocus(outs[outs.length-1], "start"); return;
+  }
+  const top=rsappJobState()[0]; if(!top) return;
+  if(top.kind==="fetch"){ if(rsappNarrow()) rsappSetView("results"); rsappFocus($("#rsFetchBar")); return; }
+  if(rsappNarrow()) rsappSetView("ai");
+  rsappFocus($(top.kind==="ask" ? "#rsLog .ask-progress" : "#rsLog .rpt-progress"));
+}
+function rsappHello(){   // 会話が空のとき: 「作る」5種類のカード
+  const w=el("div",{class:"rsapp__hello"});
+  w.append(el("div",{class:"rsapp__lead", text:"何を作りますか？"}));
+  const cards=el("div",{class:"rsapp__cards"});
+  RSAPP_MAKE.forEach((x,i)=>{
+    const b=el("button",{type:"button", class:"rsapp__card", "aria-label":x.title+"（"+(i+1)+"）— "+x.desc, "aria-keyshortcuts":String(i+1)});
+    b.dataset.for=x.btn;
+    const h=el("b"); h.append(rsappSvg(x.ico), x.title);
+    b.append(h, el("span",{text:x.desc}), el("kbd",{text:String(i+1), "aria-hidden":"true"}));
+    b.onclick=()=>$("#"+x.btn).click(); cards.append(b);
+  });
+  w.append(cards, el("p",{class:"rsapp__foot", text:"または下の欄で質問できます。回答には出典番号 [n] が付き、コピー・保存・書き出しできます。"}));
+  return w;
+}
+function rsappNewOut(show){ const b=$("#rsappNewOut"); if(b) b.hidden=!show; }
+function rsappPageNear(){ const d=document.documentElement; return d.scrollHeight-(window.scrollY||0)-innerHeight<=120; }
+function rsappShowLast(log, mine){   // スマホ幅: 最新の出力を入力欄（画面の下に固定）の上に見せる（scroll-margin で入力欄の高さを空ける）
+  const c=log.lastElementChild; if(!c) return;
+  const comp=$(".rs__composer"), head=$("#researchModal .modal__head");
+  const room=innerHeight-(comp ? comp.offsetHeight : 0)-(head ? head.offsetHeight : 0)-24;
+  try{ c.scrollIntoView({block: !mine && c.offsetHeight>room ? "start" : "end"}); }catch(e){}   // 長い出力（レポート等）は頭から
+}
+// 利用者が自分で始めた出力（フォームの「集計する」「作成」・保存済みレポートを開く など）: 次の描画で1回だけ「自分の発言」と同じに扱う。
+// API が成功して出力を積む直前に付ける（失敗したときは付かない。ジョブの完了など後から届く出力には付けない）
+function rsOwnOut(){ if(RS_STANDALONE) RS_APP.ownAction=true; }
+function rsappHoldLast(log){   // スマホ幅・自分で始めた出力: 直後の更新（進捗の1回目など）で高さが増えても入力欄の下に潜らないよう、
+  // 2.5 秒だけ見せ直す（その間に利用者が触った・上へ読みに行ったらやめる。上の欄が縮んでブラウザが位置を直すことがあるので、位置の差では判断しない）
+  if(typeof ResizeObserver==="undefined") return;
+  if(RS_APP.holdStop) RS_APP.holdStop();
+  const evs=["wheel","touchstart","keydown","pointerdown"];
+  const ro=new ResizeObserver(()=>{
+    if(RS_APP.view!=="ai" || !rsappPageNear()){ stop(); return; }
+    rsappShowLast(log, false);
+  });
+  const stop=()=>{ ro.disconnect(); clearTimeout(t); evs.forEach(e=>window.removeEventListener(e, stop, true)); if(RS_APP.holdStop===stop) RS_APP.holdStop=null; };
+  const t=setTimeout(stop, 2500);
+  evs.forEach(e=>window.addEventListener(e, stop, {capture:true, passive:true}));
+  RS_APP.holdStop=stop; ro.observe(log);
+}
+function rsappScrollLog(log, prev){   // 下の方にいる・自分の発言のときだけ末尾へ。上を読んでいる間は位置を保つ
+  const own=!!RS_APP.ownAction; RS_APP.ownAction=false;   // 1回だけ（どの道でも消す）
+  const n=RS.msgs.length, last=RS.msgs[n-1], first=RS_APP.lastLen<0;
+  // 新しい出力: 件数が増えた、または最後のメッセージが変わった（進捗 → レポート、生成中 → 回答 は同じ件数のまま置き換わる）
+  const sig=n+"|"+(last ? last.role+"|"+(last.job_id || (last.report&&last.report.id) || (last.data&&last.data.id) || "") : "");
+  const grew=n>=RS_APP.lastLen && sig!==RS_APP.lastSig; RS_APP.lastLen=n; RS_APP.lastSig=sig;
+  const mine=!!(grew && last && last.role==="user");
+  if(getComputedStyle(log).overflowY==="visible"){   // スマホ幅: ページ全体がスクロールする（入力欄は画面の下に固定）
+    if(!n || !grew || RS_APP.view!=="ai"){ if(!n || RS_APP.view!=="ai") rsappNewOut(false); return; }
+    // 自分の発言・自分で始めた出力（フォームはログの上にあり、押した時点ではページの上の方にいる）・下の方を読んでいた:
+    // 最新を入力欄の上へ（長い出力は頭から）。上を読んでいる間は動かさず「↓ 新しい出力」（入力欄の上に出す）
+    if(mine || (own && grew) || prev.pageNear!==false){ rsappShowLast(log, mine); rsappNewOut(false); if(own && !mine) rsappHoldLast(log); }
+    else rsappNewOut(true);
+    return;
+  }
+  if(!n){ log.scrollTop=0; rsappNewOut(false); return; }   // 会話が空（「何を作りますか？」のカード）: 先頭から見せる
+  if(first || prev.near || mine){ log.scrollTop=log.scrollHeight; rsappNewOut(false); }
+  else { log.scrollTop=prev.top; if(grew && log.scrollHeight-log.scrollTop-log.clientHeight>120) rsappNewOut(true); }
+}
+function rsappRowIds(){   // 一覧の行の順（renderRsList と同じ: 類似の束は代表、開いた束はその下）
+  const dedup=!!(RS.filters&&RS.filters.dedup), byId=new Map(RS.results.map(a=>[a.id,a])), out=[];
+  RS.results.forEach(a=>{ if(dedup && a.dup_of) return; out.push(a.id);
+    if(dedup && a.dups && RS.openDups.has(a.id)) a.dups.forEach(id=>{ if(byId.has(id)) out.push(id); }); });
+  return out;
+}
+function rsappSetKb(row){
+  $$("#rsList .rrow.kb").forEach(r=>{ if(r!==row) r.classList.remove("kb"); });
+  if(row){ row.classList.add("kb"); RS_APP.kbId=row.dataset.id||null; }
+}
+function rsappRestoreCursor(){   // 一覧を描き直したら J/K のカーソルを同じ記事に戻す
+  const rows=$$("#rsList .rrow"), ids=rsappRowIds();
+  if(rows.length===ids.length) rows.forEach((r,i)=>{ r.dataset.id=ids[i]; });
+  if(!RS_APP.kbId) return;
+  const r=rows.find(x=>x.dataset.id===RS_APP.kbId); if(r) r.classList.add("kb");
+}
+function rsappCursor(d){   // J/K: 記事を移動（チェックボックスにフォーカス）
+  const rows=$$("#rsList .rrow"); if(!rows.length) return;
+  let i=rows.findIndex(r=>r.classList.contains("kb"));
+  i = i<0 ? (d>0 ? 0 : rows.length-1) : Math.max(0, Math.min(rows.length-1, i+d));
+  const r=rows[i]; rsappSetKb(r);
+  const cb=r.querySelector("input"); if(cb) try{ cb.focus({preventScroll:true}); }catch(e){}
+  try{ r.scrollIntoView({block:"nearest"}); }catch(e){}
+  rsappKeepVisible(r);
+}
+function rsappKeepVisible(r){   // scrollIntoView の nearest は、行が固定の結果バー（上）やスマホの「AI に…」ボタン（下）に隠れていても動かない。見える範囲までずらす
+  const narrow=rsappNarrow(), sc=narrow ? null : $(".rs__search"), bar=$("#researchModal .rs__bar");
+  const rr=r.getBoundingClientRect(), top=(bar ? bar.getBoundingClientRect().bottom : 0)+8;
+  let bot=sc ? sc.getBoundingClientRect().bottom : innerHeight;
+  const cta=$("#rsappToAi"); if(narrow && cta && cta.getClientRects().length) bot=Math.min(bot, cta.getBoundingClientRect().top);
+  bot-=8;
+  const dy = rr.top<top || rr.height>bot-top ? rr.top-top : rr.bottom>bot ? rr.bottom-bot : 0;
+  if(dy){ if(sc) sc.scrollTop+=dy; else window.scrollBy(0, dy); }
+}
+function rsappSetView(v){   // 900px 以下: 結果／AI の切替（戻ったときは元のスクロール位置へ）
+  v = v==="ai" ? "ai" : "results";
+  const m=$("#researchModal"), narrow=rsappNarrow(), from=RS_APP.view;
+  if(narrow && from==="results" && v==="ai") RS_APP.scrollRes=window.scrollY||0;
+  RS_APP.view=v; m.dataset.view=v;
+  $$(".rsapp__view button").forEach(b=>b.setAttribute("aria-pressed", String(b.dataset.view===v)));
+  try{ sessionStorage.setItem(RS_VIEW_KEY, v); }catch(e){}
+  if(!narrow || from===v) return;
+  if(v==="ai"){
+    const f=RSAPP_MAKE.map(x=>$("#"+x.form)).find(x=>!x.hidden);
+    const t=f || $("#rsLog").lastElementChild;
+    requestAnimationFrame(()=>{ try{ if(t) t.scrollIntoView({block:f?"start":"end"}); else window.scrollTo(0,0); }catch(e){} });
+  }else requestAnimationFrame(()=>window.scrollTo(0, RS_APP.scrollRes||0));
+}
+function rsappSetWide(on){   // ⤢ / W: AI の欄を広げる（1280px 以上）
+  RS_APP.wide=!!on; const m=$("#researchModal");
+  if(RS_APP.wide) m.setAttribute("data-wide",""); else m.removeAttribute("data-wide");
+  $("#rsappWide").setAttribute("aria-pressed", String(RS_APP.wide));
+  store.set("rs.wide", RS_APP.wide);
+  rsappPlaceFilters();
+}
+function rsappSyncForms(){
+  const open=RSAPP_MAKE.some(x=>!$("#"+x.form).hidden);
+  $("#rsappForms").classList.toggle("is-empty", !open);
+  $(".rs__chat").classList.toggle("has-form", open);
+}
+function rsappObserve(){   // フォーム・パネルの開閉（hidden）→ ボタンの aria-expanded・フォームの置き場・フォーカス
+  const mo=new MutationObserver(muts=>{
+    let forms=false;
+    muts.forEach(mu=>{
+      const n=mu.target, x=RSAPP_MAKE.find(k=>k.form===n.id);
+      if(x){
+        forms=true; const b=$("#"+x.btn); b.setAttribute("aria-expanded", String(!n.hidden));
+        if(n.hidden){ const ae=document.activeElement; if(!ae || ae===document.body || n.contains(ae)) try{ b.focus({preventScroll:true}); }catch(e){} }
+        else setTimeout(()=>{   // 開いたフォームの最初の欄へ（既存の処理が欄に入れていればそのまま）
+          if(n.hidden) return;
+          const own=n.contains(document.activeElement);
+          const f=own ? document.activeElement : n.querySelector('input:not([type=hidden]):not([disabled]),select:not([disabled]),textarea:not([disabled]),button:not([disabled])');
+          if(!f) return;
+          if(!own) try{ f.focus({preventScroll:true}); }catch(e){}
+          // 置き場の中で、下に貼り付けた実行の行に隠れない位置へ（scroll-padding-bottom）。スマホ幅はページ全体がスクロールするので動かさない
+          if(!rsappNarrow() && !f.closest(".rs__formacts")) try{ f.scrollIntoView({block:"nearest"}); }catch(e){}
+        }, 50);
+        return;
+      }
+      const p=RSAPP_PANELS.find(([pid])=>pid.slice(1)===n.id); if(p) $(p[1]).setAttribute("aria-expanded", String(!n.hidden));
+    });
+    if(forms) rsappSyncForms();
+  });
+  RSAPP_MAKE.forEach(x=>mo.observe($("#"+x.form), {attributes:true, attributeFilter:["hidden"]}));
+  RSAPP_PANELS.forEach(([p])=>mo.observe($(p), {attributes:true, attributeFilter:["hidden"]}));
+  rsappSyncForms();
+}
+function rsappCloseForm(id, focusBtn){
+  const x=RSAPP_MAKE.find(k=>k.form===id); if(!x) return;
+  x.toggle(false); if(focusBtn) try{ $("#"+x.btn).focus({preventScroll:true}); }catch(e){}
+}
+function rsappKey(e){   // 別タブのキー操作（入力中・Ctrl/Alt/⌘ との組み合わせでは1文字のキーは使わない）
+  if(overlayStack.length){ if(e.key==="Escape"){ e.preventDefault(); closeTop(); } return; }
+  const ae=document.activeElement, tag=ae ? ae.tagName : "";
+  const typing = tag==="TEXTAREA" || tag==="SELECT" || (tag==="INPUT" && !/^(checkbox|radio)$/i.test(ae.type||""));
+  const form = ae && ae.closest ? ae.closest(".rs__form") : null;
+  if(e.key==="Escape"){   // パネル → フォーム → 入力欄 の順に閉じる
+    if(ae && ae.id==="rsQ" && ae.value) return;   // 検索欄の文字を消す（ブラウザの既定動作）
+    const pan=RSAPP_PANELS.find(([p])=>!$(p).hidden);
+    if(pan){ e.preventDefault(); closeRsPanels(); try{ $(pan[1]).focus(); }catch(_){} return; }
+    if(form && !form.hidden){ e.preventDefault(); rsappCloseForm(form.id, true); return; }
+    if(typing){ ae.blur(); return; }
+    const of=RSAPP_MAKE.find(x=>!$("#"+x.form).hidden); if(of){ e.preventDefault(); rsappCloseForm(of.form, true); }
+    return;
+  }
+  if(e.key==="Enter" && (e.ctrlKey||e.metaKey) && form && !form.hidden){   // Ctrl+Enter: フォームを実行
+    const x=RSAPP_MAKE.find(k=>k.form===form.id); if(x){ e.preventDefault(); const s=$("#"+x.start); if(!s.disabled) s.click(); }
+    return;
+  }
+  if(typing || e.ctrlKey || e.altKey || e.metaKey) return;
+  const k=e.key, narrow=rsappNarrow();
+  if(k==="/"){ e.preventDefault(); if(narrow) rsappSetView("results"); const q=$("#rsQ"); q.focus(); q.select(); }
+  else if(k==="j"||k==="J"){ e.preventDefault(); if(narrow) rsappSetView("results"); rsappCursor(1); }
+  else if(k==="k"||k==="K"){ e.preventDefault(); if(narrow) rsappSetView("results"); rsappCursor(-1); }
+  else if(k==="x"||k==="X"){ const r=$("#rsList .rrow.kb"), cb=r && r.querySelector("input"); if(cb){ e.preventDefault(); cb.click(); } }
+  else if(k==="c"||k==="C"){ e.preventDefault(); if(narrow) rsappSetView("ai"); $("#rsInput").focus(); }
+  else if(/^[1-5]$/.test(k)){ e.preventDefault(); if(narrow) rsappSetView("ai"); $("#"+RSAPP_MAKE[Number(k)-1].btn).click(); }
+  else if(k==="w"||k==="W"){ if(rsappDesk()){ e.preventDefault(); rsappSetWide(!RS_APP.wide); } }
+  else if(k==="t"||k==="T"){ e.preventDefault(); applyTheme(document.documentElement.getAttribute("data-theme")==="dark"?"light":"dark"); }
+  else if(k==="?"){ e.preventDefault(); openHelp(); }
+}
+async function rsappCollect(force){   // ニュースの収集（ポータルを開いていなくても過去ログが新しくなるように）。失敗しても何も出さない
+  RS_APP.lastCollect=Date.now();
+  try{
+    const d=await api("/api/articles"+(force?"?refresh=1":""));
+    if(d && Array.isArray(d.categories) && d.categories.length){
+      S.categories=d.categories; const sel=$("#rsCat");
+      d.categories.forEach(c=>{ if(typeof c==="string" && c && ![...sel.options].some(o=>o.value===c)) sel.append(el("option",{value:c, text:c})); });
+    }
+  }catch(e){}
+}
+function rsappAutoTick(){   // 自動更新（ポータルと同じ間隔）: ポータルのタブが開いていないときだけ
+  const auto=Number(store.get("auto",0))||0, now=Date.now();
+  if(auto>0 && !document.hidden && now-RS_APP.lastAlive>150000 && now-RS_APP.lastCollect>=auto*60000) rsappCollect(true);
+}
+function rsappRestoreForm(fm){   // 引き継いだフォームを開き、値を戻す（対象・宛先・長さ・枚数・スイッチ・別表記のチェックも）。
+  // 選択肢がまだ無いもの（保存済みレポート・テーマ・資料は読み込み中）は、届いたときに当てる（rsappFormWant）
+  const fl=(typeof fm.fields==="object" && fm.fields) || {}, ck=(typeof fm.checks==="object" && fm.checks) || {};
+  const v=k=>typeof fl[k]==="string" ? fl[k] : null;
+  const setSel=(id,val)=>{ const n=$(id); if(n && val!=null && [...n.options].some(o=>o.value===val)) n.value=val; };
+  const setNum=(id,val)=>{ const n=$(id), x=parseInt(val,10); if(n && val!=null && x>=Number(n.min) && x<=Number(n.max)) n.value=String(x); };
+  const setChk=id=>{ const n=document.getElementById(id); if(n && typeof ck[id]==="boolean") n.checked=ck[id]; };
+  const want=(id,val)=>{ const n=document.getElementById(id); if(!n || val==null) return; const cur=n.type==="checkbox" ? n.checked : n.value;
+    if(cur===val) return;
+    RS_APP.formWant[id]=val;
+    n.addEventListener("change",()=>{ if(RS_APP.formWant) delete RS_APP.formWant[id]; }, {once:true});   // 利用者が選び直したら当てない
+  };
+  RS_APP.formWant={};
+  if(fm.id==="rsAcctForm"){
+    const name=(v("rsAcctName")||"").trim().slice(0,40), ac=(typeof fm.acct==="object" && fm.acct) || {};
+    setSel("#rsAcctDays", v("rsAcctDays"));   // 候補の件数は期間で数えるので、開く（候補を聞く）前に
+    ACCT.aiFor = typeof ac.aiFor==="string" && ac.aiFor===name ? name : "";   // AI で探していた: AI の候補も戻す（サーバーの保存した応答から）
+    ACCT.restore = Array.isArray(ac.checked) ? {name, checked:ac.checked.filter(t=>typeof t==="string").slice(0,20)} : null;
+    toggleAcctForm(true,{name, q: typeof ac.fixedQ==="string" && ac.fixedQ ? ac.fixedQ : undefined});
+    if(v("rsAcctMemo")!=null) $("#rsAcctMemo").value=v("rsAcctMemo");
+    setChk("rsAcctWord"); setChk("rsAcctFull");
+  }else if(fm.id==="rsReportForm"){
+    toggleReportForm(true); if(v("rsRQ")!=null) $("#rsRQ").value=v("rsRQ"); setSel("#rsRT", v("rsRT")); setNum("#rsRDocK", v("rsRDocK"));
+    setChk("rsRFull");
+    if(typeof ck.rsRDocs==="boolean"){ if(RS.docs.length) $("#rsRDocs").checked=ck.rsRDocs; else want("rsRDocs", ck.rsRDocs); }   // 資料の一覧が届いてから
+  }else if(fm.id==="rsExportForm"){
+    const kd=v("rsExKind"), src=v("rsExSrc")||"", rid=/^report:[0-9a-f]{16}$/.test(src) ? src.slice(7) : "";
+    toggleExportForm(true,{kind: kd && EXPORT_NAMES[kd] ? kd : undefined, instructions: v("rsExInst")!=null ? v("rsExInst") : undefined,
+      tone: ["boss","team"].includes(v("rsExTone")) ? v("rsExTone") : undefined, length: ["short","normal"].includes(v("rsExLen")) ? v("rsExLen") : undefined,
+      report_id: rid || undefined, report_title: rid ? String(fm.srcTitle||"").slice(0,200) : undefined});   // 保存済みレポートは読み込み前でも選んだまま
+    setNum("#rsExSlides", v("rsExSlides")); setChk("rsRFull");
+    if(src && !rid){ setSel("#rsExSrc", src); want("rsExSrc", src); }   // 選択中の記事・テーマ
+  }else if(fm.id==="rsCmpForm"){
+    toggleCmpForm(true); setSel("#rsCmpB", v("rsCmpB")); want("rsCmpB", v("rsCmpB"));   // テーマ・ウォッチはテーマの一覧が届いてから
+  }else if(fm.id==="rsChgForm"){
+    toggleChgForm(true); setSel("#rsChgPeriod", v("rsChgPeriod")); setSel("#rsChgBase", v("rsChgBase"));
+  }
+}
+function rsappFormWant(){   // 一覧（保存済みレポート・テーマ・資料）が届いた: 引き継いだ値を当てる（利用者がその後に変えた欄は rsappRestoreForm で外す）
+  const W=RS_APP.formWant; if(!W || !RS_STANDALONE) return;
+  Object.keys(W).forEach(id=>{
+    const n=document.getElementById(id), val=W[id]; if(!n){ delete W[id]; return; }
+    if(n.type==="checkbox"){ if(!n.disabled){ n.checked=val; delete W[id]; } }
+    else if([...n.options].some(o=>o.value===val)){ n.value=val; delete W[id]; }
+  });
+}
+function rsappRefreshLists(){   // ほかのタブで変わったかもしれない一覧・設定を読み直す（開いているパネルは触らない）
+  const open=id=>!$(id).hidden;
+  rsSettingsReload();   // 生成AIの設定（ポータルで登録した直後に戻ってきても「未設定です」と出さない）
+  if(!open("#rsSavedPanel")) loadReports();
+  if(!open("#rsExpPanel")) loadExports();
+  if(!open("#rsThemePanel") && !open("#rsWatchPanel")) loadThemes();
+  if(!open("#rsDocPanel")) loadDocs();
+  if(!open("#rsSynPanel")) loadSynonyms(true);
+}
+function mountResearchApp(){   // /research の起動
+  const m=$("#researchModal");
+  m.classList.add("rsapp","show"); ["role","aria-modal","aria-label"].forEach(a=>m.removeAttribute(a));
+  m.setAttribute("aria-hidden","false"); m.inert=false;
+  try{ window.name=RS_TAB; }catch(e){}
+  const hp=$("#helpPortal"), hr=$("#helpResearch"); if(hp) hp.hidden=true; if(hr) hr.hidden=false;
+  rsappBuildDom();
+  RS_APP.mounted=true;
+  rsappPlaceFilters();
+  const mq=matchMedia("(min-width:1280px)");
+  if(mq.addEventListener) mq.addEventListener("change", rsappPlaceFilters); else if(mq.addListener) mq.addListener(rsappPlaceFilters);
+  rsappObserve();
+  if(innerHeight<760) RS.histOpen=false;   // 低い画面: 報道量のグラフは閉じて始める（一覧を多く見せる）
+  // 控え（このタブ）＋引き継ぎ（ポータル）＋ URL の条件
+  const ho=rsHandoffTake(), own=rsReadSession();
+  // このタブで書きかけだった文・開いていたフォーム（読み込み直す直前に控えたもの）。控えからは消す（次に閉じるときに入れ直す）
+  const ownDraft=own ? String(own.draft||"").slice(0,4000) : "", ownForm=own && own.form && typeof own.form==="object" ? own.form : null;
+  const {st, adopted}=rsMergeSession(own, ho);
+  delete st.draft; delete st.form;
+  if(!ho){
+    const u=rsUrlRead();
+    if(u){ const differs=rsCondsNorm(st)!==rsCondsNorm(u); Object.assign(st, u);
+           if(differs){ delete st.sel; st.theme=null; st.newOnly=false; } }   // 条件が違えば選択・テーマは使わない（既定の上位20件）
+  }
+  try{ sessionStorage.setItem(RS_STORE, JSON.stringify(st)); }catch(e){}
+  loadAiSettings().then(()=>{ if(!$("#rsAcctForm").hidden) renderAcct(); });   // 候補はそのまま（生成AIのボタンの状態だけ。引き継いだチェックを消さない）
+  rsMount();
+  // 入力中の文・開いていたフォーム: このタブで書きかけだったものを優先し、無ければ引き継いだもの（引き継ぎで書きかけを消さない）
+  let focusForm=false;
+  const okForm=fm=>!!fm && typeof fm==="object" && RSAPP_MAKE.some(x=>x.form===fm.id);
+  const d=ownDraft || (ho ? String(ho.st.draft||"").slice(0,4000) : "");
+  if(d){ const ta=$("#rsInput"); ta.value=d; ta.dispatchEvent(new Event("input")); }
+  const fm=okForm(ownForm) ? ownForm : (ho && okForm(ho.st.form) ? ho.st.form : null);
+  if(fm){ focusForm=true; rsappRestoreForm(fm); }
+  if(ho){
+    const bc=rsChannel();   // 受け取ったことをポータルへ（ポータルは引き取ったジョブを追うのをやめる）
+    if(bc) try{ bc.postMessage({t:"rs-handoff-ack", nonce:ho.nonce, job:adopted.job, ask:adopted.ask}); }catch(e){}
+  }
+  let sv=null; try{ sv=sessionStorage.getItem(RS_VIEW_KEY); }catch(e){}
+  rsappSetView(sv==="ai" ? "ai" : "results");
+  rsappSetWide(!!store.get("rs.wide", false));
+  rsappCollect(false);
+  const bc=rsChannel();
+  // 生きている合図（ポータルの「別タブで開く」・Shift+G は、合図のある別タブを読み込み直さずに前へ出す。rsToLiveTab）
+  const tabId=rsNonce();
+  const alive=()=>{ if(bc) try{ bc.postMessage({t:"rs-tab-alive", id:tabId, at:Date.now()}); }catch(e){} };
+  alive(); setInterval(alive, 60000);
+  document.addEventListener("visibilitychange",()=>{ if(!document.hidden) alive(); });
+  window.addEventListener("pageshow",(e)=>{ if(e.persisted) alive(); });   // 戻る・進むのキャッシュから戻った
+  window.addEventListener("pagehide",()=>{   // 閉じる・読み込み直す: 書きかけの文・フォームも控え、ポータルに知らせる
+    rsPersist(true);
+    if(bc) try{ bc.postMessage({t:"rs-tab-gone", id:tabId}); }catch(e){}
+  });
+  if(bc) bc.addEventListener("message",(ev)=>{ const t=ev.data && ev.data.t;
+    if(t==="portal-alive"){ RS_APP.lastAlive=Date.now(); alive(); }   // 開いたばかりのポータルにも、このタブがあることを伝える
+    else if(t==="settings-saved") rsSettingsReload();   // ポータルで設定を保存した: 生成AIの設定を読み直す
+    else if(t==="rs-offer") rsappOffer(ev.data.ho); });
+  setInterval(rsappAutoTick, 60000);
+  setInterval(rsappSyncJob, 1000);
+  RS_APP.lastRefresh=Date.now();
+  const onShow=()=>{   // タブに戻ってきた: 「(✓) 」を消し、ほかのタブで変わった一覧を読み直す
+    if(document.hidden) return;
+    if(document.title.startsWith(DONE_MARK)) document.title=document.title.slice(DONE_MARK.length);
+    const now=Date.now();
+    if(now-RS_APP.lastRefresh>=2000){ RS_APP.lastRefresh=now; rsappRefreshLists(); }
+    if(now-RS_APP.lastCollect>600000) rsappCollect(false);
+  };
+  document.addEventListener("visibilitychange", onShow); window.addEventListener("focus", onShow);
+  if(!focusForm) setTimeout(()=>{ try{ $("#rsQ").focus({preventScroll:true}); }catch(e){} }, 90);
+}
+
 // search (debounced) — インライン絞り込み。Enter で横断検索へ展開
 let sT=null;
 $("#q").addEventListener("input",(e)=>{ clearTimeout(sT); sT=setTimeout(()=>{ S.q=e.target.value.trim(); renderGrid(); renderStatus(); renderTrend(); },120); });
@@ -4923,6 +6358,7 @@ $("#q").addEventListener("keydown",(e)=>{ if(e.key==="Enter"){ e.preventDefault(
 
 // ============================================================ keyboard
 document.addEventListener("keydown",(e)=>{
+  if(RS_STANDALONE){ rsappKey(e); return; }   // リサーチの別タブは専用のキー操作（フィードのキーは使わない）
   const ae=document.activeElement; const typing=!!ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName);
   if(e.key==="Escape"){
     if(overlayStack.length) closeTop();
@@ -4945,6 +6381,7 @@ document.addEventListener("keydown",(e)=>{
   else if(e.key==="s"||e.key==="S") openSources();
   else if(e.key==="v"||e.key==="V") openSourcePicker();
   else if(e.key==="a"||e.key==="A"){ setAiContext(null); openAI(); }
+  else if((e.key==="g"||e.key==="G") && e.shiftKey){ e.preventDefault(); rsPopout({open:true}); }   // Shift+G: リサーチを別タブで
   else if(e.key==="g"||e.key==="G"){ e.preventDefault(); if(!$("#researchModal").classList.contains("show")) openResearch(); }   // リサーチ（開いていれば何もしない）
   else if(e.key==="?") openHelp();
   else if(/^[1-9]$/.test(e.key)){ const cats=["すべて",...S.categories,"保存済み"]; const c=cats[parseInt(e.key)-1];
@@ -4959,6 +6396,10 @@ document.addEventListener("keydown",(e)=>{
   $("#autoLbl").textContent="自動: "+(S.auto?S.auto+"分":"オフ");
   if(!["すべて","保存済み",...ALL_CATS].includes(S.cat)) S.cat="すべて";
   $$(".modal,.drawer").forEach(n=>{ n.inert=true; });   // 非表示の overlay をタブ順/AT から外す
+  if(RS_STANDALONE){ mountResearchApp(); return; }   // /research: リサーチだけの画面（フィードは起動しない）
+  try{ if(!window.name) window.name="prism-portal"; }catch(e){}   // 別タブの「ポータル」リンクがこのタブを使えるように
+  rsHandoffSweep();   // 期限を過ぎた引き継ぎ（読まれなかったもの）を消す
+  rsPortalBeat();
   renderGrid();                 // スケルトン即表示
   if(isArchiveHash()){ const h=arParseHash(location.hash); enterArchive({filters:h.f, view:h.view, history:false}); }   // #archive?… で開いた／再読み込み
   loadAiSettings();
