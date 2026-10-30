@@ -25,8 +25,8 @@ from datetime import datetime
 
 # ------------------------------------------------------------------ 共通
 
-_CITE_RE = re.compile(r"\[(\d{1,3})\]")
-_INLINE_RE = re.compile(r"(\*\*[^*]+\*\*|\[\d{1,3}\])")
+_CITE_RE = re.compile(r"\[(\d{1,4})\]")   # 出典番号は4桁まで（[1000] 以降も出典として扱う）
+_INLINE_RE = re.compile(r"(\*\*[^*]+\*\*|\[\d{1,4}\])")
 _TABLE_SEP_RE = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$")
 
 

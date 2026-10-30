@@ -2371,6 +2371,25 @@ def archive_count(q: str, sources: list[str] | None = None, since_ts: float | No
             conn.close()
 
 
+def archive_source_counts(q: str, sources: list[str] | None = None, since_ts: float | None = None,
+                          until_ts: float | None = None, category: str | None = None,
+                          archived_since: float | None = None, parsed: dict | None = None,
+                          limit: int = 6) -> list[dict]:
+    """archive_search と同じ条件に合う記事の情報源ごとの件数（多い順・上位 limit 件）。比較ビューの内訳を
+    検索結果の先頭300件ではなく全件で数える。WHERE 句は _search_where を共用する。"""
+    where, params, _ = _search_where(q, sources, since_ts, until_ts, category, archived_since, parsed)
+    sql = ("SELECT coalesce(nullif(a.source, ''), a.source_id, '') AS name, COUNT(*) AS n " + _SEARCH_FROM + where
+           + " GROUP BY 1 ORDER BY 2 DESC, 1 ASC LIMIT ?")
+    params.append(max(1, int(limit)))
+    with _archive_lock:
+        _archive_init_locked()
+        conn = _db()
+        try:
+            return [{"name": r[0], "count": int(r[1])} for r in conn.execute(sql, params)]
+        finally:
+            conn.close()
+
+
 def _filters_window(f: dict, now: float | None = None) -> tuple[float | None, float | None]:
     """検索条件の期間（from/to の日付範囲、無ければ直近 days 日）を [since, until) の epoch に。
     since_ts / until_ts（epoch）が直接あればそれを優先（比較ビューの「前の期間」など秒単位の範囲）。"""
@@ -4462,8 +4481,20 @@ def ai_probe(body: dict) -> dict:
     return out
 
 
+_CHAT_SYSTEM = ("あなたはニュース閲覧を助けるアシスタントです。以下に与えられた記事情報や"
+                "本文に基づいて、日本語で簡潔かつ正確に答えてください。推測が必要な場合は"
+                "その旨を明示し、与えられた情報に無い事実を断定しないでください。")
+_CHAT_DISCIPLINE = ("\n出力規律: 思考過程・分析・下書き・途中の検討（*Analysis* や "
+                    "*Output Generation* のような見出しを含む）は出力せず、最終的な"
+                    "回答本文だけを書いてください。思考過程を書く必要がある場合は、"
+                    "必ず <think> と </think> で囲み、その後に回答本文を書いてください。")
+_CHAT_CITE_RULE = ("\n出典: 事実・数値・日付を述べる文の末尾には、与えられた記事・資料の番号を [n] の形で付けてください"
+                   "（与えられていない番号は使わない）。与えられた記事・資料から判断できないことは推測しないでください。")
+
+
 def ai_chat(payload: dict) -> dict:
-    """UI からの1問に答える。記事/一覧のコンテキストを組み立ててAIへ。"""
+    """UI からの1問に答える。記事/一覧のコンテキストを組み立ててAIへ。
+    リサーチ（research）と表示中の一覧（list）は出典番号 [n] つき（_chat_context）、1件の記事は従来どおり。"""
     cfg = ai_config()
     # ローカルLLM はAPIキー不要。クラウドはキー必須。
     if cfg["provider"] != "local" and not cfg["api_key"]:
@@ -4476,92 +4507,68 @@ def ai_chat(payload: dict) -> dict:
     history = history[-8:]  # 直近のみ
     ctx = payload.get("context") if isinstance(payload.get("context"), dict) else {}
 
-    system = ("あなたはニュース閲覧を助けるアシスタントです。以下に与えられた記事情報や"
-              "本文に基づいて、日本語で簡潔かつ正確に答えてください。推測が必要な場合は"
-              "その旨を明示し、与えられた情報に無い事実を断定しないでください。")
+    if ctx.get("kind") in ("research", "list"):
+        # リサーチ画面（検索でヒットした記事群）と AI パネルの「表示中の記事一覧」: 出典番号 [n] つきで答える。
+        # 記事は問いに関連の高い順に、文脈長に収まる分だけ渡す（_chat_context）。会話履歴も指示文の中に入れて量を数える
+        kind = ctx["kind"]
+        items = ctx.get("items") if isinstance(ctx.get("items"), list) else []
+        items = items[:25] if kind == "list" else items[:CHAT_MAX_IDS]
+        f = ctx.get("filters") if kind == "research" and isinstance(ctx.get("filters"), dict) else {}
+        try:
+            C = _chat_context(cfg, kind, question, items, f, history,
+                              kind == "research" and bool(payload.get("fulltext")),
+                              kind == "research" and bool(payload.get("use_docs")))
+            o = _step_opts(_budgets(cfg), C["system"], C["prompt"], OUT_CHAT)
+            o["_stats"] = {}
+            answer, reasoning = _split_reasoning(call_ai(cfg, C["system"], C["prompt"], [], opts=o))
+            answer, bad = _chat_answer_post(answer, C["n_src"], o["_stats"])
+            return {"ok": True, "answer": answer, "reasoning": reasoning, "page_note": C["page_note"],
+                    "note": C["note"], "sources": C["sources"], "used": C["used"], "trimmed": C["trimmed"],
+                    "bad_cites": bad, "grounded": bool(_CITE_RE.search(answer))}
+        except RuntimeError as e:
+            return {"ok": False, "error": str(e)}
+        except Exception as e:   # 想定外も UI に見せる
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+    system = _CHAT_SYSTEM
     if cfg["provider"] == "local":
         # 推論系ローカルLLM（Qwen3 等）が思考・下書き・*見出し* 付きの検討を
         # 本文に垂れ流すのを抑止し、出す場合はタグで機械可読にさせる
-        system += ("\n出力規律: 思考過程・分析・下書き・途中の検討（*Analysis* や "
-                   "*Output Generation* のような見出しを含む）は出力せず、最終的な"
-                   "回答本文だけを書いてください。思考過程を書く必要がある場合は、"
-                   "必ず <think> と </think> で囲み、その後に回答本文を書いてください。")
+        system += _CHAT_DISCIPLINE
 
     parts = []
     page_note = ""   # 本文取得の状態（selenium経由/失敗）をUIへ伝える注記
-    if ctx.get("kind") == "list":
-        parts.append("【現在表示中の記事一覧】")
-        for i, a in enumerate((ctx.get("items") or [])[:25], 1):
-            parts.append(f"{i}. [{a.get('category','')}] {a.get('title','')}（{a.get('source','')}）"
-                         + (f" — {a.get('summary','')}" if a.get("summary") else ""))
-    elif ctx.get("kind") == "research":   # リサーチ画面: 検索でヒットした記事群
-        # 検索条件（情報源×期間×キーワード）を明示して、LLMが対象範囲を踏まえて答えられるようにする
-        f = ctx.get("filters") if isinstance(ctx.get("filters"), dict) else {}
-        conds = _filters_conds(f)
-        items = (ctx.get("items") or [])[:30]
-        if conds:
-            parts.append("【検索条件】" + " ／ ".join(conds))
-        hit = f.get("hit")
-        parts.append("【検索でヒットした記事（過去ログ）】"
-                     + (f"（該当 {hit} 件のうち {len(items)} 件を選択）"
-                        if isinstance(hit, int) and hit >= len(items) else ""))
-        pages: dict[str, dict] = {}
-        if payload.get("fulltext"):   # 取得済み（キャッシュ）の本文抜粋を添える。会話では新規取得はしない
-            ids = [str(a.get("id")) for a in items if a.get("id")][:FULLTEXT_CHAT_MAX]
-            pages = {k: v for k, v in pages_cached(ids).items() if v.get("text")}
-        per = FULLTEXT_CHAT_LOCAL if cfg["provider"] == "local" else FULLTEXT_CHAT_CLOUD
-        terms = _report_terms(question, f, items) if pages else []
-        for i, a in enumerate(items, 1):
-            d = str(a.get("published") or "")[:10]
-            parts.append(f"{i}. [{a.get('category','')}] {a.get('title','')}"
-                         f"（{a.get('source','')}{' ' + d if d else ''}）"
-                         + (f" — {a.get('summary','')}" if a.get("summary") else ""))
-            pg = pages.get(str(a.get("id")))
-            if pg:
-                parts.append("   本文抜粋: " + _excerpt(pg["text"], per, terms))
-        if payload.get("fulltext"):
-            page_note = (f"本文抜粋を {len(pages)} 件に添付（取得済みの記事のみ・各{per}字まで）" if pages else
-                         "⚠ 取得済みの本文がありません（左の「本文を取得」で先に取得してください）。要約のみに基づく回答です")
-        if payload.get("use_docs"):   # 外部資料（RAG）: 問いに関連する抜粋を添える
-            pz = retrieve_passages(_report_terms(question, f, items), None, DOC_CHAT_K)
-            if pz:
-                parts.append("\n【外部資料の抜粋（利用者が登録した資料。記事と同様に根拠として使う）】")
-                for i, p in enumerate(pz, 1):
-                    parts.append(f"{i}. {p['name']}（{p['heading'] or '本文'}）: " + re.sub(r"\s+", " ", p["text"])[:per])
-                page_note = (page_note + " ／ " if page_note else "") + f"外部資料の抜粋 {len(pz)} 件を添付"
-            else:
-                page_note = (page_note + " ／ " if page_note else "") + "⚠ 問いに関連する外部資料の抜粋が見つかりません"
-    else:
-        parts.append("【対象の記事】")
-        for f in ("title", "source", "category", "published", "summary", "link"):
-            if ctx.get(f):
-                parts.append(f"{f}: {ctx.get(f)}")
-        # 本文取得（記事の実URLがあり、要求されていれば）
-        # urllib → Selenium(ヘッドレスブラウザ) の順に試し、両方失敗なら
-        # 「取れなかった」ことを注記としてLLMと画面の両方へ明示する
-        if payload.get("fetch_page") and safe_url(ctx.get("link")):
-            pg = fetch_page_text(ctx.get("link"), cfg)
-            if pg["text"]:
-                # 小さな文脈窓で出力が思考の途中に切れて漏れるのを防ぐ（ローカルは設定の文脈長から導く）。
-                # 続きページを連結した長い本文は、冒頭＋問いの語を含む文で埋める
-                limit = min(MAX_PAGE_TEXT_LOCAL, _budgets(cfg)["page"]) if cfg["provider"] == "local" else MAX_PAGE_TEXT
-                page = _excerpt(pg["text"], limit, _report_terms(question, {}, []))
-                parts.append("\n【記事ページ本文（抜粋）】\n" + page)
-                notes = []
-                if pg.get("pages", 1) > 1:
-                    notes.append(f"本文は続きページを含め {pg['pages']} ページ分を連結して取得しました")
-                if pg["via"] == "selenium":
-                    notes.append("本文はヘッドレスブラウザ（selenium）経由で取得しました")
-                if pg.get("note") and pg.get("pages", 1) <= 1:
-                    notes.append(pg["note"])
-                page_note = "／".join(notes)
-                if pg["error"]:
-                    page_note = "⚠ " + pg["error"]
-            else:
-                parts.append("\n【注記】記事ページ本文は取得できなかった（"
-                             + pg["error"] + "）。上の要約のみに基づいて回答すること。")
-                page_note = ("⚠ 記事本文を取得できませんでした（" + pg["error"]
-                             + "）。要約のみに基づく回答です")
+    # 1件の記事（AI パネルで記事を開いたとき）
+    parts.append("【対象の記事】")
+    for f in ("title", "source", "category", "published", "summary", "link"):
+        if ctx.get(f):
+            parts.append(f"{f}: {ctx.get(f)}")
+    # 本文取得（記事の実URLがあり、要求されていれば）
+    # urllib → Selenium(ヘッドレスブラウザ) の順に試し、両方失敗なら
+    # 「取れなかった」ことを注記としてLLMと画面の両方へ明示する
+    if payload.get("fetch_page") and safe_url(ctx.get("link")):
+        pg = fetch_page_text(ctx.get("link"), cfg)
+        if pg["text"]:
+            # 小さな文脈窓で出力が思考の途中に切れて漏れるのを防ぐ（ローカルは設定の文脈長から導く）。
+            # 続きページを連結した長い本文は、冒頭＋問いの語を含む文で埋める
+            limit = min(MAX_PAGE_TEXT_LOCAL, _budgets(cfg)["page"]) if cfg["provider"] == "local" else MAX_PAGE_TEXT
+            page = _excerpt(pg["text"], limit, _report_terms(question, {}, []))
+            parts.append("\n【記事ページ本文（抜粋）】\n" + page)
+            notes = []
+            if pg.get("pages", 1) > 1:
+                notes.append(f"本文は続きページを含め {pg['pages']} ページ分を連結して取得しました")
+            if pg["via"] == "selenium":
+                notes.append("本文はヘッドレスブラウザ（selenium）経由で取得しました")
+            if pg.get("note") and pg.get("pages", 1) <= 1:
+                notes.append(pg["note"])
+            page_note = "／".join(notes)
+            if pg["error"]:
+                page_note = "⚠ " + pg["error"]
+        else:
+            parts.append("\n【注記】記事ページ本文は取得できなかった（"
+                         + pg["error"] + "）。上の要約のみに基づいて回答すること。")
+            page_note = ("⚠ 記事本文を取得できませんでした（" + pg["error"]
+                         + "）。要約のみに基づく回答です")
     context_block = "\n".join(str(p) for p in parts if p)
     user_content = (context_block + "\n\n" if context_block else "") + "質問: " + question
     if cfg["provider"] == "local" and context_block:
@@ -4619,10 +4626,26 @@ REPORT_TEMPLATES = {
         "相違点・温度差（片方だけの論点、扱いの違い）",
         "示唆・次に注目すべき点",
     ]),
+    # 商談前ブリーフ（Phase 9）: 取引先名と別表記で集めた記事＋訪問メモから。「直近の主な動き」の行はタイムライン表示にも使う
+    "account": ("取引先ブリーフ", [
+        "会社の現況（2〜3文。記事から分かる範囲で）",
+        "直近の主な動き（日付順。1行1件「YYYY-MM-DD 媒体: 内容 [n]」）",
+        "商談で触れたい話題（3〜5項目。各項目に理由と出典番号）",
+        "リスクと機会（それぞれ2〜3項目）",
+        "先方に確認したいこと（3〜5項目。記事から判断できない点を質問の形で）",
+    ]),
+    # 変化ブリーフ（Phase 9）: 今期〔A〕と前期〔B〕の記事を比べる。本文の先頭には Python で数えた集計表（出典番号なし）を置く
+    "change": ("変化ブリーフ", [
+        "変化の要約（3〜4文。件数の増減と主な理由）",
+        "新しく出てきた話題（〔A〕今期にだけ見られる論点。3〜5項目）",
+        "増えた話題・減った話題（〔A〕と〔B〕を比べて）",
+        "数値・計画の変化（あれば。無ければ「目立った数値の変化はありません」と書く）",
+        "今後の注目点（2〜3項目）",
+    ]),
 }
 _jobs: dict[str, dict] = {}       # レポート生成ジョブ（メモリ上。完了結果は SQLite の reports に保存）
 _jobs_lock = threading.Lock()
-_CITE_RE = re.compile(r"\[(\d{1,3})\]")
+_CITE_RE = re.compile(r"\[(\d{1,4})\]")   # 出典番号 [n]（1000件を超えるレポートの [1000] 以降も）
 
 
 def _filters_conds(f: dict) -> list[str]:
@@ -4630,6 +4653,8 @@ def _filters_conds(f: dict) -> list[str]:
     conds: list[str] = []
     if not isinstance(f, dict):
         return conds
+    if f.get("account"):   # 商談前ブリーフ（取引先名）
+        conds.append(f"取引先「{str(f['account'])[:40]}」")
     if f.get("theme"):
         conds.append(f"テーマ「{str(f['theme'])[:40]}」")
     if isinstance(f.get("compare"), dict):
@@ -4736,10 +4761,28 @@ def _merge_prompt(question: str, notes: str) -> str:
             "最大20項目。箇条書きのみを出力する")
 
 
+def _sec_title(sec: str) -> str:
+    """テンプレートの見出し「要点（5項目以内。…）」の見出し部分（「要点」）。レポート本文・文書の見出しにはこちらを使う。"""
+    return str(sec or "").split("（", 1)[0].strip()
+
+
+def _sec_hint(sec: str) -> str:
+    """テンプレートの見出しの書き方の補足（最初の（…）の中身。入れ子の（）があっても最後の）まで）。無ければ空。"""
+    s = str(sec or "")
+    i = s.find("（")
+    if i < 0:
+        return ""
+    j = s.rfind("）")
+    return (s[i + 1:j] if j > i else s[i + 1:]).strip()
+
+
 def _reduce_prompt(question: str, tname: str, sections: list[str], notes: str,
                    n_articles: int, filters: dict, note: str = "", n_docs: int = 0) -> str:
     conds = _filters_conds(filters)
-    heads = "\n".join(f"{i}. ## {s}" for i, s in enumerate(sections, 1))
+    # 見出し行には見出し部分だけを示し、書き方の補足（（5項目以内。…））は別の段に分ける
+    # （見出しと補足を1行で示すと、補足ごと見出しに書き写すモデルがあり、本文や Word・PDF の見出しに指示文が出ていた）
+    heads = "\n".join(f"{i}. ## {_sec_title(s)}" for i, s in enumerate(sections, 1))
+    hints = "\n".join(f"- {_sec_title(s)}: {_sec_hint(s)}" for s in sections if _sec_hint(s))
     target = (f"【対象】記事 {n_articles} 件（出典番号 [1]〜[{n_articles}]）\n\n" if not n_docs else
               f"【対象】記事 {n_articles} 件＋外部資料の抜粋 {n_docs} 件（出典番号 [1]〜[{n_articles + n_docs}]。"
               f"[{n_articles + 1}] 以降が資料）\n\n")
@@ -4748,6 +4791,8 @@ def _reduce_prompt(question: str, tname: str, sections: list[str], notes: str,
             + target
             + f"【部分メモ】\n{notes}\n\n"
             f"【指示】部分メモを統合し、Markdown で「{tname}」を書いてください。構成は次の見出し（## で始める）を順に:\n{heads}\n"
+            + (f"各見出しの書き方:\n{hints}\n" if hints else "")
+            + "- 見出し行は上の文字どおりに書き、書き方の補足は見出しに含めない\n"
             "- 各文・各箇条書きの末尾に根拠の出典番号 [n] を付ける（与えられた番号のみ使う）\n"
             "- 重複は統合し、矛盾があれば両論を併記する。新しい事実を加えない\n"
             "- 日付は YYYY-MM-DD で書く。「# 」のタイトル行は不要（こちらで付けます）")
@@ -4755,9 +4800,11 @@ def _reduce_prompt(question: str, tname: str, sections: list[str], notes: str,
 
 def _section_prompt(question: str, tname: str, sections: list[str], idx: int, notes: str,
                     n_articles: int, filters: dict, note: str = "", n_docs: int = 0) -> str:
-    """最終段を見出しごとに分けて書くときの1見出し分の指示（文脈長が小さいローカルLLM向け）。"""
+    """最終段を見出しごとに分けて書くときの1見出し分の指示（文脈長が小さいローカルLLM向け）。
+    見出しは見出し部分だけを示し、書き方の補足は「- 書き方:」の行で別に渡す。"""
     conds = _filters_conds(filters)
-    others = " ／ ".join(s for i, s in enumerate(sections) if i != idx)
+    others = " ／ ".join(_sec_title(s) for i, s in enumerate(sections) if i != idx)
+    hint = _sec_hint(sections[idx])
     target = (f"【対象】記事 {n_articles} 件（出典番号 [1]〜[{n_articles}]）\n\n" if not n_docs else
               f"【対象】記事 {n_articles} 件＋外部資料の抜粋 {n_docs} 件（出典番号 [1]〜[{n_articles + n_docs}]。"
               f"[{n_articles + 1}] 以降が資料）\n\n")
@@ -4765,8 +4812,9 @@ def _section_prompt(question: str, tname: str, sections: list[str], idx: int, no
             + (f"【検索条件】{' ／ '.join(conds)}\n" if conds else "")
             + target
             + f"【部分メモ】\n{notes}\n\n"
-            f"【指示】部分メモに基づき、「{tname}」のうち見出し「{sections[idx]}」の部分だけを Markdown で書いてください。\n"
-            f"- 見出し行（## …）は書かない（小見出しが要るときは ### を使う）。他の見出し（{others}）の内容は書かない\n"
+            f"【指示】部分メモに基づき、「{tname}」のうち見出し「{_sec_title(sections[idx])}」の部分だけを Markdown で書いてください。\n"
+            + (f"- 書き方: {hint}\n" if hint else "")
+            + f"- 見出し行（## …）は書かない（小見出しが要るときは ### を使う）。他の見出し（{others}）の内容は書かない\n"
             "- 各文・各箇条書きの末尾に根拠の出典番号 [n] を付ける（与えられた番号のみ使う）\n"
             "- 新しい事実を加えない。日付は YYYY-MM-DD で書く")
 
@@ -4780,6 +4828,30 @@ def _head_norm(h: str) -> str:
     """見出しを比べやすくする: 強調（**）・番号（1. ／①）・括弧・空白を除く。"""
     t = re.sub(r"[*_`「」『』\s]", "", h or "")
     return _HEAD_NUM_RE.sub("", t)
+
+
+def _normalize_headings(md: str, sections: list[str]) -> str:
+    """本文の「## 」行のうち、テンプレートの見出し（書き方の補足つきの全文）をそのまま書き写したものだけを
+    「## 見出し部分」に直す（番号・強調つきの書き写しも含む）。「## 主要トピック（独自の補足）」のように
+    テンプレートと一致しない見出しは変えない。保存済みの古いレポートも読み出すときにこれで整える。"""
+    full = {}
+    for s in sections or []:
+        k = _head_norm(s)   # 番号・強調・空白を除いた全文（補足の無い見出しは見出し部分そのもの）
+        if k:
+            full.setdefault(k, _sec_title(s))
+    if not full or not md:
+        return md
+    out = []
+    for ln in md.split("\n"):
+        m = _H2_RE.match(ln)
+        t = full.get(_head_norm(m.group(1))) if m else None
+        out.append(f"## {t}" if t else ln)
+    return "\n".join(out)
+
+
+def _all_template_sections() -> list[str]:
+    """すべてのレポートテンプレートの見出し（保存済みレポートの見出しを整えるとき用。後から足したテンプレートも含む）。"""
+    return [s for _, secs in REPORT_TEMPLATES.values() for s in secs]
 
 
 def _head_is(head: str, key: str) -> bool:
@@ -4882,11 +4954,14 @@ def _save_report(rep: dict) -> None:
 
 
 def _row_to_report(r) -> dict:
+    # 以前の版で保存したレポートは、見出しに書き方の補足（（5項目以内。…））が入っていることがある。
+    # DB は書き換えず、読み出すたびにテンプレートの見出しの書き写しだけを見出し部分に直す（画面・書き出しとも）
     return {"id": r["id"], "created_at": r["created_at"], "title": r["title"],
             "question": r["question"], "template": r["template"],
             "filters": json.loads(r["filters_json"] or "{}"),
             "article_ids": json.loads(r["article_ids_json"] or "[]"),
-            "markdown": r["markdown"], "sources": json.loads(r["sources_json"] or "[]"),
+            "markdown": _normalize_headings(r["markdown"], _all_template_sections()),
+            "sources": json.loads(r["sources_json"] or "[]"),
             "model": r["model"], "stats": json.loads(r["stats_json"] or "{}")}
 
 
@@ -4898,7 +4973,7 @@ def list_reports(limit: int = 100) -> list[dict]:
             rows = conn.execute("SELECT id, created_at, title, template, article_ids_json FROM reports "
                                 "ORDER BY created_at DESC LIMIT ?", (max(1, min(int(limit), 500)),))
             return [{"id": r["id"], "created_at": r["created_at"], "title": r["title"],
-                     "template": r["template"],
+                     "template": r["template"], "kind_name": REPORT_KIND_NAMES.get(r["template"], r["template"]),
                      "articles": len(json.loads(r["article_ids_json"] or "[]"))} for r in rows]
         finally:
             conn.close()
@@ -5082,14 +5157,20 @@ def _llm_retry(cfg: dict, system: str, prompt: str, max_tokens: int | None, upd=
 
 def _build_report(cfg: dict, question: str, template: str, ids: list, filters: dict, fulltext: bool = False,
                   groups: list[dict] | None = None, progress=None, title: str | None = None,
-                  docs=None, doc_k: int = 0, reuse: bool = False) -> dict:
+                  docs=None, doc_k: int = 0, reuse: bool = False, *, extra_stats: dict | None = None,
+                  pin_docs: list[str] | None = None, preface: str = "", extra_note: str = "") -> dict:
     """レポートを生成して dict で返す（保存はしない）。
     (本文一括取得) → (外部資料から関連抜粋を検索) → 部分要約(map) → 文脈長に収まるまで多段統合 → 最終統合(reduce)。
     - 失敗したチャンクは再試行→半分に分割して再試行→それでも駄目なら記録して先へ進む（ジョブ全体は止めない）
     - progress(**kw) で進捗（state / total / done / sub / failed / retries / started）を通知
     - groups（比較レポート）があれば記事行に〔A〕〔B〕のタグを付け、群の定義をプロンプトに添える
     - docs（外部資料: "all" または資料 id の配列）があれば、問いに関連する抜粋 doc_k 件を出典に加える
-    - 各段の結果は保存しておき、reuse=True（「同じ条件で再実行」）なら完了した段を再利用する"""
+    - 各段の結果は保存しておき、reuse=True（「同じ条件で再実行」）なら完了した段を再利用する
+    内部用（HTTP からは指定できない）:
+    - pin_docs: 資料 id の配列。その資料の抜粋（各 6 件まで・資料内の順）を検索結果より先に必ず出典に入れる（訪問メモ）。
+      番号は記事の後（他の資料の抜粋と同じ [N+1] 以降）
+    - extra_stats: stats に足す項目（既存の項目は上書きしない）。extra_note: 指示文の注記に足す文（Python で数えた集計など）
+    - preface: 本文の先頭に置く Markdown（出典番号の確認・見出しの整えの後に置く。出典番号を含めないこと）"""
     def upd(**kw):
         if progress:
             progress(**kw)
@@ -5098,12 +5179,18 @@ def _build_report(cfg: dict, question: str, template: str, ids: list, filters: d
         for i in (g.get("ids") or []):
             tag_of.setdefault(str(i), f"〔{chr(65 + gi)}〕")
     note = _groups_note(groups)
+    if extra_note:
+        note += str(extra_note).rstrip("\n") + "\n"
     arts = _report_fetch(ids)
-    if not arts and not (docs and doc_k):
+    pinned = [pz for d in (pin_docs or []) for pz in doc_passages(d)]   # 訪問メモなど、必ず渡す資料の抜粋
+    if not arts and not (docs and doc_k) and not pinned:
         raise RuntimeError("対象記事が過去ログに見つかりません")
     local = cfg["provider"] == "local"
     B = _budgets(cfg)
-    budget, par = B["chunk"], B["parallel"]
+    # extra_note（変化ブリーフの集計など）は各段の指示文に毎回入るので、ローカルLLMはその分を記事・メモの予算から引く
+    # （群の定義などの短い注記は TOK_OVERHEAD に含まれる。extra_note が無ければ予算は従来どおり）
+    xn = _est_tokens(str(extra_note)) if (local and extra_note) else 0
+    budget, par = max(500, B["chunk"] - xn) if xn else B["chunk"], B["parallel"]
     system = _report_system(local)
     pages: dict[str, dict] = {}
     n_target = 0
@@ -5115,10 +5202,13 @@ def _build_report(cfg: dict, question: str, template: str, ids: list, filters: d
     terms = _report_terms(question, filters, arts) if (pages or (docs and doc_k)) else []
     lines = [_article_line(i + 1, a, (pages.get(a["id"]) or {}).get("text"), B["per_article"], tag_of.get(a["id"], ""), terms)
              for i, a in enumerate(arts)]
-    passages: list[dict] = []
-    if docs and doc_k:   # 外部資料（RAG）: 問い・検索語・主要な固有名詞に関連する抜粋を出典として追加
-        upd(state="retrieving", sub="外部資料から関連する抜粋を検索中", articles=len(arts))
-        passages = retrieve_passages(terms, None if docs == "all" else list(docs), doc_k)
+    passages: list[dict] = list(pinned)
+    if (docs and doc_k) or pinned:   # 外部資料（RAG）: 問い・検索語・主要な固有名詞に関連する抜粋を出典として追加
+        if docs and doc_k:
+            upd(state="retrieving", sub="外部資料から関連する抜粋を検索中", articles=len(arts))
+            seen_chunks = {pz["id"] for pz in pinned}   # 先に入れた抜粋（訪問メモ）は重ねない
+            passages += [pz for pz in retrieve_passages(terms, None if docs == "all" else list(docs), doc_k)
+                         if pz["id"] not in seen_chunks]
         per_doc = max(300, min(DOC_CHUNK_CHARS, budget // 2))
         for i, pz in enumerate(passages):
             lines.append(f"[{len(arts) + i + 1}] 資料｜{pz['name']}（{pz['heading'] or '本文'}）: "
@@ -5230,7 +5320,7 @@ def _build_report(cfg: dict, question: str, template: str, ids: list, filters: d
             notes.append(first)
         if think_obs["max"] > max(200, int(B.get("think") or 0)):
             B = _budgets(cfg, think_override=max(128, round(think_obs["max"] * 1.3 / 128) * 128))
-            budget = B["chunk"]
+            budget = max(500, B["chunk"] - xn) if xn else B["chunk"]
             rest_lines = lines[len(chunks[0]):] if first else lines
             chunks = ([chunks[0]] if first else []) + _chunk_lines(rest_lines, budget, msr)
             think_adapted = True
@@ -5250,7 +5340,8 @@ def _build_report(cfg: dict, question: str, template: str, ids: list, filters: d
     upd(state="reducing", sub="", mtotal=0, mdone=0, gen="")
     notes_text = "\n\n".join(notes)
     merge_rounds = 0
-    while msr(notes_text) > B["reduce_cap"] and merge_rounds < 6:   # 最終段の文脈長に収まるまで多段統合
+    reduce_cap = max(500, B["reduce_cap"] - xn) if xn else B["reduce_cap"]
+    while msr(notes_text) > reduce_cap and merge_rounds < 6:   # 最終段の文脈長に収まるまで多段統合
         merge_rounds += 1
         gs = _chunk_lines(notes_text.split("\n"), B["merge"], msr)
         upd(sub=f"部分メモを統合中（第{merge_rounds}段）", mtotal=len(gs), mdone=0)
@@ -5287,7 +5378,7 @@ def _build_report(cfg: dict, question: str, template: str, ids: list, filters: d
         truncated = True
         return text[:max(200, int(len(text) * cap / n) - 40)] + "\n（以降のメモは文脈長の都合で省略）"
 
-    notes_text = fit(notes_text, int(B["reduce_cap"]))
+    notes_text = fit(notes_text, int(reduce_cap))
     tname, sections = REPORT_TEMPLATES.get(template) or REPORT_TEMPLATES["overview"]
     sections_failed: list[str] = []
     fallback = False
@@ -5320,18 +5411,19 @@ def _build_report(cfg: dict, question: str, template: str, ids: list, filters: d
             mode, reason, body = "sectioned", "1回で書き切れなかったため", ""
     if mode == "sectioned":   # 見出しごとに書く（1回の回答を短くして、はみ出し・タイムアウトを防ぐ）
         if local:   # 1回で書く予定だった量のメモは、見出しごとの入力には大きすぎることがある
-            notes_text = fit(notes_text, max(500, B["ctx"] - TOK_OVERHEAD - OUT_SECTION - int(B.get("think") or 0)))
+            notes_text = fit(notes_text, max(500, B["ctx"] - TOK_OVERHEAD - OUT_SECTION - int(B.get("think") or 0) - xn))
         parts = []
         for si, sec in enumerate(sections, 1):
-            upd(sub=f"統合レポートを作成中（見出し {si}/{len(sections)}: {sec[:20]}）", mtotal=len(sections), mdone=si - 1, gen="")
+            head = _sec_title(sec)   # 本文の見出しは見出し部分だけ（書き方の補足は指示にだけ使う）
+            upd(sub=f"統合レポートを作成中（見出し {si}/{len(sections)}: {head[:20]}）", mtotal=len(sections), mdone=si - 1, gen="")
             prompt = _section_prompt(question, tname, sections, si - 1, notes_text, len(arts), filters, note, len(passages))
             txt, err = write_long(prompt, OUT_SECTION, "統合レポートを")
             if txt:
                 txt = _section_body(txt, sec, sections)
-                parts.append(f"## {sec}\n{txt}" if txt else f"## {sec}\n（この見出しは内容がありませんでした）")
+                parts.append(f"## {head}\n{txt}" if txt else f"## {head}\n（この見出しは内容がありませんでした）")
             else:
-                sections_failed.append(sec)
-                parts.append(f"## {sec}\n（この見出しは生成できませんでした: {err[:80]}）")
+                sections_failed.append(sec)   # 記録はテンプレートの見出しの全文のまま
+                parts.append(f"## {head}\n（この見出しは生成できませんでした: {err[:80]}）")
         body = "\n\n".join(parts)
         if len(sections_failed) == len(sections):
             body, fallback = "", True
@@ -5341,12 +5433,27 @@ def _build_report(cfg: dict, question: str, template: str, ids: list, filters: d
                 f"（{(err or '不明')[:80]}）。「同じ条件で再実行」で、完了した部分を再利用して最終段だけをやり直せます。\n\n"
                 + notes_text)
     body = re.sub(r"^\s*#\s[^\n]*\n", "", body, count=1)   # 念のため先頭のタイトル行を除去
+    body = _normalize_headings(body, sections)   # 書き方の補足ごと書き写した見出しを見出し部分だけに
     body, bad = _strip_bad_cites(body, n_src)
+    if preface and str(preface).strip():   # Python で作った前置き（集計表など）。LLM の本文の前に置く
+        body = str(preface).strip() + "\n\n" + body.strip()
     n_text = sum(1 for p in pages.values() if p.get("text"))
     sources = [{"n": i + 1, "id": a["id"], "title": a.get("title"), "source": a.get("source"),
                 "published": str(a.get("published") or "")[:10], "link": a.get("link")} for i, a in enumerate(arts)]
     sources += [{"n": len(arts) + i + 1, "id": f"doc:{pz['id']}", "title": f"{pz['name']}（{pz['heading'] or '本文'}）",
                  "source": "外部資料", "published": "", "link": ""} for i, pz in enumerate(passages)]
+    stats = {"articles": len(arts), "chunks": len(chunks), "bad_cites": bad,
+             "fulltext": n_text, "fulltext_failed": max(0, n_target - n_text),
+             "fulltext_multi": sum(1 for p in pages.values() if p.get("text") and p.get("pages", 1) > 1),
+             "docs": len(passages), "failed_chunks": len(failed), "retries": retries[0],
+             "merge_rounds": merge_rounds, "truncated": truncated, "cached_steps": cst["cached"],
+             "sectioned": mode == "sectioned", "final_mode": mode, "final_reason": reason, "continued": continued[0],
+             "sections_failed": sections_failed, "fallback": fallback,
+             "think_adapted": think_adapted, "think_seen": think_obs["max"],
+             "elapsed_s": round(time.time() - t0, 1), "chunk_chars": budget, "parallel": par,
+             "errors": [f["error"] for f in failed[:3]]}
+    for k, v in (extra_stats or {}).items():   # 呼び出し側の項目（取引先・別表記など）。既存の項目は上書きしない
+        stats.setdefault(str(k), v)
     return {
         "id": secrets.token_hex(8), "created_at": time.time(),
         "title": (title or "").strip()[:80] or _report_title(question, filters, tname),
@@ -5355,24 +5462,19 @@ def _build_report(cfg: dict, question: str, template: str, ids: list, filters: d
         "markdown": body.strip(),
         "sources": sources,
         "model": f"{cfg['provider']}:{cfg['model'] or 'default'}",
-        "stats": {"articles": len(arts), "chunks": len(chunks), "bad_cites": bad,
-                  "fulltext": n_text, "fulltext_failed": max(0, n_target - n_text),
-                  "fulltext_multi": sum(1 for p in pages.values() if p.get("text") and p.get("pages", 1) > 1),
-                  "docs": len(passages), "failed_chunks": len(failed), "retries": retries[0],
-                  "merge_rounds": merge_rounds, "truncated": truncated, "cached_steps": cst["cached"],
-                  "sectioned": mode == "sectioned", "final_mode": mode, "final_reason": reason, "continued": continued[0],
-                  "sections_failed": sections_failed, "fallback": fallback,
-                  "think_adapted": think_adapted, "think_seen": think_obs["max"],
-                  "elapsed_s": round(time.time() - t0, 1), "chunk_chars": budget, "parallel": par,
-                  "errors": [f["error"] for f in failed[:3]]},
+        "stats": stats,
     }
 
 
 def _run_report(job_id: str, question: str, template: str, ids: list, filters: dict,
                 fulltext: bool = False, theme_id: str | None = None, title: str | None = None,
-                groups: list[dict] | None = None, docs=None, doc_k: int = 0, reuse: bool = False) -> None:
+                groups: list[dict] | None = None, docs=None, doc_k: int = 0, reuse: bool = False, *,
+                extra_stats: dict | None = None, then_export: dict | None = None, pin_docs: list[str] | None = None,
+                preface: str = "", extra_note: str = "") -> None:
     """ワーカースレッド: _build_report → 保存（レポート id = ジョブ id）。進捗は _jobs に書く。
-    reuse=True（「同じ条件で再実行」）なら、前回までに完了した段の結果を再利用する。"""
+    reuse=True（「同じ条件で再実行」）なら、前回までに完了した段の結果を再利用する。
+    then_export（{"kind": "docx"} など）があれば、保存の後に書き出しジョブを始め、その id（export_job）か開始できなかった
+    理由（export_error）を done と同時に記録する（書き出しの失敗でレポートは失敗にしない。レポートは保存済みのまま）。"""
     def upd(**kw):
         with _jobs_lock:
             _jobs[job_id].update(kw)
@@ -5380,23 +5482,44 @@ def _run_report(job_id: str, question: str, template: str, ids: list, filters: d
         cfg = ai_config()
         if cfg["provider"] != "local" and not cfg["api_key"]:
             raise RuntimeError("生成AI APIが未設定です")
-        rep = _build_report(cfg, question, template, ids, filters, fulltext, groups, upd, title, docs, doc_k, reuse)
+        rep = _build_report(cfg, question, template, ids, filters, fulltext, groups, upd, title, docs, doc_k, reuse,
+                            extra_stats=extra_stats, pin_docs=pin_docs, preface=preface, extra_note=extra_note)
         rep["id"] = job_id
         _save_report(rep)
         if theme_id:
             _theme_set_brief(theme_id, rep["id"], rep["created_at"])
-        upd(state="done", report_id=rep["id"], title=rep["title"])
+        exp: dict = {}
+        if then_export:
+            kind = then_export.get("kind")
+            try:
+                if rep["stats"].get("fallback"):
+                    exp = {"export_error": "最終段の文章化が完了していないため、" + EXPORT_KINDS.get(kind, ("文書",))[0]
+                                           + " は作成しませんでした（同じ条件で作り直してから書き出してください）"}
+                elif not rep["article_ids"]:
+                    exp = {"export_error": "対象の記事が無い（訪問メモだけの）ため、"
+                                           + EXPORT_KINDS.get(kind, ("文書",))[0] + " は作成しませんでした"}
+                else:
+                    r = start_export_job({"kind": kind, "report_id": rep["id"]})
+                    exp = {"export_job": r.get("job_id"), "export_error": r.get("error")} if r.get("ok") else {"export_error": r.get("error")}
+            except Exception as e:   # 書き出しを始められなくてもレポートは完成として返す
+                exp = {"export_error": f"{type(e).__name__}: {str(e)[:160]}"}
+        upd(state="done", report_id=rep["id"], title=rep["title"], **exp)
     except Exception as e:
         upd(state="error", error=f"{type(e).__name__}: {str(e)[:200]}")
 
 
 def _new_job(kind: str, **fields) -> str:
-    """ジョブ登録（レポート生成・本文一括取得で共用）。古いジョブは完了・失敗から1時間で掃除。"""
+    """ジョブ登録（レポート生成・本文一括取得・書き出し・会話で共用）。古いジョブは完了・失敗から1時間で掃除。
+    会話（ask）は回答を「保存」できるよう ASK_KEEP_S（6時間）残す（数は ASK_KEEP_MAX まで。古いものから捨てる）。"""
     job_id = secrets.token_hex(8)
     with _jobs_lock:
         now = time.time()
         for k in [k for k, j in _jobs.items()
-                  if j.get("state") in ("done", "error") and now - j.get("created", now) > 3600]:
+                  if j.get("state") in ("done", "error")
+                  and now - j.get("created", now) > (ASK_KEEP_S if j.get("kind") == "ask" else 3600)]:
+            _jobs.pop(k, None)
+        asks = sorted((j.get("created", 0), k) for k, j in _jobs.items() if j.get("kind") == "ask" and j.get("state") in ("done", "error"))
+        for _, k in asks[:max(0, len(asks) - ASK_KEEP_MAX)]:
             _jobs.pop(k, None)
         _jobs[job_id] = {"id": job_id, "kind": kind, "state": "queued", "total": 0, "done": 0,
                          "created": now, **fields}
@@ -5431,9 +5554,25 @@ def start_report_job(body: dict) -> dict:
     theme_id = body.get("theme_id") if isinstance(body.get("theme_id"), str) and _ID_RE.fullmatch(body["theme_id"]) else None
     title = str(body.get("title") or "")[:80]
     reuse = body.get("reuse") is True   # 「同じ条件で再実行」: 完了した段を再利用（通常の生成は毎回作り直す）
-    job_id = _new_job("report", articles=len(ids), fulltext=fulltext, docs=bool(docs))
+    return _start_report(question, template, ids, filters, fulltext=fulltext, theme_id=theme_id, title=title,
+                         groups=groups or None, docs=docs, doc_k=doc_k, reuse=reuse)
+
+
+def _start_report(question: str, template: str, ids: list, filters: dict, *, fulltext: bool = False,
+                  theme_id: str | None = None, title: str = "", groups: list[dict] | None = None, docs=None,
+                  doc_k: int = 0, reuse: bool = False, extra_stats: dict | None = None, then_export: dict | None = None,
+                  pin_docs: list[str] | None = None, preface: str = "", extra_note: str = "") -> dict:
+    """レポート生成ジョブを登録してワーカースレッドで始める（検証済みの値で呼ぶ内部用）。
+    POST /api/research/report（start_report_job）は HTTP の本文を検証してここを呼ぶ。extra_stats・then_export・
+    pin_docs・preface・extra_note は内部用で、HTTP の本文からは指定できない（商談前ブリーフ・変化ブリーフが使う）。"""
+    fields = {"articles": len(ids), "fulltext": fulltext, "docs": bool(docs or pin_docs)}
+    if then_export:
+        fields["export_after"] = then_export.get("kind")   # 完了後に書き出す形式（画面の進捗に「完了後に Word を作成」）
+    job_id = _new_job("report", **fields)
     threading.Thread(target=_run_report, args=(job_id, question, template, ids, filters, fulltext, theme_id, title, groups or None,
                                                docs, doc_k, reuse),
+                     kwargs={"extra_stats": extra_stats, "then_export": then_export, "pin_docs": pin_docs,
+                             "preface": preface, "extra_note": extra_note},
                      daemon=True).start()
     return {"ok": True, "job_id": job_id, "articles": len(ids)}
 
@@ -5444,6 +5583,376 @@ def report_job_status(job_id: str) -> dict:
         if not j:
             return {"ok": False, "error": "unknown job"}
         return {"ok": True, **j, "elapsed": round(time.time() - float(j.get("created") or time.time()), 1)}
+
+
+# ------------------------------------------------------------------ リサーチ: 根拠つき会話（出典 [n]・文脈長の予算・関連度順・非同期・保存）
+# 会話もレポートと同じ出典番号の体系で答える。選択した記事を問いに関連の高い順に並べ、文脈長に収まる分だけを [1]〜[N]
+# として渡し（外部資料は [N+1] 以降）、回答の [n] は Python 側で範囲を確かめる。ローカルLLMは 入力＋回答（OUT_CHAT）＋思考
+# が文脈長に収まるように量を決める（以前は選択の上から30件を丸ごと渡し、4096 の文脈長を大きく超えていた）。
+# 生成は非同期のジョブ（進捗は report/status）。回答は出典の控えごとメモリに残し、「保存」で Q&A レポートにできる。
+
+OUT_CHAT = 700                 # 会話の回答に空けておく量（トークン）
+CHAT_MAX_IDS = 1000            # 会話に渡せる選択記事の上限（関連度順に並べ、文脈長に収まる分を使う）
+CHAT_CLOUD_CHARS = 20000       # クラウドの会話で渡す 記事・資料・会話履歴 の文字数の上限
+CHAT_HISTORY_TURNS = 8         # 会話履歴として添える発言の数（直近から）
+CHAT_HISTORY_CHARS = 400       # 会話履歴の1発言あたりの文字数の上限
+ASK_KEEP_S = 6 * 3600          # 完了した会話ジョブをメモリに残す時間（この間は「保存」できる）
+ASK_KEEP_MAX = 200             # 残しておく完了した会話ジョブの数の上限（古いものから捨てる）
+CHAT_FALLBACK_N = 5            # 生成AIに接続できないときに示す記事の数
+REPORT_KIND_NAMES = {"qa": "Q&A", **{k: v[0] for k, v in REPORT_TEMPLATES.items()}}   # 保存済みレポートの種類の表示名
+QA_GONE_MSG = "回答が見つかりません（時間が経ったかサーバーが再起動しました）。もう一度質問してください"
+_HIST_CITE_RE = re.compile(r"\[\d+\]")   # 会話履歴から消す出典番号（前の回答の番号は今回の出典一覧と合わないため）
+
+
+def _art_ts(a: dict) -> float:
+    """並べ替え用の時刻（過去ログの sort_ts、無ければ published を読む）。"""
+    for k in ("sort_ts", "published_ts"):
+        try:
+            v = float(a.get(k) or 0)
+        except (TypeError, ValueError):
+            v = 0.0
+        if v:
+            return v
+    d = parse_date(str(a.get("published") or ""))
+    return d.timestamp() if d else 0.0
+
+
+def rank_for_question(arts: list[dict], terms: list[str], pages: dict | None = None) -> list[dict]:
+    """問いに関連の高い順に並べる（純粋関数。引数は変更しない）。
+    点数 = 語ごとに 見出しに含む 3 ＋ 要約に含む 1 ＋ 取得済みの本文に含む 1。同点は新しい順（並べ替えは安定）。
+    そのうえで類似記事（別媒体の同じニュース）を束ね、代表以外は代表すべての後ろへ回す（文脈長を同じ話で埋めない）。"""
+    keys: list[str] = []
+    for t in terms or []:
+        k = _norm(t)
+        if k and k not in keys:
+            keys.append(k)
+    pages = pages or {}
+    scored = []
+    for i, a in enumerate(arts):
+        title, summ = _norm(a.get("title")), _norm(a.get("summary"))
+        pg = pages.get(str(a.get("id") or "")) if pages else None
+        body = _norm(pg.get("text") or "") if isinstance(pg, dict) else ""
+        sc = sum((3 if k in title else 0) + (1 if k in summ else 0) + (1 if body and k in body else 0) for k in keys)
+        scored.append((-sc, -_art_ts(a), i))
+    order = [i for _, _, i in sorted(scored)]
+    rows = [{"id": str(n), "title": arts[i].get("title") or "", "sort_ts": _art_ts(arts[i])} for n, i in enumerate(order)]
+    group_duplicates(rows)   # 写しの上で束ねる（先に出る＝関連の高い方が代表）
+    heads = [order[int(r["id"])] for r in rows if not r.get("dup_of")]
+    dups = [order[int(r["id"])] for r in rows if r.get("dup_of")]
+    return [arts[i] for i in heads + dups]
+
+
+def _chat_item(x) -> dict | None:
+    """画面から送られてきた記事（過去ログに無いもの）を、長さと URL を確かめて取り込む。"""
+    if not isinstance(x, dict):
+        return None
+    return {"id": str(x.get("id") or "")[:64], "title": str(x.get("title") or "")[:200],
+            "source": str(x.get("source") or "")[:60], "category": str(x.get("category") or "")[:20],
+            "summary": str(x.get("summary") or "")[:320], "published": str(x.get("published") or "")[:25],
+            "link": safe_url(str(x.get("link") or "")) or ""}
+
+
+def _chat_key(x) -> str:
+    if isinstance(x, dict):
+        x = x.get("id")
+    return str(x)[:64] if isinstance(x, (str, int)) and not isinstance(x, bool) and str(x) else ""
+
+
+def _chat_system(local: bool) -> str:
+    return _CHAT_SYSTEM + (_CHAT_DISCIPLINE if local else "") + _CHAT_CITE_RULE
+
+
+def _chat_context(cfg: dict, kind: str, question: str, items: list, filters: dict, history: list,
+                  fulltext: bool = False, use_docs: bool = False) -> dict:
+    """会話1回分の指示文を組み立てる（LLM は呼ばない）。
+    items: 記事 id（文字列）または記事の dict（従来の items・AI パネルの一覧）。過去ログにある id は DB の値
+    （正しいリンク・日付）を使い、無いものは送られてきた値を長さと URL を確かめて使う。
+    量の予算: ローカルは 文脈長 − 指示の固定分 − 回答（OUT_CHAT）− 思考 をトークンの見積もりで、クラウドは
+    CHAT_CLOUD_CHARS を文字数で。会話履歴は 1/4 まで（新しい発言から）、外部資料は 1/4 まで、残りを記事に
+    （関連度順・本文抜粋は取得済みの記事の上位から）。
+    戻り値: system, prompt, sources（[{n, id, title, source, published, link}]）, used, trimmed, note, page_note, n_src"""
+    local = cfg.get("provider") == "local"
+    B = _budgets(cfg)
+    f = filters if isinstance(filters, dict) else {}
+    question = str(question or "").strip()[:500]
+    items = list(items or [])[:CHAT_MAX_IDS]
+    keys = [k for k in (_chat_key(x) for x in items) if k]
+    db = {a["id"]: a for a in _report_fetch(keys)} if keys else {}
+    arts: list[dict] = []
+    seen: set = set()
+    for x in items:
+        k = _chat_key(x)
+        if k and k in seen:
+            continue
+        a = db.get(k) if k else None
+        if a is None:
+            a = _chat_item(x)   # 過去ログに無い id だけが来た場合は使わない
+        if a is None:
+            continue
+        if k:
+            seen.add(k)
+        arts.append(a)
+    of = len(arts)
+    rank_terms = _report_terms(question, f, [])     # 並べ替えは問い・検索語の語だけで（記事群に多い固有名詞は全体に効いて順位を乱す）
+    # 本文抜粋・外部資料の検索に使う語（記事群に多い固有名詞も含む）
+    terms = _report_terms(question, f, arts) if (fulltext or use_docs) and arts else rank_terms
+    pages: dict[str, dict] = {}
+    if fulltext and arts:   # 取得済み（キャッシュ）の本文。会話では新規取得はしない
+        pages = {k: v for k, v in pages_cached([str(a.get("id")) for a in arts if a.get("id")]).items() if v.get("text")}
+    ranked = rank_for_question(arts, rank_terms, pages)
+
+    system = _chat_system(local)
+    conds = _filters_conds(f)
+    hit = f.get("hit")
+    label = "選択" if kind == "research" else "表示中"
+
+    def head_line(n: int) -> str:
+        if kind == "list":
+            return f"【現在表示中の記事一覧】（{of} 件のうち {n} 件を使用・関連度順）"
+        if isinstance(hit, int) and not isinstance(hit, bool) and hit >= n:
+            return f"【検索でヒットした記事（過去ログ）】（該当 {hit} 件のうち {n} 件を使用・関連度順）"
+        return f"【検索でヒットした記事（過去ログ）】（{label} {of} 件のうち {n} 件を使用・関連度順）"
+
+    instr = ["- 上の記事・資料だけに基づき、日本語で簡潔に（600字程度まで）答える",
+             "- 事実・数値・日付を含む文の末尾には必ず出典番号 [n]（上の番号のみ。複数可 [1][3]）",
+             "- 記事から判断できないときは「選択した記事からは判断できません」と書き、推測しない"]
+    if local:   # 長い資料の直後は指示が薄まりやすいので、末尾でも出力規律を念押しする
+        instr.append("（注意: 上の資料の分析過程・思考・下書きは出力せず、質問への最終回答のみを日本語で書いてください）")
+    tail = "\n\n【問い】" + question + "\n\n【回答の指示】\n" + "\n".join(instr)
+    fixed = ("【検索条件】" + " ／ ".join(conds) + "\n" if conds else "") + head_line(CHAT_MAX_IDS) + tail
+    if local:
+        room = B["ctx"] - TOK_OVERHEAD - OUT_CHAT - int(B.get("think") or 0) - _est_tokens(system) - _est_tokens(fixed)
+        msr = lambda s: _est_tokens(s) + 1   # 改行の分も含めて安全側に
+    else:
+        room = CHAT_CLOUD_CHARS
+        msr = lambda s: len(s) + 1
+    room = max(0, room)
+    per = min(FULLTEXT_CHAT_LOCAL if local else FULLTEXT_CHAT_CLOUD, int(B["per_article"]))   # 本文・資料の抜粋の文字数
+
+    # 1) 会話履歴（1/4 まで・新しい発言から）。前の回答の出典番号は今回の一覧と合わないので消す
+    hist_hdr = "【これまでの会話（参考。番号は今回の出典一覧とは別）】"
+    hist_lines: list[str] = []
+    used_h = 0
+    hs = [m for m in (history or []) if isinstance(m, dict) and m.get("role") in ("user", "assistant")][-CHAT_HISTORY_TURNS:]
+    for m in reversed(hs):
+        t = str(m.get("content") or "")
+        prev = None
+        while prev != t:   # 「[[1]2]」のように消した後に番号の形が残るものも消す
+            prev, t = t, _HIST_CITE_RE.sub("", t)
+        t = _WS_RE.sub(" ", t).strip()[:CHAT_HISTORY_CHARS]
+        if not t:
+            continue
+        line = ("利用者: " if m["role"] == "user" else "アシスタント: ") + t
+        c = msr(line) + (0 if hist_lines else msr(hist_hdr) + 1)
+        if used_h + c > room // 4:
+            break
+        hist_lines.insert(0, line)
+        used_h += c
+
+    # 2) 外部資料（1/4 まで）。番号は記事の件数が決まってから振る（量は最大の番号の幅で見積もる）
+    doc_hdr = "【外部資料の抜粋（利用者が登録した資料。記事と同様に根拠として使う）】"
+    pz_all = retrieve_passages(terms, None, DOC_CHAT_K) if use_docs else []
+    passages: list[tuple[dict, str]] = []
+    used_d = 0
+    for pz in pz_all:
+        pre = f"[{CHAT_MAX_IDS + DOC_CHAT_K}] 資料｜{pz['name']}（{pz['heading'] or '本文'}）: "
+        text = re.sub(r"\s+", " ", pz["text"]).strip()[:per]
+        base = 0 if passages else msr(doc_hdr) + 1
+        if used_d + base + msr(pre + text) > room // 4:
+            rest = room // 4 - used_d - base - msr(pre)   # 収まる分だけに切る（短すぎるなら添えない）
+            if rest >= 80:
+                text = text[:rest]   # 1文字は1トークン以下（安全側）
+                passages.append((pz, text))
+                used_d += base + msr(pre + text)
+            break
+        passages.append((pz, text))
+        used_d += base + msr(pre + text)
+
+    # 3) 記事（残り全部・関連度順）。本文抜粋があるときは記事の行を先に 6 割まで入れ、抜粋を上位から添えてから、
+    #    余りで記事の行を足す（記事の行だけで埋めて抜粋が1件も入らない、を防ぐ）
+    a_room = max(0, room - used_h - used_d)
+    entries: list[list] = []   # [記事, 行, 本文抜粋]
+    used_a = 0
+    nxt = 0
+
+    def add_lines(limit: int) -> None:
+        nonlocal used_a, nxt
+        while nxt < len(ranked):
+            line = _article_line(len(entries) + 1, ranked[nxt])
+            c = msr(line)
+            if used_a + c > limit:
+                return
+            entries.append([ranked[nxt], line, ""])
+            used_a += c
+            nxt += 1
+
+    has_pages = bool(pages) and any(str(a.get("id")) in pages for a in ranked)
+    add_lines(int(a_room * 0.6) if has_pages else a_room)
+    n_bodies = 0
+    if has_pages:
+        lab = "\n   本文抜粋: "
+        for e in entries:
+            if n_bodies >= FULLTEXT_CHAT_MAX:
+                break
+            pg = pages.get(str(e[0].get("id")))
+            if not pg:
+                continue
+            ex = _excerpt(pg["text"], per, terms)
+            if used_a + msr(lab + ex) > a_room:
+                rest = a_room - used_a - msr(lab)
+                if rest < 120:
+                    break
+                ex = _excerpt(pg["text"], rest, terms)
+            e[2] = ex
+            used_a += msr(lab + ex)
+            n_bodies += 1
+        add_lines(a_room)
+    if not entries and ranked:   # 文脈長がごく小さい: 最上位の1件だけは見出しで渡す
+        a = ranked[0]
+        entries.append([a, f"[1] {str(a.get('published') or '')[:10]} {a.get('source') or ''}｜{str(a.get('title') or '')[:120]}", ""])
+    n = len(entries)
+
+    parts = []
+    if conds:
+        parts.append("【検索条件】" + " ／ ".join(conds))
+    parts.append(head_line(n))
+    for a, line, ex in entries:
+        parts.append(line + ("\n   本文抜粋: " + ex if ex else ""))
+    if passages:
+        parts.append("\n" + doc_hdr)
+        for k, (pz, text) in enumerate(passages):
+            parts.append(f"[{n + k + 1}] 資料｜{pz['name']}（{pz['heading'] or '本文'}）: " + text)
+    if hist_lines:
+        parts.append("\n" + hist_hdr)
+        parts.extend(hist_lines)
+    prompt = "\n".join(parts) + tail
+
+    sources = [{"n": i + 1, "id": str(a.get("id") or ""), "title": a.get("title") or "", "source": a.get("source") or "",
+                "published": str(a.get("published") or "")[:10], "link": safe_url(a.get("link")) or ""}
+               for i, (a, _, _) in enumerate(entries)]
+    sources += [{"n": n + k + 1, "id": f"doc:{pz['id']}", "title": f"{pz['name']}（{pz['heading'] or '本文'}）",
+                 "source": "外部資料", "published": "", "link": ""} for k, (pz, _) in enumerate(passages)]
+    trimmed = n < of
+    note = ""
+    if trimmed:
+        note = (f"文脈長 {B['ctx']} のため、{label} {of} 件のうち関連度上位 {n} 件" + (f"と本文抜粋 {n_bodies} 件" if n_bodies else "") + "を使用"
+                if local else f"{label} {of} 件のうち関連度上位 {n} 件を使用")
+    page_note = ""
+    if fulltext:
+        page_note = (f"本文抜粋を {n_bodies} 件に添付（取得済みの記事のみ・各{per}字まで）" if n_bodies else
+                     "⚠ 文脈長の都合で本文抜粋を添付できませんでした。要約のみに基づく回答です" if pages else
+                     "⚠ 取得済みの本文がありません（左の「本文を取得」で先に取得してください）。要約のみに基づく回答です")
+    if use_docs:
+        dn = (f"外部資料の抜粋 {len(passages)} 件を添付" if passages else
+              "⚠ 文脈長の都合で外部資料の抜粋を添付できませんでした" if pz_all else
+              "⚠ 問いに関連する外部資料の抜粋が見つかりません")
+        page_note = (page_note + " ／ " if page_note else "") + dn
+    return {"system": system, "prompt": prompt, "sources": sources,
+            "used": {"articles": n, "of": of, "bodies": n_bodies, "docs": len(passages), "history_turns": len(hist_lines)},
+            "trimmed": trimmed, "note": note, "page_note": page_note, "n_src": len(sources)}
+
+
+def _chat_answer_post(answer: str, n_src: int, st: dict | None = None) -> tuple[str, int]:
+    """回答の後処理: 回答の上限で止めたら最後の行・文で切って注記し、範囲外の出典番号を取り除く。戻り値 (回答, 除去数)。"""
+    if answer and (st or {}).get("capped"):
+        answer = _trim_to_line(answer) + "\n（文字数の上限のため、以降は省略しました）"
+    return _strip_bad_cites(answer, n_src)
+
+
+def _chat_fallback(C: dict, err: str = "") -> tuple[str, str]:
+    """生成AIに接続できない（未設定・失敗）ときの回答: 問いに関連の高い記事を出典番号つきで示す（決まった手順・LLM なし）。"""
+    arts = [s for s in C["sources"] if not str(s.get("id") or "").startswith("doc:")][:CHAT_FALLBACK_N]
+    lines = [f"- {s['published']} {s['source']}｜{s['title']} [{s['n']}]".replace("-  ", "- ", 1) for s in arts]
+    answer = "生成AIに接続できないため、問いに関連の高い記事を示します。\n" + ("\n".join(lines) if lines else "（該当する記事が過去ログに見つかりません）")
+    why = f"（{err[:80]}）" if err else "（未設定）"
+    return answer, "⚠ 生成AIに接続できないため" + why + "、関連の高い記事を示しています"
+
+
+def _run_ask(job_id: str, question: str, items: list, filters: dict, history: list,
+             fulltext: bool, use_docs: bool) -> None:
+    """ワーカースレッド: 関連する記事を選ぶ → 文脈長に収まる指示文 → LLM（1回）→ 出典番号の確認。進捗は _jobs に書く。
+    生成AIが未設定・失敗のときも done にして、関連の高い記事の一覧を返す（fallback=True）。"""
+    def upd(**kw):
+        with _jobs_lock:
+            _jobs[job_id].update(kw)
+    try:
+        upd(state="retrieving", sub="関連する記事を選んでいます")
+        cfg = ai_config()
+        C = _chat_context(cfg, "research", question, items, filters, history, fulltext, use_docs)
+        local = cfg["provider"] == "local"
+        ready = local or bool(cfg.get("api_key"))
+        answer, err, bad = "", "", 0
+        if ready:
+            B = _budgets(cfg)
+            upd(state="answering", sub=C["note"] or "回答を生成中", used=C["used"], trimmed=C["trimmed"], gen="")
+            gen_t = [0.0]
+
+            def live(think: int, ans: int) -> None:   # ストリーミング中の生成量（画面に「生成中 n字」）
+                if time.time() - gen_t[0] > 1.0:
+                    gen_t[0] = time.time()
+                    upd(gen=f"生成中 {ans}字" + (f"（思考 {think}字）" if think else ""))
+            o = _step_opts(B, C["system"], C["prompt"], OUT_CHAT, live)
+            o["_stats"] = {}
+            answer, err = _llm_retry(cfg, C["system"], C["prompt"], None if local else 1500, upd, "回答を", opts=o, tries=2)
+            answer, bad = _chat_answer_post(answer, C["n_src"], o["_stats"]) if answer else ("", 0)
+        fallback = not answer
+        note = C["note"]
+        if fallback:
+            answer, fb = _chat_fallback(C, err if ready else "")
+            note = fb + (" ／ " + note if note else "")
+        upd(state="done", answer=answer, sources=C["sources"], used=C["used"], trimmed=C["trimmed"], note=note,
+            page_note=C["page_note"], bad_cites=bad, grounded=bool(_CITE_RE.search(answer)), question=question,
+            filters=filters, model=f"{cfg['provider']}:{cfg['model'] or 'default'}", fallback=fallback, sub="", gen="")
+    except Exception as e:
+        upd(state="error", error=f"{type(e).__name__}: {str(e)[:200]}")
+
+
+def start_ask_job(body: dict) -> dict:
+    """POST /api/research/ask: 根拠つき会話のジョブを開始する（すぐに job_id を返す。進捗・結果は report/status）。"""
+    question = str(body.get("question") or "").strip()[:500]
+    if not question:
+        return {"ok": False, "error": "質問が空です。"}
+    ids = body.get("ids") if isinstance(body.get("ids"), list) else []
+    ids = [k for k in (_chat_key(i) for i in ids if not isinstance(i, dict)) if k]
+    legacy = [x for x in (body.get("items") if isinstance(body.get("items"), list) else []) if isinstance(x, dict)]   # 従来の items（dict）
+    items = list(dict.fromkeys(ids))[:CHAT_MAX_IDS] + legacy[:CHAT_MAX_IDS]
+    items = items[:CHAT_MAX_IDS]
+    if not items:
+        return {"ok": False, "error": "記事を1件以上選択してください"}
+    filters = body.get("filters") if isinstance(body.get("filters"), dict) else {}
+    history = body.get("history") if isinstance(body.get("history"), list) else []
+    history = [m for m in history if isinstance(m, dict)][-CHAT_HISTORY_TURNS:]
+    job_id = _new_job("ask", question=question, articles=len(items))
+    threading.Thread(target=_run_ask, args=(job_id, question, items, filters, history,
+                                            bool(body.get("fulltext")), bool(body.get("use_docs"))), daemon=True).start()
+    return {"ok": True, "job_id": job_id}
+
+
+def save_qa(job_id: str) -> dict | None:
+    """完了した会話ジョブの回答を Q&A レポート（template='qa'・id はジョブ id）として保存する。何度呼んでも1件。
+    出典は回答のときの控えのまま（後で選択や過去ログが変わっても番号がずれない）。戻り値 {id, title}、無ければ None。"""
+    job_id = str(job_id or "")
+    if not _ID_RE.fullmatch(job_id):
+        return None
+    rep = get_report(job_id)
+    if rep:   # 保存済み（ジョブが消えた後も同じレポートを返す）。会話以外のレポートの id では保存しない
+        return {"id": rep["id"], "title": rep["title"]} if rep.get("template") == "qa" else None
+    with _jobs_lock:
+        j = dict(_jobs.get(job_id) or {})
+    if j.get("kind") != "ask" or j.get("state") != "done":
+        return None
+    question = str(j.get("question") or "")
+    sources = j.get("sources") or []
+    arts = [s for s in sources if not str(s.get("id") or "").startswith("doc:")]
+    rep = {"id": job_id, "created_at": time.time(), "title": "Q&A: " + _WS_RE.sub(" ", question).strip()[:60],
+           "question": question, "template": "qa", "filters": j.get("filters") or {},
+           "article_ids": [s["id"] for s in arts if s.get("id")],
+           "markdown": f"## 問い\n{question}\n\n## 回答\n{j.get('answer') or ''}",
+           "sources": sources, "model": j.get("model") or "",
+           "stats": {"qa": True, "articles": len(arts), "docs": len(sources) - len(arts), "bad_cites": j.get("bad_cites") or 0,
+                     "grounded": bool(j.get("grounded")), "note": j.get("note") or ""}}
+    _save_report(rep)
+    return {"id": job_id, "title": rep["title"]}
 
 
 # ------------------------------------------------------------------ リサーチ: テーマ（保存した検索条件）・新着差分・本文一括取得
@@ -5907,6 +6416,241 @@ def start_theme_brief(body: dict) -> dict:
     return r
 
 
+# ------------------------------------------------------------------ リサーチ: 商談前ブリーフ（取引先の別表記・訪問メモ・Word まで一括・Phase 9）
+# 会社名から別表記の候補（同義語辞書・ウォッチ・任意で生成AI）を件数つきで示し、チェックした語に合う記事（類似記事は代表のみ・
+# 問いに関連の高い順に最大 120 件）と訪問メモから「取引先ブリーフ」を作る（求めがあれば Word まで続けて書き出す）。
+# 別表記は検索全体には広げない（このブリーフと検索欄の「別表記」だけで使う）。生成AIの候補は過去ログに1件以上あるものだけ使う。
+
+ACCOUNT_MAX_ARTICLES = 120        # ブリーフに渡す記事の上限（類似記事を除き、関連度の高い順）
+ACCOUNT_DAYS_DEFAULT = 90         # ブリーフの期間（直近N日）の既定と範囲
+ACCOUNT_DAYS_MIN, ACCOUNT_DAYS_MAX = 7, 365
+ACCOUNT_MEMO_MAX = 4000           # 訪問メモの文字数の上限
+ACCOUNT_Q_MAX = 300               # 検索条件（別表記を | でつないだもの）の文字数の上限
+ACCOUNT_THIN = 3                  # 記事がこれ未満なら「内容が薄くなる」と知らせる
+ALIAS_MAX = 10                    # 別表記の候補の上限（会社名を含む）
+ALIAS_AI_MAX = 8                  # 生成AIに挙げさせる別表記の上限
+ALIAS_TERM_MAX = 40               # 会社名・別表記1語の文字数の上限
+ALIAS_SCAN = 1000                 # 類似記事を除いた件数を数える・ブリーフの記事を選ぶために読む記事の上限
+ALIAS_AI_WALL_S = 180             # 生成AIで別表記を探す1回の時間の上限（秒。画面が応答を待つため）
+
+
+def _alias_term_ok(w) -> bool:
+    """検索語として安全な1語か: 1〜40字・「|」「"」を含まない・先頭が「-」でない・改行や制御文字を含まない
+    （全角の ｜ ＂ － も検索では NFKC で半角と同じに扱うので、正規化してから確かめる）。"""
+    if not isinstance(w, str):
+        return False
+    w = w.strip()
+    n = unicodedata.normalize("NFKC", w).strip()
+    return (1 <= len(w) <= ALIAS_TERM_MAX and "|" not in n and '"' not in n and not n.startswith("-")
+            and not any(unicodedata.category(c)[0] == "C" for c in w))
+
+
+def _alias_name(name) -> str:
+    """会社名の検証（前後の空白は除く）。不正なら ValueError（API は 400）。"""
+    n = name.strip() if isinstance(name, str) else ""
+    if not _alias_term_ok(n):
+        raise ValueError("会社名は1〜40文字で、「|」「\"」・先頭の「-」・改行を含めずに入力してください")
+    return n
+
+
+def _days_arg(v, default: int | None, lo: int, hi: int) -> int | None:
+    """日数の引数: 省略（None・空文字）は default、数値は lo〜hi に収める、それ以外は ValueError。"""
+    if v is None or v == "":
+        return default
+    if isinstance(v, bool):
+        raise ValueError("期間（日数）が不正です")
+    try:
+        d = int(v)
+    except (TypeError, ValueError, OverflowError):   # JSON の Infinity も弾く
+        raise ValueError("期間（日数）が不正です")
+    return max(lo, min(d, hi))
+
+
+def _query_surface_terms(q: str) -> list[str]:
+    """検索条件の語（除外語を除く・元の表記を NFKC にしたもの・重複なし）。"""
+    raw = _WS_RE.sub(" ", unicodedata.normalize("NFKC", str(q or ""))).strip()
+    out: list[str] = []
+    for t in _query_tokens(raw):
+        if not t.strip('-|"') or t.startswith("-"):
+            continue
+        out += [a.strip().strip('"').strip() for a in t.split("|") if a.strip().strip('"').strip()]
+    return list(dict.fromkeys(out))
+
+
+def _single_group_terms(q: str) -> list[str]:
+    """検索条件が OR の1グループだけ（スペース区切りの AND を含まない。除外語は無視）なら、その語。それ以外は []。"""
+    raw = _WS_RE.sub(" ", unicodedata.normalize("NFKC", str(q or ""))).strip()
+    toks = [t for t in _query_tokens(raw) if t.strip('-|"') and not t.startswith("-")]
+    if len(toks) != 1 or len(parse_query(q, {})["groups"]) != 1:
+        return []
+    return _query_surface_terms(toks[0])
+
+
+def _watch_alias_terms(name: str) -> list[str]:
+    """ウォッチ（kind=watch のテーマ）から別表記を拾う: 名前が会社名と同じ、または条件の語のひとつが会社名のウォッチで、
+    条件が OR の1グループだけ（「日本製鉄|日鉄」など。AND を含む条件は別表記とみなさない）なら、その語。"""
+    key = _norm(name)
+    with _archive_lock:
+        _archive_init_locked()
+        conn = _db()
+        try:
+            rows = conn.execute("SELECT * FROM themes ORDER BY updated_at DESC").fetchall()
+        finally:
+            conn.close()
+    out: list[str] = []
+    for r in rows:
+        if ((r["kind"] if "kind" in r.keys() else None) or "theme") != "watch":
+            continue
+        try:
+            f = json.loads(r["filters_json"] or "{}")
+        except ValueError:
+            continue
+        terms = _single_group_terms(str(f.get("q") or "")) if isinstance(f, dict) else []
+        if terms and (_norm(r["name"]) == key or key in [_norm(t) for t in terms]):
+            out += terms
+    return out
+
+
+def _alias_ai(cfg: dict, name: str) -> list[str]:
+    """生成AIに会社名の略称・旧称・英語表記などを JSON 配列で挙げさせる（会社名ごとにキャッシュし、2回目からは呼ばない。
+    再試行しない）。実在しない表記は呼び出し側で「過去ログに1件以上」で落とす。接続できない等は RuntimeError。"""
+    local = cfg["provider"] == "local"
+    prompt = (f"企業・組織「{name}」の略称・旧称・英語表記・よく使われる別表記を JSON 配列（文字列のみ・最大8件）で出力してください。"
+              "グループ会社・子会社・取引先の名前は含めない。知らなければ [] を出力。")
+    txt, err = _llm_retry(cfg, _json_system(local), prompt, 400,
+                          opts={**_quick_opts(cfg), "ans_cap": 1200, "wall_s": ALIAS_AI_WALL_S},
+                          cache=True, reuse=True, tries=1)
+    if err:
+        raise RuntimeError(err)
+    out: list[str] = []
+    for x in _parse_json_array(txt):
+        if isinstance(x, str) and _alias_term_ok(x.strip()):
+            out.append(x.strip())
+        if len(out) >= ALIAS_AI_MAX:
+            break
+    return out
+
+
+def resolve_aliases(name, days=None, ai: bool = False) -> dict:
+    """POST /api/research/aliases: 会社名の別表記の候補と、それぞれの過去ログの件数。
+    候補の順: 会社名 → 同義語辞書の同じ行 → ウォッチの条件の語 → （ai=True で生成AIが使えるとき）生成AIの候補。
+    _norm で重複を除き最大 10 件。件数は検索と同じ数え方（同義語辞書の展開も効く）。生成AIの候補で 0 件のものは
+    excluded_zero に回して使わない（実在しない表記を混ぜない）。q = 会社名（0件でも必ず）＋件数のある別表記を | でつないだもの。
+    total は q の件数、dedup_total は類似記事（別媒体の同じニュース）を代表1件に数えた件数（先頭 1000 件で数える。
+    超えたら dedup_partial）。生成AIに接続できないときも、同義語とウォッチの候補で答える（llm_used=False・ai_error）。"""
+    name = _alias_name(name)
+    days = _days_arg(days, None, 1, 3650)
+    since = time.time() - days * 86400 if days else None
+    cands: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    def add(w, frm: str) -> None:
+        w = str(w or "").strip()
+        k = _norm(w)
+        if k and k not in seen and len(cands) < ALIAS_MAX and _alias_term_ok(w):
+            seen.add(k)
+            cands.append((w, frm))
+
+    add(name, "name")
+    for w in _synonym_map().get(_norm(name)) or []:
+        add(w, "synonym")
+    for w in _watch_alias_terms(name):
+        add(w, "watch")
+    llm_used, ai_error = False, ""
+    if ai:
+        cfg = ai_config()
+        if _ai_ready(cfg):   # 未設定なら生成AIは使わない（llm_used=False。画面がその旨を出す）
+            try:
+                for w in _alias_ai(cfg, name):
+                    add(w, "ai")
+                llm_used = True
+            except Exception as e:
+                ai_error = f"生成AIで別表記を探せませんでした（{str(e)[:80]}）。同義語とウォッチの候補を表示しています"
+    aliases: list[dict] = []
+    excluded: list[str] = []
+    for w, frm in cands:
+        n = archive_count(quote_term(w), None, since)
+        if frm == "ai" and n <= 0:
+            excluded.append(w)
+            continue
+        aliases.append({"term": w, "count": n, "from": frm, "on": n > 0})
+    q_terms = [aliases[0]["term"]]   # 会社名（先頭）は件数が 0 でも条件に入れる
+    for a in aliases[1:]:
+        if not a["on"]:
+            continue
+        if len("|".join(quote_term(t) for t in q_terms + [a["term"]])) > ACCOUNT_Q_MAX:
+            a["on"] = False   # 条件が長くなりすぎる分は入れない（画面ではチェックを外した状態で出る）
+            continue
+        q_terms.append(a["term"])
+    q = "|".join(quote_term(t) for t in q_terms)
+    total = archive_count(q, None, since)
+    rows = archive_search(q, ALIAS_SCAN, None, since)
+    group_duplicates(rows)
+    out = {"ok": True, "name": name, "days": days, "aliases": aliases, "excluded_zero": excluded, "q": q,
+           "total": total, "dedup_total": sum(1 for r in rows if not r.get("dup_of")), "dedup_partial": total > ALIAS_SCAN,
+           "llm_used": llm_used}
+    if ai_error:
+        out["ai_error"] = ai_error
+    return out
+
+
+def start_account_brief(body: dict) -> dict:
+    """POST /api/research/account-brief: 商談前ブリーフ（取引先ブリーフ）のレポート生成ジョブを開始する。
+    q（チェックした別表記を | でつないだもの）が無ければ resolve_aliases で作る。直近 days 日の該当記事から類似記事を除き、
+    問いに関連の高い順に最大 120 件。訪問メモは資料（note=memo）として登録し、抜粋を必ず出典に入れる。
+    export='docx' なら保存の後に Word の書き出しジョブを続ける（進捗の export_job）。記事が 3 件未満なら thin=True。"""
+    cfg = ai_config()
+    if not _ai_ready(cfg):
+        return {"ok": False, "need_setup": True, "error": "生成AI APIが未設定です。設定（トップバーの設定ボタン）から登録してください。"}
+    try:
+        name = _alias_name(body.get("name"))
+        days = _days_arg(body.get("days"), ACCOUNT_DAYS_DEFAULT, ACCOUNT_DAYS_MIN, ACCOUNT_DAYS_MAX)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    memo = body.get("memo").strip() if isinstance(body.get("memo"), str) else ""
+    if len(memo) > ACCOUNT_MEMO_MAX:
+        return {"ok": False, "error": f"訪問メモは {ACCOUNT_MEMO_MAX} 文字までです"}
+    export = body.get("export") or ""
+    if export not in ("", "docx"):
+        return {"ok": False, "error": "書き出しの形式（export）は docx だけを指定できます"}
+    q = body.get("q").strip() if isinstance(body.get("q"), str) else ""
+    if q:
+        toks = [t for t in _query_tokens(_norm(q)) if t.strip('-|"') and not t.startswith("-")]
+        if len(q) > ACCOUNT_Q_MAX or len(toks) > MAX_QUERY_GROUPS or not parse_query(q)["groups"]:
+            return {"ok": False, "error": f"検索条件が不正です（{ACCOUNT_Q_MAX}文字・{MAX_QUERY_GROUPS}語まで）"}
+    else:
+        q = resolve_aliases(name, days)["q"]
+    terms = _query_surface_terms(q)
+    since = time.time() - days * 86400
+    rows = archive_search(q, ALIAS_SCAN, None, since, order="rel" if _fts_ok else "new")
+    group_duplicates(rows)   # 別媒体の同じニュースは代表1件だけ
+    heads = [r for r in rows if not r.get("dup_of")]
+    ids = [a["id"] for a in rank_for_question(heads, terms)[:ACCOUNT_MAX_ARTICLES]]
+    thin = len(ids) < ACCOUNT_THIN
+    if not ids and not memo:
+        return {"ok": False, "thin": True,
+                "error": f"「{name}」に該当する記事が直近{days}日にありません。期間を広げるか別表記を追加してください"}
+    docs = None   # 登録済みの外部資料も使う（任意）: "all" または資料 id の配列
+    if body.get("use_docs") == "all":
+        docs = "all"
+    elif isinstance(body.get("use_docs"), list):
+        docs = [str(d) for d in body["use_docs"] if isinstance(d, str) and _ID_RE.fullmatch(d)][:DOC_MAX] or None
+    pin = None
+    if memo:   # 訪問メモは資料として残し（「資料」パネルに「メモ」の印）、このブリーフでは必ず使う
+        try:
+            pin = [add_doc_text(f"訪問メモ: {name} {datetime.now().strftime('%Y-%m-%d')}", memo, "memo")["id"]]
+        except ValueError as e:
+            return {"ok": False, "error": f"訪問メモを保存できませんでした（{e}）"}
+    question = f"{name}との商談準備: 直近{days}日の動き・話題・リスクを整理する"
+    r = _start_report(question, "account", ids, {"q": q, "days": days, "account": name},
+                      fulltext=bool(body.get("fulltext")), title=f"取引先ブリーフ: {name}",
+                      docs=docs, doc_k=DOC_K_DEFAULT if docs else 0,
+                      extra_stats={"account": name, "aliases": terms, "thin": thin},
+                      then_export={"kind": "docx"} if export == "docx" else None, pin_docs=pin)
+    r.update(thin=thin, q=q)
+    return r
+
+
 # ------------------------------------------------------------------ リサーチ: 企業・製品ウォッチ（固有名詞の候補抽出・週別推移）
 
 ENTITY_MAX = 40                     # 候補の上限
@@ -5920,14 +6664,18 @@ _ENT_STOP = set("ニュース サービス システム プロジェクト エ�
                 "インタビュー ランキング コラム シリーズ レポート プラットフォーム テクノロジー マーケット リスク コスト シェア トップ "
                 "ポイント スタート セミナー イベント オンライン グローバル サプライチェーン カーボンニュートラル リサイクル グリーン "
                 "ベース レベル モデル タイプ ケース プラン ビジョン ニーズ トレンド シフト ブーム ショック ステンレス アルミ アルミニウム バッテリー "
-                "電気自動車 燃料電池自動車 商用車 乗用車 鉄鋼業 製造業 自動車業界 電力会社 ガス会社 大手銀行 地方銀行".split())
+                "電気自動車 燃料電池自動車 商用車 乗用車 鉄鋼業 製造業 自動車業界 電力会社 ガス会社 大手銀行 地方銀行 "
+                # 地域名（完全一致だけを除く。「中国電力」のような組織名は _ENT_ORG_RE でそのまま拾う）
+                "アジア 東南アジア 欧州 ヨーロッパ 北米 中南米 中東 アフリカ アメリカ 中国 米国 日本 国内 海外 世界 "
+                "北海道 東北 関東 中部 近畿 四国 九州".split())
 _ENT_STOP_ASCII = set("RSS PR NEW TOP NEWS THE AND FOR WITH FROM JP CO LTD INC CEO CTO CFO Q A IT EV AI IoT DX GX SDGs ESG M&A".split())
 
 
-def extract_entities(rows: list[dict]) -> list[dict]:
+def extract_entities(rows: list[dict], limit: int | None = ENTITY_MAX) -> list[dict]:
     """見出し（と要約の先頭）から 企業・組織・製品 らしい固有名詞の候補を抽出し、出現記事数で並べる。
     形態素解析なしの経験則: カタカナ語（3文字以上・英字＋カタカナ）、英字の固有名詞・略語、
-    組織名の接尾辞（製鉄・自動車・HD など）。一般語は除外リストで落とす。"""
+    組織名の接尾辞（製鉄・自動車・HD など）。一般語・地域名は除外リストで落とす。
+    limit=None なら上限なし（変化ブリーフで今期と前期の語を突き合わせるとき）。"""
     counts: dict[str, int] = {}
     surface: dict[str, str] = {}
     kinds: dict[str, str] = {}
@@ -5963,7 +6711,7 @@ def extract_entities(rows: list[dict]) -> list[dict]:
             kinds.setdefault(k, kind)
     out = [{"name": surface[k], "kind": kinds[k], "count": n, "q": quote_term(surface[k])} for k, n in counts.items()]
     out.sort(key=lambda e: (-e["count"], e["name"]))
-    return out[:ENTITY_MAX]
+    return out if limit is None else out[:limit]
 
 
 def _parse_json_array(text: str) -> list:
@@ -6063,19 +6811,22 @@ def watch_trends(weeks: int = 8) -> dict:
 COMPARE_IDS = 60   # AI 比較レポートに渡す各群の記事上限
 
 
-def _side_summary(label: str, f: dict) -> dict:
-    """1つの条件（q / sources / category / 期間 / archived）を集計する。"""
+def _side_summary(label: str, f: dict, rows_out: list | None = None) -> dict:
+    """1つの条件（q / sources / category / 期間 / archived）を集計する。
+    件数（total）と情報源の内訳は条件に合う全件で数える（以前は新しい300件で数え、300件で頭打ちになっていた）。
+    固有名詞・記事 id・最新／最古の日付は新しい300件（sampled）から。rows_out（リスト）を渡すと、その300件をそこへ足す
+    （変化ブリーフが固有名詞の全候補と関連度順の id を作るのに使う）。"""
     since, until = _filters_window(f)
     parsed = parse_query(f.get("q", ""))
-    rows = archive_search(f.get("q", ""), 300, f.get("sources"), since, until, f.get("category") or None,
-                          f.get("archived"), "new", parsed)
-    srcs: dict[str, int] = {}
-    for a in rows:
-        k = a.get("source") or a.get("source_id") or ""
-        srcs[k] = srcs.get(k, 0) + 1
-    hist = archive_histogram(f.get("q", ""), f.get("sources"), f.get("category") or None, parsed, since, until)
-    return {"label": label, "total": len(rows), "conds": _filters_conds({**f, "sources": _source_names(f.get("sources") or [])}),
-            "sources": [{"name": k, "count": v} for k, v in sorted(srcs.items(), key=lambda x: (-x[1], x[0]))[:6]],
+    q, srcf, cat, arch = f.get("q", ""), f.get("sources"), f.get("category") or None, f.get("archived")
+    rows = archive_search(q, 300, srcf, since, until, cat, arch, "new", parsed)
+    if rows_out is not None:
+        rows_out.extend(rows)
+    total = archive_count(q, srcf, since, until, cat, arch, parsed)
+    hist = archive_histogram(q, srcf, cat, parsed, since, until)
+    return {"label": label, "total": total, "sampled": len(rows),
+            "conds": _filters_conds({**f, "sources": _source_names(f.get("sources") or [])}),
+            "sources": archive_source_counts(q, srcf, since, until, cat, arch, parsed, limit=6),
             "entities": extract_entities(rows)[:10],
             "hist": {"unit": hist["unit"], "buckets": hist["buckets"], "total": hist["total"]},
             "ids": [a["id"] for a in rows[:COMPARE_IDS]],
@@ -6083,10 +6834,15 @@ def _side_summary(label: str, f: dict) -> dict:
             "oldest": str(rows[-1].get("published") or "")[:10] if rows else ""}
 
 
-def _prev_window(f: dict) -> dict:
-    """同じ条件で「1つ前の期間」の条件を作る（直近N日 → その前のN日、from〜to → 同じ長さの直前）。"""
-    since, until = _filters_window(f)
-    now = time.time()
+def _prev_window(f: dict, now: float | datetime | None = None) -> dict:
+    """同じ条件で「1つ前の期間」の条件を作る（直近N日 → その前のN日、from〜to → 同じ長さの直前）。
+    暦の期間（f["period"] が 今月・先週 など）なら、前の同じ種類の期間まるごと（今月 → 先月の1日〜末日。29日分ずらすのではない）。"""
+    if f.get("period") in CAL_PERIODS:
+        _, b = calendar_windows(f["period"], "prev", now)
+        return {"q": f.get("q", ""), "sources": f.get("sources") or [], "category": f.get("category") or "",
+                "days": 0, "from": b["from"], "to": b["to"], "since_ts": b["since_ts"], "until_ts": b["until_ts"]}
+    now = _cal_now(now).timestamp() if now is not None else time.time()
+    since, until = _filters_window(f, now)
     if since is None:
         return {}
     until = until if until is not None else now
@@ -6098,13 +6854,21 @@ def _prev_window(f: dict) -> dict:
             "since_ts": since - length, "until_ts": since}        # 実際の範囲は秒単位で直前の同じ長さ
 
 
-def compare_conditions(body: dict) -> dict:
-    """A（現在の条件）と B（テーマ／ウォッチ、同条件の前の期間、または任意の条件）を比較する。"""
+def compare_conditions(body: dict, now: float | datetime | None = None) -> dict:
+    """A（現在の条件）と B（テーマ／ウォッチ、同条件の前の期間、または任意の条件）を比較する。
+    A の period が暦の期間（今月・先週 など）なら「前の期間」は前の同じ種類の期間（_prev_window）。A に日付が無ければ
+    A の範囲も period から決める。now はテスト用（省略時は現在時刻）。"""
     a = _clean_filters(body.get("a"))
     try:
         a["archived"] = float(body.get("a", {}).get("archived")) if isinstance(body.get("a"), dict) and body["a"].get("archived") else None
     except (TypeError, ValueError):
         a["archived"] = None
+    per = body["a"].get("period") if isinstance(body.get("a"), dict) else None
+    if per in CAL_PERIODS:
+        a["period"] = per
+        if not (a["from"] or a["to"] or a["days"]):
+            wa, _ = calendar_windows(per, "prev", now)
+            a.update({"from": wa["from"], "to": wa["to"], "since_ts": wa["since_ts"], "until_ts": wa["until_ts"]})
     bspec = body.get("b") if isinstance(body.get("b"), dict) else {}
     if bspec.get("theme_id"):
         t = get_theme(str(bspec.get("theme_id")))
@@ -6113,7 +6877,7 @@ def compare_conditions(body: dict) -> dict:
         b = dict(t["filters"])
         blabel = ("ウォッチ: " if t.get("kind") == "watch" else "テーマ: ") + t["name"]
     elif bspec.get("prev"):
-        b = _prev_window(a)
+        b = _prev_window(a, now)
         if not b:
             return {"ok": False, "error": "期間（直近N日 または 日付範囲）を指定すると「前の期間」と比較できます"}
         blabel = f"前の期間（{b['from']}〜{b['to']}）"
@@ -6131,6 +6895,269 @@ def compare_conditions(body: dict) -> dict:
     return {"ok": True, "a": A, "b": B, "common": common,
             "only_a": [ea[k] for k in ea if k not in eb], "only_b": [eb[k] for k in eb if k not in ea],
             "filters_b": b}
+
+
+# ------------------------------------------------------------------ リサーチ: 変化ブリーフ（今月 vs 先月・前年同期／暦の期間・件数の集計表）
+# 「電炉で今月何が変わった？」に答える。件数・1日あたり・情報源・新しく出てきた語・増えた語・収集の空白日は Python で数え
+# （生成AIは使わない。未設定でも「集計する」は使える）、出典つきの文章（変化ブリーフ）は今期〔A〕と前期〔B〕の記事を比較レポートと
+# 同じ map-reduce で書く。集計表は「Prism による件数」として本文の先頭に置き、出典番号を付けない。期間はローカル時刻・週は月曜始まり。
+
+CAL_PERIODS = ("this_week", "last_week", "this_month", "last_month", "this_quarter", "last_quarter")
+CAL_PERIOD_NAMES = {"this_week": "今週", "last_week": "先週", "this_month": "今月", "last_month": "先月",
+                    "this_quarter": "今四半期", "last_quarter": "前四半期"}
+CHANGE_BASES = {"prev": "前期", "year_ago": "前年同期"}   # 比べる期間 → 表示名
+CHANGE_Q_MAX = 300      # 検索条件の文字数の上限
+CHANGE_TOP = 8          # 新しく出てきた語・見られなくなった語・増えた語の数
+CHANGE_NOTE_TOP = 5     # 指示文の集計に載せる語の数（ローカルLLMの文脈長を食わないように短く）
+
+
+def _cal_now(now=None) -> datetime:
+    """基準の時刻（ローカル時刻・タイムゾーンなし）。now は epoch 秒か datetime（テスト用）。省略時は現在。"""
+    if isinstance(now, datetime):
+        return now.astimezone().replace(tzinfo=None) if now.tzinfo else now
+    return datetime.fromtimestamp(float(now) if now is not None else time.time())
+
+
+def _year_ago(dt: datetime) -> datetime:
+    """1年前の同じ日時（2月29日は2月28日に）。"""
+    try:
+        return dt.replace(year=dt.year - 1)
+    except ValueError:
+        return dt.replace(year=dt.year - 1, day=28)
+
+
+def _cal_side(since: datetime, until: datetime) -> dict:
+    """[since, until) を画面・API 用の形に。to は最後に含む日、days はその日数（今日も1日と数える）。"""
+    if until <= since:   # 期間の始まりちょうど（1日の 0:00）でも空の範囲にしない
+        until = since + timedelta(seconds=1)
+    d0, d1 = since.date(), (until - timedelta(seconds=1)).date()
+    return {"from": d0.isoformat(), "to": d1.isoformat(), "since_ts": since.timestamp(), "until_ts": until.timestamp(),
+            "days": (d1 - d0).days + 1, "label": f"{d0.isoformat()}〜{d1.isoformat()}"}
+
+
+def calendar_windows(period: str, base: str = "prev", now=None) -> tuple[dict, dict]:
+    """暦の期間（今週・先週・今月・先月・今四半期・前四半期）の 今期 A と比べる期間 B（各 {from, to, since_ts, until_ts, days, label}）。
+    - A = [期間の始め, min(期間の終わり, 今))。今週・今月・今四半期は今の時刻まで
+    - base="prev": B = 1つ前の同じ種類の期間まるごと（今月 → 先月の1日〜末日、先週 → 先々週の月曜〜日曜）
+    - base="year_ago": B = A の日時を1年戻した範囲（同じ日数。2月29日は2月28日に）
+    period・base が不正なら ValueError。"""
+    if period not in CAL_PERIODS:
+        raise ValueError("期間（period）は this_week / last_week / this_month / last_month / this_quarter / last_quarter のいずれかです")
+    if base not in CHANGE_BASES:
+        raise ValueError("比べる期間（base）は prev（前の期間）か year_ago（前年同期）です")
+    n = _cal_now(now)
+    kind = period.split("_", 1)[1]   # week / month / quarter
+
+    def start_of(d: date) -> date:
+        if kind == "week":
+            return d - timedelta(days=d.weekday())   # 月曜始まり
+        if kind == "month":
+            return d.replace(day=1)
+        return d.replace(month=(d.month - 1) // 3 * 3 + 1, day=1)
+
+    def next_start(d: date) -> date:   # d は期間の始め
+        if kind == "week":
+            return d + timedelta(days=7)
+        y, m = divmod(d.month - 1 + (1 if kind == "month" else 3), 12)
+        return date(d.year + y, m + 1, 1)
+
+    def midnight(d: date) -> datetime:
+        return datetime(d.year, d.month, d.day)
+
+    cur = start_of(n.date())
+    s = cur if period.startswith("this_") else start_of(cur - timedelta(days=1))
+    since, until = midnight(s), min(midnight(next_start(s)), n)
+    A = _cal_side(since, until)
+    if base == "prev":
+        B = _cal_side(midnight(start_of(s - timedelta(days=1))), since)
+    else:
+        B = _cal_side(_year_ago(since), _year_ago(until if until > since else since + timedelta(seconds=1)))
+    return A, B
+
+
+def _change_args(body) -> dict:
+    """POST /api/research/change(/report) の本文を検証する（不正なら ValueError）。情報源は id、カテゴリは完全一致。"""
+    body = body if isinstance(body, dict) else {}
+    period = body.get("period")
+    if period not in CAL_PERIODS:
+        raise ValueError("期間（period）は 今週・先週・今月・先月・今四半期・前四半期"
+                         "（this_week / last_week / this_month / last_month / this_quarter / last_quarter）のいずれかを指定してください")
+    base = body.get("base") or "prev"
+    if base not in CHANGE_BASES:
+        raise ValueError("比べる期間（base）は prev（前の期間）か year_ago（前年同期）を指定してください")
+    q = body.get("q").strip() if isinstance(body.get("q"), str) else ""
+    if len(q) > CHANGE_Q_MAX:
+        raise ValueError(f"キーワードは {CHANGE_Q_MAX} 文字までです")
+    srcs = body.get("sources") if isinstance(body.get("sources"), list) else []
+    cat = body.get("category") if isinstance(body.get("category"), str) else ""
+    return {"q": q, "sources": list(dict.fromkeys(s.strip()[:60] for s in srcs if isinstance(s, str) and s.strip()))[:50],
+            "category": archive_category_arg(cat) or "", "period": period, "base": base}
+
+
+def _archive_coverage(windows: list[dict]) -> tuple[list[int], str]:
+    """各期間のうち、過去ログに記事が1件も無い日（条件に関係なく全記事で数える）の数と、過去ログの最古の日付。
+    フィードはタブを開いている間だけ取得するので、空白日が多い期間は「ニュースが無い」のではなく「集めていない」可能性がある。"""
+    out: list[int] = []
+    with _archive_lock:
+        _archive_init_locked()
+        conn = _db()
+        try:
+            lo = conn.execute("SELECT MIN(sort_ts) FROM articles").fetchone()[0]
+            for w in windows:
+                have = {r[0] for r in conn.execute(
+                    "SELECT date(sort_ts, 'unixepoch', 'localtime'), COUNT(*) FROM articles WHERE sort_ts >= ? AND sort_ts < ? GROUP BY 1",
+                    (float(w["since_ts"]), float(w["until_ts"])))}
+                d0, d1 = date.fromisoformat(w["from"]), date.fromisoformat(w["to"])
+                out.append(sum(1 for i in range((d1 - d0).days + 1) if (d0 + timedelta(days=i)).isoformat() not in have))
+        finally:
+            conn.close()
+    return out, (datetime.fromtimestamp(float(lo)).date().isoformat() if lo is not None else "")
+
+
+def change_summary(body: dict, now=None) -> dict:
+    """POST /api/research/change: 今期と前期（または前年同期）の件数・1日あたり・情報源・固有名詞の変化・収集の空白日。
+    生成AIは使わない。件数は条件に合う全件（_side_summary の exact な total）、固有名詞は各期の新しい 300 件から。
+    ids は各期の記事を問い（検索語）に関連の高い順に最大 COMPARE_IDS 件（検索語が無ければ新しい順。類似記事は後ろへ）。
+    どちらかが 0 件なら reason（前期 0 件なら「今期だけで要点ブリーフ」を案内する）。now はテスト用。不正な本文は ValueError。"""
+    p = _change_args(body)
+    wa, wb = calendar_windows(p["period"], p["base"], now)
+    parsed = parse_query(p["q"])
+    terms = [w for g in parsed["groups"] for w in g]
+    sides, all_src, ents = [], [], []
+    for name, w in (("今期", wa), (CHANGE_BASES[p["base"]], wb)):
+        f = {"q": p["q"], "sources": p["sources"], "category": p["category"], "from": w["from"], "to": w["to"],
+             "since_ts": w["since_ts"], "until_ts": w["until_ts"]}
+        rows: list[dict] = []
+        s = _side_summary(f"{name} {w['label']}", f, rows_out=rows)
+        s.update({"name": name, "range": w["label"], "from": w["from"], "to": w["to"], "since_ts": w["since_ts"],
+                  "until_ts": w["until_ts"], "days": w["days"], "per_day": round(s["total"] / max(1, w["days"]), 2),
+                  "ids": [a["id"] for a in rank_for_question(rows, terms)[:COMPARE_IDS]]})
+        sides.append(s)
+        all_src.append({x["name"]: x["count"] for x in archive_source_counts(
+            p["q"], p["sources"] or None, w["since_ts"], w["until_ts"], p["category"] or None, None, parsed, limit=1000)})
+        ents.append({_norm(e["name"]): e for e in extract_entities(rows, limit=None)})
+    a, b = sides
+    rate_a, rate_b = a["total"] / max(1, a["days"]), b["total"] / max(1, b["days"])
+    names = list(dict.fromkeys([x["name"] for x in a["sources"]] + [x["name"] for x in b["sources"]]))
+    delta = {"count": a["total"] - b["total"],
+             "pct": round(100 * (a["total"] - b["total"]) / b["total"], 1) if b["total"] else None,
+             "per_day_pct": round(100 * (rate_a - rate_b) / rate_b, 1) if rate_b else None,
+             "sources": sorted(({"name": n, "a": all_src[0].get(n, 0), "b": all_src[1].get(n, 0)} for n in names),
+                               key=lambda x: (-x["a"], -x["b"], x["name"]))}
+    skip = {_norm(t) for t in terms}   # 検索語そのもの（どの記事にも出る）は「変化」に数えない
+    ea, eb = ents
+    new = [e["name"] for k, e in ea.items() if e["count"] >= 2 and k not in eb and k not in skip][:CHANGE_TOP]
+    gone = [e["name"] for k, e in eb.items() if e["count"] >= 2 and k not in ea and k not in skip][:CHANGE_TOP]
+    # 増えた語: 前期にもあり（前期 0 件の語は「新しく出てきた語」の方に出す）、2件以上かつ 1.5 倍以上に増えたもの
+    rising = sorted(({"name": e["name"], "a": e["count"], "b": eb[k]["count"]} for k, e in ea.items()
+                     if k in eb and k not in skip and e["count"] >= eb[k]["count"] + 2 and e["count"] >= 1.5 * eb[k]["count"]),
+                    key=lambda x: (-(x["a"] - x["b"]), -x["a"], x["name"]))[:CHANGE_TOP]
+    (a_empty, b_empty), oldest = _archive_coverage([wa, wb])
+    reasons = []
+    for s in (a, b):
+        if s["total"] == 0:
+            t = f"{s['name']}（{s['range']}）は該当 0 件です"
+            if not oldest:
+                t += "（過去ログにまだ記事がありません）"
+            elif oldest > s["from"]:
+                t += f"（過去ログは {oldest} 以降のみ）"
+            reasons.append(t)
+    out = {"ok": True, "period": p["period"], "period_name": CAL_PERIOD_NAMES[p["period"]], "base": p["base"],
+           "base_name": CHANGE_BASES[p["base"]], "q": p["q"], "sources": p["sources"], "category": p["category"],
+           "a": a, "b": b, "delta": delta, "new_entities": new, "gone_entities": gone, "rising": rising,
+           "coverage": {"a_empty_days": a_empty, "b_empty_days": b_empty, "archive_oldest": oldest}}
+    if reasons:
+        out["reason"] = "。".join(reasons)
+    return out
+
+
+def _md_cell(v) -> str:
+    """集計表のセル・指示文の集計: 表を壊す「|」と出典番号に見える「[」「]」を全角に、改行は空白に。"""
+    return re.sub(r"\s+", " ", str("" if v is None else v)).replace("|", "｜").replace("[", "［").replace("]", "］").strip()
+
+
+def _signed(v, unit: str = "") -> str:
+    return ("+" if v > 0 else "−" if v < 0 else "±") + (f"{abs(v):.1f}" if isinstance(v, float) else str(abs(v))) + unit
+
+
+def change_table_md(s: dict) -> str:
+    """変化ブリーフの本文の先頭に置く集計表（Markdown）。Prism が数えた件数で、出典番号は付けない（[ ] は全角にする）。"""
+    a, b, dl, cov = s["a"], s["b"], s["delta"], s["coverage"]
+    srcs = lambda side: "・".join(f"{x['name']} {x['count']}" for x in (side.get("sources") or [])[:3]) or "—"
+    rows = [
+        ("記事数", f"{a['total']}件", f"{b['total']}件",
+         _signed(dl["count"], "件") + (f"（{_signed(dl['pct'], '%')}）" if dl.get("pct") is not None else f"（{b['name']} 0 件）")),
+        ("1日あたり", f"{a['per_day']}件", f"{b['per_day']}件",
+         _signed(dl["per_day_pct"], "%") if dl.get("per_day_pct") is not None else "—"),
+        ("主な情報源", srcs(a), srcs(b), ""),
+        ("新しく出てきた語", "・".join(s.get("new_entities") or []) or "—", "—",
+         f"{b['name']}には無く今期に2件以上" if s.get("new_entities") else ""),
+        ("増えた語", "・".join(f"{x['name']} {x['b']}→{x['a']}" for x in s.get("rising") or []) or "—", "—",
+         f"{b['name']}→今期の件数" if s.get("rising") else ""),
+        ("収集の空白日", f"{cov['a_empty_days']}日", f"{cov['b_empty_days']}日", "記事が1件も保存されていない日"),
+    ]
+    out = ["### 集計（Prism による件数集計。出典番号なし）", "",
+           f"| 項目 | {_md_cell(a['label'])} | {_md_cell(b['label'])} | 変化 |", "|---|---|---|---|"]
+    out += ["| " + " | ".join(_md_cell(c) for c in r) + " |" for r in rows]
+    out += ["", "※ 件数は Prism が過去ログで数えた値です。ブラウザを閉じていた間は記事を収集しないため、"
+                "収集の空白日が多い期間は件数が少なく出ます。", ""]
+    return "\n".join(out)
+
+
+def change_note(s: dict) -> str:
+    """変化ブリーフの指示文に添える集計（Python で数えた件数。生成AIに件数を数えさせない・作らせない）。出典番号は付けない。"""
+    a, b, dl, cov = s["a"], s["b"], s["delta"], s["coverage"]
+    top = lambda side: "・".join(f"{x['name']} {x['count']}" for x in (side.get("sources") or [])[:3]) or "なし"
+    lines = ["【集計（Prism による件数。出典番号なし）】",
+             f"- {a['label']}: {a['total']}件（1日あたり {a['per_day']}件）",
+             f"- {b['label']}: {b['total']}件（1日あたり {b['per_day']}件）",
+             f"- 増減: {_signed(dl['count'], '件')}" + (f"（{_signed(dl['pct'], '%')}）" if dl.get("pct") is not None else ""),
+             f"- 主な情報源: 今期 {top(a)} ／ {b['name']} {top(b)}"]
+    if s.get("new_entities"):
+        lines.append("- 今期に新しく出てきた語: " + "・".join(s["new_entities"][:CHANGE_NOTE_TOP]))
+    if s.get("rising"):
+        lines.append("- 増えた語: " + "・".join(f"{x['name']} {x['b']}→{x['a']}" for x in s["rising"][:CHANGE_NOTE_TOP]))
+    lines.append(f"- 収集の空白日: 今期 {cov['a_empty_days']}日・{b['name']} {cov['b_empty_days']}日"
+                 "（ブラウザを閉じていた間は収集されないため、件数の差には収集の差も含まれる）")
+    lines.append("件数・増減に触れるときはこの値をそのまま使い、記事から数え直したり作ったりしない。この集計に基づく記述には出典番号を付けない")
+    return "\n".join(_md_cell(x) if i else x for i, x in enumerate(lines)) + "\n"
+
+
+def start_change_report(body: dict, now=None) -> dict:
+    """POST /api/research/change/report: 変化ブリーフ（今期〔A〕と前期〔B〕の比較・出典つき）のレポート生成ジョブを開始する。
+    集計は change_summary でサーバー側で数え直す（画面から送られた件数・表は使わない）。今期が 0 件なら 400。
+    only_a=true または前期が 0 件なら、今期の記事だけで要点ブリーフ（template=brief）。生成AIが未設定なら need_setup。"""
+    cfg = ai_config()
+    if not _ai_ready(cfg):
+        return {"ok": False, "need_setup": True,
+                "error": "生成AI APIが未設定です。設定（トップバーの設定ボタン）から登録してください（件数の集計は生成AIなしで使えます）"}
+    try:
+        s = change_summary(body, now)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    a, b = s["a"], s["b"]
+    if a["total"] <= 0:
+        return {"ok": False, "error": s.get("reason") or f"今期（{a['range']}）は該当 0 件です"}
+    q, subj = s["q"], s["q"] or "すべて"
+    filters = {"q": q, "sources": _source_names(s["sources"]) if s["sources"] else [], "category": s["category"],
+               "from": a["from"], "to": a["to"], "period": s["period"]}
+    fulltext = bool(body.get("fulltext"))
+    stats = {"a_total": a["total"], "b_total": b["total"], "period": s["period"], "base": s["base"]}
+    if body.get("only_a") is True or b["total"] <= 0:   # 比べる相手が無い: 今期だけで要点ブリーフ
+        r = _start_report(f"「{q or 'すべての記事'}」について、{a['range']} の要点を整理する", "brief", a["ids"], filters,
+                          fulltext=fulltext, title=f"要点ブリーフ: {subj} {a['range']}"[:80],
+                          extra_stats={"change": {**stats, "only_a": True}})
+        r.update(template="brief", a_total=a["total"], b_total=b["total"])
+        return r
+    template = body.get("template") if body.get("template") in ("change", "compare") else "change"
+    ids = list(dict.fromkeys(a["ids"] + b["ids"]))
+    r = _start_report(f"「{q or 'すべての記事'}」について、{a['range']} と {b['range']} を比べて何が変わったかを整理する",
+                      template, ids, {**filters, "compare": {"a": a["label"], "b": b["label"]}},
+                      fulltext=fulltext, groups=[{"label": a["label"], "ids": a["ids"]}, {"label": b["label"], "ids": b["ids"]}],
+                      title=(f"変化ブリーフ: {subj} {a['range']}" + ("（前年同期比）" if s["base"] == "year_ago" else ""))[:80],
+                      extra_stats={"change": stats}, preface=change_table_md(s), extra_note=change_note(s))
+    r.update(template=template, a_total=a["total"], b_total=b["total"])
+    return r
 
 
 # ---- 書き出し（Markdown / Word）
@@ -6502,6 +7529,23 @@ def retrieve_passages(terms: list[str], doc_ids: list[str] | None, k: int = DOC_
     return out
 
 
+def doc_passages(doc_id: str, limit: int = 6) -> list[dict]:
+    """資料1件の抜粋を資料内の順に limit 件まで（retrieve_passages と同じ形）。問いとの一致に関係なく必ず渡す資料
+    （商談前ブリーフの訪問メモ）用。不正な id・無い資料は空。"""
+    if not (isinstance(doc_id, str) and _ID_RE.fullmatch(doc_id)):
+        return []
+    with _archive_lock:
+        _archive_init_locked()
+        conn = _db()
+        try:
+            rows = conn.execute("SELECT c.id, c.doc_id, c.heading, c.text, d.name FROM doc_chunks c JOIN docs d ON d.id = c.doc_id "
+                                "WHERE c.doc_id = ? ORDER BY c.idx LIMIT ?", (doc_id, max(1, int(limit)))).fetchall()
+        finally:
+            conn.close()
+    return [{"id": r["id"], "doc_id": r["doc_id"], "heading": r["heading"], "text": r["text"], "name": r["name"], "score": 0.0}
+            for r in rows]
+
+
 # ------------------------------------------------------------------ リサーチ: 文書生成（Word / Excel / PowerPoint / PDF）× ローカルLLM
 # 内容の構成・抽出・要約は LLM、ファイルの組み立ては docgen（標準ライブラリ）。生成物は exports/ に保存し一覧・再DL・削除できる。
 
@@ -6511,6 +7555,7 @@ EXPORT_KINDS = {
     "xlsx": ("Excel", ".xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
     "pptx": ("PowerPoint", ".pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"),
     "pdf": ("PDF", ".pdf", "application/pdf"),
+    "mail": ("メール下書き", ".eml", "message/rfc822"),   # 社内共有メールの下書き（送信はしない。Outlook で下書きとして開ける）
 }
 EXPORT_MAX = 200               # 保存する生成物の上限（古いものから削除）
 FACTS_CHUNK_LOCAL = 3000       # 事実・数値の抽出で1回に渡す記事テキスト（文字）
@@ -6518,6 +7563,55 @@ FACTS_CHUNK_CLOUD = 10000
 FACTS_MAX_ROWS = 120
 SLIDES_DEFAULT = 8
 SLIDES_MAX = 20
+# レポートを LLM に渡すときの予算（ローカルLLM: 入力＋回答＋思考 ≤ 文脈長 − FIT_MARGIN。回答に空けておく量はトークン）
+OUT_SUMMARY, OUT_SLIDES, OUT_MAIL = 600, 1500, 600
+FIT_MARGIN = 200               # 見積もりの誤差に空けておく量（トークン）
+FIT_MAX_CHARS = 12000          # レポート本文の上限（文字。クラウドは常にここまで、ローカルも文脈長が大きくてもここまで）
+# 社内共有メールの下書き
+MAIL_TONES = {"boss": "上長への報告", "team": "チームへの共有"}
+MAIL_LENGTHS = {"short": ("短め: 要点3〜4件", 4), "normal": ("標準: 要点5〜6件", 6)}
+MAIL_CLOSING = {"boss": "以上、取り急ぎご報告します。", "team": "以上、共有します。"}
+MAIL_SUBJECT_MAX = 60
+MAIL_NEED_REPORT = "メール下書きは保存済みレポート（会話の回答を保存したものを含む）から作成します"
+_EXPORT_UNFINISHED = ("レポートの最終段（文章化）が完了していないため、文書にできません。リサーチでレポートを生成し直し"
+                      "（失敗した直後なら「同じ条件で再実行」）、完成したレポートから書き出してください")
+_CTRL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")   # 制御文字（改行・タブを含む）。件名に入れるとヘッダーを書き換えられる
+
+
+def _fit_tokens(cfg: dict, text: str, out: int, *fixed: str) -> str:
+    """LLM に渡す本文（レポートの Markdown など）を文脈長に収める。
+    - ローカルLLM: 固定の部分（システム文・指示文など。fixed）と合わせて、入力＋回答（out）＋思考 ≤ 文脈長 − FIT_MARGIN に
+      なるよう行の境目で切る（1行目だけで超えるときはその行を文字で切る）。大きな文脈長でも FIT_MAX_CHARS 字まで
+    - クラウド: FIT_MAX_CHARS 字まで
+    見積もりは予算と同じ物差し（_est_tokens。日本語は1文字≒1トークン）。"""
+    t = (text or "")[:FIT_MAX_CHARS]
+    if cfg.get("provider") != "local":
+        return t
+    B = _budgets(cfg)
+    room = B["ctx"] - FIT_MARGIN - int(out) - int(B.get("think") or 0) - sum(_est_tokens(x) for x in fixed)
+    if _est_tokens(t) <= room:
+        return t
+    kept: list[str] = []
+    cjk = other = 0
+    for line in t.split("\n"):
+        c = len(_CJK_RE.findall(line))
+        o = len(line) - c + 1   # 改行の分
+        if cjk + c + (other + o) // 3 + 1 > room:
+            break
+        kept.append(line)
+        cjk, other = cjk + c, other + o
+    if kept:
+        return "\n".join(kept).rstrip()
+    line = t.split("\n", 1)[0]   # 1行目だけで収まらない（改行の無い長文）: 文字で切る
+    cjk = other = 0
+    for i, ch in enumerate(line):
+        if _CJK_RE.match(ch):
+            cjk += 1
+        else:
+            other += 1
+        if cjk + other // 3 + 1 > room:
+            return line[:i]
+    return line
 
 
 def _parse_json_object(text: str) -> dict:
@@ -6542,11 +7636,16 @@ def _json_system(local: bool) -> str:
     return s
 
 
-def compose_facts(cfg: dict, arts: list[dict], question: str, progress=None) -> list[dict]:
-    """記事群から 事実・数値表（日付・企業・項目・値・単位・補足・出典番号）を LLM で抽出する（記事チャンクごと）。"""
+def compose_facts(cfg: dict, arts: list[dict], question: str, progress=None, numbering: list[int] | None = None) -> list[dict]:
+    """記事群から 事実・数値表（日付・企業・項目・値・単位・補足・出典番号）を LLM で抽出する（記事チャンクごと）。
+    numbering（arts と同じ並びの出典番号）を渡すと、その番号で記事を示し、その番号の出典だけを受け付ける
+    （保存済みレポートから書き出すとき、レポートの出典番号のまま。保存の設定で記事が消えても番号がずれない）。
+    各行に article_id（その出典番号の記事 id）を付ける。"""
     local = cfg["provider"] == "local"
     budget = _budgets(cfg)["facts"]
-    lines = [_article_line(i + 1, a) for i, a in enumerate(arts)]
+    nums = list(numbering) if numbering and len(numbering) == len(arts) else [i + 1 for i in range(len(arts))]
+    id_of = {n: a.get("id") for n, a in zip(nums, arts)}
+    lines = [_article_line(n, a) for n, a in zip(nums, arts)]
     chunks = _chunk_lines(lines, budget)
     system = _json_system(local)
     rows: list[dict] = []
@@ -6569,11 +7668,12 @@ def compose_facts(cfg: dict, arts: list[dict], question: str, progress=None) -> 
                 cite = int(it.get("cite") or 0)
             except (TypeError, ValueError):
                 cite = 0
-            if not (1 <= cite <= len(arts)):
+            if cite not in id_of:   # 示した番号以外（範囲外・消えた記事の番号）は使わない
                 continue
             row = {"date": str(it.get("date") or "")[:10], "entity": str(it.get("entity") or "")[:40],
                    "topic": str(it.get("topic") or "")[:60], "value": str(it.get("value") or "")[:30],
-                   "unit": str(it.get("unit") or "")[:16], "note": str(it.get("note") or "")[:60], "cite": cite}
+                   "unit": str(it.get("unit") or "")[:16], "note": str(it.get("note") or "")[:60], "cite": cite,
+                   "article_id": id_of[cite]}
             if row["topic"] or row["value"]:
                 rows.append(row)
         if len(rows) >= FACTS_MAX_ROWS:
@@ -6588,12 +7688,15 @@ def compose_summary(cfg: dict, rep: dict, instructions: str) -> dict:
     """レポートからエグゼクティブサマリー（3〜5文・出典番号つき）とキーワードを LLM で作る。"""
     local = cfg["provider"] == "local"
     n = len(rep.get("sources") or [])
-    prompt = (f"【レポート】\n{rep['markdown'][:12000 if not local else 6000]}\n\n【出典番号】[1]〜[{n}]\n\n"
-              "【指示】上のレポートのエグゼクティブサマリーを JSON オブジェクトだけで出力してください: "
-              "{\"summary\": [\"1文（60字以内）。末尾に出典番号 [n]\", ...（3〜5件）], \"keywords\": [\"キーワード\", ...（5件以内）]}"
-              + (f"\n想定読者・体裁の指示: {instructions}" if instructions else ""))
+    system = _json_system(local)
+    tail = (f"\n\n【出典番号】[1]〜[{n}]\n\n"
+            "【指示】上のレポートのエグゼクティブサマリーを JSON オブジェクトだけで出力してください: "
+            "{\"summary\": [\"1文（60字以内）。末尾に出典番号 [n]\", ...（3〜5件）], \"keywords\": [\"キーワード\", ...（5件以内）]}"
+            + (f"\n想定読者・体裁の指示: {instructions}" if instructions else ""))
+    # ローカルLLMは文脈長に収まる分だけ渡す（以前は一律 6000 字。文脈長 4096 では入力だけで文脈からはみ出していた）
+    prompt = "【レポート】\n" + _fit_tokens(cfg, rep["markdown"], OUT_SUMMARY, system, "【レポート】\n" + tail) + tail
     try:
-        txt, _ = _split_reasoning(call_ai(cfg, _json_system(local), prompt, [], max_tokens=1200, opts=_quick_opts(cfg)))
+        txt, _ = _split_reasoning(call_ai(cfg, system, prompt, [], max_tokens=1200, opts=_quick_opts(cfg)))
     except Exception:
         return {}
     obj = _parse_json_object(txt)
@@ -6608,14 +7711,16 @@ def compose_slides(cfg: dict, rep: dict, instructions: str, n_slides: int) -> li
     local = cfg["provider"] == "local"
     n = len(rep.get("sources") or [])
     n_slides = max(2, min(int(n_slides or SLIDES_DEFAULT), SLIDES_MAX))
-    prompt = (f"【レポート】\n{rep['markdown'][:12000 if not local else 6000]}\n\n【出典番号】[1]〜[{n}]\n\n"
-              f"【指示】上のレポートからプレゼン資料のスライド構成を作り、JSON 配列だけを出力してください。スライドは {n_slides} 枚以内。\n"
-              "各要素は {\"title\": \"スライド見出し（20字以内）\", \"bullets\": [\"要点（45字以内。末尾に出典番号 [n]）\", ...（3〜5件）], "
-              "\"notes\": \"発表者ノート（2〜3文）\"} の形。\n"
-              "1枚目は全体像（要点）、最後は示唆・次に注目すべき点にする。表紙と出典一覧はこちらで付けるので含めない。レポートに無い事実を加えない。"
-              + (f"\n想定読者・体裁の指示: {instructions}" if instructions else ""))
+    system = _json_system(local)
+    tail = (f"\n\n【出典番号】[1]〜[{n}]\n\n"
+            f"【指示】上のレポートからプレゼン資料のスライド構成を作り、JSON 配列だけを出力してください。スライドは {n_slides} 枚以内。\n"
+            "各要素は {\"title\": \"スライド見出し（20字以内）\", \"bullets\": [\"要点（45字以内。末尾に出典番号 [n]）\", ...（3〜5件）], "
+            "\"notes\": \"発表者ノート（2〜3文）\"} の形。\n"
+            "1枚目は全体像（要点）、最後は示唆・次に注目すべき点にする。表紙と出典一覧はこちらで付けるので含めない。レポートに無い事実を加えない。"
+            + (f"\n想定読者・体裁の指示: {instructions}" if instructions else ""))
+    prompt = "【レポート】\n" + _fit_tokens(cfg, rep["markdown"], OUT_SLIDES, system, "【レポート】\n" + tail) + tail
     try:
-        txt, _ = _split_reasoning(call_ai(cfg, _json_system(local), prompt, [], max_tokens=3000, opts=_quick_opts(cfg)))
+        txt, _ = _split_reasoning(call_ai(cfg, system, prompt, [], max_tokens=3000, opts=_quick_opts(cfg)))
     except Exception:
         return []
     out: list[dict] = []
@@ -6628,6 +7733,201 @@ def compose_slides(cfg: dict, rep: dict, instructions: str, n_slides: int) -> li
             continue
         out.append({"title": title or "要点", "bullets": bullets, "notes": str(it.get("notes") or "")[:400]})
     return out[:n_slides]
+
+
+# ---- 社内共有メールの下書き（出典 URL つき・コピー／Outlook で開ける .eml。送信はしない）
+# 生成AIは保存済みレポートの言い換えだけ（事実を足さない）。出典番号の確認・あいさつ・出典の一覧・署名は Python で付ける。
+
+def _one_line(s, limit: int = 300) -> str:
+    """1行に整える（制御文字・改行・タブは空白にしてまとめる）。"""
+    return _WS_RE.sub(" ", _CTRL_RE.sub(" ", str(s or ""))).strip()[:limit]
+
+
+def _mail_line(s, limit: int) -> str:
+    """1行に整えて limit 字に収める（Markdown の装飾と行頭の箇条書きの記号は外す。切るときも末尾の [n] は残す）。"""
+    s = _one_line(_md_plain(str(s or "")), 2000)
+    s = re.sub(r"^(?:[-*+]\s+|[・●■□◆▪]\s*|\d{1,2}[.)．]\s+)", "", s).strip()
+    if len(s) <= limit:
+        return s
+    cites = " ".join(list(dict.fromkeys(m.group(0) for m in _CITE_RE.finditer(s)))[:3])
+    core = _CITE_RE.sub("", s).strip()
+    return core[:max(10, limit - len(cites) - 2)].rstrip() + "…" + (" " + cites if cites else "")
+
+
+def _mail_subject(s) -> str:
+    """件名: 制御文字（CR・LF・TAB など）は空白にしてまとめ、出典番号は外し、MAIL_SUBJECT_MAX 字まで（ヘッダーの差し込みを防ぐ）。"""
+    return _WS_RE.sub(" ", _CITE_RE.sub("", _CTRL_RE.sub(" ", str(s or "")))).strip()[:MAIL_SUBJECT_MAX].strip()
+
+
+def _has_cite(s: str, n: int) -> bool:
+    return any(1 <= int(k) <= n for k in _CITE_RE.findall(s or ""))
+
+
+def _mail_from_json(obj: dict, rep: dict, tone: str, max_b: int) -> dict | None:
+    """LLM の JSON を検証する。要点・冒頭の要約は範囲外の [n] を除き、有効な [n] の無いものは捨てる。要点が残らなければ None。"""
+    if not isinstance(obj, dict) or not obj:
+        return None
+    n = len(rep.get("sources") or [])
+    def strs(v):
+        v = [v] if isinstance(v, str) else (v if isinstance(v, list) else [])
+        return [str(x) for x in v if isinstance(x, (str, int, float)) and str(x).strip()]
+    bullets: list[str] = []
+    for b in strs(obj.get("bullets")):
+        b = _mail_line(_strip_bad_cites(b, n)[0], 160)
+        if _has_cite(b, n) and b not in bullets:
+            bullets.append(b)
+    if not bullets:
+        return None
+    lead = [x for x in (_mail_line(_strip_bad_cites(s, n)[0], 120) for s in strs(obj.get("lead"))) if _has_cite(x, n)]
+    closing = _mail_line(_CITE_RE.sub("", str(obj.get("closing") or "")), 80)
+    return {"subject": _mail_subject(obj.get("subject")) or _mail_subject(rep.get("title")) or "共有",
+            "lead": lead[:3], "bullets": bullets[:max_b], "closing": closing or MAIL_CLOSING[tone]}
+
+
+def _md_plain(s: str) -> str:
+    """Markdown の装飾を外す（太字・コード・リンク・引用）。出典番号 [n] は残す。"""
+    s = re.sub(r"\[([^\]]+)\]\((?:https?://|/)[^)\s]*\)", r"\1", str(s or ""))
+    s = re.sub(r"^\s*>\s?", "", s)
+    return s.replace("**", "").replace("__", "").replace("`", "")
+
+
+def _mail_sentences(text: str, n: int) -> list[str]:
+    """段落を「。」で文に分け、有効な [n] のある文だけを返す（「。」の後ろに付いた [n] は前の文に戻す）。"""
+    out: list[str] = []
+    for piece in re.findall(r"[^。]+。?", text or ""):
+        m = re.match(r"^\s*((?:\[\d{1,4}\]\s*)+)", piece)
+        if m and out:
+            out[-1] += m.group(1).strip()
+            piece = piece[m.end():]
+        if piece.strip():
+            out.append(piece.strip())
+    return [_mail_line(s, 120) for s in (_strip_bad_cites(x, n)[0] for x in out) if _has_cite(s, n)]
+
+
+def _mail_fallback(rep: dict, tone: str, max_b: int) -> dict:
+    """生成AIを使わずにレポートの本文から作る（決まった手順）。件名=レポートの題名、冒頭=最初の見出しの段落の文（出典番号つき・3文まで）、
+    要点=本文の箇条書きのうち有効な [n] のあるもの（無ければ段落の文）、結び=決まり文句。"""
+    n = len(rep.get("sources") or [])
+    secs: list[dict] = []   # 見出し（##）ごとの段落と箇条書き
+    cur = {"para": [], "items": []}
+    for line in (rep.get("markdown") or "").split("\n"):
+        if re.match(r"^#{1,2}\s", line):
+            if cur["para"] or cur["items"]:
+                secs.append(cur)
+            cur = {"para": [], "items": []}
+        elif re.match(r"^\s*(?:[-*+]|\d{1,2}[.)])\s+", line):
+            cur["items"].append(_md_plain(line))
+        elif line.strip() and not line.lstrip().startswith(("#", "|")):
+            cur["para"].append(_md_plain(line).strip())
+    if cur["para"] or cur["items"]:
+        secs.append(cur)
+    lead: list[str] = []
+    for sec in secs:
+        lead = _mail_sentences(" ".join(sec["para"]), n)[:3]
+        if lead:
+            break
+    bullets: list[str] = []
+    for sec in secs:
+        for it in sec["items"]:
+            b = _mail_line(_strip_bad_cites(it, n)[0], 160)
+            if _has_cite(b, n) and b not in bullets:
+                bullets.append(b)
+    if not bullets:   # 箇条書きの無いレポート（会話の回答など）: 冒頭に使わなかった段落の文を要点に
+        for sec in secs:
+            bullets += [s for s in _mail_sentences(" ".join(sec["para"]), n) if s not in lead and s not in bullets]
+        if not bullets:   # 文が冒頭の分しか無い: 要点として示す（冒頭の要約は付けない）
+            lead, bullets = [], lead
+    return {"subject": _mail_subject(rep.get("title")) or "共有", "lead": lead, "bullets": bullets[:max_b],
+            "closing": MAIL_CLOSING[tone]}
+
+
+def compose_mail(cfg: dict | None, rep: dict, tone: str = "boss", length: str = "short", instructions: str = "") -> dict:
+    """保存済みレポート（会話の回答を保存した Q&A を含む）から、社内向けメールの文面（件名・冒頭の要約・要点・結び）を作る。
+    - LLM 1回（文脈長に収まる分のレポート・回答は JSON・llm_cache に保存・失敗したら1回だけ再試行）
+    - 出典番号は Python で確かめる（範囲外は除き、有効な [n] の無い要点・要約は捨てる）
+    - 生成AIが未設定（cfg=None）・失敗・JSON が読めない・要点が残らないときは _mail_fallback（fallback=True）
+    戻り値 {subject, lead, bullets, closing, fallback, reason}（reason: 生成AIを使わなかった理由）"""
+    tone = tone if tone in MAIL_TONES else "boss"
+    length = length if length in MAIL_LENGTHS else "short"
+    max_b = MAIL_LENGTHS[length][1]
+    reason = "生成AIが未設定のため"
+    if cfg is not None:
+        n = len(rep.get("sources") or [])
+        system = _json_system(cfg.get("provider") == "local")
+        head = f"【レポート】\n題名: {_mail_subject(rep.get('title'))}\n"
+        tail = (f"\n\n【出典番号】[1]〜[{n}]\n\n"
+                f"【指示】上のレポートをもとに、社内向けメール（{MAIL_TONES[tone]}・{MAIL_LENGTHS[length][0]}）の文面を JSON オブジェクトだけで出力してください: "
+                "{\"subject\": \"件名（40字以内）\", \"lead\": [\"冒頭の要約（1文60字以内。末尾に出典番号 [n]）\", …（2〜3件）], "
+                "\"bullets\": [\"要点（1文80字以内。末尾に出典番号 [n]）\", …], \"closing\": \"結び（1文）\"}。"
+                "レポートに無い事実を加えない。社内向けの丁寧語で書く。"
+                + (f"\n想定読者・体裁の指示: {instructions}" if instructions else ""))
+        prompt = head + _fit_tokens(cfg, rep.get("markdown") or "", OUT_MAIL, system, head + tail) + tail
+        opts = {**_quick_opts(cfg), **_step_opts(_budgets(cfg), system, prompt, OUT_MAIL)}
+        st: dict = {}
+        txt, err = _llm_retry(cfg, system, prompt, 1200, opts=opts, cache=True, reuse=True, stats=st)
+        parts = None if err else _mail_from_json(_parse_json_object(txt), rep, tone, max_b)
+        if parts is None and not err and st.get("cached"):   # 保存してあった応答が使えない: 1回だけ作り直す（保存も置き換わる）
+            txt, err = _llm_retry(cfg, system, prompt, 1200, opts=opts, cache=True)
+            parts = None if err else _mail_from_json(_parse_json_object(txt), rep, tone, max_b)
+        if parts:
+            return {**parts, "fallback": False, "reason": ""}
+        reason = (f"生成AIに接続できないため（{err[:80]}）" if err
+                  else "生成AIの応答から出典番号つきの要点を読み取れなかったため")
+    return {**_mail_fallback(rep, tone, max_b), "fallback": True, "reason": reason}
+
+
+def _mail_topic(rep: dict) -> str:
+    """あいさつ文に入れる題: レポートの題名から種類の名前（「概況レポート: 」「Q&A: 」など）を外したもの。"""
+    t = _mail_subject(rep.get("title"))
+    kind, sep, rest = t.partition(": ")
+    return rest.strip() if sep and rest.strip() and kind in set(REPORT_KIND_NAMES.values()) else t
+
+
+def build_mail_text(rep: dict, parts: dict) -> tuple[str, list[int]]:
+    """メール本文（プレーンテキスト）と、本文で引用した出典番号（昇順）を返す。
+    あいさつ（Python）→ 冒頭の要約 → ■ 要点 → 結び → 区切り線 → 出典（引用した番号だけ。[n] 媒体 日付 タイトル＋URL）→ 署名。
+    番号→出典はレポートに保存した出典の控え（引き直さない）。"""
+    tone = parts.get("tone") if parts.get("tone") in MAIL_TONES else "boss"
+    srcs = [s for s in (rep.get("sources") or []) if isinstance(s, dict) and isinstance(s.get("n"), int)]
+    by_n = {s["n"]: s for s in srcs}
+    n = len(rep.get("sources") or [])
+    topic = _mail_topic(rep)
+    # 題に「」が入っている（「高炉」の動向を整理する など）・題が無いときは、かぎかっこを重ねず「標記の件」とする
+    topic = f"「{topic}」" if topic and not re.search(r"[「」『』]", topic) else "標記の件"
+    greet = (f"お疲れさまです。{topic}について、要点を報告します。" if tone == "boss"
+             else f"各位\nお疲れさまです。{topic}について共有します。")
+    lead = [str(x) for x in (parts.get("lead") or [])]
+    bullets = [str(x) for x in (parts.get("bullets") or [])]
+    lines = [greet, ""]
+    if lead:
+        lines += lead + [""]
+    lines += ["■ 要点"] + (["・" + b for b in bullets] or ["・（レポートに出典番号つきの要点がありません。レポート本文をご確認ください）"])
+    lines += ["", str(parts.get("closing") or MAIL_CLOSING[tone])]
+    cited = sorted({int(k) for x in lead + bullets for k in _CITE_RE.findall(x) if 1 <= int(k) <= n and int(k) in by_n})
+    lines += ["", "――――――――――", "出典"]
+    for k in cited:
+        s = by_n[k]
+        lines.append(f"[{k}] " + " ".join(_one_line(s.get(f), 200) for f in ("source", "published", "title") if _one_line(s.get(f))))
+        link = safe_url(_CTRL_RE.sub("", str(s.get("link") or "")))
+        is_doc = str(s.get("id") or "").startswith("doc:")
+        lines.append("    " + (link or ("外部資料（URLなし）" if is_doc else "（URLなし）")))
+    if not cited:
+        lines.append("（引用した出典はありません）")
+    n_art = sum(1 for s in srcs if not str(s.get("id") or "").startswith("doc:"))
+    lines += ["", f"Prism で作成（記事 {n_art} 件・{date.today().isoformat()}）"]
+    return "\n".join(lines) + "\n", cited
+
+
+def build_eml(subject: str, text: str) -> bytes:
+    """.eml（RFC 5322・CRLF）。件名は RFC 2047 で自動的に符号化、本文は UTF-8（base64）。X-Unsent: 1 で Outlook は
+    編集できる下書きとして開く。宛先・差出人・日付は入れない（送信はしない）。"""
+    from email.message import EmailMessage
+    from email import policy as _policy
+    msg = EmailMessage(policy=_policy.SMTP)
+    msg["Subject"] = _mail_subject(subject) or "共有"
+    msg["X-Unsent"] = "1"
+    msg.set_content(text, charset="utf-8", cte="base64")
+    return msg.as_bytes()
 
 
 def _fmt_dt(ts: float) -> str:
@@ -6667,16 +7967,24 @@ def _articles_sheet_rows(arts: list[dict]) -> list[list]:
              {"v": a.get("link") or "", "link": a.get("link") or ""} if a.get("link") else "", (a.get("summary") or "")[:300]] for a in arts]
 
 
-def build_export_xlsx(title: str, question: str, conds: list[str], arts: list[dict], facts: list[dict]) -> bytes:
-    """Excel: 概要 / 記事一覧 / 事実・数値 / 情報源別 / 日付別 / 出典。"""
+def build_export_xlsx(title: str, question: str, conds: list[str], arts: list[dict], facts: list[dict],
+                      sources: list[dict] | None = None) -> bytes:
+    """Excel: 概要 / 記事一覧 / 事実・数値 / 情報源別 / 日付別 / 出典。
+    sources（保存済みレポートの出典一覧）を渡すと、『出典』シートと事実・数値の出典URLはレポートの番号→出典の対応で作る
+    （過去ログから消えた記事も出典には残る）。無ければ arts の並びの番号（1〜）。"""
     by_src: dict[str, int] = {}
     by_day: dict[str, int] = {}
     for a in arts:
         by_src[a.get("source") or ""] = by_src.get(a.get("source") or "", 0) + 1
         d = str(a.get("published") or "")[:10]
         by_day[d] = by_day.get(d, 0) + 1
-    idx = {a["id"]: i + 1 for i, a in enumerate(arts)}
-    link_of = {i + 1: a.get("link") or "" for i, a in enumerate(arts)}
+    if sources:
+        src_rows = [(s.get("n"), str(s.get("published") or "")[:10], s.get("source") or "", s.get("title") or "", s.get("link") or "")
+                    for s in sources if isinstance(s, dict) and isinstance(s.get("n"), int)]
+    else:
+        src_rows = [(i + 1, str(a.get("published") or "")[:10], a.get("source") or "", a.get("title") or "", a.get("link") or "")
+                    for i, a in enumerate(arts)]
+    link_of = {r[0]: r[4] for r in src_rows}
     sheets = [
         {"name": "概要", "columns": [{"title": "項目", "width": 16}, {"title": "内容", "width": 80}], "filter": False,
          "rows": [["タイトル", title], ["問い", question], ["作成", _fmt_dt(time.time())], ["対象記事", len(arts)],
@@ -6696,8 +8004,7 @@ def build_export_xlsx(title: str, question: str, conds: list[str], arts: list[di
          "rows": [[k, v] for k, v in sorted(by_day.items())]},
         {"name": "出典", "columns": [{"title": "番号", "width": 7}, {"title": "日付", "width": 12}, {"title": "媒体", "width": 16},
                                   {"title": "見出し", "width": 60}, {"title": "URL", "width": 40}],
-         "rows": [[idx[a["id"]], str(a.get("published") or "")[:10], a.get("source") or "", a.get("title") or "",
-                   {"v": a.get("link") or "", "link": a.get("link") or ""} if a.get("link") else ""] for a in arts]},
+         "rows": [[n, d, src, t, {"v": lk, "link": lk} if lk else ""] for n, d, src, t, lk in src_rows]},
     ]
     return docgen.build_xlsx(sheets)
 
@@ -6835,6 +8142,9 @@ def _run_export(job_id: str, kind: str, body: dict) -> None:
         with _jobs_lock:
             _jobs[job_id].update(kw)
     try:
+        if kind == "mail":   # 社内共有メールの下書き: 生成AIが未設定でもレポートの本文から作る
+            _export_mail(job_id, body, upd)
+            return
         cfg = ai_config()
         if cfg["provider"] != "local" and not cfg["api_key"]:
             raise RuntimeError("生成AI APIが未設定です")
@@ -6851,8 +8161,7 @@ def _run_export(job_id: str, kind: str, body: dict) -> None:
                 filters = {**f, "sources": _source_names(f.get("sources") or []), "theme": t["name"]}
         if rep is None and not ids:
             raise RuntimeError("対象（保存済みレポート、または記事）を指定してください")
-        unfinished = ("レポートの最終段（文章化）が完了していないため、文書にできません。リサーチでレポートを生成し直し"
-                      "（失敗した直後なら「同じ条件で再実行」）、完成したレポートから書き出してください")
+        unfinished = _EXPORT_UNFINISHED
         if rep and (rep.get("stats") or {}).get("fallback"):
             raise RuntimeError(unfinished)
         if rep is None and kind != "xlsx":   # Word / PowerPoint / PDF はレポートが土台。無ければ先に作る
@@ -6863,7 +8172,19 @@ def _run_export(job_id: str, kind: str, body: dict) -> None:
             _save_report(rep)   # 最終段が失敗しても、抽出した要点はレポートとして残す
             if rep["stats"].get("fallback"):
                 raise RuntimeError(unfinished)
-        arts = _report_fetch(rep["article_ids"] if rep else ids)
+        numbering: list[int] | None = None   # 記事ごとの出典番号（レポートがあればレポートの番号のまま）
+        missing = 0
+        if rep:
+            # レポートの出典一覧（番号→記事）で対応づける。過去ログを引き直した並びで番号を振ると、
+            # 保存の設定で記事が1件消えただけで以降の番号がすべてずれ、事実・数値表が別の記事を引用してしまう
+            by_id = {a["id"]: a for a in _report_fetch(rep["article_ids"])}
+            art_srcs = [s for s in (rep.get("sources") or []) if isinstance(s, dict) and not str(s.get("id") or "").startswith("doc:")]
+            pairs = [(s["n"], by_id[s["id"]]) for s in art_srcs if s.get("id") in by_id and isinstance(s.get("n"), int)]
+            missing = sum(1 for s in art_srcs if s.get("id") not in by_id)
+            arts = [a for _, a in pairs]
+            numbering = [n for n, _ in pairs]
+        else:
+            arts = _report_fetch(ids)
         if not arts:
             raise RuntimeError("対象記事が過去ログに見つかりません")
         question = rep["question"] if rep else (str(body.get("question") or "").strip()[:300] or _default_question(filters))
@@ -6874,7 +8195,7 @@ def _run_export(job_id: str, kind: str, body: dict) -> None:
         slides: list[dict] = []
         if kind in ("docx", "pdf", "xlsx"):
             upd(state="composing", label="事実・数値を抽出中", total=0, done=0)
-            facts = compose_facts(cfg, arts, question, progress=lambda **kw: upd(**kw))
+            facts = compose_facts(cfg, arts, question, progress=lambda **kw: upd(**kw), numbering=numbering)
         if kind in ("docx", "pdf") and rep:
             upd(state="composing", label="エグゼクティブサマリーを作成中", total=0, done=0)
             summary = compose_summary(cfg, rep, instructions)
@@ -6886,7 +8207,8 @@ def _run_export(job_id: str, kind: str, body: dict) -> None:
             upd(state="composing", label="スライド構成を作成中", total=0, done=0)
             slides = compose_slides(cfg, rep, instructions, n_slides)
         upd(state="building", label="ファイルを組み立て中")
-        meta = {"facts": len(facts), "summary": len(summary.get("summary") or []), "slides": len(slides), "articles": len(arts)}
+        meta = {"facts": len(facts), "summary": len(summary.get("summary") or []), "slides": len(slides), "articles": len(arts),
+                "missing": missing}   # missing: レポートの出典のうち過去ログから消えた記事の件数（出典一覧には残る）
         if kind == "docx":
             data = docgen.build_docx(report_doc_model(rep, summary, facts))
         elif kind == "pdf":
@@ -6896,7 +8218,7 @@ def _run_export(job_id: str, kind: str, body: dict) -> None:
             data = docgen.build_pdf(report_doc_model(rep, summary, facts), fp)
             meta["font"] = os.path.basename(fp)
         elif kind == "xlsx":
-            data = build_export_xlsx(title, question, conds, arts, facts)
+            data = build_export_xlsx(title, question, conds, arts, facts, rep.get("sources") if rep else None)
         else:
             data = build_export_pptx(rep, slides, arts)
         _, ext, _ = EXPORT_KINDS[kind]
@@ -6908,10 +8230,40 @@ def _run_export(job_id: str, kind: str, body: dict) -> None:
         upd(state="error", error=f"{type(e).__name__}: {str(e)[:200]}")
 
 
+def _export_mail(job_id: str, body: dict, upd) -> None:
+    """書き出しジョブの「メール下書き」: 保存済みレポート → 文面（LLM、使えなければレポートの本文から）→ 本文・出典 → .eml。"""
+    cfg = ai_config()
+    ready = cfg["provider"] == "local" or bool(cfg["api_key"])   # 未設定なら LLM を呼ばない
+    rep = get_report(str(body.get("report_id") or ""))
+    if not rep:
+        raise RuntimeError("対象のレポートが見つかりません（削除された可能性があります）")
+    if (rep.get("stats") or {}).get("fallback"):
+        raise RuntimeError(_EXPORT_UNFINISHED)
+    tone = body.get("tone") if body.get("tone") in MAIL_TONES else "boss"
+    length = body.get("length") if body.get("length") in MAIL_LENGTHS else "short"
+    instructions = str(body.get("instructions") or "").strip()[:300]
+    upd(state="composing", label="メールの文面を作成中", total=0, done=0)
+    parts = compose_mail(cfg if ready else None, rep, tone, length, instructions)
+    upd(state="building", label="メールを組み立て中")
+    text, cited = build_mail_text(rep, {**parts, "tone": tone})
+    data = build_eml(parts["subject"], text)
+    n_art = sum(1 for x in (rep.get("sources") or []) if isinstance(x, dict) and not str(x.get("id") or "").startswith("doc:"))
+    meta = {"subject": parts["subject"], "text": text, "cited": cited, "fallback": bool(parts["fallback"]),
+            "articles": n_art, "tone": tone, "length": length}
+    if parts["fallback"]:
+        meta["note"] = f"⚠ {parts.get('reason') or '生成AIを使えないため'}、レポートの本文から作成しました（要点と出典番号はレポートのまま）"
+    row = {"id": job_id, "created_at": time.time(), "kind": "mail", "title": rep["title"][:80], "filename": job_id + ".eml",
+           "bytes": len(data), "report_id": rep["id"], "instructions": instructions, "meta": meta}
+    _save_export(row, data)
+    upd(state="done", export={**row, "kind_name": EXPORT_KINDS["mail"][0]}, report_id=rep["id"])
+
+
 def start_export_job(body: dict) -> dict:
     kind = body.get("kind")
     if kind not in EXPORT_KINDS:
-        return {"ok": False, "error": "kind は docx / xlsx / pptx / pdf のいずれかです"}
+        return {"ok": False, "error": "kind は docx / xlsx / pptx / pdf / mail のいずれかです"}
+    if kind == "mail" and not (isinstance(body.get("report_id"), str) and body["report_id"].strip()):
+        return {"ok": False, "error": MAIL_NEED_REPORT}   # 記事やテーマからは作らない（先にレポートか Q&A を保存）
     has_src = bool(body.get("report_id") or (isinstance(body.get("ids"), list) and body["ids"]) or body.get("theme_id"))
     if not has_src:
         return {"ok": False, "error": "対象（保存済みレポート・選択記事・テーマ）を指定してください"}
@@ -6922,11 +8274,17 @@ def start_export_job(body: dict) -> dict:
     return {"ok": True, "job_id": job_id, "kind": kind}
 
 
+_MAIL_INTENT_RE = r"メール(?!マガジン|アドレス)|e-?mail"   # メールマガジン・メールアドレスは除く
+
+
 def detect_export_intent(text: str) -> dict | None:
     """会話文から「〜を pptx にして」のような書き出し意図を拾う（形式と指示）。該当しなければ None。"""
     t = str(text or "")
-    kinds = [("pptx", r"pptx|パワポ|パワーポイント|powerpoint|スライド|プレゼン"), ("xlsx", r"xlsx|excel|エクセル|スプレッドシート|表計算"),
+    kinds = [("mail", _MAIL_INTENT_RE),   # 社内共有メールの下書き（最初に判定。「この内容をメールにして」）
+             ("pptx", r"pptx|パワポ|パワーポイント|powerpoint|スライド|プレゼン"), ("xlsx", r"xlsx|excel|エクセル|スプレッドシート|表計算"),
              ("docx", r"docx|word|ワード(?!プレス)"), ("pdf", r"pdf")]
+    if re.search(r"(?:" + _MAIL_INTENT_RE + r")の?(?:下書き|文面)", t, re.I):   # 「メールの下書き」「メール文面」は依頼の言い回しが無くても
+        return {"kind": "mail", "instructions": t[:300]}
     if not re.search(r"にして|に変換|で出力|で書き出|書き出し|作って|作成|生成|エクスポート|出して|化して|にまとめ", t, re.I):
         return None
     for k, pat in kinds:
@@ -7085,6 +8443,13 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _host_ok(self) -> bool:
+        """Host ヘッダがループバック（127.0.0.1 / localhost / ::1）か。それ以外は DNS リバインディング
+        （攻撃者のドメインを 127.0.0.1 に向け直して、ブラウザからこのサーバーを読ませる）とみなす。"""
+        host = self.headers.get("Host", "")
+        hostname = host.rsplit(":", 1)[0].strip("[]").lower()
+        return hostname in ("127.0.0.1", "localhost", "::1")
+
     def _same_origin(self) -> bool:
         """ブラウザからのクロスサイト書き込み(CSRF)を弾く。
 
@@ -7092,8 +8457,7 @@ class Handler(BaseHTTPRequestHandler):
         ループバックに固定し DNS リバインディングを防ぐ。
         ヘッダの無い非ブラウザ(curl 等)は許可する。"""
         host = self.headers.get("Host", "")
-        hostname = host.rsplit(":", 1)[0].strip("[]").lower()
-        if hostname not in ("127.0.0.1", "localhost", "::1"):
+        if not self._host_ok():
             return False   # 127.0.0.1 以外の Host はブラウザ経由の DNS リバインディング等
         for h in (self.headers.get("Origin"), self.headers.get("Referer")):
             if h and urlparse(h).netloc != host:
@@ -7143,6 +8507,12 @@ class Handler(BaseHTTPRequestHandler):
 
         if u.path in ("/favicon.ico", "/manifest.webmanifest") or u.path.startswith("/icons/"):
             self._send_icon(u.path)
+            return
+
+        if u.path.startswith("/api/") and not self._host_ok():
+            # 読み取りの API も Host をループバックに限る（DNS リバインディングで攻撃者のページが
+            # レポート・過去ログ・設定を読めないように）。画面（/・/index.html）とアイコンはそのまま返す
+            self._json({"error": "host not allowed"}, 403)
             return
 
         if u.path == "/api/articles":
@@ -7552,6 +8922,41 @@ class Handler(BaseHTTPRequestHandler):
 
         if u.path == "/api/research/report":  # レポート生成ジョブの開始（非同期・進捗は status で）
             r = start_report_job(self._read_body())
+            self._json(r, 200 if r.get("ok") else 400)
+            return
+
+        if u.path == "/api/research/ask":  # 根拠つき会話（出典 [n]）のジョブ開始（非同期・進捗と回答は report/status で）
+            r = start_ask_job(self._read_body())
+            self._json(r, 200 if r.get("ok") else 400)
+            return
+
+        if u.path == "/api/research/qa/save":  # 会話の回答を Q&A レポートとして保存（書き出しの元にできる）
+            r = save_qa(str(self._read_body().get("job_id") or ""))
+            self._json({"ok": True, "report": r} if r else {"ok": False, "error": QA_GONE_MSG}, 200 if r else 404)
+            return
+
+        if u.path == "/api/research/aliases":  # 取引先の別表記の候補（件数つき。ai=true なら生成AIにも聞く。未設定でも答える）
+            body = self._read_body()
+            try:
+                self._json(resolve_aliases(body.get("name"), body.get("days"), body.get("ai") is True))
+            except ValueError as e:
+                self._json({"ok": False, "error": str(e)}, 400)
+            return
+
+        if u.path == "/api/research/account-brief":  # 商談前ブリーフ（取引先ブリーフ）のジョブ開始（進捗は report/status で）
+            r = start_account_brief(self._read_body())
+            self._json(r, 200 if r.get("ok") else 400)
+            return
+
+        if u.path == "/api/research/change":  # 変化の集計（今期 vs 前期／前年同期・件数・語・収集の空白日。生成AIは使わない）
+            try:
+                self._json(change_summary(self._read_body()))
+            except ValueError as e:
+                self._json({"ok": False, "error": str(e)}, 400)
+            return
+
+        if u.path == "/api/research/change/report":  # 変化ブリーフ（出典つき・集計表つき）のジョブ開始（進捗は report/status で）
+            r = start_change_report(self._read_body())
             self._json(r, 200 if r.get("ok") else 400)
             return
 
