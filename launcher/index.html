@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>App Portal — for_eigyo / claudecode</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230e1524'/%3E%3Crect x='6' y='6' width='8' height='8' rx='2' fill='%236d8dff'/%3E%3Crect x='18' y='6' width='8' height='8' rx='2' fill='%2338d3ff'/%3E%3Crect x='6' y='18' width='8' height='8' rx='2' fill='%2338d3ff'/%3E%3Crect x='18' y='18' width='8' height='8' rx='2' fill='%2334d399'/%3E%3C/svg%3E">
 <style>
   :root{
     --bg:#0b0f1a; --bg2:#0e1524; --card:#121a2c; --card2:#16203a;
@@ -42,9 +43,47 @@
   .btn.ghost{background:transparent}
   .btn.danger{border-color:rgba(251,113,133,.35); color:#ffb3c0}
   .btn:disabled{opacity:.5; cursor:default; transform:none; box-shadow:none}
+  .btn.on{border-color:rgba(56,211,255,.6); box-shadow:0 0 0 3px rgba(56,211,255,.15)}
+  [hidden]{display:none !important}
+  .brand-row{display:flex; align-items:baseline; gap:10px}
+  .pver{font:600 12px/1 ui-monospace,Consolas,monospace; color:#7f8bb0; padding:4px 8px;
+    border:1px solid var(--line); border-radius:999px}
+  .hdr-actions{display:flex; gap:10px; flex-wrap:wrap}
+
+  /* ---------- 配置の編集バー ---------- */
+  .editbar{display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
+    margin:-14px 0 24px; padding:12px 14px 12px 18px; border-radius:16px;
+    background:linear-gradient(90deg, rgba(79,109,245,.16), rgba(55,182,240,.10));
+    border:1px solid rgba(109,141,255,.35); animation:fadeIn .2s both}
+  .eb-hint{font-size:12.5px; color:#c9d5ff; line-height:1.7}
+  .eb-hint kbd{font:600 11px ui-monospace,Consolas,monospace; padding:1px 6px; border-radius:5px;
+    border:1px solid rgba(148,163,255,.35); background:rgba(10,14,26,.5)}
+  .eb-actions{display:flex; gap:8px; flex-wrap:wrap}
+
+  /* ---------- グループ ---------- */
+  #board{display:flex; flex-direction:column; gap:30px}
+  #board.editing{user-select:none; -webkit-user-select:none}
+  .ghead{display:flex; align-items:center; gap:10px; margin:0 2px 14px; color:#aab6da;
+    font-size:13px; font-weight:700; letter-spacing:.06em}
+  .ghead::after{content:""; flex:1; height:1px; background:linear-gradient(90deg, rgba(148,163,255,.25), transparent)}
+  .ghead.edit::after{display:none}
+  .gcount{font:600 11px/1 ui-monospace,Consolas,monospace; color:#7f8bb0; padding:3px 7px;
+    border:1px solid var(--line); border-radius:999px; letter-spacing:0}
+  .ghead.edit{flex-wrap:wrap}
+  .gname-in{flex:1 1 140px; min-width:0; max-width:340px; background:#0a0e1a; border:1px solid var(--line); color:var(--text);
+    border-radius:10px; padding:8px 12px; font-size:14px; font-weight:700; outline:none}
+  .gname-in:focus{border-color:rgba(109,141,255,.6)}
+  .gtools{display:flex; gap:6px; margin-left:auto}
+  .gtools .icon-btn{opacity:1}
+  .icon-btn:disabled{opacity:.3 !important; cursor:default}
+  #board.editing .grid{min-height:140px; padding:12px; border:1.5px dashed rgba(148,163,255,.22);
+    border-radius:20px; background:rgba(109,141,255,.03)}
+  .drop-hint{grid-column:1/-1; display:grid; place-items:center; min-height:110px; color:#5f6a8c; font-size:13px}
+  .card ~ .drop-hint{display:none}
+  #hidden-note{margin-top:22px; text-align:center; font-size:12.5px; color:#7f8bb0}
 
   /* ---------- cards ---------- */
-  .grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:22px}
+  .grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(min(320px,100%),1fr)); gap:22px}
   .card{
     position:relative; border-radius:var(--r); background:linear-gradient(180deg,var(--card2),var(--card));
     border:1px solid var(--line); overflow:hidden; cursor:pointer;
@@ -85,6 +124,35 @@
   .badge.starting .dot{background:var(--warn); animation:pulse .9s infinite}
   .badge.link .dot{background:var(--acc2)}
   @keyframes pulse{0%,100%{transform:scale(1); opacity:1}50%{transform:scale(1.45); opacity:.55}}
+  /* 編集モードのカード */
+  #board.editing .card{cursor:grab; animation:none; touch-action:none}
+  #board.editing .card:focus-visible{outline:2px solid var(--acc2); outline-offset:3px}
+  #board.editing .mini, #board.editing .go{visibility:hidden}
+  .grip, .eye{position:absolute; top:12px; z-index:3; width:32px; height:32px; display:grid; place-items:center;
+    border-radius:9px; background:rgba(10,14,26,.62); border:1px solid rgba(255,255,255,.16);
+    color:#cfe0ff; font-size:15px; backdrop-filter:blur(6px)}
+  .grip{left:12px; letter-spacing:-2px}
+  .eye{left:50px; cursor:pointer; transition:.15s}
+  .eye:hover{border-color:rgba(56,211,255,.6); color:#fff}
+  .hidden-tag{position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); z-index:3;
+    padding:6px 14px; border-radius:999px; background:rgba(10,14,26,.78); font-size:12px;
+    color:#ffd1d9; border:1px solid rgba(251,113,133,.45)}
+  .card.is-hidden .art > svg, .card.is-hidden .body{opacity:.4; filter:grayscale(.6)}
+  .card.placeholder{background:rgba(109,141,255,.06); border:2px dashed rgba(109,141,255,.6); box-shadow:none}
+  .card.placeholder > *{visibility:hidden}
+  .card.ghost{position:fixed; z-index:80; pointer-events:none; margin:0; animation:none;
+    transform:rotate(1.2deg) scale(1.03); box-shadow:0 30px 80px rgba(0,0,0,.6), 0 0 0 1px rgba(109,141,255,.55)}
+  body.dragging, body.dragging *{cursor:grabbing !important}
+
+  /* バージョン表示 */
+  .meta{display:flex; align-items:center; gap:8px; margin-top:8px; flex-wrap:wrap}
+  .ver{font:700 11px/1 ui-monospace,Consolas,monospace; letter-spacing:.02em; padding:4px 8px; border-radius:999px;
+    color:#bfe6ff; background:rgba(56,211,255,.10); border:1px solid rgba(56,211,255,.3)}
+  .ver.none{font-family:inherit; font-weight:600; color:#7f8bb0; background:transparent; border-color:var(--line)}
+  .upd{font-size:11px; color:#6c789c}
+  .upd.fresh{color:#8ef0c4}
+  .upd.fresh::before{content:"● "; font-size:9px}
+
   .body{padding:18px 20px 16px}
   .body h3{font-size:17.5px; font-weight:750; letter-spacing:.01em}
   .body p{color:var(--dim); font-size:13px; line-height:1.75; margin-top:7px; min-height:44px}
@@ -151,12 +219,27 @@
   }
   #confetti{position:fixed; inset:0; z-index:60; pointer-events:none}
 
-  /* ---------- add modal ---------- */
-  #modal{position:fixed; inset:0; z-index:55; display:none; align-items:center; justify-content:center;
+  /* ---------- modals ---------- */
+  .modalwrap{position:fixed; inset:0; z-index:55; display:none; align-items:center; justify-content:center;
     background:rgba(6,9,18,.7); backdrop-filter:blur(10px)}
-  #modal.show{display:flex; animation:fadeIn .2s both}
+  .modalwrap.show{display:flex; animation:fadeIn .2s both}
   .mpanel{width:min(600px,94vw); max-height:90vh; overflow:auto; border-radius:22px; padding:30px 32px;
     background:linear-gradient(180deg,#141d33,#0e1424); border:1px solid rgba(148,163,255,.22)}
+  .mpanel.wide{width:min(900px,94vw)}
+  .vwrap{overflow-x:auto}
+  .vtable{width:100%; border-collapse:collapse; font-size:13px}
+  .vtable th{text-align:left; font-size:11.5px; color:#8b96b8; font-weight:600; padding:8px 10px;
+    border-bottom:1px solid var(--line); letter-spacing:.04em; white-space:nowrap}
+  .vtable td{padding:9px 10px; border-bottom:1px solid rgba(148,163,255,.07); vertical-align:top}
+  .vtable .mono{font-family:ui-monospace,Consolas,monospace; white-space:nowrap}
+  .vtable .src{color:#6c789c; font-size:11.5px; word-break:break-all}
+  .vtable td.fresh{color:#8ef0c4}
+  .vtable .dim{color:#5f6a8c}
+  #toast{position:fixed; left:50%; bottom:28px; z-index:90; transform:translate(-50%,16px); opacity:0;
+    transition:.25s; pointer-events:none; background:#141d33; border:1px solid rgba(148,163,255,.3);
+    padding:10px 18px; border-radius:12px; font-size:13px; box-shadow:0 14px 40px rgba(0,0,0,.45)}
+  #toast.show{opacity:1; transform:translate(-50%,0)}
+  #toast.err{border-color:rgba(251,113,133,.6); color:#ffc2cc}
   .mpanel h2{font-size:19px; margin-bottom:4px}
   .mpanel .hint{color:var(--dim); font-size:12.5px; line-height:1.7; margin-bottom:18px}
   .field{margin-bottom:14px; text-align:left}
@@ -182,19 +265,60 @@
 <div class="wrap">
   <header>
     <div class="brand">
-      <h1>App Portal</h1>
+      <div class="brand-row"><h1>App Portal</h1><span class="pver" id="portal-ver" title="App Portal のバージョン"></span></div>
       <p>for_eigyo / claudecode で作ったアプリを、ここからワンクリックで起動する窓口</p>
     </div>
-    <button class="btn" id="btn-add">＋ アプリを追加</button>
+    <div class="hdr-actions">
+      <button class="btn" id="btn-versions" title="各アプリのバージョンと最終更新日">ⓘ バージョン一覧</button>
+      <button class="btn" id="btn-edit" title="カードの並び替え・グループ分け・非表示">✥ 配置を編集</button>
+      <button class="btn" id="btn-add">＋ アプリを追加</button>
+    </div>
   </header>
 
-  <div class="grid" id="grid"></div>
+  <div class="editbar" id="editbar" hidden>
+    <span class="eb-hint">
+      カードを<b>ドラッグ</b>して並べ替え・グループ間を移動できます。<b>👁</b> で表示 / 非表示。<br>
+      キーボード: カードを選んで <kbd>←</kbd><kbd>→</kbd> で移動、<kbd>↑</kbd><kbd>↓</kbd> で前後のグループへ、<kbd>H</kbd> で非表示。配置は自動で保存されます。
+    </span>
+    <span class="eb-actions">
+      <button class="btn ghost" id="btn-addgroup">＋ グループを追加</button>
+      <button class="btn ghost" id="btn-reset">初期配置に戻す</button>
+      <button class="btn primary" id="btn-done">完了</button>
+    </span>
+  </div>
+
+  <div id="board"></div>
+  <div id="hidden-note"></div>
 
   <footer>
-    アプリの登録は上の「＋ アプリを追加」か、<code>launcher/apps.json</code> を直接編集。<br>
+    アプリの登録は上の「＋ アプリを追加」か、<code>launcher/apps.json</code> を直接編集。
+    配置は <code>launcher/layout.json</code> に保存されます（git 管理外）。<br>
     起動プロセスはこのポータル終了（Ctrl+C）時にまとめて停止されます。
   </footer>
 </div>
+
+<!-- バージョン一覧 -->
+<div id="vmodal" class="modalwrap">
+  <div class="mpanel wide" role="dialog" aria-labelledby="v-title">
+    <h2 id="v-title">バージョン一覧</h2>
+    <p class="hint">
+      各アプリのパッケージフォルダ（pyproject.toml・__init__.py の __version__ など）から読み取った値です。
+      「最終更新」はそのフォルダを最後に変更した git コミットの日付で、<span style="color:#8ef0c4">●</span> は14日以内に更新されたもの。<br>
+      <code>git pull</code> などで更新したあとは「再読み込み」を押してください。
+    </p>
+    <div class="vwrap">
+      <table class="vtable">
+        <thead><tr><th>アプリ</th><th>バージョン</th><th>最終更新</th><th>取得元</th></tr></thead>
+        <tbody id="vbody"></tbody>
+      </table>
+    </div>
+    <div class="mrow">
+      <button class="btn ghost" id="v-reload">↻ 再読み込み</button>
+      <button class="btn primary" id="v-close">閉じる</button>
+    </div>
+  </div>
+</div>
+<div id="toast" role="status" aria-live="polite"></div>
 
 <!-- 起動オーバーレイ -->
 <div id="overlay">
@@ -219,7 +343,7 @@
 <canvas id="confetti"></canvas>
 
 <!-- アプリ追加モーダル -->
-<div id="modal">
+<div id="modal" class="modalwrap">
   <div class="mpanel">
     <h2>アプリを追加</h2>
     <p class="hint">
@@ -236,6 +360,8 @@
       <div class="sub">launcher/ フォルダ起点の相対パス、または絶対パス</div></div>
     <div class="field"><label>待機ポート</label><input id="f-port" placeholder="8501">
       <div class="sub">このポートが応答したら「起動完了」と判定する</div></div>
+    <div class="field"><label>バージョン情報ファイル（任意）</label><input id="f-ver" placeholder="mypkg/__init__.py">
+      <div class="sub">通常は自動検出（pyproject.toml・__version__ など）。うまく読めないときだけ、作業フォルダ起点で指定</div></div>
     <div class="field"><label>入り口イメージ</label><div class="icons" id="f-icons"></div></div>
     <div id="madd-err"></div>
     <div class="mrow">
@@ -920,59 +1046,159 @@ const artOf = (icon) => (ART[icon] || ART.terminal)(++artSeq);
 })();
 
 /* ================================================================
-   カード描画
+   カード描画（並び順・グループ・非表示は layout.json に保存）
    ================================================================ */
-const grid = document.getElementById("grid");
+const board = document.getElementById("board");
+const hiddenNote = document.getElementById("hidden-note");
+const portalVer = document.getElementById("portal-ver");
+const MAIN = "_main";               // どのグループにも入っていないアプリの置き場
+const FRESH_DAYS = 14;
 let apps = [];
+let layout = {groups: [], hidden: []};
+let editMode = false;
+let drag = null;
+let lastSnap = null;
 
 const STATE_LABEL = { running:"起動中", starting:"準備中", stopped:"停止中", link:"リンク" };
-
-function render() {
-  grid.innerHTML = "";
-  if (!apps.length) {
-    grid.innerHTML = '<div class="empty">アプリが未登録です。「＋ アプリを追加」から登録してください。</div>';
-    return;
-  }
-  apps.forEach((app, i) => {
-    const card = document.createElement("div");
-    card.className = "card";
-    card.style.animationDelay = (i * 70) + "ms";
-    card.innerHTML = `
-      <div class="shine"></div>
-      <div class="art">${artOf(app.icon)}
-        <div class="badge ${app.state}"><span class="dot"></span>${STATE_LABEL[app.state] || app.state}</div>
-      </div>
-      <div class="body">
-        <h3>${esc(app.name)}</h3>
-        <p>${esc(app.description || "")}</p>
-        <div class="foot">
-          <span class="go">${app.state === "running" || app.state === "link" ? "開く" : "起動して開く"} <span class="arrow">→</span></span>
-          <span class="mini">
-            ${app.command && app.state === "running" ? '<button class="icon-btn stop" title="停止" data-act="stop">■</button>' : ""}
-            <button class="icon-btn" title="登録を削除" data-act="del">✕</button>
-          </span>
-        </div>
-      </div>`;
-    card.addEventListener("click", (e) => {
-      const act = e.target.closest("[data-act]")?.dataset.act;
-      if (act === "stop") { e.stopPropagation(); stopApp(app); return; }
-      if (act === "del")  { e.stopPropagation(); delApp(app); return; }
-      openApp(app);
-    });
-    // ホバーチルト
-    card.addEventListener("mousemove", (e) => {
-      const r = card.getBoundingClientRect();
-      const px = (e.clientX - r.left) / r.width, py = (e.clientY - r.top) / r.height;
-      card.style.transform = `perspective(900px) rotateY(${(px-.5)*5}deg) rotateX(${(.5-py)*4}deg) translateY(-3px)`;
-      card.style.setProperty("--mx", px*100+"%"); card.style.setProperty("--my", py*100+"%");
-    });
-    card.addEventListener("mouseleave", () => card.style.transform = "");
-    if (app.previews && app.previews.length) setupPreview(card, app.previews);
-    grid.appendChild(card);
-  });
-}
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c =>
   ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmtVer = (s) => /^v/i.test(s) ? s : "v" + s;
+const isFresh = (d) => !!d && (Date.now() - Date.parse(d)) / 864e5 <= FRESH_DAYS;
+const appMap = () => new Map(apps.map(a => [a.id, a]));
+
+/* layout.json + 登録アプリ → 表示するグループ列（新しく登録されたアプリは「その他」の末尾へ） */
+function resolveGroups() {
+  const known = new Set(apps.map(a => a.id));
+  const placed = new Set();
+  const groups = (layout.groups || []).map(g => {
+    const ids = (g.apps || []).filter(id => known.has(id) && !placed.has(id));
+    ids.forEach(id => placed.add(id));
+    return {id: g.id, name: g.name || "", apps: ids};
+  });
+  let main = groups.find(g => g.id === MAIN);
+  if (!main) { main = {id: MAIN, name: "", apps: []}; groups.push(main); }
+  apps.forEach(a => { if (!placed.has(a.id)) main.apps.push(a.id); });
+  return groups;
+}
+
+function versionMeta(v) {
+  v = v || {};
+  const tip = [
+    v.source ? `取得元: ${v.source}` : "パッケージにバージョン情報が見つかりません（apps.json の version_from で指定できます）",
+    v.updated ? `最終更新: ${v.updated}（このフォルダの最後の git コミット）` : "",
+  ].filter(Boolean).join("\n");
+  const chip = v.version
+    ? `<span class="ver">${esc(fmtVer(v.version))}</span>`
+    : `<span class="ver none">版数なし</span>`;
+  const upd = v.updated ? `<span class="upd ${isFresh(v.updated) ? "fresh" : ""}">${esc(v.updated)} 更新</span>` : "";
+  return `<div class="meta" title="${esc(tip)}">${chip}${upd}</div>`;
+}
+
+function render() {
+  const map = appMap();
+  const hidden = new Set(layout.hidden || []);
+  const groups = resolveGroups();
+  const named = groups.length > 1 || groups.some(g => g.name);
+  board.innerHTML = "";
+  board.classList.toggle("editing", editMode);
+  if (!apps.length) {
+    board.innerHTML = '<div class="empty">アプリが未登録です。「＋ アプリを追加」から登録してください。</div>';
+    hiddenNote.textContent = "";
+    return;
+  }
+  let n = 0;
+  groups.forEach((g, gi) => {
+    const ids = g.apps.filter(id => editMode || !hidden.has(id));
+    if (!editMode && !ids.length) return;
+    const sec = document.createElement("section");
+    sec.className = "group";
+    sec.dataset.gid = g.id;
+    if (editMode) {
+      sec.innerHTML = `<div class="ghead edit">
+        <input class="gname-in" value="${esc(g.name)}" maxlength="40" aria-label="グループ名"
+          placeholder="${g.id === MAIN ? "その他（名前は任意）" : "グループ名"}">
+        <span class="gcount">${ids.length}</span>
+        <span class="gtools">
+          <button class="icon-btn" data-gact="up" title="グループを上へ" ${gi === 0 ? "disabled" : ""}>▲</button>
+          <button class="icon-btn" data-gact="down" title="グループを下へ" ${gi === groups.length - 1 ? "disabled" : ""}>▼</button>
+          ${g.id === MAIN ? "" : '<button class="icon-btn stop" data-gact="del" title="グループを削除（中のアプリは「その他」へ）">🗑</button>'}
+        </span></div>`;
+    } else if (named) {
+      sec.innerHTML = `<div class="ghead"><span class="gname">${esc(g.name || (g.id === MAIN ? "その他" : "グループ"))}</span>
+        <span class="gcount">${ids.length}</span></div>`;
+    }
+    const gridEl = document.createElement("div");
+    gridEl.className = "grid";
+    gridEl.dataset.gid = g.id;
+    ids.forEach(id => gridEl.appendChild(makeCard(map.get(id), n++, hidden.has(id))));
+    if (editMode) {
+      const hint = document.createElement("div");
+      hint.className = "drop-hint";
+      hint.textContent = "ここにカードをドラッグ";
+      gridEl.appendChild(hint);
+    }
+    sec.appendChild(gridEl);
+    board.appendChild(sec);
+  });
+  const nh = apps.filter(a => hidden.has(a.id)).length;
+  hiddenNote.textContent = !editMode && nh
+    ? `非表示のアプリが ${nh} 件あります — 「✥ 配置を編集」で再表示できます` : "";
+}
+
+function makeCard(app, i, isHidden) {
+  const card = document.createElement("div");
+  card.className = "card" + (isHidden ? " is-hidden" : "");
+  card.dataset.id = app.id;
+  card.style.animationDelay = (i * 45) + "ms";
+  if (editMode) {
+    card.tabIndex = 0;
+    card.setAttribute("aria-label", `${app.name}（← → で移動、↑ ↓ でグループ移動、H で非表示）`);
+  }
+  card.innerHTML = `
+    <div class="shine"></div>
+    <div class="art">${artOf(app.icon)}
+      <div class="badge ${app.state}"><span class="dot"></span>${STATE_LABEL[app.state] || app.state}</div>
+      ${editMode ? `<span class="grip" aria-hidden="true">⠿</span>
+        <button class="eye" data-act="hide" title="${isHidden ? "表示する" : "非表示にする"}">${isHidden ? "🙈" : "👁"}</button>` : ""}
+      ${isHidden ? '<span class="hidden-tag">非表示</span>' : ""}
+    </div>
+    <div class="body">
+      <h3>${esc(app.name)}</h3>
+      ${versionMeta(app.version)}
+      <p>${esc(app.description || "")}</p>
+      <div class="foot">
+        <span class="go">${app.state === "running" || app.state === "link" ? "開く" : "起動して開く"} <span class="arrow">→</span></span>
+        <span class="mini">
+          ${app.command && app.state === "running" ? '<button class="icon-btn stop" title="停止" data-act="stop">■</button>' : ""}
+          <button class="icon-btn" title="登録を削除" data-act="del">✕</button>
+        </span>
+      </div>
+    </div>`;
+  card.addEventListener("click", (e) => {
+    const act = e.target.closest("[data-act]")?.dataset.act;
+    if (act === "hide") { e.stopPropagation(); toggleHidden(app.id); return; }
+    if (editMode) return;                       // 編集中は起動しない
+    if (act === "stop") { e.stopPropagation(); stopApp(app); return; }
+    if (act === "del")  { e.stopPropagation(); delApp(app); return; }
+    openApp(app);
+  });
+  card.addEventListener("keydown", (e) => {
+    if (!editMode || e.target !== card) return;
+    if (e.key.startsWith("Arrow")) { e.preventDefault(); moveByKey(app.id, e.key); }
+    else if (e.key === "h" || e.key === "H") { e.preventDefault(); toggleHidden(app.id); }
+  });
+  // ホバーチルト（編集中は無効）
+  card.addEventListener("mousemove", (e) => {
+    if (editMode) return;
+    const r = card.getBoundingClientRect();
+    const px = (e.clientX - r.left) / r.width, py = (e.clientY - r.top) / r.height;
+    card.style.transform = `perspective(900px) rotateY(${(px-.5)*5}deg) rotateX(${(.5-py)*4}deg) translateY(-3px)`;
+    card.style.setProperty("--mx", px*100+"%"); card.style.setProperty("--my", py*100+"%");
+  });
+  card.addEventListener("mouseleave", () => card.style.transform = "");
+  if (!editMode && app.previews && app.previews.length) setupPreview(card, app.previews);
+  return card;
+}
 
 /* ホバーで実画面のスクリーンショットをGIF風に流す */
 const PV_DELAY = 450;      // ホバーからプレビュー開始まで
@@ -1013,17 +1239,318 @@ function setupPreview(card, frames) {
   });
 }
 
-async function refresh(rerender = true) {
+async function refresh(force = false, fresh = false) {
   try {
-    const r = await fetch("/api/apps");
-    const data = await r.json();
-    const prev = JSON.stringify(apps);
+    const data = await (await fetch("/api/apps" + (fresh ? "?fresh=1" : ""))).json();
+    if (data.portal && data.portal.version) portalVer.textContent = "v" + data.portal.version;
+    if (editMode || drag) return;               // 編集中は手元の配置を優先して描き直さない
+    const snap = JSON.stringify([data.apps, data.layout]);
+    if (!force && snap === lastSnap) return;
+    lastSnap = snap;
     apps = data.apps || [];
-    if (rerender && JSON.stringify(apps) !== prev) render();
+    layout = data.layout || {groups: [], hidden: []};
+    render();
+    if (vmodal.classList.contains("show")) renderVersions();
   } catch {}
 }
-setInterval(() => { if (!ovShown) refresh(); }, 4000);
+setInterval(() => { if (!ovShown && !editMode) refresh(); }, 4000);
 refresh();
+
+/* ================================================================
+   配置の編集（グループ・並べ替え・非表示）
+   ================================================================ */
+const btnEdit = document.getElementById("btn-edit");
+const editbar = document.getElementById("editbar");
+const toastEl = document.getElementById("toast");
+let toastTimer = null, saveTimer = null;
+
+function toast(msg, isErr = false) {
+  toastEl.textContent = msg;
+  toastEl.classList.toggle("err", isErr);
+  toastEl.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.remove("show"), isErr ? 4500 : 1400);
+}
+
+function setEdit(on) {
+  if (on === editMode) return;
+  editMode = on;
+  btnEdit.classList.toggle("on", on);
+  btnEdit.textContent = on ? "✓ 編集を終了" : "✥ 配置を編集";
+  editbar.hidden = !on;
+  render();
+  if (!on) { lastSnap = null; refresh(true); }
+}
+btnEdit.addEventListener("click", () => setEdit(!editMode));
+document.getElementById("btn-done").addEventListener("click", () => setEdit(false));
+
+/* 編集中の DOM から配置を読み取る（DOM が正。描き直し前に必ずこれで最新化する） */
+function layoutFromDOM() {
+  const groups = [...board.querySelectorAll("section.group")].map(sec => ({
+    id: sec.dataset.gid,
+    name: (sec.querySelector(".gname-in")?.value || "").trim(),
+    apps: [...sec.querySelectorAll(":scope > .grid > .card[data-id]")].map(c => c.dataset.id),
+  }));
+  return {groups, hidden: [...(layout.hidden || [])]};
+}
+
+function saveLayout(next, quiet = false) {
+  layout = next;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    try {
+      const r = await fetch("/api/layout", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(layout),
+      });
+      const res = await r.json();
+      if (!res.ok) throw new Error(res.error || r.status);
+      if (!quiet) toast("✓ 配置を保存しました");
+    } catch (e) {
+      toast("配置を保存できませんでした: " + e.message, true);
+    }
+  }, 250);
+}
+
+function updateCounts() {
+  board.querySelectorAll("section.group").forEach(sec => {
+    const c = sec.querySelector(".gcount");
+    if (c) c.textContent = sec.querySelectorAll(":scope > .grid > .card[data-id]").length;
+  });
+}
+
+function focusCard(id) {
+  board.querySelector(`.card[data-id="${CSS.escape(id)}"]`)?.focus({preventScroll: false});
+}
+
+/* 位置の変化をアニメーションで見せる（FLIP）。描き直しをまたいでも data-id で対応づける */
+function flip(mutate) {
+  const before = new Map([...board.querySelectorAll(".card[data-id]")]
+    .map(c => [c.dataset.id, c.getBoundingClientRect()]));
+  mutate();
+  board.querySelectorAll(".card[data-id]").forEach(c => {
+    if (c.classList.contains("placeholder")) return;
+    const a = before.get(c.dataset.id);
+    if (!a) return;
+    const b = c.getBoundingClientRect();
+    const dx = a.left - b.left, dy = a.top - b.top;
+    if (Math.abs(dx) + Math.abs(dy) < 1) return;
+    c.animate([{transform: `translate(${dx}px,${dy}px)`}, {transform: "translate(0,0)"}],
+              {duration: 240, easing: "cubic-bezier(.2,.8,.3,1)"});
+  });
+}
+
+function toggleHidden(id) {
+  const next = editMode ? layoutFromDOM() : {groups: resolveGroups(), hidden: [...(layout.hidden || [])]};
+  const set = new Set(next.hidden);
+  set.has(id) ? set.delete(id) : set.add(id);
+  next.hidden = [...set];
+  layout = next;
+  render();
+  focusCard(id);
+  saveLayout(next, true);
+  toast(set.has(id) ? "非表示にしました（編集モードでは薄く表示）" : "表示に戻しました");
+}
+
+function moveByKey(id, key) {
+  const next = layoutFromDOM();
+  const gs = next.groups;
+  const gi = gs.findIndex(g => g.apps.includes(id));
+  if (gi < 0) return;
+  const list = gs[gi].apps, i = list.indexOf(id);
+  if (key === "ArrowLeft" && i > 0) [list[i - 1], list[i]] = [list[i], list[i - 1]];
+  else if (key === "ArrowRight" && i < list.length - 1) [list[i + 1], list[i]] = [list[i], list[i + 1]];
+  else if (key === "ArrowUp" && gi > 0) { list.splice(i, 1); gs[gi - 1].apps.push(id); }
+  else if (key === "ArrowDown" && gi < gs.length - 1) { list.splice(i, 1); gs[gi + 1].apps.unshift(id); }
+  else return;
+  flip(() => { layout = next; render(); });
+  focusCard(id);
+  saveLayout(next, true);
+}
+
+/* グループ操作 */
+board.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-gact]");
+  if (!btn || !editMode) return;
+  const sec = btn.closest("section.group");
+  const next = layoutFromDOM();
+  const gi = next.groups.findIndex(g => g.id === sec.dataset.gid);
+  const act = btn.dataset.gact;
+  if (act === "up" && gi > 0) {
+    [next.groups[gi - 1], next.groups[gi]] = [next.groups[gi], next.groups[gi - 1]];
+  } else if (act === "down" && gi < next.groups.length - 1) {
+    [next.groups[gi + 1], next.groups[gi]] = [next.groups[gi], next.groups[gi + 1]];
+  } else if (act === "del") {
+    const g = next.groups[gi];
+    if (g.apps.length && !confirm(`グループ「${g.name || "（名前なし）"}」を削除しますか？\n中の ${g.apps.length} 件は「その他」に移ります。`)) return;
+    next.groups.splice(gi, 1);
+    next.groups.find(x => x.id === MAIN)?.apps.push(...g.apps);
+  } else return;
+  flip(() => { layout = next; render(); });
+  saveLayout(next);
+});
+board.addEventListener("input", (e) => {
+  if (editMode && e.target.classList.contains("gname-in")) saveLayout(layoutFromDOM(), true);
+});
+document.getElementById("btn-addgroup").addEventListener("click", () => {
+  const next = layoutFromDOM();
+  const gid = "g" + Date.now().toString(36);
+  next.groups.unshift({id: gid, name: "新しいグループ", apps: []});
+  layout = next;
+  render();
+  const input = board.querySelector(`section[data-gid="${gid}"] .gname-in`);
+  input?.focus(); input?.select();
+  saveLayout(next, true);
+  toast("グループを追加しました — 名前を入れて、カードをドラッグで入れてください");
+});
+document.getElementById("btn-reset").addEventListener("click", () => {
+  if (!confirm("グループ・並び順・非表示をすべて解除して、apps.json の順に戻しますか？")) return;
+  const next = {groups: [], hidden: []};
+  flip(() => { layout = next; render(); });
+  saveLayout(next);
+});
+
+/* ドラッグ＆ドロップ（ポインタイベント：マウス・タッチ・ペン共通） */
+board.addEventListener("pointerdown", (e) => {
+  if (!editMode || e.button !== 0) return;
+  const card = e.target.closest(".card[data-id]");
+  if (!card || e.target.closest("button, input, a")) return;
+  const sx = e.clientX, sy = e.clientY;
+  const onMove = (ev) => {
+    if (!drag) {
+      if (Math.hypot(ev.clientX - sx, ev.clientY - sy) < 6) return;   // クリックと区別
+      startDrag(card, ev);
+    }
+    moveDrag(ev);
+  };
+  const onUp = () => {
+    removeEventListener("pointermove", onMove);
+    removeEventListener("pointerup", onUp);
+    removeEventListener("pointercancel", onUp);
+    if (drag) endDrag();
+  };
+  addEventListener("pointermove", onMove);
+  addEventListener("pointerup", onUp);
+  addEventListener("pointercancel", onUp);
+});
+
+function startDrag(card, ev) {
+  const r = card.getBoundingClientRect();
+  const ghost = card.cloneNode(true);
+  ghost.classList.add("ghost");
+  ghost.removeAttribute("tabindex");
+  ghost.removeAttribute("data-id");
+  Object.assign(ghost.style, {left: r.left + "px", top: r.top + "px", width: r.width + "px", height: r.height + "px"});
+  document.body.appendChild(ghost);
+  card.classList.add("placeholder");
+  document.body.classList.add("dragging");
+  drag = {card, ghost, dx: ev.clientX - r.left, dy: ev.clientY - r.top, x: ev.clientX, y: ev.clientY, raf: 0};
+  autoScroll();
+}
+
+function moveDrag(ev) {
+  drag.x = ev.clientX; drag.y = ev.clientY;
+  drag.ghost.style.left = (ev.clientX - drag.dx) + "px";
+  drag.ghost.style.top = (ev.clientY - drag.dy) + "px";
+  placeAt(ev.clientX, ev.clientY);
+}
+
+function placeAt(x, y) {
+  const el = document.elementFromPoint(x, y);
+  if (!el || !board.contains(el)) return;
+  const card = drag.card;
+  const target = el.closest(".card[data-id]");
+  if (target && target !== card) {
+    if (target.getAnimations().some(a => a.playState === "running")) return;  // 移動中のカードには反応しない（ちらつき防止）
+    const r = target.getBoundingClientRect();
+    const before = x < r.left + r.width / 2;
+    if (before ? target.previousElementSibling === card : target.nextElementSibling === card) return;
+    flip(() => target.parentNode.insertBefore(card, before ? target : target.nextElementSibling));
+    updateCounts();
+    return;
+  }
+  if (target) return;
+  const gridEl = el.closest(".grid[data-gid]");
+  if (!gridEl) return;
+  const cards = [...gridEl.querySelectorAll(":scope > .card[data-id]")];
+  const last = cards[cards.length - 1];
+  if (last === card) return;
+  if (last) {   // カードの隙間ではなく「最後のカードより後ろ」の空きにいるときだけ末尾へ
+    const r = last.getBoundingClientRect();
+    if (y < r.top || (y < r.bottom && x < r.right)) return;
+  }
+  flip(() => gridEl.insertBefore(card, gridEl.querySelector(":scope > .drop-hint")));
+  updateCounts();
+}
+
+/* 画面端での自動スクロール。ポインタが止まっていても、周りのカードの移動が終わったら置き場所を決め直す */
+function autoScroll(ts = 0) {
+  if (!drag) return;
+  const edge = 70, y = drag.y;
+  let v = 0;
+  if (y < edge) v = -Math.ceil((edge - y) / 5);
+  else if (y > innerHeight - edge) v = Math.ceil((y - (innerHeight - edge)) / 5);
+  if (v) scrollBy(0, v);
+  if (v || ts - (drag.checked || 0) > 120) { drag.checked = ts; placeAt(drag.x, drag.y); }
+  drag.raf = requestAnimationFrame(autoScroll);
+}
+
+function endDrag() {
+  const {card, ghost} = drag;
+  cancelAnimationFrame(drag.raf);
+  drag = null;
+  document.body.classList.remove("dragging");
+  const r = card.getBoundingClientRect();
+  ghost.style.transition = "left .2s ease, top .2s ease, transform .2s ease";
+  ghost.style.left = r.left + "px";
+  ghost.style.top = r.top + "px";
+  ghost.style.transform = "none";
+  setTimeout(() => { ghost.remove(); card.classList.remove("placeholder"); card.focus({preventScroll: true}); }, 200);
+  updateCounts();
+  saveLayout(layoutFromDOM());
+}
+
+/* ================================================================
+   バージョン一覧
+   ================================================================ */
+const vmodal = document.getElementById("vmodal");
+const vbody = document.getElementById("vbody");
+
+function renderVersions() {
+  const map = appMap();
+  const hidden = new Set(layout.hidden || []);
+  const order = resolveGroups().flatMap(g => g.apps);
+  vbody.innerHTML = order.map(id => map.get(id)).filter(Boolean).map(a => {
+    const v = a.version || {};
+    return `<tr>
+      <td>${esc(a.name)}${hidden.has(a.id) ? ' <span class="dim">（非表示）</span>' : ""}</td>
+      <td class="mono">${v.version ? esc(fmtVer(v.version)) : '<span class="dim">版数なし</span>'}</td>
+      <td class="mono ${isFresh(v.updated) ? "fresh" : ""}">${v.updated ? esc(v.updated) : '<span class="dim">—</span>'}</td>
+      <td class="src">${v.source ? esc(v.source) : '<span class="dim">見つかりません</span>'}</td></tr>`;
+  }).join("");
+}
+document.getElementById("btn-versions").addEventListener("click", () => {
+  renderVersions();
+  vmodal.classList.add("show");
+});
+document.getElementById("v-close").addEventListener("click", () => vmodal.classList.remove("show"));
+vmodal.addEventListener("click", (e) => { if (e.target === vmodal) vmodal.classList.remove("show"); });
+document.getElementById("v-reload").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true; btn.textContent = "読み込み中…";
+  const wasEditing = editMode;
+  if (wasEditing) setEdit(false);
+  await refresh(true, true);
+  renderVersions();
+  btn.disabled = false; btn.textContent = "↻ 再読み込み";
+  toast("バージョン情報を読み直しました");
+});
+addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (vmodal.classList.contains("show")) vmodal.classList.remove("show");
+  else if (document.getElementById("modal").classList.contains("show")) document.getElementById("modal").classList.remove("show");
+  else if (editMode && !drag) setEdit(false);
+});
 
 /* ================================================================
    起動フロー（オーバーレイ）
@@ -1210,7 +1737,7 @@ function buildIconPicker() {
 }
 document.getElementById("btn-add").addEventListener("click", () => {
   selIcon = "terminal"; buildIconPicker();
-  ["f-name","f-desc","f-url","f-cmd","f-cwd","f-port"].forEach(id => document.getElementById(id).value = "");
+  ["f-name","f-desc","f-url","f-cmd","f-cwd","f-port","f-ver"].forEach(id => document.getElementById(id).value = "");
   document.getElementById("madd-err").style.display = "none";
   modal.classList.add("show");
 });
@@ -1225,6 +1752,7 @@ document.getElementById("m-save").addEventListener("click", async () => {
     command: document.getElementById("f-cmd").value,
     cwd: document.getElementById("f-cwd").value,
     port: document.getElementById("f-port").value,
+    version_from: document.getElementById("f-ver").value,
     icon: selIcon,
   };
   const res = await (await fetch("/api/apps", {
