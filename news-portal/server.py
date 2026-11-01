@@ -6618,7 +6618,11 @@ def resolve_aliases(name, days=None, ai: bool = False) -> dict:
     件数ではどのチップも同じ数になり、チェックを外しても同じ行の語がまた入ってしまうため）。生成AIの候補で 0 件のものは
     excluded_zero に回して使わない（実在しない表記を混ぜない）。q = 会社名（0件でも必ず）＋件数のある別表記を | でつないだもの。
     total は q の件数（展開しない）、dedup_total は類似記事（別媒体の同じニュース）を代表1件に数えた件数（先頭 1000 件で数える。
-    超えたら dedup_partial）。生成AIに接続できないときも、同義語とウォッチの候補で答える（llm_used=False・ai_error）。"""
+    超えたら dedup_partial）。生成AIに接続できないときも、同義語とウォッチの候補で答える（llm_used=False・ai_error）。
+    各候補の locked: その語の同義語辞書の行（_synonym_map は語ごとに最初の行）が会社名の行と同じ。検索（/api/archive/search）は
+    会社名の行を必ず展開するので、外しても結果が変わらない（画面ではチェックしたまま外せない形で示す）。adds: その語を入れると
+    検索で一緒に展開される、会社名の行に無い語（「NSC」が先の行「NSC, 日鉄ソリューションズ」にもあれば ["日鉄ソリューションズ"]）。
+    locked でない語は外すとその展開も外れる。"""
     name = _alias_name(name)
     days = _days_arg(days, None, 1, 3650)
     since = time.time() - days * 86400 if days else None
@@ -6649,12 +6653,18 @@ def resolve_aliases(name, days=None, ai: bool = False) -> dict:
                 ai_error = f"生成AIで別表記を探せませんでした（{str(e)[:80]}）。同義語とウォッチの候補を表示しています"
     aliases: list[dict] = []
     excluded: list[str] = []
+    smap = _synonym_map()
+    row = smap.get(_norm(name))   # 会社名の行（検索で必ず展開される）
+    row_n = {_norm(x) for x in row} if row else set()
     for w, frm in cands:
         n = archive_count(quote_term(w), None, since, parsed=parse_query(quote_term(w), {}))
         if frm == "ai" and n <= 0:
             excluded.append(w)
             continue
-        aliases.append({"term": w, "count": n, "from": frm, "on": n > 0})
+        own = smap.get(_norm(w))   # この語を条件に入れたときに展開される行（行どうしは値で比べる。_synonym_map は語ごとに別のリスト）
+        locked = bool(row) and own is not None and own == row
+        adds = [] if locked or not own else [x for x in own if _norm(x) not in row_n and _norm(x) != _norm(w)][:5]
+        aliases.append({"term": w, "count": n, "from": frm, "on": n > 0, "locked": locked, "adds": adds})
     q_terms = [aliases[0]["term"]]   # 会社名（先頭）は件数が 0 でも条件に入れる
     for a in aliases[1:]:
         if not a["on"]:
@@ -7247,12 +7257,20 @@ def start_change_report(body: dict, now=None) -> dict:
 
 # ---- 書き出し（Markdown / Word）
 
+def _source_counts(rep: dict) -> tuple[int, int]:
+    """出典のうち記事の件数と、外部資料（訪問メモ・資料）の抜粋（id が doc:）の件数。出典番号の範囲（[1]〜[n]）は len(sources) のまま。"""
+    srcs = [s for s in (rep.get("sources") or []) if isinstance(s, dict)]
+    docs = sum(1 for s in srcs if str(s.get("id") or "").startswith("doc:"))
+    return len(srcs) - docs, docs
+
+
 def report_markdown(rep: dict) -> str:
     conds = _filters_conds(rep.get("filters") or {})
     d = datetime.fromtimestamp(rep["created_at"], timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
+    n_art, n_doc = _source_counts(rep)
     head = [f"# {rep['title']}", "",
             f"- 作成: {d}", f"- 問い: {rep['question']}",
-            f"- 対象記事: {len(rep.get('sources') or [])} 件"]
+            f"- 対象記事: {n_art} 件"] + ([f"- 外部資料の抜粋: {n_doc} 件"] if n_doc else [])
     if conds:
         head.append("- 検索条件: " + " ／ ".join(conds))
     out = "\n".join(head) + "\n\n" + rep["markdown"].strip() + "\n\n## 出典\n"
@@ -7669,20 +7687,27 @@ _SURROGATE_RE = re.compile(r"[\ud800-\udfff]")   # 対になっていないサ�
 # 生成AIが書いた文（件名・冒頭の要約・要点・結び）に入った URL・メールアドレス。メールで URL を載せるのは Python が組み立てる
 # 出典の欄だけにする（記事に仕込まれた指示に従った生成AIが、出典と見分けのつかないリンクを社内メールに混ぜるのを防ぐ）。
 # 日本語は URL の後に空白を置かないことが多いので、URL に使える ASCII の文字だけを対象にする（[n] や後ろの日本語は残す）。
-# 対象: scheme://（http・https・ftp・file・smb など全部）、// の無いスキーム（file:・mailto:・javascript: など。「EBITDA:120億円」は
-# 消さないよう名前を決めて）、www.、UNC（\\host\share。Outlook はリンクにし、開くと Windows の資格情報が相手に送られる）、
-# //host/share、ドメイン＋パスまたはポート（evil.example/login・host:8080）、IPv4＋パス、3つ以上のラベルのドメイン
-# （intranet-login.evil.example）。2つのラベルだけの語（Node.js・Amazon.com・ASP.NET・report.pdf）はパスが無ければ残す
+# 消す（必ずリンクになる形）: scheme://（http・https・ftp・file・smb など全部）、// の無いスキーム（file:・mailto:・javascript: など。
+# 「EBITDA:120億円」「TEL:03-1234-5678」「Outlook:2026年は増益」「data:2025年度」は消さないよう、名前を決め、tel: は「+」で始まる番号、
+# data: は MIME 型、outlook: は 16 桁以上の16進（EntryID）のときだけ）、www.、UNC（\\host\share。Outlook はリンクにし、開くと Windows の
+# 資格情報が相手に送られる）、//host/share、IPv4＋パスまたはポート。
+# 無効化する（_MAIL_DOMAIN_RE。「.」を「[.]」に）: ドメイン＋パスまたはポート（evil.example/login・host.example:8080）、3つ以上のラベルの
+# ドメイン（intranet-login.evil.example）。会社名・技術名（Amazon.co.jp・Node.js/TypeScript・ASP.NET/C#）とも区別できないため、消さずに
+# 読める形のまま、メールソフトがリンクにしない形にする。2つのラベルだけの語（Node.js・Amazon.com・report.pdf）はパスが無ければそのまま。
+# 消す方を先に全体へ当て、無効化は後から当てる（一度に当てると「Amazon.co.jp/https://intranet/x」の後ろの URL が無効化の範囲に入って残る）
 _MAIL_URL_CH = r"A-Za-z0-9\-._~:/?#@!$&'*+,;=%"
 _MAIL_URL_RE = re.compile(
     r"(?<![A-Za-z0-9+.\-])[A-Za-z][A-Za-z0-9+.\-]{0,30}://[" + _MAIL_URL_CH + r"\\]*"
-    r"|(?<![A-Za-z0-9+.\-])(?:file|mailto|tel|sms|sips?|callto|javascript|vbscript|data|onenote|outlook|notes|news|nntp"
+    r"|(?<![A-Za-z0-9+.\-])(?:file|mailto|sms|sips?|callto|javascript|vbscript|onenote|nntp"
     r"|ms-[A-Za-z0-9\-]+):[" + _MAIL_URL_CH + r"\\]+"
+    r"|(?<![A-Za-z0-9+.\-])(?:tel:\+\d|data:[a-z]+/[a-z0-9.+\-]+[;,]|outlook:[0-9a-f]{16})[" + _MAIL_URL_CH + r"\\]*"
     r"|www\.[" + _MAIL_URL_CH + r"]+"
     r"|\\\\[A-Za-z0-9\-._~%$]+(?:\\[" + _MAIL_URL_CH + r"$]*)*"
     r"|(?<![A-Za-z0-9\-._@/])//[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)+[" + _MAIL_URL_CH + r"]*"
-    r"|(?<![A-Za-z0-9\-._@])(?:[A-Za-z0-9][A-Za-z0-9\-]*\.)+[A-Za-z]{2,24}(?=/|:\d)[" + _MAIL_URL_CH + r"]*"
-    r"|(?<![A-Za-z0-9\-._@])\d{1,3}(?:\.\d{1,3}){3}(?=/|:\d)[" + _MAIL_URL_CH + r"]*"
+    r"|(?<![A-Za-z0-9\-._@])\d{1,3}(?:\.\d{1,3}){3}(?=/|:\d)[" + _MAIL_URL_CH + r"]*",
+    re.I)
+_MAIL_DOMAIN_RE = re.compile(
+    r"(?<![A-Za-z0-9\-._@])(?:[A-Za-z0-9][A-Za-z0-9\-]*\.)+[A-Za-z]{2,24}(?=/|:\d)[" + _MAIL_URL_CH + r"]*"
     r"|(?<![A-Za-z0-9\-._@])[A-Za-z0-9][A-Za-z0-9\-]*\.(?:[A-Za-z0-9][A-Za-z0-9\-]+\.)+[A-Za-z]{2,24}(?![A-Za-z0-9\-])",
     re.I)
 _MAIL_ADDR_RE = re.compile(r"(?<![A-Za-z0-9._%+\-])[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)+")   # 語の途中から始めない（長い英数字の行で遅くならない）
@@ -7868,9 +7893,12 @@ def _one_line(s, limit: int = 300) -> str:
     return _WS_RE.sub(" ", _CTRL_RE.sub(" ", str(s or ""))).strip()[:limit]
 
 
-def _mail_strip_links(s) -> str:
-    """URL・メールアドレスを「（URL省略）」「（アドレス省略）」に置き換える（メールの URL は出典の欄だけ。_MAIL_URL_RE を参照）。"""
-    return _MAIL_ADDR_RE.sub("（アドレス省略）", _MAIL_URL_RE.sub("（URL省略）", str(s or "")))
+def _mail_strip_links(s, soft: bool = True) -> str:
+    """URL・メールアドレスを「（URL省略）」「（アドレス省略）」に置き換え、ドメインらしい語は「.」を「[.]」にして無効化する
+    （メールの URL は出典の欄だけ。_MAIL_URL_RE・_MAIL_DOMAIN_RE を参照）。soft=False は無効化をしない（利用者が付けた題名）。
+    何度当てても同じ結果（「Amazon[.]co[.]jp」はもう当たらない）。"""
+    s = _MAIL_ADDR_RE.sub("（アドレス省略）", _MAIL_URL_RE.sub("（URL省略）", str(s or "")))
+    return _MAIL_DOMAIN_RE.sub(lambda m: m.group(0).replace(".", "[.]"), s) if soft else s
 
 
 def _mail_line(s, limit: int) -> str:
@@ -7885,13 +7913,14 @@ def _mail_line(s, limit: int) -> str:
     return core[:max(10, limit - len(cites) - 2)].rstrip() + "…" + (" " + cites if cites else "")
 
 
-def _mail_subject(s) -> str:
+def _mail_subject(s, soft: bool = True) -> str:
     """件名: 制御文字（CR・LF・TAB など）は空白にしてまとめ、出典番号は外し、MAIL_SUBJECT_MAX 字まで（ヘッダーの差し込みを防ぐ）。
     URL・メールアドレスは除き（_mail_strip_links）、対になっていないサロゲート（LLM の JSON の \\udcff など）も除く
-    （UTF-8 に符号化できず .eml を作れないため）。"""
+    （UTF-8 に符号化できず .eml を作れないため）。soft=False: レポートの題名（利用者の検索語・質問から作る）は、ドメインらしい語
+    （Amazon.co.jp）を無効化しない（明示の URL・UNC・アドレスは除く）。"""
     s = _SURROGATE_RE.sub("", _CTRL_RE.sub(" ", str(s or "")))
     # 出典番号を先に外してから URL を除く（逆の順では「https[1]://evil…」が外した後に URL になって残っていた）
-    return _WS_RE.sub(" ", _mail_strip_links(_CITE_RE.sub("", s))).strip()[:MAIL_SUBJECT_MAX].strip()
+    return _WS_RE.sub(" ", _mail_strip_links(_CITE_RE.sub("", s), soft)).strip()[:MAIL_SUBJECT_MAX].strip()
 
 
 def _has_cite(s: str, n: int) -> bool:
@@ -7916,11 +7945,12 @@ def _mail_from_json(obj: dict, rep: dict, tone: str, max_b: int) -> dict | None:
     lead = [x for x in (_mail_line(_strip_bad_cites(s, n)[0], 120) for s in strs(obj.get("lead"))) if _has_cite(x, n)]
     closing = _CITE_RE.sub("", str(obj.get("closing") or ""))
     # 結びは出典番号も要らない自由な文なので、URL・UNC・メールアドレス・ドメイン・ヘッダー風の語（Reply-To: など）があれば決まり文句にする
-    if (_MAIL_URL_RE.search(closing) or _MAIL_ADDR_RE.search(closing) or "@" in closing or _MAIL_HEADERISH_RE.search(closing)
+    if (_MAIL_URL_RE.search(closing) or _MAIL_DOMAIN_RE.search(closing) or _MAIL_ADDR_RE.search(closing) or "@" in closing
+            or _MAIL_HEADERISH_RE.search(closing)
             or re.search(r"[A-Za-z0-9\-]+\.[A-Za-z]{2,}/", closing) or "\\\\" in closing):
         closing = ""
     closing = _mail_line(closing, 80)
-    return {"subject": _mail_subject(obj.get("subject")) or _mail_subject(rep.get("title")) or "共有",
+    return {"subject": _mail_subject(obj.get("subject")) or _mail_subject(rep.get("title"), soft=False) or "共有",
             "lead": lead[:3], "bullets": bullets[:max_b], "closing": closing or MAIL_CLOSING[tone]}
 
 
@@ -7977,7 +8007,7 @@ def _mail_fallback(rep: dict, tone: str, max_b: int) -> dict:
             bullets += [s for s in _mail_sentences(" ".join(sec["para"]), n) if s not in lead and s not in bullets]
         if not bullets:   # 文が冒頭の分しか無い: 要点として示す（冒頭の要約は付けない）
             lead, bullets = [], lead
-    return {"subject": _mail_subject(rep.get("title")) or "共有", "lead": lead, "bullets": bullets[:max_b],
+    return {"subject": _mail_subject(rep.get("title"), soft=False) or "共有", "lead": lead, "bullets": bullets[:max_b],
             "closing": MAIL_CLOSING[tone]}
 
 
@@ -7994,7 +8024,7 @@ def compose_mail(cfg: dict | None, rep: dict, tone: str = "boss", length: str = 
     if cfg is not None:
         n = len(rep.get("sources") or [])
         system = _json_system(cfg.get("provider") == "local")
-        head = f"【レポート】\n題名: {_mail_subject(rep.get('title'))}\n"
+        head = f"【レポート】\n題名: {_mail_subject(rep.get('title'), soft=False)}\n"
         tail = (f"\n\n【出典番号】[1]〜[{n}]\n\n"
                 f"【指示】上のレポートをもとに、社内向けメール（{MAIL_TONES[tone]}・{MAIL_LENGTHS[length][0]}）の文面を JSON オブジェクトだけで出力してください: "
                 "{\"subject\": \"件名（40字以内）\", \"lead\": [\"冒頭の要約（1文60字以内。末尾に出典番号 [n]）\", …（2〜3件）], "
@@ -8021,7 +8051,7 @@ def compose_mail(cfg: dict | None, rep: dict, tone: str = "boss", length: str = 
 
 def _mail_topic(rep: dict) -> str:
     """あいさつ文に入れる題: レポートの題名から種類の名前（「概況レポート: 」「Q&A: 」など）を外したもの。"""
-    t = _mail_subject(rep.get("title"))
+    t = _mail_subject(rep.get("title"), soft=False)
     kind, sep, rest = t.partition(": ")
     return rest.strip() if sep and rest.strip() and kind in set(REPORT_KIND_NAMES.values()) else t
 
@@ -8072,7 +8102,8 @@ def build_eml(subject: str, text: str) -> bytes:
     from email.header import Header
     from email import policy as _policy
     msg = EmailMessage(policy=_policy.SMTP)
-    msg.set_raw("Subject", Header(_mail_subject(subject) or "共有", "utf-8", header_name="Subject").encode(linesep="\r\n"))
+    # 件名は compose_mail で除き・無効化済み（ここでは明示の URL・制御文字だけ。題名の「Amazon.co.jp」を後から無効化しない）
+    msg.set_raw("Subject", Header(_mail_subject(subject, soft=False) or "共有", "utf-8", header_name="Subject").encode(linesep="\r\n"))
     msg["X-Unsent"] = "1"
     msg.set_content(text, charset="utf-8", cte="base64")
     return msg.as_bytes()
@@ -8085,7 +8116,8 @@ def _fmt_dt(ts: float) -> str:
 def report_doc_model(rep: dict, summary: dict | None = None, facts: list[dict] | None = None) -> dict:
     """レポート → docgen の文書モデル（Word / PDF 共通）。"""
     conds = _filters_conds(rep.get("filters") or {})
-    meta = [f"作成: {_fmt_dt(rep['created_at'])}", f"対象記事: {len(rep.get('sources') or [])} 件"]
+    n_art, n_doc = _source_counts(rep)   # 訪問メモ・資料の抜粋は記事に数えない（画面の「記事 N件」・Word の書き出しカードと同じ数）
+    meta = [f"作成: {_fmt_dt(rep['created_at'])}", f"対象記事: {n_art} 件"] + ([f"外部資料の抜粋: {n_doc} 件"] if n_doc else [])
     if conds:
         meta.append("検索条件: " + " ／ ".join(conds))
     if rep.get("model"):
@@ -8430,21 +8462,46 @@ _MAIL_INTENT_RE = r"(?:メール(?!マガジン|アドレス)|e-?mail)"   # メ�
 # メールが「作るもの」のときだけメール下書きにする（index.html の MAIL_INTENT と同じ規則）。以前は「メール」という語があるだけで
 # メールにしていたため、「Wordにして、メールに添付したい」（形式は Word）や「フィッシングメールの文面の特徴は？」「標的型メールの
 # 被害を時系列にまとめて」（ふつうの質問）までメール下書きのフォームになっていた
-_MAIL_DRAFT_RE = _MAIL_INTENT_RE + r"\s*の?\s*下書き"                                       # 「メールの下書き」（それだけで依頼）
-_MAIL_BODY_RE = (_MAIL_INTENT_RE + r"\s*の?\s*文面\s*(?:を|に|で|として)?\s*"             # 「メールの文面を作って」「メール文面にして」
-                 r"(?:して|作|書|まとめ|起こ|出力|変換|用意|考え)")
+# 動詞（て形）の後ろは「依頼の終わり方」のときだけ依頼とみなす（許可リスト）。以前は「くれる・いる」などの続きを除く方式だったため、
+# 「AIでメールを作成して送信する機能を発表した企業は？」「社員はAIでメールを作成していますか？」「メールを書いてもらった社員の割合は？」
+# のような質問までメールのフォームを開き、逆に「メールを作っていただけますか」（「いた」に当たる）はメールにならなかった。
+# 文末・句読点・「ください」「ほしい」「お願い」「いただけ」「もらえますか」「くれる？」「…ると助かります」など。「、」の後ろは続けてよいが、
+# 文が「？」で終わるなら質問（「AIでメールを作成して、送信まで自動化する企業は？」）
+_MAIL_REQ_END = (r"(?=[\s。.!！?？]*$|[。.!！]|[、,](?![\s\S]*[?？][\s。]*$)"
+                 r"|\s*(?:ください|下さい|くださ|ほしい|欲しい|お願い|いただ(?:け|き)|頂(?:け|き)"
+                 r"|(?:おいて|みて)(?:[\s。.!！?？、,]|$|ください|下さい|ほしい|欲しい|くれ|もらえ)"
+                 r"|くれ(?:ます|ません|ない(?:か|[？?]|[\s。]*$)|る(?:かな|か|[？?]|[\s。]*$)|ると(?:助か|嬉|うれ|あり)|[\s。.!！?？]|$)"
+                 r"|もら(?:え(?:ます|ません|ない(?:か|[？?]|[\s。]*$)|る(?:かな|か|[？?]|[\s。]*$)|ると(?:助か|嬉|うれ|あり))|いたい)"
+                 r"|(?:ね|よ)[\s。.!！]*$))")
+_MAIL_MAKE_V = r"(?:作って|作成して|書いて|用意して|生成して|起こして|出力して|起案して|考えて)"          # 「メールを作って」の動詞（て形）
+_MAIL_TURN_V = (r"(?:して|変換して|まとめて|作って|作成して|書いて|書き出して|出力して|化して|起こして)"  # 「メールにして」「メール形式でまとめて」
+                r"|変換(?=[\s。.!！]*$)")
+_MAIL_NONTE = (r"(?:作成|生成)\s*(?:を\s*)?(?:お願い|頼)"                                     # 「メールの作成をお願い」
+               r"|(?:作成|生成)\s*(?:いただ(?:け|き)|頂(?:け|き)|願い|願え|ください|下さい)"       # 「メールを作成いただけますか」「作成願います」
+               r"|(?:作成し|作り|書き|用意し)たい(?=です|ので|んです|のですが|[\s。.!！、,]|$)"      # 「メールを作成したい」（「作成したい人向け」は話題）
+               r"|(?:作成|生成)(?=[\s。.!！]*$)")                                               # 「作成」「生成」は文末のときだけ（「メールを作成する手口」は話題）
+_MAIL_DRAFT_RE = (_MAIL_INTENT_RE + r"\s*の?\s*下書き"                                      # 「メールの下書き」「メールの下書きを作って」（「下書きを自動で作る機能」は話題）
+                  r"(?:\s*(?:を\s*)?(?:" + _MAIL_MAKE_V + _MAIL_REQ_END + r"|" + _MAIL_NONTE + r")"
+                  r"|\s*に\s*(?:" + _MAIL_TURN_V + r")" + _MAIL_REQ_END +
+                  r"|(?=[\s。.!！?？]*$)|\s*[、,](?![\s\S]*[?？][\s。]*$)|\s*を?\s*(?:お願い|頼)|\s*が?\s*(?:ほしい|欲しい))")
+_MAIL_BODY_RE = (_MAIL_INTENT_RE + r"\s*の?\s*文面"                                         # 「メールの文面を作って」「メール文面にして」
+                 r"(?:\s*(?:を\s*)?(?:" + _MAIL_MAKE_V + _MAIL_REQ_END + r"|" + _MAIL_NONTE + r")"
+                 r"|\s*(?:に|で|として)\s*(?:" + _MAIL_TURN_V + r")" + _MAIL_REQ_END + r")")
 _MAIL_BODY_ONLY_RE = (r"^\s*(?:.{0,20}?(?:向け|用)の?)?" + _MAIL_INTENT_RE              # 「上長向けのメール文面」「メール文面」だけの入力
                       + r"\s*の?\s*文面[\s。.!！?？]*$")
-_MAIL_OBJ_RE = (_MAIL_INTENT_RE + r"\s*(?:の?\s*(?:文章|本文)\s*)?(?:[をの]\s*)?"             # 「報告メールを作って」「メールの文章を書いて」「メール作成」「メールの作成をお願い」
-                r"(?:作って|作成して|書いて|用意して|生成して|起こして|出力して|(?:作成|生成)\s*(?:を\s*)?(?:お願い|頼)"
-                r"|(?:作成|生成)(?=[\s。.!！]*$))"                                               # 「作成」「生成」は文末のときだけ（「メールを作成する手口」は話題）
-                r"(?!(?:くれる|もらう|もらえる|いる|いた)[^\s。.!！?？、])")                         # 「メールを作ってくれるAI」「メールを作成している企業」は話題
-_MAIL_FORM_RE = (_MAIL_INTENT_RE + r"\s*(?:形式|本文|文|用の?文章?|の文章)\s*(?:に|で|として)\s*"   # 「メール形式にして」「メール用の文章にして」
-                 r"(?:して|変換|まとめ|作|出力|化し|起こ)")
-_MAIL_TARGET_RE = (_MAIL_INTENT_RE + r"\s*(?:に|で|として|用に?|向けに)\s*"                 # 「この内容をメールにして」「PDFをメールにまとめて」
-                   r"(?:して|変換|まとめ|作|書き出|書い|出力|化し|起こ)")
+_MAIL_OBJ_RE = (_MAIL_INTENT_RE + r"\s*(?:の?\s*(?:文章|本文|文案|案|ドラフト|原稿|文例|件名と本文)\s*)?(?:[をの]\s*)?"   # 「報告メールを作って」「メールの文章を書いて」「メール作成」
+                r"(?:" + _MAIL_MAKE_V + _MAIL_REQ_END + r"|" + _MAIL_NONTE + r")")              # 「メールの作成をお願い」「メールのドラフトを作って」
+_MAIL_FORM_RE = (_MAIL_INTENT_RE + r"\s*(?:(?:形式|本文|文|用の?文章?|の文章)\s*(?:に|で|として)\s*(?:" + _MAIL_TURN_V + r")"   # 「メール形式にして」「メール用の文章にして」
+                 r"|化\s*(?:して|したい))" + _MAIL_REQ_END)                                    # 「メール化して」（「メール形式で出力される請求書」は話題）
+_MAIL_TARGET_RE = (_MAIL_INTENT_RE + r"\s*(?:に|で|として|用に?|向けに)\s*(?:" + _MAIL_TURN_V + r")"   # 「この内容をメールにして」「PDFをメールにまとめて」
+                   + _MAIL_REQ_END)                                                              # 「社員がメールにまとめて報告する頻度は？」は話題
 _MAIL_SEND_RE = (_MAIL_INTENT_RE + r"\s*で\s*(?:共有|送)"                                   # 「メールで送れる形にして」（形式の語が無いときだけ）
                  r"(?:する|できる|して|したい|しやすい|れる|る|りたい|ります|します)")
+_MAIL_SEND_REQ_RE = (_MAIL_INTENT_RE + r"\s*(?:で\s*(?:共有|送|報告|連絡)(?:して|したい|って|りたい|しておいて)"   # 「メールで共有して」「上司にメールで報告したい」
+                     r"|に\s*(?:し|まとめ)たい)"                                                   # 「社内メールにしたい」（文末のときだけ。「メールで送ってきた企業は？」は話題）
+                     r"(?:ください|下さい|ほしい|欲しい|もらえますか|くれますか)?(?:です)?[\s。.!！]*$")
+_MAIL_PURPOSE_RE = (_MAIL_INTENT_RE + r"\s*で\s*(?:共有|送|報告|連絡)(?:し|り)?たい(?:ので|から)[、,\s]*"   # 「メールで報告したいので文面を作って」
+                    r"(?:(?:文面|文章|本文|文案|下書き)\s*を?\s*)?(?:" + _MAIL_MAKE_V + _MAIL_REQ_END + r"|" + _MAIL_NONTE + r")")
 _EXPORT_VERB_RE = r"にして|に変換|で出力|で書き出|書き出し|作って|作成|生成|エクスポート|出して|化して|にまとめ"
 _EXPORT_FORMATS = [("pptx", r"pptx|パワポ|パワーポイント|powerpoint|スライド|プレゼン"), ("xlsx", r"xlsx|excel|エクセル|スプレッドシート|表計算"),
                    ("docx", r"docx|word|ワード(?!プレス)"), ("pdf", r"pdf")]
@@ -8456,20 +8513,23 @@ def detect_export_intent(text: str) -> dict | None:
     2) 依頼の言い回し（にして・作って・にまとめ など）が無ければ None
     3) メールが作るもの（「メールにして」「メールにまとめて」）→ mail（「PDFをメールにして」も mail）
     4) 形式の語（pptx・xlsx・docx・pdf）→ その形式（「Wordにして、メールに添付したい」は docx。メールは送る手段）
-    5) 形式の語が無く「メールで送れる形にまとめて」→ mail。「メール」がただの話題（フィッシングメール等）なら None"""
-    t = str(text or "")
+    5) 形式の語が無く「メールで送れる形にまとめて」「メールで共有して」「上司にメールで報告したい」（文末）→ mail。
+       「メール」がただの話題（フィッシングメール等）なら None
+    依頼かどうかは動詞の後ろの終わり方で決める（_MAIL_REQ_END）。「AIでメールを作成して送信する機能を発表した企業は？」は質問"""
+    t = str(text or "").strip()
     if (re.search(_MAIL_DRAFT_RE, t, re.I) or re.search(_MAIL_BODY_RE, t, re.I)
-            or re.search(_MAIL_BODY_ONLY_RE, t.strip(), re.I)
-            or re.search(_MAIL_OBJ_RE, t, re.I) or re.search(_MAIL_FORM_RE, t, re.I)):
+            or re.search(_MAIL_BODY_ONLY_RE, t, re.I)
+            or re.search(_MAIL_OBJ_RE, t, re.I) or re.search(_MAIL_FORM_RE, t, re.I) or re.search(_MAIL_PURPOSE_RE, t, re.I)):
         return {"kind": "mail", "instructions": t[:300]}
+    has_fmt = any(re.search(pat, t, re.I) for _k, pat in _EXPORT_FORMATS)
     if not re.search(_EXPORT_VERB_RE, t, re.I):
-        return None
+        return {"kind": "mail", "instructions": t[:300]} if not has_fmt and re.search(_MAIL_SEND_REQ_RE, t, re.I) else None
     if re.search(_MAIL_TARGET_RE, t, re.I):
         return {"kind": "mail", "instructions": t[:300]}
     for k, pat in _EXPORT_FORMATS:
         if re.search(pat, t, re.I):
             return {"kind": k, "instructions": t[:300]}
-    if re.search(_MAIL_SEND_RE, t, re.I):
+    if re.search(_MAIL_SEND_RE, t, re.I) or re.search(_MAIL_SEND_REQ_RE, t, re.I):
         return {"kind": "mail", "instructions": t[:300]}
     return None
 

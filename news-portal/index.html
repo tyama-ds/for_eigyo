@@ -493,6 +493,7 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
 .rs__bar .rs__count{flex:1; min-width:0}
 .rs__formrow{display:flex; align-items:center; gap:8px; flex-wrap:wrap}
 .rs__formrow select{padding:5px 8px; border-radius:8px; background:var(--surface); border:1px solid var(--line); color:var(--text); font:inherit; font-size:12px}
+.rs__form select{max-width:100%; min-width:0}   /* 長い題名（比較レポートなど）の選択肢があっても行からはみ出さない（矢印が隠れていた） */
 .rs__savedpanel{min-width:320px; max-width:440px}
 .rs__srcpanel.right{left:auto; right:0}   /* 右端のボタンから開くパネルは右寄せ（モーダルからはみ出さない） */
 .rs__rep{width:100%; text-align:left; background:none; border:none; color:var(--text); font:inherit}
@@ -514,6 +515,7 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
 .pbar{height:6px; border-radius:99px; background:var(--surface-2); border:1px solid var(--line); overflow:hidden; margin-bottom:6px}
 .pbar i{display:block; height:100%; background:var(--accent); transition:width .4s}
 .rs__count{font-size:12px; color:var(--text-3)}
+.rs__count .rs__nw{white-space:nowrap}
 .rs__list{flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain; display:flex; flex-direction:column; gap:2px}
 .rrow{display:flex; gap:9px; align-items:flex-start; padding:8px 9px; border-radius:10px; cursor:pointer; border:1px solid transparent}
 .rrow:hover{background:var(--surface-2)}
@@ -643,6 +645,7 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
 .cmp__col .meta{font-size:11px; color:var(--text-3); margin-bottom:4px}
 .cmp__col .n{font-size:20px; font-weight:700; font-family:var(--font-serif)}
 .cmp__col svg{display:block; width:100%; height:40px; margin:2px 0 4px}
+.cmp__col svg text{font-size:9px; fill:var(--text-3)}   /* 期間の両端の日付（棒の下。グラフの文字と同じ大きさ・色） */
 .cmp__col .lbl{font-size:10.5px; color:var(--text-3); letter-spacing:.04em; margin-top:6px}
 .cmp__col ul{margin:2px 0 0 0; padding:0; list-style:none; font-size:11.5px; color:var(--text-2)}
 .cmp__col li{display:flex; justify-content:space-between; gap:6px} .cmp__col li b{color:var(--text-3); font-weight:500}
@@ -727,7 +730,6 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
   #rsLog{flex:none; min-height:50vh; max-height:75vh}
   .rs__bar{flex-wrap:wrap}
   .rs__bar .rs__count{flex-basis:100%; white-space:normal}
-  .rs__form select{max-width:100%; min-width:0}
   /* ボタンから開くパネルはモーダルの下端に左右いっぱいで出す（モーダルは transform を持つので fixed はモーダル基準） */
   .rs .rs__srcpanel, .rs .rs__srcpanel.right{position:fixed; left:16px; right:16px; bottom:16px; top:auto;
     min-width:0; max-width:none; max-height:60vh; z-index:20}
@@ -898,6 +900,7 @@ html.rs-standalone .rsapp__skip:focus{top:8px}
 #researchModal.rsapp .rs__histhead .lnkbtn{flex:0 0 auto; white-space:nowrap; font-size:12px}
 #researchModal.rsapp .rs__histbody svg{height:84px}
 #researchModal.rsapp .rs__histbody text{fill:var(--wb-muted)}
+#researchModal.rsapp .cmp__col svg text{fill:var(--wb-muted)}
 #researchModal.rsapp .rs__histlegend{font-size:11.5px; gap:3px 12px; color:var(--wb-muted)}
 #researchModal.rsapp .rs__histlegend i{width:9px; height:9px}
 #researchModal.rsapp .rs__bar{position:sticky; top:-18px; /* 結果の欄の上の余白（18px）の分。欄の上端で止まる */ z-index:3; margin:0 -24px; padding:10px 24px; flex-wrap:wrap; row-gap:8px; background:var(--wb-main); border-bottom:1px solid var(--line)}
@@ -987,11 +990,13 @@ html.rs-standalone .rsapp__skip:focus{top:8px}
 #researchModal.rsapp .rs__logwrap{position:relative; display:flex; flex:1 1 0; min-height:clamp(140px,28vh,240px)}
 #researchModal.rsapp .rs__logwrap::before{content:""; position:absolute; top:0; left:0; right:0; height:14px; z-index:1; pointer-events:none; background:linear-gradient(var(--wb-pane), transparent)}
 #researchModal.rsapp #rsLog{flex:1 1 auto; min-width:0; min-height:0; overflow:auto; padding:18px 20px 12px; gap:14px}
-/* 低い画面（1366×768 のノート PC など）: 会話が空のままフォームを開いたら「何を作りますか？」のカード（上の「作る」の切替と同じもの）を隠し、
-   出力の欄の最小の高さを外してフォームに高さを回す（以前はフォームの欄が 110px ほどで、別表記のチップやメモが隠れていた）。
-   会話があるときは出力の欄の高さを保つ */
-@media (min-width:901px) and (max-height:820px){
+/* フォームを開いている間（901px 以上・高さによらず）: 「何を作りますか？」のカード（上の「作る」の切替と同じもの）を隠し、出力の欄の
+   最小の高さを下げてフォームに高さを回す。以前は高さ 820px 以下で会話が空のときだけだったため、1440×900・1600×900 では
+   商談ブリーフの「Word も作る」の行が下に隠れ、1366×768 で会話があるとフォームの欄が 200px ほどで会社名・別表記のチップが隠れていた。
+   フォームは「作成」で閉じるので、狭くなった出力の欄に自分の出力が出ることはない。会話が空なら出力の欄は高さ 0 まで */
+@media (min-width:901px){
   #researchModal.rsapp .rs__chat.has-form .rsapp__hello{display:none}
+  #researchModal.rsapp .rs__chat.has-form .rs__logwrap{min-height:min(120px,14vh)}
   #researchModal.rsapp .rs__chat.has-form .rs__logwrap:has(> #rsLog > .rsapp__hello:only-child){min-height:0}
   #researchModal.rsapp .rs__chat.has-form #rsLog:has(> .rsapp__hello:only-child){padding:0}
 }
@@ -1680,7 +1685,7 @@ body.arc-on .topbar .search{visibility:hidden}
     </div>
     <!-- リサーチを別タブ（/research）で開いたときのショートカット（ポータルでは隠す） -->
     <div class="kbd-list" id="helpResearch" hidden>
-      <div class="kbd-row"><kbd>/</kbd> 検索欄へ</div>
+      <div class="kbd-row"><kbd>/</kbd> 検索欄へ（<kbd>↓</kbd> または <kbd>Tab</kbd> で一覧へ。<kbd>Esc</kbd> は語を残して検索欄を離れる・語を消すのは欄の ✕）</div>
       <div class="kbd-row"><kbd>J</kbd> / <kbd>K</kbd> 記事を移動</div>
       <div class="kbd-row"><kbd>X</kbd>（<kbd>Space</kbd>）選択を切り替え</div>
       <div class="kbd-row"><kbd>C</kbd> 質問の入力欄へ</div>
@@ -2767,10 +2772,12 @@ async function restoreDefaultSources(btn){
     const d=await api("/api/sources/restore-defaults",{method:"POST"});
     S.sources=d.sources||[]; S.srcProblem=null; S.srcNote=[];
     S.srcRestored="初期の情報源（"+S.sources.length+" 件）に戻しました"+(d.backup?"。元のファイルの控え: "+d.backup:"");
-    renderSources(); renderSrcAlert(); renderStatus(); renderCats();
+    renderSources(); renderSrcAlert(); renderStatus(); renderCats(); srcPanelFocus();   // 押したボタンは描き直しで消えるので、再取得（数秒〜）を待たずにパネルの中へ戻す
     toast("初期の情報源に戻しました。再取得します");
-    await loadArticles(true); srcPanelFocus();
-  }catch(e){ if(btn) btn.disabled=false; toast(e.server ? e.message : "初期の情報源に戻せませんでした","err"); }
+    await loadArticles(true);
+    const a=document.activeElement;   // 再取得の間に利用者が別の欄へ移っていれば動かさない（入力中の文字が分かれないように）
+    if(!a || a===document.body || a.disabled || !$("#srcModal").contains(a)) srcPanelFocus();
+  }catch(e){ if(btn){ btn.disabled=false; try{ btn.focus(); }catch(_){} } toast(e.server ? e.message : "初期の情報源に戻せませんでした","err"); }
 }
 // 情報源の絞り込み・一括 ON/OFF
 $("#srcQ").addEventListener("input", renderSources);
@@ -3995,7 +4002,9 @@ async function researchSearch(keepSel){
 function syncRsCount(){
   const c=$("#rsCount");
   const capped = !!(RS.filters && RS.results.length >= (RS.filters.limit||500));
-  c.textContent = RS.results.length+"件ヒット"+(capped?"（表示上限）":"")+((RS.filters&&RS.filters.dedup&&RS.dupGroups)?"（類似 "+RS.dupGroups+"束）":"")+" ／ "+RS.sel.size+"件選択";
+  // 「N件選択」は1つの塊（折り返すなら「／」の後ろで。モーダルの左の欄は幅が決まっていて「20件選 / 択」と割れていた）
+  c.textContent = RS.results.length+"件ヒット"+(capped?"（表示上限）":"")+((RS.filters&&RS.filters.dedup&&RS.dupGroups)?"（類似 "+RS.dupGroups+"束）":"")+" ／ ";
+  c.append(el("span",{class:"rs__nw",text:RS.sel.size+"件選択"}));
   c.title = "会話は選択した記事から問いに関連の高い順に、文脈長に収まる分を使います。レポートは選択全件（最大1000件）"+((RS.filters&&RS.filters.dedup&&RS.dupGroups)?"。類似記事は代表1件にまとめて表示しています":"")
             +(capped?"。ヒットが表示上限に達しています。「表示: N件」で上限を増やせます":"");
   const rc=$("#rsRCount"); if(rc) rc.textContent=String(RS.sel.size);
@@ -4095,8 +4104,25 @@ function renderRsLog(){
   if(RS.busy) log.append(el("div",{class:"bubble think", html:'<span class="dots"><span></span><span></span><span></span></span>'}));
   const sb=$("#rsSend"); if(sb) sb.disabled=RS.busy||!!RS.ask;   // 回答の生成中は次の質問を待ってもらう（書き出しの指示は受け付ける）
   if(RS_STANDALONE) rsappScrollLog(log, prev);   // 別タブ: 上の方を読んでいる間は位置を動かさず「↓ 新しい出力」を出す
-  else log.scrollTop=log.scrollHeight;
+  else rsModalScrollLog(log, prev);
   rsPersistSoon();
+}
+const RS_WHOLE_ROLES=["report","compare","change"];   // まとめて届く出力（回答は流れてくるので末尾を追う）
+function rsLandTop(log){   // 最後の出力が欄より長ければ、その頭を欄の上端へ（以前は末尾＝出典・ボタンの所に止まり、題名・要約が上に隠れていた）
+  const c=log.lastElementChild;
+  if(!c || c.offsetHeight<=log.clientHeight-24) return false;
+  log.scrollTop += c.getBoundingClientRect().top - log.getBoundingClientRect().top - 8;
+  return true;
+}
+function rsModalScrollLog(log, prev){   // モーダル: ふだんは末尾へ。自分のジョブのレポート等が届いたら頭から見せ、その後の描き直し（注記など）では
+  // 上を読んでいる間は位置を保つ（末尾の近くへ戻った・次の質問を送ったら、また末尾を追う）
+  const own=!!RS.ownOutM; RS.ownOutM=false;
+  const n=RS.msgs.length, last=RS.msgs[n-1], whole=!!last && RS_WHOLE_ROLES.includes(last.role);
+  const land = whole && last!==RS.landSeen && (RS.landMsg===last || own) && (prev.near || own);
+  RS.landMsg=null; if(whole) RS.landSeen=last;
+  if(land && rsLandTop(log)){ RS.landHold=last; return; }
+  if(RS.landHold && RS.msgs.includes(RS.landHold) && !prev.near && !own && !(last && last.role==="user")){ log.scrollTop=prev.top; return; }
+  RS.landHold=null; log.scrollTop=log.scrollHeight;
 }
 async function sendRs(text){
   text=(text||"").trim(); if(!text||RS.busy) return;
@@ -4108,9 +4134,11 @@ async function sendRs(text){
       ? "社内向けメールの下書きを作りますね。下のフォームで対象のレポートと宛先（上長への報告／チーム共有）を確認して「作成」を押してください（送信はしません）。"
       : "「"+EXPORT_NAMES[intent.kind]+"」で書き出しますね。下のフォームで対象（レポート／選択記事）と指示を確認して「作成」を押してください。"});
     renderRsLog();
-    let rid=tgt&&tgt.report ? tgt.report.id : null, rtitle=tgt&&tgt.report ? tgt.report.title : "";
-    if(tgt && tgt.answer){ rid=await saveAnswer(tgt.answer); rtitle=tgt.answer.saved_title||""; renderRsLog(); }   // 回答は Q&A として保存してから
-    toggleExportForm(true,{kind:intent.kind, instructions:intent.instructions, report_id:rid||undefined, report_title:rtitle, tone:intent.tone, length:intent.length}); return;
+    let rid=tgt&&tgt.report ? tgt.report.id : null, rtitle=tgt&&tgt.report ? tgt.report.title : "", ans=null;
+    if(tgt && tgt.answer){ if(tgt.answer.saved_id){ rid=tgt.answer.saved_id; rtitle=tgt.answer.saved_title||""; } else ans=tgt.answer; }
+    // 保存していない回答は「作成」を押したときに Q&A として保存する（判定の誤りでフォームが開いても、保存済みレポートが勝手に増えない）
+    toggleExportForm(true,{kind:intent.kind, instructions:intent.instructions, report_id:rid||undefined, report_title:rtitle,
+      answer_job: ans ? ans.job_id : undefined, answer_title: ans ? String(ans.question||"") : undefined, tone:intent.tone, length:intent.length}); return;
   }
   if(RS.ask){ toast("回答を生成中です。完了をお待ちください","err"); return; }
   const ids=RS.results.filter(a=>RS.sel.has(a.id)).map(a=>a.id).slice(0,1000);   // 選択全件（表示順）。どれを使うかはサーバーが関連度と文脈長で決める
@@ -4246,7 +4274,9 @@ function rsRestore(){
   const okMsg=m=>m && typeof m==="object" && (RS_KEEP_ROLES.includes(m.role) || m.role==="error")
     && (m.role!=="report" || (m.report && typeof m.report==="object")) && (!["compare","export","change"].includes(m.role) || (m.data && typeof m.data==="object"));
   RS.msgs=(Array.isArray(st.msgs) ? st.msgs : []).filter(okMsg).map(m=>m.role==="error" ? {role:"error", text:String(m.text||"")} : m);
-  try{
+  // 検索語・期間も、まだ検索していないときだけ戻す。検索済み（モーダルを閉じて開き直した）なら画面の条件と一覧の方が新しい
+  // （控えは 300ms 遅れて書くので、以前は古い控えの検索語だけが戻り、一覧は別の検索のままになることがあった）
+  if(fresh) try{
     $("#rsQ").value=String(st.q||"").slice(0,300);
     const per=$("#rsPeriod"); if([...per.options].some(o=>o.value===st.period)) per.value=st.period;
     if(per.value==="custom"){ $("#rsFrom").value=validDay(st.from); $("#rsTo").value=validDay(st.to); }
@@ -4376,6 +4406,7 @@ async function pollReport(){
 function replaceProgress(msg){
   const i=RS.msgs.findIndex(m=>m.role==="progress");
   if(i>=0) RS.msgs.splice(i,1,msg); else RS.msgs.push(msg);
+  if(msg && RS_WHOLE_ROLES.includes(msg.role)) RS.landMsg=msg;   // ジョブで届いたレポート等: 頭から見せる（追っていたとき）
   renderRsLog();
 }
 function rsRenderProgress(){ const n=document.querySelector("#rsLog .rpt-progress"); if(n) n.replaceWith(progressEl()); else renderRsLog(); }
@@ -4485,7 +4516,8 @@ function reportEl(rep){
   const w=el("div",{class:"bubble ai rpt"});
   w.append(el("div",{class:"rpt__title",text:rep.title||"レポート"}));
   const d=new Date((rep.created_at||0)*1000);
-  const st=rep.stats||{}; const meta=[d.toLocaleString("ja-JP"), "記事 "+(rep.sources||[]).length+"件"];
+  const st=rep.stats||{};   // 記事の件数は外部資料（訪問メモ・資料。id が doc:）の抜粋を除く（抜粋は下の「外部資料の抜粋 N件」）
+  const meta=[d.toLocaleString("ja-JP"), "記事 "+(rep.sources||[]).filter(s=>!String((s&&s.id)||"").startsWith("doc:")).length+"件"];
   if(st.account && Array.isArray(st.aliases) && st.aliases.length) meta.push("別表記: "+st.aliases.join("・"));   // 商談ブリーフで記事を集めた語
   if(st.thin) meta.push("⚠ 対象記事が少ない（"+(st.articles||0)+"件）ため内容が薄い可能性があります");
   if(st.chunks) meta.push("部分要約 "+st.chunks+"回");
@@ -4678,14 +4710,17 @@ function renderAliasRow(){
   const row=$("#rsAliasRow"); if(!row) return; row.innerHTML="";
   const a=RS.alias; if(!a){ row.hidden=true; return; }
   row.hidden=false; const d=a.data, cbs=[];
-  // 同義語辞書に名前の行があると、検索（/api/archive/search）はその行の語を必ず OR で展開する。名前と同義語のチップは外しても
-  // 検索結果が変わらないので、チェックしたまま外せない形で示す（外すには同義語辞書を編集）。件数はその語だけの件数
-  const synTerms=(d.aliases||[]).filter(x=>x.from==="synonym").map(x=>x.term);
-  const locked=x=>synTerms.length>0 && (x.from==="name" || x.from==="synonym");
+  // 同義語辞書に名前の行があると、検索（/api/archive/search）はその行の語を必ず OR で展開する。その行で展開される語（サーバーの
+  // locked: 語の最初の行が名前の行と同じ）は外しても検索結果が変わらないので、チェックしたまま外せない形で示す（外すには同義語辞書を編集）。
+  // 別の行にも入っている語（「NSC, 日鉄ソリューションズ」の NSC）は、その行も展開されるので外せる（adds: 一緒に入る語）。件数はその語だけの件数
+  const locked=x=>x.locked===true;
+  const lockTerms=(d.aliases||[]).filter(locked).map(x=>x.term);
+  const addsOf=x=>Array.isArray(x.adds) ? x.adds.filter(t=>typeof t==="string" && t) : [];
   row.append(el("span",{text:"別表記:"}));
   (d.aliases||[]).forEach(x=>{
     const lab=el("label",{class:"achip"+(x.count?"":" zero")+(locked(x)?" lock":""),
-      title:(ALIAS_FROM[x.from]||x.from)+"・過去ログ "+x.count+"件"+(locked(x)?"（同義語辞書の行の語は検索で常に含まれます）":"")});
+      title:(ALIAS_FROM[x.from]||x.from)+"・過去ログ "+x.count+"件"+(locked(x)?"（同義語辞書の行の語は検索で常に含まれます）":"")
+            +(addsOf(x).length?"（含めると同義語辞書の別の行の「"+addsOf(x).join("・")+"」も検索に入ります）":"")});
     const cb=el("input",{type:"checkbox"}); cb.checked=locked(x) || acctDefaultOn(x); cb.disabled=locked(x); cbs.push([cb,x]);
     lab.append(cb, el("span",{class:"t",text:x.term}), document.createTextNode(" "), el("span",{class:"c",text:x.count+"件"}));
     if(ALIAS_BADGE[x.from]) lab.append(el("span",{class:"k",text:ALIAS_BADGE[x.from]}));
@@ -4699,7 +4734,8 @@ function renderAliasRow(){
   row.append(go, x);
   const hints=[];
   if((d.aliases||[]).length<=1) hints.push("別表記の候補は見つかりませんでした");
-  if(synTerms.length) hints.push("同義語辞書の行の語（"+[d.aliases[0].term].concat(synTerms).join("・")+"）は検索で常にまとめて含まれます（外すには「同義語」で辞書を編集）");
+  if(lockTerms.length>1) hints.push("同義語辞書の行の語（"+lockTerms.join("・")+"）は検索で常にまとめて含まれます（外すには「同義語」で辞書を編集）");
+  (d.aliases||[]).filter(x=>addsOf(x).length).forEach(x=>hints.push("「"+x.term+"」を含めると、同義語辞書の別の行の「"+addsOf(x).join("・")+"」も検索に入ります"));
   if((d.excluded_zero||[]).length) hints.push("過去ログに無い候補は使いません: "+d.excluded_zero.join("・"));
   if(d.ai_error) hints.push("⚠ "+d.ai_error);
   else if(!d.llm_used) hints.push("生成AIが未設定のため、同義語とウォッチから候補を出しています");
@@ -4712,26 +4748,44 @@ const EXPORT_COLORS={docx:"#2B5C8F", xlsx:"#1F8A4C", pptx:"#C2410C", pdf:"#B91C1
 const MAIL_RE=/メール(?!マガジン|アドレス)|e-?mail/i;   // サーバー側 _MAIL_INTENT_RE と同じ（メールマガジン・メールアドレスは除く）
 // メールが「作るもの」のときだけメール下書きにする（サーバー側 detect_export_intent と同じ規則・同じ順）。「Wordにして、メールに添付したい」は Word、
 // 「フィッシングメールの文面の特徴は？」「標的型メールの被害を時系列にまとめて」はふつうの質問（以前は「メール」の語だけでメールのフォームになっていた）
-const MAIL_INTENT=(()=>{ const m="(?:"+MAIL_RE.source+")";
-  return {draft:new RegExp(m+"\\s*の?\\s*下書き","i"),
-          body:new RegExp(m+"\\s*の?\\s*文面\\s*(?:を|に|で|として)?\\s*(?:して|作|書|まとめ|起こ|出力|変換|用意|考え)","i"),
-          bodyOnly:new RegExp("^\\s*(?:.{0,20}?(?:向け|用)の?)?"+m+"\\s*の?\\s*文面[\\s。.!！?？]*$","i"),
-          // 「報告メールを作って」「メールの文章を書いて」「メール作成」。「作成」「生成」は文末のときだけ（「メールを作成する手口」は話題）・「メールを作ってくれるAI」も話題
-          obj:new RegExp(m+"\\s*(?:の?\\s*(?:文章|本文)\\s*)?(?:[をの]\\s*)?(?:作って|作成して|書いて|用意して|生成して|起こして|出力して|(?:作成|生成)\\s*(?:を\\s*)?(?:お願い|頼)"
-                         +"|(?:作成|生成)(?=[\\s。.!！]*$))(?!(?:くれる|もらう|もらえる|いる|いた)[^\\s。.!！?？、])","i"),
-          form:new RegExp(m+"\\s*(?:形式|本文|文|用の?文章?|の文章)\\s*(?:に|で|として)\\s*(?:して|変換|まとめ|作|出力|化し|起こ)","i"),   // 「メール形式にして」「メール用の文章にして」
-          target:new RegExp(m+"\\s*(?:に|で|として|用に?|向けに)\\s*(?:して|変換|まとめ|作|書き出|書い|出力|化し|起こ)","i"),
-          send:new RegExp(m+"\\s*で\\s*(?:共有|送)(?:する|できる|して|したい|しやすい|れる|る|りたい|ります|します)","i")}; })();
+const MAIL_INTENT=(()=>{ const R=String.raw, m="(?:"+MAIL_RE.source+")", g=x=>new RegExp(x,"i");
+  // 動詞（て形）の後ろが「依頼の終わり方」のときだけ依頼とみなす（許可リスト）。サーバー側 _MAIL_REQ_END と同じ文字列（String.raw で書き写す）。
+  // 「AIでメールを作成して送信する機能を発表した企業は？」「社員はAIでメールを作成していますか？」は質問、「メールを作っていただけますか」は依頼
+  const END=R`(?=[\s。.!！?？]*$|[。.!！]|[、,](?![\s\S]*[?？][\s。]*$)`
+           +R`|\s*(?:ください|下さい|くださ|ほしい|欲しい|お願い|いただ(?:け|き)|頂(?:け|き)`
+           +R`|(?:おいて|みて)(?:[\s。.!！?？、,]|$|ください|下さい|ほしい|欲しい|くれ|もらえ)`
+           +R`|くれ(?:ます|ません|ない(?:か|[？?]|[\s。]*$)|る(?:かな|か|[？?]|[\s。]*$)|ると(?:助か|嬉|うれ|あり)|[\s。.!！?？]|$)`
+           +R`|もら(?:え(?:ます|ません|ない(?:か|[？?]|[\s。]*$)|る(?:かな|か|[？?]|[\s。]*$)|ると(?:助か|嬉|うれ|あり))|いたい)`
+           +R`|(?:ね|よ)[\s。.!！]*$))`;
+  const MAKE=R`(?:作って|作成して|書いて|用意して|生成して|起こして|出力して|起案して|考えて)`;
+  const TURN=R`(?:して|変換して|まとめて|作って|作成して|書いて|書き出して|出力して|化して|起こして)`+R`|変換(?=[\s。.!！]*$)`;
+  const NONTE=R`(?:作成|生成)\s*(?:を\s*)?(?:お願い|頼)`
+             +R`|(?:作成|生成)\s*(?:いただ(?:け|き)|頂(?:け|き)|願い|願え|ください|下さい)`
+             +R`|(?:作成し|作り|書き|用意し)たい(?=です|ので|んです|のですが|[\s。.!！、,]|$)`
+             +R`|(?:作成|生成)(?=[\s。.!！]*$)`;
+  return {draft:g(m+R`\s*の?\s*下書き`+R`(?:\s*(?:を\s*)?(?:`+MAKE+END+"|"+NONTE+")"+R`|\s*に\s*(?:`+TURN+")"+END
+                  +R`|(?=[\s。.!！?？]*$)|\s*[、,](?![\s\S]*[?？][\s。]*$)|\s*を?\s*(?:お願い|頼)|\s*が?\s*(?:ほしい|欲しい))`),
+          body:g(m+R`\s*の?\s*文面`+R`(?:\s*(?:を\s*)?(?:`+MAKE+END+"|"+NONTE+")"+R`|\s*(?:に|で|として)\s*(?:`+TURN+")"+END+")"),
+          bodyOnly:g(R`^\s*(?:.{0,20}?(?:向け|用)の?)?`+m+R`\s*の?\s*文面[\s。.!！?？]*$`),
+          obj:g(m+R`\s*(?:の?\s*(?:文章|本文|文案|案|ドラフト|原稿|文例|件名と本文)\s*)?(?:[をの]\s*)?`+"(?:"+MAKE+END+"|"+NONTE+")"),   // 「報告メールを作って」「メールの作成をお願い」
+          form:g(m+R`\s*(?:(?:形式|本文|文|用の?文章?|の文章)\s*(?:に|で|として)\s*(?:`+TURN+")"+R`|化\s*(?:して|したい))`+END),   // 「メール形式にして」「メール化して」
+          target:g(m+R`\s*(?:に|で|として|用に?|向けに)\s*(?:`+TURN+")"+END),   // 「この内容をメールにして」「PDFをメールにまとめて」
+          send:g(m+R`\s*で\s*(?:共有|送)`+R`(?:する|できる|して|したい|しやすい|れる|る|りたい|ります|します)`),
+          sendReq:g(m+R`\s*(?:で\s*(?:共有|送|報告|連絡)(?:して|したい|って|りたい|しておいて)`+R`|に\s*(?:し|まとめ)たい)`
+                    +R`(?:ください|下さい|ほしい|欲しい|もらえますか|くれますか)?(?:です)?[\s。.!！]*$`),   // 「メールで共有して」「社内メールにしたい」（文末だけ）
+          purpose:g(m+R`\s*で\s*(?:共有|送|報告|連絡)(?:し|り)?たい(?:ので|から)[、,\s]*`
+                    +R`(?:(?:文面|文章|本文|文案|下書き)\s*を?\s*)?(?:`+MAKE+END+"|"+NONTE+")")}; })();   // 「メールで報告したいので文面を作って」
+const EXPORT_VERB_RE=/にして|に変換|で出力|で書き出|書き出し|作って|作成|生成|エクスポート|出して|化して|にまとめ/i;
 const EXPORT_KIND_RES=[["mail",MAIL_RE],["pptx",/pptx|パワポ|パワーポイント|powerpoint|スライド|プレゼン/i],["xlsx",/xlsx|excel|エクセル|スプレッドシート|表計算/i],["docx",/docx|word|ワード(?!プレス)/i],["pdf",/pdf/i]];
-function detectExportIntent(text){   // 形式の判定はサーバー側 detect_export_intent と同じ規則。指示は依頼の言い回しを除いた残り
-  const t=String(text||"");
+function detectExportIntent(text){   // 形式の判定はサーバー側 detect_export_intent と同じ規則・同じ順。指示は依頼の言い回しを除いた残り
+  const t=String(text||"").trim(), I=MAIL_INTENT;
   const mail=()=>Object.assign({kind:"mail", instructions:exportInstructions(t)}, mailPreset(t));
-  if(MAIL_INTENT.draft.test(t) || MAIL_INTENT.body.test(t) || MAIL_INTENT.bodyOnly.test(t.trim())
-     || MAIL_INTENT.obj.test(t) || MAIL_INTENT.form.test(t)) return mail();   // 「メールの下書き」「メールを作って」は依頼の言い回しが無くても
-  if(!/にして|に変換|で出力|で書き出|書き出し|作って|作成|生成|エクスポート|出して|化して|にまとめ/i.test(t)) return null;
-  if(MAIL_INTENT.target.test(t)) return mail();   // 「この内容をメールにして」「PDFをメールにして」
+  if(I.draft.test(t) || I.body.test(t) || I.bodyOnly.test(t) || I.obj.test(t) || I.form.test(t) || I.purpose.test(t)) return mail();   // 「メールの下書き」「メールを作って」は依頼の言い回しが無くても
+  const hasFmt=EXPORT_KIND_RES.slice(1).some(([k,re])=>re.test(t));
+  if(!EXPORT_VERB_RE.test(t)) return !hasFmt && I.sendReq.test(t) ? mail() : null;   // 「メールで共有して」（形式の語があれば送る手段）
+  if(I.target.test(t)) return mail();   // 「この内容をメールにして」「PDFをメールにして」
   for(const [k,re] of EXPORT_KIND_RES.slice(1)) if(re.test(t)) return {kind:k, instructions:exportInstructions(t,k)};   // 形式の語が先（メールは送る手段）
-  if(MAIL_INTENT.send.test(t)) return mail();   // 「メールで送れる形にまとめて」（形式の語が無いとき）
+  if(I.send.test(t) || I.sendReq.test(t)) return mail();   // 「メールで送れる形にまとめて」（形式の語が無いとき）
   return null;
 }
 function mailPreset(t){   // 依頼の言葉からメールの宛先・長さの既定を選ぶ（「チームに共有」→チーム共有、「詳しく」→標準）
@@ -4740,12 +4794,26 @@ function mailPreset(t){   // 依頼の言葉からメールの宛先・長さの
   if(/詳しく|詳細|標準|長め/.test(t)) o.length="normal"; else if(/短く|短め|簡潔/.test(t)) o.length="short";
   return o;
 }
-function exportInstructions(text, kind){   // 「この結果をExcelにして、数値中心で」→「数値中心で」（形式・依頼の動詞・「この回答を」などを除く）
-  let t=String(text||"");   // メール以外の形式では「メール」の語は残す（「Wordにして、メールに添付したい」→「メールに添付したい」）
-  EXPORT_KIND_RES.forEach(([k,re])=>{ if(k==="mail" && kind && kind!=="mail") return; t=t.replace(new RegExp(re.source,"gi"),""); });
-  t=t.replace(/にして|に変換|で出力|で書き出(し|して)?|作って|作成|生成|エクスポート|出して|化して|にまとめ(て)?/g,"");
-  t=t.replace(/この(結果|回答|内容)を?|これを/g,"").replace(/^の?(下書き|文面)を?/,"");
-  return t.replace(/^[、。,.\s　]+|[、。,.\s　]+$/g,"").slice(0,300);
+function exportInstructions(text, kind){   // 「この結果をExcelにして、数値中心で」→「数値中心で」（形式・依頼の言い回し・「この回答を」などを除く）
+  // 除いた所に印（\u0000）を置き、印に挟まれた・印の前の助詞（「メールを作成」の「を」、「エクセルで出して」の「で」）も落とす。
+  // メール以外の形式では「メール」の語は残す（「Wordにして、メールに添付したい」→「メールに添付したい」）
+  const X="\u0000", mail=!kind||kind==="mail"; let t=String(text||"").replace(/\u0000/g,"");
+  const cut=re=>{ t=t.replace(re,X); };
+  if(mail) cut(new RegExp("(?:[EＥeｅ][-‐]?)?(?:"+MAIL_RE.source+")\\s*(?:の?\\s*(?:下書き|文面|文章|本文|文案|ドラフト|原稿|文例|件名と本文|案|形式|用の?文章?|用|文)(?![\\u4e00-\\u9fff]))?","gi"));
+  EXPORT_KIND_RES.forEach(([k,re])=>{ if(k!=="mail") cut(new RegExp(re.source,"gi")); });
+  cut(/この(?:結果|回答|内容|レポート)を?|これを/g);
+  if(mail){
+    cut(/で\s*(?:共有|送|報告|連絡)(?:し|り)?たい(?:ので|から)[、,\s]*|で\s*(?:共有|送|報告|連絡)(?:して|したい|って|りたい|しておいて)|で\s*(?:共有|送)(?:れる|できる|しやすい)(?:形|よう)(?=\s*に)|に\s*(?:し|まとめ)たい/g);
+    cut(/作って|書いて|用意して|生成して|起こして|起案して|考えて|書き出して|(?:作り|書き|作成し)たい(?:です)?/g);
+  }
+  cut(/(?:作成|生成)(?:\s*して|\s*を)?(?=[\s。.!！?？、,]|$|\s*(?:お願い|頼|いただ|頂|願|ください|下さい|ほしい|欲しい|もら|くれ))/g);
+  cut(/にして|に変換|で出力|で書き出(?:し|して)?|で出して|作って|エクスポート|出して|化して|にまとめ(?:て)?/g);
+  cut(/(?:して)?(?:ください|下さい)|お願い(?:します|したい|できますか)?|頼みたい|(?:いただ|頂)(?:け(?:ます|ません)?か|きたい(?:です)?)|願います|(?:ほしい|欲しい)(?:です)?|もらえ(?:ます|る)(?:か|でしょうか)?|もらえると(?:助かります|嬉しいです|ありがたい(?:です)?)|もらいたい|くれ(?:ます|ません)か|くれる(?:かな|か)?/g);
+  t=t.replace(/\u0000\s*(?:の\s*)?(?:下書き|文面|文章|本文|文案)(?![\u4e00-\u9fff])/g,X);   // 「メールで報告したいので文面を作って」の「文面」
+  for(let i=0;i<4;i++) t=t.replace(/\u0000\s*[をでにへのとが](?=\s*(?:\u0000|[、。,.!！?？]|$))/g,X).replace(/[をが]\s*(?=\u0000)/g,"");
+  t=t.replace(/\u0000+/g,"").replace(/^の?(下書き|文面)を?/,"");
+  t=t.replace(/^[、。,.\s　]+|[、。,.\s　]+$/g,"").replace(/[をのが]+$/,"");
+  return /^[をでにはのへとがも用文、。,.\s　]*$/.test(t) ? "" : t.slice(0,300);
 }
 function toggleExportForm(show, preset){
   const fm=$("#rsExportForm"); fm.hidden=!show; if(!show) return;
@@ -4755,24 +4823,31 @@ function toggleExportForm(show, preset){
   if(preset.instructions!==undefined) $("#rsExInst").value=preset.instructions;
   if(preset.tone) $("#rsExTone").value=preset.tone;
   if(preset.length) $("#rsExLen").value=preset.length;
-  RS.exPreset = preset.report_id ? {id:preset.report_id, title:preset.report_title||""} : null;
-  syncExportForm(preset.report_id||"");
+  RS.exPreset = preset.report_id ? {id:preset.report_id, title:preset.report_title||""}
+              : preset.answer_job ? {answer:preset.answer_job, title:preset.answer_title||""} : null;   // answer: まだ保存していない会話の回答（「作成」で保存）
+  syncExportForm(preset.report_id || (preset.answer_job ? "answer:"+preset.answer_job : ""));
   setTimeout(()=>$("#rsExInst").focus(),30);
 }
-function fillExportSrc(pick, keep){   // 対象の候補（メール下書きはレポートだけ）。pick（レポート id）を選ぶ。keep なら直前の選択を選び直す
+function exportAnswerMsg(jobId){ return RS.msgs.find(x=>x.role==="assistant" && x.job_id===jobId && Array.isArray(x.sources) && x.sources.length) || null; }
+function fillExportSrc(pick, keep){   // 対象の候補（メール下書きはレポートだけ）。pick（レポート id か "answer:<job>"）を選ぶ。keep なら直前の選択を選び直す
   const sel=$("#rsExSrc"), prev=sel.value, mail=$("#rsExKind").value==="mail"; sel.innerHTML="";
   const reps=RS.msgs.filter(m=>m.role==="report").map(m=>m.report).reverse();   // 画面に出ているレポート（新しい順）
   reps.forEach(r=>sel.append(el("option",{value:"report:"+r.id, text:"レポート: "+r.title})));
   RS.reports.filter(r=>!reps.some(x=>x.id===r.id)).slice(0,20).forEach(r=>sel.append(el("option",{value:"report:"+r.id, text:"保存済み: "+r.title})));
   const pre=RS.exPreset;
-  if(pre && ![...sel.options].some(o=>o.value==="report:"+pre.id))   // 保存したばかりの Q&A など、一覧に無ければ先頭に足す
+  if(pre && pre.answer){   // まだ保存していない回答: 「作成」を押したときに Q&A として保存する（保存済みならそのレポート）
+    const am=exportAnswerMsg(pre.answer);
+    if(am && am.saved_id){ if(![...sel.options].some(o=>o.value==="report:"+am.saved_id)) sel.insertBefore(el("option",{value:"report:"+am.saved_id, text:"保存済み: "+(am.saved_title||"Q&A")}), sel.firstChild);
+      if(pick==="answer:"+pre.answer) pick=am.saved_id; }
+    else if(am) sel.insertBefore(el("option",{value:"answer:"+pre.answer, text:"回答: "+(pre.title||am.question||"Q&A").slice(0,80)+"（「作成」で Q&A として保存）"}), sel.firstChild);
+  }else if(pre && ![...sel.options].some(o=>o.value==="report:"+pre.id))   // 保存したばかりの Q&A など、一覧に無ければ先頭に足す
     sel.insertBefore(el("option",{value:"report:"+pre.id, text:"保存済み: "+(pre.title||"Q&A")}), sel.firstChild);
   if(!mail){
     if(RS.sel.size) sel.append(el("option",{value:"ids", text:"選択中の記事 "+RS.sel.size+"件（Word/PowerPoint/PDF は先にレポートを生成）"}));
     if(RS.theme) sel.append(el("option",{value:"theme:"+RS.theme.id, text:(RS.theme.kind==="watch"?"ウォッチ: ":"テーマ: ")+RS.theme.name+"（該当記事すべて）"}));
   }
   if(!sel.options.length) sel.append(el("option",{value:"", text: mail ? "（保存済みのレポートがありません）" : "（レポートを生成するか、記事を選択してください）"}));
-  const want = pick ? "report:"+pick : keep ? prev : "";
+  const want = pick ? (/^answer:/.test(pick) ? pick : "report:"+pick) : keep ? prev : "";
   if(want && [...sel.options].some(o=>o.value===want)) sel.value=want;
 }
 function syncExportForm(pick){   // 形式に合わせて 対象の候補（メールはレポートだけ）・枚数・宛先と長さ・説明 を切り替える
@@ -4788,10 +4863,18 @@ function syncExportForm(pick){   // 形式に合わせて 対象の候補（メ�
 }
 async function startExport(){
   if(RS.job && !["done","error"].includes(RS.job.state)){ toast("実行中のジョブがあります。完了をお待ちください","err"); return; }
-  const kind=$("#rsExKind").value, src=$("#rsExSrc").value;
-  if(kind==="mail" && !src.startsWith("report:")){ toast("先にレポートを作るか、会話の回答を保存してください","err"); return; }
+  const kind=$("#rsExKind").value; let src=$("#rsExSrc").value;
+  if(kind==="mail" && !/^(report|answer):/.test(src)){ toast("先にレポートを作るか、会話の回答を保存してください","err"); return; }
   if(!aiReady() && kind!=="mail"){ RS.msgs.push({role:"error",text:"⚠ 生成AIが未設定です。"+RS_SETTINGS_HINT+"から登録してください。"}); renderRsLog(); return; }   // メールは未設定でもレポートの本文から作る
   if(!src){ toast("対象を選んでください","err"); return; }
+  if(src.startsWith("answer:")){   // 会話の回答は、ここで初めて Q&A として保存する（何度押しても1件）
+    const am=exportAnswerMsg(src.slice(7));
+    if(!am){ toast("対象の回答が見つかりません。対象を選び直してください","err"); return; }
+    const btn=$("#rsExStart"); if(btn) btn.disabled=true;
+    const id=await saveAnswer(am); if(btn) btn.disabled=false;
+    if(!id) return;
+    renderRsLog(); src="report:"+id; RS.exPreset={id, title:am.saved_title||""};
+  }
   const body = kind==="mail" ? {kind, instructions:$("#rsExInst").value.trim(), tone:$("#rsExTone").value, length:$("#rsExLen").value}
              : {kind, instructions:$("#rsExInst").value.trim(), slides:parseInt($("#rsExSlides").value,10)||8, fulltext:$("#rsRFull").checked};
   if(src.startsWith("report:")) body.report_id=src.slice(7);
@@ -5521,7 +5604,7 @@ function rsOpenForm(){   // 開いている「作る」フォームと入力中�
   RS_FORM_FIELDS.forEach(k=>{ const n=document.getElementById(k); if(n) fields[k]=String(n.value||"").slice(0,4000); });
   RS_FORM_CHECKS.forEach(k=>{ const n=document.getElementById(k); if(n) checks[k]=!!n.checked; });
   const out={id, fields, checks};
-  if(id==="rsExportForm"){ const o=$("#rsExSrc").selectedOptions[0]; if(o) out.srcTitle=String(o.textContent||"").replace(/^(レポート|保存済み): /,"").slice(0,200); }
+  if(id==="rsExportForm"){ const o=$("#rsExSrc").selectedOptions[0]; if(o) out.srcTitle=String(o.textContent||"").replace(/^(レポート|保存済み|回答): /,"").replace(/（「作成」で Q&A として保存）$/,"").slice(0,200); }
   if(id==="rsAcctForm") out.acct={checked: ACCT.checked ? [...ACCT.checked].slice(0,20) : null, fixedQ:String(ACCT.fixedQ||"").slice(0,300),
                                   aiFor:String(ACCT.aiFor||"").slice(0,40)};
   return out;
@@ -5584,20 +5667,42 @@ function rsHandoffTrack(nonce){   // 渡したジョブ・質問を覚える（�
 // 「ポータルの条件で開き直す」を出す（押すまで別タブの作業はそのまま）
 const RS_TAB_ALIVE_MS=180000, RS_TABS=new Map();   // 別タブの id → 最後に合図を受けた時刻
 function rsTabSeen(){ const now=Date.now(); for(const [id,t] of RS_TABS) if(now-t>RS_TAB_ALIVE_MS) RS_TABS.delete(id); return RS_TABS.size>0; }
+// 申し出・引き継ぎは「前に渡したときから、ポータルで変わったもの」があるときだけ（rsHandoffSig）。以前は一度リサーチを開いた後は
+// フィードからの Shift+G のたびに、渡し済みの古い検索・書きかけ・ポータルだけの案内（「この質問の回答は別タブ…」）を申し出ていた
+const RS_RELAY_RE=/^(このジョブの進捗|この質問の回答)は別タブ/;   // ポータルに出した「別タブに表示」の案内（別タブへは持ち込まない・数えない）
+function rsHandoffSig(st){   // 渡す中身の目印: 条件・選択・会話（案内を除く）・書きかけ・フォーム・まだ渡していないジョブ／質問
+  st=st||{}; const ids=(RS.handed && RS.handed.ids) || new Set(), o={};
+  RS_COND_KEYS.forEach(k=>{ if(k in st) o[k]=st[k]; });
+  o.msgs=(Array.isArray(st.msgs) ? st.msgs : []).filter(m=>m && RS_KEEP_ROLES.includes(m.role) && !(m.role==="assistant" && RS_RELAY_RE.test(String(m.text||"")))).map(rsMsgKey);
+  o.draft=String(st.draft||"").trim(); o.form=st.form||null;
+  const jid=st.job && st.job.id, aid=st.ask && st.ask.id;
+  o.job = jid && !ids.has(jid) ? jid : null; o.ask = aid && !ids.has(aid) ? aid : null;
+  try{ return JSON.stringify(o); }catch(e){ return "x"+Date.now(); }
+}
+function rsHandedMark(st){   // 渡した（引き継ぎを書いた・申し出た）: 次は、ここから変わったときだけ申し出る
+  RS.handed=RS.handed || {ids:new Set(), sig:""};
+  [st && st.job && st.job.id, st && st.ask && st.ask.id].forEach(id=>{ if(id) RS.handed.ids.add(id); });
+  RS.handed.sig=rsHandoffSig(st);
+}
 function rsToLiveTab(st){   // 扱ったら true（前へ出した、または名前で届かずに新しくできた空のタブで開いた）。false なら今までの動作
   if(!rsTabSeen()) return false;
   let w=null; try{ w=window.open("", RS_TAB); }catch(e){ w=null; }
   if(!w) return false;   // 開けない（ポップアップを止められた）
-  let live=false;
-  try{ live = w.location.pathname==="/research" && w.document.documentElement.classList.contains("rs-standalone"); }catch(e){ live=false; }
+  let live=false, to="";
+  try{   // /research/（末尾の / つき）で開いたタブも同じ（サーバーと先頭のスクリプトは両方を別タブとして扱う）
+    live = /^\/research\/?$/.test(w.location.pathname) && w.document.documentElement.classList.contains("rs-standalone");
+    if(live) to=String(w.document.documentElement.dataset.rsTab||"");   // 前へ出したタブの番号（申し出はそのタブだけに）
+  }catch(e){ live=false; }
   if(live){
     try{ w.focus(); }catch(e){}
-    if(RS.opened){   // ポータルでリサーチを開いていた: その条件・会話を申し出る（ただの「別タブへ戻る」では申し出ない）
+    // ポータルでリサーチを開いていて、前に渡したときから変わったものがある: その条件・会話を、前へ出したタブにだけ申し出る
+    // （ただの「別タブへ戻る」・渡し済みのものでは申し出ない。ブックマークで開いた別のリサーチのタブには出さない）
+    if(RS.opened && to && rsHandoffSig(st)!==(RS.handed && RS.handed.sig)){
       const bc=rsChannel(), nonce=rsNonce();
-      if(bc) try{ bc.postMessage({t:"rs-offer", ho:{v:1, at:Date.now(), nonce, st}}); rsHandoffTrack(nonce); }catch(e){}
+      if(bc) try{ bc.postMessage({t:"rs-offer", to, ho:{v:1, at:Date.now(), nonce, st}}); rsHandoffTrack(nonce); rsHandedMark(st); }catch(e){}
     }
   }else{   // 合図はあるが名前では届かない（ブックマークから開いた別タブなど）: いまできた空のタブ（または移動したタブ）で開く
-    const nonce=rsHandoffWrite(st); if(nonce) rsHandoffTrack(nonce);
+    const nonce=rsHandoffWrite(st); if(nonce){ rsHandoffTrack(nonce); rsHandedMark(st); }
     try{ w.location.href="/research"+rsUrlQuery(st); }catch(e){}
   }
   if(rsModalTop()) closeTop();
@@ -5610,7 +5715,7 @@ function rsPopout(opts){   // 引き継ぎを書く。opts.open: ここで windo
   else{ st=Object.assign({}, rsReadSession() || {v:1, msgs:[]}); delete st.draft; delete st.form; }   // このページでまだリサーチを開いていない: 控えをそのまま渡す
   if(!opts.background && rsToLiveTab(st)) return "";
   const nonce=rsHandoffWrite(st);
-  if(nonce) rsHandoffTrack(nonce);
+  if(nonce){ rsHandoffTrack(nonce); rsHandedMark(st); }
   const url="/research"+rsUrlQuery(st);
   if(opts.open){
     let w=null; try{ w=window.open(url, RS_TAB); }catch(e){ w=null; }
@@ -5689,7 +5794,7 @@ function rsMergeSession(own, ho){   // このタブの控え（own）と引き�
   // 条件・選択・テーマは引き継いだもの。ただし条件を1つも持たない引き継ぎ（ポータルでリサーチを開いたことが無い）では、
   // このタブの条件を消さない（以前は {v:1, msgs:[]} で検索語・選択が既定に戻っていた）
   if(RS_COND_KEYS.some(k=>k in hs)) RS_COND_KEYS.forEach(k=>{ if(k in hs) st[k]=hs[k]; else delete st[k]; });
-  const relay=/^(このジョブの進捗|この質問の回答)は別タブ/;   // ポータルに出した「別タブに表示」の案内は持ち込まない
+  const relay=RS_RELAY_RE;   // ポータルに出した「別タブに表示」の案内は持ち込まない
   const seen=new Set(), msgs=[];
   [...(Array.isArray(base.msgs) ? base.msgs : []), ...(Array.isArray(hs.msgs) ? hs.msgs : [])].forEach(m=>{
     if(!m || typeof m!=="object" || (m.role==="assistant" && relay.test(String(m.text||"")))) return;
@@ -5914,11 +6019,14 @@ function rsappOffer(ho){
   if(!ho || typeof ho!=="object" || ho.v!==1 || !ho.st || typeof ho.st!=="object" || !/^[0-9a-f]{16}$/.test(String(ho.nonce||""))) return;
   const age=Date.now()-Number(ho.at); if(!(age>=-5000 && age<RS_OFFER_MS)) return;
   const hs=ho.st, cur=rsSnapshot(), have=new Set(cur.msgs.map(rsMsgKey));
-  const nMsg=(Array.isArray(hs.msgs) ? hs.msgs : []).filter(m=>m && typeof m==="object" && RS_KEEP_ROLES.includes(m.role) && !have.has(rsMsgKey(m))).length;
+  const nMsg=(Array.isArray(hs.msgs) ? hs.msgs : []).filter(m=>m && typeof m==="object" && RS_KEEP_ROLES.includes(m.role) && !have.has(rsMsgKey(m))
+    && !(m.role==="assistant" && RS_RELAY_RE.test(String(m.text||"")))).length;   // ポータルだけの案内は持ち込まないので数えない
   const sortIds=a=>JSON.stringify((Array.isArray(a) ? a : []).map(String).sort());
   const cond=RS_COND_KEYS.some(k=>k in hs) && (rsCondsNorm(hs)!==rsCondsNorm(cur) || sortIds(hs.sel)!==sortIds(cur.sel)
     || JSON.stringify(hs.theme||null)!==JSON.stringify(cur.theme||null));
-  const job=!!(hs.job && hs.job.id) || !!(hs.ask && hs.ask.id), draft=!!String(hs.draft||"").trim() || !!(hs.form && hs.form.id);
+  // 書きかけ・フォームは、このタブに自分のものがあれば開き直してもこのタブのものが残る（mountResearchApp）ので申し出ない
+  const job=!!(hs.job && hs.job.id) || !!(hs.ask && hs.ask.id);
+  const draft=(!!String(hs.draft||"").trim() && !String($("#rsInput").value||"").trim()) || (!!(hs.form && hs.form.id) && !rsOpenForm());
   if(!cond && !nMsg && !job && !draft){ rsappOfferHide(); return; }   // このタブと同じ: 何も出さない（ただ前へ出しただけ）
   const what=[];
   if(cond) what.push(String(hs.q||"").trim() ? "検索「"+String(hs.q).trim().slice(0,30)+"」" : "検索条件");
@@ -6015,9 +6123,16 @@ function rsappPill(t, s, pct, done){
   b.querySelector(".t").textContent=t; b.querySelector(".s").textContent=s;
   b.setAttribute("aria-label", t+(s?" "+s:""));
 }
+function rsappHeadInView(){   // 最後の出力の頭が出力の欄に見えている
+  const log=$("#rsLog"), c=log && log.lastElementChild; if(!c) return false;
+  const r=c.getBoundingClientRect(), lr=log.getBoundingClientRect();
+  return r.height>0 && r.top>=lr.top-4 && r.top<lr.bottom-24;
+}
 function rsappDone(kind){   // ジョブの完了: 「…ができました — 開く」（見えている時間で20秒、または押すまで）
+  const live=$("#rsappJobLive"); if(live) live.textContent=(kind==="ask"?"回答":kind==="export"?"ファイル":"レポート")+"ができました";   // 読み上げには常に知らせる
+  // 出力がもう画面に見えている（デスクトップでこのタブを見ていて、頭が欄の中）: 「開く」は出さない（開く先が今見ているもの）
+  if(!document.hidden && !rsappNarrow() && rsappHeadInView()){ RS_APP.done=null; rsappSyncJob(); return; }
   RS_APP.done={kind, left:20000};
-  const live=$("#rsappJobLive"); if(live) live.textContent=(kind==="ask"?"回答":kind==="export"?"ファイル":"レポート")+"ができました";
   rsappSyncJob();
 }
 function rsappFocus(n, block){ if(!n) return; if(!n.hasAttribute("tabindex")) n.setAttribute("tabindex","-1"); try{ n.scrollIntoView({block:block||"nearest"}); n.focus({preventScroll:true}); }catch(e){} }
@@ -6056,7 +6171,7 @@ function rsappShowLast(log, mine){   // スマホ幅: 最新の出力を入力�
 }
 // 利用者が自分で始めた出力（フォームの「集計する」「作成」・保存済みレポートを開く など）: 次の描画で1回だけ「自分の発言」と同じに扱う。
 // API が成功して出力を積む直前に付ける（失敗したときは付かない。ジョブの完了など後から届く出力には付けない）
-function rsOwnOut(){ if(RS_STANDALONE) RS_APP.ownAction=true; }
+function rsOwnOut(){ if(RS_STANDALONE) RS_APP.ownAction=true; else RS.ownOutM=true; }
 function rsappHoldLast(log){   // スマホ幅・自分で始めた出力: 直後の更新（進捗の1回目など）で高さが増えても入力欄の下に潜らないよう、
   // 2.5 秒だけ見せ直す（その間に利用者が触った・上へ読みに行ったらやめる。上の欄が縮んでブラウザが位置を直すことがあるので、位置の差では判断しない）
   if(typeof ResizeObserver==="undefined") return;
@@ -6087,7 +6202,11 @@ function rsappScrollLog(log, prev){   // 下の方にいる・自分の発言の
     return;
   }
   if(!n){ log.scrollTop=0; rsappNewOut(false); return; }   // 会話が空（「何を作りますか？」のカード）: 先頭から見せる
-  if(first || prev.near || mine){ log.scrollTop=log.scrollHeight; rsappNewOut(false); }
+  // 追っていた（または自分で始めた）出力がまとめて届いた（レポート・比較・変化）: 欄より長ければ頭から（スマホ幅と同じ）
+  if(grew && !first && !mine && last && RS_WHOLE_ROLES.includes(last.role) && (prev.near || own) && rsLandTop(log)){ RS.landMsg=null; rsappNewOut(false); return; }
+  RS.landMsg=null;
+  // 自分で始めた出力（フォームの「作成」など）は、読んでいた位置によらず追う（次の進捗が画面の外に出ないように）
+  if(first || prev.near || mine || (own && grew)){ log.scrollTop=log.scrollHeight; rsappNewOut(false); }
   else { log.scrollTop=prev.top; if(grew && log.scrollHeight-log.scrollTop-log.clientHeight>120) rsappNewOut(true); }
 }
 function rsappRowIds(){   // 一覧の行の順（renderRsList と同じ: 類似の束は代表、開いた束はその下）
@@ -6187,12 +6306,18 @@ function rsappKey(e){   // 別タブのキー操作（入力中・Ctrl/Alt/⌘ �
   const typing = tag==="TEXTAREA" || tag==="SELECT" || (tag==="INPUT" && !/^(checkbox|radio)$/i.test(ae.type||""));
   const form = ae && ae.closest ? ae.closest(".rs__form") : null;
   if(e.key==="Escape"){   // パネル → フォーム → 入力欄 の順に閉じる
-    if(ae && ae.id==="rsQ" && ae.value) return;   // 検索欄の文字を消す（ブラウザの既定動作）
+    if(e.isComposing || e.keyCode===229) return;   // 日本語入力の変換の取り消し
+    // 検索欄の Esc は語を残して検索欄を離れる（以前はブラウザの既定動作で語が消え、検索が全件に戻っていた。消すのは欄の ✕）。
+    // その後の J / K で一覧を移動できる
     const pan=RSAPP_PANELS.find(([p])=>!$(p).hidden);
     if(pan){ e.preventDefault(); closeRsPanels(); try{ $(pan[1]).focus(); }catch(_){} return; }
     if(form && !form.hidden){ e.preventDefault(); rsappCloseForm(form.id, true); return; }
-    if(typing){ ae.blur(); return; }
+    if(typing){ e.preventDefault(); ae.blur(); return; }
     const of=RSAPP_MAKE.find(x=>!$("#"+x.form).hidden); if(of){ e.preventDefault(); rsappCloseForm(of.form, true); }
+    return;
+  }
+  if(e.key==="ArrowDown" && ae && ae.id==="rsQ" && !e.isComposing && e.keyCode!==229 && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey){   // 検索欄の ↓: 一覧の先頭へ
+    if($("#rsList .rrow")){ e.preventDefault(); if(rsappNarrow()) rsappSetView("results"); rsappSetKb(null); RS_APP.kbId=null; rsappCursor(1); }
     return;
   }
   if(e.key==="Enter" && (e.ctrlKey||e.metaKey) && form && !form.hidden){   // Ctrl+Enter: フォームを実行
@@ -6251,12 +6376,13 @@ function rsappRestoreForm(fm){   // 引き継いだフォームを開き、値�
     setChk("rsRFull");
     if(typeof ck.rsRDocs==="boolean"){ if(RS.docs.length) $("#rsRDocs").checked=ck.rsRDocs; else want("rsRDocs", ck.rsRDocs); }   // 資料の一覧が届いてから
   }else if(fm.id==="rsExportForm"){
-    const kd=v("rsExKind"), src=v("rsExSrc")||"", rid=/^report:[0-9a-f]{16}$/.test(src) ? src.slice(7) : "";
+    const kd=v("rsExKind"), src=v("rsExSrc")||"", rid=/^report:[0-9a-f]{16}$/.test(src) ? src.slice(7) : "", aj=/^answer:[0-9a-f]{16}$/.test(src) ? src.slice(7) : "";
     toggleExportForm(true,{kind: kd && EXPORT_NAMES[kd] ? kd : undefined, instructions: v("rsExInst")!=null ? v("rsExInst") : undefined,
       tone: ["boss","team"].includes(v("rsExTone")) ? v("rsExTone") : undefined, length: ["short","normal"].includes(v("rsExLen")) ? v("rsExLen") : undefined,
-      report_id: rid || undefined, report_title: rid ? String(fm.srcTitle||"").slice(0,200) : undefined});   // 保存済みレポートは読み込み前でも選んだまま
+      report_id: rid || undefined, report_title: rid ? String(fm.srcTitle||"").slice(0,200) : undefined,   // 保存済みレポートは読み込み前でも選んだまま
+      answer_job: aj || undefined, answer_title: aj ? String(fm.srcTitle||"").slice(0,200) : undefined});   // まだ保存していない回答（「作成」で保存）
     setNum("#rsExSlides", v("rsExSlides")); setChk("rsRFull");
-    if(src && !rid){ setSel("#rsExSrc", src); want("rsExSrc", src); }   // 選択中の記事・テーマ
+    if(src && !rid && !aj){ setSel("#rsExSrc", src); want("rsExSrc", src); }   // 選択中の記事・テーマ
   }else if(fm.id==="rsCmpForm"){
     toggleCmpForm(true); setSel("#rsCmpB", v("rsCmpB")); want("rsCmpB", v("rsCmpB"));   // テーマ・ウォッチはテーマの一覧が届いてから
   }else if(fm.id==="rsChgForm"){
@@ -6325,6 +6451,7 @@ function mountResearchApp(){   // /research の起動
   const bc=rsChannel();
   // 生きている合図（ポータルの「別タブで開く」・Shift+G は、合図のある別タブを読み込み直さずに前へ出す。rsToLiveTab）
   const tabId=rsNonce();
+  document.documentElement.dataset.rsTab=tabId;   // ポータルが名前で前へ出したタブを見分ける（申し出の宛先。rsToLiveTab）
   const alive=()=>{ if(bc) try{ bc.postMessage({t:"rs-tab-alive", id:tabId, at:Date.now()}); }catch(e){} };
   alive(); setInterval(alive, 60000);
   document.addEventListener("visibilitychange",()=>{ if(!document.hidden) alive(); });
@@ -6336,7 +6463,7 @@ function mountResearchApp(){   // /research の起動
   if(bc) bc.addEventListener("message",(ev)=>{ const t=ev.data && ev.data.t;
     if(t==="portal-alive"){ RS_APP.lastAlive=Date.now(); alive(); }   // 開いたばかりのポータルにも、このタブがあることを伝える
     else if(t==="settings-saved") rsSettingsReload();   // ポータルで設定を保存した: 生成AIの設定を読み直す
-    else if(t==="rs-offer") rsappOffer(ev.data.ho); });
+    else if(t==="rs-offer" && ev.data.to===tabId) rsappOffer(ev.data.ho); });   // 申し出は前へ出されたタブだけ（ほかのリサーチのタブには出さない）
   setInterval(rsappAutoTick, 60000);
   setInterval(rsappSyncJob, 1000);
   RS_APP.lastRefresh=Date.now();
@@ -6361,7 +6488,10 @@ document.addEventListener("keydown",(e)=>{
   if(RS_STANDALONE){ rsappKey(e); return; }   // リサーチの別タブは専用のキー操作（フィードのキーは使わない）
   const ae=document.activeElement; const typing=!!ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName);
   if(e.key==="Escape"){
-    if(overlayStack.length) closeTop();
+    if(e.isComposing || e.keyCode===229) return;   // 日本語入力の変換の取り消し
+    // 開いている画面を閉じる。既定の動作は止める（検索欄 type=search の Esc は文字を消して input を出すため、リサーチの検索語が
+    // 消えたうえ、閉じた後に空の検索が走り、開き直すと控えの検索語と一覧（全件）が食い違っていた）
+    if(overlayStack.length){ e.preventDefault(); closeTop(); }
     else if(AR.active){   // 過去ログ: 入力欄では既定動作（キーワードのクリア）かフォーカスを外すだけ、それ以外はフィードに戻る
       if(typing){ if(!(ae.id==="arcQ" && ae.value)) ae.blur(); }   // （隠れたフィードの検索語はここでは消さない）
       else exitArchive({focus:"#archiveBtn"});
