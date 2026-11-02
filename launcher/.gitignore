@@ -1,0 +1,4 @@
+# カードの配置（並び順・グループ・非表示）は PC ごとの設定なので git 管理しない
+layout.json
+layout.json.tmp
+__pycache__/
