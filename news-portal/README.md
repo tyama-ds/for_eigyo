@@ -197,6 +197,7 @@ App Portal（`launcher/`）にも `Prism ニュースポータル` として登�
     （指示欄には「この回答を」「パワポにして」などを除いた残りだけが入る）。回答は 6 時間までサーバーに残り、その間は保存できる。
   - **生成AIが未設定・接続できないとき**も送れて、問いに関連の高い記事 5 件を出典番号つきで示す（「⚠ 生成AIに接続できない…」）。
   - AI パネル（`A`）の「表示中の記事一覧」への質問も同じ出典番号の付け方で答える（[n] が記事へのリンクになる）。
+    AI パネルには選択が無いので、判断できないときの言い方と出典の無い回答の注意は「表示中の記事」と書く（「選択した記事」とは書かない）。
     生成AIには記事ごとにカテゴリも渡す（「カテゴリ別に要約」に答えられる）。ローカルLLMの文脈長がごく小さく、最上位の1件だけでも
     回答の分が残らないときは、生成AIを呼ばずに関連の高い記事の一覧で答える。
 - **商談前ブリーフ（取引先ブリーフ・Phase 9）** — リサーチの先頭の「商談ブリーフ」で、会社名（例: 日本製鉄）と期間
@@ -438,7 +439,10 @@ App Portal（`launcher/`）にも `Prism ニュースポータル` として登�
   サンプル記事（オフラインデモ）で画面を満たし、状態バーに「オフラインデモ」を表示。
 - **キーボード操作** — `/` 検索・`F` 横断検索・`V` ソース別・`R` 再取得・`T` テーマ・
   `L` 表示・`B` 保存済み・`S` 情報源・`A` AIアシスタント・`G` リサーチ・`Shift+G` リサーチを別タブで・`H` 過去ログ・`1`〜`9` カテゴリ・
-  `Esc` 閉じる（過去ログからはフィードに戻る）（`?` で一覧）。
+  `Esc` 閉じる（過去ログからはフィードに戻る）（`?` で一覧）。リサーチの画面を開いている間はフィードの1文字のキーを使わない
+  （モーダルのボタンにフォーカスがあっても `H`・`S`・数字などで背面のフィードが動かない。`Esc` と `Shift+G` だけ使える）。
+  日本語入力の変換を確定する `Enter` では、検索欄の横断検索・AI への質問・リサーチの送信や各フォーム（商談ブリーフの会社名・
+  レポートの問い・書き出しの指示・テーマ名）を実行しない。
 
 ## 生成AI（要約・質問）
 
@@ -621,6 +625,11 @@ UI の「情報源」から自由に 追加 / 無効化 / 削除でき、URL も
 
 ## API（他ツールからの連携用）
 
+POST の本文は **UTF-8 の JSON オブジェクト**で送る（先頭の BOM は可）。壊れた JSON・UTF-8 以外（Shift_JIS など）・配列など
+オブジェクト以外・深すぎる入れ子は `400 {"ok": false, "error": "JSON が不正です（…）"}` で断り、何も保存しない（以前は `{}` とみなして
+AI 設定や同義語辞書を既定値で上書きし、200 を返していた）。JSON の `1e999`（無限大）のような数は不正な値として各項目の既定値になる。
+`/api/ai/chat` の `question` が文字列でなければ「質問が空です」と答える。
+
 | メソッド | パス | 内容 |
 |----------|------|------|
 | GET | `/api/articles` | 記事一覧 + 情報源の状態 + カテゴリ + 更新時刻（`?refresh=1` で強制再取得） |
@@ -634,12 +643,12 @@ UI の「情報源」から自由に 追加 / 無効化 / 削除でき、URL も
 | POST | `/api/sources/restore-defaults` | 初期の情報源に戻す（feeds.json を読み込めないとき・情報源 0 件のときのみ。今のファイルを `feeds.json.broken-日時` に控えてから書き出し、`sources`・`backup`（控えのファイル名）を返す。正常で情報源があれば 409） |
 | POST | `/api/refresh` | 強制再取得（件数・状態を返す） |
 | GET | `/api/settings` | AI 設定（プロバイダ / base_url / model / キー登録有無。**キー本体は返さない**）。`archive` に過去ログの保存の設定 `{mode, max_count, max_days}`、`archive_paused` に古い記事の削除を止めている理由（settings.json を読めない・値が不正。止めていなければ空） |
-| POST | `/api/settings` | AI 設定の保存（JSON: `provider`, `base_url`, `model`, `api_key?`, `clear_key?`）。任意の `archive`=`{mode: "count"\|"days"\|"unlimited", max_count?: 1000〜2000000, max_days?: 7〜3650}` で過去ログの保存の設定も保存し、**すぐに超えた古い記事を削除**して応答の `archive_deleted` に件数を返す（`archive` が無い・null なら保存の設定は変えず何も削除しない。範囲外・不正なら 400 で何も保存しない。省いた項目は今の値のまま。今の設定と同じか、より多く残す設定なら何も削除しない）。settings.json があるのに読めない・壊れているときは、ほかの設定を消さないよう何も保存せず 409（`settings_error: true`） |
+| POST | `/api/settings` | AI 設定の保存（JSON: `provider`（必須。無ければ 400 で何も保存しない）, `base_url`, `model`, `api_key?`, `clear_key?`）。任意の `archive`=`{mode: "count"\|"days"\|"unlimited", max_count?: 1000〜2000000, max_days?: 7〜3650}` で過去ログの保存の設定も保存し、**すぐに超えた古い記事を削除**して応答の `archive_deleted` に件数を返す（`archive` が無い・null なら保存の設定は変えず何も削除しない。範囲外・不正なら 400 で何も保存しない。省いた項目は今の値のまま。今の設定と同じか、より多く残す設定なら何も削除しない）。settings.json があるのに読めない・壊れているときは、ほかの設定を消さないよう何も保存せず 409（`settings_error: true`） |
 | GET | `/api/archive/retention?mode=&max_count=&max_days=` | 過去ログの保存の設定をその値にしたら何件削除されるか（**何も変更しない**）: `current`（今の設定）・`proposed`・`would_delete`・`count`（保存中の件数）・`keep`・`oldest`/`newest`/`oldest_after`（epoch 秒）・`db_bytes`（`archive.sqlite3` と `-wal`/`-shm` の合計）・`text`・`over_limit`（保存では消さないが設定を超えている件数。上限を少し超えた分など）・`paused`（削除を止めている理由）。省いた項目は今の設定、範囲外・不正なら 400。`would_delete` は今の設定と同じか、より多く残す設定なら 0 で、間に新着が入らなければ `POST /api/settings` の `archive_deleted` と一致する |
 | POST | `/api/proxy/test` | プロキシ接続テスト（JSON: `use_proxy`, `proxy_url`, `ca_bundle`, `url?`。**保存せず**その設定で1回取得を試し、状態/件数/所要時間を返す） |
 | GET | `/api/archive/search?q=&sources=&days=&from=&to=&category=&archived=&order=&dedup=&limit=&offset=&as_of=&upto=` | 過去ログの条件検索（`q`: スペース=AND・`\|`=OR・`-`=除外、同義語辞書で展開。情報源(カンマ区切りid)・直近N日 or 日付範囲・カテゴリ・`archived`=この時刻(epoch)より後に保存された記事のみ。`order`=new/rel、`dedup`=1 で類似記事を束ねる（代表に `dups[]`、他に `dup_of`）。応答に `fts`・`expanded`・`dup_groups`、各記事に `has_text`）。**ページ送り**: `limit`（1〜2000、既定60）件を `offset`（0〜1億、不正値は0。以前は 2万で頭打ち）件目から返し、応答に `total`（同じ条件に合う総数）・`offset`・`limit`・`has_more`（`offset`＋`count` < `total`）を含む。並びは同時刻でも一意（ページの境目で重複・欠落しない）。応答の `as_of`（期間の基準時刻）と `upto`（その時点の最後の rowid）を2ページ目以降に送り返すと、1ページ目と同じ期間・同じ記事の集合で続きを返す（「直近N日」の期間が動いたり新着が入ったりしても関連順で抜けない）。`category` は CATEGORIES 以外（feeds.json の独自カテゴリ）もそのまま完全一致で絞り込む。`order_used` は実際の並び（`rel` は3文字以上の語で全文索引を使えたときだけ。それ以外は `new`） |
 | GET | `/api/archive/histogram?q=&sources=&category=` | 日付×情報源の件数分布（期間以外の条件。`unit`=day/week/month、`buckets[{from,to,total,src{}}]`、`sources` 上位6） |
-| GET/POST | `/api/research/synonyms` | 同義語辞書の取得／保存（POST JSON: `text` = 1行1グループ・カンマ区切り。settings.json を読めないときは書き戻さず 409） |
+| GET/POST | `/api/research/synonyms` | 同義語辞書の取得／保存（POST JSON: `text` = 1行1グループ・カンマ区切り。辞書を丸ごと置き換えるので `text` が文字列でなければ 400（空にするなら `""`）。settings.json を読めないときは書き戻さず 409） |
 | GET | `/api/archive/entities?q=&sources=&category=&days=&from=&to=&archived=` | 検索結果（最大300件）に出てくる企業・組織・製品らしい固有名詞の候補（`name`/`kind`/`count`） |
 | POST | `/api/research/entities/ai` | ローカルLLM で見出しから固有名詞を抽出（JSON: `ids[]`、最大80件）。`aliases` と OR 条件 `q` つき |
 | GET | `/api/research/watch/trends?weeks=` | ウォッチ（`kind=watch` のテーマ）ごとの週別件数（既定8週・月曜始まり） |

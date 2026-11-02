@@ -2283,7 +2283,7 @@ def search_limit(v, default: int = 60) -> int:
     """1回に返す件数（1〜2000）。不正値は default。"""
     try:
         return max(1, min(int(v), 2000))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
@@ -2293,7 +2293,7 @@ def search_offset(v) -> int:
     SQLite の走査は該当する行の数までなので、巨大な値でも余計には読まない）。"""
     try:
         return max(0, min(int(v), SEARCH_OFFSET_MAX))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0
 
 
@@ -2411,7 +2411,7 @@ def _filters_window(f: dict, now: float | None = None) -> tuple[float | None, fl
         until += 86400   # to は当日を含む
     try:
         days = int(f.get("days") or 0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         days = 0
     if since is None and days > 0:
         since = (now or time.time()) - days * 86400
@@ -2700,7 +2700,7 @@ def fulltext_config() -> dict:
     f = x if isinstance(x, dict) else {}
     try:
         mp = int(f.get("max_pages") or 0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         mp = 0
     return {"follow": f.get("follow") if f.get("follow") in FOLLOW_MODES else "auto",
             "max_pages": mp if 1 <= mp <= PAGES_MAX_LIMIT else PAGES_MAX_DEFAULT}
@@ -2780,7 +2780,7 @@ def ai_config() -> dict:
     def _int(k, lo, hi, default):
         try:
             v = int(ai.get(k) or 0)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             v = 0
         return v if lo <= v <= hi else default
     return {
@@ -4438,7 +4438,7 @@ def ai_probe(body: dict) -> dict:
     for k, lo, hi in (("ctx_tokens", 1024, 2_000_000), ("timeout_s", 30, 7200)):
         try:
             v = int(body.get(k) or 0)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             v = 0
         if lo <= v <= hi:
             cfg[k] = v
@@ -4509,7 +4509,8 @@ def ai_chat(payload: dict) -> dict:
     if cfg["provider"] != "local" and not cfg["api_key"]:
         return {"ok": False, "need_setup": True,
                 "error": "生成AI APIが未設定です。設定からAPIキーを登録してください。"}
-    question = (payload.get("question") or "").strip()
+    q = payload.get("question")
+    question = q.strip() if isinstance(q, str) else ""   # 文字列以外（数値・真偽値など）は空の質問として扱う
     if not question:
         return {"ok": False, "error": "質問が空です。"}
     history = payload.get("history") if isinstance(payload.get("history"), list) else []
@@ -4682,7 +4683,7 @@ def _filters_conds(f: dict) -> list[str]:
     elif f.get("days"):
         try:
             conds.append(f"期間: 直近{int(f['days'])}日")
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             pass
     return conds
 
@@ -5576,7 +5577,7 @@ def start_report_job(body: dict) -> dict:
         docs = [str(d) for d in body["docs"] if isinstance(d, str) and _ID_RE.fullmatch(d)] or None
     try:
         doc_k = max(1, min(int(body.get("doc_k") or DOC_K_DEFAULT), DOC_K_MAX)) if docs else 0
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         doc_k = DOC_K_DEFAULT if docs else 0
     if not ids and not docs:
         return {"ok": False, "error": "記事を1件以上選択してください"}
@@ -5748,7 +5749,7 @@ def _chat_context(cfg: dict, kind: str, question: str, items: list, filters: dic
 
     instr = ["- 上の記事・資料だけに基づき、日本語で簡潔に（600字程度まで）答える",
              "- 事実・数値・日付を含む文の末尾には必ず出典番号 [n]（上の番号のみ。複数可 [1][3]）",
-             "- 記事から判断できないときは「選択した記事からは判断できません」と書き、推測しない"]
+             f"- 記事から判断できないときは「{'表示中の記事' if kind == 'list' else '選択した記事'}からは判断できません」と書き、推測しない"]
     if local:   # 長い資料の直後は指示が薄まりやすいので、末尾でも出力規律を念押しする
         instr.append("（注意: 上の資料の分析過程・思考・下書きは出力せず、質問への最終回答のみを日本語で書いてください）")
     tail = "\n\n【問い】" + question + "\n\n【回答の指示】\n" + "\n".join(instr)
@@ -6264,7 +6265,7 @@ def _clean_filters(f) -> dict:
     srcs = f.get("sources") if isinstance(f.get("sources"), list) else []
     try:
         days = max(0, min(int(f.get("days") or 0), 3650))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         days = 0
     fr, to = f.get("from"), f.get("to")
     out = {"q": str(f.get("q") or "").strip()[:100],
@@ -6442,7 +6443,7 @@ def start_theme_brief(body: dict) -> dict:
     f = t["filters"]
     try:
         days = max(1, min(int(body.get("days") or 7), 365))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         days = 7
     now = time.time()
     use_last = body.get("since") == "last" and bool(t.get("last_brief_at"))
@@ -7806,7 +7807,7 @@ def compose_facts(cfg: dict, arts: list[dict], question: str, progress=None, num
                 continue
             try:
                 cite = int(it.get("cite") or 0)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 cite = 0
             if cite not in id_of:   # 示した番号以外（範囲外・消えた記事の番号）は使わない
                 continue
@@ -8382,7 +8383,7 @@ def _run_export(job_id: str, kind: str, body: dict) -> None:
         if kind == "pptx" and rep:
             try:
                 n_slides = int(body.get("slides") or SLIDES_DEFAULT)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 n_slides = SLIDES_DEFAULT
             upd(state="composing", label="スライド構成を作成中", total=0, done=0)
             sinfo: dict = {}
@@ -8616,6 +8617,29 @@ _ICON_NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,63}\.(svg|png|ico|webmanifest)"
 _ICON_TYPES = {"svg": "image/svg+xml", "png": "image/png", "ico": "image/x-icon",
                "webmanifest": "application/manifest+json; charset=utf-8"}
 
+BAD_BODY_MSG = "JSON が不正です（UTF-8 の JSON オブジェクトを送ってください）"
+
+
+class BadBody(Exception):
+    """POST の本文を JSON オブジェクトとして読めない（壊れた JSON・UTF-8 以外の文字コード・深すぎる入れ子・配列など）。
+    {} とみなして続けると、全体を置き換えて保存する API（AI 設定・同義語辞書）が既定値で上書きしてしまうので 400 で断る。"""
+
+
+_SURROGATE_ESC_RE = re.compile(r"\\u[dD][89a-fA-F]")
+_LONE_SURROGATE_RE = re.compile("[\ud800-\udfff]")
+
+
+def _scrub_surrogates(o):
+    """JSON の "\\udcff" のような対になっていないサロゲートを U+FFFD に置き換える（そのままだと UTF-8 で保存・応答する
+    ときに UnicodeEncodeError で 500 になる）。正しい対（絵文字など）は json.loads が 1 文字にまとめるので残らない。"""
+    if isinstance(o, str):
+        return _LONE_SURROGATE_RE.sub("�", o)
+    if isinstance(o, list):
+        return [_scrub_surrogates(x) for x in o]
+    if isinstance(o, dict):
+        return {_scrub_surrogates(k): _scrub_surrogates(v) for k, v in o.items()}
+    return o
+
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_a):  # 静かに
@@ -8636,6 +8660,11 @@ class Handler(BaseHTTPRequestHandler):
             fn()
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             pass   # ブラウザ側が先に切断した
+        except BadBody:   # 本文が JSON オブジェクトとして読めない → 何も保存せず 400（本文は読み切っているので接続は使い続けられる）
+            try:
+                self._json({"ok": False, "error": BAD_BODY_MSG}, 400)
+            except Exception:
+                pass
         except Exception as e:
             try:
                 sys.stderr.write(f"[error] {self.command} {self.path}\n{traceback.format_exc()}")
@@ -8718,17 +8747,25 @@ class Handler(BaseHTTPRequestHandler):
         return None
 
     def _read_body(self) -> dict:
+        """POST の JSON 本文（オブジェクト）を返す。本文が無ければ {}。読めない本文（壊れた JSON・UTF-8 以外・
+        深すぎる入れ子・オブジェクト以外）は BadBody（_guard が 400 で答える）。先頭の BOM は許す。"""
         try:
             n = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             return {}
         if n <= 0 or n > MAX_BODY:
             return {}
+        raw = self.rfile.read(n)   # 断る場合も本文は読み切る（同じ接続の次の要求を壊さない）
         try:
-            obj = json.loads(self.rfile.read(n).decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):
-            return {}
-        return obj if isinstance(obj, dict) else {}   # 非オブジェクトJSONで落ちない
+            text = raw.decode("utf-8-sig")
+            obj = json.loads(text)
+            if not isinstance(obj, dict):
+                raise BadBody()
+            if _SURROGATE_ESC_RE.search(text):
+                obj = _scrub_surrogates(obj)
+        except (ValueError, UnicodeDecodeError, RecursionError):
+            raise BadBody() from None
+        return obj
 
     # ------------------------------------------------------------------ GET
     def _do_GET(self):
@@ -9051,6 +9088,9 @@ class Handler(BaseHTTPRequestHandler):
 
         if u.path == "/api/settings":  # AI API 設定の保存
             body = self._read_body()
+            if "provider" not in body:   # AI 設定は丸ごと置き換えて保存する。provider の無い本文（空など）で既定値に戻さない
+                self._json({"ok": False, "error": "provider を指定してください（AI・プロキシ設定はまとめて保存します）"}, 400)
+                return
             arc = None   # 過去ログの保存（任意）。範囲外なら何も保存せず 400（黙って別の値にして多く消さない）
             if body.get("archive") is not None:
                 arc, err = archive_config_arg(body.get("archive"))
@@ -9072,7 +9112,7 @@ class Handler(BaseHTTPRequestHandler):
             for k, lo, hi in (("ctx_tokens", 1024, 2_000_000), ("parallel", 1, 8), ("timeout_s", 30, 7200)):   # ローカルLLMの処理設定
                 try:
                     v = int(body.get(k) or 0)
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, OverflowError):
                     v = 0
                 if lo <= v <= hi:
                     ai[k] = v
@@ -9117,7 +9157,7 @@ class Handler(BaseHTTPRequestHandler):
                             ft["follow"] = body["follow_pages"]
                         try:
                             mp = int(body.get("max_pages") or 0)
-                        except (TypeError, ValueError):
+                        except (TypeError, ValueError, OverflowError):
                             mp = 0
                         if 1 <= mp <= PAGES_MAX_LIMIT:
                             ft["max_pages"] = mp
@@ -9223,7 +9263,11 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if u.path == "/api/research/synonyms":  # 同義語辞書の保存
-            r = save_synonyms(str(self._read_body().get("text") or ""))
+            text = self._read_body().get("text")
+            if not isinstance(text, str):   # 辞書は丸ごと置き換える。text の無い本文（空など）で辞書を消さない（空にするなら "text": ""）
+                self._json({"ok": False, "error": "text（同義語辞書の本文）を文字列で指定してください"}, 400)
+                return
+            r = save_synonyms(text)
             self._json(r, 200 if r.get("ok") else 409)   # settings.json を読めない → 書き戻さない
             return
 

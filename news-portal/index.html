@@ -449,10 +449,14 @@ main{max-width:1360px; margin:0 auto; padding:16px 22px 80px}
 :root[data-theme="light"] .btn.ghost{color:var(--text-2)}
 :root[data-theme="light"] .btn.ghost:hover{color:var(--text)}
 
-.kbd-list{display:grid; grid-template-columns:1fr 1fr; gap:10px 22px}
+.kbd-list{display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px 22px}   /* 列は中身の最小幅で広がらない（狭い画面で右の列がはみ出さない） */
 .kbd-row{display:flex; align-items:center; gap:10px; font-size:13.5px; color:var(--text-2)}
 kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2); border:1px solid var(--line-2);
   border-bottom-width:2px; border-radius:6px; padding:2px 8px; color:var(--text); min-width:22px; text-align:center}
+/* リサーチのキー一覧は説明の文中にキーが並ぶ行がある。flex だとキーの間の文が別々に縮んで1文字ずつ折り返すので、文として流す */
+#helpResearch .kbd-row{display:block; line-height:2}
+#helpResearch kbd{display:inline-block}
+@media (max-width:600px){ .kbd-list{grid-template-columns:1fr} }
 
 /* ============================================================ 横断検索 */
 .search-modal{width:min(860px,95vw); max-height:88vh}
@@ -527,6 +531,7 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
 .rrow__m .c{font-weight:700; color:var(--c, inherit)}
 /* ライト: カテゴリの色（暗い背景向けの明るい色）は文字には薄すぎる（専門 1.9:1）ので、色相を保ったまま黒と半々に（白・選択行で 4.8:1 以上） */
 :root[data-theme="light"] .rrow__m .c{color:color-mix(in srgb, var(--c, currentColor) 50%, #000)}
+:root[data-theme="light"] .rrow__m{color:#586174}   /* 情報源・日付: --text-3 では選択中の行の薄い色の背景で約 2.7:1 */
 .rs__chat{display:flex; flex-direction:column; min-height:0; min-width:0}
 .rs__hint{padding:8px 16px 0; font-size:11.5px; color:var(--text-3)}
 /* テーマ（保存した検索条件）・新着差分・本文取得 */
@@ -641,7 +646,8 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
 .cmp__col{border:1px solid var(--line); border-radius:9px; padding:8px 10px; background:var(--surface-2); min-width:0}
 .cmp__col h4{margin:0 0 2px; font-size:13px; display:flex; align-items:baseline; gap:6px}
 .cmp__col h4 .tag{font-size:11px; color:#fff; background:var(--accent); border-radius:5px; padding:0 5px}
-.cmp__col h4 .tag.b{background:var(--accent-2)}
+.cmp__col h4 .tag.b{background:var(--accent-2); color:#05101d}   /* 明るい --accent-2 に白では読めない（ライト 3.0:1・ダーク 1.6:1） */
+:root[data-theme="dark"] .cmp__col h4 .tag{color:#05101d}   /* ダークの --accent も白では 2.6:1。ボタンと同じ濃い文字に */
 .cmp__col .meta{font-size:11px; color:var(--text-3); margin-bottom:4px}
 .cmp__col .n{font-size:20px; font-weight:700; font-family:var(--font-serif)}
 .cmp__col svg{display:block; width:100%; height:40px; margin:2px 0 4px}
@@ -684,6 +690,7 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
 .bubble.ans .rpt__body p:first-child{margin-top:0}
 .bubble.ans .rpt__src li, .bubble.ans .rpt__acts .btn{overflow-wrap:anywhere; word-break:normal; white-space:normal}   /* 英語の見出しは単語の切れ目で、長い URL はどこでも折り返す */
 .bubble-warn{margin-top:8px; font-size:12px; font-weight:600; color:var(--cat-世界)}
+:root[data-theme="light"] .bubble-note.warn, :root[data-theme="light"] .bubble-warn, :root[data-theme="light"] .exp__note{color:#a8360a}   /* 明るい背景でも読める濃さ（--cat-世界 のままでは約 2.2:1）。:is() で書くと全要素で照合され、大きな一覧でスタイルの再計算が遅くなる */
 .bubble.ask-progress{display:flex; align-items:center; gap:8px; white-space:normal; overflow-wrap:anywhere}
 .bubble.ask-progress .dots{flex:0 0 auto}
 .ask-progress__t{font-size:12.5px; min-width:0}
@@ -710,7 +717,8 @@ kbd{font-family:var(--font-sans); font-size:11.5px; background:var(--surface-2);
   background:var(--surface-2); font-size:12px; color:var(--text-2); min-width:0}
 .rs__aliasrow[hidden]{display:none}
 .rs__aliasrow .hint{font-size:11.5px; color:var(--text-3); overflow-wrap:anywhere}
-.rs__doc .k.memo{background:var(--accent-2)}
+.rs__doc .k.memo{background:var(--accent-2); color:#05101d}
+:root[data-theme="dark"] .rs__doc .k, :root[data-theme="dark"] .rs__rep .k{color:#05101d}
 @media (max-width:480px){
   #rsAcctForm .rs__formrow{flex-direction:column; align-items:stretch}
   #rsAcctForm .rs__formrow > *{flex:0 0 auto}   /* 横並び用の幅の目安（flex-basis）を縦並びで高さにしない */
@@ -2857,14 +2865,17 @@ function renderDiag(diag){
 let lastTrigger=null;
 const overlayStack=[];
 function _bgInert(on){ $$(".topbar,.catbar,.subbar,main,#researchModal.rsapp,.rsapp__skip").forEach(n=>{ n.inert=on; }); }  // 背面をフォーカス不能に（リサーチの別タブでは画面全体と body 直下のスキップリンク）
-function _focusFirst(node,d){ const f=node.querySelector('input,select,textarea,button,[href]'); if(f) setTimeout(()=>{ try{ f.focus(); }catch(e){} }, d); }
+function _focusFirst(node,d){ const f=node.querySelector('input,select,textarea,button,[href]');
+  // 待つ間に画面自身（リサーチの検索欄・AI の入力欄）や利用者が中の欄へフォーカスしていたら動かさない（入力中の Enter が先頭のボタンへ行かないように）
+  if(f) setTimeout(()=>{ try{ if(!node.contains(document.activeElement)) f.focus(); }catch(e){} }, d); }
 function openOverlay(node){
   const prev=overlayStack[overlayStack.length-1];
   if(prev && prev!==node) prev.inert=true;          // 背面の overlay をタブ順/ATから外す
   else if(!prev){ lastTrigger=document.activeElement; _bgInert(true); }
   $("#scrim").classList.add("show");
   node.classList.add("show"); node.setAttribute("aria-hidden","false"); node.inert=false;
-  if(!overlayStack.includes(node)) overlayStack.push(node);
+  const at=overlayStack.indexOf(node); if(at>=0) overlayStack.splice(at,1);   // 下に重なっている overlay を開き直したら一番上へ（見えている上の overlay を操作不能のまま残さない）
+  overlayStack.push(node);
   _focusFirst(node,70);
 }
 function closeTop(){   // 一番上の overlay だけ閉じる
@@ -3468,7 +3479,7 @@ function renderAiPanel(){
   const inp=el("div",{class:"ai__input"});
   const ta=el("textarea",{id:"aiInput", "aria-label":"AIへの質問", placeholder:"質問を入力…（Enterで送信 / Shift+Enterで改行）", rows:1});
   ta.addEventListener("input",()=>{ ta.style.height="auto"; ta.style.height=Math.min(ta.scrollHeight,120)+"px"; });
-  ta.addEventListener("keydown",(e)=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); sendAi(ta.value); } });
+  ta.addEventListener("keydown",(e)=>{ if(e.key==="Enter" && !e.shiftKey && !e.isComposing && e.keyCode!==229){ e.preventDefault(); sendAi(ta.value); } });   // 変換を確定する Enter では送らない
   const send=el("button",{class:"ai__send", id:"aiSend", title:"送信","aria-label":"送信"});
   send.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4z"/></svg>';
   send.onclick=()=>sendAi($("#aiInput").value);
@@ -3492,7 +3503,8 @@ function bubbleEl(m){   // AIパネル/リサーチ共通のメッセージバ�
   }
   if(cited){ b.append(mdLite(String(m.text||""), m.sources)); b.append(sourcesEl(m.sources)); }   // [n] は出典へのリンク
   else b.append(document.createTextNode(m.text));
-  if(m.role==="assistant" && m.grounded===false) b.append(el("div",{class:"bubble-warn",text:"⚠ 出典のない回答です（選択した記事に根拠が見つからない可能性）"}));
+  if(m.role==="assistant" && m.grounded===false)   // AI パネルの一覧への質問は選択ではなく「表示中の記事」が対象
+    b.append(el("div",{class:"bubble-warn",text:"⚠ 出典のない回答です（"+(m.ctxKind==="list" ? "表示中の記事" : "選択した記事")+"に根拠が見つからない可能性）"}));
   return b;
 }
 function sourcesEl(sources){   // 出典の一覧（折りたたみ・リンクは新しいタブ・textContent 描画）。レポートと会話の回答で共用
@@ -3547,7 +3559,7 @@ async function sendAi(text){
   }catch(e){ res = {role:"error", text:"⚠ "+(e.server?e.message:"通信に失敗しました")}; }
   AI.busy=false;
   if(AI.ctx!==ctxAtSend){ return; }   // 送信中にコンテキストが変わったら結果は破棄（孤立バブル防止）
-  AI.msgs.push({role:res.role, text:res.text, reasoning:res.reasoning||"", note:res.note||"", sources:res.sources||null, grounded:res.grounded});
+  AI.msgs.push({role:res.role, text:res.text, reasoning:res.reasoning||"", note:res.note||"", sources:res.sources||null, grounded:res.grounded, ctxKind:ctxPayload.kind});
   if(res.need_setup) setTimeout(openAiSettings,500);
   renderAiMessages();
 }
@@ -3601,7 +3613,9 @@ function renderSetErr(){   // 設定画面の上の消えない警告と、保�
   $("#aiClearKey").disabled = blocked;
 }
 async function openAiSettings(){   // 開くたびにサーバーから読み直す（前に読めなかった・別のタブで変わった値で保存しないように）
-  await loadAiSettings(); fillAiForm(); openOverlay($("#aiSettings"));
+  await loadAiSettings(); fillAiForm();
+  $("#aiSettings .modal__body").scrollTop=0;   // 前に保存した位置（下端）のまま開かない（閉じても中身は残るのでスクロール位置も残る）
+  openOverlay($("#aiSettings"));
 }
 function proxyPayload(){ const on=$("#aiUseProxy").checked; return { use_proxy:on, proxy_url: on ? $("#aiProxyUrl").value.trim() : "", ca_bundle: $("#aiCaBundle").value.trim(),
   browser_binary: $("#brBinary").value.trim(), driver_path: $("#brDriver").value.trim(), pdf_font: ($("#pdfFont")?$("#pdfFont").value.trim():""),
@@ -3758,7 +3772,7 @@ $$('input[name="retMode"]').forEach(r=>r.addEventListener("change", ()=>{ RET.to
 ["#retCount","#retDays"].forEach(s=>$(s).addEventListener("input", ()=>{ RET.touched=true; retPreviewSoon(); }));
 // 数値の欄で Enter を押しても設定全体を保存しない（削除の確認がすぐ出て、続けて Enter で消えてしまうため）。プレビューだけ数え直す
 ["#retCount","#retDays"].forEach(s=>$(s).addEventListener("keydown", e=>{
-  if(e.key==="Enter" && !e.isComposing){ e.preventDefault(); retPreview(); }
+  if(e.key==="Enter" && !e.isComposing && e.keyCode!==229){ e.preventDefault(); retPreview(); }
 }));
 
 $("#aiProvider").addEventListener("change", applyProviderHints);
@@ -3923,16 +3937,20 @@ const RS={results:[], sel:new Set(), srcSel:new Set(), msgs:[], busy:false, stat
 const RS_QUICK=["期間内の動きを時系列で要約","情報源ごとに要点を整理","共通するテーマと相違点を比較","重要トピック3つと根拠"];
 function rsMount(){   // リサーチの中身を準備（モーダルを開いたとき・別タブ /research の起動時に共通）
   fillRsCats();
-  if(!RS.msgs.length) rsRestore();   // 再読み込みの後: 会話・検索条件を戻し、途中のジョブの進捗を追い直す
+  const restored=!RS.msgs.length;
+  if(restored) rsRestore();   // 再読み込みの後: 会話・検索条件を戻し、途中のジョブの進捗を追い直す
   RS.opened=true;   // 戻す前に控えを書き込むと、前の会話を空で上書きしてしまう
   if(!RS.results.length) researchSearch(RS.sel.size ? true : undefined);   // 戻した選択があれば保つ
-  renderRsLog(); renderRsQuick(); loadReports(); loadThemes(); loadSynonyms(); loadExports(); loadDocs();
+  // 会話を変える処理は閉じている間も自分で描き直す（閉じたモーダルは見えないだけで配置は残る）。開き直すたびに作り直すと、
+  // 開いた「出典」が閉じ、読んでいた位置が末尾へ飛ぶので、戻したとき・まだ描いていないときだけ描く
+  if(restored || !$("#rsLog").childElementCount) renderRsLog();
+  renderRsQuick(); loadReports(); loadThemes(); loadSynonyms(); loadExports(); loadDocs();
 }
 function openResearch(){
   if(document.title.startsWith(DONE_MARK)) document.title=document.title.slice(DONE_MARK.length);   // 「(✓) 」は画面を開いたら消す
   openOverlay($("#researchModal"));
   rsMount();
-  setTimeout(()=>{ try{ $("#rsQ").focus(); }catch(e){} }, 90);
+  setTimeout(()=>{ try{ $("#rsQ").focus({preventScroll:true}); }catch(e){} }, 90);   // 600px 以下は画面全体が1つのスクロール。読んでいた位置を検索欄へ戻さない
 }
 function fillRsCats(){
   const sel=$("#rsCat"); if(sel.dataset.filled) return; sel.dataset.filled="1";
@@ -4042,7 +4060,7 @@ function syncRsSrcBtn(){
 function renderRsList(){
   const box=$("#rsList"); box.innerHTML="";
   if(RS.stats){
-    const fmt=t=>t?new Date(t*1000).toISOString().slice(0,10):"";
+    const fmt=t=>t?isoLocal(new Date(t*1000)):"";   // 行の日付・期間の欄と同じ現地の日付（UTC だと朝 9 時前の記事が前日になる）
     $("#rsStats").textContent="過去ログ "+RS.stats.count+"件"+(RS.stats.oldest?"（"+fmt(RS.stats.oldest)+"〜"+fmt(RS.stats.newest)+"）":"")+"を条件検索";
   }
   syncRsCount();
@@ -5214,12 +5232,19 @@ async function loadThemes(){
 }
 function themeDesc(t){ return (t.conds||[]).join(" ／ ") || "条件なし"; }
 function renderThemePanel(){
-  const p=$("#rsThemePanel"); p.innerHTML="";
-  const save=el("div",{class:"rs__themesave"});
-  const inp=el("input",{type:"text",id:"rsThemeName",placeholder:"現在の条件をテーマとして保存（名前）",maxLength:60,"aria-label":"テーマ名"});
-  const sb=el("button",{type:"button",class:"btn sm",text:"保存"}); sb.onclick=()=>saveTheme(inp.value);
-  inp.addEventListener("keydown",(e)=>{ if(e.key==="Enter"){ e.preventDefault(); saveTheme(inp.value); } });
-  save.append(inp,sb); p.append(save);
+  const p=$("#rsThemePanel");
+  // テーマ名の行は作り直さない（パネルを開いた直後に一覧の読み込みが終わって描き直すと、入力中の名前・フォーカス・日本語入力の
+  // 変換中の文字が消えていた）。一覧の部分だけ描き直す。行は外さない（フォーカス中の欄を外すと変換が取り消される）
+  let save=p.querySelector(":scope > .rs__themesave");
+  if(save){ while(save.nextSibling) save.nextSibling.remove(); while(save.previousSibling) save.previousSibling.remove(); }
+  else{
+    p.innerHTML="";
+    save=el("div",{class:"rs__themesave"});
+    const inp=el("input",{type:"text",id:"rsThemeName",placeholder:"現在の条件をテーマとして保存（名前）",maxLength:60,"aria-label":"テーマ名"});
+    const sb=el("button",{type:"button",class:"btn sm",text:"保存"}); sb.onclick=()=>saveTheme(inp.value);
+    inp.addEventListener("keydown",(e)=>{ if(e.key==="Enter" && !e.isComposing && e.keyCode!==229){ e.preventDefault(); saveTheme(inp.value); } });   // 変換を確定する Enter では保存しない
+    save.append(inp,sb); p.append(save);
+  }
   const themes=RS.themes.filter(t=>t.kind!=="watch");
   if(!themes.length){ p.append(el("div",{class:"rs__srcrow",text:"保存したテーマはありません。キーワード・情報源・期間を設定して保存すると、新着差分の確認やブリーフ生成ができます"})); return; }
   themes.forEach(t=>{
@@ -5249,6 +5274,7 @@ async function saveTheme(name, id){
   if(f.period) filters.period=f.period;   // 暦の期間（今月など）: サーバーは使うときの期間で数える（日付で固定しない）
   try{
     const d=await api("/api/research/themes",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id, name, filters})});
+    { const i=$("#rsThemeName"); if(i) i.value=""; }   // 名前の欄は描き直さないので、保存できたら空にする
     RS.theme=d.theme; RS.newOnly=false; await loadThemes(); closeRsPanels();   // 保存後はパネルを閉じ、条件行（strip）で示す
     toast(id ? "テーマを上書き保存しました" : "テーマを保存しました");
   }catch(e){ toast(e.server?e.message:"テーマを保存できませんでした","err"); }
@@ -5524,7 +5550,7 @@ $("#rsAcctBtn").onclick=()=>toggleAcctForm($("#rsAcctForm").hidden);
 $("#rsAcctCancel").onclick=()=>toggleAcctForm(false);
 $("#rsAcctStart").onclick=startAcct;
 $("#rsAcctName").addEventListener("input",()=>{ ACCT.fixedQ=""; ACCT.checked=null; acctPreviewSoon(); });
-$("#rsAcctName").addEventListener("keydown",(e)=>{ if(e.key==="Enter"){ e.preventDefault(); startAcct(); } });
+$("#rsAcctName").addEventListener("keydown",(e)=>{ if(e.key==="Enter" && !e.isComposing && e.keyCode!==229){ e.preventDefault(); startAcct(); } });   // 会社名の変換を確定する Enter では始めない
 $("#rsAcctDays").addEventListener("change", acctPreviewSoon);
 $("#rsAcctAi").onclick=()=>acctPreview(true);
 $("#rsAcctThinAi").onclick=()=>acctPreview(true);
@@ -5536,7 +5562,7 @@ $("#rsExportBtn").onclick=()=>{ const open=$("#rsExportForm").hidden; toggleExpo
 $("#rsExCancel").onclick=()=>toggleExportForm(false);
 $("#rsExStart").onclick=startExport;
 $("#rsExKind").addEventListener("change", ()=>syncExportForm());
-$("#rsExInst").addEventListener("keydown",(e)=>{ if(e.key==="Enter"){ e.preventDefault(); startExport(); } });
+$("#rsExInst").addEventListener("keydown",(e)=>{ if(e.key==="Enter" && !e.isComposing && e.keyCode!==229){ e.preventDefault(); startExport(); } });
 $("#rsExpBtn").onclick=(e)=>{ e.stopPropagation(); const p=$("#rsExpPanel"); const open=p.hidden; closeRsPanels(); p.hidden=!open; if(!p.hidden) loadExports(); };
 $("#rsExpPanel").addEventListener("click",(e)=>e.stopPropagation());
 $("#rsDocBtn").onclick=(e)=>{ e.stopPropagation(); const p=$("#rsDocPanel"); const open=p.hidden; closeRsPanels(); p.hidden=!open;
@@ -5549,13 +5575,13 @@ $("#rsChgRun").onclick=runChange;
 $("#rsCmpStart").onclick=startCompare;
 $("#rsRCancel").onclick=()=>toggleReportForm(false);
 $("#rsRStart").onclick=startReport;
-$("#rsRQ").addEventListener("keydown",(e)=>{ if(e.key==="Enter"){ e.preventDefault(); startReport(); } });
-$("#rsInput").addEventListener("keydown",(e)=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); sendRs($("#rsInput").value); } });
+$("#rsRQ").addEventListener("keydown",(e)=>{ if(e.key==="Enter" && !e.isComposing && e.keyCode!==229){ e.preventDefault(); startReport(); } });
+$("#rsInput").addEventListener("keydown",(e)=>{ if(e.key==="Enter" && !e.shiftKey && !e.isComposing && e.keyCode!==229){ e.preventDefault(); sendRs($("#rsInput").value); } });   // 変換を確定する Enter では送らない
 $("#rsInput").addEventListener("input",()=>{ const t=$("#rsInput"); t.style.height="auto"; t.style.height=Math.min(t.scrollHeight,120)+"px"; });
 $("#rsSend").onclick=()=>sendRs($("#rsInput").value);
 $("#rsThemeBtn").onclick=(e)=>{ e.stopPropagation(); const p=$("#rsThemePanel"); const open=p.hidden; closeRsPanels(); p.hidden=!open;
   $("#rsThemeBtn").setAttribute("aria-expanded", String(!p.hidden));
-  if(!p.hidden){ loadThemes(); const i=$("#rsThemeName"); if(i) setTimeout(()=>i.focus(),30); } };   // 開くたびに新着件数を更新
+  if(!p.hidden){ loadThemes(); const i=$("#rsThemeName"); if(i) setTimeout(()=>{ i.focus(); i.select(); },30); } };   // 開くたびに新着件数を更新（前に入力して保存しなかった名前は選択して、打てば置き換わるように）
 $("#rsThemePanel").addEventListener("click",(e)=>e.stopPropagation());
 $("#rsFetchBtn").onclick=()=>startFetch(false);
 $("#rsOrder").addEventListener("change", ()=>researchSearch(true));
@@ -6481,7 +6507,7 @@ function mountResearchApp(){   // /research の起動
 // search (debounced) — インライン絞り込み。Enter で横断検索へ展開
 let sT=null;
 $("#q").addEventListener("input",(e)=>{ clearTimeout(sT); sT=setTimeout(()=>{ S.q=e.target.value.trim(); renderGrid(); renderStatus(); renderTrend(); },120); });
-$("#q").addEventListener("keydown",(e)=>{ if(e.key==="Enter"){ e.preventDefault(); openSearchAll($("#q").value.trim()); } });
+$("#q").addEventListener("keydown",(e)=>{ if(e.key==="Enter" && !e.isComposing && e.keyCode!==229){ e.preventDefault(); openSearchAll($("#q").value.trim()); } });   // 変換を確定する Enter では開かない
 
 // ============================================================ keyboard
 document.addEventListener("keydown",(e)=>{
@@ -6501,6 +6527,9 @@ document.addEventListener("keydown",(e)=>{
   }
   if(typing) return;
   if(e.ctrlKey||e.metaKey||e.altKey) return;   // ブラウザのショートカット(Ctrl+T等)と衝突させない
+  // リサーチを開いている間（モーダルのボタンにフォーカスがあるときなど）はフィードの1文字キーを使わない。H で閉じて過去ログへ移る・
+  // S/A/B/F で別の画面が重なる・数字で背面のカテゴリが変わるのを防ぐ（Esc は上で処理。Shift+G はリサーチを別タブで開く）
+  if(overlayStack.includes($("#researchModal")) && !(e.shiftKey && (e.key==="g"||e.key==="G"))) return;
   if(e.key==="/"){ e.preventDefault(); if(AR.active){ $("#arcQ").focus(); $("#arcQ").select(); } else $("#q").focus(); }
   else if(e.key==="h"||e.key==="H"){ e.preventDefault(); toggleArchive(); }
   else if(e.key==="f"||e.key==="F"){ e.preventDefault(); openSearchAll(); }
