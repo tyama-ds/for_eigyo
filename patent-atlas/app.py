@@ -123,7 +123,7 @@ def normalize_selection(values, candidates=None):
 
 def display_labels(item, *, selection=False):
     """Project current captions and optional selection rules, preserving saved data."""
-    if not isinstance(item, dict) or item.get('kind') not in ('IPC', 'F-term', 'CPC') or not item.get('code'):
+    if not isinstance(item, dict) or item.get('kind') not in ('IPC', 'F-term', 'CPC', 'FI') or not item.get('code'):
         return item
     try:
         enriched = explorer.enrich(item)
@@ -153,7 +153,7 @@ def public_state():
                               'candidate_proposal':display_candidate_proposal(STATE.get('candidate_proposal')),
                               'discovery':display_discovery(STATE['discovery']),
                               'candidates':[{**display_labels(c, selection=True),'key':classification_key(c)} for c in STATE['candidates']],
-                              'classification_catalog':{'ipc':explorer.ipc_catalog.metadata(),'fterm':explorer.fterm_catalog.metadata()},
+                              'classification_catalog':{'ipc':explorer.ipc_catalog.metadata(),'fterm':explorer.fterm_catalog.metadata(),'fi':explorer.fi_catalog.metadata()},
                               'settings': {**{k: v for k, v in SETTINGS.items() if k not in SECRET_SETTINGS},
                                            'api_key_set': bool(SETTINGS['api_key']), 'proxy_set': bool(SETTINGS['proxy']),
                                            'ops_key_set': bool(SETTINGS['ops_key']), 'ops_secret_set': bool(SETTINGS['ops_secret'])}, 'job': JOB})
@@ -197,13 +197,13 @@ def checked_text(value, limit=3000):
 
 def llm_classification_text(kind, code):
     """Strip only unambiguous display decoration, keeping incomplete symbols."""
-    aliases = {'IPC': 'IPC', 'F-TERM': 'F-term', 'FTERM': 'F-term',
+    aliases = {'IPC': 'IPC', 'FI': 'FI', 'F-TERM': 'F-term', 'FTERM': 'F-term',
                'F_TERM': 'F-term', 'Fターム': 'F-term'}
     kind = aliases.get(unicodedata.normalize('NFKC', kind).strip().upper())
     if kind is None:
-        raise ValueError('分類体系は IPC または F-term を指定してください。')
+        raise ValueError('分類体系は IPC、FI または F-term を指定してください。')
     text = unicodedata.normalize('NFKC', code).strip()
-    prefix = re.match(r'^(IPC|CPC|F-TERM|FTERM|F_TERM|Fターム)\s*:\s*(.*)$', text, re.I)
+    prefix = re.match(r'^(IPC|FI|CPC|F-TERM|FTERM|F_TERM|Fターム)\s*:\s*(.*)$', text, re.I)
     if prefix:
         if aliases.get(prefix[1].upper()) != kind:
             raise ValueError('kind とコードに付いた分類体系が一致しません。')
@@ -308,6 +308,9 @@ def llm_candidate_rows(result, notices, proposal=None):
             continue
         seen.add((kind, code))
         known = explorer.lookup(kind, code)
+        if kind == 'FI' and not known:
+            reject(index, {'kind': kind, 'code': code}, '収録FI表（電動車両関連6主群）で未確認です。未収録は不存在を意味しません。')
+            continue
         if kind == 'IPC' and not known:
             reject(index, {'kind': kind, 'code': code}, '収録IPC辞書（2026.01）で確認できません。旧版・誤記の可能性があります。')
             continue
@@ -341,11 +344,15 @@ def llm_candidate_rows(result, notices, proposal=None):
 
 
 def candidate_list(text, use_llm=False, *, notices=None, proposal=None, connection=None, research_context=None):
-    candidates = suggest(text)
+    import classification_retrieval
+    candidates = explorer.merge_candidates(classification_retrieval.retrieve(text),
+        [c for c in suggest(text) if classification_retrieval.relevant_seed(text, c)])
     seed_keys = {classification_key(row) for row in candidates}
     llm_rows = []
     if use_llm:
-        payload = {'keywords': text}
+        payload = {'keywords': text, 'verified_reference_candidates': [
+            {k: row[k] for k in ('kind', 'code', 'title', 'reason', 'path_title') if k in row}
+            for row in candidates[:24]]}
         if research_context:
             payload['research_context'] = copy.deepcopy(research_context)
         result = complete(connection if connection is not None else SETTINGS, CLASSIFICATION_SYSTEM, payload)

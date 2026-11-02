@@ -5,6 +5,7 @@ import unicodedata
 
 import classification_catalog as ipc_catalog
 import fterm_catalog
+import fi_catalog
 import classification_bridge
 from classification_translations import label_fields
 from catalog import CATALOG, keywords, suggest
@@ -15,8 +16,10 @@ def key(item):
 
 
 def normalize(kind, code):
-    if kind not in ('IPC', 'CPC', 'F-term') or not isinstance(code, str):
+    if kind not in ('IPC', 'CPC', 'F-term', 'FI') or not isinstance(code, str):
         raise ValueError('分類体系とコードを確認してください。')
+    if kind == 'FI':
+        return fi_catalog.normalize(code)
     code = re.sub(r'\s+', '', unicodedata.normalize('NFKC', code)).upper()
     # IPCPUB's documented 14-character symbol form is already understood by
     # the official catalogue. Apply that formatting conversion consistently at
@@ -43,6 +46,8 @@ def parse_codes(kind, text):
     pattern = section + r'(?:\s*\d{2}(?:\s*[A-Z](?:\s*\d{1,4}\s*/\s*\d{1,6})?)?)?' if kind != 'F-term' else r'\d[A-Z]\d{3}(?:\s*[A-Z]{2}\d{2})?'
     if kind == 'IPC':
         pattern = r'(?:[A-H]\s*\d{2}\s*[A-Z]\s*\d{10}|' + pattern + ')'
+    elif kind == 'FI':
+        pattern = r'[A-H]\s*\d{2}\s*[A-Z]\s*\d{1,4}\s*/\s*\d{2,6}(?:\s*,\s*\d{3})?(?:\s*@?\s*[A-Z](?![0-9]))?'
     out, pos = [], 0
     while pos < len(text):
         match = re.match(pattern, text[pos:])
@@ -70,14 +75,17 @@ def parse_codes(kind, text):
 
 def lookup(kind, code):
     code = normalize(kind, code)
+    if kind == 'FI': return fi_catalog.lookup(code)
     return fterm_catalog.lookup(code) if kind == 'F-term' else ipc_catalog.lookup(kind, code)
 
 
 def parent(kind, code):
+    if kind == 'FI': return fi_catalog.parent(code)
     return fterm_catalog.parent(code) if kind == 'F-term' else ipc_catalog.parent(kind, code)
 
 
 def children(kind, code=None):
+    if kind == 'FI': return fi_catalog.children(code)
     return fterm_catalog.children(code) if kind == 'F-term' else ipc_catalog.children(kind, code)
 
 
@@ -104,6 +112,7 @@ def enrich(item):
     result['verified'] = bool(known or local)
     result['key'] = key(result)
     result['selectable'] = bool(re.fullmatch(r'[A-HY]\d{2}[A-Z]\d{1,4}/\d{1,6}', code)) if kind != 'F-term' else bool(re.fullmatch(r'\d[A-Z]\d{3}[A-Z]{2}\d{2}', code))
+    if kind == 'FI': result['selectable'] = True
     upper_ipc = kind == 'IPC' and bool(known) and '/' not in code
     if upper_ipc:
         result['selectable'] = True
@@ -224,7 +233,7 @@ def overview(items, text, limit=24):
 
 
 def browse(kind='IPC', code=None, direction='children', text='', offset=0):
-    if kind not in ('IPC', 'CPC', 'F-term'):
+    if kind not in ('IPC', 'CPC', 'F-term', 'FI'):
         raise ValueError('分類体系を確認してください。')
     focus = enrich({'kind': kind, 'code': code}) if code else None
     note = ''
@@ -232,6 +241,7 @@ def browse(kind='IPC', code=None, direction='children', text='', offset=0):
         if not isinstance(text, str) or not text.strip() or len(text) > 300:
             raise ValueError('分類コードまたは名称を300文字以内で入力してください。')
         rows = ipc_catalog.search(kind, text, limit=300) if kind != 'F-term' else []
+        if kind == 'FI': rows = fi_catalog.search(text, limit=300)
         if kind == 'F-term':
             stack = list(children(kind))
             while stack:
@@ -244,7 +254,10 @@ def browse(kind='IPC', code=None, direction='children', text='', offset=0):
             for local in suggest(text):
                 if local['kind'] == kind and key(local) not in {key(x) for x in rows}:
                     rows.insert(0, local)
-        note = '公式IPCの名称検索は英語。日本語は内蔵の対訳がある語に対応します。' if kind == 'IPC' else ''
+        if kind in ('IPC', 'FI'):
+            from classification_retrieval import retrieve
+            rows = merge_candidates([r for r in retrieve(text) if r['kind']==kind], rows)
+        note = '公式IPCの英語名称と収録済み日本語名称を検索。技術語の対訳・探索入口も利用します。' if kind == 'IPC' else ''
     elif direction == 'roots':
         focus = None
         rows = children(kind)
@@ -281,6 +294,8 @@ def browse(kind='IPC', code=None, direction='children', text='', offset=0):
         raise ValueError('探索方向を確認してください。')
     if kind == 'CPC':
         note = 'CPCの階層辞書は未収録です。直接指定は可能です。IPCの階層へは読み替えません。'
+    if kind == 'FI':
+        note += ' FIは2026.04の電動車両関連6メイングループのみ収録。IPCとは別体系です。未収録は不存在を意味しません。'
     if kind == 'F-term':
         note += ' F-termの階層辞書は5H029のみ収録しています。'
     unique = {key(c): c for c in rows}
@@ -304,7 +319,7 @@ def seed_items(body, patents):
     if any(i not in indexed for i in ids):
         raise ValueError('取り込み済みの特許にないIDが指定されています。')
     batches = []
-    for kind, field in [('IPC', 'ipc_text'), ('F-term', 'fterm_text'), ('CPC', 'cpc_text')]:
+    for kind, field in [('IPC', 'ipc_text'), ('FI', 'fi_text'), ('F-term', 'fterm_text'), ('CPC', 'cpc_text')]:
         text = body.get(field, '')
         codes = parse_codes(kind, text)
         batches.append((kind, codes, dict(type='manual', label=str(body.get('label', '利用者の推薦'))[:160], raw=text)))

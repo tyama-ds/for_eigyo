@@ -7,6 +7,8 @@ from fastapi import HTTPException
 
 import classification_bridge
 import classification_explorer as explorer
+import classification_retrieval
+from discovery_engine import propose_plan
 from research_strategy import selected_sources
 from invention_strategy import plan_invention, compose_invention_query
 
@@ -18,7 +20,7 @@ def register_invention_routes(app, context, services):
     fingerprint, checked_brief = services['fingerprint'], services['checked_brief']
     idle = context['idle']
 
-    def candidate_pool(brief, patents):
+    def candidate_pool(brief, patents, input_data):
         # Actual seed metadata first. Existing proposed classifications stay
         # proposals; membership in this pool never makes a code mandatory.
         pool, notes = [], []
@@ -28,8 +30,31 @@ def register_invention_routes(app, context, services):
             extracted = classification_bridge.extract(patent)
             pool = explorer.merge_candidates(pool, extracted['items'])
             notes.extend(extracted['warnings'])
-        pool = explorer.merge_candidates(pool, (wb().get('plan') or {}).get('classification_candidates', []))
-        pool = explorer.merge_candidates(pool, state.get('candidates', []))
+        # Refresh using this brief, rather than feeding the previous topic's
+        # cached pool to a model forbidden from proposing outside that pool.
+        if brief['keywords'].strip():
+            fresh = propose_plan(brief['keywords'], [], [])
+            pool = explorer.merge_candidates(pool, fresh['candidate_hypotheses'])
+        manual = input_data.get('manual_elements', [])
+        for text in [brief['goal'], input_data.get('invention_text', ''),
+                     *(manual if isinstance(manual, list) else [])]:
+            if isinstance(text, str) and text.strip():
+                pool = explorer.merge_candidates(pool, classification_retrieval.retrieve(text[:12000]))
+        previous = wb().get('plan') or {}
+        if previous.get('brief') == brief:
+            pool = explorer.merge_candidates(pool, previous.get('classification_candidates', []))
+        if state.get('keywords', '').strip() == brief['keywords'].strip():
+            pool = explorer.merge_candidates(pool, state.get('candidates', []))
+        else:
+            notes.append('現在の技術・キーワードから分類候補を再取得しました。別テーマの自動候補は引き継いでいません。')
+        # User-selected seeds are deliberate input; do not silently erase them.
+        explicit = [c for c in state.get('candidates', []) if explorer.key(c) in state.get('selected', [])]
+        if explicit:
+            pool = explorer.merge_candidates(pool, explicit)
+            notes.append('対話で探索で選択済みの分類も残しています。今回の主題との適合性を確認してください。')
+        pool = [explorer.enrich(c) for c in pool]
+        if any(c['kind']=='FI' for c in pool):
+            notes.append('FIは電動車両関連6メイングループ（2026.04）の部分収録です。候補の網羅性や主題への適合性は公報で確認してください。')
         pool = [c for c in pool if c.get('selectable')]
         if len(pool) > 120:
             notes.append('分類候補はターゲット由来を優先して120件まで表示しています。')
@@ -50,7 +75,7 @@ def register_invention_routes(app, context, services):
             input_data.update(invention_text=body.get('invention_text', ''),
                               manual_elements=body.get('manual_elements', []))
             sources = selected_sources(patents, brief['target_ids'])
-            candidates, notes = candidate_pool(brief, patents)
+            candidates, notes = candidate_pool(brief, patents, input_data)
             connection = copy.deepcopy(settings)
             stamp = fingerprint((wb(), state['patents']))
         plan = plan_invention(input_data, sources, candidates, connection, use_llm=use_llm)
