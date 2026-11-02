@@ -18,6 +18,11 @@ def normalize(kind, code):
     if kind not in ('IPC', 'CPC', 'F-term') or not isinstance(code, str):
         raise ValueError('分類体系とコードを確認してください。')
     code = re.sub(r'\s+', '', unicodedata.normalize('NFKC', code)).upper()
+    # IPCPUB's documented 14-character symbol form is already understood by
+    # the official catalogue. Apply that formatting conversion consistently at
+    # the input boundary too; never apply IPC padding rules to CPC/F-term.
+    if kind == 'IPC':
+        code = ipc_catalog.normalize_code(code)
     section = '[A-HY]' if kind == 'CPC' else '[A-H]'
     pattern = section + r'(?:\d{2}(?:[A-Z](?:\d{1,4}/\d{1,6})?)?)?' if kind != 'F-term' else r'\d[A-Z]\d{3}(?:[A-Z]{2}\d{2})?'
     if not re.fullmatch(pattern, code):
@@ -36,6 +41,8 @@ def parse_codes(kind, text):
     text = unicodedata.normalize('NFKC', text).strip().upper()
     section = '[A-HY]' if kind == 'CPC' else '[A-H]'
     pattern = section + r'(?:\s*\d{2}(?:\s*[A-Z](?:\s*\d{1,4}\s*/\s*\d{1,6})?)?)?' if kind != 'F-term' else r'\d[A-Z]\d{3}(?:\s*[A-Z]{2}\d{2})?'
+    if kind == 'IPC':
+        pattern = r'(?:[A-H]\s*\d{2}\s*[A-Z]\s*\d{10}|' + pattern + ')'
     out, pos = [], 0
     while pos < len(text):
         match = re.match(pattern, text[pos:])
@@ -43,7 +50,10 @@ def parse_codes(kind, text):
             raise ValueError(f'{kind} の未解析部分があります: {text[pos:pos+50]}。体系ごとの欄に完全なコードを入力してください。')
         code = normalize(kind, match[0])
         pos += match.end()
-        version = re.match(r'\s*\(\d{4}\.\d{2}\)', text[pos:])
+        # WIPO also displays edition indicators in square brackets. They are
+        # formatting metadata, not a licence to infer a missing symbol prefix.
+        version_pattern = r'\s*(?:\(\d{4}\.\d{2}\)|\[\d{4}\.\d{2}\])' if kind == 'IPC' else r'\s*\(\d{4}\.\d{2}\)'
+        version = re.match(version_pattern, text[pos:])
         if version:
             pos += version.end()
         if code not in out:

@@ -14,13 +14,17 @@ function captureResearchDraft(){
  for(const [field,id] of [['purpose','research-purpose'],['goal','research-goal'],['keywords','research-keywords']])if($('#'+id))brief[field]=$('#'+id).value;
  if($('#research-target-options'))brief.target_ids=$$('.research-target input:checked').map(el=>el.value);
  captureResearchPlan();
+ if(typeof researchDraftScheduleSave==='function')researchDraftScheduleSave();
 }
 function captureResearchPlan(){
  if(!$('#research-concepts')||!researchPlanDraft)return;
  researchPlanDraft.concepts=$$('.research-concept').map(el=>{const previous=researchPlanDraft.concepts.find(c=>c.id===el.dataset.concept);return {...previous,id:el.dataset.concept,selected:$('input[data-use]',el).checked,role:$('select[data-role]',el).value,or_group:$('select[data-or-group]',el)?.value||previous?.or_group||'',terms:$('textarea',el).value.split(/\r?\n/).map(t=>t.trim()).filter(Boolean)};});
  researchPlanDraft.classification_keys=$$('.research-class input:checked').map(el=>el.value);
  researchPlanDraft.acknowledge_unmapped=$('#research-unmapped-ack')?.checked||false;
+ if(typeof researchDraftScheduleSave==='function')researchDraftScheduleSave();
 }
+function researchPlanningActive(){return researchPlanning||(typeof inventionPlanning!=='undefined'&&inventionPlanning)||(typeof researchProgressIsRunning==='function'&&researchProgressIsRunning());}
+function syncResearchPlanningControls(){for(const id of ['research-plan-llm','research-plan-local']){const button=$('#'+id);if(button)button.disabled=researchPlanningActive();}if(typeof applyResearchInputMethod==='function')applyResearchInputMethod();}
 function researchPlanState(plan){
  if(!plan)return null;
  if(researchPlanDraft?.id!==plan.id)researchPlanDraft={id:plan.id,concepts:plan.concepts.map(c=>({...c,selected:c.role==='required',role:c.role==='exclude'?'exclude':'required',or_group:c.or_group||researchOwnGroup(c,plan),terms:[...c.terms]})),classification_keys:[],preview:null};
@@ -57,7 +61,10 @@ function refreshResearchLogic(){
 }
 function researchTargetOptions(){
  const ids=new Set(researchBrief().target_ids),references=new Map((state.research_workbench?.target_patents||[]).map(p=>[p.id,p]));for(const p of state.patents){const old=references.get(p.id)||{},merged={...p};for(const field of ['title','abstract','ipc','fi','fterm','cpc'])if(!merged[field]||(Array.isArray(merged[field])&&!merged[field].length))merged[field]=old[field]||merged[field];references.set(p.id,merged);}const rows=[...references.values()].sort((a,b)=>Number(ids.has(b.id))-Number(ids.has(a.id)));
- return rows.map(p=>`<label class="research-target" data-search="${esc((p.id+' '+p.title).toLocaleLowerCase())}"><input type="checkbox" value="${esc(p.id)}" ${ids.has(p.id)?'checked':''}><span><b>${esc(p.title)}</b><small>${esc(p.id)} · IPC ${esc(p.ipc||'なし')} ${p.fi?' · FI '+esc(p.fi):''}${p.fterm?' · Fターム '+esc(p.fterm):''}${p.cpc?' · CPC '+esc(p.cpc):''}</small></span></label>`).join('')||'<p class="caption">CSVを追加するか、ターゲット特許の情報を入力してください。</p>';
+ const hasValue=value=>Array.isArray(value)?value.some(v=>String(v).trim()):Boolean(String(value||'').trim());
+ const missing=rows.filter(p=>!hasValue(p.ipc)),derived=missing.filter(p=>hasValue(p.fi)||hasValue(p.fterm));
+ const note=missing.length?`<p class="research-target-provenance">${missing.length} 件は取り込みデータの公報IPC欄が未収録です。${derived.length?`うち ${derived.length} 件にはFIまたはFタームがあり、対応が確認できる範囲からIPCの探索候補を提示します。`:''}候補と公報の付与IPCは区別します。原本にIPCがないという意味ではありません。</p>`:'';
+ return note+(rows.map(p=>`<label class="research-target" data-search="${esc((p.id+' '+p.title).toLocaleLowerCase())}"><input type="checkbox" value="${esc(p.id)}" ${ids.has(p.id)?'checked':''}><span><b>${esc(p.title)}</b><small>${esc(p.id)} · 公報IPC：${hasValue(p.ipc)?esc(p.ipc):'未収録'}${p.fi?' · FI '+esc(p.fi):''}${p.fterm?' · Fターム '+esc(p.fterm):''}${p.cpc?' · CPC '+esc(p.cpc):''}</small></span></label>`).join('')||'<p class="caption">CSVを追加するか、ターゲット特許の情報を入力してください。</p>');
 }
 function researchPlanHtml(plan){
  if(!plan)return '<div class="research-plan-empty"><span>◎</span><h3>目的から、検索の観点へ。</h3><p>条件を整理すると、観点・語句・根拠となる分類をここで比較できます。</p></div>';
@@ -66,7 +73,7 @@ function researchPlanHtml(plan){
  <div id="research-logic" class="research-logic" aria-live="polite">${researchLogicHtml(plan,draft)}</div>
  <div id="research-concepts">${plan.concepts.map(c=>{const d=draft.concepts.find(x=>x.id===c.id),locked=researchConceptGroupLocked(c,plan)||d.role==='exclude';return `<article class="research-concept" data-concept="${esc(c.id)}"><div class="panel-heading"><label class="check"><input data-use type="checkbox" ${d.selected?'checked':''}><b>${esc(c.name)}</b></label><select data-role aria-label="${esc(c.name)} の条件"><option value="required" ${d.role==='required'?'selected':''}>含める</option><option value="exclude" ${d.role==='exclude'?'selected':''}>除外 · NOT</option></select></div><label class="research-group-choice">和集合グループ<select data-or-group aria-label="${esc(c.name)} の和集合グループ" ${locked?'disabled':''}>${researchGroupOptions(plan,draft,d)}</select></label><p class="caption research-group-help">同じ条件を選んだ観点同士はOR、別の条件とはAND。${researchConceptGroupLocked(c,plan)&&c.role!=='exclude'?'明示した必須観点は独立条件を保持します。':esc(c.group_reason||'')}</p><label>語句 · 1行に1語句（この欄の語はOR）<textarea rows="3" maxlength="5000">${esc(d.terms.join('\n'))}</textarea></label><p class="caption">${esc(c.reason)}${c.evidence_ids?.length?' / 根拠：'+c.evidence_ids.map(esc).join('、'):''}</p>${c.abstract_terms?.length?`<div class="research-expansion"><span>機能・概念を広げる</span>${c.abstract_terms.map(t=>`<button class="button small" data-abstract="${esc(t)}" type="button">＋ ${esc(t)}</button>`).join('')}</div>`:''}</article>`;}).join('')}</div>
  ${plan.unmapped_keywords?.length?`<div class="notice">観点に未割当の入力語：${plan.unmapped_keywords.map(esc).join('、')}。上の語句欄に割り当ててください。<label class="check"><input id="research-unmapped-ack" type="checkbox" ${draft.acknowledge_unmapped?'checked':''}>未割当の語を今回の式から省略することを確認した</label></div>`:''}
- <details class="research-classifications" open><summary>分類の根拠を比較する · ${plan.classification_candidates.length} 件</summary><p class="caption">実付与・対応付け・上位への拡張・観点からの仮説を区別しています。分類は任意です。選択すると分類群のORを、観点の式にANDで加えます。</p><div class="research-class-grid">${plan.classification_candidates.map(c=>{const tag=researchClassificationProvenance(c),hypothesis=tag.includes('仮説'),origins=c.origins||[];return `<label class="research-class ${hypothesis?'hypothesis':''}"><input type="checkbox" value="${esc(c.key)}" ${selected.has(c.key)?'checked':''} ${c.selectable?'':'disabled'}><span><small>${tag} · ${c.verified?'辞書で確認':'未確認'}</small><b>${esc(c.kind)} ${esc(c.code)}</b><span>${esc(c.title_short_ja||c.title_ja||c.title)}</span><small>${esc(c.reason||'')}${origins.map(o=>o.patent_id?' / '+esc(o.patent_id):'').join('')}</small></span></label>`;}).join('')}</div></details>
+ <details class="research-classifications" open><summary>分類の根拠を比較する · ${plan.classification_candidates.length} 件</summary><p class="caption">実付与・対応付け・上位への拡張・観点からの仮説を区別しています。分類は任意です。選択すると分類群のORを、観点の式にANDで加えます。</p><div class="research-class-grid">${plan.classification_candidates.map(c=>{const tag=researchClassificationProvenance(c),hypothesis=tag.includes('仮説'),origins=c.origins||[];return `<label class="research-class ${hypothesis?'hypothesis':''}"><input type="checkbox" value="${esc(c.key)}" ${selected.has(c.key)?'checked':''} ${c.selectable?'':'disabled'}><span><small>${tag} · ${c.verified?'分類表に存在':'存在未確認'}</small><b>${esc(c.kind)} ${esc(c.code)}</b><span>${esc(c.title_short_ja||c.title_ja||c.title)}</span><small>${esc(c.reason||'')}${origins.map(o=>o.patent_id?' / '+esc(o.patent_id):'').join('')}</small></span></label>`;}).join('')}</div></details>
  ${[...(plan.questions||[]),...(plan.classification_notes||[])].length?`<details class="research-notes"><summary>確認する点・根拠の限界</summary><ul>${[...(plan.questions||[]),...(plan.classification_notes||[])].map(t=>`<li>${esc(t)}</li>`).join('')}</ul></details>`:''}
  <div class="button-row"><button class="button primary" id="research-preview">検索条件をプレビュー →</button></div><div id="research-query-preview" aria-live="polite">${researchPreviewHtml()}</div>`;
 }
@@ -87,37 +94,65 @@ function renderResearchWorkbench(){
   if(layout){layout.classList.add('research-invention-brief');layout.insertAdjacentHTML('afterend',inventionWorkbenchHtml());}
   const actions=$('.research-plan-actions',host);if(actions){const details=document.createElement('details');details.className='research-direct-actions';details.innerHTML='<summary>キーワードから直接、観点案を作る</summary>';actions.replaceWith(details);details.append(actions);}
  }
- $$('.research-brief input,.research-brief textarea').forEach(el=>el.addEventListener('input',()=>{captureResearchDraft();invalidateResearchPreview();}));
- $$('[data-research-mode]').forEach(el=>el.addEventListener('click',()=>{captureResearchDraft();if(el.dataset.researchMode==='discover'&&researchDraft.entry_mode!=='discover')researchDraft.target_ids=[];researchDraft.entry_mode=el.dataset.researchMode;invalidateResearchPreview();renderResearchWorkbench();}));
+ $$('.research-brief input,.research-brief textarea').forEach(el=>{if(el.id==='research-target-filter')return;el.addEventListener('input',()=>{if(typeof inventionShowError==='function')inventionShowError('');captureResearchDraft();invalidateResearchPreview();});});
+ $$('[data-research-mode]').forEach(el=>el.addEventListener('click',()=>{captureResearchDraft();researchDraft.entry_mode=el.dataset.researchMode;invalidateResearchPreview();if(typeof researchDraftScheduleSave==='function')researchDraftScheduleSave();renderResearchWorkbench();}));
  $$('[data-open-tab]').forEach(el=>el.addEventListener('click',()=>{setTab(el.dataset.openTab);if(el.dataset.openTab==='explore')setStep(Number(el.dataset.openStep));}));
- if(mode==='examples'){bindQueryLibrary();return;}if(mode==='tools')return;
+ if(mode==='examples'){bindQueryLibrary();if(typeof renderResearchFlowHeader==='function')renderResearchFlowHeader();return;}if(mode==='tools'){if(typeof renderResearchFlowHeader==='function')renderResearchFlowHeader();return;}
  on('#research-aspects-open','click',()=>{captureResearchDraft();$('#research-aspects-text').value=researchDraft.user_aspects.join('\n');$('#research-aspects-dialog').showModal();});
  on('#research-target-filter','input',e=>{$$('.research-target').forEach(el=>el.hidden=!el.dataset.search.includes(e.target.value.toLocaleLowerCase()));});
  on('#research-upload','click',()=>$('#research-csv-file').click());
- on('#research-csv-file','change',async e=>{captureResearchDraft();researchImportPending=true;pendingImportMode='merge';try{await uploadFile(e.target.files[0]);}catch(error){researchImportPending=false;throw error;}});
+ on('#research-csv-file','change',async e=>{captureResearchDraft();if(typeof researchDraftFlush==='function')researchDraftFlush();researchImportPending=true;pendingImportMode='merge';try{await uploadFile(e.target.files[0]);}catch(error){researchImportPending=false;throw error;}});
  on('#research-target-add','click',()=>{captureResearchDraft();$('#research-target-dialog').showModal();});
  on('#research-promote','click',()=>{captureResearchDraft();if(!researchDraft.target_ids.length)throw new Error('ターゲット特許を選んでください。');researchDraft.entry_mode='target';invalidateResearchPreview();renderResearchWorkbench();});
  for(const [id,llm] of [['research-plan-llm',true],['research-plan-local',false]])on('#'+id,'click',e=>busy(e.currentTarget,'観点を整理しています…',()=>requestResearchPlan(llm)));
  $$('[data-abstract]').forEach(el=>el.addEventListener('click',()=>{const field=$('textarea',el.closest('.research-concept'));const values=field.value.split(/\r?\n/);if(!values.includes(el.dataset.abstract))field.value+=(field.value?'\n':'')+el.dataset.abstract;captureResearchPlan();invalidateResearchPreview();refreshResearchLogic();}));
  $$('.research-plan input,.research-plan textarea,.research-plan select').forEach(el=>el.addEventListener('input',()=>{captureResearchPlan();invalidateResearchPreview();refreshResearchLogic();}));
- on('#research-preview','click',e=>busy(e.currentTarget,'確認中…',async()=>{researchPlanDraft.preview=await api('/research/preview',researchPlanPayload());$('#research-query-preview').innerHTML=researchPreviewHtml();bindResearchApply();}));
+ on('#research-preview','click',e=>busy(e.currentTarget,'確認中…',previewResearchPlan));
  bindResearchApply();refreshResearchLogic();if(typeof bindInventionWorkbench==='function')bindInventionWorkbench();
+ syncResearchPlanningControls();if(typeof mountResearchGuidance==='function')mountResearchGuidance();
 }
-function bindResearchApply(){on('#research-apply','click',e=>busy(e.currentTarget,'作成中…',async()=>{const preview=researchPlanDraft.preview;const body=researchPlanPayload();state=await api('/research/apply',{...body,expected_preview_hash:preview?.preview_hash});researchDraft=structuredClone(state.research_workbench.brief);updateChrome();setTab('explore');setStep(1);toast('検索条件を履歴に保存しました。検索サービスの形式で出力します。');}));}
+async function previewResearchPlan(){
+ if($('#research-error'))$('#research-error').textContent='';
+ try{
+  const body=researchPlanPayload(),key=JSON.stringify(body),planId=body.plan_id;
+  if(typeof researchDraftFlush==='function')researchDraftFlush();
+  const result=await api('/research/preview',body);
+  if(researchPlanDraft?.id!==planId||researchBriefChanged())return;
+  let current;try{current=JSON.stringify(researchPlanPayload());}catch{return;}if(current!==key)return;
+  researchPlanDraft.preview=result;
+  const host=$('#research-query-preview');if(host){host.innerHTML=researchPreviewHtml();bindResearchApply();}
+ }catch(error){if($('#research-error'))$('#research-error').textContent=error.message;throw error;}
+}
+function bindResearchApply(){on('#research-apply','click',e=>busy(e.currentTarget,'作成中…',async()=>{
+ const preview=researchPlanDraft.preview,body=researchPlanPayload(),submitted=JSON.stringify(researchBrief());
+ if(!preview)throw new Error('最新の検索条件をプレビューしてから採用してください。');
+ if(typeof researchDraftFlush==='function')researchDraftFlush();
+ const result=await api('/research/apply',{...body,expected_preview_hash:preview.preview_hash});
+ captureResearchDraft();const edited=JSON.stringify(researchBrief())!==submitted;
+ state=result;if(!edited)researchDraft=structuredClone(state.research_workbench.brief);if(researchPlanDraft)researchPlanDraft.preview=null;
+ if(typeof researchDraftRebase==='function')researchDraftRebase();if(typeof researchDraftScheduleSave==='function')researchDraftScheduleSave();
+ updateChrome();setTab('explore');setStep(1);toast('検索条件を履歴に保存しました。検索サービスの形式で出力します。');
+}));}
 function initResearchWorkbench(){
  on('#research-aspects-close','click',()=>$('#research-aspects-dialog').close());
- on('#research-aspects-form','submit',e=>{e.preventDefault();const values=$('#research-aspects-text').value.split(/\r?\n/).map(t=>t.trim()).filter(Boolean);if(values.length>8||values.some(t=>t.length>160))throw new Error('観点は8件まで、1件160文字以内です。');researchBrief().user_aspects=values;invalidateResearchPreview();$('#research-aspects-dialog').close();renderResearchWorkbench();});
+ on('#research-aspects-form','submit',e=>{e.preventDefault();const values=$('#research-aspects-text').value.split(/\r?\n/).map(t=>t.trim()).filter(Boolean);if(values.length>8||values.some(t=>t.length>160))throw new Error('観点は8件まで、1件160文字以内です。');researchBrief().user_aspects=values;invalidateResearchPreview();if(typeof researchDraftScheduleSave==='function')researchDraftScheduleSave();$('#research-aspects-dialog').close();renderResearchWorkbench();});
  on('#research-target-close','click',()=>$('#research-target-dialog').close());
- on('#research-target-form','submit',async e=>{e.preventDefault();captureResearchDraft();const values=Object.fromEntries(new FormData(e.currentTarget));values.target_ids=[...researchBrief().target_ids];await busy($('#research-target-save'),'追加中…',async()=>{state=await api('/research/targets/add',values);researchBrief().target_ids=[...new Set([...values.target_ids,state.research_workbench.last_added_target_id||values.id])];invalidateResearchPreview();$('#research-target-dialog').close();e.target.reset();renderResearchWorkbench();updateChrome();});});
+ on('#research-target-form','submit',async e=>{e.preventDefault();captureResearchDraft();const values=Object.fromEntries(new FormData(e.currentTarget));values.target_ids=[...researchBrief().target_ids];await busy($('#research-target-save'),'追加中…',async()=>{
+  if(typeof researchDraftFlush==='function')researchDraftFlush();
+  const result=await api('/research/targets/add',values);captureResearchDraft();const selected=[...researchBrief().target_ids];
+  state=result;researchBrief().target_ids=[...new Set([...selected,state.research_workbench.last_added_target_id||values.id])];invalidateResearchPreview();
+  $('#research-target-dialog').close();e.target.reset();renderResearchWorkbench();
+  if(typeof researchDraftRebase==='function')researchDraftRebase();if(typeof researchDraftScheduleSave==='function')researchDraftScheduleSave();updateChrome();
+ });});
  renderResearchWorkbench();
 }
 
 function researchClassificationProvenance(c){
- const types=new Set((c.origins||[]).map(o=>o.type));
+ const origins=[...(c.classification_origins||[]),...(c.origins||[])],types=new Set(origins.map(o=>o.type));
  const tags=[];
- if(types.has('patent'))tags.push('公報の分類欄');
- if(types.has('fi_to_ipc'))tags.push('FIからのIPC候補');
- if(types.has('fterm_theme_to_ipc'))tags.push('Fターム対応範囲');
+ if(types.has('patent'))tags.push(origins.some(o=>o.type==='patent'&&o.field==='ipc')?'公報のIPC欄から抽出':'公報の分類欄から抽出');
+ if(types.has('fi_to_ipc'))tags.push(origins.some(o=>o.type==='fi_to_ipc'&&o.method==='subclass_fallback')?'FIからのIPC候補（上位へ拡張・付与IPCとは別）':'FIからのIPC候補（付与IPCとは別）');
+ if(types.has('fterm_theme_to_ipc'))tags.push('Fターム対応範囲のIPC候補（付与IPCとは別）');
  if(types.has('target_parent'))tags.push('上位へ拡張');
  return tags.join(' / ')||(c.llm_proposed?'LLMからの仮説':'観点からの仮説');
 }
@@ -129,16 +164,20 @@ function researchBriefChanged(){
 }
 
 async function requestResearchPlan(useLlm){
- if(researchPlanning)throw new Error('観点を起案中です。完了を待ってください。');
- captureResearchDraft();const submitted=structuredClone(researchBrief());researchPlanning=true;
+ if(researchPlanningActive())throw new Error('観点または要素を起案中です。完了を待ってください。');
+ captureResearchDraft();const submitted=structuredClone(researchBrief());researchPlanning=true;let progressToken=null,failure;
  if($('#research-error'))$('#research-error').textContent='';
  try{
+  if(typeof researchProgressStart==='function')progressToken=researchProgressStart({label:'観点・広げ方を作成',useLlm,settings:state.settings});syncResearchPlanningControls();
+  if(typeof researchDraftFlush==='function')researchDraftFlush();
   const result=await api('/research/plan',{revision:state.research_workbench.revision,brief:submitted,use_llm:useLlm});
   captureResearchDraft();const edited=JSON.stringify(researchBrief())!==JSON.stringify(submitted);
   state=result;if(!edited)researchDraft=structuredClone(state.research_workbench.brief);
   researchPlanDraft=null;
+  if(typeof researchDraftRebase==='function')researchDraftRebase();if(typeof researchDraftScheduleSave==='function')researchDraftScheduleSave();
   if(activeTab==='workbench')renderResearchWorkbench();updateChrome();
+  if(!edited&&activeTab==='workbench'){const details=$('.research-legacy-plan');if(details){details.open=true;details.scrollIntoView?.({block:'start',behavior:'auto'});}}
   if(edited)toast('起案中の入力変更は保持しています。新しい条件で観点を再作成してください。');
- }catch(error){if($('#research-error'))$('#research-error').textContent=error.message;throw error;}
- finally{researchPlanning=false;}
+ }catch(error){failure=error;if($('#research-error'))$('#research-error').textContent=error.message;throw error;}
+ finally{researchPlanning=false;if(progressToken!==null&&typeof researchProgressFinish==='function')researchProgressFinish(progressToken,failure);syncResearchPlanningControls();}
 }

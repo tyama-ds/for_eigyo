@@ -29,11 +29,15 @@
   <link rel="stylesheet" href="/static/invention-workbench.css?v=20260918-elements">
   <link rel="stylesheet" href="/static/query-library-ui.css?v=20260918">
   <link rel="stylesheet" href="/static/projection-ui.css?v=20260918">
-  <script src="/static/query-library-ui.js?v=20260918" defer></script>
-  <script src="/static/research-workbench.js?v=20260918" defer></script>
-  <script src="/static/invention-workbench.js?v=20260918-elements" defer></script>
+  <link rel="stylesheet" href="/static/research-guidance.css?v=20261102-usability">
+  <script src="/static/query-library-ui.js?v=20261102-usability" defer></script>
+  <script src="/static/research-workbench.js?v=20261102-usability" defer></script>
+  <script src="/static/invention-workbench.js?v=20261102-usability" defer></script>
   <script src="/static/projection-ui.js?v=20260918" defer></script>
-  <script src="/static/app.js?v=20260918-research" defer></script>
+  <script src="/static/research-draft-store.js?v=20261102-usability" defer></script>
+  <script src="/static/research-progress.js?v=20261102-usability" defer></script>
+  <script src="/static/research-guidance.js?v=20261102-usability" defer></script>
+  <script src="/static/app.js?v=20261102-usability" defer></script>
   <script src="/static/atlas-motion.js" defer></script>
 </head>
 <body>
@@ -48,15 +52,20 @@
    <div class="atlas-heading-copy"><span class="eyebrow">PATENT RESEARCH / 知の地図をつくる</span><h1>特許検索を、探索する。</h1><p class="atlas-heading-note">ひとつの技術から、次の発見へ。</p></div>
    <div class="heading-actions"><label class="atlas-motion-control"><select id="atlas-motion-mode" aria-label="画面の動き"><option value="system">動き：自動</option><option value="dynamic">動き：あり</option><option value="static">静止表示</option></select></label><button class="button subtle" id="demo-button">サンプルを試す <span>↗</span></button><a class="button subtle atlas-export" href="/api/export" download>プロジェクトを書き出す <span>↓</span></a></div>
   </div>
+  <div id="research-flow-header"></div>
+  <div id="research-progress"></div>
   <div id="job-banner" class="job-banner hidden" role="status" aria-live="polite"><span class="spinner"></span><span id="job-message"></span><progress id="job-progress" max="100" value="0"></progress><button class="button small" id="stop-job">停止</button></div>
   <section id="workbench-tab" class="view active"><div id="research-workbench"></div></section>
   <section id="explore-tab" class="view">
+   <details id="research-workspace-shortcuts" class="research-workspace-shortcuts" open>
+   <summary>分類コンステレーション・個別ステップを開く</summary>
    <nav class="stepper" aria-label="探索ステップ">
     <button class="step active" data-step="0"><span class="step-number">00</span><span><b>技術の輪郭</b><small>キーワード・分類を選ぶ</small></span><span class="step-arrow">→</span></button>
     <button class="step" data-step="1"><span class="step-number">01</span><span><b>検索の初案</b><small>検索式をつくる・CSVを渡す</small></span><span class="step-arrow">→</span></button>
     <button class="step" data-step="2"><span class="step-number">02</span><span><b>特許の地図</b><small>眺める・選ぶ・学習する</small></span><span class="step-arrow">→</span></button>
     <button class="step" data-step="3"><span class="step-number">03</span><span><b>次の検索へ</b><small>判断から検索式を育てる</small></span></button>
    </nav>
+   </details>
    <div id="step-content" class="step-content"></div>
   </section>
   <section id="agent-tab" class="view"><div class="agent-layout">

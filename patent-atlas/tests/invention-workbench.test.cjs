@@ -134,3 +134,38 @@ test('boundary-ellipsis evidence adjustment is disclosed only for the exact stat
  const s=setup(),c=s.context,e=s.plan.elements[0];e.evidence=[{source_id:'invention_text',quote:'<原文>',quote_adjustment:'boundary_ellipsis_removed',original_quote:'…<original>…'},{source_id:'research_goal',quote:'<別原文>',quote_adjustment:'unchanged'}];
  const html=c.inventionWorkbenchHtml();assert.equal((html.match(/前後の省略記号を除き、原文と照合/g)||[]).length,1);assert.match(html,/貼り付けた発明の原文/);assert.match(html,/調べたい技術・解決したいこと/);assert.match(html,/&lt;原文&gt;/);assert.match(html,/&lt;別原文&gt;/);assert.doesNotMatch(html,/<原文>|<別原文>|<original>/);
 });
+
+test('guided validation errors display inline and restore controls without starting a request',async()=>{
+ const s=setup(),c=s.context;let updated=0,started=0;c.applyResearchInputMethod=()=>updated++;c.researchProgressStart=()=>started++;
+ c.researchFlowValidate=()=>{throw new Error('今回の検索目的を入力してください。');};
+ await assert.rejects(c.requestInventionPlan(true),/検索目的/);assert.match(s.read('inventionError'),/検索目的/);assert.equal(s.read('inventionPlanning'),false);assert.equal(updated,1);assert.equal(started,0);assert.equal(s.calls.length,0);
+});
+
+test('element planning reports progress, preserves pending edits and chooses the corresponding guided stage',async()=>{
+ const s=setup(),c=s.context,events=[];let running=false,resolve;
+ c.researchProgressIsRunning=()=>running;c.researchProgressStart=()=>{running=true;events.push('start');return 9;};c.researchProgressFinish=(token,error)=>{assert.equal(token,9);running=false;events.push(error?'error':'finish');};
+ c.researchDraftFlush=()=>events.push('flush');c.researchDraftRebase=()=>events.push('rebase:'+c.state.research_workbench.revision);c.researchDraftScheduleSave=()=>{};
+ c.researchFlowAfterPlan=edited=>events.push('stage:'+edited);c.renderResearchWorkbench=()=>events.push('render');c.applyResearchInputMethod=()=>events.push('controls');
+ c.api=()=>new Promise(yes=>resolve=yes);const pending=c.requestInventionPlan(true);await assert.rejects(c.requestInventionPlan(true),/起案中/);
+ c.inventionDraftInput().invention_text='応答待ち中の追記';const next=structuredClone(c.state);next.research_workbench.revision=4;next.research_workbench.invention.plan.id='inv2';resolve(next);await pending;
+ assert.equal(c.inventionDraftInput().invention_text,'応答待ち中の追記');assert.deepEqual(events,['start','controls','flush','rebase:4','stage:true','render','finish','controls']);
+ c.api=async()=>{throw new Error('LLM失敗');};await assert.rejects(c.requestInventionPlan(true),/LLM失敗/);assert.deepEqual(events.slice(-2),['error','controls']);assert.equal(running,false);
+ c.researchPlanning=true;const count=events.length;await assert.rejects(c.requestInventionPlan(true),/起案中/);assert.equal(events.length,count);
+});
+
+test('preview reveals the result and adoption retains typed input while clearing the old revision preview',async()=>{
+ const s=setup(),c=s.context,d=c.inventionPlanState(),events=[];let resolve;
+ c.researchFlowRevealPreview=()=>events.push('reveal');c.researchDraftFlush=()=>events.push('flush');c.researchDraftRebase=()=>events.push('rebase:'+c.state.research_workbench.revision);
+ c.api=async()=>({query:{boolean_tree:{}},preview_hash:'exact',expression:'温度'});await c.previewInvention();assert.deepEqual(events,['flush','reveal']);
+ c.api=(_path,body)=>{assert.equal(body.expected_preview_hash,'exact');return new Promise(yes=>resolve=yes);};const pending=c.applyInvention();
+ s.dom['#invention-text']={value:'採用を待つ間の追記'};const next=structuredClone(c.state);next.research_workbench.revision=4;resolve(next);await pending;
+ assert.equal(c.inventionDraftInput().invention_text,'採用を待つ間の追記');assert.equal(d.preview,null);assert.equal(d.previewPayload,null);assert.equal(events.at(-1),'rebase:4');
+});
+
+test('editing invention input clears the old inline error without changing progress history',()=>{
+ const s=setup(),c=s.context;let input;const progress={status:'error',error:'接続失敗'};c.researchProgressCurrent=progress;
+ const field={id:'invention-manual-elements',value:'修正した要素',addEventListener:(_event,fn)=>input=fn};s.dom['#invention-manual-elements']=field;
+ s.dom['#invention-error']={textContent:'',hidden:true};s.groups['#invention-workbench input,#invention-workbench textarea,#invention-workbench select']=[field];
+ c.inventionShowError('要素を入力してください。');c.bindInventionWorkbench();c.captureInventionDraft();assert.match(s.read('inventionError'),/要素/);
+ input();assert.equal(s.read('inventionError'),'');assert.equal(s.dom['#invention-error'].hidden,true);assert.equal(s.dom['#invention-error'].textContent,'');assert.deepEqual([...c.inventionDraftInput().manual_elements],['修正した要素']);assert.deepEqual(progress,{status:'error',error:'接続失敗'});
+});

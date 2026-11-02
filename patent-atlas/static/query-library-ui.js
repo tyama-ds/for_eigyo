@@ -84,11 +84,13 @@ async function queryLibraryAction(action){
  let entry=queryLibrarySelected(state.research_workbench||{});if(entry&&entry.id!==d.selected)queryLibraryChoose(entry.id);
  d.error='';d.busy=true;queryLibraryRefresh();
  try{
+  if((action==='import'||action==='apply')&&typeof researchDraftFlush==='function')researchDraftFlush();
   if(action==='import'){
    if(!d.text.trim())throw Error('検索式かJSONを入力してください。');
    const oldIds=new Set(queryLibraryEntries(state.research_workbench).map(e=>e.id));
    const result=await api('/research/library/import',{text:d.text,source_format:d.source_format,name:d.name,purpose:d.purpose});
    state=result.state||result;
+   if(typeof researchDraftRebase==='function'){researchDraftRebase();researchDraftScheduleSave();}
    const added=queryLibraryEntries(state.research_workbench).find(e=>!oldIds.has(e.id));if(added)queryLibraryChoose(added.id);
    d.text='';d.name='';d.purpose='';
   }else if(action==='suggest'){
@@ -108,6 +110,7 @@ async function queryLibraryAction(action){
    if(JSON.stringify(current)!==JSON.stringify(d.previewPayload)){queryLibraryInvalidate();throw Error('条件が変わりました。もう一度プレビューしてください。');}
    const result=await api('/research/library/apply',{...d.previewPayload,expected_preview_hash:d.preview.preview_hash});
    state=result.state||result;d.preview=null;d.previewPayload=null;
+   if(typeof researchDraftRebase==='function'){researchDraftRebase();researchDraftScheduleSave();}
    if(typeof updateChrome==='function')updateChrome();
    if(typeof setTab==='function')setTab('explore');if(typeof setStep==='function')setStep(1);
   }

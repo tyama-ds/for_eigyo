@@ -14,6 +14,7 @@ function captureInventionDraft(){
  const input=inventionDraftInput();
  if($('#invention-text'))input.invention_text=$('#invention-text').value;
  if($('#invention-manual-elements'))input.manual_elements=inventionLines($('#invention-manual-elements').value);
+ if(typeof researchDraftScheduleSave==='function')researchDraftScheduleSave();
  const d=inventionPlanDraft;if(!d||!$('#invention-elements'))return;
  if($('#invention-strategy'))d.strategy=$('#invention-strategy').value;
  d.element_ids=$$('[data-invention-use]:checked').map(el=>el.value);
@@ -42,7 +43,7 @@ function inventionClassLabel(c){return [c.kind||c.system||'',c.code||'',c.title_
 function inventionClassProvenance(c){return typeof researchClassificationProvenance==='function'?researchClassificationProvenance(c):((c.origins||[]).some(o=>o.type==='patent')?'公報の分類欄':'分類候補・仮説');}
 function inventionPerspectiveHtml(element,p,d,plan){
  const choices=plan.classification_candidates||[],suggested=new Set(p.classification_keys||[]),active=d.class_mode!=='text';
- return `<section class="invention-perspective" data-invention-element="${esc(element.id)}" data-invention-perspective="${esc(p.id)}"><div class="invention-perspective-title"><span>検索観点</span><label class="check"><input type="checkbox" data-invention-perspective-use aria-label="${esc(element.name+' / '+p.name)} を採用" ${d.selected?'checked':''}><b>${esc(p.name)}</b></label></div><p class="caption">${esc(p.reason||'')}</p>${p.anchor_term?`<p class="caption">起案時の基準語：${esc(p.anchor_term)}。言い換えと合わせて編集できます。</p>`:''}<label>語句 · 1行に1語句（語句同士はOR）<textarea data-invention-terms rows="3" maxlength="12000" aria-label="${esc(element.name+' / '+p.name)} の語句">${esc(d.terms.join('\n'))}</textarea></label><label>語句と分類の使い方<select data-invention-class-mode aria-label="${esc(element.name+' / '+p.name)} の検索方法">${[['text','語句だけ'],['class','分類だけ'],['or','語句 OR 分類 · どちらか'],['and','語句 AND 分類 · 両方']].map(([value,label])=>`<option value="${value}" ${d.class_mode===value?'selected':''}>${label}</option>`).join('')}</select></label><details class="invention-classifications" ${active?'open':''}><summary>分類候補を選ぶ · ${d.classification_keys.length} 件${active?'':'（語句だけでは未使用）'}</summary><p class="caption">分類は候補です。検索観点との対応を確認してください。選んだ分類同士はORになります。</p><div class="invention-class-options">${choices.map(c=>`<label class="invention-class-option"><input type="checkbox" data-invention-class value="${esc(c.key)}" ${d.classification_keys.includes(c.key)?'checked':''} ${c.selectable===false?'disabled':''}><span><b>${esc(inventionClassLabel(c))}</b><small>${suggested.has(c.key)?'この観点の候補 · ':''}${esc(inventionClassProvenance(c))} · ${c.verified?'辞書で確認':'未確認'}</small></span></label>`).join('')||'<p class="caption">分類候補はありません。語句で検索できます。</p>'}</div></details></section>`;
+ return `<section class="invention-perspective" data-invention-element="${esc(element.id)}" data-invention-perspective="${esc(p.id)}"><div class="invention-perspective-title"><span>検索観点</span><label class="check"><input type="checkbox" data-invention-perspective-use aria-label="${esc(element.name+' / '+p.name)} を採用" ${d.selected?'checked':''}><b>${esc(p.name)}</b></label></div><p class="caption">${esc(p.reason||'')}</p>${p.anchor_term?`<p class="caption">起案時の基準語：${esc(p.anchor_term)}。言い換えと合わせて編集できます。</p>`:''}<label>語句 · 1行に1語句（語句同士はOR）<textarea data-invention-terms rows="3" maxlength="12000" aria-label="${esc(element.name+' / '+p.name)} の語句">${esc(d.terms.join('\n'))}</textarea></label><label>語句と分類の使い方<select data-invention-class-mode aria-label="${esc(element.name+' / '+p.name)} の検索方法">${[['text','語句だけ'],['class','分類だけ'],['or','語句 OR 分類 · どちらか'],['and','語句 AND 分類 · 両方']].map(([value,label])=>`<option value="${value}" ${d.class_mode===value?'selected':''}>${label}</option>`).join('')}</select></label><details class="invention-classifications" ${active?'open':''}><summary>分類候補を選ぶ · ${d.classification_keys.length} 件${active?'':'（語句だけでは未使用）'}</summary><p class="caption">分類表での存在確認と、特許に付与された分類・今回の観点への適合性は別です。由来を確認して選んでください。選んだ分類同士はORになります。</p><div class="invention-class-options">${choices.map(c=>`<label class="invention-class-option"><input type="checkbox" data-invention-class value="${esc(c.key)}" ${d.classification_keys.includes(c.key)?'checked':''} ${c.selectable===false?'disabled':''}><span><b>${esc(inventionClassLabel(c))}</b><small>${suggested.has(c.key)?'この観点の候補 · ':''}${esc(inventionClassProvenance(c))} · ${c.verified?'分類表に存在':'存在未確認'}</small></span></label>`).join('')||'<p class="caption">分類候補はありません。語句で検索できます。</p>'}</div></details></section>`;
 }
 function inventionElementHtml(element,d,plan){
  const selected=d.element_ids.includes(element.id),edit=d.elements.find(e=>e.id===element.id);
@@ -79,42 +80,61 @@ function inventionShowError(error){inventionError=error?.message||String(error||
 function inventionRefresh(){const host=$('#invention-workbench');if(host){host.outerHTML=inventionWorkbenchHtml();bindInventionWorkbench();}}
 function inventionRefreshSelection(){const d=inventionPlanDraft;if(!d)return;for(const el of $$('[data-invention-use]'))el.checked=d.element_ids.includes(el.value);for(const el of $$('[data-invention-card]'))el.classList?.toggle('selected',d.element_ids.includes(el.dataset.inventionCard));const select=$('#invention-strategy');if(select)select.value=d.strategy;const help=$('#invention-selection-help');if(help)help.textContent=inventionSelectionText(d);}
 async function requestInventionPlan(useLlm){
- if(inventionPlanning)throw new Error('要素分解中です。完了を待ってください。');
+ if(inventionPlanning||(typeof researchPlanning!=='undefined'&&researchPlanning)||(typeof researchProgressIsRunning==='function'&&researchProgressIsRunning()))throw new Error('要素分解または観点の起案中です。完了を待ってください。');
  captureResearchDraft();captureInventionDraft();const submitted=structuredClone(inventionDraftInput()),brief=structuredClone(researchBrief());
- if(submitted.invention_text.length>20000)throw new Error('発明の説明・請求項は20000文字以内です。');
- if(submitted.manual_elements.length>8||submitted.manual_elements.some(t=>t.length>600))throw new Error('手動要素は8件まで、1要素600文字以内です。');
- if(!useLlm&&!submitted.manual_elements.length)throw new Error('「自分で分けた要素」に1行ずつ要素を入力してください。');
- inventionPlanning=true;inventionShowError('');
+ inventionPlanning=true;inventionShowError('');let progressToken=null,failure;
  try{
+  if(typeof researchFlowValidate==='function')researchFlowValidate(useLlm);
+  if(submitted.invention_text.length>20000)throw new Error('発明の説明・請求項は20000文字以内です。');
+  if(submitted.manual_elements.length>8||submitted.manual_elements.some(t=>t.length>600))throw new Error('手動要素は8件まで、1要素600文字以内です。');
+  if(!useLlm&&!submitted.manual_elements.length)throw new Error('「自分で分けた要素」に1行ずつ要素を入力してください。');
+  if(typeof researchProgressStart==='function')progressToken=researchProgressStart({label:'発明を要素・観点に整理',useLlm,settings:state.settings});
+  if(typeof syncResearchPlanningControls==='function')syncResearchPlanningControls();else if(typeof applyResearchInputMethod==='function')applyResearchInputMethod();
+  if(typeof researchDraftFlush==='function')researchDraftFlush();
   const result=await api('/research/invention/plan',{revision:state.research_workbench.revision,brief,...submitted,use_llm:useLlm});
   captureResearchDraft();captureInventionDraft();const inputEdited=inventionInputKey(inventionDraftInput())!==inventionInputKey(submitted),briefEdited=inventionBriefKey(researchBrief())!==inventionBriefKey(brief);
   state=result;if(!inputEdited)inventionInputDraft=inventionInput(result.research_workbench?.invention?.input||submitted);
   if(!briefEdited&&typeof researchDraft!=='undefined')researchDraft=structuredClone(result.research_workbench.brief);
-  inventionPlanDraft=null;inventionPlanning=false;if(typeof renderResearchWorkbench==='function')renderResearchWorkbench();else inventionRefresh();updateChrome();
+  inventionPlanDraft=null;
+  if(typeof researchDraftRebase==='function')researchDraftRebase();if(typeof researchDraftScheduleSave==='function')researchDraftScheduleSave();
+  if(typeof researchFlowAfterPlan==='function')researchFlowAfterPlan(inputEdited||briefEdited);
+  if(typeof renderResearchWorkbench==='function')renderResearchWorkbench();else inventionRefresh();updateChrome();
   if(inputEdited||briefEdited)toast('要素分解中の入力変更を保持しています。変更後の条件で要素分解をやり直してください。');
- }catch(error){inventionShowError(error);throw error;}finally{inventionPlanning=false;}
+ }catch(error){failure=error;inventionShowError(error);throw error;}finally{
+  inventionPlanning=false;if(progressToken!==null&&typeof researchProgressFinish==='function')researchProgressFinish(progressToken,failure);
+  if(typeof syncResearchPlanningControls==='function')syncResearchPlanningControls();else if(typeof applyResearchInputMethod==='function')applyResearchInputMethod();
+ }
 }
 async function previewInvention(){
- inventionShowError('');const payload=inventionPayload(),key=JSON.stringify(payload),planId=payload.plan_id;
+ inventionShowError('');
  try{
+  const payload=inventionPayload(),key=JSON.stringify(payload),planId=payload.plan_id;
+  if(typeof researchDraftFlush==='function')researchDraftFlush();
   const result=await api('/research/invention/preview',payload);
   if(inventionPlanDraft?.id!==planId||inventionPlanStale())return;
   let current;try{current=JSON.stringify(inventionPayload());}catch{return;}
   if(current!==key)return;
   inventionPlanDraft.preview=result;inventionPlanDraft.previewPayload=key;
   const host=$('#invention-query-preview');if(host){host.innerHTML=inventionPreviewHtml();bindInventionApply();}
+  if(typeof researchFlowRevealPreview==='function')researchFlowRevealPreview();
  }catch(error){inventionShowError(error);throw error;}
 }
 async function applyInvention(){
- const payload=inventionPayload(),d=inventionPlanDraft;
- if(!d.preview||d.previewPayload!==JSON.stringify(payload))throw new Error('条件が変わっています。もう一度プレビューしてください。');
- try{state=await api('/research/invention/apply',{...payload,expected_preview_hash:d.preview.preview_hash});updateChrome();setTab('explore');setStep(1);toast('要素と観点から作った検索式を履歴に保存しました。');}catch(error){inventionShowError(error);throw error;}
+ try{
+  const payload=inventionPayload(),d=inventionPlanDraft;
+  if(!d.preview||d.previewPayload!==JSON.stringify(payload))throw new Error('条件が変わっています。もう一度プレビューしてください。');
+  if(typeof researchDraftFlush==='function')researchDraftFlush();
+  const result=await api('/research/invention/apply',{...payload,expected_preview_hash:d.preview.preview_hash});
+  captureResearchDraft();captureInventionDraft();state=result;invalidateInventionPreview();
+  if(typeof researchDraftRebase==='function')researchDraftRebase();if(typeof researchDraftScheduleSave==='function')researchDraftScheduleSave();
+  updateChrome();setTab('explore');setStep(1);toast('要素と観点から作った検索式を履歴に保存しました。');
+ }catch(error){inventionShowError(error);throw error;}
 }
 function bindInventionApply(){on('#invention-apply','click',e=>busy(e.currentTarget,'作成中…',applyInvention));}
 function bindInventionWorkbench(){
  for(const [id,llm] of [['invention-plan-llm',true],['invention-plan-local',false]])on('#'+id,'click',e=>busy(e.currentTarget,'要素を整理しています…',()=>requestInventionPlan(llm)));
  for(const el of $$('#invention-workbench input,#invention-workbench textarea,#invention-workbench select'))el.addEventListener('input',()=>{
-  captureInventionDraft();const d=inventionPlanDraft;
+  inventionShowError('');captureInventionDraft();const d=inventionPlanDraft;
   if(d&&el.matches?.('[data-invention-use]')&&d.strategy==='element'&&el.checked)d.element_ids=[el.value];
   if(d&&el.id==='invention-strategy'&&d.strategy==='element')d.element_ids=d.element_ids.slice(0,1);
   invalidateInventionPreview();inventionRefreshSelection();
