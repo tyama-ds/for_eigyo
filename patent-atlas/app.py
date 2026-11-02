@@ -83,6 +83,8 @@ async def local_security(request: Request, call_next):
     response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'"
     if request.url.path.startswith('/api/'):
         response.headers['Cache-Control'] = 'no-store'
+    elif request.url.path == '/' or request.url.path.startswith('/static/'):
+        response.headers['Cache-Control'] = 'no-cache'
     return response
 
 @app.exception_handler(ValueError)
@@ -309,7 +311,7 @@ def llm_candidate_rows(result, notices, proposal=None):
         seen.add((kind, code))
         known = explorer.lookup(kind, code)
         if kind == 'FI' and not known:
-            reject(index, {'kind': kind, 'code': code}, '収録FI表（電動車両関連6主群）で未確認です。未収録は不存在を意味しません。')
+            reject(index, {'kind': kind, 'code': code}, '収録FI表（2026.04）で未確認です。版の相違・誤記などを確認してください。')
             continue
         if kind == 'IPC' and not known:
             reject(index, {'kind': kind, 'code': code}, '収録IPC辞書（2026.01）で確認できません。旧版・誤記の可能性があります。')
@@ -344,53 +346,40 @@ def llm_candidate_rows(result, notices, proposal=None):
 
 
 def candidate_list(text, use_llm=False, *, notices=None, proposal=None, connection=None, research_context=None):
-    import classification_retrieval
-    candidates = explorer.merge_candidates(classification_retrieval.retrieve(text),
-        [c for c in suggest(text) if classification_retrieval.relevant_seed(text, c)])
-    seed_keys = {classification_key(row) for row in candidates}
-    llm_rows = []
+    import classification_retrieval as retrieval
+    import classification_planner as planner
+    notices = notices if notices is not None else []
+    connection = connection if connection is not None else SETTINGS
+    concepts = (research_context or {}).get('concepts', [])
+    if concepts:
+        elements = [dict(id=c['id'], name=c['name'], terms=c['terms']+c.get('abstract_terms',[]),
+                         relation=c.get('reason','調査観点')) for c in concepts if c.get('role')!='exclude']
+    elif use_llm:
+        decomposition = planner.decompose(text, connection, complete, research_context)
+        elements = decomposition['elements']
+        notices.extend(decomposition['questions'])
+    else:
+        elements = retrieval.input_elements(text)
+        notices.append('LLM未使用: 入力語句で公式分類表を検索しました。自動の意味分解・定義の適合判定は行っていません。')
+    retrieved = retrieval.retrieve_elements(elements, limit=96 if use_llm else 48)
+    rejected = []
     if use_llm:
-        payload = {'keywords': text, 'verified_reference_candidates': [
-            {k: row[k] for k in ('kind', 'code', 'title', 'reason', 'path_title') if k in row}
-            for row in candidates[:24]]}
-        if research_context:
-            payload['research_context'] = copy.deepcopy(research_context)
-        result = complete(connection if connection is not None else SETTINGS, CLASSIFICATION_SYSTEM, payload)
-        llm_rows = llm_candidate_rows(result, notices if notices is not None else [], proposal)
-        # A repeated code is still an LLM recommendation: preserve its reason
-        # even when a keyword seed already supplied the same classification.
-        candidates = explorer.merge_candidates(candidates, llm_rows)
-    initial = [explorer.enrich(c) for c in candidates]
-    # Imported at call time: discovery_engine uses explorer for official-code
-    # checks, but generating manual candidates never reads/writes the lab state.
-    from discovery_engine import propose_plan
-    plan = propose_plan(text, initial, [])
-    facets = {facet['id']: facet for facet in plan['facets']}
-    rows = explorer.merge_candidates(initial, plan['candidate_hypotheses'])
-    llm_by_key = {classification_key(row): row for row in llm_rows}
+        rows, rejected = planner.review(text, elements, retrieved, connection, complete, research_context)
+        notices.append(f'技術を{len(elements)}要素に分解 → 公式辞書から{len(retrieved)}候補を取得 → 定義照合で{len(rows)}候補を提案しました。分類は未選択です。')
+    else:
+        rows = retrieved
+    missing = planner.unresolved(elements, rows)
+    if missing:
+        notices.append('分類候補が見つからない要素: ' + '、'.join(e['name'] for e in missing) + '。要素の説明や同義語を補って再探索できます。')
     for row in rows:
-        row.update(evidence_status='hypothesis', relevance_status='review_pending')
-        row.setdefault('facets', [])
-        related_terms = list(row.get('terms', []))
-        for facet_id in row['facets']:
-            facet = facets.get(facet_id, {})
-            related_terms.extend(facet.get('terms', []) + facet.get('english_terms', []))
-        row['terms'] = list(dict.fromkeys(related_terms))[:48]
-        row['recommendation_sources'] = [dict(type='keyword_facets', keywords=text,
-            kind=row['kind'], code=row['code'], facets=list(row['facets']),
-            reason=row.get('reason', ''), source=row.get('source', ''))]
-        proposed = llm_by_key.get(classification_key(row))
-        if proposed:
-            if classification_key(row) not in seed_keys and row.get('reason', '').startswith('既存候補を起点に保存'):
-                row['recommendation_sources'] = []
-            row.update(reason=proposed['reason'], llm_reason=proposed['reason'],
-                       llm_proposed=True, recommendation_method='llm')
-            row['recommendation_sources'].append(dict(type='llm', keywords=text,
-                kind=row['kind'], code=row['code'], reason=proposed['reason']))
+        row['recommendation_sources'] = [dict(type='llm' if use_llm else 'element_dictionary', keywords=text,
+            kind=row['kind'], code=row['code'], reason=row['reason'], source=row.get('source',''))]
     result = [explorer.enrich(row) for row in rows]
     if proposal is not None:
-        by_key = {classification_key(row): row for row in result}
-        proposal['items'] = [copy.deepcopy(by_key[key]) for key in llm_by_key]
+        proposal.update(elements=elements, unresolved_elements=missing, pipeline='elements_dictionary_review',
+            retrieved_count=len(retrieved), returned_count=len(rows)+len(rejected), accepted_count=len(rows),
+            rejected=rejected, rejected_count=len(rejected), duplicate_count=0,
+            items=copy.deepcopy(result) if use_llm else [], decomposition_method='llm' if use_llm else 'input_phrases')
     return result
 
 

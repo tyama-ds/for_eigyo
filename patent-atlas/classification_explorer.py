@@ -295,7 +295,7 @@ def browse(kind='IPC', code=None, direction='children', text='', offset=0):
     if kind == 'CPC':
         note = 'CPCの階層辞書は未収録です。直接指定は可能です。IPCの階層へは読み替えません。'
     if kind == 'FI':
-        note += ' FIは2026.04の電動車両関連6メイングループのみ収録。IPCとは別体系です。未収録は不存在を意味しません。'
+        note += ' FIはJPO 2026.04の全分野を収録。IPCとは独立した分類表で確認します。版の相違には注意してください。'
     if kind == 'F-term':
         note += ' F-termの階層辞書は5H029のみ収録しています。'
     unique = {key(c): c for c in rows}

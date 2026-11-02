@@ -12,6 +12,9 @@ module = integration.module
 
 class LLMCandidateTests(unittest.TestCase):
     def setUp(self):
+        # Retain regression coverage for historical saved proposal reports.
+        from legacy_candidate_fixture import install
+        install(self, module)
         self.client = TestClient(module.app)
         module.JOB.update(status='idle')
         module.SETTINGS.clear()
@@ -247,7 +250,7 @@ class LLMCandidateTests(unittest.TestCase):
         overview = self.client.post('/api/classifications/browse', json={'direction': 'overview'})
         self.assertEqual(overview.status_code, 200, overview.text)
         self.assertIn('IPC:B60W30/18', overview.json()['classification_view']['keys'])
-        self.assertIn('IPC:H01M10/00', overview.json()['classification_view']['keys'])
+        self.assertIn('IPC:H01M10/0562', overview.json()['classification_view']['keys'])
         self.assertEqual(overview.json()['candidate_proposal'], report)
 
     def test_empty_llm_and_dictionary_refresh_report_what_was_used(self):

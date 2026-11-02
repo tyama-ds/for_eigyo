@@ -8,7 +8,6 @@ from fastapi import HTTPException
 import classification_bridge
 import classification_explorer as explorer
 import classification_retrieval
-from discovery_engine import propose_plan
 from research_strategy import selected_sources
 from invention_strategy import plan_invention, compose_invention_query
 
@@ -30,31 +29,14 @@ def register_invention_routes(app, context, services):
             extracted = classification_bridge.extract(patent)
             pool = explorer.merge_candidates(pool, extracted['items'])
             notes.extend(extracted['warnings'])
-        # Refresh using this brief, rather than feeding the previous topic's
-        # cached pool to a model forbidden from proposing outside that pool.
-        if brief['keywords'].strip():
-            fresh = propose_plan(brief['keywords'], [], [])
-            pool = explorer.merge_candidates(pool, fresh['candidate_hypotheses'])
-        manual = input_data.get('manual_elements', [])
-        for text in [brief['goal'], input_data.get('invention_text', ''),
-                     *(manual if isinstance(manual, list) else [])]:
-            if isinstance(text, str) and text.strip():
-                pool = explorer.merge_candidates(pool, classification_retrieval.retrieve(text[:12000]))
-        previous = wb().get('plan') or {}
-        if previous.get('brief') == brief:
-            pool = explorer.merge_candidates(pool, previous.get('classification_candidates', []))
-        if state.get('keywords', '').strip() == brief['keywords'].strip():
-            pool = explorer.merge_candidates(pool, state.get('candidates', []))
-        else:
-            notes.append('現在の技術・キーワードから分類候補を再取得しました。別テーマの自動候補は引き継いでいません。')
+        # Before decomposition, only documentary/explicit seeds are supplied.
+        # New classification hypotheses are retrieved AFTER elements exist.
         # User-selected seeds are deliberate input; do not silently erase them.
         explicit = [c for c in state.get('candidates', []) if explorer.key(c) in state.get('selected', [])]
         if explicit:
             pool = explorer.merge_candidates(pool, explicit)
             notes.append('対話で探索で選択済みの分類も残しています。今回の主題との適合性を確認してください。')
         pool = [explorer.enrich(c) for c in pool]
-        if any(c['kind']=='FI' for c in pool):
-            notes.append('FIは電動車両関連6メイングループ（2026.04）の部分収録です。候補の網羅性や主題への適合性は公報で確認してください。')
         pool = [c for c in pool if c.get('selectable')]
         if len(pool) > 120:
             notes.append('分類候補はターゲット由来を優先して120件まで表示しています。')
@@ -79,6 +61,35 @@ def register_invention_routes(app, context, services):
             connection = copy.deepcopy(settings)
             stamp = fingerprint((wb(), state['patents']))
         plan = plan_invention(input_data, sources, candidates, connection, use_llm=use_llm)
+        search_elements = [dict(id=p['id'], name=e['name']+' / '+p['name'], terms=p['terms'])
+            for e in plan['elements'] for p in e['perspectives']]
+        found = classification_retrieval.retrieve_elements(search_elements, limit=96)
+        if use_llm:
+            import classification_planner
+            from llm import complete
+            found, rejected = classification_planner.review(brief['keywords']+' '+input_data['invention_text'][:4000],
+                search_elements, found, connection, complete)
+            if rejected: notes.append('提示候補にない分類キーを除外しました。')
+        seeds = {c['key']: c for c in candidates}
+        candidates = explorer.merge_candidates(candidates, found)
+        for candidate in candidates:
+            original = seeds.get(candidate['key'])
+            if original and original.get('origins'):
+                candidate['hypothesis_reason'] = candidate.get('reason', '')
+                for field in ('reason', 'evidence_status', 'group'):
+                    if field in original: candidate[field] = copy.deepcopy(original[field])
+        candidates = [explorer.enrich(c) for c in candidates][:120]
+        for e in plan['elements']:
+            for p in e['perspectives']:
+                p['retrieved_classification_keys'] = [c['key'] for c in candidates
+                    if p['id'] in c.get('reviewed_element_ids', c.get('facets', []))]
+                # Retrieval never silently activates classification restrictions.
+        import classification_planner
+        missing = classification_planner.unresolved(search_elements, found)
+        plan['unresolved_classification_elements'] = missing
+        if missing: notes.append('分類未発見の観点: '+ '、'.join(e['name'] for e in missing)+'。語句の補足で再探索できます。')
+        notes.append('要素分解の後で各観点から公式IPC/FIを検索しました。候補の追加は検索式の必須条件化ではありません。')
+        if not use_llm: notes.append('手入力要素の語句による辞書検索です。LLMによる意味分解・適合性照合は未実施です。')
         plan.update(id=uuid.uuid4().hex, brief=brief, target_ids=brief['target_ids'],
                     classification_candidates=candidates, classification_notes=notes,
                     created_at=time.strftime('%Y-%m-%d %H:%M'))

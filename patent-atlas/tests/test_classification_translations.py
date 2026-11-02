@@ -20,9 +20,9 @@ class TranslationTests(unittest.TestCase):
     def test_official_snapshot_is_bounded_and_version_is_explicit(self):
         bundle = translations._bundle()
         self.assertEqual(bundle['metadata']['count'], len(bundle['records']))
-        self.assertFalse(bundle['metadata']['complete'])
-        self.assertEqual(bundle['metadata']['symbol_validation_version'], 'WIPO 2026.01')
-        self.assertTrue(bundle['metadata']['version'].startswith('PMGS snapshot '))
+        self.assertTrue(bundle['metadata']['complete'])
+        self.assertEqual(set(bundle['records']), set(catalog._catalog()[1]))
+        self.assertIn('2026-08-18', bundle['metadata']['version'])
         self.assertGreater(len(bundle['records']), 1000)
         self.assertTrue(set(bundle['records']) <= set(catalog._catalog()[1]))
         codes = json.loads((translations.BUNDLE.parent / 'japanese_snapshot_codes.json').read_text(encoding='utf-8'))
@@ -51,7 +51,8 @@ class TranslationTests(unittest.TestCase):
     def test_unknown_system_and_untranslated_titles_are_not_fabricated(self):
         self.assertIsNone(catalog.lookup('IPC', 'H99Z999/99'))
         self.assertIsNone(catalog.lookup('CPC', 'H01M10/0562'))
-        row = catalog.lookup('IPC', 'A01B1/04')
+        with patch.object(translations, '_bundle', return_value={'records':{},'metadata':{'count':0}}):
+            row = catalog.lookup('IPC', 'A01B1/04')
         self.assertEqual(row['title_ja_status'], 'unavailable')
         self.assertEqual(row['title_ja'], '')
         self.assertEqual(translations.label_fields('CPC', 'H01M10/0562'), {})
@@ -73,6 +74,8 @@ class TranslationTests(unittest.TestCase):
         self.assertEqual(records['A01B1/04']['title_ja_version'], 'PMGS snapshot 2026-09-12')
 
     def test_explicit_fetch_uses_proxy_and_caches_only_language_fields(self):
+        missing = patch.object(translations, '_bundle', return_value={'records':{},'metadata':{'count':0}})
+        missing.start(); self.addCleanup(missing.stop)
         real_client = httpx.Client
         calls, options = [], []
         def handler(request):
@@ -100,6 +103,8 @@ class TranslationTests(unittest.TestCase):
             translations._cache_path, translations._cache = old_path, old_cache
 
     def test_bad_input_never_fetches_and_provider_errors_are_redacted(self):
+        missing = patch.object(translations, '_bundle', return_value={'records':{},'metadata':{'count':0}})
+        missing.start(); self.addCleanup(missing.stop)
         with patch.object(translations.httpx, 'Client') as client:
             for value in ([], ['A01B1/04']*49, ['https://example.com'], ['H99Z999/99'], 'A01B1/04'):
                 with self.assertRaises(ValueError):
@@ -115,6 +120,8 @@ class TranslationTests(unittest.TestCase):
         self.assertTrue(result['warnings'])
 
     def test_explicit_fetch_stops_at_four_tables(self):
+        missing = patch.object(translations, '_bundle', return_value={'records':{},'metadata':{'count':0}})
+        missing.start(); self.addCleanup(missing.stop)
         codes = ['A01B1/04', 'A01C1/00', 'A01D1/00', 'A01F1/00', 'A01G2/00']
         urls = {translations.BASE + translations.table_path(catalog.lookup('IPC', code)): code for code in codes}
         self.assertEqual(len(urls), 5)
@@ -133,6 +140,8 @@ class TranslationTests(unittest.TestCase):
             translations._cache_path, translations._cache = old_path, old_cache
 
     def test_invalid_proxy_errors_do_not_expose_configuration(self):
+        missing = patch.object(translations, '_bundle', return_value={'records':{},'metadata':{'count':0}})
+        missing.start(); self.addCleanup(missing.stop)
         with patch.object(translations.httpx, 'Client', side_effect=ValueError('secret-token')):
             with self.assertRaises(ValueError) as caught:
                 translations.fetch_translations(['A01B1/04'], {})

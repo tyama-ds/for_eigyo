@@ -1,52 +1,34 @@
 {
   "kind": "FI",
   "version": "2026.04",
-  "retrieved_at": "2026-11-02",
-  "count": 255,
-  "complete": false,
+  "count": 190202,
+  "complete": true,
   "coverage": [
-    "B60L50/00",
-    "B60L53/00",
-    "B60L58/00",
-    "B60L15/00",
-    "B60L7/00",
-    "B60K1/00"
+    "A",
+    "B",
+    "C",
+    "D",
+    "E",
+    "F",
+    "G",
+    "H"
   ],
-  "publisher": "JPO / INPIT",
+  "japanese_count": 188621,
+  "publisher": "JPO",
+  "source": "https://www.jpo.go.jp/e/system/patent/gaiyo/seido-bunrui/bulkdata.html",
   "sources": [
     {
-      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/common/FI/ja/202604/fiList/fiListB60L50_00.html",
-      "sha256": "5920c0da637b63356d39964b9f558a32b9548d1e215e2ad85fc25aee8abfdd72",
-      "retrieved_at": "2026-11-02"
+      "url": "https://www.jpo.go.jp/e/system/patent/gaiyo/seido-bunrui/document/bulkdata/fi_xml202605.zip",
+      "sha256": "4dc47a703a5ccafdc50e48cb6d5520136d2af347e7159ba1b1738d44adad2cd2"
     },
     {
-      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/common/FI/ja/202604/fiList/fiListB60L53_00.html",
-      "sha256": "fff784eb6e81d5ab47ec12727f93e78c2ee012d8de3436b694ea86bd110f6d33",
-      "retrieved_at": "2026-11-02"
-    },
-    {
-      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/common/FI/ja/202604/fiList/fiListB60L58_00.html",
-      "sha256": "cd23efe072347657935b1ebf537e573a9667fae38132ffdb13e69e572800be6e",
-      "retrieved_at": "2026-11-02"
-    },
-    {
-      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/common/FI/ja/202604/fiList/fiListB60L15_00.html",
-      "sha256": "cb52fee2f59a2740127e2224a65f2ff72a6ee3c19ea931d5ae6c5420c9693f4e",
-      "retrieved_at": "2026-11-02"
-    },
-    {
-      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/common/FI/ja/202604/fiList/fiListB60L7_00.html",
-      "sha256": "da7349b08fa49803bffd209ae8a325164e1b4e029280c500d5f30050a61ff423",
-      "retrieved_at": "2026-11-02"
-    },
-    {
-      "url": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/common/FI/ja/202604/fiList/fiListB60K1_00.html",
-      "sha256": "535343160f6d1d9ac386806254fb43174e4690d1ac9904c7ebde9a0fd1b8d661",
-      "retrieved_at": "2026-11-02"
+      "url": "https://www.jpo.go.jp/support/general/searchportal/cgi-bin/search-portal/narabe_tool/data_20260818.zip",
+      "sha256": "ed7ed2e3b8af127c6fa5137b0b3c029acbc009406fd8a7cc43859c17ab3c4ec1"
     }
   ],
+  "excluded_symbols": {},
   "limitations": [
-    "電動車両関連6メイングループの部分収録。FI全分類ではありません。",
-    "IPCと同じ記号でも別の分類体系です。未収録FIの不存在を意味しません。"
+    "FIの階層・英語名称は2026.04、日本語名称は2026-08-18公開データ。",
+    "分類の存在と技術への適合性は別です。対応IPCは対照表の候補で、公報への付与を意味しません。"
   ]
 }

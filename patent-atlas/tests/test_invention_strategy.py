@@ -122,7 +122,7 @@ class PlanningTests(unittest.TestCase):
         with patch('invention_strategy.complete', return_value=result) as network:
             plan = strategy.plan_invention(request(manual_elements=[]), sources(), candidates(), {'provider': 'local'}, True)
         self.assertEqual(plan['method'], 'llm')
-        self.assertEqual(plan['prompt_version'], 'invention-2026-09-18-v1')
+        self.assertEqual(plan['prompt_version'], 'invention-2026-11-02-elements-v2')
         self.assertEqual(plan['elements'][1]['evidence'][0]['source_id'], 'p1')
         args, kwargs = network.call_args
         self.assertIn('思考過程は出力せず', args[1])

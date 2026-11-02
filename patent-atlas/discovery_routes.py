@@ -120,6 +120,16 @@ def register_discovery_routes(app, context):
                 {'keywords': topic, 'english_terms': english})
             validate_llm_plan(llm_plan)
         plan = propose_plan(topic, candidates, patents, llm_plan=llm_plan, manual_english_terms=additions)
+        if use_llm:
+            import classification_planner
+            reviewed, rejected = classification_planner.review(topic, plan['retrieval_elements'],
+                plan['candidate_hypotheses'], connection, context['complete'])
+            plan['candidate_hypotheses'] = reviewed
+            plan['unresolved_elements'] = classification_planner.unresolved(plan['retrieval_elements'], reviewed)
+            plan['llm_proposal']['candidate_keys'] = [c['key'] for c in reviewed]
+            plan['llm_proposal']['received_counts']['classifications'] = len(reviewed) + len(rejected)
+            plan['llm_proposal']['applied_counts']['classifications'] = len(reviewed)
+            plan['llm_proposal']['notices'].append(f'公式IPC/FIの定義照合で{len(reviewed)}件を候補にしました。提示候補以外の返答{len(rejected)}件を除外。')
         plan['user_english_terms'] = english
         with lock:
             idle()

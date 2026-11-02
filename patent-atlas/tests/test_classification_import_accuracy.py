@@ -77,6 +77,8 @@ class ClassificationImportAccuracyTests(unittest.TestCase):
         row = {'id': 'EXAMPLE', 'ipc': '', 'fi': 'G03F 1/92 A'}
         before = copy.deepcopy(row)
         result = bridge.extract(row, strict=True)
+        self.assertTrue(any(i['kind']=='FI' for i in result['items']))
+        result['items'] = [i for i in result['items'] if i['kind']=='IPC']
         self.assertEqual(len(result['items']), 1)
         item = result['items'][0]
         self.assertEqual(item['evidence_status'], 'derived_candidate')

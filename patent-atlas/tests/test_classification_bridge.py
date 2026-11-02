@@ -46,12 +46,14 @@ class ClassificationBridgeTests(unittest.TestCase):
         row = self.row(fi='Ｇ０８Ｇ １／１６＠Ａ, G06T7/00,650@Z; G05D105:00')
         before = copy.deepcopy(row)
         result = bridge.extract(row)
+        self.assertEqual({item['kind'] for item in result['items']}, {'IPC','FI'})
+        result['items'] = [i for i in result['items'] if i['kind']=='IPC']
         self.assertEqual({item['key'] for item in result['items']}, {'IPC:G08G1/16', 'IPC:G06T7/00'})
         self.assertTrue(all(item['evidence_status'] == 'derived_candidate' and item['verified'] for item in result['items']))
         self.assertTrue(any('索引記号' in warning for warning in result['warnings']))
         origin = result['items'][0]['classification_origins'][0]
         self.assertEqual(origin['type'], 'fi_to_ipc')
-        self.assertIn('版差', origin['warning'])
+        self.assertIn('付与', origin['warning'])
         self.assertEqual(origin['ipc_version'], '2026.01')
         self.assertEqual(row, before)
 
@@ -64,16 +66,16 @@ class ClassificationBridgeTests(unittest.TestCase):
             bridge.extract(row, strict=True)
 
     def test_unknown_fi_base_uses_only_verified_subclass_with_warning(self):
-        item = bridge.extract(self.row(fi='H04L9999/999999'))['items'][0]
+        item = next(i for i in bridge.extract(self.row(fi='H04L9999/999999'))['items'] if i['kind']=='IPC')
         self.assertEqual(item['code'], 'H04L')
         self.assertEqual(item['evidence_status'], 'derived_candidate')
         self.assertEqual(item['origins'][0]['method'], 'subclass_fallback')
         self.assertIn('現行辞書にない', item['reason'])
-        self.assertEqual(bridge.extract(self.row(fi='H98Z9999/999999'))['items'], [])
+        self.assertFalse(any(i['kind']=='IPC' for i in bridge.extract(self.row(fi='H98Z9999/999999'))['items']))
 
     def test_explicit_ipc_and_fi_candidate_merge_without_double_counting(self):
         row = self.row(ipc='G08G1/16', fi='G08G1/16@A')
-        items = bridge.extract(row)['items']
+        items = [i for i in bridge.extract(row)['items'] if i['kind']=='IPC']
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]['evidence_status'], 'patent_metadata')
         self.assertEqual({o['type'] for o in items[0]['origins']}, {'patent', 'fi_to_ipc'})
@@ -103,9 +105,9 @@ class ClassificationBridgeTests(unittest.TestCase):
     def test_seed_lab_and_refinement_share_derived_candidate_provenance(self):
         patent = self.row(fi='G08G1/16@A')
         before = copy.deepcopy(patent)
-        seed = explorer.seed_items({'patent_ids': ['JP1']}, [patent])[0]
-        lab = discovery_engine.analyze_patents({'english_terms': ['vehicle']}, [patent])['recommendations'][0]
-        feedback = classification_feedback([patent])['candidates'][0]
+        seed = next(i for i in explorer.seed_items({'patent_ids': ['JP1']}, [patent]) if i['kind']=='IPC')
+        lab = next(i for i in discovery_engine.analyze_patents({'english_terms': ['vehicle']}, [patent])['recommendations'] if i['kind']=='IPC')
+        feedback = next(i for i in classification_feedback([patent])['candidates'] if i['kind']=='IPC')
         for item in (seed, lab, feedback):
             self.assertEqual(item['key'], 'IPC:G08G1/16')
             self.assertEqual(item['evidence_status'], 'derived_candidate')

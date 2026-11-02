@@ -11,6 +11,7 @@ import unicodedata
 
 import classification_catalog as ipc_catalog
 import fterm_catalog
+import fi_catalog
 
 
 FI_SOURCE = 'https://www.jpo.go.jp/system/patent/gaiyo/bunrui/fi/f_i_kaisei.html'
@@ -150,6 +151,22 @@ def extract(patent, *, strict=False):
         if ':' in entry['base']:
             warnings.append(f'{patent_id}: FI欄のコロン付き索引記号 {entry["raw"]} は原文を保持し、IPCコードへ直接変換しません。')
             continue
+        fi_code = fi_catalog.normalize(entry['raw'])
+        fi_row = fi_catalog.lookup(fi_code)
+        add('FI', fi_code, dict(type='patent', field='fi', raw=entry['raw'], source='uploaded_metadata',
+            source_version='not_provided', code_verified=bool(fi_row)),
+            'patent_metadata' if fi_row else 'unverified_metadata',
+            '公報のFI欄に記載された分類です。技術への適合性は別途確認してください。')
+        if fi_row:
+            mapped = [known for code in fi_row.get('concordance_ipc', []) if (known := _known(code))]
+            for known in mapped:
+                warning = '公式FI→IPC対照表からの候補です。公報への実際のIPC付与は未確認です。'
+                add('IPC', known['code'], dict(type='fi_to_ipc', field='fi', raw=entry['raw'],
+                    fi_base=entry['base'], method='official_concordance', source=fi_catalog.metadata()['sources'][0]['url'],
+                    source_version='2026.04 / concordance 2026-05-15', ipc_version=known['version'], warning=warning),
+                    'derived_candidate', f'FI {fi_code} の公式対応表。'+warning)
+            if mapped:
+                continue
         known, method = _fi_candidate(entry['base'])
         if not known:
             warnings.append(f'{patent_id}: FI {entry["raw"]} のIPC部分・上位サブクラスを公式辞書で確認できません。')

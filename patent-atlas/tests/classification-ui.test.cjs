@@ -28,6 +28,19 @@ function deferred() {
 
 const flush = () => new Promise(setImmediate);
 
+test('element summary explains dictionary mode, missing elements and escapes model text', () => {
+  const s=setup();
+  const html=s.context.classElementSummaryHtml({decomposition_method:'llm',
+    elements:[{id:'e1',name:'膜<script>',terms:['<img>','membrane separation'],relation:'入力の分離機能'}],
+    unresolved_elements:[{id:'e1',name:'膜<script>'}]});
+  assert.match(html,/技術を分けた探索要素/);
+  assert.match(html,/分類未発見/);
+  assert.match(html,/和集合/);
+  assert.match(html,/&lt;script&gt;/);
+  assert.doesNotMatch(html,/<img>|<script>/);
+  assert.match(s.context.classElementSummaryHtml({decomposition_method:'input_phrases',elements:[{id:'e1',name:'膜',terms:['膜']}]}),/辞書で探した入力語句/);
+});
+
 function setup(apiHandler = async () => snapshot()) {
   const root = {
     inert: false, attributes: {},

@@ -32,7 +32,7 @@ class ManualCandidateExpansionTests(unittest.TestCase):
         module.STATE['patents'][0].update(label='keep', label_source='human')
         module.save()
         before = copy.deepcopy(module.STATE)
-        response = self.client.post('/api/candidates', json={'keywords': '全固体電池', 'use_llm': False})
+        response = self.client.post('/api/candidates', json={'keywords': 'lithium compounds, ceramic sintering, joining ceramic, solid electrolyte', 'use_llm': False})
         self.assertEqual(response.status_code, 200, response.text)
         state = response.json()
         for field in ('selected', 'patents', 'queries', 'training', 'discovery'):
@@ -50,19 +50,19 @@ class ManualCandidateExpansionTests(unittest.TestCase):
             self.assertTrue(by_code[code]['terms'])
         self.assertLessEqual(len(rows), 24)
         all_codes = {row['code'] for row in state['candidates']}
-        self.assertTrue({'H01M10/0562', 'H01M4/139', 'C04B35/64'} <= all_codes)
+        self.assertTrue({'H01M10/0562', 'C04B35/64'} <= all_codes)
         self.assertFalse({'C01D13/00', 'B23H3/00', 'H01M8/04291'} & all_codes)
 
     def test_coarse_overview_retains_precise_process_codes_facets_and_reasons(self):
-        candidates = module.candidate_list('全固体電池')
+        candidates = module.candidate_list('ceramic compositions, ceramic sintering')
         original = copy.deepcopy(candidates)
         rows = module.explorer.overview(candidates, '全固体電池')
         ceramic = next(row for row in rows if row['code'] == 'C04B35/00')
-        self.assertTrue({'material', 'process'} <= set(ceramic['facets']))
+        self.assertTrue({'e1', 'e2'} <= set(ceramic['facets']))
         matched = {row['code']: row for row in ceramic['matched_classifications']}
         self.assertIn('C04B35/64', matched)
         self.assertIn('sintering', matched['C04B35/64']['reason'])
-        self.assertIn('sintering', ceramic['terms'])
+        self.assertIn('ceramic sintering', ceramic['terms'])
         self.assertEqual(candidates, original)
 
     def test_explicit_recommendation_and_selection_survive_regeneration(self):

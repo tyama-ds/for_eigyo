@@ -56,7 +56,7 @@ class DiscoveryRouteTests(unittest.TestCase):
         return copy.deepcopy({k: v for k, v in module.STATE.items() if k != 'discovery'})
 
     def plan(self, **extra):
-        response = self.client.post('/api/discovery/plan', json={'keywords': '全固体電池', **extra})
+        response = self.client.post('/api/discovery/plan', json={'keywords': '全固体電池', 'english_terms':'all-solid-state battery', **extra})
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()['discovery']
 
@@ -164,14 +164,15 @@ class DiscoveryRouteTests(unittest.TestCase):
 
     def test_llm_manual_and_model_english_coexist_and_public_feedback_is_saved(self):
         manual = self.manual_snapshot()
-        with patch.object(module, 'complete', return_value={
+        with patch.object(module, 'complete', side_effect=[{
                 'english_terms': ['autonomous navigation'],
-                'facets': [{'id': 'interface', 'terms': ['通信接続'], 'english_terms': ['vehicle communication']}]}) as complete:
+                'facets': [{'id': 'interface', 'terms': ['通信接続'], 'english_terms': ['vehicle communication']}]}, {'selections':[]}]) as complete:
             response = self.client.post('/api/discovery/plan', json={
                 'keywords': '自動運転', 'english_terms': 'self driving', 'use_llm': True})
         self.assertEqual(response.status_code, 200, response.text)
         from prompt_templates import DISCOVERY_SYSTEM, CLASSIFICATION_SYSTEM
-        self.assertEqual(complete.call_args.args[1], DISCOVERY_SYSTEM)
+        self.assertEqual(complete.call_args_list[0].args[1], DISCOVERY_SYSTEM)
+        self.assertEqual(complete.call_count,2)
         self.assertNotEqual(complete.call_args.args[1], CLASSIFICATION_SYSTEM)
         plan = response.json()['discovery']['plan']
         self.assertEqual(plan['english_terms'], ['self driving', 'autonomous navigation'])

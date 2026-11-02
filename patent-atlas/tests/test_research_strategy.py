@@ -420,7 +420,7 @@ class ResearchStrategyTests(unittest.TestCase):
             strategy.plan_research(dict(goal='電池技術'), patents(), {}, use_llm=True)
 
     def test_prompt_contracts_preserve_existing_response_shapes(self):
-        self.assertIn('"candidates"', CLASSIFICATION_SYSTEM)
+        self.assertIn('"elements"', CLASSIFICATION_SYSTEM)
         self.assertIn('"decisions"', JUDGMENT_SYSTEM)
         self.assertIn('required_decision_count', JUDGMENT_SYSTEM)
         self.assertIn('unsure', JUDGMENT_SYSTEM)

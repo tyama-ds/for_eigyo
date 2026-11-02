@@ -1,8 +1,7 @@
-"""Offline bilingual display captions, with explicit bounded PMGS cache updates.
+"""JPO bulk Japanese IPC captions, plus explicit bounded PMGS cache updates.
 
-The Japanese publication is a dated PMGS snapshot, not a claim that its wording
-has been checked against the WIPO 2026.01 English edition. Codes are cross-checked
-against that edition; neither hierarchy nor classification selection is changed.
+Codes are validated against WIPO 2026.01. Japanese captions retain their
+independent publication date; neither classification hierarchy nor codes change.
 """
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -18,7 +17,7 @@ import unicodedata
 import httpx
 
 BASE = 'https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/IPC/ja/'
-BUNDLE = Path(__file__).resolve().parent / 'resources' / 'ipc' / 'ipc_ja_pmgs.json.gz'
+BUNDLE = Path(__file__).resolve().parent / 'resources' / 'ipc' / 'ipc_ja_jpo.json.gz'
 MAX_TABLES = 4
 MAX_BYTES = 4 * 1024 * 1024
 _cache_path = None

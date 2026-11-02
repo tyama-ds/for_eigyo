@@ -270,8 +270,7 @@ def register_research_routes(app, context):
                     parent = explorer.enrich({**parent, 'reason': f'ターゲット {row["id"]} の {item["code"]} から上位へ拡張。',
                         'origins': [{'type': 'target_parent', 'patent_id': row['id'], 'source_code': item['code']}]})
                     candidates = explorer.merge_candidates(candidates, [parent])
-        all_terms = list(dict.fromkeys(classification_retrieval.english_topics(brief['keywords']) +
-            keywords(brief['keywords']) + [t for c in plan['concepts'] for t in c.get('terms', []) + c.get('abstract_terms', [])]))
+        all_terms = list(dict.fromkeys(keywords(brief['keywords']) + [t for c in plan['concepts'] for t in c.get('terms', []) + c.get('abstract_terms', [])]))
         used_terms, vocabulary = [], ''
         for term in all_terms:
             token = '"' + term.replace('"', ' ') + '"'

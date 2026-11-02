@@ -143,7 +143,7 @@ class ResearchRoutesTests(unittest.TestCase):
         return dict(purpose='先行技術調査', summary='対象と機能を分け、既知の必要例の回収を確認する。',
                     concepts=[dict(id='keyword1', name='車両', role='required', terms=['車両', '自動車'],
                                    abstract_terms=['移動体'], reason='対象物の具体語と機能による抽象語。', evidence_ids=['JP2024000001A']),
-                              dict(id='keyword2', name='制御', role='required', terms=['制御'],
+                              dict(id='keyword2', name='制御', role='required', terms=['制御','road vehicle drive control systems'],
                                    abstract_terms=['自律制御'], reason='制御方式を比較する。', evidence_ids=['JP2024000001A'])],
                     questions=['請求項と既知の必要例を照合してください。'])
 
@@ -432,10 +432,9 @@ class ResearchRoutesTests(unittest.TestCase):
 
     def test_llm_plan_passes_purpose_concepts_selected_sources_and_existing_connection_to_classification(self):
         module.STATE['patents'][0].update(fi=['B60W30/00'], fterm=['3D241BA01'], cpc=['B60W30/00'])
-        classification_response = {'candidates': [
-            {'kind': 'IPC', 'code': 'B60W30/00', 'reason': '制御方式の探索仮説。'},
-            {'kind': 'IPC', 'code': 'B64', 'reason': '隣接領域の比較候補。'},
-            {'kind': 'F-term', 'code': '3D241BA01', 'reason': '車両制御の観点候補。'},
+        classification_response = {'selections': [
+            dict(key='IPC:B60W30/00',element_ids=['keyword2'],relation='direct',reason='制御方式の探索仮説。'),
+            dict(key='FI:B60W30/00',element_ids=['keyword2'],relation='direct',reason='車両制御の定義。')
         ]}
         before_rows = copy.deepcopy(module.STATE['patents'])
         with patch('research_strategy.complete', return_value=self.llm_plan_response()) as plan_llm, \
@@ -459,11 +458,11 @@ class ResearchRoutesTests(unittest.TestCase):
         sent_connection, _, sent_payload = class_llm.call_args.args
         self.assertEqual(sent_connection, self.settings)
         self.assertEqual(sent_payload['research_context'], call_context)
-        self.assertIn('移動体', sent_payload['keywords'])
+        self.assertIn('移動体', sent_payload['technology'])
         self.assertNotIn('retained-test-key', json.dumps(sent_payload))
         self.assertEqual(plan['classification_proposal']['status'], 'completed')
-        self.assertEqual(plan['classification_proposal']['accepted_count'], 3)
-        self.assertIn('IPC:B64', [c['key'] for c in plan['classification_candidates']])
+        self.assertEqual(plan['classification_proposal']['accepted_count'], 2)
+        self.assertIn('FI:B60W30/00', [c['key'] for c in plan['classification_candidates']])
         self.assertEqual(module.STATE['patents'], before_rows)
         self.assertEqual(module.STATE['queries'], [])
         self.assertEqual(module.SETTINGS, self.settings)
@@ -499,7 +498,7 @@ class ResearchRoutesTests(unittest.TestCase):
         seed = next(c for c in classification_bridge.extract(module.STATE['patents'][0])['items'] if c['key'] == 'IPC:B60W30/00')
         llm_reason = 'この理由は実付与の根拠として表示してはいけない探索仮説。'
         with patch('research_strategy.complete', return_value=self.llm_plan_response()), \
-                patch.object(module, 'complete', return_value={'candidates': [{'kind': 'IPC', 'code': 'B60W30/00', 'reason': llm_reason}]}), \
+                patch.object(module, 'complete', return_value={'selections': [dict(key='IPC:B60W30/00', element_ids=['keyword2'], relation='direct', reason=llm_reason)]}), \
                 patch.object(module, 'candidate_list', wraps=REAL_CANDIDATE_LIST):
             result = self.post('plan', self.llm_plan_body())
         plan = result['research_workbench']['plan']

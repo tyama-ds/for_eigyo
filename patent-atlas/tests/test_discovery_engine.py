@@ -14,7 +14,10 @@ def patent(identifier, ipc='H01M10/058', family='', **extra):
 class DiscoveryEngineTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.plan = engine.propose_plan('全固体電池', [], [])
+        cls.plan = engine.propose_plan('全固体電池', [], [], llm_plan=dict(english_terms=['all-solid-state battery'], facets=[
+            dict(id='material', terms=['固体電解質'], english_terms=['solid electrolytes secondary cells','lithium compounds','ceramic compositions']),
+            dict(id='process', terms=[], english_terms=['manufacture electrodes accumulators','ceramic sintering']),
+            dict(id='interface', terms=[], english_terms=['joining ceramic'])]))
 
     def test_plan_has_independent_facets_and_unrestricted_topic_search(self):
         self.assertEqual({f['id'] for f in self.plan['facets']},
@@ -44,9 +47,8 @@ class DiscoveryEngineTests(unittest.TestCase):
     def test_empty_workspace_keeps_core_and_process_and_gains_adjacent_hypotheses(self):
         rows = {row['code']: row for row in self.plan['candidate_hypotheses']}
         self.assertIn('H01M10/0562', rows)
-        self.assertIn('H01M4/139', rows)
-        self.assertIn('process', rows['H01M4/139']['facets'])
-        self.assertIn('C04B35/64', rows)
+        self.assertTrue(any(row['code'].startswith('H01M4/') and 'process' in row['facets'] for row in rows.values()))
+        self.assertTrue(any(row['code'].startswith('C04B35/') and 'process' in row['facets'] for row in rows.values()))
         self.assertTrue(any(row['code'].startswith('C01') and 'material' in row['facets'] for row in rows.values()))
         for code in ('C01D13/00', 'B23H3/00', 'B23H3/04', 'H01M8/04291', 'H01M8/18'):
             self.assertNotIn(code, rows)

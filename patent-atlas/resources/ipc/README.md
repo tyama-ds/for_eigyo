@@ -53,3 +53,12 @@ To rebuild this same bounded snapshot:
 
 Underlying IPC copyright belongs to WIPO; the Japanese translation belongs to
 the Government of Japan, as described on the [JPO publication page](https://www.jpo.go.jp/system/patent/gaiyo/bunrui/ipc/ipc8wk.html).
+
+
+## All-domain Japanese captions (2026-11-02)
+
+Runtime now uses `ipc_ja_jpo.json.gz`, containing captions for all 80,145
+WIPO 2026.01 codes, independently matched to JPO's 2026-08-18 parallel-viewer
+bulk data. Caption publication dates remain distinct from the English scheme.
+The former PMGS snapshot and script are retained as historical source material;
+they no longer bound retrieval. Rebuild using `../fi/build_full_catalog.py`.

@@ -18,7 +18,7 @@ import classification_catalog
 import classification_bridge
 import classification_retrieval
 import classification_explorer as explorer
-from catalog import keywords as parse_keywords, suggest as suggest_seeds
+from catalog import keywords as parse_keywords
 
 
 MAX_RECOMMENDATIONS = 60
@@ -222,19 +222,7 @@ def propose_plan(keywords: str, candidates: list, patents: list, llm_plan: dict 
     llm_plan = llm_plan or {}
     notices = []
     facets = deepcopy(_FACETS)
-    normalized = unicodedata.normalize('NFKC', keywords).casefold()
-    english = _english(classification_retrieval.english_topics(keywords) or classification_retrieval.phrases(keywords))
-    solid_battery = '全固体' in normalized or bool(re.search(r'(?:all[ -]?)?solid[ -]state\s+batter', normalized))
-    if solid_battery:
-        english = _unique(['all-solid-state battery', 'solid-state battery'] + english, 8)
-        facets[1]['english_terms'] = ['solid electrolyte', 'sulfide', 'oxide', 'polymer electrolyte']
-        facets[1]['terms'] += ['電解質', 'セラミック', '硫化物', '酸化物']
-        facets[0]['english_terms'] = ['cell structure', 'electrode', 'separator']
-        facets[0]['terms'] += ['電池', 'セル', '電極']
-        facets[4]['english_terms'] = ['impedance', 'conductivity', 'degradation', 'testing']
-        facets[4]['terms'] += ['抵抗', '伝導']
-        facets[5]['english_terms'] = ['application', 'vehicle', 'energy storage', 'system']
-        facets[5]['terms'] += ['車両', '蓄電']
+    english = _english(classification_retrieval.phrases(keywords))
     english = _unique(english + _english(manual_english_terms or [], 8), 8)
     before_english = {term.casefold() for term in english}
     supplied_english = llm_plan.get('english_terms', [])
@@ -288,11 +276,6 @@ def propose_plan(keywords: str, candidates: list, patents: list, llm_plan: dict 
 
     for candidate in classification_retrieval.retrieve(keywords):
         add_hypothesis(candidate, candidate.get('facets', []), candidate['reason'])
-    for candidate in suggest_seeds(keywords):
-        if not classification_retrieval.relevant_seed(keywords, candidate):
-            continue
-        matched_facets = _facets_for({'title': candidate['title'], 'abstract': ' '.join(candidate.get('terms', []))}, facets)
-        add_hypothesis(candidate, matched_facets, '入力語に対応する分類候補。コードの存在は確認済みですが、適合性は公報で確認します。')
     for candidate in candidates[:120]:
         if not isinstance(candidate, dict) or not candidate.get('kind') or not candidate.get('code'):
             continue
@@ -300,24 +283,16 @@ def propose_plan(keywords: str, candidates: list, patents: list, llm_plan: dict 
             add_hypothesis(candidate, [], '既存候補を起点に保存。収録特許による裏付けは別途確認します。')
         if len(hypotheses) >= 18:
             break
-    # Search the full official dictionary by independent aspect, so the compact
-    # seed catalogue never bounds what can be discovered. These broad matches
-    # explicitly remain hypotheses until actual patent metadata is collected.
-    qualified = {
-        'device': ['secondary cells', 'non-aqueous electrodes'],
-        'material': ['solid electrolyte', 'lithium compounds', 'ceramic compositions'],
-        'process': ['manufacture secondary cells', 'manufacture electrodes accumulators', 'ceramic sintering', 'coating electrodes'],
-        'interface': ['electrodes coating', 'joining ceramic', 'electrolyte interface'],
-        'performance': ['battery testing', 'ionic conductivity', 'electrochemical impedance'],
-        'application': ['electric vehicles batteries', 'energy storage batteries'],
-    } if solid_battery else {}
-    for facet in facets:
-        if classification_retrieval.ev_topic(keywords):
-            continue
-        searches = qualified.get(facet['id']) or [subject + ' ' + term for subject in english[:2] for term in facet['english_terms'][:2]]
-        for term in searches[:4]:
-            for row in _dictionary_matches(term):
-                add_hypothesis(row, [facet['id']], f'公式IPC名称と観点「{facet["label"]} / {term}」の語句一致。主題への適合性は未確認です。')
+    # Search actual input-specific facet terms. The six UI facet names are not
+    # a code whitelist and their generic default words do not seed candidates.
+    search_elements = []
+    for facet in accepted_facets:
+        search_elements.append(dict(id=facet['id'], name=facet['label'],
+            terms=facet['terms'] + facet['english_terms']))
+    if english:
+        search_elements.insert(0, dict(id='topic', name='主題の言い換え', terms=english))
+    for row in classification_retrieval.retrieve_elements(search_elements, limit=48):
+        add_hypothesis(row, row.get('facets', []), row['reason'])
     supplied_hypotheses = llm_plan.get('candidate_hypotheses', [])
     before_hypothesis_keys = set(hypotheses)
     if isinstance(supplied_hypotheses, list):
@@ -327,8 +302,6 @@ def propose_plan(keywords: str, candidates: list, patents: list, llm_plan: dict 
     warnings = ['観点・分類候補は探索仮説です。分類の網羅性や特許の関連性を保証する数値ではありません。']
     if not english:
         warnings.append('外部検索用の英語主題語がありません。英語を併記するかLLM翻訳を設定してください。CSVの分析は利用できます。')
-    if solid_battery:
-        warnings.append('全固体電池の英語対訳を補いました。検索語の追加条件は実行前に確認してください。')
     final_hypotheses = list(hypotheses.values())[:MAX_RECOMMENDATIONS]
     accepted_candidate_keys = [item['key'] for item in final_hypotheses if item['key'] not in before_hypothesis_keys]
     received_counts = dict(english_terms=len(supplied_english), facets=len(supplied_facets),
@@ -361,6 +334,7 @@ def propose_plan(keywords: str, candidates: list, patents: list, llm_plan: dict 
                     query_ids=query_ids)
     return dict(version=1, keywords=keywords.strip(), topic_terms=topic_terms, english_terms=english,
                 facets=facets, queued_queries=queries[:MAX_QUERIES],
+                retrieval_elements=classification_retrieval.input_elements(keywords) + search_elements,
                 candidate_hypotheses=final_hypotheses, warnings=warnings, llm_proposal=proposal)
 
 

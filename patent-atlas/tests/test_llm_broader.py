@@ -11,6 +11,9 @@ module = integration.module
 
 class LLMBroaderCandidateTests(unittest.TestCase):
     def setUp(self):
+        # Retain regression coverage for historical saved proposal reports.
+        from legacy_candidate_fixture import install
+        install(self, module)
         self.client = TestClient(module.app)
         module.JOB.update(status='idle')
         module.SETTINGS.clear()

@@ -49,21 +49,8 @@ nameは160文字以内、reasonは300文字以内。questionsは不足情報や�
 形式 {"purpose":"入力のeffective_purpose","summary":"探索方針", "concepts":[{"id":"c1","name":"観点名","role":"optional","terms":["検索語"],"abstract_terms":["機能による上位語"],"reason":"入力との対応と提案理由","evidence_ids":[],"or_group":"","group_reason":"独立した追加検討の観点"}],"questions":[]}。
 既知のターゲットが次の検索結果に含まれるか、除外条件で必要例を落とさないかを検証する方針をsummaryかquestionsに示してください。'''
 
-CLASSIFICATION_SYSTEM = _COMMON + '''
-verified_reference_candidatesは公式分類表で確認した探索入口です。主題・各観点との対応を確認して優先的に選びます。
-「electric vehicle」をelectricとvehicleの別主題に分けるなど、複合概念の意味を壊して分類しないでください。
-電動駆動・充電・電池管理など関係する機能を区別し、単なる語の共起だけで無関係な分類を提案しないでください。
-FIは提供された候補内のkind=FIだけを利用し、IPCのコードから推測して作らないでください。
-調査テーマの分類候補を最大6件だけ提案してください。purpose、concepts、target_patentsがあれば参照します。
-ターゲットがある場合はその実際の付与分類を起点に、親分類・関連する技術観点を検討します。ない場合は仮の候補と明示します。
-IPCは現行の収録版を優先し、不確かな細分類を作らず、既存のセクション・クラス・サブクラスまで戻って提案できます。
-IPCの形式例は B、B60、B60L、B60W30/18 です。主群・小群は / とその後の数字まで必要です。
-F-termは5H029AM12のような完全なタームを使います。これらの形式例をテーマに無関係に推薦しないでください。
-IPC、CPC、FI、F-termは別の分類体系です。F-termをIPCの単純な下位コードとみなしたり、付与分類を別体系の実付与と断定しないでください。
-特に製品全体以外の材料・製造・構造・界面・制御も、入力の観点と関連する場合に検討してください。
-分類名をテーマに合わせて作り変えません。名称は公式辞書を使うため出力不要です。
-codeは1件につき1コード。kindはIPC、FIまたはF-term。reasonは日本語60文字以内で、関連する観点と不確実性を説明します。
-形式 {"candidates":[{"code":"分類コード","kind":"IPC","reason":"関連を検討する理由"}]}。確かな候補がなければ空配列です。'''
+# Compatibility import; generation now decomposes elements before dictionary retrieval.
+from classification_planner import ELEMENT_SYSTEM as CLASSIFICATION_SYSTEM
 
 DISCOVERY_SYSTEM = _COMMON + '''
 探索ラボで使う検索語と技術観点を提案してください。これは分類候補一覧とは異なる応答形式です。
@@ -76,7 +63,8 @@ DISCOVERY_SYSTEM = _COMMON + '''
 英語は100文字以内の短い検索語句、日本語は160文字以内とし、Boolean式・フィールド指定・ワイルドカードを含めません。
 本文や実際の付与分類を受け取っていない場合、実在特許から確認したとは書かないでください。
 架空の特許・分類コード・出典は作りません。この応答でcandidatesや分類コードを出力しないでください。
-形式 {"english_terms":["topic synonym"],"facets":[{"id":"process","terms":["製造"],"english_terms":["manufacturing"]}]}。
+各観点の語は入力固有の機能・実現手段まで具体化してください。「材料」「製造」だけでは分類を探せません。
+形式 {"english_terms":["主題の英語同義語"],"facets":[{"id":"process","terms":["入力に即した具体的な工程名"],"english_terms":["対応する英語の工程名"]}]}。
 意味のある語を少なくとも1つ含めてください。JSONの外側に説明は書きません。'''
 
 SELECTION_SYSTEM = _COMMON + '''
