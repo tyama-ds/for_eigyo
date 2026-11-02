@@ -4,6 +4,7 @@ Run with: python -m unittest discover -s launcher -p "test_portal_*.py" -v
 """
 import importlib.util
 import json
+import os
 import tempfile
 import threading
 import unittest
@@ -32,6 +33,13 @@ class SandboxMixin:
         tmp = tempfile.TemporaryDirectory(prefix="portal sandbox ")
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name)
+        if os.name != "nt":
+            # Windows の一時フォルダは 8.3 形式の別名（RUNNER~1 など）で返り、resolve() と表記が食い違う。
+            # 他の OS でも同じ状況を作るため、作業場所をシンボリックリンク越しに指す。
+            real = self.root / "real"
+            real.mkdir()
+            (self.root / "alias").symlink_to(real, target_is_directory=True)
+            self.root = self.root / "alias"
         self.repo = self.root / "for_eigyo"
         (self.repo / "launcher").mkdir(parents=True)
         values = {

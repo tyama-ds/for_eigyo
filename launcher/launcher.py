@@ -261,8 +261,9 @@ def _candidates(app: dict, cwd: Path):
 def _progress_version(cwd: Path) -> tuple[str | None, Path | None]:
     """for_eigyo の progress/projects/<フォルダ名>.json の version（最後の手段）。"""
     try:
-        slug = cwd.relative_to(REPO_ROOT).parts[0]
-    except (ValueError, IndexError):
+        # 両方を resolve() してから比べる（Windows の 8.3 短縮名やジャンクションで表記が食い違うため）
+        slug = cwd.resolve().relative_to(REPO_ROOT.resolve()).parts[0]
+    except (ValueError, IndexError, OSError):
         return None, None
     path = PROGRESS_DIR / f"{slug}.json"
     try:
@@ -290,8 +291,8 @@ def git_last_updated(directory: Path) -> str | None:
 def _display_path(path: Path) -> str:
     """for_eigyo/... や claudecode/... のように親フォルダからの相対で見せる。"""
     try:
-        return path.resolve().relative_to(REPO_ROOT.parent).as_posix()
-    except ValueError:
+        return path.resolve().relative_to(REPO_ROOT.parent.resolve()).as_posix()
+    except (ValueError, OSError):
         return str(path)
 
 
