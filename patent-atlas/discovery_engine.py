@@ -16,6 +16,7 @@ import unicodedata
 
 import classification_catalog
 import classification_bridge
+import classification_retrieval
 import classification_explorer as explorer
 from catalog import keywords as parse_keywords, suggest as suggest_seeds
 
@@ -222,7 +223,7 @@ def propose_plan(keywords: str, candidates: list, patents: list, llm_plan: dict 
     notices = []
     facets = deepcopy(_FACETS)
     normalized = unicodedata.normalize('NFKC', keywords).casefold()
-    english = _english(topic_terms)
+    english = _english(classification_retrieval.english_topics(keywords) or classification_retrieval.phrases(keywords))
     solid_battery = '全固体' in normalized or bool(re.search(r'(?:all[ -]?)?solid[ -]state\s+batter', normalized))
     if solid_battery:
         english = _unique(['all-solid-state battery', 'solid-state battery'] + english, 8)
@@ -271,10 +272,10 @@ def propose_plan(keywords: str, candidates: list, patents: list, llm_plan: dict 
     hypotheses = {}
 
     def add_hypothesis(raw, facet_ids, reason):
-        if not isinstance(raw, dict) or raw.get('kind') not in ('IPC', 'F-term', 'CPC'):
+        if not isinstance(raw, dict) or raw.get('kind') not in ('IPC', 'F-term', 'CPC', 'FI'):
             return
         try:
-            item = explorer.enrich({'kind': raw['kind'], 'code': raw.get('code', '')})
+            item = explorer.enrich(raw)
         except ValueError:
             return
         # Unknown LLM classifications cannot become dictionary-backed hypotheses.
@@ -282,14 +283,21 @@ def propose_plan(keywords: str, candidates: list, patents: list, llm_plan: dict 
             return
         previous = hypotheses.get(item['key'], {})
         hypotheses[item['key']] = dict(item, evidence_status='hypothesis', relevance_status='review_pending',
-                                       facets=_unique(previous.get('facets', []) + facet_ids), evidence=[],
+                                       facets=_unique(previous.get('facets', []) + raw.get('facets', []) + facet_ids), evidence=[],
                                        support_count=0, family_count=0, reason=reason)
 
+    for candidate in classification_retrieval.retrieve(keywords):
+        add_hypothesis(candidate, candidate.get('facets', []), candidate['reason'])
     for candidate in suggest_seeds(keywords):
+        if not classification_retrieval.relevant_seed(keywords, candidate):
+            continue
         matched_facets = _facets_for({'title': candidate['title'], 'abstract': ' '.join(candidate.get('terms', []))}, facets)
         add_hypothesis(candidate, matched_facets, '入力語に対応する分類候補。コードの存在は確認済みですが、適合性は公報で確認します。')
     for candidate in candidates[:120]:
-        add_hypothesis(candidate, [], '既存候補を起点に保存。収録特許による裏付けは別途確認します。')
+        if not isinstance(candidate, dict) or not candidate.get('kind') or not candidate.get('code'):
+            continue
+        if explorer.key(candidate) not in hypotheses:
+            add_hypothesis(candidate, [], '既存候補を起点に保存。収録特許による裏付けは別途確認します。')
         if len(hypotheses) >= 18:
             break
     # Search the full official dictionary by independent aspect, so the compact
@@ -304,6 +312,8 @@ def propose_plan(keywords: str, candidates: list, patents: list, llm_plan: dict 
         'application': ['electric vehicles batteries', 'energy storage batteries'],
     } if solid_battery else {}
     for facet in facets:
+        if classification_retrieval.ev_topic(keywords):
+            continue
         searches = qualified.get(facet['id']) or [subject + ' ' + term for subject in english[:2] for term in facet['english_terms'][:2]]
         for term in searches[:4]:
             for row in _dictionary_matches(term):
@@ -312,7 +322,8 @@ def propose_plan(keywords: str, candidates: list, patents: list, llm_plan: dict 
     before_hypothesis_keys = set(hypotheses)
     if isinstance(supplied_hypotheses, list):
         for candidate in supplied_hypotheses[:24]:
-            add_hypothesis(candidate, [], 'LLMの探索仮説。コードの存在だけを公式辞書で確認済みです。')
+            add_hypothesis({'kind': candidate['kind'], 'code': candidate['code']}, [],
+                           'LLMの探索仮説。コードの存在だけを公式辞書で確認済みです。')
     warnings = ['観点・分類候補は探索仮説です。分類の網羅性や特許の関連性を保証する数値ではありません。']
     if not english:
         warnings.append('外部検索用の英語主題語がありません。英語を併記するかLLM翻訳を設定してください。CSVの分析は利用できます。')

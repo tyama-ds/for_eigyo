@@ -29,11 +29,15 @@
   <link rel="stylesheet" href="/static/invention-workbench.css?v=20260918-elements">
   <link rel="stylesheet" href="/static/query-library-ui.css?v=20260918">
   <link rel="stylesheet" href="/static/projection-ui.css?v=20260918">
-  <script src="/static/query-library-ui.js?v=20260918" defer></script>
-  <script src="/static/research-workbench.js?v=20260918" defer></script>
-  <script src="/static/invention-workbench.js?v=20260918-elements" defer></script>
+  <link rel="stylesheet" href="/static/research-guidance.css?v=20261102-usability">
+  <script src="/static/query-library-ui.js?v=20261102-usability" defer></script>
+  <script src="/static/research-workbench.js?v=20261102-usability" defer></script>
+  <script src="/static/invention-workbench.js?v=20261102-usability" defer></script>
   <script src="/static/projection-ui.js?v=20260918" defer></script>
-  <script src="/static/app.js?v=20260918-research" defer></script>
+  <script src="/static/research-draft-store.js?v=20261102-usability" defer></script>
+  <script src="/static/research-progress.js?v=20261102-usability" defer></script>
+  <script src="/static/research-guidance.js?v=20261102-usability" defer></script>
+  <script src="/static/app.js?v=20261102-usability" defer></script>
   <script src="/static/atlas-motion.js" defer></script>
 </head>
 <body>
@@ -48,15 +52,20 @@
    <div class="atlas-heading-copy"><span class="eyebrow">PATENT RESEARCH / 知の地図をつくる</span><h1>特許検索を、探索する。</h1><p class="atlas-heading-note">ひとつの技術から、次の発見へ。</p></div>
    <div class="heading-actions"><label class="atlas-motion-control"><select id="atlas-motion-mode" aria-label="画面の動き"><option value="system">動き：自動</option><option value="dynamic">動き：あり</option><option value="static">静止表示</option></select></label><button class="button subtle" id="demo-button">サンプルを試す <span>↗</span></button><a class="button subtle atlas-export" href="/api/export" download>プロジェクトを書き出す <span>↓</span></a></div>
   </div>
+  <div id="research-flow-header"></div>
+  <div id="research-progress"></div>
   <div id="job-banner" class="job-banner hidden" role="status" aria-live="polite"><span class="spinner"></span><span id="job-message"></span><progress id="job-progress" max="100" value="0"></progress><button class="button small" id="stop-job">停止</button></div>
   <section id="workbench-tab" class="view active"><div id="research-workbench"></div></section>
   <section id="explore-tab" class="view">
+   <details id="research-workspace-shortcuts" class="research-workspace-shortcuts" open>
+   <summary>分類コンステレーション・個別ステップを開く</summary>
    <nav class="stepper" aria-label="探索ステップ">
     <button class="step active" data-step="0"><span class="step-number">00</span><span><b>技術の輪郭</b><small>キーワード・分類を選ぶ</small></span><span class="step-arrow">→</span></button>
     <button class="step" data-step="1"><span class="step-number">01</span><span><b>検索の初案</b><small>検索式をつくる・CSVを渡す</small></span><span class="step-arrow">→</span></button>
     <button class="step" data-step="2"><span class="step-number">02</span><span><b>特許の地図</b><small>眺める・選ぶ・学習する</small></span><span class="step-arrow">→</span></button>
     <button class="step" data-step="3"><span class="step-number">03</span><span><b>次の検索へ</b><small>判断から検索式を育てる</small></span></button>
    </nav>
+   </details>
    <div id="step-content" class="step-content"></div>
   </section>
   <section id="agent-tab" class="view"><div class="agent-layout">
@@ -94,7 +103,7 @@
  <footer><span>PATENT ATLAS <span class="footer-divider">/</span> ローカルに保存</span><span id="footer-info">探索のはじまり</span><a href="https://www.j-platpat.inpit.go.jp/" target="_blank" rel="noopener noreferrer">J-PlatPat ↗</a></footer>
  <div id="toast" role="status" aria-live="polite" class="toast"></div>
  <dialog id="mapping-dialog"><form id="mapping-form"><span class="eyebrow">CSV IMPORT</span><h2>列の意味を教えてください。</h2><p class="muted">このCSVの列名を、特許の項目に割り当てます。</p><div id="mapping-fields"></div><div class="button-row"><button class="button" type="button" id="cancel-mapping">キャンセル</button><button class="button primary" type="submit">この割り当てで読み込む</button></div></form></dialog>
- <dialog id="classification-dialog"><form id="classification-form"><span class="eyebrow">ADD CLASSIFICATION</span><h2>分類を追加する</h2><label>分類体系<select id="new-class-kind"><option>IPC</option><option>F-term</option><option>CPC</option></select></label><label>コード<input id="new-class-code" required placeholder="H01M10/0562"></label><label>名称<input id="new-class-title" required placeholder="無機固体電解質"></label><p class="caption">辞書にない分類は「未確認」として追加します。公式定義をご確認ください。IPCとCPCは別の体系として保持します。</p><div class="button-row"><button class="button" type="button" id="cancel-classification">キャンセル</button><button class="button primary" type="submit">追加</button></div></form></dialog>
+ <dialog id="classification-dialog"><form id="classification-form"><span class="eyebrow">ADD CLASSIFICATION</span><h2>分類を追加する</h2><label>分類体系<select id="new-class-kind"><option>IPC</option><option>FI</option><option>F-term</option><option>CPC</option></select></label><label>コード<input id="new-class-code" required placeholder="H01M10/0562"></label><label>名称<input id="new-class-title" required placeholder="無機固体電解質"></label><p class="caption">辞書にない分類は「未確認」として追加します。公式定義をご確認ください。IPCとCPCは別の体系として保持します。</p><div class="button-row"><button class="button" type="button" id="cancel-classification">キャンセル</button><button class="button primary" type="submit">追加</button></div></form></dialog>
  <dialog id="research-aspects-dialog" class="research-dialog"><form id="research-aspects-form"><span class="eyebrow">YOUR PERSPECTIVE</span><h2>想定している観点</h2><p class="caption">分かる場合だけ入力してください。1行に1観点、最大8件・各160文字。必要に応じて「必須:」「任意:」「除外:」を先頭につけます。入力後、観点案に反映するには起案ボタンを押してください。</p><label>観点<textarea id="research-aspects-text" rows="8" placeholder="必須: 電極と電解質の界面\n任意: 加圧・積層プロセス\n除外: 液体電解質"></textarea></label><div class="button-row"><button class="button" type="button" id="research-aspects-close">キャンセル</button><button class="button primary" type="submit">入力を反映</button></div></form></dialog>
  <dialog id="research-target-dialog" class="research-dialog"><form id="research-target-form"><span class="eyebrow">ADD A SEED</span><h2>ターゲット特許を追加</h2><p class="caption">公報から情報を転記してください。番号だけでの自動取得は行いません。既存のCSV・判定は保持します。</p><label>公報番号<input name="id" required maxlength="200" placeholder="JP2026000001A"></label><label>発明の名称<input name="title" required maxlength="12000"></label><label>要約<textarea name="abstract" rows="4" maxlength="12000"></textarea></label><div class="form-row"><label>IPC<input name="ipc" maxlength="12000" placeholder="H01M10/0562"></label><label>FI<input name="fi" maxlength="12000"></label></div><div class="form-row"><label>Fターム<input name="fterm" maxlength="12000"></label><label>CPC<input name="cpc" maxlength="12000"></label></div><div class="button-row"><button class="button" type="button" id="research-target-close">キャンセル</button><button class="button primary" id="research-target-save" type="submit">追加して選択</button></div></form></dialog>
 </body>

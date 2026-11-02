@@ -23,13 +23,16 @@ function setTab(tab) {
  if(tab===activeTab)return;
  const previous=activeTab; globalThis.PatentAtlasMotion?.cancelAll();
  if(previous==='workbench'&&typeof captureResearchDraft==='function')captureResearchDraft();
+ if(typeof researchDraftFlush==='function')researchDraftFlush();
  hideClassTooltip(); globalThis.hidePatentRowPreview?.(); if(typeof captureLearningDraft==='function')captureLearningDraft(); if(activeTab==='explore'&&step===0)captureClassDraft(); if(activeTab==='discovery')captureDiscoveryDraft();if(activeTab==='orchestration'&&typeof captureOrchestrationDraft==='function')captureOrchestrationDraft();activeTab=tab;
  $$('.tab').forEach(el=>el.classList.toggle('active',el.dataset.tab===tab)); $$('.view').forEach(el=>el.classList.toggle('active',el.id===tab+'-tab'));
  if(tab==='workbench')renderResearchWorkbench();if(tab==='explore')renderStep(); if(tab==='agent')renderAgent(); if(tab==='discovery')renderDiscovery();if(tab==='orchestration')renderOrchestration();
+ if(typeof renderResearchFlowHeader==='function')renderResearchFlowHeader();
  if(previous!==tab){const order=['explore','discovery','agent','orchestration','settings'];globalThis.PatentAtlasMotion?.enter($('#'+tab+'-tab'),{direction:order.indexOf(tab)-order.indexOf(previous),kind:'tab'});}
 }
 function setStep(value) {
  const previous=step;globalThis.PatentAtlasMotion?.cancelAll();hideClassTooltip();globalThis.hidePatentRowPreview?.();if(step===0)captureClassDraft();step=value;picked.clear();renderStep();
+ const shortcuts=$('#research-workspace-shortcuts');if(shortcuts)shortcuts.open=value===0;
  if(previous!==value&&activeTab==='explore')globalThis.PatentAtlasMotion?.enter($('#step-content'),{direction:value-previous,kind:'step'});
  const still=document.documentElement.dataset.atlasMotion==='static'||window.matchMedia('(prefers-reduced-motion: reduce)').matches;
  window.scrollTo({top:0,behavior:still?'instant':'smooth'});
@@ -40,6 +43,7 @@ function updateChrome() {
  $('#agent-count').textContent = `${state.patents.length} 件の特許`;
  const j=state.job, running=j.status==='running'; $('#job-banner').classList.toggle('hidden',!running); $('#job-message').textContent=j.message; $('#job-progress').value=j.progress;
  $('#run-agent').disabled=running;
+ if(typeof renderResearchFlowHeader==='function')renderResearchFlowHeader();
 }
 function fillSettings() {
  const s=state.settings; $('#provider').value=s.provider; $('#base-url').value=s.base_url; $('#llm-model').value=s.model; $('#llm-timeout').value=s.llm_timeout??120;
@@ -79,6 +83,8 @@ function renderQuery() {
 }
 async function uploadFile(file,mapping={}) {
  if(!file)return;if(file.size>20*1024*1024)throw new Error('CSVは20MB以下にしてください。');pendingFile=file;pendingImportMode=(typeof researchImportPending!=='undefined'&&researchImportPending)?'merge':($('#csv-import-mode')?.value||pendingImportMode);toast('CSVを読み込み、特許を配置しています…');
+ if(typeof captureResearchDraft==='function'&&activeTab==='workbench')captureResearchDraft();
+ if(typeof researchDraftFlush==='function')researchDraftFlush();
  const data=await api('/upload?merge='+(pendingImportMode==='merge')+'&mapping='+encodeURIComponent(JSON.stringify(mapping)),undefined,{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:await file.arrayBuffer()});
  if(data.needs_mapping){showMapping(data);return;}state=data;picked.clear();$('#mapping-dialog').close();if(typeof researchImportPending!=='undefined'&&researchImportPending){researchImportPending=false;setTab('workbench');renderResearchWorkbench();updateChrome();}else setStep(2);toast(`${state.patents.length} 件を読み込みました。`);
 }
@@ -177,7 +183,7 @@ async function refreshJob(){
 }
 function download(name,text){const url=URL.createObjectURL(new Blob([text],{type:'text/plain;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 async function init(){
- [state,formatCatalog]=await Promise.all([api('/state'),api('/query/formats')]);fillSettings();updateChrome();renderStep();initResearchWorkbench();
+ [state,formatCatalog]=await Promise.all([api('/state'),api('/query/formats')]);if(typeof initResearchDraftStore==='function')initResearchDraftStore();fillSettings();updateChrome();renderStep();initResearchWorkbench();
  let resizeTimer;window.addEventListener('resize',()=>{clearTimeout(resizeTimer);resizeTimer=setTimeout(()=>{if(activeTab==='explore'&&step===0&&$('#class-svg')){drawClassNodes();updateSelectedClasses();renderClassFocus();}},120);});
  $$('.tab').forEach(el=>el.addEventListener('click',()=>setTab(el.dataset.tab)));$$('.step').forEach(el=>el.addEventListener('click',()=>setStep(Number(el.dataset.step))));
  on('#demo-button','click',async e=>busy(e.currentTarget,'準備中…',async()=>{state=await api('/demo',{});resetClassExplorer();picked.clear();setTab('explore');setStep(0);toast('架空のサンプル72件を読み込みました。Step 02で特許マップを試せます。');}));
@@ -196,4 +202,9 @@ async function init(){
  // Progressive WebMCP support; the normal GUI works without this proposed browser API.
  const context=document.modelContext;if(context?.registerTool){try{await context.registerTool({name:'read_patent_workspace',title:'Read patent workspace',description:'Read the current keywords, selected classifications and patent counts. Does not modify data.',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:true,untrustedContentHint:true},execute:async(input)=>{if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).length)throw new Error('No input fields are accepted.');return {keywords:state.keywords,selected:state.selected,patent_count:state.patents.length,labels:counts()};}});}catch{/* Optional browser feature. */}}
 }
-init().catch(error=>{$('#step-content').innerHTML='<div class="panel empty-state"><h2>ワークスペースに接続できません。</h2><p>Pythonサーバーを起動してからページを再読み込みしてください。</p></div>';toast(error.message,true);});
+init().catch(error=>{
+ const host=$('#research-workbench');
+ host.innerHTML='<div class="panel empty-state"><h2>ワークスペースに接続できません。</h2><p>Pythonサーバーを起動してから再読み込みしてください。保存済みのデータは削除していません。</p><button id="research-retry-connection" class="button primary" type="button">再読み込みする</button></div>';
+ on('#research-retry-connection','click',()=>location.reload());
+ toast(error.message,true);
+});

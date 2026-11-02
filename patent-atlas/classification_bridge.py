@@ -19,7 +19,7 @@ FI_WARNING = 'FIとIPCには版差があります。IPC部分の照合は関連�
 
 def _raw(value):
     if isinstance(value, list) and all(isinstance(item, str) for item in value):
-        return '; '.join(value)
+        value = '; '.join(value)
     if not isinstance(value, str):
         raise ValueError('分類欄は文字列または文字列配列で指定してください。')
     if len(value) > 12000:
@@ -38,7 +38,7 @@ def parse_fi(value):
     if not text:
         return []
     base = r'[A-H]\s*\d{2}\s*[A-Z]\s*\d{1,4}\s*[/:]\s*\d{1,6}'
-    entry = re.compile(r'(' + base + r')(?P<suffix>(?:\s+\d{3})(?:\s*[A-Z])?|(?:\s*,\s*\d{3})?(?:\s*@\s*[A-Z])?)')
+    entry = re.compile(r'(' + base + r')(?P<suffix>(?:\s+\d{3})(?:\s*[A-Z](?=$|[\s,;、；|]))?|\s+[A-Z](?=$|[\s,;、；|])|(?:\s*,\s*\d{3})?(?:\s*@\s*[A-Z])?)')
     result, position = [], 0
     while position < len(text):
         match = entry.match(text, position)

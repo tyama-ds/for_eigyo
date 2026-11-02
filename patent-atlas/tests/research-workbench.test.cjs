@@ -185,3 +185,42 @@ test('changing a group updates the live set diagram and invalidates the prior pr
 test('group reasons and live query terms escape untrusted model strings',()=>{
  const s=setup(),c=s.context,p=unionPlan();p.concepts[0].name='<img>';p.concepts[0].group_reason='<script>reason';p.concepts[0].terms=['<svg>'];const html=c.researchPlanHtml(p);assert.doesNotMatch(html,/<img>|<script>|<svg>/);assert.match(html,/&lt;img&gt;/);assert.match(html,/&lt;svg&gt;/);
 });
+
+test('filtering targets preserves the preview, and changing to discovery keeps the selected targets',()=>{
+ const s=setup(),c=s.context,p=plan();c.state.research_workbench.plan=p;c.researchBrief().target_ids=['JP1'];const d=c.researchPlanState(p);d.preview={preview_hash:'keep',query:{boolean_tree:{}},expression:'保持'};
+ const callbacks={};const filter={id:'research-target-filter',addEventListener:(event,fn)=>callbacks['filter:'+event]=fn};
+ const discover={dataset:{researchMode:'discover'},addEventListener:(event,fn)=>callbacks['mode:'+event]=fn};
+ s.groups['.research-brief input,.research-brief textarea']=[filter];s.groups['[data-research-mode]']=[discover];c.renderResearchWorkbench();
+ callbacks['filter:input']?.();assert.equal(d.preview.preview_hash,'keep');callbacks['mode:click']();assert.equal(c.researchBrief().entry_mode,'discover');assert.deepEqual([...c.researchBrief().target_ids],['JP1']);
+});
+
+test('all entry views refresh the flow header and the guided view mounts after rendering',()=>{
+ const s=setup(),c=s.context,events=[];c.mountResearchGuidance=()=>events.push('mount');c.renderResearchFlowHeader=()=>events.push('header');
+ c.renderResearchWorkbench();c.researchBrief().entry_mode='examples';c.renderResearchWorkbench();c.researchBrief().entry_mode='tools';c.renderResearchWorkbench();assert.deepEqual(events,['mount','header','header']);
+});
+
+test('legacy planning uses shared progress, captures edits before rebasing, and releases failure state',async()=>{
+ const s=setup(),c=s.context,events=[];let running=false;
+ c.researchProgressIsRunning=()=>running;c.researchProgressStart=options=>{assert.equal(options.useLlm,true);running=true;events.push('start');return 10;};
+ c.researchProgressFinish=(token,error)=>{assert.equal(token,10);running=false;events.push(error?'error':'finish');};
+ c.researchDraftFlush=()=>events.push('flush');c.researchDraftRebase=()=>events.push('rebase:'+c.state.research_workbench.revision);c.researchDraftScheduleSave=()=>{};
+ let resolve;c.api=()=>{events.push('request');return new Promise(yes=>resolve=yes);};const pending=c.requestResearchPlan(true);
+ await assert.rejects(c.requestResearchPlan(true),/起案中/);c.researchBrief().goal='待機中の編集';const next=structuredClone(c.state);next.research_workbench.revision=8;next.research_workbench.plan=plan();resolve(next);await pending;
+ assert.equal(c.researchBrief().goal,'待機中の編集');assert.deepEqual(events,['start','flush','request','rebase:8','finish']);
+ c.api=async()=>{throw new Error('接続エラー');};await assert.rejects(c.requestResearchPlan(true),/接続エラー/);assert.equal(events.at(-1),'error');assert.equal(running,false);
+ c.inventionPlanning=true;const length=events.length;await assert.rejects(c.requestResearchPlan(true),/起案中/);assert.equal(events.length,length);
+});
+
+test('a legacy preview returned after a concept edit is discarded',async()=>{
+ const s=setup(),c=s.context;c.state.research_workbench.plan=plan();const d=c.researchPlanState(c.state.research_workbench.plan);let resolve;
+ c.api=()=>new Promise(yes=>resolve=yes);const pending=c.previewResearchPlan();d.concepts[0].terms=['待機中に変更'];resolve({preview_hash:'old',expression:'old'});await pending;assert.equal(d.preview,null);
+});
+
+test('editing research inputs clears the old invention alert, while capture and rerender preserve it',()=>{
+ const s=setup(),c=s.context;vm.runInContext(fs.readFileSync('static/invention-workbench.js','utf8'),c);
+ let input;s.dom['#invention-error']={textContent:'',hidden:true};s.dom['#research-purpose']={value:'先行技術を調査'};
+ s.groups['.research-brief input,.research-brief textarea']=[{id:'research-purpose',addEventListener:(_event,fn)=>input=fn}];
+ c.inventionShowError('まず今回の検索目的を入力してください。');c.captureResearchDraft();c.renderResearchWorkbench();
+ assert.match(s.read('inventionError'),/検索目的/);assert.equal(s.dom['#invention-error'].hidden,false);
+ input();assert.equal(s.read('inventionError'),'');assert.equal(s.dom['#invention-error'].textContent,'');assert.equal(s.dom['#invention-error'].hidden,true);assert.equal(c.researchBrief().purpose,'先行技術を調査');
+});

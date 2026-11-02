@@ -3,6 +3,7 @@ import copy
 import hashlib
 import io
 import re
+import unicodedata
 from collections import Counter
 from pathlib import Path
 
@@ -19,7 +20,8 @@ ALIASES = {
     'title': ['title', '発明の名称', '名称', 'タイトル'],
     'abstract': ['abstract', '要約', '抄録', '要約（日本語）', 'summary'],
     'applicant': ['applicant', 'assignee', '出願人', '出願人/権利者', 'assignee - original'],
-    'ipc': ['ipc', '国際特許分類', 'ipc分類', 'ipc classifications'],
+    'ipc': ['ipc', '国際特許分類', 'ipc分類', 'ipc分類記号', '国際特許分類(IPC)',
+            'IPC(国際特許分類)', 'ipc classifications', 'international patent classification'],
     'cpc': ['cpc', 'cpc分類', 'cpc classifications', 'cooperative patent classification'],
     'fi': ['fi', 'fi分類', 'fi分類記号', 'fi classifications', 'file index'],
     'fterm': ['fterm', 'f-term', 'fターム', 'fターム分類'],
@@ -47,16 +49,22 @@ def parse_csv(raw, mapping=None):
     reader = csv.DictReader(io.StringIO(text), dialect=dialect)
     headers = reader.fieldnames or []
     chosen = {}
-    normalized = {h.strip().lower(): h for h in headers}
+    def header_key(value):
+        return unicodedata.normalize('NFKC', value).strip().casefold()
+    normalized = {header_key(h): h for h in headers}
     for field, aliases in ALIASES.items():
-        chosen[field] = (mapping or {}).get(field) or next((normalized[a.lower()] for a in aliases if a.lower() in normalized), None)
+        chosen[field] = (mapping or {}).get(field) or next((normalized[header_key(a)] for a in aliases if header_key(a) in normalized), None)
     if not chosen['title']:
         return {'needs_mapping': True, 'headers': headers, 'mapping': chosen, 'rows': []}
     rows, seen, duplicates, skipped = [], set(), 0, 0
     for n, row in enumerate(reader):
         if n >= 5000:
             raise ValueError('初版はCSV 5,000行まで対応しています。ファイルを分割してください。')
-        item = {f: str(row.get(c) or '').strip()[:12000] for f, c in chosen.items()}
+        item = {f: str(row.get(c) or '').strip() for f, c in chosen.items()}
+        for field in ('ipc', 'fi', 'fterm', 'cpc'):
+            if len(item[field]) > 12000:
+                raise ValueError(f'CSV {n + 2}行目の{field}分類欄が12,000文字を超えています。分類を途中で切り捨てず、取り込みを中止しました。')
+        item = {f: value[:12000] for f, value in item.items()}
         if not item['title']:
             skipped += 1
             continue

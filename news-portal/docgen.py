@@ -25,8 +25,8 @@ from datetime import datetime
 
 # ------------------------------------------------------------------ 共通
 
-_CITE_RE = re.compile(r"\[(\d{1,3})\]")
-_INLINE_RE = re.compile(r"(\*\*[^*]+\*\*|\[\d{1,3}\])")
+_CITE_RE = re.compile(r"\[(\d{1,4})\]")   # 出典番号は4桁まで（[1000] 以降も出典として扱う）
+_INLINE_RE = re.compile(r"(\*\*[^*]+\*\*|\[\d{1,4}\])")
 _TABLE_SEP_RE = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$")
 
 
@@ -910,6 +910,41 @@ def _uri_str(u: str) -> str:
     return "(" + u.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)") + ")"
 
 
+_URI_SAFE = ":/?#[]@!$&'()*+,;=%~"
+
+
+def _uri_ascii(u: str) -> str:
+    """Link 注釈の URI を 7 ビット ASCII にする（PDF の URI は ASCII。以前は日本語のパスや IDN のホストを含む出典が1件でもあると
+    latin-1 に符号化できず、PDF 全体が UnicodeEncodeError で失敗していた）。ホストは IDNA（punycode）、ホストより後ろは
+    %XX にする（既にある %XX・クエリの & = +・#断片はそのまま。空白・"<>{}|^`\\ と非 ASCII だけ）。ユーザー情報・ポート・
+    IPv6 のホストはそのまま（hostname は小文字にし角かっこを外すので使わない）。変換できなければ UnicodeError / ValueError。
+    画面に出す文字（出典の URL の本文）は元の Unicode のまま。"""
+    from urllib.parse import quote
+    u = str(u or "")
+    if u.isascii() and not re.search(r"[\s\"<>{}|^`\\]", u):
+        return u
+    m = re.match(r"([A-Za-z][A-Za-z0-9+.\-]*:)(//([^/?#]*))?(.*)\Z", u, re.S)
+    if not m:
+        raise ValueError("URI のスキームがありません")
+    scheme, auth, rest = m.group(1), m.group(3), m.group(4)
+    out = scheme
+    if m.group(2) is not None:
+        userinfo, at, hostport = auth.rpartition("@")
+        if hostport.startswith("["):   # IPv6（[::1]:8080）は ASCII のはず
+            host, port = hostport, ""
+        else:
+            host, colon, port = hostport.partition(":")
+            port = colon + port
+        if not host.isascii():
+            host = host.encode("idna").decode("ascii")   # 長すぎるラベルなどは UnicodeError（呼び出し側でそのリンクだけ外す）
+        if port and not re.fullmatch(r":\d*", port):
+            raise ValueError("ポートが不正です")
+        out += "//" + (quote(userinfo, safe=_URI_SAFE) + "@" if at else "") + host + port
+    out += quote(rest, safe=_URI_SAFE)
+    out.encode("ascii")
+    return out
+
+
 class _Layout:
     """A4 縦・1段組みの簡易レイアウト。テキストはグリフ幅で折り返す。"""
     PW, PH = 595.28, 841.89
@@ -1164,9 +1199,14 @@ def build_pdf(doc: dict, font_path: str | None = None) -> bytes:
         if links:
             ids = []
             for (x0, y0, x1, y1, url) in links:
-                ids.append(pdf.add((f"<< /Type /Annot /Subtype /Link /Rect [{x0:.2f} {y0:.2f} {x1:.2f} {y1:.2f}] /Border [0 0 0] "
-                                    f"/A << /S /URI /URI {_uri_str(url)} >> >>").encode("latin-1")))
-            annots = " /Annots [" + " ".join(f"{i} 0 R" for i in ids) + "]"
+                try:   # ASCII にできないリンクはその注釈だけ付けない（文書は作る。本文の URL の文字は残る）
+                    annot = (f"<< /Type /Annot /Subtype /Link /Rect [{x0:.2f} {y0:.2f} {x1:.2f} {y1:.2f}] /Border [0 0 0] "
+                             f"/A << /S /URI /URI {_uri_str(_uri_ascii(url))} >> >>").encode("ascii")
+                except (UnicodeError, ValueError):
+                    continue
+                ids.append(pdf.add(annot))
+            if ids:
+                annots = " /Annots [" + " ".join(f"{i} 0 R" for i in ids) + "]"
         page_ids.append(pdf.add((f"<< /Type /Page /Parent {pages_obj} 0 R /MediaBox [0 0 {L.PW:.2f} {L.PH:.2f}] "
                                  f"/Resources << /Font << /F1 {font_obj} 0 R >> >> /Contents {content} 0 R{annots} >>").encode("latin-1")))
     pdf.set(pages_obj, (f"<< /Type /Pages /Kids [{' '.join(f'{i} 0 R' for i in page_ids)}] /Count {len(page_ids)} >>").encode("latin-1"))

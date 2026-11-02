@@ -301,7 +301,7 @@ def plan_invention(input_data, sources, candidates, settings, use_llm=False):
         allowed = {key: row for key, row in pool.items() if row.get('selectable') is True}
         payload = dict(input=copy.deepcopy(data), sources=copy.deepcopy(sources), effective_purpose=purpose,
                        manual_anchors=copy.deepcopy(anchors),
-                       provided_classifications=[{key: copy.deepcopy(row[key]) for key in ('key', 'kind', 'code', 'title') if key in row}
+                       provided_classifications=[{key: copy.deepcopy(row[key]) for key in ('key', 'kind', 'code', 'title', 'path_title', 'reason') if key in row}
                                                  for row in allowed.values()])
         result = complete(copy.deepcopy(settings), INVENTION_SYSTEM, payload,
                           response_schema=response_schema(['invention_text', 'research_goal'] + [row['id'] for row in sources], list(allowed)))

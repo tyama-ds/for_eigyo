@@ -15,7 +15,7 @@ import re
 import unicodedata
 from urllib.parse import urlencode
 
-from classification_translations import label_fields
+from classification_translations import label_fields, _bundle
 
 _DATA = Path(__file__).resolve().parent / "resources" / "ipc" / "ipc_2026_01_en.json.gz"
 
@@ -112,11 +112,14 @@ def metadata() -> dict:
 
 @lru_cache(maxsize=1)
 def _titles() -> list[tuple[str, str]]:
-    return [(row[0], unicodedata.normalize("NFKC", row[1]).casefold()) for row in _catalog()[1].values()]
+    japanese = _bundle().get('records', {})
+    return [(row[0], unicodedata.normalize("NFKC", row[1] + ' ' +
+             japanese.get(row[0], {}).get('title_ja', '')).casefold().strip())
+            for row in _catalog()[1].values()]
 
 
 def search(kind: str, text: str, limit: int = 30) -> list[dict]:
-    """Search exact/code prefixes and English titles, using official parent context.
+    """Search exact/code prefixes and English/bundled Japanese official titles.
 
     Text words are ANDed (case-insensitive substring matching). At least one word
     must occur in the node's own title; remaining words may occur in ancestors.
@@ -153,7 +156,8 @@ def search(kind: str, text: str, limit: int = 30) -> list[dict]:
             missing = [word for word, found in zip(words, present) if not found]
             parent_code = rows[code][2]
             while parent_code is not None and missing:
-                title_parent = unicodedata.normalize("NFKC", rows[parent_code][1]).casefold()
+                title_parent = unicodedata.normalize("NFKC", rows[parent_code][1] + ' ' +
+                    _bundle().get('records', {}).get(parent_code, {}).get('title_ja', '')).casefold()
                 missing = [word for word in missing if word not in title_parent]
                 parent_code = rows[parent_code][2]
             if missing:

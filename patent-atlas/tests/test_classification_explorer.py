@@ -288,7 +288,7 @@ class ClassificationExplorerTests(unittest.TestCase):
         self.assert_rejected_atomically('/api/query', {'refine': True, 'include': ['battery'], 'exclude': []})
 
     def test_invalid_browse_and_busy_mutations_preserve_state(self):
-        for body in ({'kind': 'FI'}, {'direction': 'unknown'}, {'direction': 'children', 'code': 'invalid'}, {'direction': 'children', 'offset': -1}):
+        for body in ({'kind': 'USPC'}, {'direction': 'unknown'}, {'direction': 'children', 'code': 'invalid'}, {'direction': 'children', 'offset': -1}):
             with self.subTest(body=body):
                 self.assert_rejected_atomically('/api/classifications/browse', body)
         module.JOB['status'] = 'running'

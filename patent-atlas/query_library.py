@@ -1,7 +1,7 @@
 """Import prior search strategies without flattening their Boolean meaning.
 
 Editable imports deliberately cover Patent Atlas portable JSON and the explicit
-J-PlatPat subset /TX, /IP, /CP, /FT, [...], +, *, binary -. Mixed operators at the
+J-PlatPat subset /TX, /IP, /FI, /CP, /FT, [...], +, *, binary -. Mixed operators at the
 same bracket level need explicit grouping: this module does not guess precedence.
 All other expressions remain useful, immutable references. No input is executed.
 """
@@ -112,9 +112,9 @@ def _parse_jplatpat(text):
             return node
         if token in (']', '+', '*', '-'):
             raise ValueError('空の条件や単項NOTには対応していません。')
-        match = re.fullmatch(r'(.+)/(TX|IP|CP|FT)', token, re.I | re.S)
+        match = re.fullmatch(r'(.+)/(TX|IP|FI|CP|FT)', token, re.I | re.S)
         if not match:
-            raise ValueError('対応項目は /TX・/IP・/CP・/FT です。各語句・分類に項目を付けてください。')
+            raise ValueError('対応項目は /TX・/IP・/FI・/CP・/FT です。各語句・分類に項目を付けてください。')
         value, field = match[1].strip(), match[2].upper()
         if field == 'TX':
             if value[:1] in ('\"', "'"):
@@ -124,7 +124,7 @@ def _parse_jplatpat(text):
             elif re.search(r'\s', value):
                 raise ValueError('空白を含む句は引用符で囲んでください。単語への分割は行いません。')
             return {'op': 'text', 'value': value}
-        return _node_dict(_class(value, {'IP': 'IPC', 'CP': 'CPC', 'FT': 'F-term'}[field]))
+        return _node_dict(_class(value, {'IP': 'IPC', 'FI': 'FI', 'CP': 'CPC', 'FT': 'F-term'}[field]))
 
     def sequence(depth):
         nonlocal index

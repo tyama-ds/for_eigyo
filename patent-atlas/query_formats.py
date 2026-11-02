@@ -10,8 +10,8 @@ import re
 VERIFIED_AT = '2026-09-12'
 PROFILES = {
     'jplatpat': dict(name='J-PlatPat', interface='特許・実用新案検索 → 論理式入力', url='https://www.j-platpat.inpit.go.jp/p0100',
-        systems=['IPC','CPC','F-term'], text_scope='全文（/TX）。和文・英文の検索対象を検索画面で指定。',
-        class_note='IPCは /IP、CPCは /CP、F-termは /FT。通常の分類検索は下位階層も含みます。「指定コード」は完全一致の意味ではありません。上位IPCもセクション（B/IP）・クラス（B60/IP）・サブクラス（B60W/IP）の形で出力します。',
+        systems=['IPC','CPC','F-term','FI'], text_scope='全文（/TX）。和文・英文の検索対象を検索画面で指定。',
+        class_note='IPCは /IP、FIは /FI（展開記号は ,、分冊識別記号は @）、CPCは /CP、F-termは /FT。通常の分類検索は下位階層も含みます。「指定コード」は完全一致の意味ではありません。上位IPCもセクション（B/IP）・クラス（B60/IP）・サブクラス（B60W/IP）の形で出力します。',
         sources=[('J-PlatPat 論理式入力ヘルプ','https://www.j-platpat.inpit.go.jp/help/ja/p01/arithmetic.html'),
                  ('J-PlatPat 特許・実用新案検索ヘルプ（IPC検索項目）','https://www.j-platpat.inpit.go.jp/help/ja/p01/p0101.html#9994'),
                  ('特許庁 GXTI検索式のJ-PlatPat入力例（H02S/IP）','https://www.jpo.go.jp/resources/statistics/document/gxti/gxti_jplatpat.pdf')], language='ja_en', descendants=False),
@@ -136,6 +136,9 @@ def _literal(value):
 def _class(code, system):
     if not isinstance(code,str):
         raise ValueError('分類コードは文字列にしてください。')
+    if system == 'FI':
+        from fi_catalog import normalize
+        return Node('class', normalize(code), system)
     code=re.sub(r'\s+', '', code).upper()
     pattern=r'[A-HY]\d{2}[A-Z]\d{1,4}/\d{1,6}' if system=='CPC' else r'[A-H](?:\d{2}(?:[A-Z](?:\d{1,4}/\d{1,6})?)?)?' if system=='IPC' else r'\d[A-Z]\d{3}[A-Z]{2}\d{2}'
     if system not in ('IPC','CPC','F-term') or not re.fullmatch(pattern,code):
@@ -244,7 +247,7 @@ def _render(node, format_id, language, descendants):
                 return 'IC:("' + code + '")'
             raise ValueError('この検索サービスでは上位IPCの出力に対応していません。')
         if format_id=='jplatpat':
-            return code+{'IPC':'/IP','CPC':'/CP','F-term':'/FT'}[node.system]
+            return code+{'IPC':'/IP','CPC':'/CP','F-term':'/FT','FI':'/FI'}[node.system]
         if format_id=='derwent_innovation':
             display_code=re.sub(r'^([A-HY]\d{2}[A-Z])',r'\1 ',code) if node.system!='F-term' else code
             return {'IPC':'IC','CPC':'ACP','F-term':'FTC'}[node.system]+'=('+display_code+')'
