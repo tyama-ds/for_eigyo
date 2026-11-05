@@ -1272,8 +1272,17 @@ async function diagnoseLoadFailure(err) {
        ポータルの黒いウィンドウにも詳しい内容が出ています。この文言をそのまま伝えてもらえれば原因を特定できます。${retry}`);
     return;
   }
-  let alive = false;
-  try { alive = (await fetchWithTimeout("/api/ping", 3000)).ok; } catch {}
+  let ping = null;
+  try { ping = await fetchWithTimeout("/api/ping", 3000); } catch {}
+  if (ping && ping.status === 404) {
+    // v1.1.2 以前のポータルには /api/ping が無い。古いポータルが同じ番号で動き続けていて、要求がそちらに届いている
+    showLoadError("古いポータルがまだ動いています",
+      `${esc(location.port || "8770")} 番を、前に起動した古いポータル（v1.1.2 以前）が使い続けていて、要求がそちらに届いています。<br>
+       黒いウィンドウをすべて閉じ、それでも直らなければタスクマネージャーの「詳細」タブで <code>python.exe</code> と <code>py.exe</code> を終了してから、
+       <code>launcher\\start_portal.bat</code> で起動し直してください（v1.1.4 以降は、古いポータルが残っていても自動で引き継ぐか別の番号で起動します）。`);
+    return;
+  }
+  const alive = !!(ping && ping.ok);
   if (!alive) {
     showLoadError("ポータルのサーバーが止まっています",
       `黒いウィンドウ（ポータル本体）が閉じたか、起動していません。<code>launcher\\start_portal.bat</code> で起動し直してください。
