@@ -139,7 +139,7 @@
     {
       "id": "rag-orchestrator",
       "name": "RAG Orchestrator",
-      "description": "同一コーパス・同一質問を複数のRAG実装（GraphRAG/Vector/BM25/Hybrid + nano-graphrag/LightRAG）へ並列実行し、回答・出典・実行時間を比較して統合レポートを生成。ナレッジグラフ可視化つき。ローカルLLM（OpenAI互換）対応、BM25はLLMなしでも動作",
+      "description": "同一コーパス・同一質問を複数のRAG実装（GraphRAG/Vector/BM25/Hybrid/DecisionRAG + nano-graphrag/LightRAG）へ並列実行し、回答・出典・実行時間を比較して統合レポートを生成。ナレッジグラフ可視化つき。ローカルLLM（OpenAI互換）対応、BM25はLLMなしでも動作",
       "icon": "research",
       "cwd": "../rag-orchestrator",
       "command": [

@@ -38,6 +38,7 @@ python rag-orchestrator/server.py --port 9500 --open
 | **Vector RAG** | 組み込み | 埋め込みAPI | チャンク→埋め込み→コサイン top-k→生成（Naive RAG のベースライン） |
 | **BM25 RAG** | 組み込み | なし | 字句一致（BM25）→top-k→生成。LLM 未設定なら抜粋を返す |
 | **Hybrid RAG** | 組み込み | 埋め込みAPI | ベクトル + BM25 を RRF（Reciprocal Rank Fusion）で融合 |
+| **DecisionRAG** | 組み込み | チャットLLM（または Jev） | 検索器を使わず、文書 → 節 → 段落の階層を判定モデルでたどる（arXiv:2610.35868。下記） |
 | **nano-graphrag** | 外部・実験的 | `pip install nano-graphrag` ※Python 3.10〜3.12（graspologic→gensim 依存のため 3.13 不可） | [gusye1234/nano-graphrag](https://github.com/gusye1234/nano-graphrag)。約1,000行の GraphRAG 実装。グラフタブ表示対応 |
 | **LightRAG** | 外部・実験的 | `pip install lightrag-hku openai` | [HKUDS/LightRAG](https://github.com/HKUDS/LightRAG)。グラフ+ベクトル二層・増分更新。導入が軽い（gensim 不要）。グラフタブ表示対応 |
 | **MiniRAG** | 外部・実験的 | `pip install minirag-hku openai` | [HKUDS/MiniRAG](https://github.com/HKUDS/MiniRAG)（ACL2026）。小型ローカルLLM向け設計の異種グラフ RAG。mini / light / naive 検索。グラフタブ表示対応 |
@@ -45,6 +46,38 @@ python rag-orchestrator/server.py --port 9500 --open
 | **RAG-Anything** | 外部・実験的 | `pip install raganything openai` | [HKUDS/RAG-Anything](https://github.com/HKUDS/RAG-Anything)。LightRAG 基盤のマルチモーダル RAG。本アプリからはテキストコーパスを投入（PDF/画像/表の解析は MinerU の別途設定が必要）。グラフタブ表示対応 |
 
 日本語はチャンク分割（段落・句点境界）と CJK バイグラムのトークン化で形態素解析なしに扱う。
+
+## 組み込み DecisionRAG について
+
+Wan, Jünger, Du, Liu, Krishnan, Weinberger（Cornell University / ASAPP）
+"Retriever-Free Retrieval: Navigating Documents with Decision Models"
+（[arXiv:2610.35868](https://arxiv.org/abs/2610.35868)、2026）の方式。BM25 や埋め込みの第1段の検索器を使わず、
+図書館で棚を順にたどるように、コーパスの階層を判定モデルで上から下へたどる。論文では、課題向けの学習なしで
+密ベクトル検索＋8B リランカーを MultiDoc2Dial で R@1 +13.8、Natural Questions で Hit@1 +17.4 ポイント
+上回ったと報告されている（公開コードは無い）。
+
+```
+ingest:  チャンク分割 → 文書ごとの短い要約とキーワード（LLM。ノードの説明文になる）
+         → 階層: 文書 → 節（Markdown 見出しのまとまり）→ 段落
+           文書が 24 を超えるときは文書群の中間ノードを作る（埋め込みがあれば k-means、無ければ並び順）
+query:   各段で、残った枝の子をすべて同じ文脈に並べて一度に二値判定（関連する確率）
+         → 確率 0.3 以上を上位 4 本まで残して下の段へ（無ければ順位で上位を残す）
+         → 段落は閾値で切らず確率順 → 上位を選択式で比べて並べ替え → 回答生成
+```
+
+- 判定モデル（設定タブ → DecisionRAG）:
+  - **LLM**: 上の接続先に候補を並べて 0〜9 で採点させる。logprobs を返すサーバ（vLLM / llama.cpp server /
+    OpenAI など）では、採点の数字の確率分布から期待値を求めて確率として使う。返さないサーバでは数字をそのまま使う
+  - **Jev**: 論文で使われた TypeSafe の判定専用モデル。OpenRouter Decisions API の `noul`（yes/no の確率）を
+    候補ごとに、最後の並べ替えに `choice` を使う。OpenRouter の API キーが必要で、**コーパスの本文が外部へ送られる**。
+    既定のモデルは `typesafe/jev-1.14`（多言語の改善をうたう版。論文は 1.13）
+- 結果カードに「階層の経路」（各段で残った枝と確率）と判定回数を表示する
+- 各段で残す枝の数（既定 4）と、1質問あたりの判定回数の上限（既定 8）は設定で変えられる
+- インデックス構築では文書ごとに LLM を1回呼ぶ（説明文づくり）。説明文の質が判定の精度を左右するため
+- 1段目で外れた枝は二度とたどらない（論文の限界と同じ）。Hybrid など他のエンジンと並べて比べると違いが分かる
+- LLM で判定する場合は、論文のように1回の計算で全候補の確率を読むのではなく、数字を出力させて読む近似
+- [doc-vault](../doc-vault/) にも同じアルゴリズムを入れてある（あちらはフォルダ → 文書 → 節 → 段落の階層で、
+  社外秘 / 公開の区分によって判定モデルを使い分ける）。他の実装の調査は doc-vault の README を参照
 
 ## 組み込み GraphRAG について
 
@@ -188,7 +221,7 @@ python -m unittest discover -s tests -v
 ```
 
 - 実 LLM 不要。`tests/mock_llm.py` の決定論的モック（OpenAI 互換サーバ）を使用
-- ユニット（チャンク分割 / BM25 / コミュニティ検出 / GraphRAG ingest・query）+
+- ユニット（チャンク分割 / BM25 / コミュニティ検出 / GraphRAG ingest・query / DecisionRAG の階層・確率化・ナビゲーション・Jev）+
   API 統合（設定→取込→並列構築→並列質問→統合レポート、部分失敗、グラフAPI）
 
 ## 構成
@@ -207,6 +240,8 @@ ragcore/
   engines/
     graphrag.py         組み込み GraphRAG（本体）
     vector.py bm25.py hybrid.py   組み込みベースライン群
+    decision.py         DecisionRAG（階層の構築・判定・ビームでのナビゲーション）
+  jev.py                判定モデル Jev のクライアント（OpenRouter Decisions API）
     external.py         nano-graphrag / LightRAG アダプタ（実験的）
 sample_docs/            動作確認用の架空企業ドキュメント4本
 tests/                  ユニット + API 統合（モックLLM）

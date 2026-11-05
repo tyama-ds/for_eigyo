@@ -4,6 +4,7 @@
 const $ = (sel) => document.querySelector(sel);
 const ENGINE_COLORS = {
   graphrag: "#a78bfa", vector: "#5aa2ff", bm25: "#34d399", hybrid: "#f59e0b",
+  decision: "#f9a8d4",
   "nano-graphrag": "#f472b6", lightrag: "#f472b6", minirag: "#fb7185",
   hipporag: "#22d3ee", "rag-anything": "#c084fc",
 };
@@ -81,6 +82,7 @@ document.querySelectorAll(".tab").forEach((btn) => {
 // ---------------------------------------------------------------- settings
 
 const CFG_FIELDS = ["base_url", "model", "embed_model", "embed_base_url",
+  "decision_judge", "decision_beam", "decision_budget", "jev_endpoint", "jev_model",
   "context_window", "request_timeout", "max_tokens", "proxy_url"];
 
 async function loadConfig() {
@@ -90,6 +92,7 @@ async function loadConfig() {
   $("#s-api_key").placeholder = cfg.has_key
     ? "（設定済み。変更する場合のみ入力）" : "（未設定。不要なサーバでは空のまま）";
   $("#s-embed_api_key").placeholder = cfg.has_embed_key ? "（設定済み）" : "（空なら API Key を流用）";
+  $("#s-jev_api_key").placeholder = cfg.has_jev_key ? "（設定済み。変更する場合のみ入力）" : "（未設定）";
   updateConnBadge(cfg);
 }
 
@@ -105,8 +108,10 @@ $("#s-save").addEventListener("click", async () => {
   for (const f of CFG_FIELDS) body[f] = $(`#s-${f}`).value;
   if ($("#s-api_key").value) body.api_key = $("#s-api_key").value;
   if ($("#s-embed_api_key").value) body.embed_api_key = $("#s-embed_api_key").value;
+  if ($("#s-jev_api_key").value) body.jev_api_key = $("#s-jev_api_key").value;
   const cfg = await api("/api/config", body);
-  $("#s-api_key").value = ""; $("#s-embed_api_key").value = "";
+  $("#s-api_key").value = ""; $("#s-embed_api_key").value = ""; $("#s-jev_api_key").value = "";
+  $("#s-jev_api_key").placeholder = cfg.has_jev_key ? "（設定済み）" : "（未設定）";
   $("#s-msg").textContent = "✅ 保存しました";
   updateConnBadge(cfg);
   refreshEngines();
@@ -342,6 +347,8 @@ function renderQueryJob(job) {
         </div>
         ${thinkHtml(e.result.think)}
         <div class="answer">${renderText(e.result.answer || "")}</div>
+        ${eid === "decision" && e.result.stats && e.result.stats.route
+          ? `<div class="engine-stats">階層の経路: ${esc(e.result.stats.route)} ・ 判定 ${esc(e.result.stats.calls)} 回（${esc(e.result.stats.judge)}${e.result.stats.soft ? "・確率" : ""}${e.result.stats.choice ? "・選択式で並べ替え" : ""}）${e.result.stats.note ? " ・ " + esc(e.result.stats.note) : ""}</div>` : ""}
         ${cites ? `<div class="citations">${cites}</div>` : ""}
       </div>`);
     } else {

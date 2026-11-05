@@ -32,6 +32,13 @@ DEFAULT_CONFIG: dict = {
     # use_proxy=True で proxy_url 空なら環境変数（HTTP(S)_PROXY）を使う。
     "use_proxy": False,
     "proxy_url": "",
+    # DecisionRAG（arXiv:2610.35868）の判定モデル: llm（上の LLM）/ jev（OpenRouter の Jev）
+    "decision_judge": "llm",
+    "decision_beam": 4,        # 各段で残す枝の数
+    "decision_budget": 8,      # 1質問あたりの判定回数の上限
+    "jev_endpoint": "https://openrouter.ai/api/alpha/decisions",
+    "jev_api_key": "",
+    "jev_model": "typesafe/jev-1.14",
 }
 
 _lock = threading.Lock()
@@ -55,11 +62,15 @@ def load_config() -> dict:
 def save_config(new_cfg: dict) -> dict:
     """UI から受けた部分更新を検証してマージ・保存する。"""
     cfg = load_config()
-    for key in ("base_url", "model", "embed_model", "embed_base_url", "proxy_url"):
+    for key in ("base_url", "model", "embed_model", "embed_base_url", "proxy_url",
+                "jev_endpoint", "jev_model"):
         if key in new_cfg and isinstance(new_cfg[key], str):
             cfg[key] = new_cfg[key].strip()
     # api_key は空文字なら「変更なし」扱い（UI に平文を返さないため）
-    for key, clear_flag in (("api_key", "clear_api_key"), ("embed_api_key", "clear_embed_api_key")):
+    if new_cfg.get("decision_judge") in ("llm", "jev"):
+        cfg["decision_judge"] = new_cfg["decision_judge"]
+    for key, clear_flag in (("api_key", "clear_api_key"), ("embed_api_key", "clear_embed_api_key"),
+                            ("jev_api_key", "clear_jev_api_key")):
         if isinstance(new_cfg.get(key), str) and new_cfg[key].strip():
             cfg[key] = new_cfg[key].strip()
         if new_cfg.get(clear_flag):
@@ -68,7 +79,8 @@ def save_config(new_cfg: dict) -> dict:
         cfg["use_proxy"] = bool(new_cfg["use_proxy"])
     for key, lo, hi in (("context_window", 512, 1_000_000),
                         ("request_timeout", 5.0, 3600.0),
-                        ("max_tokens", 64, 32768)):
+                        ("max_tokens", 64, 32768), ("decision_beam", 1, 10),
+                        ("decision_budget", 2, 30)):
         if key in new_cfg:
             try:
                 val = float(new_cfg[key])
@@ -85,9 +97,10 @@ def save_config(new_cfg: dict) -> dict:
 
 def public_config(cfg: dict) -> dict:
     """api_key を伏せた、UI へ返してよい形。"""
-    out = {k: v for k, v in cfg.items() if k not in ("api_key", "embed_api_key")}
+    out = {k: v for k, v in cfg.items() if k not in ("api_key", "embed_api_key", "jev_api_key")}
     out["has_key"] = bool(cfg["api_key"])
     out["has_embed_key"] = bool(cfg["embed_api_key"])
+    out["has_jev_key"] = bool(cfg["jev_api_key"])
     return out
 
 

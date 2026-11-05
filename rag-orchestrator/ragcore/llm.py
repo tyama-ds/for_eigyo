@@ -16,6 +16,7 @@ import time
 import urllib.error
 import urllib.request
 
+_NO_LOGPROBS: set = set()        # logprobs を拒否した接続先（base_url, model）
 _THINK_BLOCK_RE = re.compile(r"<think(?:ing)?>(.*?)</think(?:ing)?>",
                              re.DOTALL | re.IGNORECASE)
 _THINK_OPEN_RE = re.compile(r"<think(?:ing)?>", re.IGNORECASE)
@@ -149,6 +150,42 @@ class LLMClient:
             self.stats["chat_prompt_chars"] += len(prompt) + len(system)
             self.stats["chat_completion_chars"] += len(text)
         return (text, think) if want_think else text
+
+    def chat_logprobs(self, prompt: str, *, system: str = "", max_tokens: int | None = None
+                      ) -> tuple[str, list | None]:
+        """(回答テキスト（think 未除去）, トークンごとの logprobs) を返す（DecisionRAG の確率化用）。
+
+        logprobs（上位候補つき）を要求し、サーバが受け付けなければ以後は要求せず通常の chat に戻る。
+        """
+        cfg = self.cfg
+        key = (cfg.get("base_url"), cfg.get("model"))
+        if key in _NO_LOGPROBS:
+            return self.chat(prompt, system=system, max_tokens=max_tokens), None
+        if not (cfg.get("base_url") and cfg.get("model")):
+            raise LLMError("LLM が未設定です（設定タブから Base URL / Model を登録してください）")
+        base = cfg["base_url"].rstrip("/")
+        messages = ([{"role": "system", "content": system}] if system else [])
+        messages.append({"role": "user", "content": prompt})
+        payload = {"model": cfg["model"], "messages": messages,
+                   "max_tokens": int(max_tokens or cfg.get("max_tokens") or 1600),
+                   "temperature": 0.0, "logprobs": True, "top_logprobs": 10}
+        try:
+            data = self._post_json(f"{base}/chat/completions", payload, cfg.get("api_key", ""))
+        except LLMError as e:
+            if "logprob" not in str(e).lower():
+                raise
+            _NO_LOGPROBS.add(key)
+            return self.chat(prompt, system=system, max_tokens=max_tokens), None
+        choices = data.get("choices") or []
+        choice = choices[0] if choices else {}
+        text = (choice.get("message") or {}).get("content") or ""
+        lp = choice.get("logprobs")
+        lp = lp.get("content") if isinstance(lp, dict) else None
+        with self._lock:
+            self.stats["chat_calls"] += 1
+            self.stats["chat_prompt_chars"] += len(prompt) + len(system)
+            self.stats["chat_completion_chars"] += len(text)
+        return text, (lp if isinstance(lp, list) and lp else None)
 
     # ------------------------------------------------------------ embeddings
     def embed(self, texts: list[str]) -> list[list[float]]:

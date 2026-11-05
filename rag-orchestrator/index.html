@@ -178,6 +178,40 @@
       <label class="field-label">Proxy URL（空なら環境変数 HTTP(S)_PROXY を使用）</label>
       <input type="text" id="s-proxy_url" placeholder="http://proxy.example:8080">
 
+      <h3>DecisionRAG（arXiv:2610.35868）</h3>
+      <p class="hint">検索器を使わず、文書→節→段落の階層を判定モデルでたどるエンジンの設定。</p>
+      <div class="row gap">
+        <div>
+          <label class="field-label">判定モデル</label>
+          <select id="s-decision_judge">
+            <option value="llm">LLM（上の接続先。logprobs があれば確率で読む）</option>
+            <option value="jev">Jev（論文で使われた判定モデル・OpenRouter 経由）</option>
+          </select>
+        </div>
+        <div>
+          <label class="field-label">各段で残す枝の数</label>
+          <input type="number" id="s-decision_beam" min="1" max="10">
+        </div>
+        <div>
+          <label class="field-label">判定回数の上限</label>
+          <input type="number" id="s-decision_budget" min="2" max="30">
+        </div>
+      </div>
+      <label class="field-label">Jev のエンドポイント（OpenRouter Decisions API）</label>
+      <input type="text" id="s-jev_endpoint" placeholder="https://openrouter.ai/api/alpha/decisions">
+      <div class="row gap">
+        <div class="grow">
+          <label class="field-label">OpenRouter の API キー</label>
+          <input type="password" id="s-jev_api_key" autocomplete="off">
+        </div>
+        <div class="grow">
+          <label class="field-label">Jev のモデル</label>
+          <input type="text" id="s-jev_model" placeholder="typesafe/jev-1.14">
+        </div>
+      </div>
+      <p class="hint">Jev を選ぶと、コーパスの本文（各段の候補の説明文）が外部サービスへ送られます。
+        Jev は英語が最も得意で、日本語は 1.14 で改善されたとされています。プロキシは上の設定を使います。</p>
+
       <div class="row gap top-space">
         <button class="btn primary" id="s-save">保存</button>
         <button class="btn" id="s-test">接続テスト</button>
