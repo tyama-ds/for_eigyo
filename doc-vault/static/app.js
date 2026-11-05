@@ -25,6 +25,10 @@ async function api(path, body) {
   return data;
 }
 
+const JUDGE_LABEL = { llm: "LLM", jev: "Jev", openrouter: "Jev（OpenRouter）", openai: "OpenAI",
+  azure: "Azure OpenAI" };
+const JUDGE_PROVIDERS = ["openai", "azure", "openrouter"];
+
 function esc(s) {
   return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;")
     .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -256,7 +260,7 @@ function messageHtml(m, idx) {
   if (route.retrieval) badges.push(meta.sensitivity === "internal"
     ? '<span class="badge internal">社外秘資料を含む</span>' : '<span class="badge public">公開資料のみ</span>');
   if (meta.decision && meta.decision.hits) {
-    const j = (meta.decision.judges || []).map((x) => x === "jev" ? "Jev" : "LLM").join("・");
+    const j = (meta.decision.judges || []).map((x) => JUDGE_LABEL[x] || x).join("・");
     badges.push(`<span class="badge decision" title="文書の階層を判定モデルでたどって探しました（判定 ${meta.decision.calls} 回）">DecisionRAG${j ? "・" + esc(j) : ""}</span>`);
   }
   if (meta.elapsed) badges.push(`<span class="muted">${meta.elapsed}秒</span>`);
@@ -275,7 +279,12 @@ function messageHtml(m, idx) {
         : "展開なし")
       + (p.backtracked ? `　※前の段の次点へ ${p.backtracked} 本戻った` : ""));
     if (lv.length) trace.push(`DecisionRAG（ビーム幅 ${meta.decision.beam ?? "-"}）の経路: ${lv.join(" ／ ")}`);
-    if (meta.decision.jev_cost) trace.push(`Jev の費用: $${meta.decision.jev_cost}`);
+    const a = meta.decision.api;
+    if (a && a.calls) {
+      trace.push(`判定 API（${esc(a.label)}）: ${a.calls} 回${a.cost ? `・$${a.cost}` : ""}`
+        + `${a.input_tokens ? `・入力 ${a.input_tokens.toLocaleString()} トークン` : ""}`
+        + `${a.refusals ? `・判定を断られた候補 ${a.refusals} 件` : ""}`);
+    } else if (meta.decision.jev_cost) trace.push(`Jev の費用: $${meta.decision.jev_cost}`);   // 以前の回答
   }
   if (meta.llm) trace.push(`LLM 呼び出し: ローカル ${meta.llm.calls.local} 回 / クラウド ${meta.llm.calls.cloud} 回`);
   const warns = (meta.warnings || []).map((w) => `<div class="warn-line">⚠ ${esc(w)}</div>`).join("");
@@ -855,11 +864,24 @@ async function loadSettings() {
   for (const k of RAG_BOOLS) $(`#r-${k}`).checked = !!cfg.rag[k];
   for (const k of RAG_NUMS) $(`#r-${k}`).value = cfg.rag[k];
   $("#r-decision_judge").value = cfg.rag.decision_judge || "llm";
-  for (const k of ["endpoint", "model", "proxy_url"]) $(`#j-${k}`).value = cfg.jev[k] || "";
-  $("#j-use_proxy").checked = !!cfg.jev.use_proxy;
-  $("#j-api_key").value = "";
-  $("#j-api_key").placeholder = cfg.jev.has_api_key ? "（設定済み。変更時のみ入力）" : "（未設定）";
-  $("#jev-box").open = cfg.rag.decision_judge === "jev";
+  const da = cfg.decision_api;
+  $("#da-provider").value = da.provider;
+  $("#da-timeout").value = da.timeout;
+  for (const prov of JUDGE_PROVIDERS) {
+    const sub = da[prov] || {};
+    for (const k of ["endpoint", "model", "proxy_url", "api_version"]) {
+      const el = $(`#da-${prov}-${k}`);
+      if (el) el.value = sub[k] || "";
+    }
+    $(`#da-${prov}-use_proxy`).checked = !!sub.use_proxy;
+    const allow = $(`#da-${prov}-allow_internal`);
+    if (allow) allow.checked = !!sub.allow_internal;
+    $(`#da-${prov}-api_key`).value = "";
+    $(`#da-${prov}-api_key`).placeholder = sub.has_api_key ? "（設定済み。変更時のみ入力）" : "（未設定）";
+  }
+  showJudgeProvider();
+  $("#da-test-result").textContent = "";
+  $("#judge-box").open = cfg.rag.decision_judge === "api";
   $("#up-sens").value = cfg.policy.default_sensitivity;
 }
 
@@ -876,15 +898,37 @@ async function saveSettings(quiet) {
   const rag = { decision_judge: $("#r-decision_judge").value };
   for (const k of RAG_BOOLS) rag[k] = $(`#r-${k}`).checked;
   for (const k of RAG_NUMS) rag[k] = Number($(`#r-${k}`).value);
-  const jev = { use_proxy: $("#j-use_proxy").checked };
-  for (const k of ["endpoint", "model", "proxy_url"]) jev[k] = $(`#j-${k}`).value;
-  if ($("#j-api_key").value) jev.api_key = $("#j-api_key").value;
-  const cfg = await api("/api/config", { profiles, policy, rag, jev });
+  const decision_api = { provider: $("#da-provider").value, timeout: Number($("#da-timeout").value) || 60 };
+  for (const prov of JUDGE_PROVIDERS) {
+    const sub = { use_proxy: $(`#da-${prov}-use_proxy`).checked };
+    for (const k of ["endpoint", "model", "proxy_url", "api_version"]) {
+      const el = $(`#da-${prov}-${k}`);
+      if (el) sub[k] = el.value;
+    }
+    const allow = $(`#da-${prov}-allow_internal`);
+    if (allow) sub.allow_internal = allow.checked;
+    if ($(`#da-${prov}-api_key`).value) sub.api_key = $(`#da-${prov}-api_key`).value;
+    decision_api[prov] = sub;
+  }
+  const cfg = await api("/api/config", { profiles, policy, rag, decision_api });
   state.config = cfg;
   if (!quiet) { $("#s-msg").textContent = "✅ 保存しました"; loadSettings(); }
   pollStatus();
 }
 $("#s-save").addEventListener("click", () => saveSettings(false));
+
+// 判定 API（Decisions API）: 接続先ごとの入力欄を切り替え、保存してから接続テスト
+function showJudgeProvider() {
+  for (const el of document.querySelectorAll(".judge-prov")) el.hidden = el.dataset.prov !== $("#da-provider").value;
+}
+$("#da-provider").addEventListener("change", showJudgeProvider);
+$("#da-test").addEventListener("click", async () => {
+  const out = $("#da-test-result");
+  out.textContent = "保存して判定中…";
+  await saveSettings(true);
+  const r = await api("/api/config/test", { judge_api: true });
+  out.textContent = `${r.ok ? "✅" : "❌"} ${r.message || r.error || ""}${r.url ? `（送り先: ${r.url}）` : ""}`;
+});
 $("#s-reindex").addEventListener("click", async () => {
   if (!confirm("全文書をテキスト抽出から処理し直します（LLM を多く呼びます）。よろしいですか？")) return;
   await saveSettings(true);

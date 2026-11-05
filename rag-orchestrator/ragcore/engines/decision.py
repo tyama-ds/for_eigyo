@@ -19,7 +19,8 @@ query（質問）:
 判定モデル（設定 decision_judge）:
   - llm: 設定の LLM に候補を並べて 0〜9 で採点させる。logprobs を返すサーバ（vLLM / llama.cpp /
          OpenAI 等）では採点の数字の確率分布から期待値を求める（≒ 確率）
-  - jev: 論文で使われた判定モデル Jev（OpenRouter Decisions API）。noul / choice を使う
+  - api: 判定 API（テキストを生成せず確率で答える判定モデル）。Jev（OpenRouter）/ OpenAI / Azure OpenAI の
+         Decisions API。二値判定は Jev が noul、OpenAI / Azure が predicate、選択式はどれも choice
 
 doc-vault/docvault/decision.py と同じアルゴリズム（あちらは フォルダ → 文書 → 節 → 段落 の階層で、
 社外秘 / 公開の区分による判定モデルの使い分けがある）。
@@ -31,14 +32,14 @@ import re
 import time
 from collections import Counter
 
-from .. import jev
+from .. import decision_api
 from ..llm import LLMError, strip_think
 from ..textutil import extract_json
 from .base import Engine, EngineContext, build_chunks, chunk_citation, generate_answer
 
 TOP_K = 6
 MAX_CHILDREN = 24          # 1ノードの子の上限（超えたら中間ノードに分ける）
-BATCH = 30                 # LLM 判定で1回に並べる候補数（Jev は 50）
+BATCH = 30                 # LLM 判定で1回に並べる候補数（判定 API は 50）
 DIRECT_CHUNKS = 8          # これ以下のチャンク数の文書は節を作らない
 MAX_CHOICE = 20            # 最後の選択式に出す段落数（論文の m）
 KIND_LABEL = {"group": "文書群", "doc": "文書", "section": "節", "chunk": "段落"}
@@ -182,11 +183,14 @@ class LLMJudge:
         return {i + 1: p for i, p in probs.items()}
 
 
-class JevJudge:
-    name, batch, soft = "jev", jev.MAX_PER_REQUEST, True
+class APIJudge:
+    """判定 API（Jev / OpenAI / Azure OpenAI の Decisions API）。name は接続先（openrouter / openai / azure）。"""
+
+    batch, soft = decision_api.MAX_PER_REQUEST, True
 
     def __init__(self, client):
         self.client = client
+        self.name = client.provider
 
     def binary(self, question: str, descs: list[str]) -> dict[int, float]:
         return self.client.binary(question, descs)
@@ -441,7 +445,7 @@ class DecisionRAGEngine(Engine):
     kind = "builtin"
     description = ("検索器を使わず、文書→節→段落の階層を判定モデルでたどる（arXiv:2610.35868）。"
                    "各段で候補を同じ文脈に並べて一度に判定し、上位の枝だけを下る。判定は LLM（logprobs で"
-                   "確率化）か Jev")
+                   "確率化）か判定 API（Jev・OpenAI・Azure OpenAI）")
     requires_chat = True
     requires_embed = False        # 埋め込みは任意（文書が多いときの文書群の分割に使う）
 
@@ -491,11 +495,12 @@ class DecisionRAGEngine(Engine):
     def query(self, index: dict, question: str, mode: str, ctx: EngineContext) -> dict:
         judge = None
         note = ""
-        if ctx.cfg.get("decision_judge") == "jev":
-            if jev.ready(ctx.cfg):
-                judge = JevJudge(jev.JevClient(ctx.cfg))
+        if ctx.cfg.get("decision_judge") == "api":
+            if decision_api.ready(ctx.cfg):
+                judge = APIJudge(decision_api.DecisionAPIClient(decision_api.effective(ctx.cfg)))
             else:
-                note = "Jev の API キーが未設定のため LLM で判定しました"
+                note = (f"判定 API（{decision_api.effective(ctx.cfg)['label']}）の"
+                        f"{decision_api.missing(ctx.cfg)}が未設定のため LLM で判定しました")
                 ctx.log(note)
         if judge is None:
             judge = LLMJudge(ctx.llm)
@@ -517,8 +522,15 @@ class DecisionRAGEngine(Engine):
                  "steps": len(res["path"]), "soft": res["soft"], "choice": res["choice"],
                  "trimmed": sum(lv["trimmed"] for lv in res["path"]),
                  "route": route[:300] or "（段落のみ）"}
-        if judge.name == "jev":
-            stats["jev_cost_usd"] = round(judge.client.cost, 6)
+        if isinstance(judge, APIJudge):
+            c = judge.client
+            stats["judge_api"] = c.label
+            if c.cost:
+                stats["api_cost_usd"] = round(c.cost, 6)
+            if c.input_tokens:
+                stats["api_input_tokens"] = c.input_tokens
+            if c.refusals:
+                stats["api_refusals"] = c.refusals
         if note:
             stats["note"] = note
         return {"answer": answer, "think": think, "mode": f"decision({judge.name})",

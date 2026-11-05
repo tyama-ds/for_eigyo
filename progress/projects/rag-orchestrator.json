@@ -38,7 +38,7 @@
       "date": "2026-11-05"
     },
     {
-      "title": "DecisionRAG エンジン（階層ナビゲーション・Jev 判定）",
+      "title": "DecisionRAG エンジン（階層ナビゲーション・判定 API: OpenAI / Azure OpenAI / Jev）",
       "state": "done",
       "date": "2026-11-05"
     },
@@ -48,7 +48,7 @@
     }
   ],
   "next": [
-    "DecisionRAG と Hybrid / GraphRAG を実コーパスで比較し、判定モデル（ローカル LLM / Jev）ごとの精度・時間を確認",
+    "DecisionRAG と Hybrid / GraphRAG を実コーパスで比較し、判定モデル（ローカル LLM / OpenAI・Azure OpenAI・Jev の判定 API）ごとの精度・時間を確認",
     "NRAExplorer の要否検討",
     "大規模コーパス向けにインデックス保存方式を見直す"
   ],
@@ -57,6 +57,10 @@
     "JSON 保存のため数万チャンク規模には向かない"
   ],
   "log": [
+    {
+      "date": "2026-11-05",
+      "summary": "DecisionRAG の判定 API に OpenAI・Azure OpenAI の Decisions API を追加（doc-vault と同じクライアント。接続先ごとに API キー・プロキシ、以前の Jev の設定は自動移行、接続テスト、結果カードに判定 API の使用量）。doc-vault の同じモジュールとずれないことを確かめるテストを追加"
+    },
     {
       "date": "2026-11-05",
       "summary": "Windows の起動用 start.bat を追加（ダブルクリックで起動してブラウザを開く・すでに起動していれば開くだけ）。Windows で2回起動すると同じポートに重ねて待ち受ける問題を修正"

@@ -23,6 +23,7 @@ BASE = Path(__file__).resolve().parent.parent
 CONFIG_FILE = BASE / "docvault.config.json"
 
 PROFILE_NAMES = ("local", "cloud")
+JUDGE_PROVIDERS = ("openrouter", "openai", "azure")
 PROVIDERS = ("openai", "azure", "anthropic")
 SECRET_KEYS = ("api_key", "embed_api_key")
 
@@ -52,14 +53,16 @@ DEFAULT_CONFIG: dict = {
         "cloud": {**DEFAULT_PROFILE, "provider": "anthropic", "model": "claude-opus-5-5",
                   "use_proxy": True},
     },
-    # 判定モデル Jev（TypeSafe）を OpenRouter Decisions API 経由で使う設定（公開文書の判定のみ）
-    "jev": {
-        "endpoint": "https://openrouter.ai/api/alpha/decisions",
-        "api_key": "",
-        "model": "typesafe/jev-1.14",
+    # DecisionRAG の判定 API（テキストを生成せず確率で答える判定モデル）。接続先ごとに設定を持ち、
+    # provider で使う先を選ぶ。endpoint・model が空なら既定値（decision_api.PROVIDERS）を使う。
+    # 外部サービスなので公開文書の候補だけを送る。Azure だけ allow_internal で社外秘も送れる
+    "decision_api": {
+        "provider": "openai",          # openrouter（Jev）/ openai / azure
         "timeout": 60.0,
-        "use_proxy": True,
-        "proxy_url": "",
+        "openrouter": {"endpoint": "", "api_key": "", "model": "", "use_proxy": True, "proxy_url": ""},
+        "openai": {"endpoint": "", "api_key": "", "model": "", "use_proxy": True, "proxy_url": ""},
+        "azure": {"endpoint": "", "api_key": "", "model": "", "api_version": "",
+                  "allow_internal": False, "use_proxy": True, "proxy_url": ""},
     },
     "policy": {
         # 新規取り込み文書の既定区分（迷ったら社外秘扱い）
@@ -81,7 +84,7 @@ DEFAULT_CONFIG: dict = {
         # DecisionRAG（arXiv:2610.35868）: 検索器を使わず、文書の階層（フォルダ→文書→節→段落）を
         # 判定モデルでたどる。自動モードでは事実・比較の質問に使い、Hybrid 検索と融合する
         "decision": True,
-        "decision_judge": "llm",   # 判定モデル: llm（ローカル/クラウドの LLM）/ jev（論文で使われた Jev）
+        "decision_judge": "llm",   # 判定モデル: llm（ローカル/クラウドの LLM）/ api（判定 API: Jev・OpenAI・Azure）
         "decision_beam": 4,        # 各段で残す枝の数（ビーム幅 k）
         "decision_budget": 8,      # 1質問あたりの判定（呼び出し）の上限
         "decision_choice": True,   # 最後に候補を選択式で並べ替える（論文の multiple-choice 段）
@@ -114,6 +117,23 @@ def _merge(base: dict, data: dict) -> dict:
     return out
 
 
+def _migrate(data: dict) -> dict:
+    """古い設定ファイルの読み替え: Jev 専用の "jev" ブロック → decision_api の openrouter。"""
+    if not isinstance(data, dict):
+        return {}
+    old = data.get("jev")
+    if isinstance(old, dict) and "decision_api" not in data:
+        sub = {k: old[k] for k in ("endpoint", "api_key", "model", "use_proxy", "proxy_url") if k in old}
+        api = {"provider": "openrouter", "openrouter": sub}
+        if isinstance(old.get("timeout"), (int, float)):
+            api["timeout"] = old["timeout"]
+        data = {**data, "decision_api": api}
+    rag = data.get("rag")
+    if isinstance(rag, dict) and rag.get("decision_judge") == "jev":
+        data = {**data, "rag": {**rag, "decision_judge": "api"}}
+    return data
+
+
 def load_config() -> dict:
     with _lock:
         data = {}
@@ -122,7 +142,7 @@ def load_config() -> dict:
                 data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 data = {}
-        return _merge(DEFAULT_CONFIG, data)
+        return _merge(DEFAULT_CONFIG, _migrate(data))
 
 
 def _clamp(val, lo, hi, cast):
@@ -186,23 +206,33 @@ def save_config(update: dict) -> dict:
                 val = _clamp(rag[key], lo, hi, int)
                 if val is not None:
                     cfg["rag"][key] = val
-        if rag.get("decision_judge") in ("llm", "jev"):
-            cfg["rag"]["decision_judge"] = rag["decision_judge"]
-    jev = update.get("jev") if isinstance(update, dict) else None
-    if isinstance(jev, dict):
-        for key in ("endpoint", "model", "proxy_url"):
-            if isinstance(jev.get(key), str):
-                cfg["jev"][key] = jev[key].strip()
-        if isinstance(jev.get("api_key"), str) and jev["api_key"].strip():
-            cfg["jev"]["api_key"] = jev["api_key"].strip()
-        if jev.get("clear_api_key"):
-            cfg["jev"]["api_key"] = ""
-        if "use_proxy" in jev:
-            cfg["jev"]["use_proxy"] = bool(jev["use_proxy"])
-        if "timeout" in jev:
-            val = _clamp(jev["timeout"], 5, 600, float)
+        judge = {"jev": "api"}.get(rag.get("decision_judge"), rag.get("decision_judge"))
+        if judge in ("llm", "api"):
+            cfg["rag"]["decision_judge"] = judge
+    api = update.get("decision_api") if isinstance(update, dict) else None
+    if isinstance(api, dict):
+        dst_api = cfg["decision_api"]
+        if api.get("provider") in JUDGE_PROVIDERS:
+            dst_api["provider"] = api["provider"]
+        if "timeout" in api:
+            val = _clamp(api["timeout"], 5, 600, float)
             if val is not None:
-                cfg["jev"]["timeout"] = val
+                dst_api["timeout"] = val
+        for name in JUDGE_PROVIDERS:
+            src = api.get(name)
+            if not isinstance(src, dict):
+                continue
+            dst = dst_api[name]
+            for key in ("endpoint", "model", "api_version", "proxy_url"):
+                if key in dst and isinstance(src.get(key), str):
+                    dst[key] = src[key].strip()
+            if isinstance(src.get("api_key"), str) and src["api_key"].strip():
+                dst["api_key"] = src["api_key"].strip()
+            if src.get("clear_api_key"):
+                dst["api_key"] = ""
+            for key in ("use_proxy", "allow_internal"):
+                if key in dst and key in src:
+                    dst[key] = bool(src[key])
     with _lock:
         CONFIG_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
     return cfg
@@ -215,8 +245,10 @@ def public_config(cfg: dict) -> dict:
         for key in SECRET_KEYS:
             prof[f"has_{key}"] = bool(prof.get(key))
             prof.pop(key, None)
-    out["jev"]["has_api_key"] = bool(cfg["jev"].get("api_key"))
-    out["jev"].pop("api_key", None)
+    for name in JUDGE_PROVIDERS:
+        sub = out["decision_api"][name]
+        sub["has_api_key"] = bool(sub.get("api_key"))
+        sub.pop("api_key", None)
     for name in PROFILE_NAMES:
         out["profiles"][name]["chat_ready"] = chat_ready(cfg, name)
         out["profiles"][name]["embed_ready"] = embed_ready(cfg, name)

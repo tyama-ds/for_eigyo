@@ -18,11 +18,14 @@ import re
 import time
 from typing import Iterator
 
-from . import db, decision, graph, jev
+from . import db, decision, decision_api, graph
 from .config import embed_space, load_config
 from .llm import LLM, LLMError, strip_think
 from .retrieval import INDEX, load_chunks
 from .textutil import BM25Index, as_str_list, extract_json, rrf_fuse
+
+JUDGE_LABELS = {"llm": "LLM", "jev": "Jev",
+                **{k: v["label"] for k, v in decision_api.PROVIDERS.items()}}
 
 ANSWER_SYSTEM = (
     "あなたは社内文書管理システムのアシスタントです。"
@@ -244,28 +247,32 @@ def retrieve(ctx: Ctx, plan: dict, allowed: set[str], doc_sens: dict[str, str]) 
     dec_rank: list[str] = []
     if ctx.cfg["rag"]["decision"] and strategy != "classic" and (
             strategy == "decision" or plan["type"] in ("fact", "compare")):
-        jev_client = None
-        if ctx.cfg["rag"].get("decision_judge") == "jev":
-            if jev.ready(ctx.cfg):
-                jev_client = jev.JevClient(ctx.cfg["jev"])
+        api_client = None
+        if ctx.cfg["rag"].get("decision_judge") == "api":
+            if decision_api.ready(ctx.cfg):
+                api_client = decision_api.DecisionAPIClient(decision_api.effective(ctx.cfg))
             else:
-                ctx.warnings.append("DecisionRAG の判定モデルに Jev が選ばれていますが、API キーが未設定です"
-                                    "（LLM で判定します）")
+                e = decision_api.effective(ctx.cfg)
+                ctx.warnings.append(f"DecisionRAG の判定モデルに判定 API（{e['label']}）が選ばれていますが、"
+                                    f"{decision_api.missing(ctx.cfg)} が未設定です（LLM で判定します）")
         beam = int(ctx.chat.get("decision_beam") or 0) or int(ctx.cfg["rag"]["decision_beam"])
         res = decision.navigate(ctx, q, allowed, k=k * 2, beam=beam,
                                 budget=int(ctx.cfg["rag"]["decision_budget"]),
                                 use_choice=bool(ctx.cfg["rag"].get("decision_choice", True)),
-                                jev_client=jev_client)
+                                api_client=api_client)
         ev["decision"] = {"path": res["path"], "calls": res["calls"], "soft": res["soft"],
                           "beam": res["beam"],
                           "hits": len(res["hits"]), "error": res["error"],
                           "choice": res["choice"], "judges": res["judges"],
-                          "jev_cost": res["jev_cost"]}
+                          "api": res["api"]}
         if res["error"]:
             ctx.warnings.append(f"DecisionRAG: {res['error']}")
+        if res["api"] and res["api"]["refusals"]:
+            ctx.warnings.append(f"DecisionRAG: {res['api']['label']} が {res['api']['refusals']} 件の候補の"
+                                "判定を断りました（関連なしとして扱いました）")
         route_txt = " → ".join("・".join(f"{x['title']}({x['path']})" for x in lv["kept"][:2])
                                for lv in res["path"] if lv.get("kept"))
-        judge_txt = "・".join({"llm": "LLM", "jev": "Jev"}[j] for j in res["judges"]) or "なし"
+        judge_txt = "・".join(JUDGE_LABELS.get(j, j) for j in res["judges"]) or "なし"
         ctx.step("DecisionRAG", f"ビーム幅 {res['beam']}・判定 {res['calls']} 回（{judge_txt}{'・確率' if res['soft'] else ''}"
                  f"{'・選択式で並べ替え' if res['choice'] else ''}）・段落 {len(res['hits'])} 件"
                  + (f": {route_txt}" if route_txt else ""))

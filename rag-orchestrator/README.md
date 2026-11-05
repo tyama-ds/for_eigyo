@@ -42,7 +42,7 @@ python rag-orchestrator/server.py --port 9500 --open
 | **Vector RAG** | 組み込み | 埋め込みAPI | チャンク→埋め込み→コサイン top-k→生成（Naive RAG のベースライン） |
 | **BM25 RAG** | 組み込み | なし | 字句一致（BM25）→top-k→生成。LLM 未設定なら抜粋を返す |
 | **Hybrid RAG** | 組み込み | 埋め込みAPI | ベクトル + BM25 を RRF（Reciprocal Rank Fusion）で融合 |
-| **DecisionRAG** | 組み込み | チャットLLM（または Jev） | 検索器を使わず、文書 → 節 → 段落の階層を判定モデルでたどる（arXiv:2610.35868。下記） |
+| **DecisionRAG** | 組み込み | チャットLLM（または判定 API: Jev・OpenAI・Azure OpenAI） | 検索器を使わず、文書 → 節 → 段落の階層を判定モデルでたどる（arXiv:2610.35868。下記） |
 | **nano-graphrag** | 外部・実験的 | `pip install nano-graphrag` ※Python 3.10〜3.12（graspologic→gensim 依存のため 3.13 不可） | [gusye1234/nano-graphrag](https://github.com/gusye1234/nano-graphrag)。約1,000行の GraphRAG 実装。グラフタブ表示対応 |
 | **LightRAG** | 外部・実験的 | `pip install lightrag-hku openai` | [HKUDS/LightRAG](https://github.com/HKUDS/LightRAG)。グラフ+ベクトル二層・増分更新。導入が軽い（gensim 不要）。グラフタブ表示対応 |
 | **MiniRAG** | 外部・実験的 | `pip install minirag-hku openai` | [HKUDS/MiniRAG](https://github.com/HKUDS/MiniRAG)（ACL2026）。小型ローカルLLM向け設計の異種グラフ RAG。mini / light / naive 検索。グラフタブ表示対応 |
@@ -73,9 +73,19 @@ query:   展開する枝の子をすべて同じ文脈に並べて一度に二�
 - 判定モデル（設定タブ → DecisionRAG）:
   - **LLM**: 上の接続先に候補を並べて 0〜9 で採点させる。logprobs を返すサーバ（vLLM / llama.cpp server /
     OpenAI など）では、採点の数字の確率分布から期待値を求めて確率として使う。返さないサーバでは数字をそのまま使う
-  - **Jev**: 論文で使われた TypeSafe の判定専用モデル。OpenRouter Decisions API の `noul`（yes/no の確率）を
-    候補ごとに、最後の並べ替えに `choice` を使う。OpenRouter の API キーが必要で、**コーパスの本文が外部へ送られる**。
-    既定のモデルは `typesafe/jev-1.14`（多言語の改善をうたう版。論文は 1.13）
+  - **判定 API**: テキストを生成せず確率で答える判定専用モデルの API（Decisions API）。候補ごとの「関連する確率」と、
+    最後の並べ替えの `choice` を使う。**コーパスの本文が外部へ送られる**。接続先は3つから選ぶ
+    （接続先ごとに API キー・プロキシを持つ。以前の Jev の設定は自動で「Jev（OpenRouter）」に移る）:
+
+    | 接続先 | 送り先 | 認証 | モデル | 二値判定 |
+    |---|---|---|---|---|
+    | OpenAI | `https://api.openai.com/v1/decisions` | `Authorization: Bearer` | `gpt-6-luna`（既定） | `predicate` |
+    | Azure OpenAI | `https://<リソース名>.openai.azure.com/openai/v1/decisions`（API バージョンを入れると `/openai/decisions?api-version=…`） | `api-key` ヘッダー | デプロイ名 | `predicate` |
+    | Jev（OpenRouter） | `https://openrouter.ai/api/alpha/decisions` | `Authorization: Bearer` | `typesafe/jev-1.14`（既定。論文は 1.13） | `noul` |
+
+    OpenAI / Azure の要求・応答の形は公式 Python SDK（openai 3.46）に合わせた（doc-vault のテストで SDK と照合）。
+    判定を断られた（refusal）候補は「関連なし」として扱い、件数を結果カードに出す。
+    設定タブの「判定 API の接続テスト」で、架空の候補 2 件の判定を 1 回試せる
 - 結果カードに「階層の経路」（展開した枝と経路スコア、前の段へ戻ったときは［戻り］）、ビーム幅、判定回数を表示する
 - ビーム幅（各段で残す枝の数、既定 4）は設定タブで、質問ごとには「質問・比較」タブの
   「DecisionRAG のビーム幅」で指定できる（空なら設定の値。API では `/api/query` の `beam`）
@@ -216,7 +226,7 @@ query:   global … コミュニティ要約への map-reduce（「全体とし�
 | Embed Model | 埋め込みモデル。空なら Model を流用。例 `nomic-embed-text` |
 | Embed Base URL / API Key | 埋め込みが別サーバの場合のみ。空なら Base URL / API Key を流用 |
 | プロキシ | OFF なら環境変数も無視して直結。ON で URL 空なら HTTP(S)_PROXY（Windows で未設定ならシステムのプロキシ設定）を使用 |
-| Jev のプロキシ | Jev（DecisionRAG の判定モデル・外部サービス）用に**別に**設定する（既定 ON・URL 空なら環境変数）。ローカル LLM は直結、Jev だけプロキシ経由、という使い方ができる |
+| 判定 API のプロキシ | 判定 API（DecisionRAG の判定モデル・外部サービス）用に接続先ごと**別に**設定する（既定 ON・URL 空なら環境変数）。ローカル LLM は直結、判定 API だけプロキシ経由、という使い方ができる |
 
 推論モデル（Qwen3 / DeepSeek-R1 系）の思考（`<think>…</think>` や `reasoning_content`）は
 回答から分離し、UI では「推論過程」として折りたたみ表示する（デフォルト非表示・▶で展開）。
@@ -230,7 +240,7 @@ python -m unittest discover -s tests -v
 ```
 
 - 実 LLM 不要。`tests/mock_llm.py` の決定論的モック（OpenAI 互換サーバ）を使用
-- ユニット（チャンク分割 / BM25 / コミュニティ検出 / GraphRAG ingest・query / DecisionRAG の階層・確率化・ナビゲーション・Jev）+
+- ユニット（チャンク分割 / BM25 / コミュニティ検出 / GraphRAG ingest・query / DecisionRAG の階層・確率化・ナビゲーション・判定 API の 3 接続先・doc-vault との一致）+
   API 統合（設定→取込→並列構築→並列質問→統合レポート、部分失敗、グラフAPI）
 
 ## 構成
@@ -250,7 +260,7 @@ ragcore/
     graphrag.py         組み込み GraphRAG（本体）
     vector.py bm25.py hybrid.py   組み込みベースライン群
     decision.py         DecisionRAG（階層の構築・判定・ビームでのナビゲーション）
-  jev.py                判定モデル Jev のクライアント（OpenRouter Decisions API）
+  decision_api.py       判定 API のクライアント（Jev / OpenAI / Azure OpenAI の Decisions API。doc-vault と同じ内容）
     external.py         nano-graphrag / LightRAG アダプタ（実験的）
 sample_docs/            動作確認用の架空企業ドキュメント4本
 tests/                  ユニット + API 統合（モックLLM）
