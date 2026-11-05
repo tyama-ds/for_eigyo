@@ -28,23 +28,32 @@ def _raw(value):
     return value
 
 
-def parse_fi(value):
+def parse_fi(value, *, allow_compact_suffix=False):
     """Consume FI entries completely, including comma expansion / @ identifiers.
 
     Commas preceding a complete IPC-shaped FI base separate entries; commas
     followed by three digits belong to the FI expansion. Invalid trailing text
     invalidates the field, rather than silently producing a partly parsed hit.
+    Manual input also retains its previously supported compact letter suffix.
     """
     text = unicodedata.normalize('NFKC', _raw(value)).strip().upper()
     if not text:
         return []
     base = r'[A-H]\s*\d{2}\s*[A-Z]\s*\d{1,4}\s*[/:]\s*\d{1,6}'
-    entry = re.compile(r'(' + base + r')(?P<suffix>(?:\s+\d{3})(?:\s*[A-Z](?=$|[\s,;、；|]))?|\s+[A-Z](?=$|[\s,;、；|])|(?:\s*,\s*\d{3})?(?:\s*@\s*[A-Z])?)')
+    letter = r'\s*@\s*[A-Z]'
+    if allow_compact_suffix:
+        letter = r'(?:' + letter + r'|\s*[A-Z](?=$|[\s,;、；|]))'
+    entry = re.compile(r'(' + base + r')(?P<suffix>(?:\s+\d{3})(?:\s*[A-Z](?=$|[\s,;、；|]))?|\s+[A-Z](?=$|[\s,;、；|])|(?:\s*,\s*\d{3})?(?:' + letter + r')?)')
     result, position = [], 0
     while position < len(text):
         match = entry.match(text, position)
         if not match:
             raise ValueError(f'FI の未解析部分があります: {text[position:position+50]}')
+        # Validate while the whole field is still being parsed. Otherwise an
+        # incomplete FI can escape extract()'s field-level error handling and
+        # prevent valid IPC/CPC/F-term fields from being used as well.
+        if ':' not in match[1]:
+            fi_catalog.normalize(match[0])
         position = match.end()
         version = re.match(r'\s*\(\d{4}\.\d{2}\)', text[position:])
         if version:

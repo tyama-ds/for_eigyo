@@ -41,13 +41,19 @@ def parse_codes(kind, text):
     """Consume every character; unknown suffixes must never be silently discarded."""
     if not isinstance(text, str) or len(text) > 12000:
         raise ValueError('分類は12,000文字以内で入力してください。')
+    if kind == 'FI':
+        # CSV/target extraction and manual seeds must consume printed FI
+        # expansion symbols in the same way, preserving the complete suffix.
+        entries = classification_bridge.parse_fi(text, allow_compact_suffix=True)
+        codes = list(dict.fromkeys(normalize('FI', entry['raw']) for entry in entries))
+        if len(codes) > 100:
+            raise ValueError('一度に追加できる分類は体系ごとに100件までです。')
+        return codes
     text = unicodedata.normalize('NFKC', text).strip().upper()
     section = '[A-HY]' if kind == 'CPC' else '[A-H]'
     pattern = section + r'(?:\s*\d{2}(?:\s*[A-Z](?:\s*\d{1,4}\s*/\s*\d{1,6})?)?)?' if kind != 'F-term' else r'\d[A-Z]\d{3}(?:\s*[A-Z]{2}\d{2})?'
     if kind == 'IPC':
         pattern = r'(?:[A-H]\s*\d{2}\s*[A-Z]\s*\d{10}|' + pattern + ')'
-    elif kind == 'FI':
-        pattern = r'[A-H]\s*\d{2}\s*[A-Z]\s*\d{1,4}\s*/\s*\d{2,6}(?:\s*,\s*\d{3})?(?:\s*@?\s*[A-Z](?![0-9]))?'
     out, pos = [], 0
     while pos < len(text):
         match = re.match(pattern, text[pos:])
