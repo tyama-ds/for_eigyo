@@ -19,59 +19,12 @@ FI_SOURCE = "https://www.jpo.go.jp/system/patent/gaiyo/bunrui/fi/f_i_kaisei.html
 FI_WARNING = "FIとIPCには版差があります。IPC部分の照合は関連候補であり、公報への付与IPCや正式な新旧対応を確認したものではありません。"
 
 
-def _raw(value):
-    if isinstance(value, list) and all(isinstance(item, str) for item in value):
-        value = "; ".join(value)
-    if not isinstance(value, str):
-        raise ValueError("分類欄は文字列または文字列配列で指定してください。")
-    if len(value) > 12000:
-        raise ValueError("分類欄は12,000文字以内で指定してください。")
-    return value
-
-
-def parse_fi(value, *, allow_compact_suffix=False):
-    """Consume FI entries completely, including comma expansion / @ identifiers.
-
-    Commas preceding a complete IPC-shaped FI base separate entries; commas
-    followed by three digits belong to the FI expansion. Invalid trailing text
-    invalidates the field, rather than silently producing a partly parsed hit.
-    Manual input also retains its previously supported compact letter suffix.
-    """
-    text = unicodedata.normalize("NFKC", _raw(value)).strip().upper()
-    if not text:
-        return []
-    base = r"[A-H]\s*\d{2}\s*[A-Z]\s*\d{1,4}\s*[/:]\s*\d{1,6}"
-    letter = r"\s*@\s*[A-Z]"
-    if allow_compact_suffix:
-        letter = r"(?:" + letter + r"|\s*[A-Z](?=$|[\s,;、；|]))"
-    entry = re.compile(
-        r"("
-        + base
-        + r")(?P<suffix>(?:\s+\d{3})(?:\s*[A-Z](?=$|[\s,;、；|]))?|\s+[A-Z](?=$|[\s,;、；|])|(?:\s*,\s*\d{3})?(?:"
-        + letter
-        + r")?)"
-    )
-    result, position = [], 0
-    while position < len(text):
-        match = entry.match(text, position)
-        if not match:
-            raise ValueError(f"FI の未解析部分があります: {text[position : position + 50]}")
-        # Validate while the whole field is still being parsed. Otherwise an
-        # incomplete FI can escape extract()'s field-level error handling and
-        # prevent valid IPC/CPC/F-term fields from being used as well.
-        if ":" not in match[1]:
-            fi_catalog.normalize(match[0])
-        position = match.end()
-        version = re.match(r"\s*\(\d{4}\.\d{2}\)", text[position:])
-        if version:
-            position += version.end()
-        result.append(dict(base=ipc_catalog.normalize_code(match[1]), raw=match[0].strip()))
-        if position < len(text):
-            delimiter = re.match(r"[\s,;、；|]+", text[position:])
-            if not delimiter:
-                raise ValueError(f"FI の未解析部分があります: {text[position : position + 50]}")
-            position += delimiter.end()
-    return result
+from fi_parser import _raw, parse_fi
+from classification_symbols import (
+    enrich as default_enrich,
+    parse_codes as default_parse_codes,
+    lookup as default_lookup,
+)
 
 
 @lru_cache(maxsize=4096)
@@ -114,7 +67,7 @@ def _theme_ipc_codes(theme):
     return tuple(codes)
 
 
-def extract(patent, *, strict=False):
+def extract(patent, *, strict=False, enrich=default_enrich, parse_codes=default_parse_codes, lookup=default_lookup):
     """Return detached items, warnings, errors; strict rejects malformed fields.
 
     Unknown explicit codes remain selectable seeds with unverified_metadata;
@@ -122,14 +75,12 @@ def extract(patent, *, strict=False):
     candidates are always dictionary-verified. `classification_origins` carries
     the same provenance as `origins` through later UI/lab-specific origin merges.
     """
-    import classification_explorer as explorer  # lazy to avoid a seed import cycle
-
     items, warnings, errors, fterms = {}, [], [], []
     patent_id = str(patent.get("id", ""))
 
     def add(kind, code, origin, status, reason):
         origin = dict(origin, patent_id=patent_id, label=str(patent.get("title", ""))[:300])
-        item = explorer.enrich(dict(kind=kind, code=code, origins=[origin], evidence_status=status, reason=reason))
+        item = enrich(dict(kind=kind, code=code, origins=[origin], evidence_status=status, reason=reason))
         old = items.get(item["key"])
         if old:
             if origin not in old["origins"]:
@@ -143,12 +94,12 @@ def extract(patent, *, strict=False):
     for kind, field in [("IPC", "ipc"), ("F-term", "fterm"), ("CPC", "cpc")]:
         try:
             raw = _raw(patent.get(field) or "")
-            codes = explorer.parse_codes(kind, raw)
+            codes = parse_codes(kind, raw)
         except ValueError as error:
             errors.append(f"{patent_id}: {kind}欄に未解析部分があるため、その欄を候補集計から除きました。{error}")
             continue
         for code in codes:
-            verified = explorer.lookup(kind, code) is not None
+            verified = lookup(kind, code) is not None
             add(
                 kind,
                 code,

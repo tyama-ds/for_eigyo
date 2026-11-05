@@ -23,6 +23,7 @@ MAX_TABLES = 4
 MAX_BYTES = 4 * 1024 * 1024
 _cache_path = None
 _cache = {}
+_revision = 0
 _lock = threading.RLock()
 
 # Display aids written for this app; these are not an official English F-term
@@ -49,8 +50,9 @@ FTERM_EN = {
 
 def configure_cache(data_dir):
     """Load only the dedicated display-caption cache; no credentials are stored."""
-    global _cache_path, _cache
+    global _cache_path, _cache, _revision
     with _lock:
+        _revision += 1
         _cache_path = Path(data_dir) / "ipc-japanese-captions.json"
         _cache = {}
         if _cache_path.is_file():
@@ -59,6 +61,12 @@ def configure_cache(data_dir):
                 _cache = {k: v for k, v in raw.items() if _valid_caption(k, v)}
             except (OSError, ValueError, TypeError, AttributeError):
                 _cache = {}
+
+
+def cache_token():
+    """Public projection dependency, including caption refreshes outside STATE."""
+    with _lock:
+        return _revision
 
 
 def _valid_caption(code, row):
@@ -204,6 +212,7 @@ def caption_records(rows, path, valid_codes, retrieved_at=None):
 
 def fetch_translations(codes, settings, cache_dir=None):
     """Explicit UI action: at most 48 known codes and four pages with short timeouts."""
+    global _revision
     import classification_catalog as catalog
 
     if not isinstance(codes, list) or not 1 <= len(codes) <= 48 or not all(isinstance(c, str) for c in codes):
@@ -252,6 +261,7 @@ def fetch_translations(codes, settings, cache_dir=None):
         if updates:
             with _lock:
                 _cache.update(updates)
+                _revision += 1
                 if _cache_path:
                     _cache_path.parent.mkdir(parents=True, exist_ok=True)
                     temp = _cache_path.with_suffix(".tmp")

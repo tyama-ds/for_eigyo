@@ -1,5 +1,8 @@
 """Practitioner workflow: invention evidence -> elements -> scoped search statements."""
 
+from workspace import Workspace
+from research_services import ResearchServices
+
 import copy
 import time
 import uuid
@@ -14,12 +17,12 @@ from invention_strategy import plan_invention, compose_invention_query
 from common import text_contains
 
 
-def register_invention_routes(app, context, services):
-    state, settings, lock = context["STATE"], context["SETTINGS"], context["LOCK"]
-    wb, rows = services["workbench"], services["source_patents"]
-    check_revision, commit = services["check_revision"], services["commit"]
-    fingerprint, checked_brief = services["fingerprint"], services["checked_brief"]
-    idle = context["idle"]
+def register_invention_routes(app, ws: Workspace, services: ResearchServices):
+    state, settings, lock = ws.state, ws.settings, ws.lock
+    wb, rows = services.workbench, services.source_patents
+    check_revision, commit = services.check_revision, services.commit
+    fingerprint, checked_brief = services.fingerprint, services.checked_brief
+    idle = ws.idle
 
     def candidate_pool(brief, patents, input_data):
         # Actual seed metadata first. Existing proposed classifications stay
@@ -123,7 +126,7 @@ def register_invention_routes(app, context, services):
             idle()
             if stamp != fingerprint((wb(), state["patents"])):
                 raise HTTPException(409, "要素分解中に調査条件・特許群が変わりました。前の案を保持しています。")
-            references = services["merge_target_references"](
+            references = services.merge_target_references(
                 wb()["target_patents"], [p for p in patents if p["id"] in brief["target_ids"]]
             )
 
@@ -153,7 +156,7 @@ def register_invention_routes(app, context, services):
             keyword_context=plan["brief"]["keywords"],
             invention_plan_id=plan["id"],
         )
-        query = services["enrich_query"](query)
+        query = services.enrich_query(query)
         warnings = list(query.pop("warnings", []))
         # This checks observed words only. It cannot claim DB recall or prove
         # whether a branch would match a patent's unavailable full text.
@@ -203,7 +206,7 @@ def register_invention_routes(app, context, services):
 
             def action():
                 state["keywords"] = wb()["brief"]["keywords"]
-                saved = services["save_query"](query, "発明要素からの検索式")
+                saved = services.save_query(query, "発明要素からの検索式")
                 saved["note"] = (
                     "選択した発明要素・観点・分類の括弧構造を保持した検索式です。要素単独と組合せの検索を区別します。"
                 )

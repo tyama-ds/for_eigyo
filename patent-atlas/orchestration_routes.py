@@ -1,5 +1,9 @@
 """One shared-job, resumable CSV workflow across manual exploration and the lab."""
 
+import classification_explorer as explorer
+from workspace import Workspace
+from services import Services
+
 import copy
 import json
 import time
@@ -9,43 +13,48 @@ from functools import wraps
 from fastapi import HTTPException
 
 from discovery_engine import analyze_patents, propose_plan
-from discovery_routes import merge_documents, new_discovery
+from discovery_services import merge_documents, new_discovery
 from orchestration_engine import (
     PROGRESS,
     checked_options,
     fingerprint,
     fresh_rows,
     new_orchestration,
-    recover,
     refresh_steps,
     summary,
 )
 from workspace_import import merge_patents
-from convergence_routes import record_result
+from convergence_services import record_result
 
 
-def register_orchestration_routes(app, context):
-    ws = context["ws"]
-    state, settings, lock = context["STATE"], context["SETTINGS"], context["LOCK"]
-    idle = context["idle"]
+def register_orchestration_routes(app, ws: Workspace, services: Services):
+    state, settings, lock = ws.state, ws.settings, ws.lock
+    idle = ws.idle
 
     def save():
-        return context["save"]()
+        return services.save()
 
-    stop = context["STOP"]
-    state["orchestration"] = recover(state.get("orchestration"))
+    stop = ws.stop
 
     def workspace():
         if not isinstance(state.get("orchestration"), dict):
             state["orchestration"] = new_orchestration()
         return state["orchestration"]
 
+    # These are the only keys make_query may mutate; patents/settings remain read-only.
+    query_keys = ("candidates", "selected", "queries", "research_workbench")
+    finish_keys = query_keys + ("convergence_tracking",)
+    discovery_keys = ("patents", "clusters", "discovery", "candidates", "selected", "classification_view")
+    refine_keys = tuple(dict.fromkeys(("discovery", "classification_view") + finish_keys))
+
     def atomic_request(action):
         @wraps(action)
         def wrapped(*args, **kwargs):
             with lock:
                 try:
-                    with ws.transaction(check_idle=False, persist=False, include_job=True):
+                    with ws.transaction(
+                        ("orchestration", "selected"), check_idle=False, persist=False, include_job=True
+                    ):
                         return action(*args, **kwargs)
                 except Exception as exc:
                     if not isinstance(exc, (ValueError, HTTPException)):
@@ -56,8 +65,8 @@ def register_orchestration_routes(app, context):
 
         return wrapped
 
-    def commit(operation):
-        with ws.transaction(check_idle=False, save=save):
+    def commit(operation, *, keys=()):
+        with ws.transaction(("orchestration",) + tuple(keys), check_idle=False, save=save):
             result = operation()
             value = workspace()
             value["summary"].update(summary(state["patents"]))
@@ -72,7 +81,7 @@ def register_orchestration_routes(app, context):
         if completed and completed not in value["completed_stages"]:
             value["completed_stages"].append(completed)
         value.update(stage=stage, progress=PROGRESS[stage], message=message, checkpoint=None)
-        context["progress"](value["progress"], message)
+        services.progress(value["progress"], message)
         log(value, message)
 
     def progress_for(start, end):
@@ -83,7 +92,7 @@ def register_orchestration_routes(app, context):
                     progress=round(start + max(0, min(100, percent)) / 100 * (end - start), 1), message=message
                 )
                 value["summary"].update(summary(state["patents"]))
-                context["progress"](value["progress"], message)
+                services.progress(value["progress"], message)
 
         return update
 
@@ -103,7 +112,7 @@ def register_orchestration_routes(app, context):
             archives = list(lab.get("archives", []))
             if lab.get("plan"):
                 archive_id = uuid.uuid4().hex
-                target = context["DATA"] / f"discovery-archive-{archive_id}.json"
+                target = ws.data_dir / f"discovery-archive-{archive_id}.json"
                 target.write_text(
                     json.dumps({k: v for k, v in lab.items() if k != "archives"}, ensure_ascii=False, allow_nan=False),
                     encoding="utf-8",
@@ -135,15 +144,15 @@ def register_orchestration_routes(app, context):
         return lab
 
     def evidence_candidates():
-        feedback = context["classification_feedback"](state["patents"], state["selected"])
+        feedback = services.classification_feedback(state["patents"], state["selected"])
         lab = state["discovery"]
-        pool = context["explorer"].merge_candidates(
+        pool = explorer.merge_candidates(
             state["candidates"],
             (lab.get("plan") or {}).get("candidate_hypotheses", [])
             + (lab.get("analysis") or {}).get("recommendations", [])
             + feedback["candidates"],
         )
-        context["set_classification_view"](
+        services.set_classification_view(
             pool,
             direction="seed",
             note="統括モードで公報・探索ラボ・判定結果を統合した候補です。分類の根拠を確認してください。",
@@ -151,9 +160,7 @@ def register_orchestration_routes(app, context):
             next_offset=None,
             trail=[],
         )
-        selectable = [
-            row for row in state["candidates"] if context["explorer"].enrich(row).get("selectable") is not False
-        ]
+        selectable = [row for row in state["candidates"] if explorer.enrich(row).get("selectable") is not False]
         selectable_keys = {row["kind"] + ":" + row["code"] for row in selectable}
         recommended = [key for key in feedback["recommended_keys"] if key in selectable_keys]
         selected = list(dict.fromkeys(state["selected"] + recommended[:30]))
@@ -162,10 +169,10 @@ def register_orchestration_routes(app, context):
         return selectable, selected
 
     def preview_query(selected, include=None, exclude=None):
-        before = ws.snapshot()
+        before = ws.snapshot(query_keys)
         try:
             return copy.deepcopy(
-                context["make_query"](
+                services.make_query(
                     refine=True,
                     classification_keys=selected,
                     include=include,
@@ -197,7 +204,7 @@ def register_orchestration_routes(app, context):
         log(value, value["message"])
 
     def finish_query(selected, include=None, exclude=None):
-        result = context["make_query"](
+        result = services.make_query(
             refine=True, classification_keys=selected, include=include, exclude=exclude, preserve_conditions=True
         )
         result["orchestration_id"] = workspace()["id"]
@@ -225,7 +232,7 @@ def register_orchestration_routes(app, context):
                             raise ValueError("対話で探索または同じテーマの探索ラボへCSVを取り込んでください。")
                         # Imported lab patents join the same map and the same judgment owner.
                         state["patents"] = rows
-                        clusters = context["map_patents"](rows, state["keywords"])
+                        clusters = services.map_patents(rows, state["keywords"])
                         state.update(patents=rows, clusters=clusters)
                         sync_lab()
                         candidates, selected = evidence_candidates()
@@ -234,17 +241,17 @@ def register_orchestration_routes(app, context):
                         if options["review"]:
                             checkpoint("classifications", candidates, selected)
                         else:
-                            state["selected"] = context["normalize_selection"](selected)
+                            state["selected"] = services.normalize_selection(selected)
                             transition("assess", "未判定の特許を確認します。", "classifications")
 
-                    commit(discover)
+                    commit(discover, keys=discovery_keys)
                     if workspace()["status"] == "review":
                         return
                 elif stage == "assess":
                     with lock:
                         pending = fresh_rows(state["patents"])
                     if options["judge"] and pending:
-                        context["run_llm_assessment"](
+                        services.run_llm_assessment(
                             dict(
                                 criteria=options["criteria"],
                                 max_items=options["max_items"],
@@ -268,7 +275,7 @@ def register_orchestration_routes(app, context):
                     )
                 elif stage == "train":
                     if options["learning"] != "none":
-                        context["run_model_training"](
+                        services.run_model_training(
                             options["learning"],
                             include_agent=options["include_agent"],
                             progress_callback=progress_for(70, 85),
@@ -288,7 +295,7 @@ def register_orchestration_routes(app, context):
                         else:
                             finish_query(selected)
 
-                    commit(refine)
+                    commit(refine, keys=refine_keys)
                     return
                 elif stage == "query":
                     commit(
@@ -296,7 +303,8 @@ def register_orchestration_routes(app, context):
                             workspace()["approved_query"]["selected_keys"],
                             workspace()["approved_query"]["include_terms"],
                             workspace()["approved_query"]["exclude_terms"],
-                        )
+                        ),
+                        keys=finish_keys,
                     )
                     return
                 else:
@@ -321,7 +329,7 @@ def register_orchestration_routes(app, context):
         value.update(status="running", error=None)
         refresh_steps(value)
         save()
-        return context["begin_job"](lambda: run_cycle(run_id), kind="orchestration", mode="cycle")
+        return services.begin_job(lambda: run_cycle(run_id), kind="orchestration", mode="cycle")
 
     @app.post("/api/orchestration/start")
     @atomic_request
@@ -385,14 +393,14 @@ def register_orchestration_routes(app, context):
             if value["status"] == "review":
                 review = value["checkpoint"]
                 defaults = list(dict.fromkeys(state["selected"] + review["selected_keys"]))
-                selected = context["normalize_selection"](body.get("selected_keys", defaults))
+                selected = services.normalize_selection(body.get("selected_keys", defaults))
                 # The checkpoint form is a stable editing draft. A selection made
                 # in another tab after its creation must not disappear merely
                 # because that stale form does not submit the newly selected key.
                 baseline = set(review.get("selection_baseline", review["selected_keys"]))
                 added_elsewhere = [key for key in state["selected"] if key not in baseline]
                 preserved = [key for key in added_elsewhere if key not in selected]
-                selected = context["normalize_selection"](list(dict.fromkeys(selected + added_elsewhere)))
+                selected = services.normalize_selection(list(dict.fromkeys(selected + added_elsewhere)))
                 if preserved:
                     log(value, "確認待ちの間に他タブで追加した分類を保持しました: " + "、".join(preserved))
                 if review["type"] == "classifications":
@@ -411,14 +419,14 @@ def register_orchestration_routes(app, context):
     def stop_orchestration():
         with lock:
             value = workspace()
-            if context["JOB"].get("status") == "running" and context["JOB"].get("kind") == "orchestration":
+            if ws.job.get("status") == "running" and ws.job.get("kind") == "orchestration":
                 stop.set()
-                context["JOB"]["stop_requested"] = True
+                ws.job["stop_requested"] = True
                 value["message"] = "停止を要求しました。処理中の応答が戻ると停止します。"
             elif value["status"] == "review":
                 value["message"] = "確認待ちです。編集内容を確認して再開できます。"
             save()
-        return context["public_state"]()
+        return services.public_state()
 
     @app.post("/api/orchestration/reset")
     def reset_orchestration():
@@ -433,4 +441,4 @@ def register_orchestration_routes(app, context):
                 state["orchestration"] = value
 
             commit(reset)
-        return context["public_state"]()
+        return services.public_state()

@@ -1,5 +1,9 @@
 """An evidence workspace for discovery; manual selections and labels stay owned by their UI."""
 
+import classification_explorer as explorer
+from workspace import Workspace
+from services import Services
+
 import copy
 import json
 import math
@@ -15,73 +19,27 @@ from analysis_engine import parse_csv
 from discovery_engine import propose_plan, analyze_patents, validate_llm_plan
 from patent_search import search_ops
 from prompt_templates import DISCOVERY_SYSTEM
-from common import normalize_publication_id, tokenize_keywords
+from common import tokenize_keywords
 
 
-def new_discovery():
-    return dict(
-        id=uuid.uuid4().hex,
-        plan=None,
-        analysis=None,
-        patents=[],
-        rounds=[],
-        logs=[],
-        status="idle",
-        mode="csv",
-        last_error=None,
-        archives=[],
-    )
+from discovery_services import (
+    new_discovery,
+    public_discovery as public_discovery,
+    _document_key as _document_key,
+    merge_documents,
+)
 
 
-def public_discovery(value):
-    if not isinstance(value, dict):
-        return None
-    return {**{k: v for k, v in value.items() if k != "patents"}, "document_count": len(value.get("patents", []))}
-
-
-def _document_key(row):
-    return normalize_publication_id(row["id"])
-
-
-def merge_documents(existing, incoming, source, live_labels=False):
-    """Accumulate publications, and refresh human decisions only from their owner."""
-    rows = {_document_key(row): copy.deepcopy(row) for row in existing}
-    before = set(rows)
-    for incoming_row in incoming:
-        row = copy.deepcopy(incoming_row)
-        key = _document_key(row)
-        old = rows.get(key, {})
-        merged = {**old, **{k: v for k, v in row.items() if v not in ("", None)}}
-        merged["id"] = old.get("id") or row["id"]
-        if old.get("label_source") == "human" and not live_labels:
-            for field in ("label", "label_source", "label_reason"):
-                merged[field] = old.get(field)
-        if live_labels:
-            for field in ("label", "label_source", "label_reason"):
-                merged[field] = row.get(field)
-        merged.setdefault("source", source)
-        merged["synthetic"] = bool(old.get("synthetic") or row.get("synthetic") or str(row["id"]).startswith("DEMO-"))
-        origins = list(old.get("discovery_sources", []))
-        if source not in origins:
-            origins.append(source)
-        merged["discovery_sources"] = origins[-20:]
-        rows[key] = merged
-    if len(rows) > 5000:
-        raise ValueError("探索ラボの蓄積上限は5,000公報です。結果を書き出し、新しい計画を作成してください。")
-    return list(rows.values()), len(set(rows) - before)
-
-
-def register_discovery_routes(app, context):
-    ws = context["ws"]
-    state, settings, lock = context["STATE"], context["SETTINGS"], context["LOCK"]
-    save, idle, public_state = context["save"], context["idle"], context["public_state"]
-    stop_event = context["STOP"]
+def register_discovery_routes(app, ws: Workspace, services: Services):
+    state, settings, lock = ws.state, ws.settings, ws.lock
+    save, idle, public_state = services.save, ws.idle, services.public_state
+    stop_event = ws.stop
 
     @contextmanager
     def atomic_workspace(*fields):
         archives_to_write = []
         try:
-            with ws.transaction(fields, save=context["save"]):
+            with ws.transaction(fields, save=services.save):
                 yield archives_to_write
         except Exception as error:
             if isinstance(error, (ValueError, HTTPException)):
@@ -137,10 +95,10 @@ def register_discovery_routes(app, context):
 
     @app.post("/api/discovery/plan")
     def create_plan(body: dict):
-        topic = context["checked_text"](body.get("keywords", ""), 2000)
+        topic = services.checked_text(body.get("keywords", ""), 2000)
         if not topic:
             raise ValueError("探索する技術を入力してください。")
-        english = context["checked_text"](body.get("english_terms", ""), 1000)
+        english = services.checked_text(body.get("english_terms", ""), 1000)
         # Validate user vocabulary before an optional paid/network model call.
         additions = tokenize_keywords(english, split_spaces=False, limit=None)
         if len(additions) > 8 or any(
@@ -161,14 +119,14 @@ def register_discovery_routes(app, context):
             connection = settings.copy()
         llm_plan = None
         if use_llm:
-            llm_plan = context["complete"](connection, DISCOVERY_SYSTEM, {"keywords": topic, "english_terms": english})
+            llm_plan = services.complete(connection, DISCOVERY_SYSTEM, {"keywords": topic, "english_terms": english})
             validate_llm_plan(llm_plan)
         plan = propose_plan(topic, candidates, patents, llm_plan=llm_plan, manual_english_terms=additions)
         if use_llm:
             import classification_planner
 
             reviewed, rejected = classification_planner.review(
-                topic, plan["retrieval_elements"], plan["candidate_hypotheses"], connection, context["complete"]
+                topic, plan["retrieval_elements"], plan["candidate_hypotheses"], connection, services.complete
             )
             plan["candidate_hypotheses"] = reviewed
             plan["unresolved_elements"] = classification_planner.unresolved(plan["retrieval_elements"], reviewed)
@@ -187,7 +145,7 @@ def register_discovery_routes(app, context):
             archives = list(old.get("archives", []))
             if old.get("plan"):
                 archive_id = uuid.uuid4().hex
-                target = context["DATA"] / f"discovery-archive-{archive_id}.json"
+                target = ws.data_dir / f"discovery-archive-{archive_id}.json"
                 archived = {k: v for k, v in old.items() if k != "archives"}
                 archives_to_write.append((target, json.dumps(archived, ensure_ascii=False, allow_nan=False)))
                 archives.append(
@@ -269,8 +227,8 @@ def register_discovery_routes(app, context):
                     if ids
                     else "探索ラボの辞書仮説。関連特許で裏付けてから選んでください。"
                 )
-                items.append(context["explorer"].enrich(item))
-            context["set_classification_view"](
+                items.append(explorer.enrich(item))
+            services.set_classification_view(
                 items,
                 direction="seed",
                 note="探索ラボから追加した候補です。検索に使う分類を選んでください。",
@@ -290,7 +248,7 @@ def register_discovery_routes(app, context):
                     a["id"] == archive_id for a in value.get("archives", [])
                 ):
                     raise HTTPException(404, "保存した計画が見つかりません。")
-                target = context["DATA"] / f"discovery-archive-{archive_id}.json"
+                target = ws.data_dir / f"discovery-archive-{archive_id}.json"
                 if not target.is_file():
                     raise HTTPException(404, "保存した計画ファイルが見つかりません。")
                 text = target.read_text(encoding="utf-8")
@@ -362,7 +320,7 @@ def register_discovery_routes(app, context):
                     for query in batch:
                         if stop_event.is_set():
                             break
-                        context["progress"](
+                        services.progress(
                             int(90 * performed / limits["max_queries"]),
                             f"探索ラボ: {performed + 1}/{limits['max_queries']} 検索",
                         )
@@ -427,4 +385,4 @@ def register_discovery_routes(app, context):
                     save()
                 raise
 
-        return context["begin_job"](action)
+        return services.begin_job(action)

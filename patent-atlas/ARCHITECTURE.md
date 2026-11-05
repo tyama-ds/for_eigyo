@@ -1,10 +1,10 @@
-# Patent Atlas 設計の正本（Phase 3b）
+# Patent Atlas 設計の正本（Phase 3c）
 
 - 棚卸し日: 2026-11-05
-- 対象: `tyama-ds/for_eigyo` の `patent-atlas/`、Phase 1完了時点 `87e87e8` の棚卸しをPhase 3bの実装に合わせて更新
+- 対象: `tyama-ds/for_eigyo` の `patent-atlas/`、Phase 1完了時点 `87e87e8` の棚卸しをPhase 3cの実装に合わせて更新
 - 状態: **現状と目標を区別する。6項目の目標とPhase 3での扱いは利用者が確定済み。**
 - 6項目の判断者: 利用者（本会話）　確定日: 2026-11-05
-- Phase 3a（共通ヘルパー）と3b（Workspace）を実装済み。3c（注入・依存の整理）は未着手。設定値、保存形式・保存データ、CSS、既存文書の配置を変更しない。
+- Phase 3a（共通ヘルパー）、3b（Workspace）、3c（明示的なサービス注入・依存の整理・公開状態キャッシュ・統括の部分復元）を実装済み。APIの入出力、設定値、保存形式・保存データ、CSS、既存文書の配置を変更しない。
 
 ## 1. 現状
 
@@ -18,9 +18,9 @@ FastAPIを起点とするローカル単一ユーザーアプリで、HTML/CSS/J
 |---|---|---|
 | Pythonの `STATE` | `ws.state` と同一の可変dictを指す互換名。特許、検索式、分類、各モードの計画・履歴を保持 | [workspace.py](workspace.py): `Workspace`、[app.py](app.py): `ws`, `STATE` |
 | Pythonの `SETTINGS` | `ws.settings` と同一dictを指す互換名。LLM、プロキシ、OPS、モデル、分類配置など。`STATE`のキーではない | `app.py`: `DEFAULT_SETTINGS`, `settings`、`workspace.py` |
-| Pythonの `JOB` / `STOP` / `LOCK` | `JOB` / `LOCK` は `ws.job` / `ws.lock` の互換参照。STOPは従来どおり停止イベント。`begin_job` がデーモンスレッドを起動 | `workspace.py`: `idle` / `transaction`、`app.py`: `begin_job`, `progress` |
+| Pythonの `JOB` / `STOP` / `LOCK` | `ws.job` / `ws.stop` / `ws.lock` の互換参照。STOPは従来どおり停止イベント。`begin_job` がデーモンスレッドを起動 | `workspace.py`: `idle` / `transaction`、`app.py`: `begin_job`, `progress` |
 | `workspace.json` | `{"state": STATE, "settings": 非秘密設定}`。保存先は従来と同じ `PATENT_ATLAS_DATA`、未指定時は `data/`。DATAは `ws.data_dir` の互換参照 | `workspace.py`: `load`, `to_dict`, `save`。`app.py:save` は委譲 |
-| `/api/state` の返り値 | 従来と同じ表示用データ。ロック下で分類/収束等を投影し、秘密設定の有無・ジョブ進捗を加えてコピーを返す | `workspace.py:public_state`、`app.py:_public_workspace` / `public_state` |
+| `/api/state` の返り値 | 従来と同じ表示用JSON。ロック下で変更を検出し、分類/収束・秘密設定の有無・ジョブ進捗を含む投影とJSONバイト列を再利用する | `workspace.py:public_state_json`、`app.py:_public_workspace` / `get_state`。dict返却用 `public_state` は独立したコピーを返す |
 | ブラウザー内 `state` | 上記API応答。PythonのSTATEと同じキー集合・オブジェクトではない | [static/app.js](static/app.js): `init`, `refreshJob` |
 | UI下書き・表示状態 | `classDraft`, `learningDraft`, `discoveryDraft`, `researchDraft`, `inventionPlanDraft`, `atlasProjection` など。編集だけではサーバーへ保存されない | 各 `static/*-ui.js`, `research-workbench.js`, `invention-workbench.js`, `projection-ui.js` |
 | ブラウザー保存 | 調査・発明の下書きは `sessionStorage`。出力形式・分類言語・動作表示などの設定は `localStorage`。全UI下書きが永続化されるわけではない | [static/research-draft-store.js](static/research-draft-store.js)、`static/app.js`, `classification-ui.js`, `atlas-motion.js` |
@@ -29,18 +29,18 @@ FastAPIを起点とするローカル単一ユーザーアプリで、HTML/CSS/J
 
 ### 1.2 STATEの既知トップレベルキー17個と書き込み元
 
-`app.py` がWorkspaceへ渡す初期 `state=dict(...)` は13キー。ルート登録で `orchestration` と `research_workbench` が加わり、取込・記録・デモ操作などで `search_result` と `convergence_tracking` が加わる。したがって、通常処理で扱う既知キーは17個だが、新規起動直後から17個すべてが存在するとは限らない。`Workspace.load()` の `state.update(...)` は未知キーを除去しないので、厳密な17キーのスキーマ検証もない。
+`app.py` がWorkspaceへ渡す初期 `state=dict(...)` は13キー。`Workspace.load(initialize_workflows=True)` の後処理で `orchestration` と `research_workbench` を初期化・復旧し、取込・記録・デモ操作などで `search_result` と `convergence_tracking` が加わる。ルート登録そのものはSTATEを変更しない。通常処理で扱う既知キーは17個だが、新規起動直後から17個すべてが存在するとは限らない。`Workspace.load()` の `state.update(...)` は未知キーを除去しないので、厳密な17キーのスキーマ検証もない。
 
 表の列は `.py` を省略したモジュール名。**直**はモジュール内の代入・リスト操作・参照先dictの変更、**間**は共有サービスを呼び出した結果の変更、**—**は通常処理での書き込みなし。全STATEのロード、トランザクションの復元、一時プレビューの復元は全キーに触れ得るため、この表の通常の書き込みとは分ける。
 
 | キー | 内容・代表的な書き込み箇所 | app | discovery_routes | orchestration_routes | convergence_routes | research_routes | invention_routes |
 |---|---|:---:|:---:|:---:|:---:|:---:|:---:|
 | `keywords` | 手動探索のテーマ。`candidates`, `update_keywords`, `demo`、調査・発明の `apply` | 直 | — | — | — | 直 | 直 |
-| `candidates` | 共有分類候補。`set_classification_view`, `make_query`, `agent`; 調査の `save_query` | 直 | 間 | 間 | — | 直・間 | 間 |
-| `selected` | 選択済み `kind:code`。`selection`, `classification_seeds`, `make_query`; 統括の `discover` / `resume`; 調査の `save_query` | 直 | 間 | 直・間 | — | 直・間 | 間 |
+| `candidates` | 共有分類候補。`set_classification_view`, `make_query`, `agent`; 調査の `save_query` | 直 | 間 | 間 | — | 間 | 間 |
+| `selected` | 選択済み `kind:code`。`selection`, `classification_seeds`, `make_query`; 統括の `discover` / `resume`; 調査の `save_query` | 直 | 間 | 直・間 | — | 間 | 間 |
 | `patents` | 現在の検索結果と行の判定・スコア・標準地図座標。取込、ラベル変更、学習、統括の統合、保留確認、ターゲット追加 | 直 | — | 直・間 | 直 | 直 | — |
 | `clusters` | `map_patents` のクラスタ集計。CSV取込、デモ、統括の統合、ターゲット追加 | 直 | — | 直 | — | 直 | — |
-| `queries` | 保存済み検索式の履歴。`make_query`、調査の `save_query`、デモ時リセット | 直 | — | 間 | — | 直 | 間 |
+| `queries` | 保存済み検索式の履歴。`make_query`、調査の `save_query`、デモ時リセット | 直 | — | 間 | — | 間 | 間 |
 | `training` | 学習・LLM判定のモード、件数、状態、評価等。ラベル変更時の無効化や追加データの印も含む | 直 | — | 間 | 直 | 直 | — |
 | `agent_log` | 判断エージェントの実行ログ。`agent.log`、デモ時リセット | 直 | — | — | — | — | — |
 | `demo` | 架空データ表示用フラグ。`upload`, `demo` | 直 | — | — | — | — | — |
@@ -51,14 +51,14 @@ FastAPIを起点とするローカル単一ユーザーアプリで、HTML/CSS/J
 | `orchestration` | 統括の工程、オプション、確認待ち、再開情報、ログ | — | — | 直 | — | — | — |
 | `research_workbench` | 調査条件、観点案、発明要素案、参照特許、過去式、採用記録。`make_query` は `active_query_id` も更新する | 直 | — | 間 | — | 直 | 直・間 |
 | `search_result` | 直近の取込観測と、そのときのテーマ・式・公報キー。`upload` が `new_observation` の結果を格納 | 直 | — | — | — | — | — |
-| `convergence_tracking` | テーマ別の反復記録・完了時刻・過去記録。`record_result`, `review`, `complete`、デモ時リセット | 直 | — | 間 | 直 | — | — |
+| `convergence_tracking` | テーマ別の反復記録・完了時刻・過去記録。`record_result`, `review`, `complete`、デモ時リセット | 直 | — | 間 | 直・間 | — | — |
 
 間接書き込みの主な経路は次のとおり。
 
 - 探索ラボの `adopt` → `app.py:set_classification_view`。候補を共有表示へ渡すが、新しい候補を自動選択する処理ではない。既存選択は正規化される。
-- 統括 → `set_classification_view`, `make_query`, `run_llm_assessment`, `run_model_training`, `convergence_routes.py:record_result`。
+- 統括 → `set_classification_view`, `make_query`, `run_llm_assessment`, `run_model_training`, `convergence_services.py:record_result`。
 - 調査の `save_query` → `classification_overview` → `set_classification_view`。
-- 発明の `apply` → 注入された `research_routes.py:save_query` / `commit`。`wb()` は同じ `research_workbench` の参照を返すため、発明ルートからの `wb().update(...)` は実STATEの変更である。
+- 調査・発明の `apply` → 注入された `research_services.py:ResearchServices.save_query` / `commit`。`wb()` は同じ `research_workbench` の参照を返すため、発明ルートからの `wb().update(...)` は実STATEの変更である。
 - `app.py:run_llm_assessment.publish` は保存失敗時に `orchestration` も復元する。これは統括工程を通常更新する責務とは別である。
 
 `research_workbench.invention` や過去式 `library` はトップレベルキーではない。`SETTINGS`, `JOB`, `STOP` もこの17個には含めない。
@@ -68,46 +68,50 @@ FastAPIを起点とするローカル単一ユーザーアプリで、HTML/CSS/J
 | 場所 | 用途 | 入力・同期と相違点 |
 |---|---|---|
 | `STATE['patents']` | 現在の地図・判定・学習・検索式改善の主たる集合 | CSVの置換/追加、ターゲットの手入力、同一テーマのラボ集合を統括が取り込む経路がある。人のラベル変更はまずここへ書く |
-| `STATE['discovery']['patents']` | 探索計画ごとの蓄積公報。複数CSV/OPS取得を横断した分類支持、ファミリー、新規語・分類の分析 | `discovery_routes.py:merge_documents` がコピーして統合。`analyze_workspace` と統括の `sync_lab` は `live_labels=True` で主集合の現在の判定を反映。CSV/OPS追加は既存の人の判定を保護。主集合への判定変更が常時自動同期される構造ではない |
-| `STATE['research_workbench']['target_patents']` | CSVを置換・選択解除しても失わない、調査の起点となる保存参照 | `research_routes.py:merge_target_references` が選択した起点をコピーして蓄積。保存上限5,000件、現在の選択は `brief.target_ids` 最大20件。現在の検索結果や、現在必要と判断した全特許の別名ではない |
+| `STATE['discovery']['patents']` | 探索計画ごとの蓄積公報。複数CSV/OPS取得を横断した分類支持、ファミリー、新規語・分類の分析 | `discovery_services.py:merge_documents` がコピーして統合。`analyze_workspace` と統括の `sync_lab` は `live_labels=True` で主集合の現在の判定を反映。CSV/OPS追加は既存の人の判定を保護。主集合への判定変更が常時自動同期される構造ではない |
+| `STATE['research_workbench']['target_patents']` | CSVを置換・選択解除しても失わない、調査の起点となる保存参照 | `research_services.py:merge_target_references` が選択した起点をコピーして蓄積。保存上限5,000件、現在の選択は `brief.target_ids` 最大20件。現在の検索結果や、現在必要と判断した全特許の別名ではない |
 
-`research_routes.py:source_patents` は保存参照と主集合をIDで合わせた作業用コピーを作る。同じIDでは主集合を優先し、名称・要約・分類の空欄だけを保存参照から補う。参照の古いラベルを主集合へ自動的に戻す処理ではない。
+`research_services.py:ResearchServices.source_patents` は保存参照と主集合をIDで合わせた作業用コピーを作る。同じIDでは主集合を優先し、名称・要約・分類の空欄だけを保存参照から補う。参照の古いラベルを主集合へ自動的に戻す処理ではない。
 
 統括の `all_input_rows` は、ラボの計画テーマが現在のテーマと一致するときだけ主集合とラボ集合を `workspace_import.py:merge_patents` で統合する。その後 `sync_lab` でラボ側を更新する。異なるテーマのラボ集合を無条件で混ぜるわけではない。
 
 この3集合以外にも、LLM/学習の入力スナップショット、トランザクション復元用コピー、計画内の起点資料、`discovery-archive-*.json` の過去計画がある。実行中のコピーと、永続化された別の集合は区別する。将来一元化する場合も、検索結果・起点参照・計画ごとの観測という役割は失わせない。
 
-### 1.4 ルート登録と `globals()` への依存
+### 1.4 明示的なルート登録と依存の分離（Phase 3c）
 
-`app.py` は次の4登録関数へ `globals()` をそのまま渡す。
+`app.py` がWorkspaceと型の明示されたサービスを構成し、5つのルートを直接登録する。`globals()`、文字列キーの `context[...]`、ルート同士のimportは使わない。
 
 ```python
-register_discovery_routes(app, globals())
-register_orchestration_routes(app, globals())
-register_convergence_routes(app, globals())
-register_research_routes(app, globals())
+services = Services(...)  # 下表の15個のコールバックを名前付きで指定
+research_services = ResearchServices(ws, services)
+register_discovery_routes(app, ws, services)
+register_orchestration_routes(app, ws, services)
+register_convergence_routes(app, ws, services)
+register_invention_routes(app, ws, research_services)
+register_research_routes(app, ws, research_services)
 ```
 
-各モジュールが `context[...]` で実際に取り出す名前は以下。静的importや関数のローカル変数は含めない。
+`services.py:Services` は `frozen=True` のdataclass。フィールドは `save`, `public_state`, `checked_text`, `complete`, `progress`, `begin_job`, `set_classification_view`, `make_query`, `map_patents`, `normalize_selection`, `classification_feedback`, `run_llm_assessment`, `run_model_training`, `classification_overview`, `candidate_list` の15個だけである。既存の保存失敗・LLM等の置換テストを維持するため、app側は各関数へ委譲する明示的なクロージャを渡す。モジュール全体を渡したり、名前で任意の関数を検索したりはしない。
 
-| モジュール | `context` から取り出す名前 |
-|---|---|
-| [discovery_routes.py](discovery_routes.py) | `DATA`, `LOCK`, `SETTINGS`, `STATE`, `STOP`, `begin_job`, `checked_text`, `complete`, `explorer`, `idle`, `progress`, `public_state`, `save`, `set_classification_view`, `ws` |
-| [orchestration_routes.py](orchestration_routes.py) | `DATA`, `JOB`, `LOCK`, `SETTINGS`, `STATE`, `STOP`, `begin_job`, `classification_feedback`, `explorer`, `idle`, `make_query`, `map_patents`, `normalize_selection`, `progress`, `public_state`, `run_llm_assessment`, `run_model_training`, `save`, `set_classification_view`, `ws` |
-| [convergence_routes.py](convergence_routes.py) | `LOCK`, `STATE`, `public_state`, `save`, `ws` |
-| [research_routes.py](research_routes.py) | `LOCK`, `SETTINGS`, `STATE`, `candidate_list`, `classification_overview`, `idle`, `map_patents`, `public_state`, `save`, `ws` |
-| [invention_routes.py](invention_routes.py) | `LOCK`, `SETTINGS`, `STATE`, `idle`。`app.py`から直接登録されず、調査ルートが同じ `context` を渡す |
+| モジュール | Workspaceから使うもの | Services経由の操作 |
+|---|---|---|
+| [discovery_routes.py](discovery_routes.py) | state/settings/lock/stop/data_dir、idle/transaction | save/public_state、checked_text/complete、progress/begin_job、set_classification_view |
+| [orchestration_routes.py](orchestration_routes.py) | state/settings/lock/stop/job/data_dir、idle/transaction/snapshot/restore | save/public_state、progress/begin_job、make_query、map_patents、normalize_selection、classification_feedback、set_classification_view、run_llm_assessment/run_model_training |
+| [convergence_routes.py](convergence_routes.py) | state/lock、transaction | save/public_state |
+| [research_routes.py](research_routes.py) | state/settings/lock、idle | ResearchServicesの共有操作、app.save/public_state/candidate_list/map_patents |
+| [invention_routes.py](invention_routes.py) | state/settings/lock、idle | ResearchServicesの共有操作 |
 
-発明ルートにはさらに `services` として `workbench`, `source_patents`, `check_revision`, `commit`, `fingerprint`, `checked_brief`, `merge_target_references`, `enrich_query`, `save_query` が渡される。これらは `research_routes.py` 内の関数である。
+`research_services.py:ResearchServices` は `ws` と上記 `Services` を保持するdataclass。`workbench`, `source_patents`, `check_revision`, `commit`, `fingerprint`, `checked_brief`, `merge_target_references`, `enrich_query`, `save_query` を調査・発明の双方が使う。状態操作・保存はWorkspaceへ、分類表示の更新は `app.classification_overview` へ委譲する。
 
-現在はルート同士の依存もある。
+共有処理の移動先は次のとおり。既存の直接importを壊さないよう、元のモジュールには同一実装の再exportを残す。
 
-- `orchestration_routes.py` → `discovery_routes.py` の `merge_documents`, `new_discovery`。
-- `orchestration_routes.py` → `convergence_routes.py` の `record_result`。
-- `research_routes.py` → `invention_routes.py` の登録関数。
-- `app.py` はルート登録だけでなく、各ルートモジュールの状態生成・表示・検索式関数もimportする。
+- `discovery_services.py`: `new_discovery`, `public_discovery`, `_document_key`, `merge_documents`。探索ラボ・統括・appから使う。
+- `convergence_services.py`: テーマ照合、観測・表示・収束記録の共有関数。収束・統括・appから使う。
+- `research_services.py`: 調査・発明の共有サービスと観点/式の組立。初期状態の純粋な生成は `workspace_defaults.py:new_workbench`。
+- `classification_symbols.py`: コード正規化、parse_codes、lookup、親子、enrich。`fi_parser.py`: FI欄の分解。どちらもexplorer/bridgeをimportしない。
+- `classification_bridge.extract` は enrich/parse_codes/lookup を引数で受け取れる。explorerから呼ぶときはそれらを明示する。ほかの既存呼出しは循環しない下位モジュールの既定実装を使う。bridgeからexplorerへの遅延importを廃止した。
 
-したがって、ルートは現時点では薄いHTTP層に限定されておらず、状態操作・ワークフロー・ドメイン処理が混在している。
+`Workspace.load(initialize_workflows=True)` がルート登録前に統括の中断復旧と調査ワークベンチの初期化を行う。引数の既定値はFalseとし、アプリ固有のキーを持たないWorkspaceの既存ロード契約も保つ。ルートの相互依存は解消したが、各ルート内の全ワークフローをサービスへ移す作業や、全engineのI/O分離までは行っていない。
 
 ### 1.5 画面とSTATEの読み書き
 
@@ -143,12 +147,12 @@ register_research_routes(app, globals())
 
 | 共通実装 | 使用箇所（`file:function`） | 保持する用途別の契約 |
 |---|---|---|
-| `normalize_publication_id` | `workspace_import.py:publication_key`、`discovery_routes.py:_document_key`、`convergence_engine.py:publication_key`（import別名） | 引数が行かIDかだけを呼び出し元で吸収。比較キーを作るだけで原文IDは書き換えない |
+| `normalize_publication_id` | `workspace_import.py:publication_key`、`discovery_services.py:_document_key`、`convergence_engine.py:publication_key`（import別名） | 引数が行かIDかだけを呼び出し元で吸収。比較キーを作るだけで原文IDは書き換えない |
 | `tokenize_keywords` | `catalog.py:keywords`（import別名）、`classification_retrieval.py:phrases`、`analysis_engine.py:map_patents`、`discovery_routes.py:register_discovery_routes.create_plan` | 通常のキーワードは空白区切り、引用符内は句、24項目・各500文字。辞書検索は空白を含む技術説明を保持し、先頭24項目、説明単位の500文字制限やBoolean入力検査は適用しない。英語起点語は空白を保持し、ルート側の8項目・英数字等の制限を維持 |
 | `is_plain_term` | `research_strategy.py:_term`、`invention_strategy.py:_term`、`query_formats.py:_literal`、`catalog.py:keywords`（tokenizer経由）、`discovery_engine.py:_english` | 入力検索語は厳密に検査。出力側は既存の引用付きリテラルの契約を `literal=True` で維持し、単語内部で演算として解釈しない。DB固有の追加制限は各rendererが維持 |
 | `text_contains` | `research_routes.py:register_research_routes.proposed_query`、`invention_routes.py:register_invention_routes.proposed`、`research_strategy.py:_evidence_ids`、`discovery_engine.py:_facets_for`、`analysis_engine.py:map_patents` / `refinement_terms.choose`、`invention_strategy.py:_evidence` | 通常は名称・要約のNFKC＋casefold部分一致。マップは既存の先頭6000文字の範囲。研究の根拠と発明側の除外保護は名称/要約を別々に照合。発明の原文引用は `exact=True, separate_fields=True` により表記・大小文字・フィールド境界の完全一致を維持 |
 | `keep_rows` / `label_counts` / `is_assessed` | `orchestration_engine.py:summary` / `fresh_rows`、`convergence_engine.py:_counts` / `build_record`、`projection_engine.py:compute_evaluation`、`llm_judgment.py:human_examples` / `run` ほか | ラベルから集計し、スコアをkeepへ昇格させない。人だけのS/Nと、人・AIを含む収束件数は区別。保留はAIの理由・有限の確信度を要求。`llm_judgment.is_assessed` は互換importとして維持 |
-| `fingerprint` | `research_routes.py:fingerprint`（import）、`orchestration_engine.py:fingerprint`、`llm_judgment.py:context_fingerprint`、`convergence_routes.py:evidence_signature` | UTF-8・キー順固定のJSONのSHA-256。統括はラベル/スコア/座標を除いた本文等、収束は判定情報を含む根拠、研究は呼び出し元の対象、LLMは照合文脈を入力とする。入力対象と並べ替えを共通化して意味を変えない。LLMの文脈なしは引き続き `None` |
+| `fingerprint` | `research_routes.py:fingerprint`（import）、`orchestration_engine.py:fingerprint`、`llm_judgment.py:context_fingerprint`、`convergence_services.py:evidence_signature` | UTF-8・キー順固定のJSONのSHA-256。統括はラベル/スコア/座標を除いた本文等、収束は判定情報を含む根拠、研究は呼び出し元の対象、LLMは照合文脈を入力とする。入力対象と並べ替えを共通化して意味を変えない。LLMの文脈なしは引き続き `None` |
 | `validate_llm_object` | `research_strategy.py:_validate_result`、`invention_strategy.py:_validate_plan` / `_evidence`、`query_adaptation.py:suggest_adaptation`、`classification_planner.py:validate_elements` / `review`、`llm_judgment.py:validate_decisions`、`discovery_engine.py:validate_llm_plan` | オブジェクトの必須/任意/余分なキーを検査。探索ラボとLLM判定の既存の余分なキー許容も明示。目的・アンカー・ID完全一致・提示分類・原文引用・値域・件数などの業務検証は各呼び出し元に残す |
 | `json_schema` | `research_strategy.py:response_schema`、`invention_strategy.py:response_schema`、`query_adaptation.py:_schema`、`classification_planner.py:element_schema` / `review`、`llm_judgment.py:response_schema` | 既存の必須/任意キー、件数、enum、値域を保持。子スキーマをコピーし共有による変更を防ぐ。ラボの自由形式計画に新たな応答スキーマを強制しない |
 | `query_formats.py:tree_data` / `group` | `query_library.py` の木の辞書化、`invention_strategy.py:compose_invention_query` のグループ化 | 旧 `_node_dict` / `_group` を削除。発明側は内部でNodeを組み立て、最後に従来の木の検証を通して同じ辞書形式を返す。OR/AND/枝別NOTの範囲を保持 |
@@ -164,7 +168,7 @@ register_research_routes(app, globals())
 
 #### 指定範囲外として残す関連処理
 
-- `refinement_classifications.py:classification_feedback` の行優先順位・公報ID照合、`analysis_engine.py:parse_csv` / `backfill_fi` のCSV内照合、`discovery_engine.py:analyze_patents` / `_family` の分析時集合、`research_routes.py:merge_target_references` / `source_patents` の保存参照は今回の3実装の統合対象外。各用途の保存形式や代表行を勝手に変更しない。
+- `refinement_classifications.py:classification_feedback` の行優先順位・公報ID照合、`analysis_engine.py:parse_csv` / `backfill_fi` のCSV内照合、`discovery_engine.py:analyze_patents` / `_family` の分析時集合、`research_services.py:merge_target_references` / `source_patents` の保存参照は今回の3実装の統合対象外。各用途の保存形式や代表行を勝手に変更しない。
 - `classification_retrieval.py:tokens` とTF-IDF用のトークン化は特徴量抽出であり、入力語句の分割器ではない。UIの行単位入力も今回変更しない。
 - `app.py:make_query` / `agent.action` の除外語の保護、`analysis_engine.py:train` / `refinement_terms`、`refinement_classifications.py:_decision` / `_priority`、`discovery_engine.py:analyze_patents` は用途固有の予測・保護・支持を担う。Phase 3aで指定された共通化先以外の処理は維持する。
 - `llm.py:_response_content` / `_text_content` / `_without_thinking` / `_parse_model_json` は従来から共通の通信応答/JSON入口。今回の `validate_llm_object` はその後のオブジェクト形検証だけで、JSONパーサーの置き換えではない。
@@ -175,31 +179,55 @@ register_research_routes(app, globals())
 
 `tests/test_common.py` で全角IDの取込、キーワードの引用/上限、用途別の厳密性、原文引用、ラベル/保留、ハッシュ、LLM形検証・スキーマを検証する。検証はPython 502件実行（501件成功・既存の任意Transformer 1件スキップ）、JavaScript 304件成功。既存APIテストは変更しない。削除した関数を直接呼んでいた `test_discovery_engine.py` と `test_query_library.py` だけは、ケースと主要assertを残して現行の辞書検索・JSON取込契約へ移した。
 
-### 1.7 Workspace・永続化・復元（Phase 3b）
+### 1.7 Workspace・永続化・復元（Phase 3b・3c）
 
-`workspace.py:Workspace` が既存構造の `state`, `settings`, `job`、`RLock`、`data_dir` を所有する。`app.py` の `STATE/SETTINGS/JOB/LOCK/DATA` は同一オブジェクトへの互換参照であり、別の正本ではない。`save/idle/public_state` も薄い委譲として残す。既存の `globals()` 登録方式、ルート間import、登録時の初期化はPhase 3cまで変更しない。
+`workspace.py:Workspace` が既存構造の `state`, `settings`, `job`、`RLock`、停止イベント、`data_dir` を所有する。`app.py` の `STATE/SETTINGS/JOB/LOCK/STOP/DATA` は同一オブジェクトへの互換参照であり、別の正本ではない。`save/idle/public_state` も薄い委譲として残す。ルートは `ws` と明示的なサービスだけを受け取り、登録時の状態変更はloadの後処理へ移した。
 
 | メソッド | 現在の契約 |
 |---|---|
-| `load(after_load=...)` | 既存のstate/settingsを同じdictへマージし、未知フィールドを保持。ファイル欠落・JSON不正の扱いも従来どおり。ロード・中断復旧だけではディスクへ書かない。`app.py:_recover_workspace` が従来の配置方式/タイムアウト検証と探索・LLM中断復旧を行う |
+| `load(after_load=..., initialize_workflows=False)` | 既存のstate/settingsを同じdictへマージし、未知フィールドを保持。ファイル欠落・JSON不正の扱いも従来どおり。ロード・中断復旧だけではディスクへ書かない。`app.py:_recover_workspace` が従来の配置方式/タイムアウト検証と探索・LLM中断復旧を行う。アプリ起動は `initialize_workflows=True` とし、その後に統括・調査の初期化/復旧を行う |
 | `to_dict()` / `save()` | `to_dict()` をシリアライズ元とし、`save()` がロック下で従来と同じUTF-8 JSONを `workspace.tmp` へ書き `replace`。全特許の追加コピーを避けるため `to_dict()` は短命な読取用ビューで、ロック下で消費する。形式・秘密項目除外・非有限値拒否は維持 |
 | `snapshot(keys=None, include_settings=False, include_job=False)` | 既定はstate全体、keys指定時はそのキーだけをdeepcopyする。存在しないキーと値Noneを区別。settings/jobの取得は明示指定した場合だけ |
 | `restore(snapshot)` | 単回使用の復元画像を消費し、共有ルートdictを再代入せずclear/updateで復元する。部分復元では対象外のキーを維持し、元々無い対象キーは削除する |
 | `transaction(...)` | lock取得→idle確認→snapshot→処理→成功時save、例外時restore。実行中ジョブの内部commitは `check_idle=False`。統括の外側ガードは `persist=False, include_job=True` で内部保存を二重実行しない。saveの既存呼び出し口を指定できるため、保存失敗の注入テストも維持 |
-| `public_state(project=...)` | 同一lock下で表示用加工・秘密項目の有無・最新jobをまとめ、独立したdeepcopyを返す。アプリ固有の分類・収束等の投影は `_public_workspace` へ分離。応答と内部dictの参照は共有しない |
+| `public_state(project=..., cache_token=...)` | 同一lock下で変更を検出し、投影キャッシュの独立したdeepcopyを返す。アプリ固有の分類・収束等の投影は `_public_workspace`。応答と内部dict・キャッシュの参照は共有しない |
+| `public_state_json(project=..., cache_token=...)` | 同じ投影からFastAPIと同じJSON化を行い、不変のbytesをキャッシュする。GET `/api/state` はこのbytesを返すため、キャッシュが有効なら全体deepcopyと表示用投影を省略する |
 
-共通transactionへの置換先は、`app.py:candidates` / `add_rejected_broader_candidate` / `query` / `upload`、`discovery_routes.py:atomic_workspace`、`convergence_routes.py:atomic`、`research_routes.py:commit`、`orchestration_routes.py:atomic_request` / `commit`。統括の `preview_query` は成功時も戻す必要があるため、`snapshot`→`finally: restore` を使う。
+共通transactionへの置換先は、`app.py:candidates` / `add_rejected_broader_candidate` / `query` / `upload`、`discovery_routes.py:atomic_workspace`、`convergence_routes.py:atomic`、`research_services.py:ResearchServices.commit`、`orchestration_routes.py:atomic_request` / `commit`。統括の `preview_query` は成功時も戻す必要があるため、`snapshot`→`finally: restore` を使う。
 
 - 一時ファイルの復元は、従来それを行っていた検索式・調査commitだけが `restore_pending=True` を指定する。ほかの経路の失敗時ファイル動作を一律に変えない。
-- 探索ラボの4ルートは共通transactionが成功した後に計画アーカイブを書く。アーカイブだけが失敗した場合の通知も維持する。**統括の `sync_lab` のアーカイブは依然として操作内で先に書く**。この別のI/O契約はPhase 3bで変更していない。
+- 探索ラボの4ルートは共通transactionが成功した後に計画アーカイブを書く。アーカイブだけが失敗した場合の通知も維持する。**統括の `sync_lab` のアーカイブは依然として操作内で先に書く**。この別のI/O契約はPhase 3b・3cで変更していない。
 - LLM判定の10バッチごとの保存、終了/停止時の保存、更新行だけの復元ジャーナルは維持する。モデル学習の行を同じ参照へ戻す処理も残す。これらを全STATEのtransactionへ置き換えて、未保存バッチや行の扱いを変えない。
 - `JOB` はメモリ内のみ。再起動で同じスレッドが復活するわけではない。保存済みtraining/discovery/orchestrationから中断・再開を扱う。`api_key`, `proxy`, `ops_key`, `ops_secret` は保存から除外し、APIは値ではなく設定有無を返す。設定値の変更・秘密情報の移行はしない。
 - `data/models/`、分類翻訳キャッシュ、探索計画のアーカイブは別の保存物。`to_dict()` はそれらのファイルI/Oを所有しない。
-- 公開状態のキャッシュは未実装。既存ルートやジョブがネストしたdictを直接変更する間は、saveだけで無効化すると未保存の進捗・判定を取りこぼす。Phase 3bでは最新応答の契約を維持し、変更通知を含むキャッシュ設計は後続作業に残す。統括の全体snapshotを変更キー単位へ絞る最適化も未実施（部分snapshotの機構自体は実装済み）。
+- 公開状態キャッシュと統括の部分snapshotは下記1.8の範囲で実装した。判定/学習の専用ジャーナル、外部ファイルのI/O契約は対象外。
 
 `tests/test_workspace.py` で、既存形式の保存と再読込、秘密設定の境界、参照の保持、部分/全体復元、一時ファイル、保存回数、ジョブ排他・RLock、未保存の変更の公開、既存中断復旧を隔離データで検証する。Phase 3bでは回帰19件を追加し、Python 521件（520成功・既存任意1スキップ）、JavaScript 304件成功。既存APIテストもその他の既存テストも変更していない。
 
-ルート同士のimportに加え、`research_strategy.py:plan_research` と `invention_strategy.py:plan_invention` は `llm.complete` を呼ぶ。分類処理には辞書・キャッシュの読込もある。「engine名のファイルはすべて純粋関数」という状態にはまだなっていない。
+`research_strategy.py:plan_research` と `invention_strategy.py:plan_invention` は依然として `llm.complete` を呼ぶ。分類処理には辞書・キャッシュの読込もある。「engine名のファイルはすべて純粋関数」という状態にはまだなっていない。
+
+### 1.8 公開状態キャッシュ・統括のコピー範囲（Phase 3c）
+
+既存のdict参照を置き換えずに直接更新との互換性を守るため、公開状態取得時にはstate/settings/jobのJSONからSHA-256を計算する。直前の内容・投影関数・外部依存トークンが同じなら投影とJSON bytesを再利用する。load/save/restore/transaction成功時は明示的にも無効化する。保存のないジョブ進捗、判定・分類等のネストした変更、失敗時の復元も次の取得で検出する。
+
+分類名称はSTATE外で更新されるため、`classification_translations.cache_token()` の世代番号も使う。キャッシュ読込と日本語名称取得の更新時に世代を進める。秘密の値は公開キャッシュに含めず、従来どおり設定有無だけを返す。メモリ内に最新1組だけ保持し、workspace.jsonへは追加しない。JSON化できない特殊値はキャッシュを使わず、dict返却とFastAPIのエンコード契約を保つ。
+
+この方式でも変更検出はデータ量に比例するJSON走査である。全書込みを追跡する新しい辞書型は導入していない。変更のないGETの表示計算・deepcopy・応答JSON再生成を削減する最適化であり、全リクエストが定数時間になるという意味ではない。
+
+本PCの隔離した合成2,000件で、従来の投影＋deepcopy＋FastAPIのJSON化と、キャッシュ済みGET応答生成を各5回比較した。応答bytesは同一、中央値は137.19 msから13.51 ms。辞書を読み込んだ後の計測であり、初回・データ変更直後・実データ全般の速度を保証する数値ではない。
+
+統括のsnapshot対象は以下。すべて成功/失敗時の従来の意味を保持する。`all_input_rows` の統合用コピーや、実際に公報集合を書き換える分類探索のコピーは残す。
+
+| 処理 | stateのsnapshot対象（settingsはコピーしない） |
+|---|---|
+| start/resumeの外側 `atomic_request` | orchestration, selected。JOBも復元対象 |
+| 式の `preview_query` | candidates, selected, queries, research_workbench。成功時も必ず復元 |
+| discoverのcommit | orchestration, patents, clusters, discovery, candidates, selected, classification_view |
+| refineのcommit | orchestration, discovery, classification_view, candidates, selected, queries, research_workbench, convergence_tracking |
+| 最終式のcommit | orchestration, candidates, selected, queries, research_workbench, convergence_tracking |
+| 工程遷移・停止・エラー・リセットのcommit | orchestration |
+
+`tests/test_public_state_cache.py` と `tests/test_service_dependencies.py` の21件で、応答bytesの互換、キャッシュ再利用・無効化・参照の分離、登録時の非変更、load復旧、別Workspaceへの分離、分類根拠/依存、統括の部分復元を隔離データで検証する。Phase 3cの全テストはPython 542件（541成功・既存任意1スキップ）、JavaScript 304件成功。既存テストの変更・削除・新規スキップはない。
 
 ## 2. 目標モデル（確定方針と詳細設計の下書き）
 
@@ -258,7 +286,7 @@ engines（純粋な計算・検証） ← workspace（状態・永続化・工�
 
 - engines: `query_formats`, `convergence_engine`, `research_strategy`, `invention_strategy`, `classification_bridge` 等の計算・検証を担当。グローバルSTATEを知らず、入力から結果を返すことを目指す。
 - workspace: Workspaceへの更新、ロック、判定の保護、プレビューと適用、観測への関連付け、保存/復元、ジョブの工程を担当する案。
-- routes: HTTPの入力・出力・エラーへの変換とworkspaceへの委譲。**目標としてroutes同士のimportは禁止**する。現状の登録・サービス呼出しの横断依存は、この目標との差分である。
+- routes: HTTPの入力・出力・エラーへの変換とworkspaceへの委譲。**routes同士のimportは禁止**する。Phase 3cでこの境界と明示的な注入を実装した。ルート内部に残る業務処理の追加分離は後続の対象とする。
 - static: 画面と下書き、API呼び出しを担当。PythonのSTATEを直接触れず、表示用応答と未保存入力を区別する。
 
 現状のLLM/OPS通信、辞書読込、モデルのロード・学習成果物の保存は純粋関数ではない。目標を実現するには、外部I/Oと純粋な検証/計算を分離し、必要な結果や依存を注入する必要がある。どの単位で分離するかは後続の設計判断とし、この文書だけで既存関数を「純粋」と認定しない。

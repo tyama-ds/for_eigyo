@@ -28,12 +28,17 @@ from refinement_classifications import classification_feedback, feedback_origin
 import classification_explorer as explorer
 import classification_translations
 import classification_revision_notes
-from discovery_routes import new_discovery, public_discovery, register_discovery_routes
+from discovery_routes import register_discovery_routes
+from discovery_services import new_discovery, public_discovery
 from orchestration_routes import register_orchestration_routes
-from convergence_routes import display_convergence, display_search_result, new_observation, register_convergence_routes
+from convergence_routes import register_convergence_routes
+from convergence_services import display_convergence, display_search_result, new_observation
 from workspace_import import merge_patents
 from workspace import Workspace
-from research_routes import register_research_routes, refined_tree
+from research_routes import register_research_routes
+from research_services import ResearchServices, refined_tree
+from invention_routes import register_invention_routes
+from services import Services
 from query_formats import Node, group, tree_data, tree_from_data, describe_tree, terms_of
 from research_strategy import suggest_keyword_or_group
 
@@ -111,11 +116,11 @@ ws = Workspace(
     ),
     secret_settings=SECRET_SETTINGS,
 )
-ws.load(after_load=_recover_workspace)
-# Compatibility references for existing routes and callers; Phase 3c changes injection.
+ws.load(after_load=_recover_workspace, initialize_workflows=True)
+# Compatibility references for callers; routes receive ws and explicit services.
 STATE, SETTINGS, LOCK, JOB, DATA = ws.state, ws.settings, ws.lock, ws.job, ws.data_dir
 classification_translations.configure_cache(DATA)
-STOP = threading.Event()
+STOP = ws.stop
 app = FastAPI(title="Patent Atlas", docs_url="/api/docs")
 
 
@@ -235,7 +240,7 @@ def _public_workspace(state):
 
 
 def public_state():
-    return ws.public_state(_public_workspace)
+    return ws.public_state(_public_workspace, cache_token=classification_translations.cache_token)
 
 
 def progress(value, message):
@@ -768,7 +773,10 @@ def make_query(refine=False, include=None, exclude=None, preserve_conditions=Fal
 
 @app.get("/api/state")
 def get_state():
-    return public_state()
+    return Response(
+        ws.public_state_json(_public_workspace, cache_token=classification_translations.cache_token),
+        media_type="application/json",
+    )
 
 
 @app.get("/api/query/formats")
@@ -1668,8 +1676,28 @@ if STATE["candidates"]:
     if not STATE.get("classification_view"):
         classification_overview()
 
-register_discovery_routes(app, globals())
-register_orchestration_routes(app, globals())
-register_convergence_routes(app, globals())
-register_research_routes(app, globals())
+# Explicit closures preserve the existing replaceable service seams without passing globals().
+services = Services(
+    save=lambda *args, **kwargs: save(*args, **kwargs),
+    public_state=lambda *args, **kwargs: public_state(*args, **kwargs),
+    checked_text=lambda *args, **kwargs: checked_text(*args, **kwargs),
+    complete=lambda *args, **kwargs: complete(*args, **kwargs),
+    progress=lambda *args, **kwargs: progress(*args, **kwargs),
+    begin_job=lambda *args, **kwargs: begin_job(*args, **kwargs),
+    set_classification_view=lambda *args, **kwargs: set_classification_view(*args, **kwargs),
+    make_query=lambda *args, **kwargs: make_query(*args, **kwargs),
+    map_patents=lambda *args, **kwargs: map_patents(*args, **kwargs),
+    normalize_selection=lambda *args, **kwargs: normalize_selection(*args, **kwargs),
+    classification_feedback=lambda *args, **kwargs: classification_feedback(*args, **kwargs),
+    run_llm_assessment=lambda *args, **kwargs: run_llm_assessment(*args, **kwargs),
+    run_model_training=lambda *args, **kwargs: run_model_training(*args, **kwargs),
+    classification_overview=lambda *args, **kwargs: classification_overview(*args, **kwargs),
+    candidate_list=lambda *args, **kwargs: candidate_list(*args, **kwargs),
+)
+research_services = ResearchServices(ws, services)
+register_discovery_routes(app, ws, services)
+register_orchestration_routes(app, ws, services)
+register_convergence_routes(app, ws, services)
+register_invention_routes(app, ws, research_services)
+register_research_routes(app, ws, research_services)
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")

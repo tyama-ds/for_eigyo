@@ -4,7 +4,7 @@
   "path": "patent-atlas/",
   "summary": "IPC・Fターム候補の選択、特許CSVの可視化と要不要判定、学習・LLM 判定から検索式を更新するローカルアプリ。",
   "status": "active",
-  "phase": "Phase 3b Workspaceクラスの導入完了",
+  "phase": "Phase 3c 明示的なサービス注入・依存整理とキャッシュ最適化完了",
   "progress": 70,
   "started": "2026-09-14",
   "ports": [
@@ -49,15 +49,24 @@
     {
       "title": "契約検索DB での構文・ヒット検証",
       "state": "todo"
+    },
+    {
+      "title": "Phase 3：共通ヘルパー・Workspace・サービス依存の整理",
+      "state": "done",
+      "date": "2026-11-05"
     }
   ],
   "next": [
-    "Phase 3c：明示的なサービス注入と依存関係の整理（未着手）"
+    "次フェーズの指示に沿って設計・実装範囲を確認する（日次自動改善は停止継続）"
   ],
   "risks": [
     "共有サーバー向けの認証・マルチユーザー分離は未実装（127.0.0.1 前提）"
   ],
   "log": [
+    {
+      "date": "2026-11-05",
+      "summary": "Phase 3c：globals()注入をWorkspaceとServices/ResearchServicesの明示的なdataclassへ置換。共有操作をサービスへ移してルート間importを解消し、分類解析・表示の下位関数と引数注入でexplorer/bridgeの循環を除去。統括・調査の初期化をload後処理へ移動。公開状態は未保存のネスト更新・ジョブ進捗・分類翻訳の更新も検出して投影/JSON bytesをキャッシュし、統括の復元範囲は工程ごとの変更キーに限定。APIの入出力・保存形式・設定を維持し、既存テスト無変更。隔離回帰21件追加、Python542件（541成功・既存任意1スキップ）、JS304件成功。移動26関数のAST一致も確認。合成2000件・5試行の応答生成中央値137.19→13.51 ms、bytes同一。claudecode不在のためdashboardは指定どおり--checkのみ実行し欠落で終了。"
+    },
     {
       "date": "2026-11-05",
       "summary": "Phase 3b：Workspaceに既存state/settings/job・RLock・保存先を集約し、load/save・snapshot/restore・transaction・公開状態を実装。既存グローバル名は同一オブジェクトの互換参照とし、保存形式・秘密項目除外・中断復旧・一時ファイル復元・LLMのバッチ保存を維持。共通の復元定型9箇所と統括プレビューを置換。隔離データの回帰19件追加、Python521件（520成功・既存任意1スキップ）・JS304件成功、既存テスト無変更。Phase 3c、公開状態キャッシュ・統括の部分snapshot最適化は未実施。claudecode不在のためdashboardは--checkのみ実行し欠落で終了。"
