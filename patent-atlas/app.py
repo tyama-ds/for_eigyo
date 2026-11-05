@@ -341,6 +341,13 @@ def refinement():
         return query_service.refinement_options(ws, refinement_terms=refinement_terms)
 
 
+@app.post("/api/refinement/score")
+def refinement_score(body: dict):
+    """Score the latest query with chosen terms against the labelled rows (retrospective proxy)."""
+    with ws.lock:
+        return query_service.refinement_score(ws, body.get("include", []), body.get("exclude", []))
+
+
 @app.post("/api/upload")
 async def upload(request: Request):
     raw, mapping = await import_service.read_csv_request(request)

@@ -17,6 +17,25 @@ from query_formats import Node, describe_tree, group, terms_of, tree_data, tree_
 from refinement_classifications import classification_feedback, feedback_origin
 from research_services import refined_tree
 from research_strategy import suggest_keyword_or_group
+import query_scoring
+import term_graph
+
+
+def latest_query(ws):
+    """The most recently saved query, which the refinement stage builds on."""
+    queries = ws.state.get("queries") or []
+    return queries[-1] if queries else None
+
+
+def graph_term_pool(ws, *, limit=8):
+    """Co-occurrence-graph suggestions for the latest query (LLM-free, evidence attached)."""
+    return term_graph.graph_suggestions(ws.state["patents"], latest_query(ws), limit=limit)
+
+
+def _merge_term_options(options, graph):
+    for kind in ("include", "exclude"):
+        options[kind] = list(dict.fromkeys(options.get(kind, []) + [item["term"] for item in graph.get(kind, [])]))
+    return options
 
 
 def classification_key(candidate):
@@ -145,6 +164,9 @@ def _checked_terms(ws, refine, include, exclude, previous, *, refinement_terms):
     include = list(dict.fromkeys(old_include if include is None else include))
     exclude = list(dict.fromkeys(old_exclude if exclude is None else exclude))
     term_options = refinement_terms(ws.state["patents"]) if refine else {"include": [], "exclude": []}
+    if refine:
+        # Graph-suggested terms are valid choices too; the keep-protection check below still applies.
+        term_options = _merge_term_options(term_options, graph_term_pool(ws))
     term_options = {
         k: list(dict.fromkeys(term_options[k] + (old_include if k == "include" else old_exclude))) for k in term_options
     }
@@ -377,7 +399,25 @@ def refinement_options(ws, *, refinement_terms=default_refinement_terms):
     result["classifications"] = classification_feedback(
         ws.state["patents"], normalize_selection(ws, ws.state["selected"])
     )
+    graph = graph_term_pool(ws)
+    result["graph"] = graph
+    result["score"] = graph.get("base_score")
+    _merge_term_options(result, graph)
     return result
+
+
+def refinement_score(ws, include, exclude):
+    """Retrospective score of the latest query with the chosen include/exclude terms applied."""
+    for values in (include, exclude):
+        if not isinstance(values, list) or any(not isinstance(v, str) or len(v) > 500 for v in values):
+            raise ValueError("追加語・除外語は語句のリストにしてください。")
+    query = latest_query(ws)
+    if query is None:
+        raise ValueError("採点する検索式がありません。先に初案を作成してください。")
+    rows = ws.state["patents"]
+    base = query_scoring.score_query(query, rows)
+    projected = query_scoring.score_query(query, rows, include=include, exclude=exclude)
+    return dict(base=base, projected=projected, delta=query_scoring.compare(base, projected))
 
 
 def apply_labels(ws, ids, label):
