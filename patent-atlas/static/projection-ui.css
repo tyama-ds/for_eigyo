@@ -10,7 +10,7 @@
   min-width: 210px;
   margin: 0;
   font-size: 12px;
-  color: var(--muted);
+  color: var(--text-muted);
 }
 .projection-controls select {
   margin-top: 6px;
@@ -36,7 +36,7 @@
   align-items: center;
   border: 1px solid var(--pin-color);
   border-radius: var(--radius-l);
-  background: color-mix(in srgb, var(--pin-color) 10%, var(--transparent));
+  background: color-mix(in srgb, var(--pin-color) 10%, transparent);
 }
 .projection-pin button {
   border: 0;
@@ -62,9 +62,9 @@
   max-height: 280px;
   overflow: hidden;
   padding: 14px var(--space-4);
-  background: var(--panel, var(--palette-17191f));
-  border: 1px solid var(--line, var(--palette-62606a));
-  box-shadow: 0 14px 48px var(--palette-00000055);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-2);
   border-radius: var(--radius-m);
   font-size: 12px;
   line-height: 1.7;
@@ -82,7 +82,7 @@
   overflow: hidden;
 }
 .projection-tooltip small {
-  color: var(--muted);
+  color: var(--text-muted);
   font-size: 10px;
 }
 #map-points .point {
@@ -93,12 +93,12 @@
   stroke-width: 3px;
 }
 #map-points .point.projection-boundary-point {
-  stroke: var(--palette-f8cd65);
+  stroke: var(--copper-mid);
   stroke-width: 3px;
   stroke-dasharray: 2 2;
 }
 #map-points .point.projection-focus {
-  stroke: var(--white);
+  stroke: var(--surface);
   stroke-width: 5px;
 }
 #projection-pin-labels {
@@ -106,7 +106,7 @@
   font-weight: 800;
   font-size: 13px;
   paint-order: stroke;
-  stroke: var(--panel, var(--palette-17191f));
+  stroke: var(--surface);
   stroke-width: 3px;
 }
 #projection-trails {
@@ -133,9 +133,9 @@
   margin-bottom: 14px;
 }
 .projection-adoption-notice {
-  border-left: 3px solid var(--amber);
+  border-left: 3px solid var(--copper);
   padding: 10px 14px;
-  background: var(--palette-e2a34e0a);
+  background: var(--bg-raised);
   font-size: 12px;
   line-height: 1.8;
 }
@@ -148,7 +148,7 @@
   border-bottom: 1px solid var(--line);
 }
 .projection-adoption-history small {
-  color: var(--muted);
+  color: var(--text-muted);
 }
 .projection-metrics {
   display: grid;
@@ -164,7 +164,7 @@
 }
 .projection-metrics small,
 .projection-metrics span {
-  color: var(--muted);
+  color: var(--text-muted);
   font-size: 11px;
 }
 .projection-metrics strong {
@@ -190,8 +190,8 @@
 }
 .projection-candidate {
   border: 1px solid var(--line);
-  background: var(--transparent);
-  border-radius: var(--radius-control);
+  background: transparent;
+  border-radius: var(--radius-m);
   padding: var(--space-3);
   text-align: left;
   color: var(--text);
@@ -202,8 +202,8 @@
   font: inherit;
 }
 .projection-candidate:hover {
-  border-color: var(--palette-e2a34e);
-  background: var(--palette-e2a34e0a);
+  border-color: var(--copper-mid);
+  background: var(--bg-raised);
 }
 .projection-candidate b {
   font-size: 12px;
@@ -211,7 +211,7 @@
 .projection-candidate span,
 .projection-candidate small {
   font-size: 11px;
-  color: var(--muted);
+  color: var(--text-muted);
 }
 @media (max-width: 850px) {
   .projection-metrics {

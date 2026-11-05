@@ -54,8 +54,8 @@
   align-items: center;
   gap: var(--space-6);
   padding: 17px var(--space-5);
-  background: var(--palette-f1edf7);
-  border: 1px solid var(--palette-d4cbe1);
+  background: var(--surface-active);
+  border: 1px solid var(--accent-soft);
   border-radius: var(--radius-m);
   margin: var(--space-5) 0;
 }
@@ -77,12 +77,12 @@
   border: 1px solid var(--line);
   border-radius: 15px;
   padding: var(--space-5);
-  background: var(--palette-fcfaf6);
+  background: var(--surface);
   min-width: 0;
 }
 .invention-element.selected {
-  border-color: var(--palette-b4a3cd);
-  box-shadow: inset 0 3px var(--palette-a08abc);
+  border-color: var(--accent-mid);
+  box-shadow: inset 0 3px var(--accent-mid);
 }
 .invention-element-heading > .check {
   margin: 0;
@@ -99,7 +99,7 @@
   font:
     10px ui-monospace,
     monospace;
-  color: var(--muted);
+  color: var(--text-muted);
 }
 .invention-element-heading b {
   font-size: 15px;
@@ -114,14 +114,14 @@
   overflow-wrap: anywhere;
 }
 .invention-relation {
-  border-left: 2px solid var(--palette-cdc0dc);
+  border-left: 2px solid var(--accent-soft);
   padding-left: 10px;
-  color: var(--muted);
+  color: var(--text-muted);
 }
 .invention-relation > b {
   display: block;
   font-size: 10px;
-  color: var(--ink);
+  color: var(--text);
   margin-bottom: 3px;
 }
 .invention-evidence summary,
@@ -139,8 +139,8 @@
 .invention-evidence blockquote {
   margin: 10px 0;
   padding: 9px var(--space-3);
-  border-left: 2px solid var(--palette-d9c9a7);
-  background: var(--palette-f5f0e7);
+  border-left: 2px solid var(--line);
+  background: var(--bg);
   border-radius: 0 7px 7px 0;
   font-size: 12px;
   line-height: 1.8;
@@ -154,15 +154,15 @@
   font:
     10px ui-monospace,
     monospace;
-  color: var(--muted);
+  color: var(--text-muted);
 }
 .invention-hypothesis {
   font-size: 11px;
-  background: var(--palette-f0eaf6);
+  background: var(--surface-active);
   border-radius: var(--radius-s);
   padding: 10px;
   line-height: 1.8;
-  color: var(--palette-756086);
+  color: color-mix(in srgb, var(--accent) 55%, var(--text-muted));
 }
 .invention-element .invention-perspective-join {
   font-size: 11px;
@@ -176,9 +176,9 @@
   gap: var(--space-3);
 }
 .invention-perspective {
-  border: 1px solid var(--palette-e2dbcf);
-  border-radius: var(--radius-control);
-  background: var(--surface-input);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+  background: var(--surface);
   padding: 15px;
   min-width: 0;
 }
@@ -189,7 +189,7 @@
 }
 .invention-perspective-title > span {
   font-size: 10px;
-  color: var(--muted);
+  color: var(--text-muted);
   flex-shrink: 0;
 }
 .invention-perspective h4 {
@@ -223,7 +223,7 @@
   gap: 9px;
   margin: 0;
   padding: 9px var(--space-1);
-  border-bottom: 1px solid var(--palette-e9e3d8);
+  border-bottom: 1px solid var(--bg-sunken);
   cursor: pointer;
 }
 .invention-perspective .invention-class-option input {
@@ -243,7 +243,7 @@
 }
 .invention-class-option small {
   font-size: 10px;
-  color: var(--muted);
+  color: var(--text-muted);
   line-height: 1.6;
 }
 .invention-exclusion {
@@ -265,7 +265,7 @@
   padding: var(--space-4) 19px;
   border: 1px solid var(--line);
   border-radius: var(--radius-m);
-  background: var(--palette-fbf8f2);
+  background: var(--bg-raised);
 }
 .invention-scope-options .check {
   font-size: 12px;
@@ -307,7 +307,7 @@
 }
 .invention-error {
   font-size: 12px;
-  color: var(--palette-9a354e);
+  color: var(--exclude);
   line-height: 1.8;
 }
 .invention-workbench button:disabled {

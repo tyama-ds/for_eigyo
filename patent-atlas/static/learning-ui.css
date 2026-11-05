@@ -3,9 +3,6 @@
   min-width: 230px;
   flex: 1;
 }
-.learning-row {
-  align-items: end;
-}
 .learning-row #include-agent-control {
   margin: 0 0 var(--space-3);
 }
@@ -15,9 +12,9 @@
 .llm-training-options {
   margin-top: 18px;
   padding: var(--space-5);
-  border: 1px solid var(--palette-d8d1e3);
+  border: 1px solid var(--accent-soft);
   border-radius: 15px;
-  background: var(--palette-f6f3fa);
+  background: var(--surface-hover);
 }
 .llm-training-options label {
   margin: 0;
@@ -37,8 +34,8 @@
 .learning-progress {
   margin-top: var(--space-5);
   padding: var(--space-5);
-  background: linear-gradient(130deg, var(--palette-f2eff8), var(--palette-f7f3ea));
-  border: 1px solid var(--palette-d8cfe2);
+  background: linear-gradient(130deg, var(--surface-hover), var(--bg));
+  border: 1px solid var(--accent-soft);
   border-radius: 15px;
 }
 .learning-progress-heading,
@@ -59,7 +56,7 @@
 .learning-progress-heading strong {
   font-size: 25px;
   font-variant-numeric: tabular-nums;
-  color: var(--cyan);
+  color: var(--accent);
 }
 .learning-progress progress {
   appearance: none;
@@ -70,22 +67,22 @@
   border: 0;
   border-radius: var(--radius-s);
   overflow: hidden;
-  background: var(--palette-e2dcea);
-  accent-color: var(--cyan);
+  background: var(--surface-active);
+  accent-color: var(--accent);
 }
 .learning-progress progress::-webkit-progress-bar {
-  background: var(--palette-e2dcea);
+  background: var(--surface-active);
 }
 .learning-progress progress::-webkit-progress-value {
-  background: linear-gradient(90deg, var(--palette-7770b8), var(--palette-5550a0));
+  background: linear-gradient(90deg, var(--accent), var(--accent));
   border-radius: var(--radius-s);
   transition: width 0.3s;
 }
 .learning-progress[data-status='done'] progress::-webkit-progress-value {
-  background: var(--palette-557e67);
+  background: var(--keep);
 }
 .learning-progress[data-status='error'] progress::-webkit-progress-value {
-  background: var(--pink);
+  background: var(--exclude);
 }
 .learning-progress p {
   margin: 0 0 var(--space-2);
@@ -93,10 +90,10 @@
 }
 .learning-progress-bottom {
   margin-bottom: 10px;
-  color: var(--muted);
+  color: var(--text-muted);
 }
 .learning-error {
-  color: var(--palette-913c51);
+  color: var(--exclude);
   white-space: pre-wrap;
 }
 .refinement-ipc {
@@ -114,13 +111,13 @@
 }
 .refinement-ipc-card {
   padding: 13px;
-  background: var(--palette-f8f5ef);
+  background: var(--bg-raised);
   border: 1px solid var(--line);
   border-radius: var(--radius-m);
 }
 .refinement-ipc-card.recommended {
-  border-color: var(--palette-ada6cf);
-  background: var(--palette-f3f0f9);
+  border-color: var(--accent-mid);
+  background: var(--surface-hover);
 }
 .refinement-ipc-card .check {
   align-items: flex-start;
@@ -130,11 +127,11 @@
   min-width: 0;
 }
 .refinement-ipc-card b {
-  color: var(--cyan);
+  color: var(--accent);
 }
 .refinement-ipc-card small {
   display: block;
-  color: var(--muted);
+  color: var(--text-muted);
   line-height: 1.7;
   margin-top: 5px;
 }
@@ -144,7 +141,7 @@
   gap: 5px 14px;
   padding: 9px 0 0 var(--space-6);
   font-size: 12px;
-  color: var(--muted);
+  color: var(--text-muted);
 }
 .refinement-ipc-card details {
   margin: var(--space-2) 0 0 var(--space-6);
@@ -152,7 +149,7 @@
 }
 .refinement-ipc-card summary {
   cursor: pointer;
-  color: var(--muted);
+  color: var(--text-muted);
 }
 .refinement-ipc-card p {
   font-size: 12px;
@@ -162,7 +159,7 @@
 .refinement-ipc-change {
   font-size: 12px;
   padding: 10px var(--space-3);
-  background: var(--palette-efeaf6);
+  background: var(--surface-active);
   border-radius: 9px;
   line-height: 1.8;
 }

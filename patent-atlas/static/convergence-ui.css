@@ -2,11 +2,11 @@
   display: grid;
   gap: var(--space-5);
   margin-top: var(--space-6);
-  --convergence-new: var(--palette-458779);
-  --convergence-topic: var(--palette-7460a7);
-  --convergence-hits: var(--palette-b47752);
-  --convergence-uploaded: var(--palette-65877c);
-  --convergence-total: var(--palette-a37c52);
+  --convergence-new: var(--keep);
+  --convergence-topic: var(--accent);
+  --convergence-hits: var(--copper);
+  --convergence-uploaded: var(--keep);
+  --convergence-total: var(--copper-strong);
 }
 .convergence-panel,
 .convergence-review-panel {
@@ -14,8 +14,7 @@
   min-width: 0;
 }
 .convergence-panel {
-  background:
-    radial-gradient(ellipse at 0 0, var(--palette-eee8fa88), var(--transparent) 48%), var(--palette-fffcf6);
+  background: radial-gradient(ellipse at 0 0, var(--overlay-paper), transparent 48%), var(--surface);
 }
 .convergence-heading {
   display: flex;
@@ -34,25 +33,25 @@
 }
 .convergence-status {
   flex: none;
-  border: 1px solid var(--palette-d5c9e5);
+  border: 1px solid var(--accent-soft);
   border-radius: 30px;
-  background: var(--palette-f0e9f8);
+  background: var(--surface-active);
   padding: var(--space-2) 13px;
   font-size: 11px;
-  color: var(--palette-65527f);
+  color: var(--text-accent);
   white-space: nowrap;
 }
 .convergence-status[data-status='stable'],
 .convergence-status[data-status='completed'] {
-  background: var(--palette-e8f0e9);
-  border-color: var(--palette-c0d7c8);
-  color: var(--palette-3d735d);
+  background: var(--keep-soft);
+  border-color: color-mix(in srgb, var(--keep) 30%, var(--surface));
+  color: var(--keep);
 }
 .convergence-summary {
   font-size: 13px;
   font-weight: 550;
   letter-spacing: 0.025em;
-  color: var(--palette-6b598b);
+  color: var(--text-accent);
   margin: 18px 0 10px;
 }
 .convergence-chart-scroll {
@@ -65,25 +64,25 @@
   overflow: visible;
 }
 .convergence-chart text {
-  fill: var(--palette-8b7b89);
+  fill: var(--text-muted);
   font:
     11px ui-monospace,
     monospace;
 }
 .convergence-gridline {
-  stroke: var(--palette-e5dfd5);
+  stroke: var(--line);
   stroke-dasharray: 3 5;
   stroke-width: 1;
 }
 .convergence-guide {
-  stroke: var(--palette-8e9c77);
+  stroke: var(--copper-mid);
   stroke-dasharray: 5 4;
   stroke-width: 1;
 }
 .convergence-chart .convergence-guide-label {
   font-family: inherit;
   font-size: 10px;
-  fill: var(--palette-778263);
+  fill: var(--keep);
 }
 .convergence-line {
   fill: none;
@@ -116,13 +115,13 @@
 }
 .convergence-point circle {
   fill: currentColor;
-  stroke: var(--palette-fffaf3);
+  stroke: var(--bg-raised);
   stroke-width: 2;
   transition: r 0.18s;
 }
 .convergence-point .convergence-hit-area {
-  fill: var(--transparent);
-  stroke: var(--transparent);
+  fill: transparent;
+  stroke: transparent;
   pointer-events: all;
 }
 .convergence-point:hover circle:not(.convergence-hit-area),
@@ -130,7 +129,7 @@
   r: 7;
   stroke: currentColor;
   stroke-width: 2;
-  fill: var(--palette-fffcf6);
+  fill: var(--surface);
 }
 .convergence-legend {
   display: flex;
@@ -140,7 +139,7 @@
 }
 .convergence-legend > span {
   font-size: 11px;
-  color: var(--palette-716679);
+  color: var(--text-muted);
   display: flex;
   align-items: center;
   gap: 7px;
@@ -150,20 +149,20 @@
   width: 18px;
   height: 3px;
   background: currentColor;
-  border-radius: var(--radius-xs);
+  border-radius: 4px;
 }
 .convergence-legend i.convergence-hits,
 .convergence-legend i.convergence-total {
-  background: repeating-linear-gradient(90deg, currentColor 0 5px, var(--transparent) 5px 8px);
+  background: repeating-linear-gradient(90deg, currentColor 0 5px, transparent 5px 8px);
 }
 .convergence-method {
   font-size: 11px;
-  color: var(--palette-807281);
+  color: var(--text-muted);
   line-height: 1.9;
   max-width: 870px;
   padding: 11px 14px;
-  border-left: 2px solid var(--palette-b6a5c5);
-  background: var(--palette-f6f1f7);
+  border-left: 2px solid var(--accent-mid);
+  background: var(--surface-hover);
   border-radius: 0 var(--radius-s) var(--radius-s) 0;
 }
 .convergence-count-details {
@@ -172,13 +171,13 @@
 .convergence-count-details > summary {
   cursor: pointer;
   font-size: 12px;
-  color: var(--palette-695784);
+  color: var(--text-accent);
   padding: var(--space-3) 0;
 }
 .convergence-table-scroll {
   overflow: auto;
   max-height: 360px;
-  border: 1px solid var(--palette-e2d8df);
+  border: 1px solid var(--surface-active);
   border-radius: var(--radius-m);
   margin-top: var(--space-4);
 }
@@ -192,20 +191,20 @@
 .convergence-table caption {
   padding: var(--space-3) 14px;
   text-align: left;
-  color: var(--palette-847784);
-  background: var(--palette-f7f2f6);
+  color: var(--text-muted);
+  background: var(--surface-hover);
 }
 .convergence-table th,
 .convergence-table td {
   padding: 11px 13px;
   vertical-align: top;
-  border-bottom: 1px solid var(--palette-e8e0e3);
+  border-bottom: 1px solid var(--exclude-soft);
   line-height: 1.6;
 }
 .convergence-table thead th {
   font-weight: 500;
-  background: var(--palette-f0e9f3);
-  color: var(--palette-706079);
+  background: var(--surface-active);
+  color: var(--text-muted);
   white-space: nowrap;
 }
 .convergence-table tbody th {
@@ -214,14 +213,14 @@
 }
 .convergence-table small {
   display: block;
-  color: var(--palette-998995);
+  color: var(--text-muted);
   font-size: 10px;
   margin-top: 3px;
 }
 .convergence-table details summary {
   font-size: 10px;
   cursor: pointer;
-  color: var(--palette-806a9b);
+  color: color-mix(in srgb, var(--accent) 55%, var(--text-muted));
   white-space: nowrap;
 }
 .convergence-table pre {
@@ -235,7 +234,7 @@
   overflow: auto;
 }
 .convergence-record {
-  border-top: 1px solid var(--palette-e1d6dd);
+  border-top: 1px solid color-mix(in srgb, var(--exclude) 30%, var(--surface));
   padding-top: 25px;
   margin-top: var(--space-6);
 }
@@ -264,7 +263,7 @@
   font:
     10px/1.8 ui-monospace,
     monospace;
-  color: var(--palette-8b7a90);
+  color: var(--text-muted);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   max-height: 92px;
@@ -277,16 +276,16 @@
   gap: var(--space-6);
   margin-top: 22px;
   padding: 18px;
-  background: var(--palette-f1ede9);
+  background: var(--bg-sunken);
   border-radius: var(--radius-m);
 }
 .convergence-complete b {
   font-size: 12px;
-  color: var(--palette-65556f);
+  color: var(--text-muted);
 }
 .convergence-complete ul {
   font-size: 11px;
-  color: var(--palette-847181);
+  color: var(--text-muted);
   padding-left: 18px;
   line-height: 1.8;
   margin-bottom: 0;
@@ -295,22 +294,22 @@
   flex: none;
 }
 .convergence-error {
-  background: var(--palette-fff0f0);
-  border: 1px solid var(--palette-d9abb6);
-  border-radius: var(--radius-control);
-  color: var(--palette-98465c);
+  background: var(--exclude-soft);
+  border: 1px solid color-mix(in srgb, var(--exclude) 30%, var(--surface));
+  border-radius: var(--radius-m);
+  color: var(--exclude);
   padding: var(--space-3);
   font-size: 12px;
   overflow-wrap: anywhere;
 }
 .convergence-review-panel {
-  background: var(--palette-fcfaf5);
+  background: var(--bg-raised);
 }
 .convergence-review-card {
   margin-top: 17px;
-  border: 1px solid var(--palette-dfd3df);
-  border-radius: var(--radius-soft);
-  background: var(--palette-fffcfa);
+  border: 1px solid var(--accent-soft);
+  border-radius: var(--radius-m);
+  background: var(--surface);
   padding: 22px;
 }
 .convergence-review-meta {
@@ -320,7 +319,7 @@
   gap: 10px;
   align-items: center;
   font-size: 11px;
-  color: var(--palette-97818c);
+  color: var(--text-muted);
 }
 .convergence-review-card h4 {
   font-size: 18px;
@@ -333,7 +332,7 @@
   font:
     11px/1.8 ui-monospace,
     monospace;
-  color: var(--palette-8b7991);
+  color: var(--text-muted);
   overflow-wrap: anywhere;
 }
 .convergence-abstract {
@@ -346,14 +345,14 @@
   overflow-wrap: anywhere;
 }
 .convergence-reason {
-  background: var(--palette-f3eef6);
+  background: var(--surface-hover);
   border-radius: 9px;
   padding: 13px var(--space-4);
   margin: 18px 0;
 }
 .convergence-reason b {
   font-size: 11px;
-  color: var(--palette-7a608e);
+  color: color-mix(in srgb, var(--accent) 55%, var(--text-muted));
 }
 .convergence-reason p {
   font-size: 12px;
@@ -369,7 +368,7 @@
 .convergence-review-empty > span {
   display: block;
   font-size: 20px;
-  color: var(--palette-6f9277);
+  color: var(--keep);
   margin-bottom: var(--space-3);
 }
 .convergence-review-empty b {
@@ -378,7 +377,7 @@
 }
 .convergence-review-empty p {
   font-size: 11px;
-  color: var(--palette-978592);
+  color: var(--text-muted);
   line-height: 1.8;
 }
 .convergence-review-panel .caption,

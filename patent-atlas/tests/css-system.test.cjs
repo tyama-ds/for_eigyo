@@ -20,9 +20,10 @@ test('light theme has one token source and colors are referenced outside that so
     for (const block of withoutRoot.matchAll(/\{([^{}]*)\}/g)) {
       for (const declaration of block[1].split(';')) {
         const value = declaration.slice(declaration.indexOf(':') + 1).replace(/var\([^)]*\)/g, '');
+        // `transparent` is a keyword, not a colour literal; every actual colour comes from :root tokens.
         assert.doesNotMatch(
           value,
-          /#[0-9a-f]{3,8}\b|\brgba?\(|\bhsla?\(|\b(?:white|black|transparent)\b/i,
+          /#[0-9a-f]{3,8}\b|\brgba?\(|\bhsla?\(|\b(?:white|black)\b/i,
           name + ': ' + declaration.trim()
         );
       }
