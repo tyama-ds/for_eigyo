@@ -82,7 +82,11 @@ function researchDraftStatusMessage() {
 }
 
 function researchDraftStatusHtml() {
-  return `<span id="research-draft-status" class="caption research-draft-status" role="status" aria-live="polite" data-draft-state="${researchDraftStoreState.researchDraftStoreStatus}">${researchDraftStatusMessage()}</span>`;
+  const draftState = researchDraftStoreState.researchDraftStoreStatus;
+  return (
+    '<span id="research-draft-status" class="caption research-draft-status" role="status" ' +
+    `aria-live="polite" data-draft-state="${draftState}">${researchDraftStatusMessage()}</span>`
+  );
 }
 
 function researchDraftSetStatus(status) {

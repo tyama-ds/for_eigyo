@@ -542,6 +542,7 @@ test('projection, learning controls, patent preview and progress', async () => {
   check('patent-preview', s.m['patent-inspector'].previewHtml(state.patents[1]));
   check('patent-preview-empty', s.m['patent-inspector'].previewHtml());
   s.m['research-progress'].researchProgressState.researchProgressCurrent = {
+    token: 'p1',
     status: 'running',
     provider: 'local',
     label: '観点を起案中',
@@ -550,6 +551,7 @@ test('projection, learning controls, patent preview and progress', async () => {
   };
   check('research-progress', s.m['research-progress'].researchProgressHtml());
   s.m['research-progress'].researchProgressState.researchProgressCurrent = {
+    token: 'p2',
     status: 'error',
     provider: 'external',
     label: '観点を起案中',

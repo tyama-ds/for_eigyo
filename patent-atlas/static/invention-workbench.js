@@ -172,7 +172,8 @@ function inventionClassOptionHtml(c, d, suggested) {
   const hint = suggested.has(c.key) ? 'この観点の候補 · ' : '';
   const note = `${hint}${esc(c.group || '')} · ${esc(inventionClassProvenance(c))}`;
   const title = esc([c.reason, c.path_title].filter(Boolean).join('\n'));
-  return html`<label class="invention-class-option"><input type="checkbox" data-invention-class value="${esc(c.key)}"
+  return html`<label class="invention-class-option">
+    <input type="checkbox" data-invention-class value="${esc(c.key)}"
     ${d.classification_keys.includes(c.key) ? 'checked' : ''} ${c.selectable === false ? 'disabled' : ''}>
     <span title="${title}"><b>${esc(inventionClassLabel(c))}</b>
     <small>${note} · ${c.verified ? '分類表に存在' : '存在未確認'}</small></span></label>`;

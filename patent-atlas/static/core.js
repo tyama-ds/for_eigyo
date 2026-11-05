@@ -32,7 +32,9 @@ const esc = (value) =>
 // right after an attribute's closing quote, where it becomes one space (so attributes can be
 // split across lines). Chunks with an escape sequence (a backslash in the raw text) are kept as is.
 function foldHtml(raw) {
-  return raw.replace(/(["']?)\n[ \t]*(>?)/g, (_, quote, close) => (quote && !close ? quote + ' ' : quote + close));
+  return raw.replace(/(["']?)\n[ \t]*(>?)/g, (_, quote, close) =>
+    quote && !close ? quote + ' ' : quote + close
+  );
 }
 function html(strings, ...values) {
   let out = '';

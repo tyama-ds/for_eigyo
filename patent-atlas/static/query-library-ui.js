@@ -135,7 +135,8 @@ function queryLibraryReplacementHtml(term, index, value, kind, disabled) {
   const attr = kind === 'term' ? 'data-ql-term' : 'data-ql-class';
   const label = kind === 'term' ? ' の置換先' : ' の置換先コード';
   return html`<label class="ql-replacement"><span>${qlEsc(term)}</span>
-    <input ${attr}="${index}" value="${qlEsc(value)}" maxlength="${kind === 'term' ? 500 : 50}" aria-label="${qlEsc(term)}${label}" ${disabled}></label>`;
+    <input ${attr}="${index}" value="${qlEsc(value)}" maxlength="${kind === 'term' ? 500 : 50}"
+    aria-label="${qlEsc(term)}${label}" ${disabled}></label>`;
 }
 function queryLibraryEditColumnsHtml(selected, edits, classEdits, disabled) {
   const has = (map, key) => Object.prototype.hasOwnProperty.call(map, key);

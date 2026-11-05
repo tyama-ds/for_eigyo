@@ -162,11 +162,12 @@ function classRetiredRevisionHtml(revision) {
     ${sources.length ? classRevisionSourcesHtml(sources) : ''}
     </div>`;
 }
-function classBroaderActionHtml(item, index, broader) {
+function classBroaderActionHtml(item, position, broader) {
+  const index = classRejectedCandidateIndex(item, position);
   if (item.broader_added === true)
     return '<span class="class-broader-added" role="status">✓ 上位分類を候補に追加済み</span>';
   if (broader && getState().candidate_proposal?.id)
-    return html`<button class="button small" data-proposal-broader="${classRejectedCandidateIndex(item, index)}"
+    return html`<button class="button small" data-proposal-broader="${index}"
       >上位の ${esc(broader.code)} を候補に追加</button>`;
   return '<p class="caption">候補を再生成すると、この上位分類を追加できます。</p>';
 }

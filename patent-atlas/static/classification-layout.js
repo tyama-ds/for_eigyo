@@ -59,9 +59,11 @@ const FACET_LABELS = {
   application: '用途・システム',
 };
 const STOP = new Set(
-  'a an and are as at be being by comprises comprising containing thereof for from in into is it of on or other otherwise parts specially such the their these this to using use with without having apparatus devices methods thereof する ため もの こと'.split(
-    ' '
-  )
+  (
+    'a an and are as at be being by comprises comprising containing thereof for from in into is it ' +
+    'of on or other otherwise parts specially such the their these this to using use with without ' +
+    'having apparatus devices methods thereof する ため もの こと'
+  ).split(' ')
 );
 const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
 const identity = (item) => classificationKey(item, false);
