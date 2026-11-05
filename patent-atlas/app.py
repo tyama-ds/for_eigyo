@@ -4,12 +4,8 @@ import copy
 import csv
 import io
 import json
-import math
 import os
-import re
-import threading
 import time
-import unicodedata
 import uuid
 from pathlib import Path
 from urllib.parse import urlparse
@@ -21,26 +17,37 @@ from fastapi.staticfiles import StaticFiles
 from analysis_engine import ALIASES, demo_rows, map_patents, parse_csv, refinement_terms, train
 from catalog import CATALOG, keywords, suggest
 from llm import complete, validate_timeout
-from prompt_templates import CLASSIFICATION_SYSTEM, SELECTION_SYSTEM
+from prompt_templates import SELECTION_SYSTEM
 import llm_judgment
 from query_formats import formats as query_formats, export_query
-from refinement_classifications import classification_feedback, feedback_origin
+from refinement_classifications import classification_feedback
 import classification_explorer as explorer
 import classification_translations
-import classification_revision_notes
+import candidate_service
+import job_runner
+import judgment_service
+import query_service
+from candidate_service import (
+    display_candidate_proposal,
+    display_discovery,
+    display_labels,
+    llm_candidate_rows,
+    llm_classification_text,
+    normalize_llm_classification,
+    rejected_candidate_guidance,
+)
+from judgment_service import LLM_CHECKPOINT_BATCHES
 from discovery_routes import register_discovery_routes
-from discovery_services import new_discovery, public_discovery
+from discovery_services import new_discovery
 from orchestration_routes import register_orchestration_routes
 from convergence_routes import register_convergence_routes
 from convergence_services import display_convergence, display_search_result, new_observation
 from workspace_import import merge_patents
 from workspace import Workspace
 from research_routes import register_research_routes
-from research_services import ResearchServices, refined_tree
+from research_services import ResearchServices
 from invention_routes import register_invention_routes
 from services import Services
-from query_formats import Node, group, tree_data, tree_from_data, describe_tree, terms_of
-from research_strategy import suggest_keyword_or_group
 
 ROOT = Path(__file__).parent
 DEFAULT_SETTINGS = dict(
@@ -159,66 +166,6 @@ def idle():
     return ws.idle()
 
 
-def classification_key(candidate):
-    return candidate["kind"] + ":" + candidate["code"]
-
-
-def normalize_selection(values, candidates=None):
-    candidates = STATE["candidates"] if candidates is None else candidates
-    if not isinstance(values, list) or any(not isinstance(v, str) for v in values):
-        raise ValueError("分類の選択はキーのリストにしてください。")
-    out = []
-    for value in values:
-        found = [c for c in candidates if classification_key(c) == value]
-        if not found:
-            found = [c for c in candidates if c["code"] == value]
-        if len(found) != 1:
-            raise ValueError("分類を体系付きで選び直してください: " + value)
-        key = classification_key(found[0])
-        if explorer.enrich(found[0]).get("selectable") is False:
-            raise ValueError(
-                "この分類は案内専用、または上位コードが未確認です。辞書で確認できるIPCか、F-termのタームを選んでください: "
-                + value
-            )
-        if key not in out:
-            out.append(key)
-    return out
-
-
-def display_labels(item, *, selection=False):
-    """Project current captions and optional selection rules, preserving saved data."""
-    if not isinstance(item, dict) or item.get("kind") not in ("IPC", "F-term", "CPC", "FI") or not item.get("code"):
-        return item
-    try:
-        enriched = explorer.enrich(item)
-    except (ValueError, TypeError):
-        return item
-    return {
-        **item,
-        **{
-            name: value for name, value in enriched.items() if name.startswith(("title_ja", "title_en", "title_short_"))
-        },
-        **({name: enriched[name] for name in ("selectable", "selection_scope")} if selection else {}),
-        **(
-            {"matched_classifications": [display_labels(row) for row in item["matched_classifications"]]}
-            if isinstance(item.get("matched_classifications"), list)
-            else {}
-        ),
-    }
-
-
-def display_discovery(discovery):
-    value = copy.deepcopy(public_discovery(discovery))
-    if value.get("plan"):
-        value["plan"]["candidate_hypotheses"] = [
-            display_labels(row, selection=True) for row in value["plan"].get("candidate_hypotheses", [])
-        ]
-    if value.get("analysis"):
-        value["analysis"]["recommendations"] = [
-            display_labels(row, selection=True) for row in value["analysis"].get("recommendations", [])
-        ]
-    return value
-
 
 def _public_workspace(state):
     return {
@@ -243,532 +190,86 @@ def public_state():
     return ws.public_state(_public_workspace, cache_token=classification_translations.cache_token)
 
 
+def classification_key(candidate):
+    return query_service.classification_key(candidate)
+
+
+def normalize_selection(values, candidates=None):
+    return query_service.normalize_selection(ws, values, candidates)
+
+
+def set_classification_view(items, **metadata):
+    return query_service.set_classification_view(ws, items, **metadata)
+
+
+def classification_overview(items=None):
+    return query_service.classification_overview(ws, items)
+
+
+def previous_query_for_context(ignore_classifications=False):
+    return query_service.previous_query_for_context(ws, ignore_classifications)
+
+
+def make_query(refine=False, include=None, exclude=None, preserve_conditions=False, classification_keys=None):
+    return query_service.make_query(
+        ws,
+        refine,
+        include,
+        exclude,
+        preserve_conditions,
+        classification_keys,
+        refinement_terms=refinement_terms,
+    )
+
+
+def candidate_list(text, use_llm=False, *, notices=None, proposal=None, connection=None, research_context=None):
+    return candidate_service.candidate_list(
+        ws,
+        text,
+        use_llm,
+        notices=notices,
+        proposal=proposal,
+        connection=connection,
+        research_context=research_context,
+        complete=complete,
+    )
+
+
 def progress(value, message):
-    with LOCK:
-        JOB.update(progress=value, message=message)
+    return job_runner.progress(ws, value, message)
 
 
 def begin_job(action, *, kind=None, mode=None):
-    with LOCK:
-        idle()
-        STOP.clear()
-        JOB.update(
-            id=uuid.uuid4().hex,
-            status="running",
-            progress=0,
-            message="準備中",
-            error=None,
-            kind=kind,
-            mode=mode,
-            started_at=time.time(),
-            completed_at=None,
-            stop_requested=False,
-        )
+    return job_runner.begin_job(ws, action, kind=kind, mode=mode, save=save)
 
-    def worker():
-        try:
-            action()
-            with LOCK:
-                # Publish terminal job status only after the workspace commit.
-                save()
-                if STOP.is_set():
-                    JOB.update(status="cancelled", message="停止しました")
-                else:
-                    JOB.update(status="done", progress=100, message="完了しました")
-                JOB["completed_at"] = time.time()
-        except Exception as exc:
-            with LOCK:
-                try:
-                    save()
-                except Exception:
-                    exc = ValueError("保存に失敗しました。保存先の空き容量と書き込み権限を確認してください。")
-                JOB.update(
-                    status="cancelled" if STOP.is_set() else "error",
-                    error=str(exc)
-                    if isinstance(exc, (ValueError, HTTPException))
-                    else "処理に失敗しました。設定・入力データ・依存パッケージを確認してください。",
-                    message="処理を終了しました",
-                )
-                JOB["completed_at"] = time.time()
 
-    threading.Thread(target=worker, daemon=True).start()
-    return {"job_id": JOB["id"]}
+def assessment_options(body, *, allow_empty=False):
+    return judgment_service.assessment_options(ws, body, allow_empty=allow_empty)
+
+
+def run_llm_assessment(body, progress_callback=None, *, _prepared=None):
+    return judgment_service.run_llm_assessment(
+        ws,
+        body,
+        progress_callback,
+        _prepared=_prepared,
+        complete=complete,
+        save=save,
+        progress=progress,
+        checkpoint_batches=LLM_CHECKPOINT_BATCHES,
+    )
+
+
+def run_model_training(mode, include_agent=False, progress_callback=None):
+    return judgment_service.run_model_training(
+        ws, mode, include_agent, progress_callback, train=train, save=save, progress=progress
+    )
 
 
 def checked_text(value, limit=3000):
     if not isinstance(value, str) or len(value) > limit:
         raise ValueError(f"入力は{limit}文字以内の文字列にしてください。")
     return value.strip()
-
-
-def llm_classification_text(kind, code):
-    """Strip only unambiguous display decoration, keeping incomplete symbols."""
-    aliases = {"IPC": "IPC", "FI": "FI", "F-TERM": "F-term", "FTERM": "F-term", "F_TERM": "F-term", "Fターム": "F-term"}
-    kind = aliases.get(unicodedata.normalize("NFKC", kind).strip().upper())
-    if kind is None:
-        raise ValueError("分類体系は IPC、FI または F-term を指定してください。")
-    text = unicodedata.normalize("NFKC", code).strip()
-    prefix = re.match(r"^(IPC|FI|CPC|F-TERM|FTERM|F_TERM|Fターム)\s*:\s*(.*)$", text, re.I)
-    if prefix:
-        if aliases.get(prefix[1].upper()) != kind:
-            raise ValueError("kind とコードに付いた分類体系が一致しません。")
-        text = prefix[2]
-    text = re.sub(r"\s*\(\d{4}\.(?:0[1-9]|1[0-2])\)\s*$", "", text)
-    return kind, text
-
-
-def normalize_llm_classification(kind, code):
-    """Remove unambiguous display decoration; never repair or infer a code."""
-    kind, text = llm_classification_text(kind, code)
-    try:
-        return kind, explorer.normalize(kind, text)
-    except ValueError:
-        raise ValueError(
-            "コード形式が不完全、または余分な文字が含まれています。1件に1つの完全なコードが必要です。"
-        ) from None
-
-
-def rejected_candidate_guidance(item):
-    """Offer a separately reviewed broader scope, never validate a rejected code."""
-    result = copy.deepcopy(item)
-    try:
-        kind, text = llm_classification_text(item.get("kind", ""), item.get("code", ""))
-    except (ValueError, TypeError, AttributeError):
-        return result
-    if kind != "IPC":
-        return result
-    text = re.sub(r"\s+", "", text).upper()
-    # Never discard FI suffixes, multiple codes, arbitrary prose or wildcards.
-    match = re.fullmatch(r"([A-H]\d{2}[A-Z])(\d{1,4})(?:/(\d{1,6}))?", text)
-    if not match:
-        return result
-    if explorer.ipc_catalog.lookup("IPC", text):
-        return result
-    revision = classification_revision_notes.lookup(text)
-    if revision:
-        result["revision"] = revision
-        result["reason"] = revision["explanation"]
-    scopes = []
-    # A complete, missing subgroup can be explored from its existing main group.
-    # A slash-less symbol is not silently completed with /00.
-    if match[3] is not None:
-        scopes.append(match[1] + str(int(match[2])) + "/00")
-    scopes.append(match[1])
-    for code in scopes:
-        known = explorer.lookup("IPC", code)
-        if not known or code == text:
-            continue
-        result["broader_candidate"] = explorer.enrich(
-            {
-                **known,
-                "reason": f"{text} の代替と確定した分類ではなく、コードの先頭部分から確認できる広い探索起点です。正式な定義と調査テーマへの適合性を確認してください。",
-                "recommendation_method": "broader_review",
-            }
-        )
-        break
-    return result
-
-
-def display_candidate_proposal(proposal):
-    if not isinstance(proposal, dict):
-        return proposal
-    result = copy.deepcopy(proposal)
-    result["rejected"] = [
-        rejected_candidate_guidance({**item, "index": item.get("index", index)})
-        for index, item in enumerate(result.get("rejected", []), 1)
-    ]
-    # Older saved reports repeat every rejection in notices. The cards now carry
-    # the explanation, while successful/zero-result notices remain unchanged.
-    if result["rejected"]:
-        result["notices"] = [
-            note for note in result.get("notices", []) if not note.startswith(("LLM提案", "LLMが提案した "))
-        ]
-        result["notices"].insert(
-            0,
-            f"LLM提案{result.get('returned_count', 0)}件のうち{len(result['rejected'])}件を除外しました。詳細と確認できる上位分類を上に表示しています。",
-        )
-    return result
-
-
-def llm_candidate_rows(result, notices, proposal=None):
-    """Validate model data before touching the workspace or enriching codes."""
-    if not isinstance(result, dict) or not isinstance(result.get("candidates"), list):
-        raise ValueError(
-            'LLMのJSONには candidates 配列が必要です。候補がない場合は {"candidates":[]} を返す必要があります。'
-        )
-    items = result["candidates"]
-    if proposal is not None:
-        proposal.update(returned_count=len(items), rejected=[], duplicate_count=0)
-    if len(items) > 12:
-        raise ValueError("LLMの分類候補が多すぎます。最大12件の短い候補一覧で再実行してください。")
-    rows, rejected, seen, normalizations = [], [], set(), []
-
-    def reject(index, item, reason):
-        item = item if isinstance(item, dict) else {}
-
-        def display(value):
-            return value[:80] if isinstance(value, str) else "（文字列ではありません）"
-
-        rejected.append(
-            rejected_candidate_guidance(
-                dict(index=index, kind=display(item.get("kind", "")), code=display(item.get("code", "")), reason=reason)
-            )
-        )
-
-    for index, item in enumerate(items, 1):
-        if (
-            not isinstance(item, dict)
-            or not isinstance(item.get("kind"), str)
-            or len(item["kind"]) > 32
-            or not isinstance(item.get("code"), str)
-            or len(item["code"]) > 64
-            or not isinstance(item.get("reason", ""), str)
-        ):
-            reject(index, item, "各候補には kind（IPC / F-term）と文字列の code・reason が必要です。")
-            continue
-        try:
-            kind, code = normalize_llm_classification(item["kind"], item["code"])
-        except ValueError as error:
-            reject(index, item, str(error))
-            continue
-        if (kind, code) in seen:
-            if proposal is not None:
-                proposal["duplicate_count"] += 1
-            continue
-        seen.add((kind, code))
-        known = explorer.lookup(kind, code)
-        if kind == "FI" and not known:
-            reject(
-                index,
-                {"kind": kind, "code": code},
-                "収録FI表（2026.04）で未確認です。版の相違・誤記などを確認してください。",
-            )
-            continue
-        if kind == "IPC" and not known:
-            reject(
-                index,
-                {"kind": kind, "code": code},
-                "収録IPC辞書（2026.01）で確認できません。旧版・誤記の可能性があります。",
-            )
-            continue
-        if kind != item["kind"] or code != item["code"]:
-            normalizations.append(
-                dict(index=index, kind=kind, code=code, input_kind=item["kind"], input_code=item["code"])
-            )
-        # Model-written titles are not definitions. Use official captions when
-        # available, otherwise show the code with explicit unverified status.
-        row = explorer.enrich(
-            dict(
-                kind=kind,
-                code=code,
-                title=code,
-                group="LLM候補",
-                reason="LLMの探索仮説（適合性は未確認）：" + item.get("reason", "").strip()[:300],
-                terms=[],
-                score=0,
-                recommendation_method="llm",
-            )
-        )
-        rows.append(row)
-    if proposal is not None:
-        proposal.update(
-            accepted_count=len(rows), rejected=rejected, rejected_count=len(rejected), normalizations=normalizations
-        )
-    if rejected:
-        details = [f"{item['kind']} {item['code'] or '（コードなし）'}: {item['reason']}" for item in rejected]
-        notice = f"LLM提案{len(items)}件のうち{len(rejected)}件を除外しました。" + " / ".join(details)
-        if not rows:
-            raise ValueError(
-                "LLMの提案に反映できる分類がありません。"
-                + notice
-                + " 現行の完全なコード、または B60L のような上位分類で再生成してください。前回の候補・選択は保持しています。"
-            )
-        notices.append(notice)
-    if normalizations:
-        notices.append(
-            "体系名・空白・全半角・接頭ラベル・版注記などの表記を統一して照合しました。"
-            + " / ".join(
-                f"{item['input_kind']} {item['input_code']} → {item['kind']} {item['code']}" for item in normalizations
-            )
-        )
-    if not items:
-        notices.append("LLMからの分類候補は0件でした。辞書からの探索仮説を表示します。")
-    if rows:
-        notices.append(
-            "LLMによる分類名は採用せず、収録済みの公式名称を表示します。主題への適合性は定義を確認してください。"
-        )
-    return rows
-
-
-def candidate_list(text, use_llm=False, *, notices=None, proposal=None, connection=None, research_context=None):
-    import classification_retrieval as retrieval
-    import classification_planner as planner
-
-    notices = notices if notices is not None else []
-    connection = connection if connection is not None else SETTINGS
-    concepts = (research_context or {}).get("concepts", [])
-    if concepts:
-        elements = [
-            dict(
-                id=c["id"],
-                name=c["name"],
-                terms=c["terms"] + c.get("abstract_terms", []),
-                relation=c.get("reason", "調査観点"),
-            )
-            for c in concepts
-            if c.get("role") != "exclude"
-        ]
-    elif use_llm:
-        decomposition = planner.decompose(text, connection, complete, research_context)
-        elements = decomposition["elements"]
-        notices.extend(decomposition["questions"])
-    else:
-        elements = retrieval.input_elements(text)
-        notices.append(
-            "LLM未使用: 入力語句で公式分類表を検索しました。自動の意味分解・定義の適合判定は行っていません。"
-        )
-    retrieved = retrieval.retrieve_elements(elements, limit=96 if use_llm else 48)
-    rejected = []
-    if use_llm:
-        rows, rejected = planner.review(text, elements, retrieved, connection, complete, research_context)
-        notices.append(
-            f"技術を{len(elements)}要素に分解 → 公式辞書から{len(retrieved)}候補を取得 → 定義照合で{len(rows)}候補を提案しました。分類は未選択です。"
-        )
-    else:
-        rows = retrieved
-    missing = planner.unresolved(elements, rows)
-    if missing:
-        notices.append(
-            "分類候補が見つからない要素: "
-            + "、".join(e["name"] for e in missing)
-            + "。要素の説明や同義語を補って再探索できます。"
-        )
-    for row in rows:
-        row["recommendation_sources"] = [
-            dict(
-                type="llm" if use_llm else "element_dictionary",
-                keywords=text,
-                kind=row["kind"],
-                code=row["code"],
-                reason=row["reason"],
-                source=row.get("source", ""),
-            )
-        ]
-    result = [explorer.enrich(row) for row in rows]
-    if proposal is not None:
-        proposal.update(
-            elements=elements,
-            unresolved_elements=missing,
-            pipeline="elements_dictionary_review",
-            retrieved_count=len(retrieved),
-            returned_count=len(rows) + len(rejected),
-            accepted_count=len(rows),
-            rejected=rejected,
-            rejected_count=len(rejected),
-            duplicate_count=0,
-            items=copy.deepcopy(result) if use_llm else [],
-            decomposition_method="llm" if use_llm else "input_phrases",
-        )
-    return result
-
-
-def set_classification_view(items, **metadata):
-    selected = normalize_selection(STATE["selected"])
-    additional = items + ([metadata["focus"]] if metadata.get("focus") else [])
-    merged = explorer.merge_candidates(STATE["candidates"], additional)
-    STATE.update(
-        candidates=merged,
-        selected=selected,
-        classification_view={"keys": [classification_key(c) for c in items], **metadata},
-    )
-
-
-def classification_overview(items=None):
-    items = STATE["candidates"] if items is None else items
-    coarse = explorer.overview(items, STATE["keywords"])
-    origins = [c for c in STATE["candidates"] if c.get("origins")]
-    rows = explorer.merge_candidates(coarse, origins)
-    proposal = STATE.get("candidate_proposal") or {}
-    if proposal.get("llm_used") and proposal.get("keywords") == STATE["keywords"]:
-        rows = explorer.merge_candidates(rows, proposal.get("items", []))
-    note = (
-        "材料・製造・界面などの観点から、広い分類を表示しています。候補は探索仮説です。気になる分類の下位へ進んで適合性を確認できます。"
-        if STATE["keywords"].strip()
-        else "キーワードが空欄のため、現在の候補と推薦した分類の上位群を表示しています。キーワードを入力すると他分野の候補も探せます。"
-    )
-    set_classification_view(rows, direction="overview", note=note, total=len(rows), next_offset=None, trail=[])
-
-
-def previous_query_for_context(ignore_classifications=False):
-    if not STATE["queries"]:
-        return {}
-    previous = STATE["queries"][-1]
-    if (
-        previous.get("keyword_context") != STATE["keywords"]
-        if previous.get("boolean_tree")
-        else previous.get("keywords") != keywords(STATE["keywords"])
-    ):
-        return {}
-    if not ignore_classifications and {classification_key(c) for c in previous.get("classifications", [])} != set(
-        normalize_selection(STATE["selected"])
-    ):
-        return {}
-    return previous
-
-
-def make_query(refine=False, include=None, exclude=None, preserve_conditions=False, classification_keys=None):
-    words = keywords(STATE["keywords"])
-    original_keys = normalize_selection(STATE["selected"])
-    selected_keys = original_keys
-    pool = STATE["candidates"]
-    classification_changes = None
-    if classification_keys is not None:
-        if (
-            not refine
-            or not isinstance(classification_keys, list)
-            or len(classification_keys) > 1500
-            or any(not isinstance(key, str) or ":" not in key for key in classification_keys)
-        ):
-            raise ValueError("改善案の分類は体系付きキーのリストで指定してください。")
-        feedback = classification_feedback(STATE["patents"], original_keys)
-        evidence_pool = {item["key"]: item for item in feedback["candidates"]}
-        allowed = {classification_key(item) for item in pool} | set(evidence_pool)
-        if any(key not in allowed for key in classification_keys):
-            raise ValueError("分類候補にないキーが含まれています。要否判定から再分析してください。")
-        incoming = []
-        evidence = []
-        for key in dict.fromkeys(classification_keys):
-            if key in evidence_pool:
-                item = copy.deepcopy(evidence_pool[key])
-                origin = feedback_origin(item)
-                item.setdefault("origins", []).append(origin)
-                incoming.append(item)
-                evidence.append(origin)
-        pool = explorer.merge_candidates(pool, incoming)
-        selected_keys = normalize_selection(classification_keys, pool)
-        classification_changes = dict(
-            added_keys=[key for key in selected_keys if key not in original_keys],
-            removed_keys=[key for key in original_keys if key not in selected_keys],
-            selected_keys=list(selected_keys),
-            evidence=evidence,
-            note=feedback["note"],
-        )
-        preserve_conditions = True
-    selected = copy.deepcopy([c for c in pool if classification_key(c) in selected_keys])
-    if not words and not selected and not (refine and STATE["queries"] and STATE["queries"][-1].get("boolean_tree")):
-        raise ValueError("キーワードを入力するか、検索に使う分類を選んでください。")
-
-    def quote(s):
-        return '"' + s.replace('"', " ").replace("\n", " ").strip() + '"'
-
-    base = " AND ".join("TEXT=" + quote(w) for w in words)
-    classes = " OR ".join(c["kind"].upper() + "=" + quote(c["code"]) for c in selected)
-    query = "(" + base + ")" if base else ""
-    if classes:
-        query += ("\nAND " if query else "") + "(" + classes + ")"
-    previous = previous_query_for_context(preserve_conditions) if refine else {}
-    if refine and STATE["queries"] and STATE["queries"][-1].get("boolean_tree") and not previous:
-        raise ValueError(
-            "観点・取り込み式と現在のキーワードまたは分類が変わっています。調査ナビで案を作り直すか、分類の改善案として更新してください。元の論理条件は保持しています。"
-        )
-    old_include, old_exclude = previous.get("include_terms", []), previous.get("exclude_terms", [])
-    for values in (include, exclude):
-        if values is not None and (not isinstance(values, list) or any(not isinstance(v, str) for v in values)):
-            raise ValueError("追加語・除外語は語句のリストにしてください。")
-    include = list(dict.fromkeys(old_include if include is None else include))
-    exclude = list(dict.fromkeys(old_exclude if exclude is None else exclude))
-    term_options = refinement_terms(STATE["patents"]) if refine else {"include": [], "exclude": []}
-    term_options = {
-        k: list(dict.fromkeys(term_options[k] + (old_include if k == "include" else old_exclude))) for k in term_options
-    }
-    for kind, chosen_terms in (("include", include), ("exclude", exclude)):
-        if any(term not in term_options[kind] for term in chosen_terms):
-            raise ValueError("対応する追加・除外候補にない語が含まれています。再分析してください。")
-    if include:
-        query += "\nAND (" + " OR ".join("TEXT=" + quote(w) for w in include) + ")"
-    if exclude:
-        kept = [r for r in STATE["patents"] if r.get("label") == "keep"]
-        unsafe = [
-            w for w in exclude if any(w.casefold() in (r["title"] + r.get("abstract", "")).casefold() for r in kept)
-        ]
-        if unsafe:
-            raise ValueError("必要特許にも出現するため除外できない語: " + "、".join(unsafe))
-        query += "\nNOT (" + " OR ".join("TEXT=" + quote(w) for w in exclude) + ")"
-    kept = [r for r in STATE["patents"] if r.get("label") == "keep"]
-    retained = sum(
-        not include or any(w.casefold() in (r["title"] + " " + r.get("abstract", "")).casefold() for w in include)
-        for r in kept
-    )
-    removed = [w for w in old_include if w not in include] + [w for w in old_exclude if w not in exclude]
-    item = dict(
-        id=uuid.uuid4().hex,
-        version=len(STATE["queries"]) + 1,
-        created_at=time.strftime("%Y-%m-%d %H:%M"),
-        expression=query,
-        type="改善案" if refine else "初案",
-        terms=term_options,
-        keywords=words,
-        classifications=selected,
-        include_terms=include,
-        exclude_terms=exclude,
-        removed_terms=removed,
-        known_keep_coverage={"retained": retained, "total": len(kept)} if include and kept else None,
-        note="DB非依存の設計式です。TEXT・IPC・F-TERMは検索先の入力欄に割り当ててください。分類群はOR、キーワードはANDです。",
-        changes=(
-            "要否判断から特徴語を抽出。NOTは選択された語だけ適用。" if refine else "入力語と選択分類から初案を作成。"
-        ),
-    )
-    if not refine:
-        groups = {}
-        for index, word in enumerate(words):
-            union, _ = suggest_keyword_or_group(word)
-            key = ("union", union) if union else ("single", index)
-            groups.setdefault(key, []).append(Node("text", word))
-        if any(len(alternatives) > 1 for alternatives in groups.values()):
-            concepts = group("and", [group("or", alternatives) for alternatives in groups.values()])
-            draft = dict(concept_tree=tree_data(concepts))
-            base_tree, boolean_tree = refined_tree(draft, selected, include, exclude)
-            item.update(
-                concept_tree=tree_data(concepts),
-                base_boolean_tree=base_tree,
-                boolean_tree=boolean_tree,
-                keyword_context=STATE["keywords"],
-                expression=describe_tree(tree_from_data(boolean_tree)),
-                note="既知の代替表現を仮のORグループにまとめ、別の条件とANDで結びました。調査ナビで意味・和集合の範囲を見直せます。",
-            )
-            item["term_catalog"] = terms_of(item)
-    if previous.get("boolean_tree"):
-        base_tree, boolean_tree = refined_tree(previous, selected, include, exclude)
-        for name in (
-            "concept_tree",
-            "facets",
-            "purpose",
-            "provenance",
-            "target_ids",
-            "prompt_version",
-            "keyword_context",
-            "invention_context",
-            "invention_plan_id",
-        ):
-            if name in previous:
-                item[name] = copy.deepcopy(previous[name])
-        item.update(
-            base_boolean_tree=base_tree,
-            boolean_tree=boolean_tree,
-            expression=describe_tree(tree_from_data(boolean_tree)),
-            note="観点・取り込み式の論理構造を保持し、追加語と除外語を更新しています。",
-        )
-        item["term_catalog"] = terms_of(item)
-    if classification_changes is not None:
-        item["classification_changes"] = classification_changes
-        item["changes"] = (
-            "要否判定・学習予測の分類と特徴語から改善。FI・Fターム由来のIPCは対応づけた候補として扱い、選択した分類をOR条件に反映。NOTは選択された語だけ適用。"
-        )
-        STATE.update(candidates=pool, selected=selected_keys)
-    STATE["queries"].append(item)
-    if isinstance(STATE.get("research_workbench"), dict):
-        STATE["research_workbench"]["active_query_id"] = item["id"]
-    return item
 
 
 @app.get("/api/state")
@@ -1203,248 +704,6 @@ def labels(body: dict):
     return public_state()
 
 
-def assessment_options(body, *, allow_empty=False):
-    """Snapshot only the applied query; unsaved workbench plans are not criteria."""
-    workbench = STATE.get("research_workbench") or {}
-    active_id = workbench.get("active_query_id")
-    adopted = next((query for query in STATE["queries"] if active_id and query.get("id") == active_id), None)
-    return llm_judgment.prepare(
-        body,
-        STATE["patents"],
-        STATE["keywords"],
-        SETTINGS["provider"],
-        allow_empty=allow_empty,
-        adopted_query=copy.deepcopy(adopted),
-    )
-
-
-LLM_CHECKPOINT_BATCHES = 10
-
-
-def run_llm_assessment(body, progress_callback=None, *, _prepared=None):
-    """Synchronous shared judgment service; the caller owns JOB and STOP."""
-    report_progress = progress_callback or progress
-    with LOCK:
-        if _prepared is None:
-            options = assessment_options(body, allow_empty=True)
-            rows_snapshot = copy.deepcopy(STATE["patents"])
-            settings_snapshot = copy.deepcopy(SETTINGS)
-        else:
-            options, rows_snapshot, settings_snapshot = _prepared
-        if not options["target_ids"]:
-            return dict(
-                skipped=True, status="completed", completed_count=0, total_count=0, judged_count=0, deferred_count=0
-            )
-        checkpoint_training = copy.deepcopy(STATE["training"])
-        checkpoint_orchestration = copy.deepcopy(STATE.get("orchestration"))
-        checkpoint_progress = {key: JOB[key] for key in ("progress", "message")}
-    initialized = False
-    pending_rows = {}
-    pending_batches = 0
-    saved_metadata = None
-    checkpoint_failed = False
-
-    def remember(row):
-        # Keep one undo snapshot per changed row since the last durable checkpoint.
-        if id(row) not in pending_rows:
-            pending_rows[id(row)] = (row, copy.deepcopy(row))
-
-    def publish(updates, metadata):
-        nonlocal initialized, pending_batches, saved_metadata, checkpoint_failed
-        nonlocal checkpoint_training, checkpoint_orchestration, checkpoint_progress
-        with LOCK:
-            previous_status = (STATE.get("training") or {}).get("status")
-            first_publish = not initialized
-            temp_path = DATA / "workspace.tmp"
-            attempted_save = False
-            previous_temp = None
-            try:
-                if not initialized:
-                    # An error-only report after failed initialization must
-                    # preserve the scores that existed before this job.
-                    if metadata["status"] == "running":
-                        prior = STATE.get("training") or {}
-                        same_judgment = (
-                            prior.get("mode") == "llm"
-                            and prior.get("criteria") == options["criteria"]
-                            and prior.get("provider") == settings_snapshot.get("provider")
-                            and prior.get("model") == settings_snapshot.get("model")
-                            and prior.get("context_fingerprint") == options.get("context_fingerprint")
-                        )
-                        for row in STATE["patents"]:
-                            if (
-                                same_judgment
-                                and row.get("label") in ("keep", "exclude")
-                                and row.get("label_source") == "agent"
-                                and row.get("score_source") == "llm"
-                            ):
-                                continue
-                            remember(row)
-                            row["score"] = None
-                            row["score_source"] = None
-                    initialized = True
-                current = {row["id"]: row for row in STATE["patents"]} if updates else {}
-                if updates and STOP.is_set():
-                    previous = STATE.get("training") or {}
-                    for key in (
-                        "completed_count",
-                        "judged_count",
-                        "deferred_count",
-                        "protected_count",
-                        "label_counts",
-                        "progress",
-                    ):
-                        if key in previous:
-                            metadata[key] = copy.deepcopy(previous[key])
-                    metadata.update(
-                        status="cancelled",
-                        stage="停止",
-                        message=f"停止 {metadata['completed_count']}/{metadata['total_count']}",
-                    )
-                    updates = []
-                for update in updates:
-                    row = current.get(update["id"])
-                    if row is None or row.get("label_source") == "human" or row.get("label"):
-                        metadata["protected_count"] += 1
-                        if update["label"]:
-                            metadata["judged_count"] -= 1
-                            metadata["label_counts"][update["label"]] -= 1
-                        else:
-                            metadata["deferred_count"] -= 1
-                        continue
-                    remember(row)
-                    row.update({key: value for key, value in update.items() if key != "id"})
-                if checkpoint_failed:
-                    # llm_judgment may have accepted several in-memory batches.
-                    # A failed checkpoint rolls ALL of those counts back too.
-                    for key in ("completed_count", "judged_count", "deferred_count", "protected_count", "progress"):
-                        metadata[key] = (saved_metadata or {}).get(key, 0)
-                    metadata["label_counts"] = copy.deepcopy(
-                        (saved_metadata or {}).get("label_counts", {"keep": 0, "exclude": 0})
-                    )
-                    metadata["message"] = (
-                        f"{metadata['stage']} {metadata['completed_count']}/{metadata['total_count']}。"
-                        "保存に失敗したため、最後の保存以降の未保存判定は取り消しました。"
-                    )
-                pending_batches += bool(updates)
-                terminal = metadata["status"] in ("completed", "cancelled", "error")
-                should_save = (
-                    first_publish
-                    or terminal
-                    or metadata["status"] != previous_status
-                    or pending_batches >= LLM_CHECKPOINT_BATCHES
-                )
-                metadata["saved_count"] = (
-                    metadata["completed_count"] if should_save else (saved_metadata or {}).get("completed_count", 0)
-                )
-                if not terminal:
-                    metadata["message"] += (
-                        f"（保存済み {metadata['saved_count']}件。保存失敗・アプリ終了時は、"
-                        "最後の保存以降の判定が失われます。）"
-                    )
-                metadata.update(
-                    job_id=JOB["id"], provider=settings_snapshot["provider"], model=settings_snapshot.get("model", "")
-                )
-                STATE["training"] = metadata
-                report_progress(metadata["progress"], metadata["message"])
-                if should_save:
-                    previous_temp = temp_path.read_bytes() if temp_path.exists() else None
-                    attempted_save = True
-                    save()
-                    checkpoint_training = copy.deepcopy(metadata)
-                    checkpoint_orchestration = copy.deepcopy(STATE.get("orchestration"))
-                    checkpoint_progress = {key: JOB[key] for key in ("progress", "message")}
-                    saved_metadata = copy.deepcopy(metadata)
-                    pending_rows.clear()
-                    pending_batches = 0
-                    checkpoint_failed = False
-            except Exception:
-                for row, snapshot in pending_rows.values():
-                    if row.get("label_source") == "human" and snapshot.get("label_source") != "human":
-                        continue
-                    row.clear()
-                    row.update(snapshot)
-                pending_rows.clear()
-                pending_batches = 0
-                checkpoint_failed = True
-                STATE["training"] = copy.deepcopy(checkpoint_training)
-                if isinstance(checkpoint_orchestration, dict) and isinstance(STATE.get("orchestration"), dict):
-                    STATE["orchestration"].clear()
-                    STATE["orchestration"].update(copy.deepcopy(checkpoint_orchestration))
-                elif checkpoint_orchestration is not None:
-                    STATE["orchestration"] = copy.deepcopy(checkpoint_orchestration)
-                JOB.update(checkpoint_progress)
-                initialized = saved_metadata is not None
-                try:
-                    if not attempted_save:
-                        pass
-                    elif previous_temp is None:
-                        temp_path.unlink(missing_ok=True)
-                    else:
-                        temp_path.write_bytes(previous_temp)
-                except OSError:
-                    raise ValueError(
-                        "LLM判定の保存に失敗し、一時ファイルも復元できませんでした。保存先の空き容量と書き込み権限を確認してください。"
-                    ) from None
-                raise ValueError(
-                    "LLM判定の保存に失敗しました。未保存のバッチを取り消し、直前に保存できた判定を保持しています。保存先の空き容量と書き込み権限を確認してください。"
-                ) from None
-            return copy.deepcopy(metadata)
-
-    def request_judgment(system, payload):
-        if settings_snapshot.get("provider") == "local":
-            return complete(
-                settings_snapshot,
-                system,
-                payload,
-                response_schema=llm_judgment.response_schema(payload["required_ids"]),
-            )
-        return complete(settings_snapshot, system, payload)
-
-    return llm_judgment.run(rows_snapshot, options, request_judgment, publish, STOP.is_set)
-
-
-def run_model_training(mode, include_agent=False, progress_callback=None):
-    """Train using the same service from the map, agent and orchestration."""
-    if mode not in ("lightweight", "transformer"):
-        raise ValueError("学習方式は軽量学習かTransformerを選んでください。")
-    report_progress = progress_callback or progress
-    with LOCK:
-        rows = copy.deepcopy(STATE["patents"])
-        settings = copy.deepcopy(SETTINGS)
-        job_id = JOB["id"]
-    result = train(
-        rows,
-        mode,
-        settings["transformer_model"],
-        settings["allow_model_download"],
-        str(DATA / "models" / job_id),
-        report_progress,
-        STOP.is_set,
-        bool(include_agent),
-    )
-    with LOCK:
-        if STOP.is_set():
-            return dict(status="cancelled")
-        old_rows = copy.deepcopy(STATE["patents"])
-        old_training = copy.deepcopy(STATE["training"])
-        try:
-            for row in STATE["patents"]:
-                row["score"] = round(result["scores"][row["id"]], 4)
-                row["score_source"] = mode
-            result.pop("scores")
-            result.update(mode=mode, job_id=job_id, status="completed")
-            STATE["training"] = result
-            save()
-        except Exception:
-            for row, previous in zip(STATE["patents"], old_rows):
-                row.clear()
-                row.update(previous)
-            STATE["training"] = old_training
-            raise
-    return result
-
-
 @app.post("/api/train")
 def training(body: dict):
     mode = body.get("mode", "lightweight")
@@ -1463,10 +722,7 @@ def training(body: dict):
 
 @app.post("/api/job/stop")
 def stop():
-    STOP.set()
-    with LOCK:
-        JOB["stop_requested"] = True
-    return {"message": "停止要求を送信しました。実行中のAPI応答・モデル読込後に停止します。"}
+    return job_runner.request_stop(ws)
 
 
 @app.post("/api/settings")
