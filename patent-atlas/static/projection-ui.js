@@ -56,8 +56,14 @@ function projectionStill() {
 function projectionControlsHtml() {
   return `<details class="panel-help"><summary role="button" aria-label="特許マップのヘルプ">?</summary><div><p id="projection-method-note"></p></div></details><div class="projection-controls"><label>配置を比較<select id="projection-method" aria-label="特許の配置方式"><option value="pca">PCA · 全体の傾向</option><option value="tsne">t-SNE · 局所の近さ</option><option value="umap">UMAP · 近傍のつながり</option></select></label><div class="button-row"><button class="button small" id="projection-pin">選択を追跡に固定</button><button class="button small" id="projection-pan">✥ 移動</button><button class="button small" id="projection-zoom-in" aria-label="マップを拡大">＋</button><button class="button small" id="projection-zoom-out" aria-label="マップを縮小">−</button><button class="button small" id="projection-reset">全体表示</button></div></div><p id="projection-status" class="caption projection-status" role="status">配置を準備しています…</p><div class="projection-pins" id="projection-pins" aria-label="追跡する特許"></div>`;
 }
+function projectionEvaluationHeadingHtml(e) {
+  const toggle = e
+    ? `<label class="check"><input id="projection-boundary" type="checkbox" ${atlasProjection.boundary ? 'checked' : ''}>確認候補を強調</label>`
+    : '';
+  return `<div class="panel-heading"><div><h3>検索式の採用</h3></div>${toggle}</div>`;
+}
 function projectionEvaluationHtml(e) {
-  if (!e) return '<p class="caption">人の判定と確認候補を集計しています…</p>';
+  if (!e) return `${projectionEvaluationHeadingHtml(null)}<p class="caption">人の判定と確認候補を集計しています…</p>`;
   const percent = e.signal_ratio == null ? '—' : (e.signal_ratio * 100).toFixed(1) + '%';
   const sn =
     e.signal_noise_ratio == null
@@ -65,7 +71,7 @@ function projectionEvaluationHtml(e) {
         ? '不要0件'
         : '未評価'
       : e.signal_noise_ratio.toFixed(2) + ' : 1';
-  return `<div class="panel-heading"><div><h3>検索式の採用</h3></div><label class="check"><input id="projection-boundary" type="checkbox" ${atlasProjection.boundary ? 'checked' : ''}>確認候補を強調</label></div><div class="projection-metrics"><div><small>人が確認したS/N</small><strong>${esc(sn)}</strong></div><div><small>確認済み部分の必要率</small><strong>${esc(percent)}</strong></div><div><small>人の確定判定</small><strong>${Number(e.human_reviewed)} 件</strong><span>必要 ${Number(e.human_keep)} / 不要 ${Number(e.human_exclude)}</span></div><div><small>AI判定 / 未判定</small><strong>${Number(e.machine_keep) + Number(e.machine_exclude)} / ${Number(e.unreviewed_count)}</strong><span>保留 ${Number(e.hold_count)} 件</span></div></div><p class="caption">${e.unknown_source_count ? '判定元が不明な旧判定 ' + Number(e.unknown_source_count) + ' 件はS/N・AI件数に含めていません。 ' : ''}${esc(e.scope_note)}${e.sn_status === 'no_excludes' ? ' 不要例が0件のためS/Nの数値は算出していません。' : ''}</p><details class="projection-boundary-details" ${atlasProjection.boundary ? 'open' : ''}><summary>境界・保留の確認候補 ${Number(e.boundary_candidate_count || 0)} 件</summary><p class="caption">${esc(e.boundary_note)} モデル関連度0.5付近・LLM保留は別の理由として表示します。最大100件。</p><div class="projection-candidates">${(e.boundary_candidates || []).map((c) => `<button class="projection-candidate" data-projection-focus="${esc(c.id)}"><b>${esc(c.id)}</b><span>${esc(c.reason)}</span>${c.keep_neighbor ? `<small>必要例 ${esc(c.keep_neighbor)} / 不要例 ${esc(c.exclude_neighbor)}</small>` : ''}</button>`).join('') || '<p class="caption">現在の条件に当たる候補はありません。必要・不要の人の判定例が揃うと近傍の比較も行います。</p>'}</div></details>${e.target_count ? `<p class="caption">現在の特許群にあるターゲット：${Number(e.target_found)} / ${Number(e.target_count)} 件${e.missing_target_ids?.length ? ' · 未回収 ' + e.missing_target_ids.map(esc).join('、') : ''}（登録した種特許を含む場合があります。実際の検索による回収はCSVの履歴で確認）</p>` : ''}<p class="caption">検索式の採用・終了は、確認候補とターゲットの回収状況、収束履歴を合わせて判断してください。</p>`;
+  return `${projectionEvaluationHeadingHtml(e)}<div class="projection-metrics"><div><small>人が確認したS/N</small><strong>${esc(sn)}</strong></div><div><small>確認済み部分の必要率</small><strong>${esc(percent)}</strong></div><div><small>人の確定判定</small><strong>${Number(e.human_reviewed)} 件</strong><span>必要 ${Number(e.human_keep)} / 不要 ${Number(e.human_exclude)}</span></div><div><small>AI判定 / 未判定</small><strong>${Number(e.machine_keep) + Number(e.machine_exclude)} / ${Number(e.unreviewed_count)}</strong><span>保留 ${Number(e.hold_count)} 件</span></div></div><p class="caption">${e.unknown_source_count ? '判定元が不明な旧判定 ' + Number(e.unknown_source_count) + ' 件はS/N・AI件数に含めていません。 ' : ''}${esc(e.scope_note)}${e.sn_status === 'no_excludes' ? ' 不要例が0件のためS/Nの数値は算出していません。' : ''}</p><details class="projection-boundary-details" ${atlasProjection.boundary ? 'open' : ''}><summary>境界・保留の確認候補 ${Number(e.boundary_candidate_count || 0)} 件</summary><p class="caption">${esc(e.boundary_note)} モデル関連度0.5付近・LLM保留は別の理由として表示します。最大100件。</p><div class="projection-candidates">${(e.boundary_candidates || []).map((c) => `<button class="projection-candidate" data-projection-focus="${esc(c.id)}"><b>${esc(c.id)}</b><span>${esc(c.reason)}</span>${c.keep_neighbor ? `<small>必要例 ${esc(c.keep_neighbor)} / 不要例 ${esc(c.exclude_neighbor)}</small>` : ''}</button>`).join('') || '<p class="caption">現在の条件に当たる候補はありません。必要・不要の人の判定例が揃うと近傍の比較も行います。</p>'}</div></details>${e.target_count ? `<p class="caption">現在の特許群にあるターゲット：${Number(e.target_found)} / ${Number(e.target_count)} 件${e.missing_target_ids?.length ? ' · 未回収 ' + e.missing_target_ids.map(esc).join('、') : ''}（登録した種特許を含む場合があります。実際の検索による回収はCSVの履歴で確認）</p>` : ''}<p class="caption">検索式の採用・終了は、確認候補とターゲットの回収状況、収束履歴を合わせて判断してください。</p>`;
 }
 function projectionTooltipHtml(row) {
   return `<b>${esc(row.id)} · ${esc(row.title)}</b><p>${esc(row.abstract || '要約がありません。')}</p><small>IPC ${esc(row.ipc || '未取込')}${row.fi ? ' / FI ' + esc(row.fi) : ''}${row.cpc ? ' / CPC ' + esc(row.cpc) : ''}</small>${row.label_reason ? `<p>${esc(row.label_source === 'human' ? '人の判断' : 'AIの判断')}：${esc(row.label_reason)}</p>` : ''}<small>クリックで選択 · ダブルクリックで追跡</small>`;
@@ -74,11 +80,11 @@ function projectionAdoptionHtml() {
   const query = getState().queries?.at(-1),
     records = getState().research_workbench?.adoptions || [];
   if (!query)
-    return '<h3>検索式の採用</h3><details class="panel-help"><summary role="button" aria-label="検索式の採用のヘルプ">?</summary><div><p>上の指標は現在の特許データに対する確認結果です。実検索母集団の再現率ではありません。</p></div></details><p class="caption">初案または次の検索式を作成すると、確認結果と採用理由を記録できます。</p>';
+    return '<div class="panel-heading"><div><h4>採用の記録</h4></div><details class="panel-help"><summary role="button" aria-label="検索式の採用のヘルプ">?</summary><div><p>上の指標は現在の特許データに対する確認結果です。実検索母集団の再現率ではありません。</p></div></details></div><p class="caption">初案または次の検索式を作成すると、確認結果と採用理由を記録できます。</p>';
   const observed = getState().search_result?.query_id,
     linked = observed === query.id,
     busy = getState().job?.status === 'running';
-  return `<div class="panel-heading"><div><h3>検索式 v${Number(query.version || getState().queries.length)} の採用</h3></div><details class="panel-help"><summary role="button" aria-label="検索式の採用のヘルプ">?</summary><div><p>上の指標は現在の特許データに対する確認結果です。実検索母集団の再現率ではありません。</p></div></details></div><p class="caption">採用は調査の完了・収束とは別に記録します。</p>${!linked ? `<p class="projection-adoption-notice">${observed ? '現在のCSVは別の検索式の結果として記録されています。' : '現在のCSVとこの検索式の対応は未確認です。'}この式の検索性能を実測した結果としては扱いません。</p><label class="check"><input id="projection-adopt-unlinked" type="checkbox">現在のCSVは参考資料として扱い、採用理由を記録する</label>` : ''}<label>採用理由<textarea id="projection-adopt-note" rows="2" maxlength="2000" placeholder="例：必要例の回収と境界候補の確認を行い、この目的には十分と判断した"></textarea></label><div class="button-row"><button id="projection-adopt" class="button primary" data-query-id="${esc(query.id)}" ${busy ? 'disabled' : ''}>この検索式の採用を記録</button><span class="caption">現在のS/N・確認候補・データとの対応を保存</span></div>${
+  return `<div class="panel-heading"><div><h4>検索式 v${Number(query.version || getState().queries.length)} の採用</h4></div><details class="panel-help"><summary role="button" aria-label="検索式の採用のヘルプ">?</summary><div><p>上の指標は現在の特許データに対する確認結果です。実検索母集団の再現率ではありません。</p></div></details></div><p class="caption">採用は調査の完了・収束とは別に記録します。</p>${!linked ? `<p class="projection-adoption-notice">${observed ? '現在のCSVは別の検索式の結果として記録されています。' : '現在のCSVとこの検索式の対応は未確認です。'}この式の検索性能を実測した結果としては扱いません。</p><label class="check"><input id="projection-adopt-unlinked" type="checkbox">現在のCSVは参考資料として扱い、採用理由を記録する</label>` : ''}<label>採用理由<textarea id="projection-adopt-note" rows="2" maxlength="2000" placeholder="例：必要例の回収と境界候補の確認を行い、この目的には十分と判断した"></textarea></label><div class="button-row"><button id="projection-adopt" class="button primary" data-query-id="${esc(query.id)}" ${busy ? 'disabled' : ''}>この検索式の採用を記録</button><span class="caption">現在のS/N・確認候補・データとの対応を保存</span></div>${
     records.length
       ? `<details class="projection-adoption-history"><summary>採用の記録 ${records.length} 件</summary>${records
           .slice(-5)
@@ -349,7 +355,7 @@ function projectionDraw(data, animate = true) {
   updatePicked();
 }
 function projectionRenderEvaluation() {
-  const panel = $('#projection-evaluation');
+  const panel = $('#projection-evaluation-body');
   if (!panel) return;
   replaceHtml(panel, projectionEvaluationHtml(atlasProjection.evaluation));
   on('#projection-boundary', 'change', (e) => {
@@ -433,8 +439,12 @@ async function projectionFetchEvaluation() {
     atlasProjection.evaluation = result.evaluation || result;
     projectionRenderEvaluation();
   } catch (error) {
-    if ($('#projection-evaluation') === host)
-      replaceHtml(host, `<p class="caption">評価を更新できませんでした。${esc(error.message)}</p>`);
+    const body = $('#projection-evaluation-body');
+    if ($('#projection-evaluation') === host && body)
+      replaceHtml(
+        body,
+        `${projectionEvaluationHeadingHtml(null)}<p class="caption">評価を更新できませんでした。${esc(error.message)}</p>`
+      );
   }
 }
 function updateProjectionAssessment() {
@@ -540,11 +550,7 @@ function mountProjectionWorkbench() {
   $('.map-panel .canvas-header').insertAdjacentHTML('afterend', projectionControlsHtml());
   $('.map-layout').insertAdjacentHTML(
     'afterend',
-    '<div class="panel projection-evaluation" id="projection-evaluation" aria-label="検索式の採用判断"></div>'
-  );
-  $('#projection-evaluation').insertAdjacentHTML(
-    'afterend',
-    '<div class="panel projection-adoption" id="projection-adoption"></div>'
+    '<div class="panel projection-evaluation" id="projection-evaluation" aria-label="検索式の採用"><div id="projection-evaluation-body"></div><div class="projection-adoption" id="projection-adoption"></div></div>'
   );
   replaceHtml($('#projection-adoption'), projectionAdoptionHtml());
   projectionBindAdoption();
