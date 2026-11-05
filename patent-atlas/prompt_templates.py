@@ -2,7 +2,7 @@
 
 These prompts generate proposals, never authoritative classification records or
 database query syntax. Validation and query serialization belong to Python.
-The public research and design decisions are documented in PROMPT_RESEARCH.md.
+The public research and design decisions are documented in docs/PROMPT_RESEARCH.md.
 """
 
 PROMPT_VERSION = "patent-research-2026-09-18-v2"

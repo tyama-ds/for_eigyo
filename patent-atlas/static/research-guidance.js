@@ -1,4 +1,4 @@
-import { replaceHtml, listen, getState, $, esc, $$, on } from './core.js';
+import { replaceHtml, listen, getState, $, esc, html, $$, on } from './core.js';
 import {
   researchBrief,
   captureResearchDraft,
@@ -188,6 +188,19 @@ function researchOpenTool(tab, targetStep, editor) {
   else if (tab === 'workbench' && same) renderResearchWorkbench('elements');
   renderResearchFlowHeader();
 }
+function researchFlowActionHtml(action, index) {
+  const disabled = action.disabled ? html`disabled title="${esc(action.reason)}"` : '';
+  const current = action.active ? 'aria-current="step"' : '';
+  return html`<button type="button" data-flow-action="${action.id}" ${disabled} ${current}>
+    <span>${index + 1}</span><b>${esc(action.label)}<small>${esc(action.note)}</small></b></button>`;
+}
+function researchStageToolHtml([tab, s, label, editor]) {
+  const pressed =
+    appState.activeTab === tab &&
+    (tab !== 'workbench' || researchGuidanceState.researchFlowEditor === editor);
+  return html`<button type="button" class="button small" data-stage-tool="${tab}" data-stage-step="${s}"
+    data-stage-editor="${editor || ''}" aria-pressed="${pressed}">${label}</button>`;
+}
 function renderResearchFlowHeader() {
   const host = $('#research-flow-header');
   if (!host || !getState()) return;
@@ -201,19 +214,10 @@ function renderResearchFlowHeader() {
   const stage = actions.find((row) => row.active)?.id;
   replaceHtml(
     host,
-    `<div class="research-flow-nav">${actions
-      .map(
-        (action, index) =>
-          `<button type="button" data-flow-action="${action.id}" ${action.disabled ? `disabled title="${esc(action.reason)}"` : ''} ${action.active ? 'aria-current="step"' : ''}><span>${index + 1}</span><b>${esc(action.label)}<small>${esc(action.note)}</small></b></button>`
-      )
-      .join('')}</div>
-    <div class="research-flow-save">${researchDraftStatusHtml()}</div>
-    <div class="research-stage-tools" role="group" aria-label="この段階で使う機能">${researchFlowTools(stage)
-      .map(
-        ([tab, s, label, editor]) =>
-          `<button type="button" class="button small" data-stage-tool="${tab}" data-stage-step="${s}" data-stage-editor="${editor || ''}" aria-pressed="${appState.activeTab === tab && (tab !== 'workbench' || researchGuidanceState.researchFlowEditor === editor)}">${label}</button>`
-      )
-      .join('')}</div>`
+    html`<div class="research-flow-nav">${actions.map(researchFlowActionHtml)}</div>
+      <div class="research-flow-save">${researchDraftStatusHtml()}</div>
+      <div class="research-stage-tools" role="group" aria-label="この段階で使う機能">
+      ${researchFlowTools(stage).map(researchStageToolHtml)}</div>`
   );
   $$('[data-flow-action]', host).forEach((button) =>
     listen(

@@ -4,7 +4,6 @@ Keeping dictionary identity preserves existing route and service references.
 """
 
 import copy
-import hashlib
 import json
 import threading
 from contextlib import contextmanager
@@ -38,7 +37,6 @@ class Workspace:
         self.secret_settings = tuple(secret_settings)
         self._public_cache = None
         self._public_json = None
-        self._public_signature = None
         self._public_project = None
         self._public_token = None
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -144,6 +142,9 @@ class Workspace:
             before = self.snapshot(keys, include_settings=include_settings, include_job=include_job)
             pending = self.data_dir / "workspace.tmp"
             pending_before = pending.read_bytes() if restore_pending and pending.exists() else None
+            # The body is about to write; a projection requested inside it must be rebuilt,
+            # and one built inside it must not outlive the transaction.
+            self.invalidate_public_state()
             try:
                 yield self
                 self.invalidate_public_state()
@@ -159,37 +160,23 @@ class Workspace:
                 raise
 
     def invalidate_public_state(self):
+        """Drop the cached projection. Called by save/restore/transaction and by every
+        writer that changes state, settings or job outside a transaction."""
         with self.lock:
             self._public_cache = None
             self._public_json = None
-            self._public_signature = None
             self._public_project = None
             self._public_token = None
 
     def _cached_public_state(self, project, cache_token):
-        """Called under lock. Detect legacy nested writes, even without save().
+        """Called under lock. The cache lives until explicit invalidation.
 
-        The digest costs one JSON traversal but avoids repeated domain projection
-        and deep copies on unchanged polling requests. Secrets only enter the
-        ephemeral digest input, never the cached public payload. Non-JSON domain
-        values retain the old dict-returning behavior without caching.
+        A poll on unchanged data costs no projection, no deep copy and no
+        traversal of the state. Secrets never enter the cached payload. The
+        projection and the external cache token are part of the cache identity.
         """
         token = cache_token() if cache_token is not None else None
-        try:
-            signature = hashlib.sha256(
-                json.dumps((self.state, self.settings, self.job), allow_nan=False, separators=(",", ":")).encode(
-                    "utf-8"
-                )
-            ).digest()
-        except (TypeError, ValueError, OverflowError):
-            signature = None
-        if (
-            signature is not None
-            and self._public_cache is not None
-            and self._public_signature == signature
-            and self._public_project is project
-            and self._public_token == token
-        ):
+        if self._public_cache is not None and self._public_project is project and self._public_token == token:
             return self._public_cache
         self.invalidate_public_state()
         value = self.state if project is None else project(self.state)
@@ -203,11 +190,9 @@ class Workspace:
                 "job": self.job,
             }
         )
-        if signature is not None:
-            self._public_cache = result
-            self._public_signature = signature
-            self._public_project = project
-            self._public_token = token
+        self._public_cache = result
+        self._public_project = project
+        self._public_token = token
         return result
 
     def public_state(self, project=None, *, cache_token=None):

@@ -6,6 +6,7 @@ import {
   $,
   $$,
   esc,
+  html,
   on,
   api,
   setState,
@@ -152,11 +153,65 @@ function filterOrchestrationCandidates() {
     if (!row.hidden) visible++;
     else if (selected.has(row.dataset.orchestrationCandidateKey)) hiddenSelected++;
   }
+  const hiddenNote = hiddenSelected ? `（絞り込みで非表示 ${hiddenSelected} 件）` : '';
   if ($('#orchestration-candidate-count'))
     $('#orchestration-candidate-count').textContent =
-      `表示 ${visible} / ${rows.length} 件 · 選択 ${selected.size} 件${hiddenSelected ? `（絞り込みで非表示 ${hiddenSelected} 件）` : ''}`;
+      `表示 ${visible} / ${rows.length} 件 · 選択 ${selected.size} 件${hiddenNote}`;
   if ($('#orchestration-candidate-empty'))
     $('#orchestration-candidate-empty').hidden = visible > 0 || !rows.length;
+}
+function orchestrationCandidateHtml(item, selected) {
+  const c = orchestrationCandidate(item),
+    derived =
+      item.evidence_status === 'derived_candidate' ||
+      (item.classification_origins || []).some((o) => ['fi_to_ipc', 'fterm_theme_to_ipc'].includes(o.type));
+  const search = [c.kind, c.code, c.title, item.title_ja, item.title_en, item.title]
+    .filter(Boolean)
+    .join(' ');
+  const source = derived
+    ? '対応づけから得た候補 · 公報付与IPCとは別'
+    : item.evidence_status === 'patent_metadata'
+      ? '取り込んだ公報の分類'
+      : '探索候補';
+  return html`<label class="orchestration-candidate" data-orchestration-candidate-key="${esc(c.key)}"
+    data-orchestration-search="${esc(search)}"><input type="checkbox" data-orchestration-key="${esc(c.key)}"
+    ${selected.has(c.key) ? 'checked' : ''} ${item.selectable === false ? 'disabled' : ''}>
+    <span><b>${esc(c.kind)} ${esc(c.code)}</b><span>${esc(c.title)}</span>
+    <small>${source}${item.reason ? ` · ${esc(item.reason)}` : ''}</small></span></label>`;
+}
+function orchestrationCandidateToolbarHtml(candidates, selected) {
+  const picked = candidates.filter(
+    (item) => selected.has(orchestrationCandidate(item).key) && item.selectable !== false
+  ).length;
+  return html`<div class="orchestration-candidate-toolbar"><label>コード・名称で絞り込む
+    <input id="orchestration-candidate-search" type="search" placeholder="例：G05D / 車両 / control"
+    autocomplete="off"></label><p class="caption" id="orchestration-candidate-count" role="status">
+    表示 ${candidates.length} / ${candidates.length} 件 · 選択 ${picked} 件</p>
+    <small>選択済みを先頭に表示。絞り込んでも選択は保持します。</small></div>`;
+}
+function orchestrationTermHtml(kind, term, checked) {
+  return html`<label class="check"><input type="checkbox" data-orchestration-term="${kind}"
+    value="${esc(term)}" ${checked ? 'checked' : ''}>${esc(term)}</label>`;
+}
+function orchestrationTermColumnHtml(checkpoint, terms, [kind, title]) {
+  const value = (item) => (typeof item === 'string' ? item : item.term || item.word || '');
+  const chosen = checkpoint[kind + '_terms'] || [];
+  const options = (terms[kind] || [])
+    .map((item) => orchestrationTermHtml(kind, value(item), chosen.includes(value(item))))
+    .join('');
+  return html`<div><b>${title}</b><div class="orchestration-terms">
+    ${options || '<span class="caption">候補なし</span>'}</div></div>`;
+}
+function orchestrationTermGridHtml(checkpoint) {
+  const terms = checkpoint.term_options || {};
+  const columns = [
+    ['include', '追加する語'],
+    ['exclude', '除外する語'],
+  ];
+  return html`<div class="orchestration-term-grid">
+    ${columns.map((column) => orchestrationTermColumnHtml(checkpoint, terms, column))}</div>
+    <p class="caption">以下は提案時点の式です。上の選択変更は「確認して続ける」で式へ反映されます。</p>
+    <pre class="orchestration-expression">${esc(checkpoint.expression || '選択を確認して検索式を作成します。')}</pre>`;
 }
 function orchestrationCheckpointHtml(checkpoint) {
   if (!checkpoint) return '';
@@ -166,209 +221,224 @@ function orchestrationCheckpointHtml(checkpoint) {
         Number(selected.has(orchestrationCandidate(b).key)) -
         Number(selected.has(orchestrationCandidate(a).key))
     );
-  const terms = checkpoint.term_options || {},
-    value = (item) => (typeof item === 'string' ? item : item.term || item.word || '');
-  return `<div class="orchestration-review-heading"><div><span class="eyebrow">REVIEW & CONTINUE</span><h3>${checkpoint.type === 'classifications' ? '検索に使う分類を確認' : '次の検索式を確認'}</h3></div><span class="pill">ここで調整できます</span></div><p class="caption">選択した分類をORでまとめ、キーワードと組み合わせます。FI・Fターム由来のIPCは検索候補として扱います。</p><p id="orchestration-additional-selection" class="caption">確認待ち中に他タブで新しく選んだ分類は、続行時に保持します。</p>
- <div class="orchestration-candidate-toolbar"><label>コード・名称で絞り込む<input id="orchestration-candidate-search" type="search" placeholder="例：G05D / 車両 / control" autocomplete="off"></label><p class="caption" id="orchestration-candidate-count" role="status">表示 ${candidates.length} / ${candidates.length} 件 · 選択 ${candidates.filter((item) => selected.has(orchestrationCandidate(item).key) && item.selectable !== false).length} 件</p><small>選択済みを先頭に表示。絞り込んでも選択は保持します。</small></div>
- <div class="orchestration-candidates">${
-   candidates
-     .map((item) => {
-       const c = orchestrationCandidate(item),
-         derived =
-           item.evidence_status === 'derived_candidate' ||
-           (item.classification_origins || []).some((o) =>
-             ['fi_to_ipc', 'fterm_theme_to_ipc'].includes(o.type)
-           );
-       return `<label class="orchestration-candidate" data-orchestration-candidate-key="${esc(c.key)}" data-orchestration-search="${esc([c.kind, c.code, c.title, item.title_ja, item.title_en, item.title].filter(Boolean).join(' '))}"><input type="checkbox" data-orchestration-key="${esc(c.key)}" ${selected.has(c.key) ? 'checked' : ''} ${item.selectable === false ? 'disabled' : ''}><span><b>${esc(c.kind)} ${esc(c.code)}</b><span>${esc(c.title)}</span><small>${derived ? '対応づけから得た候補 · 公報付与IPCとは別' : item.evidence_status === 'patent_metadata' ? '取り込んだ公報の分類' : '探索候補'}${item.reason ? ` · ${esc(item.reason)}` : ''}</small></span></label>`;
-     })
-     .join('') || '<p class="caption">分類候補はありません。キーワードを使った探索を続けられます。</p>'
- }<p id="orchestration-candidate-empty" class="caption" hidden>該当する候補がありません。コード・名称の絞り込みを変えてください。</p></div>
- ${
-   checkpoint.type === 'query'
-     ? `<div class="orchestration-term-grid">${[
-         ['include', '追加する語'],
-         ['exclude', '除外する語'],
-       ]
-         .map(
-           ([kind, title]) =>
-             `<div><b>${title}</b><div class="orchestration-terms">${
-               (terms[kind] || [])
-                 .map((item) => {
-                   const term = value(item);
-                   return `<label class="check"><input type="checkbox" data-orchestration-term="${kind}" value="${esc(term)}" ${(checkpoint[kind + '_terms'] || []).includes(term) ? 'checked' : ''}>${esc(term)}</label>`;
-                 })
-                 .join('') || '<span class="caption">候補なし</span>'
-             }</div></div>`
-         )
-         .join(
-           ''
-         )}</div><p class="caption">以下は提案時点の式です。上の選択変更は「確認して続ける」で式へ反映されます。</p><pre class="orchestration-expression">${esc(checkpoint.expression || '選択を確認して検索式を作成します。')}</pre>`
-     : ''
- }
- <div class="button-row"><button class="button primary" id="orchestration-confirm">確認して続ける →</button><button class="button subtle small" id="orchestration-review-map">特許の地図で判断を確認 ↗</button></div>`;
+  const title = checkpoint.type === 'classifications' ? '検索に使う分類を確認' : '次の検索式を確認';
+  const rows = candidates.map((item) => orchestrationCandidateHtml(item, selected)).join('');
+  return html`<div class="orchestration-review-heading"><div><h3>${title}</h3></div>
+    <span class="pill">ここで調整できます</span></div>
+    <p class="caption">選択した分類をORでまとめ、キーワードと組み合わせます。FI・Fターム由来のIPCは検索候補として扱います。</p>
+    <p id="orchestration-additional-selection" class="caption">確認待ち中に他タブで新しく選んだ分類は、続行時に保持します。</p>
+    ${orchestrationCandidateToolbarHtml(candidates, selected)}
+    <div class="orchestration-candidates">
+    ${rows || '<p class="caption">分類候補はありません。キーワードを使った探索を続けられます。</p>'}
+    <p id="orchestration-candidate-empty" class="caption" hidden>該当する候補がありません。コード・名称の絞り込みを変えてください。</p>
+    </div>
+    ${checkpoint.type === 'query' ? orchestrationTermGridHtml(checkpoint) : ''}
+    <div class="button-row"><button class="button primary" id="orchestration-confirm">確認して続ける →</button>
+    <button class="button subtle small" id="orchestration-review-map">特許の地図で判断を確認 ↗</button></div>`;
+}
+function orchestrationHeroHtml() {
+  return html`<div class="orchestration-hero panel"><div><h2>統括ワークフロー</h2>
+    <p class="muted">分類探索・特許判定・学習・検索式の更新を、同じ特許群と判断でつなぎます。</p></div>
+    <div class="orchestration-hero-status"><span id="orchestration-cycle" class="pill">サイクル 01</span>
+    <b id="orchestration-status">開始前</b><span class="caption">必要なところで、人が確認できます。</span></div></div>
+    <details class="orchestration-process-detail"><summary>自動実行の内訳</summary>
+    <ol class="orchestration-timeline" id="orchestration-timeline" aria-label="自動処理の進捗"></ol></details>`;
+}
+function orchestrationLearningOptionHtml(d, value, label) {
+  return html`<option value="${value}" ${d.learning === value ? 'selected' : ''}>${label}</option>`;
+}
+function orchestrationJudgeFieldsHtml(d) {
+  return html`<label class="check"><input id="orchestration-judge" type="checkbox"
+    ${d.judge ? 'checked' : ''}>LLMで未判定の特許を判定する</label><p id="orchestration-llm-note" class="caption"></p>
+    <div class="form-row"><label>今回の判定上限
+    <input id="orchestration-limit" type="number" min="1" max="5000" step="1"
+    value="${esc(d.max_items)}"></label>
+    <label>採用する信頼度
+    <input id="orchestration-threshold" type="number" min="0.5" max="1" step="0.05"
+    value="${esc(d.threshold)}">
+    </label></div>
+    <p class="caption">信頼度はLLMの自己評価です。低信頼度の判定は保留にし、人の確定判定を優先します。</p>`;
+}
+function orchestrationLearningFieldsHtml(d) {
+  return html`<label>判定後の学習<select id="orchestration-learning">
+    ${orchestrationLearningOptionHtml(d, 'none', '学習せず、判定を検索式へ反映')}
+    ${orchestrationLearningOptionHtml(d, 'lightweight', '軽量学習 · TF-IDF')}
+    ${orchestrationLearningOptionHtml(d, 'transformer', 'Transformer本体を微調整')}</select></label>
+    <label class="check"><input id="orchestration-include-agent" type="checkbox"
+    ${d.include_agent ? 'checked' : ''}>学習にAIの採用済み判定を含める</label>
+    <p class="caption">軽量学習は必要・不要が各2件、Transformerは各4件から実行します。</p>
+    <label class="check orchestration-review-switch">
+    <input id="orchestration-review" type="checkbox" ${d.review ? 'checked' : ''}>分類・検索式の更新前に確認を挟む</label>
+    <button class="button primary wide" id="orchestration-start">1サイクルを開始 →</button>
+    <p class="caption" id="orchestration-start-note"></p>`;
+}
+function orchestrationConfigHtml(d) {
+  return html`<div class="panel orchestration-config"><h3>このサイクルの進め方</h3>
+    <p id="orchestration-keywords" class="caption"></p>
+    <label>必要・不要の判定基準<textarea id="orchestration-criteria" rows="4" maxlength="5000"
+    placeholder="対象技術と、除外したい範囲を記載">${esc(d.criteria)}</textarea></label>
+    ${orchestrationJudgeFieldsHtml(d)}
+    ${orchestrationLearningFieldsHtml(d)}</div>`;
+}
+function orchestrationProgressPanelHtml() {
+  return html`<div class="panel orchestration-progress"><div class="panel-heading"><h3>進捗と保存済みの判断</h3>
+    <strong id="orchestration-percent">0%</strong></div>
+    <progress id="orchestration-progress" max="100" value="0" aria-label="統括ワークフロー全体の進捗"></progress>
+    <p id="orchestration-message" role="status" aria-live="polite"></p>
+    <div id="orchestration-stage-progress"></div>
+    <div id="orchestration-counts" class="orchestration-counts"></div>
+    <p class="caption" id="orchestration-data-note"></p>
+    <div class="button-row"><button id="orchestration-stop" class="button subtle small" hidden>停止する</button>
+    <button id="orchestration-resume" class="button primary small" hidden>保存したところから再開 →</button>
+    <button id="orchestration-reset" class="button small subtle" hidden>工程をリセット</button>
+    <button id="orchestration-map" class="button small subtle">特許の地図 ↗</button>
+    <button id="orchestration-lab" class="button small subtle">探索ラボ ↗</button></div>
+    <p class="orchestration-error" id="orchestration-error" role="alert" hidden></p></div>`;
+}
+function orchestrationNextHtml() {
+  return html`<div class="panel orchestration-review" id="orchestration-checkpoint" hidden></div>
+    <div class="panel orchestration-next" id="orchestration-next" hidden><h3>次のCSVを待っています</h3>
+    <p>更新した検索式で検索し、結果を追加して次のサイクルへ進めます。</p>
+    <div class="button-row"><button id="orchestration-query" class="button primary">検索式の形式を選んで出力 ↗</button>
+    <button id="orchestration-import" class="button">次のCSVを追加 →</button>
+    <button id="orchestration-next-cycle" class="button subtle">CSV取込後、次のサイクルへ →</button></div>
+    <p class="caption">同じ公報の判定を保持して追加できます。検索サイトへの実行・CSVの取得は手動です。</p></div>
+    <div class="panel orchestration-log-panel"><div class="panel-heading"><h3>工程の記録</h3>
+    <a class="button small subtle" href="/api/export" download>全体を保存 ↓</a></div>
+    <div id="orchestration-log" class="orchestration-log"></div></div>`;
+}
+function orchestrationLayoutHtml(d) {
+  return html`${orchestrationHeroHtml()}
+    <div class="orchestration-layout">${orchestrationConfigHtml(d)}
+    <div class="orchestration-main">${orchestrationProgressPanelHtml()}
+    ${orchestrationNextHtml()}</div></div>`;
+}
+function bindOrchestration() {
+  for (const id of ['criteria', 'judge', 'limit', 'threshold', 'learning', 'include-agent', 'review'])
+    on('#orchestration-' + id, 'change', captureOrchestrationDraft);
+  on('#orchestration-judge', 'change', renderOrchestrationProgress);
+  on('#orchestration-learning', 'change', renderOrchestrationProgress);
+  on('#orchestration-reset', 'click', () => orchestrationAction('reset'));
+  on('#orchestration-start', 'click', () => startOrchestration());
+  on('#orchestration-stop', 'click', () => orchestrationAction('stop'));
+  on('#orchestration-resume', 'click', () => orchestrationAction('resume', orchestrationResumePayload()));
+  on('#orchestration-map', 'click', () => {
+    setTab('explore');
+    setStep(2);
+  });
+  on('#orchestration-lab', 'click', () => setTab('discovery'));
+  on('#orchestration-query', 'click', () => {
+    setTab('explore');
+    setStep(3);
+  });
+  on('#orchestration-import', 'click', () => {
+    setTab('explore');
+    setStep(1);
+    if ($('#csv-import-mode')) $('#csv-import-mode').value = 'merge';
+  });
+  on('#orchestration-next-cycle', 'click', () => orchestrationAction('resume'));
 }
 function renderOrchestration(host = $('#orchestration-content'), snapshot = getState()) {
   if (!host) return;
   if (!$('#orchestration-criteria')) {
     orchestrationUiState.orchestrationDraft =
       orchestrationUiState.orchestrationDraft || orchestrationDefaults();
-    const d = orchestrationUiState.orchestrationDraft;
-    replaceHtml(
-      host,
-      `<div class="orchestration-hero panel"><div><span class="eyebrow">ORCHESTRATE YOUR RESEARCH</span><h2>判断をつなぎ、<br>探索をひとつ先へ。</h2><p class="muted">分類探索・特許判定・学習・検索式の更新を、同じ特許群と判断でつなぎます。</p></div><div class="orchestration-hero-status"><span id="orchestration-cycle" class="eyebrow">CYCLE 01</span><b id="orchestration-status">開始前</b><span class="caption">必要なところで、人が確認できます。</span></div></div>
-  <details class="orchestration-process-detail"><summary>自動実行の内訳</summary><ol class="orchestration-timeline" id="orchestration-timeline" aria-label="自動処理の進捗"></ol></details>
-  <div class="orchestration-layout"><div class="panel orchestration-config"><span class="eyebrow">WORKFLOW SETTINGS</span><h3>このサイクルの進め方</h3><p id="orchestration-keywords" class="caption"></p><label>必要・不要の判定基準<textarea id="orchestration-criteria" rows="4" maxlength="5000" placeholder="対象技術と、除外したい範囲を記載">${esc(d.criteria)}</textarea></label>
-  <label class="check"><input id="orchestration-judge" type="checkbox" ${d.judge ? 'checked' : ''}>LLMで未判定の特許を判定する</label><p id="orchestration-llm-note" class="caption"></p><div class="form-row"><label>今回の判定上限<input id="orchestration-limit" type="number" min="1" max="5000" step="1" value="${esc(d.max_items)}"></label><label>採用する信頼度<input id="orchestration-threshold" type="number" min="0.5" max="1" step="0.05" value="${esc(d.threshold)}"></label></div><p class="caption">信頼度はLLMの自己評価です。低信頼度の判定は保留にし、人の確定判定を優先します。</p>
-  <label>判定後の学習<select id="orchestration-learning"><option value="none" ${d.learning === 'none' ? 'selected' : ''}>学習せず、判定を検索式へ反映</option><option value="lightweight" ${d.learning === 'lightweight' ? 'selected' : ''}>軽量学習 · TF-IDF</option><option value="transformer" ${d.learning === 'transformer' ? 'selected' : ''}>Transformer本体を微調整</option></select></label><label class="check"><input id="orchestration-include-agent" type="checkbox" ${d.include_agent ? 'checked' : ''}>学習にAIの採用済み判定を含める</label><p class="caption">軽量学習は必要・不要が各2件、Transformerは各4件から実行します。</p><label class="check orchestration-review-switch"><input id="orchestration-review" type="checkbox" ${d.review ? 'checked' : ''}>分類・検索式の更新前に確認を挟む</label><button class="button primary wide" id="orchestration-start">1サイクルを開始 →</button><p class="caption" id="orchestration-start-note"></p></div>
-  <div class="orchestration-main"><div class="panel orchestration-progress"><div class="panel-heading"><h3>進捗と保存済みの判断</h3><strong id="orchestration-percent">0%</strong></div><progress id="orchestration-progress" max="100" value="0" aria-label="統括ワークフロー全体の進捗"></progress><p id="orchestration-message" role="status" aria-live="polite"></p><div id="orchestration-stage-progress"></div><div id="orchestration-counts" class="orchestration-counts"></div><p class="caption" id="orchestration-data-note"></p><div class="button-row"><button id="orchestration-stop" class="button subtle small" hidden>停止する</button><button id="orchestration-resume" class="button primary small" hidden>保存したところから再開 →</button><button id="orchestration-reset" class="button small subtle" hidden>工程をリセット</button><button id="orchestration-map" class="button small subtle">特許の地図 ↗</button><button id="orchestration-lab" class="button small subtle">探索ラボ ↗</button></div><p class="orchestration-error" id="orchestration-error" role="alert" hidden></p></div>
-  <div class="panel orchestration-review" id="orchestration-checkpoint" hidden></div><div class="panel orchestration-next" id="orchestration-next" hidden><span class="eyebrow">READY FOR THE NEXT CYCLE</span><h3>検索して、次のCSVを。</h3><p>更新した検索式で検索し、結果を追加して次のサイクルへ進めます。</p><div class="button-row"><button id="orchestration-query" class="button primary">検索式の形式を選んで出力 ↗</button><button id="orchestration-import" class="button">次のCSVを追加 →</button><button id="orchestration-next-cycle" class="button subtle">CSV取込後、次のサイクルへ →</button></div><p class="caption">同じ公報の判定を保持して追加できます。検索サイトへの実行・CSVの取得は手動です。</p></div>
-  <div class="panel orchestration-log-panel"><div class="panel-heading"><h3>工程の記録</h3><a class="button small subtle" href="/api/export" download>全体を保存 ↓</a></div><div id="orchestration-log" class="orchestration-log"></div></div></div></div>`
-    );
-    for (const id of ['criteria', 'judge', 'limit', 'threshold', 'learning', 'include-agent', 'review'])
-      on('#orchestration-' + id, 'change', captureOrchestrationDraft);
-    on('#orchestration-judge', 'change', renderOrchestrationProgress);
-    on('#orchestration-learning', 'change', renderOrchestrationProgress);
-    on('#orchestration-reset', 'click', () => orchestrationAction('reset'));
-    on('#orchestration-start', 'click', () => startOrchestration());
-    on('#orchestration-stop', 'click', () => orchestrationAction('stop'));
-    on('#orchestration-resume', 'click', () => orchestrationAction('resume', orchestrationResumePayload()));
-    on('#orchestration-map', 'click', () => {
-      setTab('explore');
-      setStep(2);
-    });
-    on('#orchestration-lab', 'click', () => setTab('discovery'));
-    on('#orchestration-query', 'click', () => {
-      setTab('explore');
-      setStep(3);
-    });
-    on('#orchestration-import', 'click', () => {
-      setTab('explore');
-      setStep(1);
-      if ($('#csv-import-mode')) $('#csv-import-mode').value = 'merge';
-    });
-    on('#orchestration-next-cycle', 'click', () => orchestrationAction('resume'));
+    replaceHtml(host, orchestrationLayoutHtml(orchestrationUiState.orchestrationDraft));
+    bindOrchestration();
   }
   renderOrchestrationProgress();
 }
-function renderOrchestrationProgress() {
-  if (!$('#orchestration-status')) return;
-  {
-    if (!$('#convergence-content')) {
-      const convergenceHost = document.createElement('div');
-      convergenceHost.id = 'convergence-content';
-      $('#orchestration-content .orchestration-main').prepend(convergenceHost);
-    }
-    renderConvergence();
-  }
-  const workflow = getState().orchestration || {},
-    status = workflow.status || 'idle',
-    running = status === 'running',
-    otherRunning = getState().job?.status === 'running' && getState().job?.kind !== 'orchestration',
-    trainRecovery = ['paused', 'error'].includes(status) && workflow.stage === 'train';
-  const locked =
-      orchestrationUiState.orchestrationStarting ||
-      ['running', 'review', 'paused', 'error', 'waiting_csv'].includes(status),
-    percent = orchestrationPercent(workflow.progress, status),
-    c = orchestrationCounts(getState().patents);
-  $('#orchestration-status').textContent = orchestrationStatus(status);
-  $('#orchestration-cycle').textContent = 'CYCLE ' + String(workflow.cycle || 1).padStart(2, '0');
-  $('#orchestration-percent').textContent = percent + '%';
-  $('#orchestration-progress').value = percent;
-  $('#orchestration-message').textContent =
-    workflow.message || '現在の特許群と、保存済みの分類を起点にします。';
-  $('#orchestration-keywords').textContent =
-    '探索キーワード：' + (getState().keywords || '未設定（対話で探索から設定）');
-  const stage =
-      workflow.stage === 'classifications'
-        ? 'discover'
-        : workflow.stage === 'refine'
-          ? 'query'
-          : workflow.stage,
-    index = orchestrationStages.findIndex(([id]) => id === stage);
-  replaceHtml(
-    $('#orchestration-timeline'),
-    orchestrationStages
-      .map(([id, label], i) => {
-        const saved = (workflow.steps || []).find((s) => s.id === id),
-          active = id === stage,
-          done =
-            !active &&
-            ((status === 'waiting_csv' && i < 4) ||
-              saved?.status === 'done' ||
-              saved?.status === 'completed' ||
-              index > i);
-        return `<li class="${done ? 'complete' : active ? 'current' : ''}" ${active ? 'aria-current="step"' : ''}><span class="orchestration-step-number">${done ? '✓' : String(i + 1).padStart(2, '0')}</span><div><b>${label}</b><small>${saved?.status === 'skipped' ? 'スキップ' : done ? '完了' : active ? orchestrationStatus(status) : '待機'}</small></div></li>`;
-      })
-      .join('')
-  );
+function orchestrationTimelineItemHtml([id, label], i, stage, index, workflow, status) {
+  const saved = (workflow.steps || []).find((s) => s.id === id),
+    active = id === stage,
+    done =
+      !active &&
+      ((status === 'waiting_csv' && i < 4) ||
+        saved?.status === 'done' ||
+        saved?.status === 'completed' ||
+        index > i);
+  const note =
+    saved?.status === 'skipped' ? 'スキップ' : done ? '完了' : active ? orchestrationStatus(status) : '待機';
+  const tone = done ? 'complete' : active ? 'current' : '';
+  return html`<li class="${tone}" ${active ? 'aria-current="step"' : ''}>
+    <span class="orchestration-step-number">${done ? '✓' : String(i + 1).padStart(2, '0')}</span>
+    <div><b>${label}</b><small>${note}</small></div></li>`;
+}
+function orchestrationStageProgressHtml(running, stage) {
   const training = getState().training || {},
     job = getState().job || {},
-    sameJob = training.job_id === job.id && job.kind === 'orchestration',
-    stageCount =
-      running && stage === 'assess' && sameJob && training.mode === 'llm'
-        ? `${Number(training.completed_count || 0)} / ${Number(training.total_count || 0)} 件`
-        : '';
-  replaceHtml(
-    $('#orchestration-stage-progress'),
-    stageCount
-      ? `<span>今回の特許判定：${stageCount}</span><progress max="${Math.max(1, Number(training.total_count) || 1)}" value="${Math.max(0, Number(training.completed_count) || 0)}" aria-label="現在工程の特許判定進捗"></progress>`
-      : running
-        ? '実行中の工程：' + esc(orchestrationStages.find(([id]) => id === stage)?.[1] || '準備')
-        : '割合は工程の進み具合を示します。'
+    sameJob = training.job_id === job.id && job.kind === 'orchestration';
+  if (running && stage === 'assess' && sameJob && training.mode === 'llm') {
+    const count = `${Number(training.completed_count || 0)} / ${Number(training.total_count || 0)} 件`;
+    return html`<span>今回の特許判定：${count}</span><progress max="${Math.max(1, Number(training.total_count) || 1)}"
+      value="${Math.max(0, Number(training.completed_count) || 0)}" aria-label="現在工程の特許判定進捗"></progress>`;
+  }
+  return running
+    ? '実行中の工程：' + esc(orchestrationStages.find(([id]) => id === stage)?.[1] || '準備')
+    : '割合は工程の進み具合を示します。';
+}
+function orchestrationCountsHtml(c) {
+  const rows = [
+    ['取込済み', c.total],
+    ['必要', c.keep],
+    ['不要', c.exclude],
+    ['保留', c.deferred],
+    ['未判定', c.pending],
+  ];
+  return rows
+    .map(([label, count]) => html`<div><strong>${count}</strong><span>${label}</span></div>`)
+    .join('');
+}
+function orchestrationDataNote(c) {
+  const titlesOnly = c.total && !getState().patents.some((p) => String(p.abstract || '').trim());
+  return (
+    `全体の保存済み件数 · 手動判定 ${c.human} 件を保持。IPC ${c.ipc} 件 / FI ${c.fi} 件 / Fターム ${c.fterm} 件。` +
+    (titlesOnly ? '要約未取込のため、タイトル中心の判断です。' : '')
   );
-  replaceHtml(
-    $('#orchestration-counts'),
-    [
-      ['取込済み', c.total],
-      ['必要', c.keep],
-      ['不要', c.exclude],
-      ['保留', c.deferred],
-      ['未判定', c.pending],
-    ]
-      .map(([label, count]) => `<div><strong>${count}</strong><span>${label}</span></div>`)
-      .join('')
-  );
-  $('#orchestration-data-note').textContent =
-    `全体の保存済み件数 · 手動判定 ${c.human} 件を保持。IPC ${c.ipc} 件 / FI ${c.fi} 件 / Fターム ${c.fterm} 件。${c.total && !getState().patents.some((p) => String(p.abstract || '').trim()) ? '要約未取込のため、タイトル中心の判断です。' : ''}`;
-  $('#orchestration-llm-note').textContent =
-    getState().settings.provider === 'offline'
-      ? 'LLM未接続。判定のチェックを外すと、保存済みの判断を使って進められます。'
-      : `接続先：${getState().settings.provider === 'local' ? 'Local LLM' : 'LLM API'} · ${getState().settings.model || 'モデル未設定'}。判定対象の特許情報と判定基準を送信します。`;
+}
+function orchestrationLlmNote() {
+  const settings = getState().settings;
+  if (settings.provider === 'offline')
+    return 'LLM未接続。判定のチェックを外すと、保存済みの判断を使って進められます。';
+  const provider = settings.provider === 'local' ? 'Local LLM' : 'LLM API';
+  return `接続先：${provider} · ${settings.model || 'モデル未設定'}。判定対象の特許情報と判定基準を送信します。`;
+}
+function orchestrationStartNote(c, otherRunning, trainRecovery, locked) {
+  if (!c.total) return '先に「対話で探索」のStep 01からCSVを取り込んでください。';
+  if (otherRunning) return '別の処理が実行中です。完了後に開始できます。';
+  if (trainRecovery)
+    return '学習方式を変更して再開できます。「学習せず」を選ぶと保存済みの判定から検索式の更新へ進みます。';
+  if (locked) return '現在のサイクルは開始時の設定を使います。確認・再開で進めてください。';
+  return '手動判定・AI判定・保留を再利用します。基準を変更しても既判定を自動で上書きしません。';
+}
+function syncOrchestrationControls(view) {
+  const { status, locked, otherRunning, trainRecovery, c, job } = view;
+  const starting = orchestrationUiState.orchestrationStarting;
   for (const id of ['criteria', 'judge', 'learning', 'review'])
     $('#orchestration-' + id).disabled = locked || otherRunning;
   for (const id of ['limit', 'threshold'])
     $('#orchestration-' + id).disabled = locked || otherRunning || !$('#orchestration-judge').checked;
-  if (trainRecovery)
-    $('#orchestration-learning').disabled = orchestrationUiState.orchestrationStarting || otherRunning;
+  if (trainRecovery) $('#orchestration-learning').disabled = starting || otherRunning;
   $('#orchestration-include-agent').disabled =
-    (locked && !trainRecovery) ||
-    orchestrationUiState.orchestrationStarting ||
-    otherRunning ||
-    $('#orchestration-learning').value === 'none';
+    (locked && !trainRecovery) || starting || otherRunning || $('#orchestration-learning').value === 'none';
   $('#orchestration-start').disabled = locked || otherRunning || !c.total;
-  $('#orchestration-start-note').textContent = !c.total
-    ? '先に「対話で探索」のStep 01からCSVを取り込んでください。'
-    : otherRunning
-      ? '別の処理が実行中です。完了後に開始できます。'
-      : trainRecovery
-        ? '学習方式を変更して再開できます。「学習せず」を選ぶと保存済みの判定から検索式の更新へ進みます。'
-        : locked
-          ? '現在のサイクルは開始時の設定を使います。確認・再開で進めてください。'
-          : '手動判定・AI判定・保留を再利用します。基準を変更しても既判定を自動で上書きしません。';
+  $('#orchestration-start-note').textContent = orchestrationStartNote(c, otherRunning, trainRecovery, locked);
   const stop = $('#orchestration-stop');
   stop.hidden = !['running', 'review'].includes(status);
-  stop.disabled = orchestrationUiState.orchestrationStarting || !!job.stop_requested;
+  stop.disabled = starting || !!job.stop_requested;
   stop.textContent = job.stop_requested ? '停止を待っています…' : '停止する';
   const resume = $('#orchestration-resume');
   resume.hidden = !['paused', 'error'].includes(status);
-  resume.disabled = orchestrationUiState.orchestrationStarting || otherRunning;
+  resume.disabled = starting || otherRunning;
   const error = $('#orchestration-error');
-  error.hidden = !workflow.error;
-  error.textContent = workflow.error || '';
+  error.hidden = !view.workflow.error;
+  error.textContent = view.workflow.error || '';
   $('#orchestration-next').hidden = status !== 'waiting_csv';
-  $('#orchestration-next-cycle').disabled = orchestrationUiState.orchestrationStarting || otherRunning;
+  $('#orchestration-next-cycle').disabled = starting || otherRunning;
   $('#orchestration-reset').hidden = !['paused', 'error', 'review', 'waiting_csv'].includes(status);
-  $('#orchestration-reset').disabled = orchestrationUiState.orchestrationStarting || otherRunning;
+  $('#orchestration-reset').disabled = starting || otherRunning;
+}
+function renderOrchestrationCheckpoint(workflow, status, otherRunning) {
   const checkpoint = workflow.checkpoint,
     showCheckpoint = status === 'review' && checkpoint,
     key = showCheckpoint ? `${workflow.id}:${workflow.cycle}:${checkpoint.type}` : '';
@@ -399,24 +469,74 @@ function renderOrchestrationProgress() {
       '確認待ち中に他タブで新しく選んだ分類は、続行時に保持します。' +
       (added.length ? ' 追加された分類：' + added.join('、') : '');
   }
+}
+function renderOrchestrationLog(workflow) {
   const logs = workflow.logs || [],
     logHost = $('#orchestration-log'),
     signature = JSON.stringify(logs);
-  if (logHost.dataset.signature !== signature) {
-    const atBottom = logHost.scrollHeight - logHost.scrollTop - logHost.clientHeight < 40;
-    replaceHtml(
-      logHost,
-      logs.length
-        ? logs
-            .map(
-              (row) => `<div><time>${esc(row.time || '')}</time><span>${esc(row.message || '')}</span></div>`
-            )
-            .join('')
-        : '<p class="caption">実行すると、使った分類・判定・学習の工程を記録します。</p>'
-    );
-    logHost.dataset.signature = signature;
-    if (atBottom) logHost.scrollTop = logHost.scrollHeight;
+  if (logHost.dataset.signature === signature) return;
+  const atBottom = logHost.scrollHeight - logHost.scrollTop - logHost.clientHeight < 40;
+  replaceHtml(
+    logHost,
+    logs.length
+      ? logs
+          .map(
+            (row) =>
+              html`<div><time>${esc(row.time || '')}</time><span>${esc(row.message || '')}</span></div>`
+          )
+          .join('')
+      : '<p class="caption">実行すると、使った分類・判定・学習の工程を記録します。</p>'
+  );
+  logHost.dataset.signature = signature;
+  if (atBottom) logHost.scrollTop = logHost.scrollHeight;
+}
+function renderOrchestrationProgress() {
+  if (!$('#orchestration-status')) return;
+  if (!$('#convergence-content')) {
+    const convergenceHost = document.createElement('div');
+    convergenceHost.id = 'convergence-content';
+    $('#orchestration-content .orchestration-main').prepend(convergenceHost);
   }
+  renderConvergence();
+  const workflow = getState().orchestration || {},
+    status = workflow.status || 'idle',
+    running = status === 'running',
+    otherRunning = getState().job?.status === 'running' && getState().job?.kind !== 'orchestration',
+    trainRecovery = ['paused', 'error'].includes(status) && workflow.stage === 'train';
+  const locked =
+      orchestrationUiState.orchestrationStarting ||
+      ['running', 'review', 'paused', 'error', 'waiting_csv'].includes(status),
+    percent = orchestrationPercent(workflow.progress, status),
+    c = orchestrationCounts(getState().patents);
+  $('#orchestration-status').textContent = orchestrationStatus(status);
+  $('#orchestration-cycle').textContent = 'サイクル ' + String(workflow.cycle || 1).padStart(2, '0');
+  $('#orchestration-percent').textContent = percent + '%';
+  $('#orchestration-progress').value = percent;
+  $('#orchestration-message').textContent =
+    workflow.message || '現在の特許群と、保存済みの分類を起点にします。';
+  $('#orchestration-keywords').textContent =
+    '探索キーワード：' + (getState().keywords || '未設定（対話で探索から設定）');
+  const stage =
+      workflow.stage === 'classifications'
+        ? 'discover'
+        : workflow.stage === 'refine'
+          ? 'query'
+          : workflow.stage,
+    index = orchestrationStages.findIndex(([id]) => id === stage);
+  replaceHtml(
+    $('#orchestration-timeline'),
+    orchestrationStages
+      .map((entry, i) => orchestrationTimelineItemHtml(entry, i, stage, index, workflow, status))
+      .join('')
+  );
+  replaceHtml($('#orchestration-stage-progress'), orchestrationStageProgressHtml(running, stage));
+  replaceHtml($('#orchestration-counts'), orchestrationCountsHtml(c));
+  $('#orchestration-data-note').textContent = orchestrationDataNote(c);
+  $('#orchestration-llm-note').textContent = orchestrationLlmNote();
+  const job = getState().job || {};
+  syncOrchestrationControls({ status, locked, otherRunning, trainRecovery, c, job, workflow });
+  renderOrchestrationCheckpoint(workflow, status, otherRunning);
+  renderOrchestrationLog(workflow);
 }
 function orchestrationResumePayload() {
   return ['paused', 'error'].includes(getState().orchestration?.status) &&

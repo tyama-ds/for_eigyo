@@ -1,4 +1,4 @@
-import { esc as qlEsc, replaceHtml, listen, getState, api, setState } from './core.js';
+import { esc as qlEsc, html, replaceHtml, listen, getState, api, setState } from './core.js';
 import {
   researchDraftFlush,
   researchDraftRebase,
@@ -51,14 +51,157 @@ function queryLibraryLabel(format) {
 }
 function queryLibraryTreeHtml(node) {
   if (!node || typeof node !== 'object') return '';
-  if (node.op === 'text') return `<span class="ql-condition ql-text">${qlEsc(node.value)}</span>`;
+  if (node.op === 'text') return html`<span class="ql-condition ql-text">${qlEsc(node.value)}</span>`;
   if (node.op === 'class')
-    return `<span class="ql-condition ql-class">${qlEsc(node.system)} ${qlEsc(node.value)}</span>`;
+    return html`<span class="ql-condition ql-class">${qlEsc(node.system)} ${qlEsc(node.value)}</span>`;
   const label = { and: 'すべて含む · AND', or: 'いずれか · OR', not: '左の条件から、右の条件を除く · NOT' }[
     node.op
   ];
   if (!label || !Array.isArray(node.children)) return '';
-  return `<div class="ql-tree ql-tree-${qlEsc(node.op)}"><b>${label}</b><div>${node.children.map(queryLibraryTreeHtml).join('')}</div></div>`;
+  return html`<div class="ql-tree ql-tree-${qlEsc(node.op)}"><b>${label}</b>
+    <div>${node.children.map(queryLibraryTreeHtml)}</div></div>`;
+}
+function queryLibraryExampleJson() {
+  return JSON.stringify(
+    {
+      schema_version: 1,
+      name: '車両制御の例',
+      purpose: '制御方式の調査',
+      source_format: 'jplatpat',
+      facets: ['用途', '制御方式'],
+      query: {
+        keywords: ['車両'],
+        include_terms: ['制御', '運転'],
+        exclude_terms: ['玩具'],
+        classifications: [{ kind: 'IPC', code: 'B60' }],
+      },
+    },
+    null,
+    2
+  );
+}
+function queryLibraryFormatHelpHtml() {
+  return html`<details class="ql-format-help"><summary>取り込める形式・JSONの例</summary>
+    <p>調整できる式：J-PlatPatの /TX・/IP・/CP・/FT と [ ]、+（OR）、*（AND）、-（AND NOT）。
+    異なる演算子の範囲は角括弧で明示してください。英文の句は引用符で囲みます。</p>
+    <p>他サービスの式や未対応の構文も参照用として保存できます。演算子・近接検索・ワイルドカードを単語に読み替えません。</p>
+    <pre>${qlEsc(queryLibraryExampleJson())}</pre>
+    <p>JSONの keywords はAND、include_terms と classifications は各群内OR、exclude_terms は除外です。
+    複雑な構造は boolean_tree で保持します。登録後「JSONを保存」で移行用ファイルを取得できます。</p></details>`;
+}
+function queryLibraryImportHtml(d, disabled) {
+  const formats = queryLibraryFormats.map(
+    ([id, label]) => html`<option value="${id}" ${d.source_format === id ? 'selected' : ''}>${label}</option>`
+  );
+  return html`<section class="panel ql-import"><h3>検索式例を取り込む</h3>
+    <label>名前<input id="ql-name" maxlength="160" value="${qlEsc(d.name)}" placeholder="例：車両制御の先行技術調査"
+    ${disabled}></label>
+    <label>元の検索サービス<select id="ql-source" ${disabled}>${formats}</select></label>
+    <label>元の調査目的<textarea id="ql-purpose" rows="2" maxlength="4000" placeholder="どのような調査で使った式ですか"
+    ${disabled}>${qlEsc(d.purpose)}</textarea></label>
+    <label>検索式・構造化JSON<textarea id="ql-text" class="ql-source-input" rows="6" maxlength="100000"
+    placeholder="[車両/TX+自動車/TX]*[B60/IP]" ${disabled}>${qlEsc(d.text)}</textarea></label>
+    <div class="button-row"><label class="button small ql-file-label" for="ql-file">ファイルから読む
+    <input id="ql-file" type="file" accept=".json,.txt,application/json,text/plain" ${disabled}></label>
+    <button id="ql-import" class="button primary small" ${disabled}>例を保存</button></div>
+    ${queryLibraryFormatHelpHtml()}</section>`;
+}
+function queryLibraryExampleHtml(e, selected, disabled) {
+  const active = e.id === selected?.id;
+  return html`<button class="ql-example ${active ? 'selected' : ''}" data-ql-select="${qlEsc(e.id)}"
+    aria-pressed="${active ? 'true' : 'false'}" ${disabled}><strong>${qlEsc(e.name)}</strong>
+    <span>${qlEsc(queryLibraryLabel(e.source_format))}</span>
+    <small>${e.status === 'editable' ? '条件を調整できます' : '参照として保存'}</small></button>`;
+}
+function queryLibraryExampleListHtml(entries, selected, disabled) {
+  const empty = html`<div class="empty-state" data-empty="library"><span>01 → 02 → 03</span>
+    <h3>検索式例はまだありません</h3><p>式を貼り付けるか、JSON・テキストファイルを読み込んでください。</p></div>`;
+  return html`<div class="ql-example-list" aria-label="保存した検索式例">
+    ${entries.length ? entries.map((e) => queryLibraryExampleHtml(e, selected, disabled)) : empty}</div>`;
+}
+function queryLibrarySuggestionHtml(suggestion) {
+  if (!suggestion) return '';
+  const reasons = suggestion.reasons.length
+    ? html`<ul>${suggestion.reasons.map(
+        (r) => html`<li><b>${qlEsc(r.original)} → ${qlEsc(r.replacement)}</b><p>${qlEsc(r.reason)}</p></li>`
+      )}</ul>`
+    : '<p class="caption">変更候補はありません。確認事項を参考に手動で調整してください。</p>';
+  const questions = suggestion.questions.length
+    ? html`<h4>採用前に確認</h4><ul>${suggestion.questions.map((q) => html`<li>${qlEsc(q)}</li>`)}</ul>`
+    : '';
+  return html`<h4>置換候補の理由</h4>${reasons}${questions}`;
+}
+function queryLibraryReplacementHtml(term, index, value, kind, disabled) {
+  const attr = kind === 'term' ? 'data-ql-term' : 'data-ql-class';
+  const label = kind === 'term' ? ' の置換先' : ' の置換先コード';
+  return html`<label class="ql-replacement"><span>${qlEsc(term)}</span>
+    <input ${attr}="${index}" value="${qlEsc(value)}" maxlength="${kind === 'term' ? 500 : 50}"
+    aria-label="${qlEsc(term)}${label}" ${disabled}></label>`;
+}
+function queryLibraryEditColumnsHtml(selected, edits, classEdits, disabled) {
+  const has = (map, key) => Object.prototype.hasOwnProperty.call(map, key);
+  const terms = (selected.terms || [])
+    .map((term, index) =>
+      queryLibraryReplacementHtml(term, index, has(edits, term) ? edits[term] : term, 'term', disabled)
+    )
+    .join('');
+  const classes = (selected.classification_terms || [])
+    .map((term, index) => {
+      const value = has(classEdits, term) ? classEdits[term] : term.slice(term.indexOf(':') + 1);
+      return queryLibraryReplacementHtml(term, index, value, 'class', disabled);
+    })
+    .join('');
+  return html`<div class="ql-edit-columns"><div><h4>観点に対応する語句</h4>
+    ${terms || '<p class="caption">この例に本文語句はありません。</p>'}</div>
+    <div><h4>検索対象の分類</h4>${classes || '<p class="caption">この例に分類条件はありません。</p>'}</div></div>`;
+}
+function queryLibraryPreviewHtml(preview, disabled) {
+  if (!preview)
+    return '<p class="caption">語句と分類の変更後にプレビューすると、AND・OR・NOTの範囲を確認できます。</p>';
+  const warnings = (preview.warnings || []).length
+    ? html`<ul class="ql-warnings">${preview.warnings.map((w) => html`<li>${qlEsc(w)}</li>`)}</ul>`
+    : '';
+  return html`<h4>この条件で新しい式を作ります</h4>${queryLibraryTreeHtml(preview.query?.boolean_tree)}
+    ${preview.expression ? html`<pre>${qlEsc(preview.expression)}</pre>` : ''}${warnings}
+    <button id="ql-apply" class="button primary small" ${disabled}>確認して検索式を作成</button>
+    <p class="caption">元の検索式例を保持し、新しい検索式として履歴に追加します。DB・LLM・プロキシの設定は引き継ぎます。</p>`;
+}
+function queryLibraryAdaptHtml(view) {
+  const { selected, edits, classEdits, preview, purpose, goal, suggestion, disabled } = view;
+  return html`<div class="ql-adapt-header"><h4>今回の調査に合わせて調整</h4>
+    <p class="caption">元の分類は引き継ぎます。別の分野へ移す場合は分類も見直してください。空欄にして条件を消す操作はできません。</p>
+    </div>
+    <label>今回の調査目的
+    <textarea id="ql-adapt-purpose" maxlength="300" rows="2" ${disabled}>${qlEsc(purpose)}</textarea></label>
+    <label>適応先の技術説明<textarea id="ql-adapt-goal" maxlength="5000" rows="3"
+    placeholder="例：自動車の経路制御の式を、工場内の搬送ロボットの調査に応用したい" ${disabled}>${qlEsc(goal)}</textarea></label>
+    <button id="ql-suggest" class="button small" ${disabled}>LLMで置換候補を起案</button>
+    <p class="caption">設定済みLLMを使い、元の例から置換候補を提案して下の入力欄を更新します。
+    提案後も、プレビューと採用は人が行います。手動調整だけでも利用できます。</p>
+    <div id="ql-suggestion" class="ql-suggestion" aria-live="polite" ${suggestion ? '' : 'hidden'}>
+    ${queryLibrarySuggestionHtml(suggestion)}</div>
+    ${queryLibraryEditColumnsHtml(selected, edits, classEdits, disabled)}
+    <button id="ql-preview" class="button small" ${disabled}>調整した条件をプレビュー</button>
+    <div id="ql-preview-area" class="ql-preview" aria-live="polite">
+    ${queryLibraryPreviewHtml(preview, disabled)}</div>`;
+}
+function queryLibraryReferenceHtml(selected) {
+  return html`<div class="ql-reference-note"><h4>参照用として保存しました</h4>
+    <ul>${(selected.issues || []).map((issue) => html`<li>${qlEsc(issue)}</li>`)}</ul>
+    <p>元の式を参考に、J-PlatPatの対応構文や構造化JSONで条件を再登録すると調整できます。</p></div>`;
+}
+function queryLibrarySelectedHtml(view) {
+  const { selected, disabled } = view;
+  const editable = selected.status === 'editable';
+  const download = html`<button id="ql-download" class="button subtle small" ${disabled}>JSONを保存</button>`;
+  const facets = (selected.facets || []).map(qlEsc).join(' / ');
+  return html`<article class="panel ql-selected"><div class="ql-heading"><h3>${qlEsc(selected.name)}</h3>
+    ${editable ? download : ''}</div>
+    <p class="caption">元の目的：${qlEsc(selected.purpose || '未記録')}</p>
+    ${selected.facets?.length ? html`<p class="caption">元の観点：${facets}</p>` : ''}
+    <details class="ql-original"><summary>元の検索式・取込データ</summary>
+    <pre>${qlEsc(selected.original_text)}</pre></details>
+    ${editable ? queryLibraryAdaptHtml(view) : queryLibraryReferenceHtml(selected)}</article>`;
 }
 function queryLibraryHtml(workbench = {}) {
   const d = queryLibraryUiState.queryLibraryDraft,
@@ -72,30 +215,17 @@ function queryLibraryHtml(workbench = {}) {
   const goal = isSelected && d.adaptGoal !== null ? d.adaptGoal : workbench.brief?.goal || '';
   const suggestion = isSelected ? d.suggestion : null;
   const disabled = d.busy ? 'disabled' : '';
-  return `<section id="query-library" data-render-scope="${qlEsc(selected?.id || 'library')}" class="ql-library" aria-label="過去の検索式から作る">
- <div class="ql-heading"><div><span class="eyebrow">QUERY LIBRARY</span><h2>良い検索式を、次の調査へ。</h2><p class="caption">元の式を残したまま、観点・語句・分類を調整し、プレビューして採用します。</p></div><span class="pill">${entries.length}件の検索式例</span></div>
- <div class="ql-layout"><section class="panel ql-import"><h3>検索式例を取り込む</h3><label>名前<input id="ql-name" maxlength="160" value="${qlEsc(d.name)}" placeholder="例：車両制御の先行技術調査" ${disabled}></label>
- <label>元の検索サービス<select id="ql-source" ${disabled}>${queryLibraryFormats.map(([id, label]) => `<option value="${id}" ${d.source_format === id ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
- <label>元の調査目的<textarea id="ql-purpose" rows="2" maxlength="4000" placeholder="どのような調査で使った式ですか" ${disabled}>${qlEsc(d.purpose)}</textarea></label>
- <label>検索式・構造化JSON<textarea id="ql-text" class="ql-source-input" rows="6" maxlength="100000" placeholder="[車両/TX+自動車/TX]*[B60/IP]" ${disabled}>${qlEsc(d.text)}</textarea></label>
- <div class="button-row"><label class="button small ql-file-label" for="ql-file">ファイルから読む<input id="ql-file" type="file" accept=".json,.txt,application/json,text/plain" ${disabled}></label><button id="ql-import" class="button primary small" ${disabled}>例を保存</button></div>
- <details class="ql-format-help"><summary>取り込める形式・JSONの例</summary><p>調整できる式：J-PlatPatの /TX・/IP・/CP・/FT と [ ]、+（OR）、*（AND）、-（AND NOT）。異なる演算子の範囲は角括弧で明示してください。英文の句は引用符で囲みます。</p><p>他サービスの式や未対応の構文も参照用として保存できます。演算子・近接検索・ワイルドカードを単語に読み替えません。</p><pre>${qlEsc(JSON.stringify({ schema_version: 1, name: '車両制御の例', purpose: '制御方式の調査', source_format: 'jplatpat', facets: ['用途', '制御方式'], query: { keywords: ['車両'], include_terms: ['制御', '運転'], exclude_terms: ['玩具'], classifications: [{ kind: 'IPC', code: 'B60' }] } }, null, 2))}</pre><p>JSONの keywords はAND、include_terms と classifications は各群内OR、exclude_terms は除外です。複雑な構造は boolean_tree で保持します。登録後「JSONを保存」で移行用ファイルを取得できます。</p></details>
- </section><section class="ql-work-area"><div class="ql-example-list" aria-label="保存した検索式例">${entries.length ? entries.map((e) => `<button class="ql-example ${e.id === selected?.id ? 'selected' : ''}" data-ql-select="${qlEsc(e.id)}" aria-pressed="${e.id === selected?.id ? 'true' : 'false'}" ${disabled}><strong>${qlEsc(e.name)}</strong><span>${qlEsc(queryLibraryLabel(e.source_format))}</span><small>${e.status === 'editable' ? '条件を調整できます' : '参照として保存'}</small></button>`).join('') : '<div class="empty-state" data-empty="library"><span>01 → 02 → 03</span><h3>過去の判断を、検索式の出発点に。</h3><p>式を貼り付けるか、JSON・テキストファイルを読み込んでください。</p></div>'}</div>
- ${
-   selected
-     ? `<article class="panel ql-selected"><div class="ql-heading"><h3>${qlEsc(selected.name)}</h3>${selected.status === 'editable' ? `<button id="ql-download" class="button subtle small" ${disabled}>JSONを保存</button>` : ''}</div><p class="caption">元の目的：${qlEsc(selected.purpose || '未記録')}</p>${selected.facets?.length ? `<p class="caption">元の観点：${selected.facets.map(qlEsc).join(' / ')}</p>` : ''}<details class="ql-original"><summary>元の検索式・取込データ</summary><pre>${qlEsc(selected.original_text)}</pre></details>
- ${
-   selected.status === 'editable'
-     ? `<div class="ql-adapt-header"><h4>今回の調査に合わせて調整</h4><p class="caption">元の分類は引き継ぎます。別の分野へ移す場合は分類も見直してください。空欄にして条件を消す操作はできません。</p></div><label>今回の調査目的<textarea id="ql-adapt-purpose" maxlength="300" rows="2" ${disabled}>${qlEsc(purpose)}</textarea></label>
- <label>適応先の技術説明<textarea id="ql-adapt-goal" maxlength="5000" rows="3" placeholder="例：自動車の経路制御の式を、工場内の搬送ロボットの調査に応用したい" ${disabled}>${qlEsc(goal)}</textarea></label><button id="ql-suggest" class="button small" ${disabled}>LLMで置換候補を起案</button><p class="caption">設定済みLLMを使い、元の例から置換候補を提案して下の入力欄を更新します。提案後も、プレビューと採用は人が行います。手動調整だけでも利用できます。</p>
- <div id="ql-suggestion" class="ql-suggestion" aria-live="polite" ${suggestion ? '' : 'hidden'}>${suggestion ? `<h4>置換候補の理由</h4>${suggestion.reasons.length ? `<ul>${suggestion.reasons.map((r) => `<li><b>${qlEsc(r.original)} → ${qlEsc(r.replacement)}</b><p>${qlEsc(r.reason)}</p></li>`).join('')}</ul>` : '<p class="caption">変更候補はありません。確認事項を参考に手動で調整してください。</p>'}${suggestion.questions.length ? `<h4>採用前に確認</h4><ul>${suggestion.questions.map((q) => `<li>${qlEsc(q)}</li>`).join('')}</ul>` : ''}` : ''}</div>
- <div class="ql-edit-columns"><div><h4>観点に対応する語句</h4>${(selected.terms || []).map((term, index) => `<label class="ql-replacement"><span>${qlEsc(term)}</span><input data-ql-term="${index}" value="${qlEsc(Object.prototype.hasOwnProperty.call(edits, term) ? edits[term] : term)}" maxlength="500" aria-label="${qlEsc(term)} の置換先" ${disabled}></label>`).join('') || '<p class="caption">この例に本文語句はありません。</p>'}</div><div><h4>検索対象の分類</h4>${(selected.classification_terms || []).map((term, index) => `<label class="ql-replacement"><span>${qlEsc(term)}</span><input data-ql-class="${index}" value="${qlEsc(Object.prototype.hasOwnProperty.call(classEdits, term) ? classEdits[term] : term.slice(term.indexOf(':') + 1))}" maxlength="50" aria-label="${qlEsc(term)} の置換先コード" ${disabled}></label>`).join('') || '<p class="caption">この例に分類条件はありません。</p>'}</div></div><button id="ql-preview" class="button small" ${disabled}>調整した条件をプレビュー</button>
- <div id="ql-preview-area" class="ql-preview" aria-live="polite">${preview ? `<span class="eyebrow">REVIEW BEFORE APPLY</span><h4>この条件で新しい式を作ります</h4>${queryLibraryTreeHtml(preview.query?.boolean_tree)}${preview.expression ? `<pre>${qlEsc(preview.expression)}</pre>` : ''}${(preview.warnings || []).length ? `<ul class="ql-warnings">${preview.warnings.map((w) => `<li>${qlEsc(w)}</li>`).join('')}</ul>` : ''}<button id="ql-apply" class="button primary small" ${disabled}>確認して検索式を作成</button><p class="caption">元の検索式例を保持し、新しい検索式として履歴に追加します。DB・LLM・プロキシの設定は引き継ぎます。</p>` : '<p class="caption">語句と分類の変更後にプレビューすると、AND・OR・NOTの範囲を確認できます。</p>'}</div>`
-     : `<div class="ql-reference-note"><h4>参照用として保存しました</h4><ul>${(selected.issues || []).map((issue) => `<li>${qlEsc(issue)}</li>`).join('')}</ul><p>元の式を参考に、J-PlatPatの対応構文や構造化JSONで条件を再登録すると調整できます。</p></div>`
- }</article>`
-     : ''
- }</section></div>
- <p id="ql-error" class="ql-error" role="alert" ${d.error ? '' : 'hidden'}>${qlEsc(d.error)}</p></section>`;
+  const view = { selected, edits, classEdits, preview, purpose, goal, suggestion, disabled };
+  return html`<section id="query-library" data-render-scope="${qlEsc(selected?.id || 'library')}"
+    class="ql-library" aria-label="過去の検索式から作る">
+    <div class="ql-heading"><div><h2>検索式ライブラリ</h2>
+    <p class="caption">元の式を残したまま、観点・語句・分類を調整し、プレビューして採用します。</p></div>
+    <span class="pill">${entries.length}件の検索式例</span></div>
+    <div class="ql-layout">${queryLibraryImportHtml(d, disabled)}<section class="ql-work-area">
+    ${queryLibraryExampleListHtml(entries, selected, disabled)}
+    ${selected ? queryLibrarySelectedHtml(view) : ''}</section></div>
+    <p id="ql-error" class="ql-error" role="alert" ${d.error ? '' : 'hidden'}>${qlEsc(d.error)}</p>
+    </section>`;
 }
 function queryLibraryRefresh(host = document.getElementById('query-library'), snapshot = getState()) {
   if (!host) return;

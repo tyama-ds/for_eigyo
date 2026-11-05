@@ -230,8 +230,8 @@ test('LLM feedback shows actual additions and destinations while escaping model 
   assert.ok(!html.includes('<img'));
   assert.ok(!html.includes('<script>'));
   assert.ok(
-    c.discoveryResultsHtml({ plan }).indexOf('LLM RESPONSE') <
-      c.discoveryResultsHtml({ plan }).indexOf('SEARCH FROM MULTIPLE ANGLES')
+    c.discoveryResultsHtml({ plan }).indexOf('discovery-llm-report') <
+      c.discoveryResultsHtml({ plan }).indexOf('discovery-plan-panel')
   );
 });
 

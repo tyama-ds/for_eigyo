@@ -3,6 +3,7 @@ import {
   tooltipPosition as positionPreview,
   judgmentLabel,
   esc as escapeHtml,
+  html,
   replaceHtml,
 } from './core.js';
 
@@ -31,21 +32,38 @@ function previewHtml(patent = {}) {
       : patent.label_source === 'agent'
         ? '判断エージェント'
         : '未収録';
+  const field = previewFieldHtml;
+  return html`<div class="patent-preview-heading">
+    <span class="patent-preview-decision ${tone}">${decision}</span></div>
+    <h3 class="patent-preview-title">${escapeHtml(text(patent.title, '名称未収録'))}</h3>
+    <dl class="patent-preview-meta">${field('公報番号 / ID', text(patent.id))}
+    ${field('出願人', text(patent.applicant))}
+    ${field('公開年', text(patent.year))}</dl>
+    <section class="patent-preview-abstract"><h4>要約</h4><p>${escapeHtml(text(patent.abstract))}</p>
+    <small>取り込まれた要約を表示しています。</small></section>
+    <dl class="patent-preview-classifications">${field('IPC', text(patent.ipc, '未取込'))}
+    ${field('FI', text(patent.fi, '未取込'))}${field('Fターム', text(patent.fterm, '未取込'))}</dl>
+    ${previewAssessmentHtml(patent, source)}
+    <div class="patent-preview-footer">スクロールで詳細を確認 · Escで閉じる</div>`;
+}
+function previewFieldHtml(name, value) {
+  return html`<div><dt>${name}</dt><dd>${escapeHtml(value)}</dd></div>`;
+}
+function previewAssessmentHtml(patent, source) {
   const relevanceName = patent.score_source === 'llm' ? 'LLMの関連度（自己評価）' : '学習モデルの関連度';
   const scoreNote =
     patent.score_source === 'llm'
       ? '関連度と確信度はいずれもLLMの自己評価です。関連性の保証ではありません。'
       : '関連度は学習モデルのスコア、確信度はAIの自己評価です。';
-  const field = (name, value) => `<div><dt>${name}</dt><dd>${escapeHtml(value)}</dd></div>`;
-  return `<div class="patent-preview-heading"><span class="patent-preview-eyebrow">PATENT PREVIEW</span><span class="patent-preview-decision ${tone}">${decision}</span></div>
-      <h3 class="patent-preview-title">${escapeHtml(text(patent.title, '名称未収録'))}</h3>
-      <dl class="patent-preview-meta">${field('公報番号 / ID', text(patent.id))}${field('出願人', text(patent.applicant))}${field('公開年', text(patent.year))}</dl>
-      <section class="patent-preview-abstract"><h4>要約</h4><p>${escapeHtml(text(patent.abstract))}</p><small>取り込まれた要約を表示しています。</small></section>
-      <dl class="patent-preview-classifications">${field('IPC', text(patent.ipc, '未取込'))}${field('FI', text(patent.fi, '未取込'))}${field('Fターム', text(patent.fterm, '未取込'))}</dl>
-      <section class="patent-preview-assessment"><h4>要否の判断</h4><dl>${field('判定者', source)}${field('判定理由', text(patent.label_reason))}</dl>
-      <div class="patent-preview-scores"><div><span>${relevanceName}</span><strong>${percentage(patent.score)}</strong></div><div><span>AI判定の確信度</span><strong>${patent.label_source === 'agent' ? percentage(patent.agent_confidence, '未収録') : '対象外'}</strong></div></div>
-      <p class="patent-preview-note">${scoreNote}</p></section>
-      <div class="patent-preview-footer">スクロールで詳細を確認 · Escで閉じる</div>`;
+  const confidence =
+    patent.label_source === 'agent' ? percentage(patent.agent_confidence, '未収録') : '対象外';
+  const field = previewFieldHtml;
+  return html`<section class="patent-preview-assessment"><h4>要否の判断</h4>
+    <dl>${field('判定者', source)}${field('判定理由', text(patent.label_reason))}</dl>
+    <div class="patent-preview-scores">
+    <div><span>${relevanceName}</span><strong>${percentage(patent.score)}</strong></div>
+    <div><span>AI判定の確信度</span><strong>${confidence}</strong></div></div>
+    <p class="patent-preview-note">${scoreNote}</p></section>`;
 }
 
 function createController(doc, win) {

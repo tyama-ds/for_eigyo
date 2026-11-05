@@ -9,7 +9,8 @@ function updateChrome() {
         ? 'Local LLM 設定済み'
         : '外部API 設定済み';
   $('#footer-info').textContent =
-    `${getState().patents.length} 件の特許 · ${getState().queries.length} 件の検索式${getState().demo ? ' · 架空のサンプルデータ' : ''}`;
+    `${getState().patents.length} 件の特許 · ${getState().queries.length} 件の検索式` +
+    (getState().demo ? ' · 架空のサンプルデータ' : '');
   $('#agent-count').textContent = `${getState().patents.length} 件の特許`;
   const j = getState().job,
     running = j.status === 'running';

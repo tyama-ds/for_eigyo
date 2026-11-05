@@ -5,14 +5,17 @@ import re
 import time
 import uuid
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 from fastapi import HTTPException
 import classification_explorer as explorer
 from catalog import keywords
 from common import fingerprint
 from query_formats import Node, build_tree, describe_tree, group, terms_of, tree_data, tree_from_data, walk_tree
 from workspace import Workspace
-from services import Services
 from workspace_defaults import new_workbench as new_workbench
+
+if TYPE_CHECKING:  # services imports query_service, which imports this module
+    from services import Services
 
 MAX_SAVED_TARGETS = 5000
 
@@ -138,7 +141,7 @@ def refined_tree(previous, classifications, include, exclude):
 @dataclass
 class ResearchServices:
     ws: Workspace
-    app: Services
+    app: "Services"
 
     fingerprint = staticmethod(fingerprint)
     checked_brief = staticmethod(checked_brief)

@@ -1,4 +1,4 @@
-import { esc as researchProgressEscape, replaceHtml } from './core.js';
+import { esc as researchProgressEscape, html, replaceHtml } from './core.js';
 
 export const researchProgressState = {
   researchProgressCurrent: null,
@@ -105,6 +105,24 @@ function researchProgressHtml() {
     progress.provider
   ];
   const phase = running ? '処理中' : failed ? '完了できませんでした' : '完了';
+  const model = progress.model ? ' · ' + researchProgressEscape(progress.model) : '';
+  const elapsed = researchProgressElapsed(progress);
+  return html`<section class="research-progress-card is-${progress.status}"
+    data-research-progress-token="${progress.token}" aria-label="案の作成状況">
+    <div class="research-progress-heading" role="status" aria-live="polite" aria-atomic="true">
+    <strong>${researchProgressEscape(progress.label)}</strong>
+    <span class="research-progress-phase">${phase}</span></div>
+    <div class="research-progress-meta"><span>${provider}${model}</span>
+    <span aria-live="off">経過 <span data-research-progress-elapsed>${elapsed}</span></span></div>
+    ${running ? researchProgressIndeterminateHtml(progress) : ''}
+    ${failed ? researchProgressErrorHtml(progress) : ''}
+    ${researchProgressNotesHtml(progress, running, failed)}</section>`;
+}
+function researchProgressIndeterminateHtml(progress) {
+  const waiting = progress.provider === 'manual' ? '入力を整理しています' : 'LLMの応答を待っています';
+  return html`<progress class="research-progress-indeterminate" aria-label="${waiting}"></progress>`;
+}
+function researchProgressNotesHtml(progress, running, failed) {
   const retained = running
     ? '入力は保持しています。応答を受け取ると案を表示します。'
     : failed
@@ -115,15 +133,14 @@ function researchProgressHtml() {
       ? ''
       : progress.timeout === null
         ? '応答待ちの上限は接続設定によります。再試行で全体の処理時間が長くなる場合があります。'
-        : `応答待ち設定：${progress.timeout}秒／回。1回の応答待ちの上限です。再試行があるため、全体の処理時間の上限ではありません。`;
-  return `<section class="research-progress-card is-${progress.status}" data-research-progress-token="${progress.token}" aria-label="案の作成状況">
-    <div class="research-progress-heading" role="status" aria-live="polite" aria-atomic="true"><strong>${researchProgressEscape(progress.label)}</strong><span class="research-progress-phase">${phase}</span></div>
-    <div class="research-progress-meta"><span>${provider}${progress.model ? ' · ' + researchProgressEscape(progress.model) : ''}</span><span aria-live="off">経過 <span data-research-progress-elapsed>${researchProgressElapsed(progress)}</span></span></div>
-    ${running ? `<progress class="research-progress-indeterminate" aria-label="${progress.provider === 'manual' ? '入力を整理しています' : 'LLMの応答を待っています'}"></progress>` : ''}
-    ${failed ? `<p class="research-progress-error">${researchProgressEscape(progress.error || '処理を完了できませんでした。')}</p>` : ''}
-    ${wait ? `<p class="caption research-progress-timeout">${wait}</p>` : ''}
-    <p class="caption research-progress-retained">${retained}</p>
-  </section>`;
+        : `応答待ち設定：${progress.timeout}秒／回。1回の応答待ちの上限です。` +
+          '再試行があるため、全体の処理時間の上限ではありません。';
+  return html`${wait ? html`<p class="caption research-progress-timeout">${wait}</p>` : ''}
+    <p class="caption research-progress-retained">${retained}</p>`;
+}
+function researchProgressErrorHtml(progress) {
+  const message = researchProgressEscape(progress.error || '処理を完了できませんでした。');
+  return html`<p class="research-progress-error">${message}</p>`;
 }
 
 function renderResearchProgress() {

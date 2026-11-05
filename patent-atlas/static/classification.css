@@ -21,6 +21,7 @@
   margin: 0 22px var(--space-3);
   font-size: 11px;
   line-height: 1.8;
+  color: var(--text-muted);
 }
 .class-scope-note {
   margin: 0 22px var(--space-3);
@@ -29,6 +30,9 @@
   font-size: 12px;
   line-height: 1.8;
   border-radius: 0 var(--radius-s) var(--radius-s) 0;
+  background: var(--surface-hover);
+  border-color: var(--accent-mid);
+  color: color-mix(in srgb, var(--accent) 55%, var(--text-muted));
 }
 #class-regions,
 #class-neighbors,
@@ -38,32 +42,41 @@
 .class-region rect {
   stroke-width: 1;
   stroke-dasharray: 3 6;
+  fill: var(--surface);
+  stroke: var(--accent-soft);
 }
 .class-region text {
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.02em;
+  fill: var(--text-muted);
 }
 .class-region-count {
   font-weight: 400;
+  fill: var(--text-muted);
 }
 .class-neighbor {
   stroke-width: 1;
   stroke-dasharray: 2 5;
+  stroke: color-mix(in srgb, var(--exclude) 30%, var(--surface));
 }
 .classification-explorer #class-svg .node-kind {
   font-size: 12px;
   letter-spacing: 0.02em;
+  fill: color-mix(in srgb, var(--accent) 55%, var(--text-muted));
 }
 .classification-explorer #class-svg .node-code {
   font-size: 14px;
   font-weight: 600;
+  fill: var(--text);
 }
 .classification-explorer #class-svg .node-title {
   font-size: 13px;
+  fill: var(--text-muted);
 }
 .classification-explorer #class-svg .selection-mark {
   font-size: 15px;
+  fill: var(--accent);
 }
 .classification-explorer .float-hint {
   position: static;
@@ -73,6 +86,7 @@
   min-height: 44px;
   white-space: normal;
   text-align: center;
+  color: var(--text-muted);
 }
 .classification-explorer .canvas-toolbar {
   flex-wrap: wrap;
@@ -87,6 +101,7 @@
   gap: 6px;
   margin: 0;
   font-size: 11px;
+  color: var(--text-muted);
 }
 .class-language-control select {
   width: 94px;
@@ -94,6 +109,9 @@
   padding: 7px var(--space-2);
   font-size: 12px;
   border-radius: var(--radius-s);
+  background: var(--surface);
+  color: var(--text);
+  border-color: var(--line);
 }
 .class-bilingual {
   margin: 10px 0;
@@ -110,16 +128,19 @@
   align-items: baseline;
   gap: var(--space-2);
   flex-wrap: wrap;
+  color: var(--accent);
 }
 .class-bilingual dt small {
   font-size: 10px;
   font-weight: 400;
+  color: var(--text-muted);
 }
 .class-bilingual dd {
   margin: 3px 0 0;
   line-height: 1.7;
   font-size: 12px;
   overflow-wrap: anywhere;
+  color: var(--text);
 }
 .class-tooltip {
   position: fixed;
@@ -129,16 +150,20 @@
   overflow: auto;
   overscroll-behavior: contain;
   padding: var(--space-4) 18px;
-  border: 1px solid;
-  border-radius: var(--radius-soft);
+  border: 1px solid var(--accent-soft);
+  border-radius: var(--radius-m);
   backdrop-filter: blur(16px);
   pointer-events: auto;
+  color: var(--text);
+  background: var(--overlay-paper);
+  box-shadow: var(--shadow-2);
 }
 .class-tooltip > strong {
   font:
     600 13px ui-monospace,
     Consolas,
     monospace;
+  color: var(--accent);
 }
 .class-tooltip .class-bilingual {
   margin-bottom: 0;
@@ -150,6 +175,7 @@
   margin: 0 22px var(--space-3);
   font-size: 11px;
   line-height: 1.8;
+  color: var(--text-muted);
 }
 .class-translation-note button {
   margin-left: var(--space-2);
@@ -157,6 +183,7 @@
 .class-translation-network {
   display: block;
   font-size: 10px;
+  color: var(--text-muted);
 }
 .class-translation-note:not(:empty) {
   margin-top: var(--space-3);
@@ -168,26 +195,28 @@
   border-left: 2px solid;
   font-size: 11px;
   line-height: 1.65;
+  border-color: var(--accent-soft);
+  color: var(--text-muted);
 }
 .class-proposal-feedback {
   margin: var(--space-4) 0;
   padding: 15px;
-  border: 1px solid;
+  border: 1px solid var(--line);
   border-radius: 13px;
   overflow-wrap: anywhere;
+  background: var(--bg-raised);
+  color: var(--text);
 }
 .class-proposal-heading h3 {
   font-size: 14px;
   margin: 5px 0 10px;
 }
-.class-proposal-heading .eyebrow {
-  font-size: 9px;
-  letter-spacing: 0.12em;
-}
+
 .class-proposal-context {
   font-size: 11px;
   line-height: 1.7;
   margin: var(--space-2) 0;
+  color: var(--text-muted);
 }
 .class-proposal-metrics {
   display: grid;
@@ -202,11 +231,14 @@
   padding: 9px 6px;
   border-radius: var(--radius-s);
   font-size: 10px;
+  background: var(--surface);
+  color: var(--text-muted);
 }
 .class-proposal-metrics b {
   font-size: 20px;
   font-variant-numeric: tabular-nums;
   font-weight: 500;
+  color: var(--text);
 }
 .class-proposal-items {
   max-height: 380px;
@@ -217,7 +249,7 @@
 }
 .class-proposal-item {
   padding: 13px 0;
-  border-top: 1px solid;
+  border-top: 1px solid var(--line);
 }
 .class-proposal-item p {
   font-size: 11px;
@@ -235,17 +267,20 @@
     600 12px ui-monospace,
     Consolas,
     monospace;
+  color: var(--text);
 }
 .class-proposal-code span {
   flex-shrink: 0;
   padding: 2px 6px;
-  border: 1px solid;
+  border: 1px solid var(--line);
   border-radius: 5px;
   font-size: 10px;
+  color: var(--text-muted);
 }
 .class-proposal-reason b {
   font-size: 10px;
   font-weight: 500;
+  color: var(--accent);
 }
 .class-proposal-item .button {
   margin-top: 5px;
@@ -265,15 +300,17 @@
 }
 .class-proposal-error {
   padding: 10px;
-  border: 1px solid;
+  border: 1px solid var(--exclude);
   border-radius: var(--radius-s);
   font-size: 12px;
   line-height: 1.75;
+  background: var(--surface);
+  color: var(--exclude);
 }
 .class-rejected-item {
   margin-top: var(--space-3);
   padding: 13px 0;
-  border-top: 1px solid;
+  border-top: 1px solid var(--line);
 }
 .class-rejected-item > p {
   margin: 7px 0;
@@ -281,11 +318,12 @@
 .class-revision-note {
   margin: 10px 0;
   padding-left: 10px;
-  border-left: 2px solid;
+  border-left: 2px solid var(--line);
 }
 .class-revision-label {
   font-size: 10px;
   font-weight: 600;
+  color: var(--text);
 }
 .class-revision-note p {
   margin: 5px 0;
@@ -302,14 +340,17 @@
 .class-revision-sources a {
   text-underline-offset: 3px;
   overflow-wrap: anywhere;
+  color: var(--accent);
 }
 .class-broader-proposal {
   display: grid;
   gap: 6px;
   padding: var(--space-3);
-  border: 1px solid;
-  border-radius: var(--radius-control);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
   margin-top: 10px;
+  background: var(--surface);
+  color: var(--text);
 }
 .class-broader-label {
   font-size: 10px;
@@ -341,16 +382,19 @@
 .class-llm-reason {
   font-size: 12px;
   line-height: 1.75;
-  border-left: 2px solid;
+  border-left: 2px solid var(--accent);
   padding-left: 10px;
+  color: var(--text);
 }
 .class-llm-reason > b {
   font-size: 11px;
+  color: var(--accent);
 }
 .class-llm-reason small {
   display: block;
   margin-top: 5px;
   font-size: 10px;
+  color: var(--text-muted);
 }
 @media (max-width: 620px) {
   .display-settings {
@@ -373,6 +417,7 @@
   top: 0;
   z-index: 1;
   padding: 6px 0;
+  background: var(--bg-raised);
 }
 .class-broader-proposal .class-broader-title {
   max-height: 9em;
@@ -390,9 +435,10 @@
   display: flex;
   gap: 3px;
   padding: var(--space-1);
-  border: 1px solid;
+  border: 1px solid var(--line);
   border-radius: 11px;
   margin: 6px 0 10px;
+  background: var(--bg-sunken);
 }
 .source-tabs button {
   border: 0;
@@ -401,6 +447,8 @@
   flex: 1;
   border-radius: 7px;
   white-space: nowrap;
+  background: transparent;
+  color: var(--text-muted);
 }
 .seed-panel details {
   margin: 15px 0;
@@ -456,12 +504,16 @@
   border-radius: 5px;
   padding: 5px 7px;
   font-size: 11px;
+  background: var(--surface-active);
+  color: var(--text-accent);
 }
 .class-focus {
   margin: 0 22px var(--space-2);
   padding: 15px;
-  border: 1px solid;
+  border: 1px solid var(--accent-soft);
   border-radius: 13px;
+  background: linear-gradient(115deg, var(--surface-active), var(--bg-raised));
+  box-shadow: inset 3px 0 0 var(--accent-mid);
 }
 .class-focus > div:first-child {
   display: flex;
@@ -469,19 +521,18 @@
   gap: var(--space-2);
   flex-wrap: wrap;
 }
-.class-focus .eyebrow {
-  font-size: 10px;
-  letter-spacing: 0.08em;
-}
+
 .class-focus b {
   font-family: ui-monospace, Consolas, monospace;
   font-size: 15px;
+  color: var(--text);
 }
 .class-focus .focus-title {
   width: 100%;
   font-size: 13px;
   line-height: 1.7;
   overflow-wrap: anywhere;
+  color: var(--text);
 }
 .class-focus small {
   font-size: 11px;
@@ -510,25 +561,10 @@
 .selection-main .caption {
   margin: var(--space-3) 0;
 }
-.selected-content {
-  flex-wrap: wrap;
-}
 .remove-class {
   border: 1px solid;
   text-align: left;
   overflow-wrap: anywhere;
-}
-.selection-bar > .button {
-  flex-shrink: 0;
-}
-.selection-bar {
-  align-items: flex-start;
-}
-.selection-bar .button:disabled {
-  cursor: default;
-}
-.node.focused .node-circle {
-  stroke-width: 2.5;
 }
 .classification-explorer .detail-strip {
   font-size: 13px;
@@ -536,6 +572,7 @@
   max-height: 260px;
   overflow: auto;
   overflow-wrap: anywhere;
+  background: var(--surface-hover);
 }
 .classification-explorer .detail-strip p {
   margin: 6px 0;
@@ -550,12 +587,15 @@
 }
 .class-facet-tags span {
   font-size: 11px;
-  border: 1px solid;
+  border: 1px solid var(--accent-soft);
   border-radius: 5px;
   padding: 1px 6px;
+  color: var(--text-muted);
+  background: var(--surface-active);
 }
 .class-match-details {
   margin: var(--space-2) 0;
+  color: var(--text-muted);
 }
 .class-match-details summary {
   cursor: pointer;
@@ -565,18 +605,19 @@
   max-height: 350px;
   overflow: auto;
   margin: var(--space-3) 0;
-  border-top: 1px solid;
+  border-top: 1px solid var(--line);
 }
 .target-row {
   display: flex;
   align-items: flex-start;
   gap: 9px;
   padding: var(--space-3) 0;
-  border-bottom: 1px solid;
+  border-bottom: 1px solid var(--line);
   margin: 0;
 }
 .target-row input {
   margin-top: var(--space-1);
+  accent-color: var(--accent);
 }
 .target-row span {
   min-width: 0;
@@ -601,8 +642,7 @@
   .classification-explorer .hint-card {
     margin-top: var(--space-4);
   }
-  .classification-explorer .canvas-header,
-  .selection-bar {
+  .classification-explorer .canvas-header {
     flex-wrap: wrap;
   }
 }
@@ -656,4 +696,163 @@
     margin-left: 13px;
     margin-right: 13px;
   }
+}
+.class-list button.active {
+  border-color: var(--accent);
+  background: var(--surface-active);
+}
+.class-proposal-code .is-new {
+  background: var(--surface);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.class-proposal-reason {
+  color: var(--text);
+}
+.class-proposal-rejected,
+.class-proposal-notices {
+  color: var(--text-muted);
+}
+.class-broader-label,
+.class-broader-added {
+  color: var(--accent);
+}
+.seed-panel details,
+.class-trail {
+  color: var(--text-muted);
+}
+.class-focus small,
+.browse-note {
+  color: var(--text-muted);
+}
+.target-row small {
+  color: var(--text-muted);
+}
+/* Paper charts and evidence panels. Geometry and interaction stay in the
+classification/discovery stylesheets; this layer changes their materials. */
+/* Classification atlas */
+.classification-explorer .canvas-panel {
+  background: var(--surface);
+  border-color: var(--line);
+}
+.classification-explorer .canvas-header h3 {
+  color: var(--text);
+}
+.classification-explorer .canvas-wrap {
+  background-color: var(--bg-raised);
+  background-image:
+    radial-gradient(var(--overlay-ink) 0.65px, transparent 0.65px),
+    linear-gradient(90deg, var(--overlay-ink) 1px, transparent 1px),
+    linear-gradient(var(--overlay-ink) 1px, transparent 1px);
+  background-size:
+    23px 23px,
+    115px 115px,
+    115px 115px;
+}
+.classification-explorer .canvas-footer {
+  border-color: var(--line);
+  background: var(--surface);
+}
+.classification-explorer .canvas-empty h3 {
+  color: var(--text);
+}
+.classification-explorer .empty-state-icon {
+  color: var(--accent);
+}
+.source-tabs button.active {
+  background: var(--surface);
+  color: var(--accent);
+  box-shadow: var(--shadow-1);
+}
+.classification-explorer .hint-card {
+  background: var(--surface-hover);
+  border-color: var(--surface-active);
+}
+.classification-explorer .hint-card h3 {
+  color: var(--accent);
+}
+.trail-item:hover {
+  background: var(--accent-soft);
+}
+#class-layout-settings {
+  color: var(--accent);
+  border-color: var(--accent-soft);
+  background: var(--surface-active);
+}
+#class-links line {
+  stroke: var(--surface-active);
+}
+.classification-explorer #class-svg .node-circle {
+  fill: var(--surface-active);
+  stroke: var(--accent-mid);
+  filter: none;
+}
+.classification-explorer #class-svg .node.fterm .node-circle {
+  fill: var(--copper-soft);
+  stroke: var(--copper-mid);
+}
+.classification-explorer #class-svg .node.cpc .node-circle {
+  fill: var(--surface-active);
+  stroke: var(--accent-mid);
+}
+.classification-explorer #class-svg .node.navigation-node .node-circle {
+  fill: var(--bg);
+  stroke: var(--accent-mid);
+}
+.classification-explorer #class-svg .node.selected .node-circle {
+  fill: var(--accent);
+  stroke: var(--accent-strong);
+  filter: drop-shadow(0 3px 5px var(--overlay-accent));
+}
+.classification-explorer #class-svg .node.fterm.selected .node-circle {
+  fill: var(--copper);
+  stroke: var(--copper);
+  filter: drop-shadow(0 3px 5px var(--overlay-ink));
+}
+.classification-explorer #class-svg .node:hover .node-circle {
+  stroke: var(--text);
+}
+.classification-explorer #class-svg .node:focus-visible .node-circle {
+  stroke: var(--text);
+}
+.classification-explorer #class-svg .node.fterm .node-kind {
+  fill: var(--copper-strong);
+}
+.classification-explorer #class-svg .node.selected .node-kind {
+  fill: var(--surface);
+}
+.classification-explorer #class-svg .node.selected .selection-mark {
+  fill: var(--surface);
+}
+.classification-explorer .lasso-path {
+  fill: var(--surface-hover);
+  stroke: var(--accent);
+}
+.classification-explorer + .selection-bar {
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+}
+.selection-bar .remove-class {
+  color: var(--accent);
+  border-color: var(--accent-soft);
+  background: var(--surface-active);
+}
+.selection-bar .remove-class:hover {
+  background: var(--surface-active);
+}
+.class-list button:hover {
+  background: var(--surface-hover);
+}
+.class-tooltip .class-bilingual dt {
+  color: var(--accent);
+}
+.class-tooltip .class-bilingual dt small {
+  color: var(--text-muted);
+}
+.class-tooltip .class-bilingual dd {
+  color: var(--text);
+}
+.class-tooltip .class-parent-caption {
+  border-color: var(--accent-soft);
+  color: var(--text-muted);
 }

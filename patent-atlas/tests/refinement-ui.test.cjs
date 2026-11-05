@@ -368,3 +368,88 @@ test('a late proposal cannot overwrite or unlock a newly rendered refinement ins
   assert.equal(s.rendered.length, 0);
   assert.equal(s.notices.length, 0);
 });
+
+function graphResult() {
+  return {
+    ...result(),
+    score: {
+      keep_hit: 3,
+      keep_total: 4,
+      exclude_hit: 1,
+      exclude_total: 2,
+      unlabeled_hit: 5,
+      note: '手元の判定で再計算',
+    },
+    graph: {
+      include: [
+        {
+          term: '電池',
+          keep_hit: 2,
+          keep_total: 4,
+          exclude_hit: 0,
+          exclude_total: 2,
+          unlabeled_hit: 1,
+          path: [
+            { type: 'term', value: '電池' },
+            { type: 'ipc', value: 'H01M10/00', keep_count: 2, keep_with_term: 2 },
+            { type: 'patents', ids: ['JP1', 'JP<2>'], total: 3 },
+          ],
+          projected: { keep_hit: 2, keep_total: 4, exclude_hit: 0, exclude_total: 2, unlabeled_hit: 1 },
+        },
+      ],
+      exclude: [],
+      or_groups: [{ terms: ['電池', '自動運転'], shared_keep: 2, reason: '共起' }],
+    },
+  };
+}
+test('graph candidates show counts, escaped evidence paths, the base score and OR-group hypotheses', async () => {
+  const s = await setup(async (path) => (path === '/refinement' ? graphResult() : {}));
+  s.context.renderRefinementWorkspace();
+  await flush();
+  const include = s.dom['#include-terms'].innerHTML;
+  assert.match(include, /必要 2\/4 ·\s*不要 0\/2/);
+  assert.match(include, /H01M10\/00（2 \/ 2 件）/);
+  assert.match(include, /JP&lt;2&gt; ほか1件/);
+  assert.match(include, /この語を使うと 必要 2 \/ 4 を捕捉/);
+  assert.doesNotMatch(include, /JP<2>/);
+  assert.match(s.dom['#refinement-score'].innerHTML, /3 \/ 4<\/strong>/);
+  assert.match(s.dom['#refinement-score'].innerHTML, /1 \/ 2<\/strong>/);
+  assert.match(s.dom['#refinement-or-groups'].innerHTML, /電池 <b>OR<\/b> 自動運転/);
+  assert.ok(s.dom['#refinement-or-group-0']);
+});
+test('choosing an OR group checks its terms and requests a projected score for the chosen terms', async () => {
+  const projected = {
+    projected: { keep_hit: 2, keep_total: 4, exclude_hit: 0, exclude_total: 2, unlabeled_hit: 1 },
+    delta: { keep_hit: -1, exclude_hit: -1 },
+  };
+  const s = await setup(async (path) =>
+    path === '/refinement' ? graphResult() : path === '/refinement/score' ? projected : {}
+  );
+  s.context.renderRefinementWorkspace();
+  await flush();
+  const battery = s.inputs.find((input) => input.name === 'include-term' && input.value === '電池');
+  assert.equal(battery.checked, false);
+  s.click('#refinement-or-group-0');
+  assert.equal(battery.checked, true);
+  await new Promise((resolve) => setTimeout(resolve, 320));
+  const request = s.requests.find((r) => r.path === '/refinement/score');
+  assert.deepEqual(request.body, { include: ['自動運転', '電池'], exclude: [] });
+  assert.match(
+    s.dom['#refinement-projected'].textContent,
+    /この条件なら 必要 2 \/ 4 を捕捉.*（必要 -1 · 不要 -1）/
+  );
+});
+test('without a scoreable query the term change does not call the score endpoint', async () => {
+  const s = await setup(async (path) =>
+    path === '/refinement'
+      ? { ...result(), score: { error: 'x' }, graph: { include: [], exclude: [], or_groups: [] } }
+      : {}
+  );
+  s.context.renderRefinementWorkspace();
+  await flush();
+  assert.match(s.dom['#refinement-score'].innerHTML, /採点できる検索式がありません/);
+  const term = s.inputs.find((input) => input.name === 'include-term');
+  term.events.get('change')();
+  await new Promise((resolve) => setTimeout(resolve, 320));
+  assert.ok(!s.requests.some((r) => r.path === '/refinement/score'));
+});

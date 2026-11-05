@@ -25,4 +25,6 @@ CSS_AUDIT=1 CSS_BASELINE_STATIC=/tmp/phase4-static PHASE4_SCREENSHOTS=/tmp/phase
 node tests/compare-css.cjs /tmp/phase4 /tmp/phase6 /tmp/comparison
 ```
 
+CSSの構成は`node tests/css-audit.cjs`で確認する（通常テストには含めない）。ファイル数・合計バイト数・`:root`の数・トークン数・`:root`外の16進カラー・複数ファイルで定義されたセレクターを表示する。色はすべて`static/atlas-theme.css`の`:root`トークンから参照し、共有コンポーネントは`static/style.css`だけで定義する。
+
 PowerShellでは各変数を`$env:変数名='値'`で指定する。`PLAYWRIGHT_EXECUTABLE_PATH`で既存のEdge等も指定可能。ポート・特許データ・設定は一時領域で作成し、終了時にそのサーバーだけを停止する。外部サイトへの通信は遮断する。

@@ -1,23 +1,4 @@
 /* Keep the current task in view; advanced controls remain available on demand. */
-main > .workspace-heading {
-  min-height: 100px;
-  padding-top: var(--space-3);
-  padding-bottom: var(--space-3);
-  margin-bottom: 14px;
-}
-.workspace-heading h1 {
-  font-size: clamp(24px, 2.4vw, 36px);
-  margin: var(--space-2) 0;
-  letter-spacing: -0.03em;
-}
-.workspace-heading .atlas-heading-note {
-  margin: 0;
-  font-size: 12px;
-}
-.workspace-heading .atlas-heading-art {
-  max-height: 120px;
-  opacity: 0.45;
-}
 #research-flow-header {
   margin-bottom: var(--space-4);
   scroll-margin-top: 80px;
@@ -28,8 +9,8 @@ main > .workspace-heading {
   gap: 5px;
   padding: 6px;
   border: 1px solid var(--line);
-  border-radius: var(--radius-card);
-  background: var(--surface-paper);
+  border-radius: var(--radius-l);
+  background: var(--surface);
 }
 .research-flow-nav button {
   display: flex;
@@ -38,10 +19,10 @@ main > .workspace-heading {
   padding: var(--space-3) 10px;
   border: 0;
   border-radius: 11px;
-  background: var(--transparent);
+  background: transparent;
   text-align: left;
   cursor: pointer;
-  color: var(--muted);
+  color: var(--text-muted);
   min-width: 0;
 }
 .research-flow-nav button > span {
@@ -68,23 +49,23 @@ main > .workspace-heading {
   margin-top: 3px;
 }
 .research-flow-nav button[aria-current='step'] {
-  color: var(--text-selected);
-  background: var(--surface-selected);
+  color: var(--text-accent);
+  background: var(--surface-active);
 }
 .research-flow-nav button[aria-current='step'] > span {
-  color: var(--white);
-  background: var(--palette-7662a4);
-  border-color: var(--palette-7662a4);
+  color: var(--surface);
+  background: color-mix(in srgb, var(--accent) 55%, var(--text-muted));
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--text-muted));
 }
 .research-flow-nav button:disabled {
   opacity: 0.5;
   cursor: default;
 }
 .research-flow-nav button:not(:disabled):hover {
-  background: var(--palette-f4f0fa);
+  background: var(--surface-hover);
 }
 .research-flow-nav button:focus-visible {
-  outline: 2px solid var(--cyan);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 .research-flow-save {
@@ -93,7 +74,7 @@ main > .workspace-heading {
   gap: 15px;
   padding: 9px 10px 0;
   font-size: 11px;
-  color: var(--muted);
+  color: var(--text-muted);
   line-height: 1.5;
 }
 .research-flow-save > .caption {
@@ -107,16 +88,14 @@ main > .workspace-heading {
   font-size: 19px;
   margin: var(--space-1) 0;
 }
-#research-workbench .research-heading .eyebrow {
-  display: none;
-}
+
 .research-resume {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
-  background: var(--palette-f0eee8);
-  border: 1px solid var(--palette-e0dbcf);
+  background: var(--bg);
+  border: 1px solid var(--line);
   border-radius: var(--radius-m);
   padding: var(--space-3) var(--space-4);
   margin: 0 0 14px;
@@ -127,7 +106,7 @@ main > .workspace-heading {
 }
 .research-resume span {
   font-size: 11px;
-  color: var(--muted);
+  color: var(--text-muted);
   display: block;
   margin-top: var(--space-1);
 }
@@ -140,12 +119,12 @@ main > .workspace-heading {
   font-size: 12px;
   font-weight: 550;
   cursor: pointer;
-  color: var(--muted);
+  color: var(--text-muted);
   line-height: 1.7;
 }
 .research-optional[open] > summary {
   margin-bottom: var(--space-3);
-  color: var(--ink);
+  color: var(--text);
 }
 .research-extra-input {
   grid-column: 1/-1;
@@ -156,25 +135,6 @@ main > .workspace-heading {
 .research-extra-input > label input {
   max-width: 700px;
 }
-.research-invention-brief .research-brief {
-  grid-template-columns: minmax(230px, 0.65fr) minmax(0, 1.35fr);
-  padding: 22px;
-  gap: var(--space-3) var(--space-6);
-}
-.research-invention-brief .research-brief > h2 {
-  font-size: 18px;
-  margin: 0;
-}
-.research-invention-brief .research-brief > .eyebrow {
-  display: none;
-}
-.research-invention-brief .research-brief > label {
-  margin-top: 6px;
-}
-.research-invention-brief .research-targets {
-  margin: 0;
-  padding-top: var(--space-3);
-}
 #invention-workbench {
   margin-top: 18px;
   padding: 22px;
@@ -182,9 +142,7 @@ main > .workspace-heading {
 #invention-workbench .invention-heading h2 {
   font-size: 20px;
 }
-#invention-workbench .invention-heading .eyebrow {
-  display: none;
-}
+
 #invention-input-area .invention-source-grid {
   display: flex;
   flex-direction: column;
@@ -206,23 +164,23 @@ main > .workspace-heading {
   display: inline-flex;
   gap: var(--space-1);
   flex-wrap: wrap;
-  background: var(--palette-f0ece5);
+  background: var(--bg-sunken);
   padding: var(--space-1);
-  border-radius: var(--radius-control);
+  border-radius: var(--radius-m);
 }
 .research-input-method button {
   border: 0;
-  background: var(--transparent);
+  background: transparent;
   padding: 10px var(--space-4);
   font-size: 12px;
   border-radius: var(--radius-s);
-  color: var(--muted);
+  color: var(--text-muted);
   cursor: pointer;
 }
 .research-input-method button[aria-pressed='true'] {
-  background: var(--surface-paper);
-  color: var(--ink);
-  box-shadow: 0 2px 7px var(--palette-32284612);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-1);
 }
 #research-llm-unavailable {
   display: flex;
@@ -237,7 +195,7 @@ main > .workspace-heading {
 #research-workbench[data-flow-stage='elements'] .invention-plan-heading + p {
   font-size: 12px;
   margin: var(--space-3) 0;
-  color: var(--muted);
+  color: var(--text-muted);
 }
 #research-condition-summary {
   display: inline-block;
@@ -255,7 +213,7 @@ main > .workspace-heading {
 .research-element-detail > summary {
   cursor: pointer;
   font-size: 12px;
-  color: var(--palette-675385);
+  color: var(--text-accent);
 }
 .research-element-detail[open] > summary {
   margin-bottom: var(--space-4);
@@ -279,12 +237,12 @@ main > .workspace-heading {
   position: sticky;
   bottom: 12px;
   z-index: 4;
-  background: var(--palette-fffdf8f5);
+  background: var(--overlay-paper);
   backdrop-filter: blur(10px);
-  border: 1px solid var(--palette-cfc5dc);
+  border: 1px solid var(--accent-soft);
   border-radius: var(--radius-m);
   padding: var(--space-3) var(--space-4);
-  box-shadow: 0 5px 20px var(--palette-40335114);
+  box-shadow: var(--shadow-1);
   margin-top: var(--space-5);
 }
 #invention-review-area .invention-bottom p {
@@ -297,13 +255,13 @@ main > .workspace-heading {
   outline: none;
 }
 #invention-query-preview:focus .invention-preview {
-  border-color: var(--cyan);
+  border-color: var(--accent);
 }
 .research-target-provenance {
   font-size: 11px;
   line-height: 1.7;
-  color: var(--palette-7a6749);
-  background: var(--palette-f8f1df);
+  color: var(--copper-strong);
+  background: var(--copper-soft);
   border-radius: var(--radius-s);
   padding: 9px var(--space-3);
 }
@@ -316,13 +274,13 @@ main > .workspace-heading {
   margin-bottom: 14px;
 }
 .research-progress-card {
-  border: 1px solid var(--palette-cfc5dc);
-  background: var(--palette-f8f5fffa);
+  border: 1px solid var(--accent-soft);
+  background: var(--overlay-paper);
   backdrop-filter: blur(10px);
   border-radius: 13px;
   padding: 14px 18px;
   font-size: 12px;
-  box-shadow: 0 6px 20px var(--palette-3427440b);
+  box-shadow: var(--shadow-1);
 }
 .research-progress-heading {
   display: flex;
@@ -336,7 +294,7 @@ main > .workspace-heading {
 .research-progress-meta,
 .research-progress-timeout,
 .research-progress-retained {
-  color: var(--muted);
+  color: var(--text-muted);
   font-size: 11px;
   margin: 6px 0;
   line-height: 1.6;
@@ -351,23 +309,23 @@ main > .workspace-heading {
 .research-progress-indeterminate {
   width: 100%;
   height: 5px;
-  accent-color: var(--palette-7662a4);
+  accent-color: color-mix(in srgb, var(--accent) 55%, var(--text-muted));
   margin: var(--space-2) 0;
 }
 .research-progress-card.is-error {
-  border-color: var(--palette-dbb9bc);
-  background: var(--palette-fff6f5);
+  border-color: color-mix(in srgb, var(--exclude) 30%, var(--surface));
+  background: var(--exclude-soft);
 }
 .research-progress-error {
-  color: var(--palette-9a354e);
+  color: var(--exclude);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 .research-progress-card.is-complete {
   padding-top: 10px;
   padding-bottom: 10px;
-  background: var(--palette-f1f7f0);
-  border-color: var(--palette-ccd8c9);
+  background: var(--keep-soft);
+  border-color: color-mix(in srgb, var(--keep) 30%, var(--surface));
 }
 .research-progress-card.is-complete .research-progress-retained {
   display: none;
@@ -391,12 +349,6 @@ main > .workspace-heading {
     align-items: flex-start;
     flex-direction: column;
   }
-  .research-invention-brief .research-brief {
-    display: block;
-  }
-  .research-invention-brief .research-brief > label {
-    margin: 14px 0;
-  }
   .research-flow-nav button > b {
     font-size: 11px;
   }
@@ -413,33 +365,21 @@ main > .workspace-heading {
     backdrop-filter: none;
   }
 }
-
-/* Phase 4: two primary views, one persistent workflow, stage-specific panels. */
+/* Phase 4: two primary views,
+one persistent workflow,
+stage-specific panels. */
 .research-panel {
   display: none;
 }
 .research-panel.active {
   display: block;
 }
-.workspace-heading.is-compact {
-  min-height: 48px;
-  padding: var(--space-2) var(--space-5);
-  margin-bottom: 10px;
-}
-.workspace-heading.is-compact .atlas-heading-art,
-.workspace-heading.is-compact .eyebrow,
-.workspace-heading.is-compact .atlas-heading-note {
-  display: none;
-}
-.workspace-heading.is-compact h1 {
-  font-size: 20px;
-  margin: 0;
-}
+
 #research-flow-header {
   position: sticky;
   top: 0;
   z-index: 12;
-  background: var(--bg, var(--palette-f6f3ec));
+  background: var(--bg);
   padding: 5px 0 var(--space-2);
 }
 .research-stage-tools {
@@ -452,9 +392,9 @@ main > .workspace-heading {
   display: none;
 }
 .research-stage-tools [aria-pressed='true'] {
-  background: var(--surface-selected);
-  border-color: var(--palette-bdb0d5);
-  color: var(--text-selected);
+  background: var(--surface-active);
+  border-color: var(--accent-mid);
+  color: var(--text-accent);
 }
 .research-modes {
   border: 0;
@@ -466,7 +406,7 @@ main > .workspace-heading {
 }
 .research-modes legend {
   font-size: 12px;
-  color: var(--muted);
+  color: var(--text-muted);
   margin-bottom: var(--space-2);
 }
 .research-modes label {
@@ -485,19 +425,16 @@ main > .workspace-heading {
   border: 1px solid var(--line);
   border-radius: 9px;
   padding: 10px var(--space-4);
-  background: var(--surface-paper);
+  background: var(--surface);
 }
 .research-modes input:checked + span {
-  color: var(--text-selected);
-  border-color: var(--palette-bdb0d5);
-  background: var(--surface-selected);
+  color: var(--text-accent);
+  border-color: var(--accent-mid);
+  background: var(--surface-active);
 }
 .research-modes input:focus-visible + span {
-  outline: 2px solid var(--cyan);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
-}
-.panel {
-  position: relative;
 }
 .panel-help {
   position: absolute;
@@ -513,16 +450,16 @@ main > .workspace-heading {
   height: 26px;
   border-radius: 50%;
   border: 1px solid var(--line);
-  background: var(--surface-paper);
+  background: var(--surface);
   cursor: pointer;
   list-style: none;
-  color: var(--muted);
+  color: var(--text-muted);
 }
 .panel-help > summary::-webkit-details-marker {
   display: none;
 }
 .panel-help > summary:focus-visible {
-  outline: 2px solid var(--cyan);
+  outline: 2px solid var(--accent);
 }
 .panel-help > div {
   position: absolute;
@@ -531,11 +468,11 @@ main > .workspace-heading {
   width: min(380px, 80vw);
   max-height: 60vh;
   overflow: auto;
-  background: var(--surface-paper);
+  background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius-m);
   padding: var(--space-4);
-  box-shadow: 0 10px 30px var(--palette-34274426);
+  box-shadow: var(--shadow-2);
   line-height: 1.8;
 }
 .panel-help[open] {
@@ -561,7 +498,7 @@ main > .workspace-heading {
 .orchestration-process-detail {
   margin: var(--space-3) 0;
   font-size: 12px;
-  color: var(--muted);
+  color: var(--text-muted);
 }
 @media (max-width: 850px) {
   .research-modes {
