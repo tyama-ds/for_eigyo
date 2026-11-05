@@ -75,6 +75,7 @@ async function loadModule(context, filename, only) {
           if (
             [
               'esc',
+              'html',
               'safeUrl',
               'keyOf',
               'insidePolygon',

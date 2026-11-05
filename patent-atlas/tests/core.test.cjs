@@ -29,3 +29,22 @@ test('row patches reject a different population without partially changing rows'
   assert.equal(row.label, 'keep');
   assert.equal(c.getState().patents[0], row);
 });
+
+test('html tag folds line breaks in static text, joins arrays and drops null without escaping', async () => {
+  const { html, esc } = await import('../static/core.js');
+  const rows = ['<li>a</li>', null, '<li>b</li>'];
+  const out = html`<ul class="x">
+    ${rows}
+    <li>${esc('<c>')}</li>${undefined}
+  </ul>`;
+  assert.equal(out, '<ul class="x"><li>a</li><li>b</li><li>&lt;c&gt;</li></ul>');
+  assert.equal(html`<pre>a\nb</pre>`, '<pre>a\nb</pre>');
+  const tag = html`<input id="x"
+    data-k="${1}"
+    ${'checked'}>
+    text</input>`;
+  assert.equal(tag, '<input id="x" data-k="1" checked>text</input>');
+  assert.equal(html`<a title="t"
+    >x</a>`, '<a title="t">x</a>');
+  assert.equal(html`<b>${0}</b> ${false}`, '<b>0</b> false');
+});

@@ -26,12 +26,19 @@ const esc = (value) =>
     /[&<>"']/g,
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]
   );
-// Tagged template for HTML fragments: arrays are concatenated, null/undefined vanish, everything
-// else is inserted as-is. Values are NOT escaped here; callers apply esc() to untrusted text.
+// Tagged template for HTML fragments. Values: arrays are concatenated, null/undefined vanish,
+// everything else is inserted as-is (NOT escaped; callers apply esc() to untrusted text).
+// Static parts may be wrapped: a line break plus the indentation after it is removed, except
+// right after an attribute's closing quote, where it becomes one space (so attributes can be
+// split across lines). Chunks with an escape sequence (a backslash in the raw text) are kept as is.
+function foldHtml(raw) {
+  return raw.replace(/(["']?)\n[ \t]*(>?)/g, (_, quote, close) => (quote && !close ? quote + ' ' : quote + close));
+}
 function html(strings, ...values) {
   let out = '';
   for (let i = 0; i < strings.length; i++) {
-    out += strings[i];
+    const raw = strings.raw[i];
+    out += raw.includes('\\') ? strings[i] : foldHtml(raw);
     if (i < values.length) {
       const value = values[i];
       out += Array.isArray(value) ? value.join('') : value == null ? '' : value;
