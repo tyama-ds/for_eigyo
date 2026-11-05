@@ -187,6 +187,46 @@ class DiscoveryRouteTests(unittest.TestCase):
                 self.assertEqual(module.STATE, before)
                 self.assertEqual((module.DATA / "workspace.json").read_bytes(), disk)
 
+    def test_save_failures_restore_each_manual_route_without_archives(self):
+        self.plan()
+        self.import_rows([patent("EP200A1", ipc="C04B35/64")])
+        before = copy.deepcopy(module.STATE)
+        disk = (module.DATA / "workspace.json").read_bytes()
+        archives = set(module.DATA.glob("discovery-archive-*.json"))
+        cases = [
+            ("plan", {"json": {"keywords": "膜分離", "english_terms": "membrane"}}),
+            ("analyze", {}),
+            ("import", {"content": csv_bytes([patent("EP300A1")])}),
+            ("adopt", {"json": {"keys": ["IPC:C04B35/64"]}}),
+        ]
+        for action, arguments in cases:
+            with self.subTest(action=action), patch.object(module, "save", side_effect=OSError("disk full")) as save:
+                response = self.client.post("/api/discovery/" + action, **arguments)
+            self.assertEqual(response.status_code, 400, response.text)
+            save.assert_called_once()
+            self.assertEqual(module.STATE, before)
+            self.assertEqual((module.DATA / "workspace.json").read_bytes(), disk)
+            self.assertEqual(set(module.DATA.glob("discovery-archive-*.json")), archives)
+
+    def test_replacement_plan_writes_archive_only_after_workspace_save(self):
+        self.plan()
+        previous = copy.deepcopy(module.STATE["discovery"])
+        real_save = module.save
+        checked = []
+
+        def save_before_archive():
+            entry = module.STATE["discovery"]["archives"][-1]
+            path = module.DATA / f"discovery-archive-{entry['id']}.json"
+            self.assertFalse(path.exists())
+            real_save()
+            checked.append(path)
+
+        with patch.object(module, "save", side_effect=save_before_archive):
+            self.plan(keywords="膜分離", english_terms="membrane")
+        self.assertEqual(len(checked), 1)
+        archived = json.loads(checked[0].read_text(encoding="utf-8"))
+        self.assertEqual(archived, {key: value for key, value in previous.items() if key != "archives"})
+
     def test_ops_unconfigured_stays_offline(self):
         self.plan()
         before = copy.deepcopy(module.STATE)

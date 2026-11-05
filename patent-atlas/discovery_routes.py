@@ -6,6 +6,7 @@ import math
 import re
 import time
 import uuid
+from contextlib import contextmanager
 
 from fastapi import HTTPException, Request
 from fastapi.responses import Response
@@ -74,6 +75,29 @@ def register_discovery_routes(app, context):
     save, idle, public_state = context["save"], context["idle"], context["public_state"]
     stop_event = context["STOP"]
 
+    @contextmanager
+    def atomic_workspace(*fields):
+        before = {field: copy.deepcopy(state[field]) for field in fields if field in state}
+        archives_to_write = []
+        try:
+            yield archives_to_write
+            context["save"]()
+        except Exception as error:
+            for field in fields:
+                if field in before:
+                    state[field] = before[field]
+                else:
+                    state.pop(field, None)
+            if isinstance(error, (ValueError, HTTPException)):
+                raise
+            raise ValueError("探索ラボの保存に失敗しました。変更前の状態を保持しています。") from None
+        # A failed workspace save must not leave an archive of an uncommitted plan.
+        for target, text in archives_to_write:
+            try:
+                target.write_text(text, encoding="utf-8")
+            except OSError:
+                raise ValueError("新しい計画は保存しましたが、前の計画のアーカイブ保存に失敗しました。") from None
+
     def workspace():
         if not isinstance(state.get("discovery"), dict):
             state["discovery"] = new_discovery()
@@ -134,7 +158,7 @@ def register_discovery_routes(app, context):
             raise ValueError("LLM利用の指定を確認してください。")
         with lock:
             idle()
-            old_id = workspace()["id"]
+            old_id = (state.get("discovery") or {}).get("id")
             same_topic = topic.casefold() == state["keywords"].strip().casefold()
             candidates = copy.deepcopy(state["candidates"]) if same_topic else []
             patents = copy.deepcopy(state["patents"])
@@ -159,17 +183,17 @@ def register_discovery_routes(app, context):
                 f"公式IPC/FIの定義照合で{len(reviewed)}件を候補にしました。提示候補以外の返答{len(rejected)}件を除外。"
             )
         plan["user_english_terms"] = english
-        with lock:
+        with lock, atomic_workspace("discovery") as archives_to_write:
             idle()
-            old = workspace()
-            if old["id"] != old_id:
+            if (state.get("discovery") or {}).get("id") != old_id:
                 raise HTTPException(409, "別の計画が先に保存されました。最新の計画を確認してください。")
+            old = workspace()
             archives = list(old.get("archives", []))
             if old.get("plan"):
                 archive_id = uuid.uuid4().hex
                 target = context["DATA"] / f"discovery-archive-{archive_id}.json"
                 archived = {k: v for k, v in old.items() if k != "archives"}
-                target.write_text(json.dumps(archived, ensure_ascii=False, allow_nan=False), encoding="utf-8")
+                archives_to_write.append((target, json.dumps(archived, ensure_ascii=False, allow_nan=False)))
                 archives.append(
                     dict(id=archive_id, keywords=old["plan"]["keywords"], time=time.strftime("%Y-%m-%d %H:%M"))
                 )
@@ -180,12 +204,11 @@ def register_discovery_routes(app, context):
                 for notice in plan["llm_proposal"]["notices"][:2]:
                     log(value, notice)
             state["discovery"] = value
-            save()
         return public_state()
 
     @app.post("/api/discovery/analyze")
     def analyze_workspace():
-        with lock:
+        with lock, atomic_workspace("discovery"):
             idle()
             value = require_plan()
             if not state["patents"]:
@@ -193,7 +216,6 @@ def register_discovery_routes(app, context):
             rows, _ = merge_documents(value["patents"], state["patents"], "手動探索のCSV", live_labels=True)
             summarize(value, rows, "手動探索のCSV")
             value["mode"] = "csv"
-            save()
         return public_state()
 
     @app.post("/api/discovery/import")
@@ -208,7 +230,7 @@ def register_discovery_routes(app, context):
             raise ValueError(
                 "発明の名称列が見つかりません。列名を「発明の名称」または「title」にするか、手動探索で列を割り当てて読み込んでください。"
             )
-        with lock:
+        with lock, atomic_workspace("discovery"):
             idle()
             value = require_plan()
             rows, added = merge_documents(value["patents"], parsed["rows"], "探索ラボへ追加したCSV")
@@ -218,7 +240,6 @@ def register_discovery_routes(app, context):
                 value,
                 f"CSVから新規{added}公報を追加。ファイル内の重複{parsed['duplicates']}件・名称なし{parsed['skipped']}行を除外。",
             )
-            save()
         return public_state()
 
     @app.post("/api/discovery/adopt")
@@ -226,7 +247,7 @@ def register_discovery_routes(app, context):
         keys = body.get("keys", [])
         if not isinstance(keys, list) or not keys or len(keys) > 100 or any(not isinstance(key, str) for key in keys):
             raise ValueError("手動探索へ送る分類を1〜100件選んでください。")
-        with lock:
+        with lock, atomic_workspace("discovery", "candidates", "selected", "classification_view"):
             idle()
             value = require_plan()
             pool = {c["key"]: c for c in value["plan"]["candidate_hypotheses"]}
@@ -262,7 +283,6 @@ def register_discovery_routes(app, context):
                 trail=[],
             )
             log(value, f"{len(items)}分類を手動探索へ追加しました。検索に使う分類の選択は利用者が行います。")
-            save()
         return public_state()
 
     @app.get("/api/discovery/export")
