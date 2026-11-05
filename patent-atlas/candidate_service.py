@@ -145,6 +145,49 @@ def display_discovery(discovery):
     return value
 
 
+def _llm_candidate_notices(items, rows, rejected, normalizations, notices):
+    if rejected:
+        details = [f"{item['kind']} {item['code'] or '（コードなし）'}: {item['reason']}" for item in rejected]
+        notice = f"LLM提案{len(items)}件のうち{len(rejected)}件を除外しました。" + " / ".join(details)
+        if not rows:
+            raise ValueError(
+                "LLMの提案に反映できる分類がありません。"
+                + notice
+                + " 現行の完全なコード、または B60L のような上位分類で再生成してください。前回の候補・選択は保持しています。"
+            )
+        notices.append(notice)
+    if normalizations:
+        notices.append(
+            "体系名・空白・全半角・接頭ラベル・版注記などの表記を統一して照合しました。"
+            + " / ".join(
+                f"{item['input_kind']} {item['input_code']} → {item['kind']} {item['code']}" for item in normalizations
+            )
+        )
+    if not items:
+        notices.append("LLMからの分類候補は0件でした。辞書からの探索仮説を表示します。")
+    if rows:
+        notices.append(
+            "LLMによる分類名は採用せず、収録済みの公式名称を表示します。主題への適合性は定義を確認してください。"
+        )
+
+
+def _llm_candidate_row(kind, code, reason):
+    # Model-written titles are not definitions. Use official captions when
+    # available, otherwise show the code with explicit unverified status.
+    return explorer.enrich(
+        dict(
+            kind=kind,
+            code=code,
+            title=code,
+            group="LLM候補",
+            reason="LLMの探索仮説（適合性は未確認）：" + reason.strip()[:300],
+            terms=[],
+            score=0,
+            recommendation_method="llm",
+        )
+    )
+
+
 def llm_candidate_rows(result, notices, proposal=None):
     """Validate model data before touching the workspace or enriching codes."""
     if not isinstance(result, dict) or not isinstance(result.get("candidates"), list):
@@ -193,65 +236,21 @@ def llm_candidate_rows(result, notices, proposal=None):
         seen.add((kind, code))
         known = explorer.lookup(kind, code)
         if kind == "FI" and not known:
-            reject(
-                index,
-                {"kind": kind, "code": code},
-                "収録FI表（2026.04）で未確認です。版の相違・誤記などを確認してください。",
-            )
+            reject(index, {"kind": kind, "code": code}, "収録FI表（2026.04）で未確認です。版の相違・誤記などを確認してください。")
             continue
         if kind == "IPC" and not known:
-            reject(
-                index,
-                {"kind": kind, "code": code},
-                "収録IPC辞書（2026.01）で確認できません。旧版・誤記の可能性があります。",
-            )
+            reject(index, {"kind": kind, "code": code}, "収録IPC辞書（2026.01）で確認できません。旧版・誤記の可能性があります。")
             continue
         if kind != item["kind"] or code != item["code"]:
             normalizations.append(
                 dict(index=index, kind=kind, code=code, input_kind=item["kind"], input_code=item["code"])
             )
-        # Model-written titles are not definitions. Use official captions when
-        # available, otherwise show the code with explicit unverified status.
-        row = explorer.enrich(
-            dict(
-                kind=kind,
-                code=code,
-                title=code,
-                group="LLM候補",
-                reason="LLMの探索仮説（適合性は未確認）：" + item.get("reason", "").strip()[:300],
-                terms=[],
-                score=0,
-                recommendation_method="llm",
-            )
-        )
-        rows.append(row)
+        rows.append(_llm_candidate_row(kind, code, item.get("reason", "")))
     if proposal is not None:
         proposal.update(
             accepted_count=len(rows), rejected=rejected, rejected_count=len(rejected), normalizations=normalizations
         )
-    if rejected:
-        details = [f"{item['kind']} {item['code'] or '（コードなし）'}: {item['reason']}" for item in rejected]
-        notice = f"LLM提案{len(items)}件のうち{len(rejected)}件を除外しました。" + " / ".join(details)
-        if not rows:
-            raise ValueError(
-                "LLMの提案に反映できる分類がありません。"
-                + notice
-                + " 現行の完全なコード、または B60L のような上位分類で再生成してください。前回の候補・選択は保持しています。"
-            )
-        notices.append(notice)
-    if normalizations:
-        notices.append(
-            "体系名・空白・全半角・接頭ラベル・版注記などの表記を統一して照合しました。"
-            + " / ".join(
-                f"{item['input_kind']} {item['input_code']} → {item['kind']} {item['code']}" for item in normalizations
-            )
-        )
-    if not items:
-        notices.append("LLMからの分類候補は0件でした。辞書からの探索仮説を表示します。")
-    if rows:
-        notices.append(
-            "LLMによる分類名は採用せず、収録済みの公式名称を表示します。主題への適合性は定義を確認してください。"
-        )
+    _llm_candidate_notices(items, rows, rejected, normalizations, notices)
     return rows
 
 

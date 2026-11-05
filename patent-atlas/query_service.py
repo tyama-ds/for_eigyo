@@ -89,70 +89,55 @@ def previous_query_for_context(ws, ignore_classifications=False):
     return previous
 
 
-def make_query(
-    ws,
-    refine=False,
-    include=None,
-    exclude=None,
-    preserve_conditions=False,
-    classification_keys=None,
-    *,
-    refinement_terms=default_refinement_terms,
-):
-    words = keywords(ws.state["keywords"])
-    original_keys = normalize_selection(ws, ws.state["selected"])
-    selected_keys = original_keys
-    pool = ws.state["candidates"]
-    classification_changes = None
-    if classification_keys is not None:
-        if (
-            not refine
-            or not isinstance(classification_keys, list)
-            or len(classification_keys) > 1500
-            or any(not isinstance(key, str) or ":" not in key for key in classification_keys)
-        ):
-            raise ValueError("改善案の分類は体系付きキーのリストで指定してください。")
-        feedback = classification_feedback(ws.state["patents"], original_keys)
-        evidence_pool = {item["key"]: item for item in feedback["candidates"]}
-        allowed = {classification_key(item) for item in pool} | set(evidence_pool)
-        if any(key not in allowed for key in classification_keys):
-            raise ValueError("分類候補にないキーが含まれています。要否判定から再分析してください。")
-        incoming = []
-        evidence = []
-        for key in dict.fromkeys(classification_keys):
-            if key in evidence_pool:
-                item = copy.deepcopy(evidence_pool[key])
-                origin = feedback_origin(item)
-                item.setdefault("origins", []).append(origin)
-                incoming.append(item)
-                evidence.append(origin)
-        pool = explorer.merge_candidates(pool, incoming)
-        selected_keys = normalize_selection(ws, classification_keys, pool)
-        classification_changes = dict(
-            added_keys=[key for key in selected_keys if key not in original_keys],
-            removed_keys=[key for key in original_keys if key not in selected_keys],
-            selected_keys=list(selected_keys),
-            evidence=evidence,
-            note=feedback["note"],
-        )
-        preserve_conditions = True
-    selected = copy.deepcopy([c for c in pool if classification_key(c) in selected_keys])
-    if not words and not selected and not (refine and ws.state["queries"] and ws.state["queries"][-1].get("boolean_tree")):
-        raise ValueError("キーワードを入力するか、検索に使う分類を選んでください。")
+def _quote(s):
+    return '"' + s.replace('"', " ").replace("\n", " ").strip() + '"'
 
-    def quote(s):
-        return '"' + s.replace('"', " ").replace("\n", " ").strip() + '"'
 
-    base = " AND ".join("TEXT=" + quote(w) for w in words)
-    classes = " OR ".join(c["kind"].upper() + "=" + quote(c["code"]) for c in selected)
-    query = "(" + base + ")" if base else ""
-    if classes:
-        query += ("\nAND " if query else "") + "(" + classes + ")"
-    previous = previous_query_for_context(ws, preserve_conditions) if refine else {}
-    if refine and ws.state["queries"] and ws.state["queries"][-1].get("boolean_tree") and not previous:
-        raise ValueError(
-            "観点・取り込み式と現在のキーワードまたは分類が変わっています。調査ナビで案を作り直すか、分類の改善案として更新してください。元の論理条件は保持しています。"
-        )
+def _classification_changes(ws, refine, classification_keys, original_keys, pool):
+    """(a) Validate improvement keys and merge judgment evidence into the candidate pool.
+
+    Returns (pool, selected_keys, changes); changes is None when no keys were given.
+    """
+    if classification_keys is None:
+        return pool, original_keys, None
+    if (
+        not refine
+        or not isinstance(classification_keys, list)
+        or len(classification_keys) > 1500
+        or any(not isinstance(key, str) or ":" not in key for key in classification_keys)
+    ):
+        raise ValueError("改善案の分類は体系付きキーのリストで指定してください。")
+    feedback = classification_feedback(ws.state["patents"], original_keys)
+    evidence_pool = {item["key"]: item for item in feedback["candidates"]}
+    allowed = {classification_key(item) for item in pool} | set(evidence_pool)
+    if any(key not in allowed for key in classification_keys):
+        raise ValueError("分類候補にないキーが含まれています。要否判定から再分析してください。")
+    incoming = []
+    evidence = []
+    for key in dict.fromkeys(classification_keys):
+        if key in evidence_pool:
+            item = copy.deepcopy(evidence_pool[key])
+            origin = feedback_origin(item)
+            item.setdefault("origins", []).append(origin)
+            incoming.append(item)
+            evidence.append(origin)
+    pool = explorer.merge_candidates(pool, incoming)
+    selected_keys = normalize_selection(ws, classification_keys, pool)
+    changes = dict(
+        added_keys=[key for key in selected_keys if key not in original_keys],
+        removed_keys=[key for key in original_keys if key not in selected_keys],
+        selected_keys=list(selected_keys),
+        evidence=evidence,
+        note=feedback["note"],
+    )
+    return pool, selected_keys, changes
+
+
+def _checked_terms(ws, refine, include, exclude, previous, *, refinement_terms):
+    """(b) Validate added/excluded terms against the refinement options.
+
+    Returns (include, exclude, term_options, old_include, old_exclude).
+    """
     old_include, old_exclude = previous.get("include_terms", []), previous.get("exclude_terms", [])
     for values in (include, exclude):
         if values is not None and (not isinstance(values, list) or any(not isinstance(v, str) for v in values)):
@@ -166,8 +151,21 @@ def make_query(
     for kind, chosen_terms in (("include", include), ("exclude", exclude)):
         if any(term not in term_options[kind] for term in chosen_terms):
             raise ValueError("対応する追加・除外候補にない語が含まれています。再分析してください。")
+    return include, exclude, term_options, old_include, old_exclude
+
+
+def _assemble_expression(ws, refine, words, selected, include, exclude, previous):
+    """(c) Build the DB-independent expression string and, when known, the boolean tree.
+
+    Returns (expression, tree_fields); tree_fields is empty for a plain AND/OR draft.
+    """
+    base = " AND ".join("TEXT=" + _quote(w) for w in words)
+    classes = " OR ".join(c["kind"].upper() + "=" + _quote(c["code"]) for c in selected)
+    query = "(" + base + ")" if base else ""
+    if classes:
+        query += ("\nAND " if query else "") + "(" + classes + ")"
     if include:
-        query += "\nAND (" + " OR ".join("TEXT=" + quote(w) for w in include) + ")"
+        query += "\nAND (" + " OR ".join("TEXT=" + _quote(w) for w in include) + ")"
     if exclude:
         kept = [r for r in ws.state["patents"] if r.get("label") == "keep"]
         unsafe = [
@@ -175,31 +173,8 @@ def make_query(
         ]
         if unsafe:
             raise ValueError("必要特許にも出現するため除外できない語: " + "、".join(unsafe))
-        query += "\nNOT (" + " OR ".join("TEXT=" + quote(w) for w in exclude) + ")"
-    kept = [r for r in ws.state["patents"] if r.get("label") == "keep"]
-    retained = sum(
-        not include or any(w.casefold() in (r["title"] + " " + r.get("abstract", "")).casefold() for w in include)
-        for r in kept
-    )
-    removed = [w for w in old_include if w not in include] + [w for w in old_exclude if w not in exclude]
-    item = dict(
-        id=uuid.uuid4().hex,
-        version=len(ws.state["queries"]) + 1,
-        created_at=time.strftime("%Y-%m-%d %H:%M"),
-        expression=query,
-        type="改善案" if refine else "初案",
-        terms=term_options,
-        keywords=words,
-        classifications=selected,
-        include_terms=include,
-        exclude_terms=exclude,
-        removed_terms=removed,
-        known_keep_coverage={"retained": retained, "total": len(kept)} if include and kept else None,
-        note="DB非依存の設計式です。TEXT・IPC・F-TERMは検索先の入力欄に割り当ててください。分類群はOR、キーワードはANDです。",
-        changes=(
-            "要否判断から特徴語を抽出。NOTは選択された語だけ適用。" if refine else "入力語と選択分類から初案を作成。"
-        ),
-    )
+        query += "\nNOT (" + " OR ".join("TEXT=" + _quote(w) for w in exclude) + ")"
+    fields = {}
     if not refine:
         groups = {}
         for index, word in enumerate(words):
@@ -210,7 +185,7 @@ def make_query(
             concepts = group("and", [group("or", alternatives) for alternatives in groups.values()])
             draft = dict(concept_tree=tree_data(concepts))
             base_tree, boolean_tree = refined_tree(draft, selected, include, exclude)
-            item.update(
+            fields.update(
                 concept_tree=tree_data(concepts),
                 base_boolean_tree=base_tree,
                 boolean_tree=boolean_tree,
@@ -218,7 +193,6 @@ def make_query(
                 expression=describe_tree(tree_from_data(boolean_tree)),
                 note="既知の代替表現を仮のORグループにまとめ、別の条件とANDで結びました。調査ナビで意味・和集合の範囲を見直せます。",
             )
-            item["term_catalog"] = terms_of(item)
     if previous.get("boolean_tree"):
         base_tree, boolean_tree = refined_tree(previous, selected, include, exclude)
         for name in (
@@ -233,19 +207,84 @@ def make_query(
             "invention_plan_id",
         ):
             if name in previous:
-                item[name] = copy.deepcopy(previous[name])
-        item.update(
+                fields[name] = copy.deepcopy(previous[name])
+        fields.update(
             base_boolean_tree=base_tree,
             boolean_tree=boolean_tree,
             expression=describe_tree(tree_from_data(boolean_tree)),
             note="観点・取り込み式の論理構造を保持し、追加語と除外語を更新しています。",
         )
+    return query, fields
+
+
+def _history_item(ws, refine, words, selected, terms, expression, tree_fields, changes):
+    """(d) Create the query history entry; terms is the tuple from _checked_terms."""
+    include, exclude, term_options, old_include, old_exclude = terms
+    kept = [r for r in ws.state["patents"] if r.get("label") == "keep"]
+    retained = sum(
+        not include or any(w.casefold() in (r["title"] + " " + r.get("abstract", "")).casefold() for w in include)
+        for r in kept
+    )
+    removed = [w for w in old_include if w not in include] + [w for w in old_exclude if w not in exclude]
+    item = dict(
+        id=uuid.uuid4().hex,
+        version=len(ws.state["queries"]) + 1,
+        created_at=time.strftime("%Y-%m-%d %H:%M"),
+        expression=expression,
+        type="改善案" if refine else "初案",
+        terms=term_options,
+        keywords=words,
+        classifications=selected,
+        include_terms=include,
+        exclude_terms=exclude,
+        removed_terms=removed,
+        known_keep_coverage={"retained": retained, "total": len(kept)} if include and kept else None,
+        note="DB非依存の設計式です。TEXT・IPC・F-TERMは検索先の入力欄に割り当ててください。分類群はOR、キーワードはANDです。",
+        changes=(
+            "要否判断から特徴語を抽出。NOTは選択された語だけ適用。" if refine else "入力語と選択分類から初案を作成。"
+        ),
+    )
+    if tree_fields:
+        item.update(tree_fields)
         item["term_catalog"] = terms_of(item)
-    if classification_changes is not None:
-        item["classification_changes"] = classification_changes
+    if changes is not None:
+        item["classification_changes"] = changes
         item["changes"] = (
             "要否判定・学習予測の分類と特徴語から改善。FI・Fターム由来のIPCは対応づけた候補として扱い、選択した分類をOR条件に反映。NOTは選択された語だけ適用。"
         )
+    return item
+
+
+def make_query(
+    ws,
+    refine=False,
+    include=None,
+    exclude=None,
+    preserve_conditions=False,
+    classification_keys=None,
+    *,
+    refinement_terms=default_refinement_terms,
+):
+    """Append a draft or refined query to the history; the caller owns the lock/transaction."""
+    words = keywords(ws.state["keywords"])
+    original_keys = normalize_selection(ws, ws.state["selected"])
+    pool, selected_keys, changes = _classification_changes(
+        ws, refine, classification_keys, original_keys, ws.state["candidates"]
+    )
+    preserve_conditions = preserve_conditions or changes is not None
+    selected = copy.deepcopy([c for c in pool if classification_key(c) in selected_keys])
+    structured_last = bool(ws.state["queries"] and ws.state["queries"][-1].get("boolean_tree"))
+    if not words and not selected and not (refine and structured_last):
+        raise ValueError("キーワードを入力するか、検索に使う分類を選んでください。")
+    previous = previous_query_for_context(ws, preserve_conditions) if refine else {}
+    if refine and structured_last and not previous:
+        raise ValueError(
+            "観点・取り込み式と現在のキーワードまたは分類が変わっています。調査ナビで案を作り直すか、分類の改善案として更新してください。元の論理条件は保持しています。"
+        )
+    terms = _checked_terms(ws, refine, include, exclude, previous, refinement_terms=refinement_terms)
+    expression, tree_fields = _assemble_expression(ws, refine, words, selected, terms[0], terms[1], previous)
+    item = _history_item(ws, refine, words, selected, terms, expression, tree_fields, changes)
+    if changes is not None:
         ws.state.update(candidates=pool, selected=selected_keys)
     ws.state["queries"].append(item)
     if isinstance(ws.state.get("research_workbench"), dict):
