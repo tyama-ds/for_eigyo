@@ -11,9 +11,17 @@ function researchProgressNow() {
 }
 
 function researchProgressEscape(value) {
-  return String(value ?? '').replace(/[&<>"']/g, character => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-  })[character]);
+  return String(value ?? '').replace(
+    /[&<>"']/g,
+    (character) =>
+      ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;',
+      })[character]
+  );
 }
 
 function researchProgressIsRunning() {
@@ -44,13 +52,18 @@ function researchProgressTick() {
   clock.textContent = researchProgressElapsed();
 }
 
-function researchProgressStart({label, useLlm = false, settings = {}} = {}) {
+function researchProgressStart({ label, useLlm = false, settings = {} } = {}) {
   if (researchProgressIsRunning()) {
     throw new Error('案の作成を実行中です。現在の処理が終わってから再実行してください。');
   }
   const usesLlm = useLlm === true;
-  const provider = usesLlm ? (settings?.provider === 'local' ? 'local' :
-    settings?.provider === 'openai' ? 'external' : 'llm') : 'manual';
+  const provider = usesLlm
+    ? settings?.provider === 'local'
+      ? 'local'
+      : settings?.provider === 'openai'
+        ? 'external'
+        : 'llm'
+    : 'manual';
   const timeout = settings?.llm_timeout;
   researchProgressCurrent = {
     token: ++researchProgressSequence,
@@ -61,7 +74,7 @@ function researchProgressStart({label, useLlm = false, settings = {}} = {}) {
     status: 'running',
     startedAt: researchProgressNow(),
     finishedAt: null,
-    error: ''
+    error: '',
   };
   renderResearchProgress();
   if (researchProgressTimer !== null) clearInterval(researchProgressTimer);
@@ -76,8 +89,14 @@ function researchProgressFinish(token, error) {
   progress.finishedAt = researchProgressNow();
   progress.status = failed ? 'error' : 'complete';
   // Do not retain an Error object, its stack, or any attached request/settings object.
-  progress.error = failed ? (typeof error === 'string' ? error :
-    typeof error?.message === 'string' ? error.message : '処理を完了できませんでした。').slice(0, 800) : '';
+  progress.error = failed
+    ? (typeof error === 'string'
+        ? error
+        : typeof error?.message === 'string'
+          ? error.message
+          : '処理を完了できませんでした。'
+      ).slice(0, 800)
+    : '';
   if (researchProgressTimer !== null) clearInterval(researchProgressTimer);
   researchProgressTimer = null;
   renderResearchProgress();
@@ -89,14 +108,21 @@ function researchProgressHtml() {
   if (!progress) return '';
   const running = progress.status === 'running';
   const failed = progress.status === 'error';
-  const provider = {local: 'Local LLM', external: '外部LLM', llm: 'LLM', manual: '手動入力の整理'}[progress.provider];
+  const provider = { local: 'Local LLM', external: '外部LLM', llm: 'LLM', manual: '手動入力の整理' }[
+    progress.provider
+  ];
   const phase = running ? '処理中' : failed ? '完了できませんでした' : '完了';
-  const retained = running ? '入力は保持しています。応答を受け取ると案を表示します。' :
-    failed ? '入力は保持しています。入力・接続設定やエラー内容を確認して再実行できます。' :
-    '入力は保持しています。作成した案を確認してください。';
-  const wait = progress.provider === 'manual' ? '' : progress.timeout === null ?
-    '応答待ちの上限は接続設定によります。再試行で全体の処理時間が長くなる場合があります。' :
-    `応答待ち設定：${progress.timeout}秒／回。1回の応答待ちの上限です。再試行があるため、全体の処理時間の上限ではありません。`;
+  const retained = running
+    ? '入力は保持しています。応答を受け取ると案を表示します。'
+    : failed
+      ? '入力は保持しています。入力・接続設定やエラー内容を確認して再実行できます。'
+      : '入力は保持しています。作成した案を確認してください。';
+  const wait =
+    progress.provider === 'manual'
+      ? ''
+      : progress.timeout === null
+        ? '応答待ちの上限は接続設定によります。再試行で全体の処理時間が長くなる場合があります。'
+        : `応答待ち設定：${progress.timeout}秒／回。1回の応答待ちの上限です。再試行があるため、全体の処理時間の上限ではありません。`;
   return `<section class="research-progress-card is-${progress.status}" data-research-progress-token="${progress.token}" aria-label="案の作成状況">
     <div class="research-progress-heading" role="status" aria-live="polite" aria-atomic="true"><strong>${researchProgressEscape(progress.label)}</strong><span class="research-progress-phase">${phase}</span></div>
     <div class="research-progress-meta"><span>${provider}${progress.model ? ' · ' + researchProgressEscape(progress.model) : ''}</span><span aria-live="off">経過 <span data-research-progress-elapsed>${researchProgressElapsed(progress)}</span></span></div>

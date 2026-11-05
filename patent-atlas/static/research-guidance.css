@@ -1,84 +1,575 @@
 /* Keep the current task in view; advanced controls remain available on demand. */
-main>.workspace-heading{min-height:100px;padding-top:12px;padding-bottom:12px;margin-bottom:14px}
-.workspace-heading h1{font-size:clamp(24px,2.4vw,36px);margin:8px 0;letter-spacing:-.03em}
-.workspace-heading .atlas-heading-note{margin:0;font-size:12px}
-.workspace-heading .atlas-heading-art{max-height:120px;opacity:.45}
-#research-flow-header{margin-bottom:16px;scroll-margin-top:80px}
-.research-workspace-shortcuts{margin:0 0 18px}.research-workspace-shortcuts>summary{font-size:12px;color:var(--muted);cursor:pointer;padding:9px 0}.research-workspace-shortcuts[open]>.stepper{margin-top:12px}
-.research-flow-nav{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:5px;padding:6px;border:1px solid var(--line);border-radius:16px;background:#fffdf9}
-.research-flow-nav button{display:flex;align-items:center;gap:10px;padding:12px 10px;border:0;border-radius:11px;background:transparent;text-align:left;cursor:pointer;color:var(--muted);min-width:0}
-.research-flow-nav button>span{display:grid;place-items:center;width:27px;height:27px;flex-shrink:0;border:1px solid var(--line);border-radius:50%;font:12px ui-monospace,monospace}
-.research-flow-nav button>b{font-size:13px;font-weight:600;line-height:1.5}
-.research-flow-nav small{display:block;font-size:10px;font-weight:400;margin-top:3px}
-.research-flow-nav button[aria-current=step]{color:#54417e;background:#eee9f8}
-.research-flow-nav button[aria-current=step]>span{color:white;background:#7662a4;border-color:#7662a4}
-.research-flow-nav button:disabled{opacity:.5;cursor:default}
-.research-flow-nav button:not(:disabled):hover{background:#f4f0fa}
-.research-flow-nav button:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
-.research-flow-save{display:flex;justify-content:space-between;gap:15px;padding:9px 10px 0;font-size:11px;color:var(--muted);line-height:1.5}
-#research-workbench .research-journey{display:none}
-#research-workbench .research-heading{margin:8px 0 14px}
-#research-workbench .research-heading h2{font-size:19px;margin:4px 0}
-#research-workbench .research-heading .eyebrow{display:none}
-#research-workbench .research-entries{gap:8px;margin-bottom:18px}
-#research-workbench .research-entry{padding:13px 16px}
-#research-workbench .research-entry small{display:none}
-#research-workbench .research-entry b{font-size:14px;margin-bottom:3px}
-#research-workbench .research-entry span{font-size:11px;line-height:1.55}
-.research-resume{display:flex;align-items:center;justify-content:space-between;gap:12px;background:#f0eee8;border:1px solid #e0dbcf;border-radius:12px;padding:12px 16px;margin:0 0 14px}
-.research-resume b{font-size:12px;display:block}.research-resume span{font-size:11px;color:var(--muted);display:block;margin-top:4px}
-.research-optional{padding:12px 0;border-top:1px solid var(--line);min-width:0}
-.research-optional>summary{font-size:12px;font-weight:550;cursor:pointer;color:var(--muted);line-height:1.7}
-.research-optional[open]>summary{margin-bottom:12px;color:var(--ink)}
-.research-extra-input{grid-column:1/-1}
-.research-extra-input>label{margin:8px 0!important}.research-extra-input>label input{max-width:700px}
-.research-invention-brief .research-brief{grid-template-columns:minmax(230px,.65fr) minmax(0,1.35fr);padding:22px;gap:12px 24px}
-.research-invention-brief .research-brief>h2{font-size:18px;margin:0}.research-invention-brief .research-brief>.eyebrow{display:none}
-.research-invention-brief .research-brief>label{margin-top:6px}
-.research-invention-brief .research-targets{margin:0;padding-top:12px}
-.research-direct-actions{margin:0}.research-direct-actions>summary{font-size:11px;padding:8px 0}
-#invention-workbench{margin-top:18px;padding:22px}
-#invention-workbench .invention-heading h2{font-size:20px}
-#invention-workbench .invention-heading .eyebrow{display:none}
-#invention-input-area .invention-source-grid{display:flex;flex-direction:column;gap:12px;margin-top:12px}
-#invention-input-area .invention-source-grid>label{max-width:900px;margin:0}
-#invention-input-area .invention-source-grid>details{order:2;width:100%}
-#invention-input-area .button-row{margin:16px 0 8px}
-.research-data-details{border:0;padding:8px 0}.research-data-details>summary{font-weight:400;font-size:11px}
-.research-input-method{display:inline-flex;gap:4px;flex-wrap:wrap;background:#f0ece5;padding:4px;border-radius:10px}
-.research-input-method button{border:0;background:transparent;padding:10px 16px;font-size:12px;border-radius:8px;color:var(--muted);cursor:pointer}
-.research-input-method button[aria-pressed=true]{background:#fffdf9;color:var(--ink);box-shadow:0 2px 7px #32284612}
-#research-llm-unavailable{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:12px}
-#invention-review-area>.invention-plan-heading{margin-top:20px}
-#research-workbench[data-flow-stage=elements] .invention-plan-heading{display:none}
-#research-workbench[data-flow-stage=elements] .invention-plan-heading+p{font-size:12px;margin:12px 0;color:var(--muted)}
-#research-workbench[data-flow-stage=elements] .invention-plan-heading+p+p{display:none}
-#research-condition-summary{display:inline-block;margin:8px 0 8px 12px}
-#invention-review-area .invention-strategy{margin:14px 0;padding:12px 16px}
-.research-element-detail{border-top:1px solid var(--line);margin-top:14px;padding-top:12px}
-.research-element-detail>summary{cursor:pointer;font-size:12px;color:#675385}
-.research-element-detail[open]>summary{margin-bottom:16px}
-.research-element-detail>p{font-size:12px;line-height:1.8;margin:10px 0}
-#invention-elements{align-items:start}
-#invention-elements .invention-element{padding:18px}
-#invention-elements .invention-evidence{margin-top:12px}
-#invention-elements .invention-perspective{margin-top:12px}
-#invention-review-area .invention-bottom{position:sticky;bottom:12px;z-index:4;background:#fffdf8f5;backdrop-filter:blur(10px);border:1px solid #cfc5dc;border-radius:12px;padding:12px 16px;box-shadow:0 5px 20px #40335114;margin-top:20px}
-#invention-review-area .invention-bottom p{max-width:65%;margin:0;font-size:11px}
-#invention-query-preview{scroll-margin-top:95px;outline:none}
-#invention-query-preview:focus .invention-preview{border-color:var(--cyan)}
-.research-legacy-plan{margin-top:14px;font-size:12px}
-.research-target-provenance{font-size:11px;line-height:1.7;color:#7a6749;background:#f8f1df;border-radius:8px;padding:9px 12px}
-#research-progress:empty{display:none}
-#research-progress{position:sticky;top:72px;z-index:8;margin-bottom:14px}
-.research-progress-card{border:1px solid #cfc5dc;background:#f8f5fffa;backdrop-filter:blur(10px);border-radius:13px;padding:14px 18px;font-size:12px;box-shadow:0 6px 20px #3427440b}
-.research-progress-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}
-.research-progress-phase{font-weight:600}.research-progress-meta,.research-progress-timeout,.research-progress-retained{color:var(--muted);font-size:11px;margin:6px 0;line-height:1.6}
-.research-progress-meta{display:flex;align-items:baseline;justify-content:space-between;gap:6px 16px;flex-wrap:wrap}
-.research-progress-indeterminate{width:100%;height:5px;accent-color:#7662a4;margin:8px 0}
-.research-progress-card.is-error{border-color:#dbb9bc;background:#fff6f5}
-.research-progress-error{color:#9a354e;white-space:pre-wrap;overflow-wrap:anywhere}
-.research-progress-card.is-complete{padding-top:10px;padding-bottom:10px;background:#f1f7f0;border-color:#ccd8c9}
-.research-progress-card.is-complete .research-progress-retained{display:none}
-@media(max-width:850px){.research-flow-nav{gap:2px}.research-flow-nav button{display:block;padding:9px}.research-flow-nav button>span{margin-bottom:5px}.research-flow-nav small{display:none}.research-flow-save>span:last-child{display:none}.research-resume{align-items:flex-start;flex-direction:column}.research-invention-brief .research-brief{display:block}.research-invention-brief .research-brief>label{margin:14px 0}.research-flow-nav button>b{font-size:11px}#invention-review-area .invention-bottom{bottom:5px;flex-wrap:wrap}#invention-review-area .invention-bottom p{max-width:100%}#research-progress{top:62px}}
-@media(prefers-reduced-motion:reduce){.research-progress-card{backdrop-filter:none}}
+main > .workspace-heading {
+  min-height: 100px;
+  padding-top: 12px;
+  padding-bottom: 12px;
+  margin-bottom: 14px;
+}
+.workspace-heading h1 {
+  font-size: clamp(24px, 2.4vw, 36px);
+  margin: 8px 0;
+  letter-spacing: -0.03em;
+}
+.workspace-heading .atlas-heading-note {
+  margin: 0;
+  font-size: 12px;
+}
+.workspace-heading .atlas-heading-art {
+  max-height: 120px;
+  opacity: 0.45;
+}
+#research-flow-header {
+  margin-bottom: 16px;
+  scroll-margin-top: 80px;
+}
+.research-flow-nav {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 5px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #fffdf9;
+}
+.research-flow-nav button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 10px;
+  border: 0;
+  border-radius: 11px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  color: var(--muted);
+  min-width: 0;
+}
+.research-flow-nav button > span {
+  display: grid;
+  place-items: center;
+  width: 27px;
+  height: 27px;
+  flex-shrink: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  font:
+    12px ui-monospace,
+    monospace;
+}
+.research-flow-nav button > b {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+.research-flow-nav small {
+  display: block;
+  font-size: 10px;
+  font-weight: 400;
+  margin-top: 3px;
+}
+.research-flow-nav button[aria-current='step'] {
+  color: #54417e;
+  background: #eee9f8;
+}
+.research-flow-nav button[aria-current='step'] > span {
+  color: white;
+  background: #7662a4;
+  border-color: #7662a4;
+}
+.research-flow-nav button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.research-flow-nav button:not(:disabled):hover {
+  background: #f4f0fa;
+}
+.research-flow-nav button:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
+.research-flow-save {
+  display: flex;
+  justify-content: space-between;
+  gap: 15px;
+  padding: 9px 10px 0;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.research-flow-save > .caption {
+  margin: 0;
+  line-height: 1.5;
+}
+#research-workbench .research-heading {
+  margin: 8px 0 14px;
+}
+#research-workbench .research-heading h2 {
+  font-size: 19px;
+  margin: 4px 0;
+}
+#research-workbench .research-heading .eyebrow {
+  display: none;
+}
+.research-resume {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: #f0eee8;
+  border: 1px solid #e0dbcf;
+  border-radius: 12px;
+  padding: 12px 16px;
+  margin: 0 0 14px;
+}
+.research-resume b {
+  font-size: 12px;
+  display: block;
+}
+.research-resume span {
+  font-size: 11px;
+  color: var(--muted);
+  display: block;
+  margin-top: 4px;
+}
+.research-optional {
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+  min-width: 0;
+}
+.research-optional > summary {
+  font-size: 12px;
+  font-weight: 550;
+  cursor: pointer;
+  color: var(--muted);
+  line-height: 1.7;
+}
+.research-optional[open] > summary {
+  margin-bottom: 12px;
+  color: var(--ink);
+}
+.research-extra-input {
+  grid-column: 1/-1;
+}
+.research-extra-input > label {
+  margin: 8px 0 !important;
+}
+.research-extra-input > label input {
+  max-width: 700px;
+}
+.research-invention-brief .research-brief {
+  grid-template-columns: minmax(230px, 0.65fr) minmax(0, 1.35fr);
+  padding: 22px;
+  gap: 12px 24px;
+}
+.research-invention-brief .research-brief > h2 {
+  font-size: 18px;
+  margin: 0;
+}
+.research-invention-brief .research-brief > .eyebrow {
+  display: none;
+}
+.research-invention-brief .research-brief > label {
+  margin-top: 6px;
+}
+.research-invention-brief .research-targets {
+  margin: 0;
+  padding-top: 12px;
+}
+#invention-workbench {
+  margin-top: 18px;
+  padding: 22px;
+}
+#invention-workbench .invention-heading h2 {
+  font-size: 20px;
+}
+#invention-workbench .invention-heading .eyebrow {
+  display: none;
+}
+#invention-input-area .invention-source-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+}
+#invention-input-area .invention-source-grid > label {
+  max-width: 900px;
+  margin: 0;
+}
+#invention-input-area .invention-source-grid > details {
+  order: 2;
+  width: 100%;
+}
+#invention-input-area .button-row {
+  margin: 16px 0 8px;
+}
+.research-input-method {
+  display: inline-flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  background: #f0ece5;
+  padding: 4px;
+  border-radius: 10px;
+}
+.research-input-method button {
+  border: 0;
+  background: transparent;
+  padding: 10px 16px;
+  font-size: 12px;
+  border-radius: 8px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.research-input-method button[aria-pressed='true'] {
+  background: #fffdf9;
+  color: var(--ink);
+  box-shadow: 0 2px 7px #32284612;
+}
+#research-llm-unavailable {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+#invention-review-area > .invention-plan-heading {
+  margin-top: 20px;
+}
+#research-workbench[data-flow-stage='elements'] .invention-plan-heading + p {
+  font-size: 12px;
+  margin: 12px 0;
+  color: var(--muted);
+}
+#research-condition-summary {
+  display: inline-block;
+  margin: 8px 0 8px 12px;
+}
+#invention-review-area .invention-strategy {
+  margin: 14px 0;
+  padding: 12px 16px;
+}
+.research-element-detail {
+  border-top: 1px solid var(--line);
+  margin-top: 14px;
+  padding-top: 12px;
+}
+.research-element-detail > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: #675385;
+}
+.research-element-detail[open] > summary {
+  margin-bottom: 16px;
+}
+.research-element-detail > p {
+  font-size: 12px;
+  line-height: 1.8;
+  margin: 10px 0;
+}
+#invention-elements {
+  align-items: start;
+}
+#invention-elements .invention-element {
+  padding: 18px;
+}
+#invention-elements .invention-evidence {
+  margin-top: 12px;
+}
+#invention-elements .invention-perspective {
+  margin-top: 12px;
+}
+#invention-review-area .invention-bottom {
+  position: sticky;
+  bottom: 12px;
+  z-index: 4;
+  background: #fffdf8f5;
+  backdrop-filter: blur(10px);
+  border: 1px solid #cfc5dc;
+  border-radius: 12px;
+  padding: 12px 16px;
+  box-shadow: 0 5px 20px #40335114;
+  margin-top: 20px;
+}
+#invention-review-area .invention-bottom p {
+  max-width: 65%;
+  margin: 0;
+  font-size: 11px;
+}
+#invention-query-preview {
+  scroll-margin-top: 95px;
+  outline: none;
+}
+#invention-query-preview:focus .invention-preview {
+  border-color: var(--cyan);
+}
+.research-target-provenance {
+  font-size: 11px;
+  line-height: 1.7;
+  color: #7a6749;
+  background: #f8f1df;
+  border-radius: 8px;
+  padding: 9px 12px;
+}
+#research-progress:empty {
+  display: none;
+}
+#research-progress {
+  position: relative;
+  z-index: 8;
+  margin-bottom: 14px;
+}
+.research-progress-card {
+  border: 1px solid #cfc5dc;
+  background: #f8f5fffa;
+  backdrop-filter: blur(10px);
+  border-radius: 13px;
+  padding: 14px 18px;
+  font-size: 12px;
+  box-shadow: 0 6px 20px #3427440b;
+}
+.research-progress-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.research-progress-phase {
+  font-weight: 600;
+}
+.research-progress-meta,
+.research-progress-timeout,
+.research-progress-retained {
+  color: var(--muted);
+  font-size: 11px;
+  margin: 6px 0;
+  line-height: 1.6;
+}
+.research-progress-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px 16px;
+  flex-wrap: wrap;
+}
+.research-progress-indeterminate {
+  width: 100%;
+  height: 5px;
+  accent-color: #7662a4;
+  margin: 8px 0;
+}
+.research-progress-card.is-error {
+  border-color: #dbb9bc;
+  background: #fff6f5;
+}
+.research-progress-error {
+  color: #9a354e;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.research-progress-card.is-complete {
+  padding-top: 10px;
+  padding-bottom: 10px;
+  background: #f1f7f0;
+  border-color: #ccd8c9;
+}
+.research-progress-card.is-complete .research-progress-retained {
+  display: none;
+}
+@media (max-width: 850px) {
+  .research-flow-nav {
+    gap: 2px;
+  }
+  .research-flow-nav button {
+    display: block;
+    padding: 9px;
+  }
+  .research-flow-nav button > span {
+    margin-bottom: 5px;
+  }
+  .research-flow-nav small {
+    display: none;
+  }
+  .research-flow-save > span:last-child {
+    display: none;
+  }
+  .research-resume {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .research-invention-brief .research-brief {
+    display: block;
+  }
+  .research-invention-brief .research-brief > label {
+    margin: 14px 0;
+  }
+  .research-flow-nav button > b {
+    font-size: 11px;
+  }
+  #invention-review-area .invention-bottom {
+    bottom: 5px;
+    flex-wrap: wrap;
+  }
+  #invention-review-area .invention-bottom p {
+    max-width: 100%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .research-progress-card {
+    backdrop-filter: none;
+  }
+}
+
+/* Phase 4: two primary views, one persistent workflow, stage-specific panels. */
+.research-panel {
+  display: none;
+}
+.research-panel.active {
+  display: block;
+}
+.workspace-heading.is-compact {
+  min-height: 48px;
+  padding: 8px 20px;
+  margin-bottom: 10px;
+}
+.workspace-heading.is-compact .atlas-heading-art,
+.workspace-heading.is-compact .eyebrow,
+.workspace-heading.is-compact .atlas-heading-note {
+  display: none;
+}
+.workspace-heading.is-compact h1 {
+  font-size: 20px;
+  margin: 0;
+}
+#research-flow-header {
+  position: sticky;
+  top: 0;
+  z-index: 12;
+  background: var(--bg, #f6f3ec);
+  padding: 5px 0 8px;
+}
+.research-stage-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 9px;
+}
+.research-stage-tools:empty {
+  display: none;
+}
+.research-stage-tools [aria-pressed='true'] {
+  background: #eee9f8;
+  border-color: #bdb0d5;
+  color: #54417e;
+}
+.research-modes {
+  border: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 0 0 20px;
+}
+.research-modes legend {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+.research-modes label {
+  margin: 0;
+  cursor: pointer;
+  position: relative;
+}
+.research-modes input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+}
+.research-modes span {
+  display: block;
+  font-size: 13px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 10px 16px;
+  background: #fffdf9;
+}
+.research-modes input:checked + span {
+  color: #54417e;
+  border-color: #bdb0d5;
+  background: #eee9f8;
+}
+.research-modes input:focus-visible + span {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
+.panel {
+  position: relative;
+}
+.panel-help {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  z-index: 5;
+  font-size: 12px;
+}
+.panel-help > summary {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: #fffdf9;
+  cursor: pointer;
+  list-style: none;
+  color: var(--muted);
+}
+.panel-help > summary::-webkit-details-marker {
+  display: none;
+}
+.panel-help > summary:focus-visible {
+  outline: 2px solid var(--cyan);
+}
+.panel-help > div {
+  position: absolute;
+  top: 34px;
+  right: 0;
+  width: min(380px, 80vw);
+  max-height: 60vh;
+  overflow: auto;
+  background: #fffdf9;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: 0 10px 30px #34274426;
+  line-height: 1.8;
+}
+.panel-help[open] {
+  z-index: 20;
+}
+.panel-help p {
+  margin: 0 0 10px;
+}
+.panel-help p:last-child {
+  margin-bottom: 0;
+}
+.invention-heading > .pill {
+  margin-right: 28px;
+}
+.panel:has(.panel-help) > .panel-heading,
+.panel:has(.panel-help) > .canvas-header,
+.panel:has(.panel-help) > .convergence-heading {
+  padding-right: 64px;
+}
+.panel-help .discovery-architecture-grid {
+  display: block;
+}
+.orchestration-process-detail {
+  margin: 12px 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+@media (max-width: 850px) {
+  .research-modes {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+}

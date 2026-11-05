@@ -5,6 +5,7 @@ nothing about whether a symbol is valid, and a note never replaces a symbol.
 Only formatting is normalized; incomplete codes and other classification
 systems must be handled by the caller before looking up an IPC note.
 """
+
 from __future__ import annotations
 
 from copy import deepcopy
@@ -34,10 +35,7 @@ _NOTES = {
             },
             {
                 "title": "WIPO IPC 2024.01 改訂対応表（G05D 1/02）",
-                "url": (
-                    "https://ipcpub.wipo.int/?notion=rcl&symbol=G05D0001020000"
-                    "&version=20240101&lang=en"
-                ),
+                "url": ("https://ipcpub.wipo.int/?notion=rcl&symbol=G05D0001020000&version=20240101&lang=en"),
             },
             {
                 "title": "WIPO IPC 2024.01 G05D 分類表",
