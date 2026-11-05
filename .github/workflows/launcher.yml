@@ -59,3 +59,53 @@ jobs:
             }
           }
           if ($failed) { Write-Error "start_portal.bat did not reach launcher.py in $failed case(s)"; exit 1 }
+
+  portal-windows:
+    # 実際のポータルを「Download ZIP」と同じ形（.git なし）・git なし・日本語コードページで
+    # start_portal.bat から起動し、画面と一覧が返ることと、その速さを確かめる
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Start the real portal from a "Download ZIP" layout without git
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          git archive --format=zip --prefix=for_eigyo-main/ HEAD -o "$env:RUNNER_TEMP\main.zip"
+          $root = Join-Path $env:RUNNER_TEMP "zip 展開 日本語"
+          Expand-Archive "$env:RUNNER_TEMP\main.zip" -DestinationPath $root -Force
+          $launcher = Join-Path $root "for_eigyo-main\launcher"
+          $env:PATH = ($env:PATH -split ';' | Where-Object { $_ -notmatch '\\Git\\' }) -join ';'
+          if (Get-Command git -ErrorAction SilentlyContinue) { Write-Error "git is still on PATH"; exit 1 }
+          $log = Join-Path $env:RUNNER_TEMP "portal_console.txt"
+          Start-Process cmd.exe -ArgumentList "/d /c chcp 932 >nul & call `"$launcher\start_portal.bat`" > `"$log`" 2>&1" -WindowStyle Hidden | Out-Null
+          $failed = 0
+          $ready = $false
+          foreach ($i in 1..30) {
+            try { Invoke-WebRequest "http://127.0.0.1:8770/api/ping" -UseBasicParsing -TimeoutSec 5 -NoProxy | Out-Null; $ready = $true; break } catch { Start-Sleep -Milliseconds 500 }
+          }
+          if (-not $ready) { Write-Host "portal did not start"; $failed++ }
+          foreach ($path in "/", "/api/ping", "/api/apps", "/api/apps", "/api/layout") {
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            try {
+              $r = Invoke-WebRequest -Uri "http://127.0.0.1:8770$path" -UseBasicParsing -TimeoutSec 30 -NoProxy
+              $sec = $sw.Elapsed.TotalSeconds
+              Write-Host ("GET {0} -> {1}, {2} bytes in {3:N2}s" -f $path, $r.StatusCode, $r.RawContentLength, $sec)
+              if ($path -eq "/api/apps") {
+                $apps = ($r.Content | ConvertFrom-Json).apps
+                Write-Host ("  apps: {0}" -f $apps.Count)
+                if ($apps.Count -lt 1) { $failed++ }
+                # 以前は Windows で 15 アプリの状態確認を順番に行い約 6 秒かかっていた
+                if ($sec -gt 3) { Write-Host "  too slow (> 3s)"; $failed++ }
+              }
+            } catch {
+              Write-Host ("GET {0} -> FAILED: {1}" -f $path, $_.Exception.Message); $failed++
+            }
+          }
+          Write-Host "===== portal console ====="
+          Get-Content $log -Encoding UTF8 -ErrorAction SilentlyContinue | Select-Object -First 80
+          Get-Process python*, py -ErrorAction SilentlyContinue | Stop-Process -Force
+          if ($failed) { Write-Error "portal check failed in $failed place(s)"; exit 1 }

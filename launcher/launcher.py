@@ -22,13 +22,15 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import webbrowser
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-__version__ = "1.1.2"
+__version__ = "1.1.3"
 
 BASE = Path(__file__).resolve().parent
 APPS_FILE = BASE / "apps.json"
@@ -511,6 +513,19 @@ def app_previews(app: dict) -> list[str]:
     return found
 
 
+def apps_payload(fresh: bool = False) -> list[dict]:
+    """全アプリの状態を並行して調べる。
+
+    Windows では止まっているアプリのポートへの接続がすぐ失敗せず待ち時間の上限まで待つため、
+    順番に調べるとアプリ数 × 0.4 秒（15 アプリで約 6 秒）かかっていた。
+    """
+    apps = load_apps()
+    if not apps:
+        return []
+    with ThreadPoolExecutor(max_workers=min(16, len(apps))) as pool:
+        return list(pool.map(lambda a: app_payload(a, fresh=fresh), apps))
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):  # 静かに
         pass
@@ -520,8 +535,34 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
+
+    def _guard(self, handle) -> None:
+        """想定外の例外で接続を黙って切らず、500 と理由を返す（画面にそのまま表示される）。"""
+        try:
+            handle()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass  # ブラウザ側が先に切った
+        except Exception as e:
+            traceback.print_exc()
+            message = f"{type(e).__name__}: {e}"
+            print(f"[App Portal] {self.command} {self.path} の処理でエラー: {message}",
+                  file=sys.stderr)
+            try:
+                self._json({"ok": False, "error": message}, 500)
+            except OSError:
+                pass
+
+    def do_GET(self):
+        self._guard(self._handle_get)
+
+    def do_POST(self):
+        self._guard(self._handle_post)
+
+    def do_DELETE(self):
+        self._guard(self._handle_delete)
 
     def _read_body(self) -> dict:
         n = int(self.headers.get("Content-Length") or 0)
@@ -532,20 +573,24 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, UnicodeDecodeError):
             return {}
 
-    def do_GET(self):
+    def _handle_get(self):
         u = urlparse(self.path)
         if u.path in ("/", "/index.html"):
             body = UI_FILE.read_bytes()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")  # 更新後に古い画面が残らないように
             self.end_headers()
             self.wfile.write(body)
+            return
+        if u.path == "/api/ping":  # 画面が「サーバーが止まっている」と「一覧の作成で失敗」を見分けるため
+            self._json({"ok": True, "version": __version__})
             return
         if u.path == "/api/apps":
             fresh = (parse_qs(u.query).get("fresh") or [""])[0] == "1"
             self._json({
-                "apps": [app_payload(a, fresh=fresh) for a in load_apps()],
+                "apps": apps_payload(fresh=fresh),
                 "layout": load_layout(),
                 "portal": {"version": __version__},
             })
@@ -588,7 +633,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._json({"error": "not found"}, 404)
 
-    def do_POST(self):
+    def _handle_post(self):
         u = urlparse(self.path)
         app_id = (parse_qs(u.query).get("id") or [""])[0]
 
@@ -656,7 +701,7 @@ class Handler(BaseHTTPRequestHandler):
 
         self._json({"error": "not found"}, 404)
 
-    def do_DELETE(self):
+    def _handle_delete(self):
         u = urlparse(self.path)
         if u.path == "/api/apps":
             app_id = (parse_qs(u.query).get("id") or [""])[0]

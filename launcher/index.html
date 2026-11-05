@@ -1244,22 +1244,71 @@ function setupPreview(card, frames) {
 
 /* 一覧を読めないときは黙って真っ白にせず、理由と対処を出す（4秒ごとの再試行で直れば自動で消える） */
 const loadError = document.getElementById("load-error");
-function showLoadError(reason) {
-  loadError.innerHTML = `<b>アプリ一覧を読み込めませんでした</b>（${esc(reason)}）。4秒ごとに再試行しています。<br>
-    ポータルを起動した黒いウィンドウに表示されているエラーを確認してください。
-    ウィンドウが閉じている場合は <code>start_portal.bat</code> で起動し直してください。`;
+const LIST_TIMEOUT_MS = 20000;
+let refreshing = false;
+function showLoadError(title, detailHtml) {
+  loadError.innerHTML = `<b>${esc(title)}</b><br>${detailHtml}`;
   loadError.hidden = false;
+}
+async function fetchWithTimeout(url, ms) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), ms);
+  try { return await fetch(url, {signal: ctl.signal, cache: "no-store"}); }
+  finally { clearTimeout(timer); }
+}
+
+/* 一覧を取れなかった理由を見分けて、何をすればよいかを画面に出す */
+async function diagnoseLoadFailure(err) {
+  const retry = "4秒ごとに再試行しています。";
+  if (location.protocol === "file:") {
+    showLoadError("このページはファイルとして直接開かれています",
+      `アドレス欄が <code>file:///</code> で始まっています。この開き方ではアプリ一覧を読めません。<br>
+       <code>launcher\\start_portal.bat</code> をダブルクリックし、自動で開くタブ（<code>http://127.0.0.1:8770</code>）を使ってください。`);
+    return;
+  }
+  if (err && err.serverError) {
+    showLoadError("アプリ一覧の作成中にエラーが起きました",
+      `内容: <code>${esc(err.serverError)}</code><br>
+       ポータルの黒いウィンドウにも詳しい内容が出ています。この文言をそのまま伝えてもらえれば原因を特定できます。${retry}`);
+    return;
+  }
+  let alive = false;
+  try { alive = (await fetchWithTimeout("/api/ping", 3000)).ok; } catch {}
+  if (!alive) {
+    showLoadError("ポータルのサーバーが止まっています",
+      `黒いウィンドウ（ポータル本体）が閉じたか、起動していません。<code>launcher\\start_portal.bat</code> で起動し直してください。
+       起動すれば、この画面は自動で表示に戻ります。`);
+  } else if (err && err.name === "AbortError") {
+    showLoadError("アプリ一覧の応答が20秒以上返ってきません",
+      `サーバーは動いていますが、一覧の作成が終わりません。黒いウィンドウにエラーが出ていないか確認してください。${retry}`);
+  } else {
+    showLoadError("サーバーは動いていますが、アプリ一覧の通信が途中で切れました",
+      `内容: <code>${esc(err ? (err.message || String(err)) : "不明")}</code><br>
+       黒いウィンドウにエラーが出ていないか確認してください。${retry}`);
+  }
 }
 
 async function refresh(force = false, fresh = false) {
+  if (refreshing) return;          // 前の問い合わせがまだ終わっていなければ重ねない
+  refreshing = true;
+  try { await refreshOnce(force, fresh); } finally { refreshing = false; }
+}
+
+async function refreshOnce(force, fresh) {
   let data;
   try {
-    const r = await fetch("/api/apps" + (fresh ? "?fresh=1" : ""));
-    if (!r.ok) throw new Error(`サーバーの応答 ${r.status}`);
-    data = await r.json();
-    if (!Array.isArray(data.apps)) throw new Error("応答の形式が不正");
+    if (location.protocol === "file:") throw new Error("file");
+    const r = await fetchWithTimeout("/api/apps" + (fresh ? "?fresh=1" : ""), LIST_TIMEOUT_MS);
+    let body = null;
+    try { body = await r.json(); } catch {}
+    if (!r.ok || !body || !Array.isArray(body.apps)) {
+      const e = new Error(`HTTP ${r.status}`);
+      e.serverError = (body && body.error) || (r.ok ? "応答の形式が不正です" : `サーバーの応答 HTTP ${r.status}`);
+      throw e;
+    }
+    data = body;
   } catch (e) {
-    showLoadError(e instanceof TypeError ? "ポータルのサーバーから応答がありません" : e.message);
+    await diagnoseLoadFailure(e);
     return;
   }
   loadError.hidden = true;
@@ -1276,7 +1325,7 @@ async function refresh(force = false, fresh = false) {
   } catch (e) {
     console.error(e);
     lastSnap = null;   // 次の更新で描き直しを再試行する
-    showLoadError("画面の表示に失敗: " + e.message);
+    showLoadError("画面の表示中にエラーが起きました", `内容: <code>${esc(e.message)}</code>`);
   }
 }
 setInterval(() => { if (!ovShown && !editMode) refresh(); }, 4000);
