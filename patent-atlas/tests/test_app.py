@@ -59,6 +59,29 @@ class AppTests(unittest.TestCase):
             time.sleep(0.03)
         self.assertNotEqual(module.JOB["status"], "running")
 
+    def test_state_poll_reuses_cached_payload_until_a_label_change(self):
+        # The public projection is cached until a writer invalidates it explicitly.
+        with patch.object(module, "_public_workspace", wraps=module._public_workspace) as project:
+            first = self.client.get("/api/state")
+            with patch("workspace.copy.deepcopy", side_effect=AssertionError("unchanged poll must not copy")):
+                second = self.client.get("/api/state")
+            self.assertEqual(first.status_code, 200)
+            self.assertEqual(second.content, first.content)
+            project.assert_called_once()
+            patent_id = module.STATE["patents"][0]["id"]
+            self.assertIsNone(next(r for r in first.json()["patents"] if r["id"] == patent_id)["label"])
+            response = self.client.post("/api/labels", json={"ids": [patent_id], "label": "keep"})
+            self.assertEqual(response.status_code, 200, response.text)
+            third = self.client.get("/api/state")
+            self.assertEqual(project.call_count, 2)
+        self.assertNotEqual(third.content, first.content)
+        row = next(r for r in third.json()["patents"] if r["id"] == patent_id)
+        self.assertEqual((row["label"], row["label_source"]), ("keep", "human"))
+        self.assertIsNone(third.json()["training"])
+        # A background publish (job progress) is a writer too, not only transactions and save().
+        module.progress(37, "判定中")
+        self.assertEqual(self.client.get("/api/state").json()["job"]["progress"], 37)
+
     def test_csv_encoding_mapping_and_deduplication(self):
         source = "公報番号,発明の名称,要約\nJP-1,固体電池,界面抵抗低減\nJP-1,重複,無視\nJP-2,液系電池,冷却装置\n"
         for encoding in ("utf-8-sig", "cp932", "utf-16"):

@@ -1,10 +1,10 @@
-# Patent Atlas 設計の正本（Phase 6）
+# Patent Atlas 設計の正本（Phase 7）
 
 - 棚卸し日: 2026-11-05、画面更新: 2026-11-06
 - 対象: `tyama-ds/for_eigyo` の `patent-atlas/`、Phase 1完了時点 `87e87e8` の棚卸しをPhase 4の画面とPhase 3cのバックエンドに合わせて更新
 - 状態: **現状と目標を区別する。6項目の目標とPhase 3での扱いは利用者が確定済み。**
 - 6項目の判断者: 利用者（本会話）　確定日: 2026-11-05
-- Phase 3a（共通ヘルパー）、3b（Workspace）、3c（明示的なサービス注入・依存の整理・公開状態キャッシュ・統括の部分復元）を実装済み。APIの入出力、設定値、保存形式・保存データ、既存文書の配置を維持。Phase 4で導線を一本化し、Phase 5で表示を維持してCSSを共通化し、Phase 6でフロントをネイティブESモジュール・共通描画へ移行した。
+- Phase 3a（共通ヘルパー）、3b（Workspace）、3c（明示的なサービス注入・依存の整理・公開状態キャッシュ・統括の部分復元）を実装済み。APIの入出力、設定値、保存形式・保存データ、既存文書の配置を維持。Phase 4で導線を一本化し、Phase 5で表示を維持してCSSを共通化し、Phase 6でフロントをネイティブESモジュール・共通描画へ移行した。Phase 7で `app.py` を起動・ミドルウェア・ルート登録・薄いハンドラだけにし、中核処理を用途別モジュールへ移して公開状態キャッシュを明示的な無効化に切り替えた。
 
 ## 1. 現状
 
@@ -18,14 +18,27 @@ FastAPIを起点とするローカル単一ユーザーアプリで、HTML/CSS/J
 
 | 置き場所 | 内容・境界 | 根拠 |
 |---|---|---|
-| Pythonの `STATE` | `ws.state` と同一の可変dictを指す互換名。特許、検索式、分類、各モードの計画・履歴を保持 | [workspace.py](workspace.py): `Workspace`、[app.py](app.py): `ws`, `STATE` |
-| Pythonの `SETTINGS` | `ws.settings` と同一dictを指す互換名。LLM、プロキシ、OPS、モデル、分類配置など。`STATE`のキーではない | `app.py`: `DEFAULT_SETTINGS`, `settings`、`workspace.py` |
-| Pythonの `JOB` / `STOP` / `LOCK` | `ws.job` / `ws.stop` / `ws.lock` の互換参照。STOPは従来どおり停止イベント。`begin_job` がデーモンスレッドを起動 | `workspace.py`: `idle` / `transaction`、`app.py`: `begin_job`, `progress` |
-| `workspace.json` | `{"state": STATE, "settings": 非秘密設定}`。保存先は従来と同じ `PATENT_ATLAS_DATA`、未指定時は `data/`。DATAは `ws.data_dir` の互換参照 | `workspace.py`: `load`, `to_dict`, `save`。`app.py:save` は委譲 |
-| `/api/state` の返り値 | 従来と同じ表示用JSON。ロック下で変更を検出し、分類/収束・秘密設定の有無・ジョブ進捗を含む投影とJSONバイト列を再利用する | `workspace.py:public_state_json`、`app.py:_public_workspace` / `get_state`。dict返却用 `public_state` は独立したコピーを返す |
+| Pythonの `ws.state` | 特許、検索式、分類、各モードの計画・履歴を保持する可変dict。アプリ内のコードは `ws` を直接受け取る。`app.py` の `STATE` はテスト互換のための同一dictへの別名で、アプリ内では使わない | [workspace.py](workspace.py): `Workspace`、[app.py](app.py): `ws` |
+| Pythonの `ws.settings` | LLM、プロキシ、OPS、モデル、分類配置など。`state` のキーではない。既定値・秘密キー・更新時の検証は `workspace_defaults.py`。`app.py` の `SETTINGS` はテスト互換の別名 | `workspace_defaults.py`: `DEFAULT_SETTINGS`, `SECRET_SETTINGS`, `checked_settings`、`workspace.py` |
+| Pythonの `ws.job` / `ws.stop` / `ws.lock` | 1本の背景ジョブの状態、停止イベント、再入可能ロック。`job_runner.py` が開始・進捗・停止要求を担い、デーモンスレッドで実行する。`app.py` の `JOB` / `STOP` / `LOCK` はテスト互換の別名 | `workspace.py`: `idle` / `transaction`、[job_runner.py](job_runner.py): `begin_job`, `progress`, `request_stop` |
+| `workspace.json` | `{"state": ws.state, "settings": 非秘密設定}`。保存先は従来と同じ `PATENT_ATLAS_DATA`、未指定時は `data/`。`app.py` の `DATA` は `ws.data_dir` のテスト互換の別名 | `workspace.py`: `load`, `to_dict`, `save`。`app.py:save` は委譲（テストが差し替える保存の継ぎ目） |
+| `/api/state` の返り値 | 従来と同じ表示用JSON。投影とJSONバイト列をロック下でキャッシュし、書込み側（save / restore / transaction / ジョブ進捗 / 判定チェックポイント）が明示的に無効化する | `workspace.py:public_state_json` / `invalidate_public_state`、`app.py:_public_workspace` / `get_state`。dict返却用 `public_state` は独立したコピーを返す |
 | ブラウザー内 `state` | 上記API応答。PythonのSTATEと同じキー集合・オブジェクトではない | [static/core.js](static/core.js): `getState`, `setState`, `patchRows`。取得元は `app.js:init`, `job-ui.js:refreshJob` |
 | UI下書き・表示状態 | `classDraft`, `learningDraft`, `discoveryDraft`, `researchDraft`, `inventionPlanDraft`, `atlasProjection` など。編集だけではサーバーへ保存されない | 各 `static/*-ui.js`, `research-workbench.js`, `invention-workbench.js`, `projection-ui.js` |
 | ブラウザー保存 | 調査・発明の下書きは `sessionStorage`。出力形式・分類言語・動作表示などの設定は `localStorage`。全UI下書きが永続化されるわけではない | [static/research-draft-store.js](static/research-draft-store.js)、`static/app.js`, `classification-ui.js`, `atlas-motion.js` |
+
+Python側のモジュール配置（Phase 7）は次のとおり。`app.py` は Workspace の構成、ミドルウェア、ルート登録、各ルートの薄いハンドラ（最長23行）と差し替え可能な継ぎ目だけを持ち、`STATE[` の直接参照を持たない。各サービス関数は Workspace（`ws`）を第1引数に取り、モジュール水準の `STATE` / `SETTINGS` / `LOCK` / `JOB` を参照しない。
+
+| モジュール | 責務 | 主な関数 |
+|---|---|---|
+| [query_service.py](query_service.py) | 分類選択の正規化、分類ビュー、検索式履歴 | `classification_key`, `normalize_selection`, `set_classification_view`, `classification_overview`, `previous_query_for_context`, `make_query`（(a)分類キー検証と候補プール更新 `_classification_changes` → (b)語句検証 `_checked_terms` → (c)式文字列と論理木 `_assemble_expression` → (d)履歴項目 `_history_item` の4段）、`browse_view`, `seed_view`, `apply_labels`, `refinement_options`, `refresh_candidates` |
+| [candidate_service.py](candidate_service.py) | 分類候補の生成と、保存済み報告の表示投影 | `candidate_list`, `llm_candidate_rows`, `normalize_llm_classification`, `rejected_candidate_guidance`, `display_candidate_proposal`, `display_labels`, `display_discovery`, `build_candidate_proposal`, `reviewed_broader_candidate` |
+| [judgment_service.py](judgment_service.py) | LLM判定と学習の共有サービス | `assessment_options`, `run_llm_assessment`, `JudgmentCheckpoint`（remember / publish / rollback）, `run_model_training` |
+| [job_runner.py](job_runner.py) | 背景ジョブの開始・進捗・停止要求 | `begin_job`, `progress`, `request_stop` |
+| [agent_service.py](agent_service.py) | 判断エージェントの1サイクル | `checked_agent_request`, `run_agent` |
+| [import_service.py](import_service.py) | CSV取込、FI補完、ラベルCSV出力 | `read_csv_request`, `import_patents`, `enrich_fi`, `labels_csv` |
+| [workspace_defaults.py](workspace_defaults.py) | 初期 state / job、設定の既定値と検証 | `new_state`, `new_job`, `new_workbench`, `checked_settings` |
+| [services.py](services.py) | ルートモジュールへ渡す15個の操作の束 | `Services`, `workspace_services` |
 
 `public_state` は `convergence_tracking` を直接返さず、集計した `convergence` を返す。`discovery.patents` は返さず `document_count` にする。`search_result` からは `publication_keys` を除く。分類名称や選択可否を表示時に補うため、API応答と保存内容がそのまま一致するとは限らない。
 
@@ -79,12 +92,12 @@ FastAPIを起点とするローカル単一ユーザーアプリで、HTML/CSS/J
 
 この3集合以外にも、LLM/学習の入力スナップショット、トランザクション復元用コピー、計画内の起点資料、`discovery-archive-*.json` の過去計画がある。実行中のコピーと、永続化された別の集合は区別する。将来一元化する場合も、検索結果・起点参照・計画ごとの観測という役割は失わせない。
 
-### 1.4 明示的なルート登録と依存の分離（Phase 3c）
+### 1.4 明示的なルート登録と依存の分離（Phase 3c・7）
 
 `app.py` がWorkspaceと型の明示されたサービスを構成し、5つのルートを直接登録する。`globals()`、文字列キーの `context[...]`、ルート同士のimportは使わない。
 
 ```python
-services = Services(...)  # 下表の15個のコールバックを名前付きで指定
+services = workspace_services(ws, save=..., complete=..., make_query=..., ...)  # 継ぎ目は app の明示的なクロージャ
 research_services = ResearchServices(ws, services)
 register_discovery_routes(app, ws, services)
 register_orchestration_routes(app, ws, services)
@@ -93,7 +106,7 @@ register_invention_routes(app, ws, research_services)
 register_research_routes(app, ws, research_services)
 ```
 
-`services.py:Services` は `frozen=True` のdataclass。フィールドは `save`, `public_state`, `checked_text`, `complete`, `progress`, `begin_job`, `set_classification_view`, `make_query`, `map_patents`, `normalize_selection`, `classification_feedback`, `run_llm_assessment`, `run_model_training`, `classification_overview`, `candidate_list` の15個だけである。既存の保存失敗・LLM等の置換テストを維持するため、app側は各関数へ委譲する明示的なクロージャを渡す。モジュール全体を渡したり、名前で任意の関数を検索したりはしない。
+`services.py:Services` は `frozen=True` のdataclass。フィールドは `save`, `public_state`, `checked_text`, `complete`, `progress`, `begin_job`, `set_classification_view`, `make_query`, `map_patents`, `normalize_selection`, `classification_feedback`, `run_llm_assessment`, `run_model_training`, `classification_overview`, `candidate_list` の15個だけである。`services.py:workspace_services(ws, ...)` がこれを組み立てる。Workspaceだけで完結する `set_classification_view` / `normalize_selection` / `classification_overview` は `query_service` に `ws` を束縛して渡し、残りは差し替え可能な継ぎ目として app 側の明示的なクロージャで渡す。既存の保存失敗・LLM等の置換テストは `app.save` / `app.complete` / `app.candidate_list` / `app.make_query` / `app.train` / `app.refinement_terms` / `app.LLM_CHECKPOINT_BATCHES` を差し替えるため、app の薄い委譲関数が呼び出し時にこれらを各サービス関数へ引数（`complete=`, `save=`, `train=`, `refinement_terms=`, `checkpoint_batches=`）として渡す。モジュール全体を渡したり、名前で任意の関数を検索したりはしない。`research_services.py` は `Services` を型注釈でしか使わない（`services` → `query_service` → `research_services` の循環を避ける）。
 
 | モジュール | Workspaceから使うもの | Services経由の操作 |
 |---|---|---|
@@ -101,6 +114,7 @@ register_research_routes(app, ws, research_services)
 | [orchestration_routes.py](orchestration_routes.py) | state/settings/lock/stop/job/data_dir、idle/transaction/snapshot/restore | save/public_state、progress/begin_job、make_query、map_patents、normalize_selection、classification_feedback、set_classification_view、run_llm_assessment/run_model_training |
 | [convergence_routes.py](convergence_routes.py) | state/lock、transaction | save/public_state |
 | [research_routes.py](research_routes.py) | state/settings/lock、idle | ResearchServicesの共有操作、app.save/public_state/candidate_list/map_patents |
+| `app.py` の各ルート | lock/idle、transaction(keys, save=save)、snapshot | `query_service` / `candidate_service` / `judgment_service` / `import_service` / `agent_service` / `job_runner` を `ws` 付きで直接呼ぶ。Phase 7でルートモジュールの変更は不要だった |
 | [invention_routes.py](invention_routes.py) | state/settings/lock、idle | ResearchServicesの共有操作 |
 
 `research_services.py:ResearchServices` は `ws` と上記 `Services` を保持するdataclass。`workbench`, `source_patents`, `check_revision`, `commit`, `fingerprint`, `checked_brief`, `merge_target_references`, `enrich_query`, `save_query` を調査・発明の双方が使う。状態操作・保存はWorkspaceへ、分類表示の更新は `app.classification_overview` へ委譲する。
@@ -112,6 +126,8 @@ register_research_routes(app, ws, research_services)
 - `research_services.py`: 調査・発明の共有サービスと観点/式の組立。初期状態の純粋な生成は `workspace_defaults.py:new_workbench`。
 - `classification_symbols.py`: コード正規化、parse_codes、lookup、親子、enrich。`fi_parser.py`: FI欄の分解。どちらもexplorer/bridgeをimportしない。
 - `classification_bridge.extract` は enrich/parse_codes/lookup を引数で受け取れる。explorerから呼ぶときはそれらを明示する。ほかの既存呼出しは循環しない下位モジュールの既定実装を使う。bridgeからexplorerへの遅延importを廃止した。
+
+`app.py` に残す互換名は tests/ が `module.` 経由で参照する `STATE` / `SETTINGS` / `LOCK` / `JOB` / `DATA` / `STOP` / `save` と、再export（`llm_judgment`, `llm_candidate_rows`, `rejected_candidate_guidance`）だけで、「テスト互換のため」と注記する。`idle` などテストが参照しない別名は削除した。
 
 `Workspace.load(initialize_workflows=True)` がルート登録前に統括の中断復旧と調査ワークベンチの初期化を行う。引数の既定値はFalseとし、アプリ固有のキーを持たないWorkspaceの既存ロード契約も保つ。ルートの相互依存は解消したが、各ルート内の全ワークフローをサービスへ移す作業や、全engineのI/O分離までは行っていない。
 
@@ -214,13 +230,13 @@ register_research_routes(app, ws, research_services)
 
 `research_strategy.py:plan_research` と `invention_strategy.py:plan_invention` は依然として `llm.complete` を呼ぶ。分類処理には辞書・キャッシュの読込もある。「engine名のファイルはすべて純粋関数」という状態にはまだなっていない。
 
-### 1.8 公開状態キャッシュ・統括のコピー範囲（Phase 3c）
+### 1.8 公開状態キャッシュ・統括のコピー範囲（Phase 3c・7）
 
-既存のdict参照を置き換えずに直接更新との互換性を守るため、公開状態取得時にはstate/settings/jobのJSONからSHA-256を計算する。直前の内容・投影関数・外部依存トークンが同じなら投影とJSON bytesを再利用する。load/save/restore/transaction成功時は明示的にも無効化する。保存のないジョブ進捗、判定・分類等のネストした変更、失敗時の復元も次の取得で検出する。
+Phase 7で署名（SHA-256）による変更検出を廃止し、明示的な無効化に切り替えた。投影関数と外部依存トークンが同じ間は投影とJSON bytesをそのまま再利用し、変更のないGETは投影・deepcopy・JSON走査を行わない。無効化するのは `load` / `save` / `restore`、`transaction` の開始時と成功時（本体の中で `public_state()` を呼ぶ `/api/query` や `ResearchServices.commit` のため）、`job_runner` のジョブ開始・進捗・終了・停止要求、`JudgmentCheckpoint` の publish / rollback である。トランザクション外で `ws.state` を直接書き換える側は `ws.invalidate_public_state()` を自分で呼ぶ契約になり、`tests/test_public_state_cache.py` / `test_workspace.py` / `test_classification_explorer.py` の直接書換え後の取得はこの契約に合わせて無効化を呼ぶ。
 
 分類名称はSTATE外で更新されるため、`classification_translations.cache_token()` の世代番号も使う。キャッシュ読込と日本語名称取得の更新時に世代を進める。秘密の値は公開キャッシュに含めず、従来どおり設定有無だけを返す。メモリ内に最新1組だけ保持し、workspace.jsonへは追加しない。JSON化できない特殊値はキャッシュを使わず、dict返却とFastAPIのエンコード契約を保つ。
 
-この方式でも変更検出はデータ量に比例するJSON走査である。全書込みを追跡する新しい辞書型は導入していない。変更のないGETの表示計算・deepcopy・応答JSON再生成を削減する最適化であり、全リクエストが定数時間になるという意味ではない。
+全書込みを追跡する新しい辞書型は導入していない。変更のないGETはキャッシュ済みbytesを返すだけで、変更直後の初回GETは従来どおり投影・deepcopy・JSON化を行う。JSON化できない特殊値や非有限値の扱いは、無効化後の再投影で従来どおりFastAPIのエンコード契約と `allow_nan=False` の拒否に従う。
 
 本PCの隔離した合成2,000件で、従来の投影＋deepcopy＋FastAPIのJSON化と、キャッシュ済みGET応答生成を各5回比較した。応答bytesは同一、中央値は137.19 msから13.51 ms。辞書を読み込んだ後の計測であり、初回・データ変更直後・実データ全般の速度を保証する数値ではない。
 
@@ -235,7 +251,7 @@ register_research_routes(app, ws, research_services)
 | 最終式のcommit | orchestration, candidates, selected, queries, research_workbench, convergence_tracking |
 | 工程遷移・停止・エラー・リセットのcommit | orchestration |
 
-`tests/test_public_state_cache.py` と `tests/test_service_dependencies.py` の21件で、応答bytesの互換、キャッシュ再利用・無効化・参照の分離、登録時の非変更、load復旧、別Workspaceへの分離、分類根拠/依存、統括の部分復元を隔離データで検証する。Phase 3cの全テストはPython 542件（541成功・既存任意1スキップ）、JavaScript 304件成功。既存テストの変更・削除・新規スキップはない。
+`tests/test_public_state_cache.py` と `tests/test_service_dependencies.py` の21件で、応答bytesの互換、キャッシュ再利用・無効化・参照の分離、登録時の非変更、load復旧、別Workspaceへの分離、分類根拠/依存、統括の部分復元を隔離データで検証する。Phase 3cの全テストはPython 542件（541成功・既存任意1スキップ）、JavaScript 304件成功。Phase 7ではPython 543件（542成功・既存任意1スキップ、`test_app.py` にキャッシュ再利用と判定変更後の再投影の1件を追加）、JavaScript 327件成功。テストの削除・新規スキップはなく、変更は直接書換え後の取得に `invalidate_public_state()` を加えた上記3ファイルの5箇所だけである。
 
 ### Phase 6：フロントの責務
 

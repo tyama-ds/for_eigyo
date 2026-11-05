@@ -255,6 +255,7 @@ class ClassificationExplorerTests(unittest.TestCase):
         item.update(selectable=False, reason="Saved evidence", support_count=7)
         saved_item = copy.deepcopy(item)
         module.STATE["discovery"]["plan"] = {"candidate_hypotheses": [copy.deepcopy(item)]}
+        module.ws.invalidate_public_state()  # direct writes outside a transaction invalidate explicitly
         state = self.client.get("/api/state").json()
         current = next(c for c in state["candidates"] if c["key"] == item["key"])
         lab = state["discovery"]["plan"]["candidate_hypotheses"][0]
