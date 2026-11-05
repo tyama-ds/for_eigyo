@@ -6,6 +6,7 @@ import {
   $,
   $$,
   esc,
+  html,
   api,
   setState,
   toast,
@@ -167,41 +168,209 @@ function inventionClassLabel(c) {
 function inventionClassProvenance(c) {
   return researchClassificationProvenance(c);
 }
-function inventionPerspectiveHtml(element, p, d, plan) {
-  const suggested = new Set([...(p.classification_keys || []), ...(p.retrieved_classification_keys || [])]),
-    choices = [...(plan.classification_candidates || [])].sort(
-      (a, b) => Number(suggested.has(b.key)) - Number(suggested.has(a.key))
-    ),
-    active = d.class_mode !== 'text';
-  return `<section class="invention-perspective" data-invention-element="${esc(element.id)}" data-invention-perspective="${esc(p.id)}"><div class="invention-perspective-title"><span>検索観点</span><label class="check"><input type="checkbox" data-invention-perspective-use aria-label="${esc(element.name + ' / ' + p.name)} を採用" ${d.selected ? 'checked' : ''}><b>${esc(p.name)}</b></label></div><p class="caption">${esc(p.reason || '')}</p>${p.anchor_term ? `<p class="caption">起案時の基準語：${esc(p.anchor_term)}。言い換えと合わせて編集できます。</p>` : ''}<label>語句 · 1行に1語句（語句同士はOR）<textarea data-invention-terms rows="3" maxlength="12000" aria-label="${esc(element.name + ' / ' + p.name)} の語句">${esc(d.terms.join('\n'))}</textarea></label><label>語句と分類の使い方<select data-invention-class-mode aria-label="${esc(element.name + ' / ' + p.name)} の検索方法">${[
+function inventionClassOptionHtml(c, d, suggested) {
+  const hint = suggested.has(c.key) ? 'この観点の候補 · ' : '';
+  const note = `${hint}${esc(c.group || '')} · ${esc(inventionClassProvenance(c))}`;
+  const title = esc([c.reason, c.path_title].filter(Boolean).join('\n'));
+  return html`<label class="invention-class-option"><input type="checkbox" data-invention-class value="${esc(c.key)}"
+    ${d.classification_keys.includes(c.key) ? 'checked' : ''} ${c.selectable === false ? 'disabled' : ''}>
+    <span title="${title}"><b>${esc(inventionClassLabel(c))}</b>
+    <small>${note} · ${c.verified ? '分類表に存在' : '存在未確認'}</small></span></label>`;
+}
+function inventionClassModeOptionsHtml(d) {
+  const modes = [
     ['text', '語句だけ'],
     ['class', '分類だけ'],
     ['or', '語句 OR 分類 · どちらか'],
     ['and', '語句 AND 分類 · 両方'],
-  ]
-    .map(
-      ([value, label]) =>
-        `<option value="${value}" ${d.class_mode === value ? 'selected' : ''}>${label}</option>`
-    )
-    .join(
-      ''
-    )}</select></label><details class="invention-classifications" ${active ? 'open' : ''}><summary>分類候補を選ぶ · ${d.classification_keys.length} 件${active ? '' : '（語句だけでは未使用）'}</summary><p class="caption">分類表での存在確認と、特許に付与された分類・今回の観点への適合性は別です。由来を確認して選んでください。選んだ分類同士はORになります。</p><div class="invention-class-options">${choices.map((c) => `<label class="invention-class-option"><input type="checkbox" data-invention-class value="${esc(c.key)}" ${d.classification_keys.includes(c.key) ? 'checked' : ''} ${c.selectable === false ? 'disabled' : ''}><span title="${esc([c.reason, c.path_title].filter(Boolean).join('\n'))}"><b>${esc(inventionClassLabel(c))}</b><small>${suggested.has(c.key) ? 'この観点の候補 · ' : ''}${esc(c.group || '')} · ${esc(inventionClassProvenance(c))} · ${c.verified ? '分類表に存在' : '存在未確認'}</small></span></label>`).join('') || '<p class="caption">分類候補はありません。語句で検索できます。</p>'}</div></details></section>`;
+  ];
+  return modes.map(
+    ([value, label]) =>
+      html`<option value="${value}" ${d.class_mode === value ? 'selected' : ''}>${label}</option>`
+  );
+}
+function inventionPerspectiveClassesHtml(d, choices, suggested) {
+  const active = d.class_mode !== 'text';
+  const options = choices.map((c) => inventionClassOptionHtml(c, d, suggested)).join('');
+  return html`<details class="invention-classifications" ${active ? 'open' : ''}>
+    <summary>分類候補を選ぶ · ${d.classification_keys.length} 件${active ? '' : '（語句だけでは未使用）'}</summary>
+    <p class="caption">分類表での存在確認と、特許に付与された分類・今回の観点への適合性は別です。由来を確認して選んでください。
+    選んだ分類同士はORになります。</p>
+    <div class="invention-class-options">
+    ${options || '<p class="caption">分類候補はありません。語句で検索できます。</p>'}</div></details>`;
+}
+function inventionPerspectiveHtml(element, p, d, plan) {
+  const suggested = new Set([...(p.classification_keys || []), ...(p.retrieved_classification_keys || [])]),
+    choices = [...(plan.classification_candidates || [])].sort(
+      (a, b) => Number(suggested.has(b.key)) - Number(suggested.has(a.key))
+    );
+  const name = esc(element.name + ' / ' + p.name);
+  return html`<section class="invention-perspective" data-invention-element="${esc(element.id)}"
+    data-invention-perspective="${esc(p.id)}"><div class="invention-perspective-title"><span>検索観点</span>
+    <label class="check"><input type="checkbox" data-invention-perspective-use aria-label="${name} を採用"
+    ${d.selected ? 'checked' : ''}><b>${esc(p.name)}</b></label></div>
+    <p class="caption">${esc(p.reason || '')}</p>
+    ${p.anchor_term ? html`<p class="caption">起案時の基準語：${esc(p.anchor_term)}。言い換えと合わせて編集できます。</p>` : ''}
+    <label>語句 · 1行に1語句（語句同士はOR）<textarea data-invention-terms rows="3" maxlength="12000"
+    aria-label="${name} の語句">${esc(d.terms.join('\n'))}</textarea></label>
+    <label>語句と分類の使い方<select data-invention-class-mode aria-label="${name} の検索方法">
+    ${inventionClassModeOptionsHtml(d)}</select></label>
+    ${inventionPerspectiveClassesHtml(d, choices, suggested)}</section>`;
+}
+function inventionEvidenceHtml(e) {
+  const source =
+    e.source_id === 'invention_text'
+      ? '貼り付けた発明の原文'
+      : e.source_id === 'research_goal'
+        ? '調べたい技術・解決したいこと'
+        : e.source_id;
+  const adjusted = e.quote_adjustment === 'boundary_ellipsis_removed';
+  return html`<blockquote><p>${esc(e.quote)}</p><cite>${esc(source)}</cite>
+    ${adjusted ? '<br><small class="caption">前後の省略記号を除き、原文と照合</small>' : ''}</blockquote>`;
+}
+function inventionElementEvidenceHtml(element) {
+  const hypothesis =
+    '<p class="invention-hypothesis">仮説 · 対応する原文の引用がありません。入力・資料と照合してください。</p>';
+  return html`<details class="invention-evidence" open><summary>要素の記載と検索上の役割を確認</summary>
+    ${element.evidence?.length ? element.evidence.map(inventionEvidenceHtml) : hypothesis}</details>`;
+}
+function inventionJoinHtml(element, d) {
+  if (element.perspectives.length <= 1) return '';
+  const join = d.perspective_joins[element.id];
+  return html`<label class="invention-perspective-join">この要素で採用した検索観点を結ぶ
+    <select data-invention-join="${esc(element.id)}" aria-label="${esc(element.name)} の観点の結び方">
+    <option value="or" ${join === 'or' ? 'selected' : ''}>OR · いずれかの観点</option>
+    <option value="and" ${join === 'and' ? 'selected' : ''}>AND · すべての観点</option></select></label>`;
+}
+function inventionExclusionHtml(element, d) {
+  return html`<details class="invention-exclusion"><summary>この要素だけの除外 · 任意</summary>
+    <label>この要素の条件から除く語句（1行に1語句）<textarea data-invention-exclude="${esc(element.id)}" rows="2"
+    maxlength="6000">${esc((d.exclusions[element.id] || []).join('\n'))}</textarea></label>
+    <p class="caption">この要素の式にだけNOTを付けます。ほかの要素には適用しません。</p></details>`;
+}
+function inventionElementHeadingHtml(element, selected) {
+  return html`<div class="invention-element-heading"><label class="check">
+    <input type="checkbox" data-invention-use value="${esc(element.id)}" ${selected ? 'checked' : ''}>
+    <span><small>${esc(element.id)}</small><b>${esc(element.name)}</b></span></label>
+    <button class="button small" type="button" data-invention-single="${esc(element.id)}"
+    ${inventionPlanStale() ? 'disabled' : ''}>この要素を検索</button></div>`;
 }
 function inventionElementHtml(element, d, plan) {
   const selected = d.element_ids.includes(element.id),
     edit = d.elements.find((e) => e.id === element.id);
-  return `<article class="invention-element ${selected ? 'selected' : ''}" data-invention-card="${esc(element.id)}"><div class="invention-element-heading"><label class="check"><input type="checkbox" data-invention-use value="${esc(element.id)}" ${selected ? 'checked' : ''}><span><small>${esc(element.id)}</small><b>${esc(element.name)}</b></span></label><button class="button small" type="button" data-invention-single="${esc(element.id)}" ${inventionPlanStale() ? 'disabled' : ''}>この要素を検索</button></div><details class="research-element-detail" ${selected ? 'open' : ''}><summary>語句・分類・根拠を編集</summary><p>${esc(element.description || '')}</p>${element.relation ? `<p class="invention-relation"><b>要素間の関係</b>${esc(element.relation)}</p>` : ''}<details class="invention-evidence" open><summary>要素の記載と検索上の役割を確認</summary>${element.evidence?.length ? element.evidence.map((e) => `<blockquote><p>${esc(e.quote)}</p><cite>${esc(e.source_id === 'invention_text' ? '貼り付けた発明の原文' : e.source_id === 'research_goal' ? '調べたい技術・解決したいこと' : e.source_id)}</cite>${e.quote_adjustment === 'boundary_ellipsis_removed' ? '<br><small class="caption">前後の省略記号を除き、原文と照合</small>' : ''}</blockquote>`).join('') : '<p class="invention-hypothesis">仮説 · 対応する原文の引用がありません。入力・資料と照合してください。</p>'}</details>${element.perspectives.length > 1 ? `<label class="invention-perspective-join">この要素で採用した検索観点を結ぶ<select data-invention-join="${esc(element.id)}" aria-label="${esc(element.name)} の観点の結び方"><option value="or" ${d.perspective_joins[element.id] === 'or' ? 'selected' : ''}>OR · いずれかの観点</option><option value="and" ${d.perspective_joins[element.id] === 'and' ? 'selected' : ''}>AND · すべての観点</option></select></label>` : ''}<div class="invention-perspectives">${element.perspectives
-    .map((p) =>
-      inventionPerspectiveHtml(
-        element,
-        p,
-        edit.perspectives.find((x) => x.id === p.id),
-        plan
-      )
+  const perspectives = element.perspectives.map((p) =>
+    inventionPerspectiveHtml(
+      element,
+      p,
+      edit.perspectives.find((x) => x.id === p.id),
+      plan
     )
-    .join(
-      ''
-    )}</div><details class="invention-exclusion"><summary>この要素だけの除外 · 任意</summary><label>この要素の条件から除く語句（1行に1語句）<textarea data-invention-exclude="${esc(element.id)}" rows="2" maxlength="6000">${esc((d.exclusions[element.id] || []).join('\n'))}</textarea></label><p class="caption">この要素の式にだけNOTを付けます。ほかの要素には適用しません。</p></details></details></article>`;
+  );
+  return html`<article class="invention-element ${selected ? 'selected' : ''}"
+    data-invention-card="${esc(element.id)}">
+    ${inventionElementHeadingHtml(element, selected)}
+    <details class="research-element-detail" ${selected ? 'open' : ''}><summary>語句・分類・根拠を編集</summary>
+    <p>${esc(element.description || '')}</p>
+    ${element.relation ? html`<p class="invention-relation"><b>要素間の関係</b>${esc(element.relation)}</p>` : ''}
+    ${inventionElementEvidenceHtml(element)}${inventionJoinHtml(element, d)}
+    <div class="invention-perspectives">${perspectives}</div>
+    ${inventionExclusionHtml(element, d)}</details></article>`;
+}
+function inventionMethodHtml(method) {
+  const help =
+    method === 'llm'
+      ? '上に入力した説明と選択特許を使います。請求項を追加したい場合だけ原文欄を開いてください。'
+      : '要素を1行ずつ入力して、検索範囲を選ぶ画面へ進みます。';
+  const offline = method === 'llm' && getState().settings.provider === 'offline';
+  return html`<div class="research-input-method" role="group" aria-label="要素の整理方法">
+    <button type="button" data-research-input-method="llm" aria-pressed="${method === 'llm'}"
+    >LLMで分解する</button>
+    <button type="button" data-research-input-method="manual" aria-pressed="${method === 'manual'}"
+    >自分で要素を入力する</button></div>
+    <p id="research-input-help" class="caption">${help}</p>
+    ${offline ? inventionLlmUnavailableHtml() : ''}`;
+}
+function inventionLlmUnavailableHtml() {
+  return html`<div id="research-llm-unavailable" class="notice">LLMは未設定です。手動入力でもこのまま進められます。
+    <button id="research-connect-llm" class="button small" type="button">接続設定を開く</button></div>`;
+}
+function inventionManualElementsHtml(input) {
+  return html`<label>自分で分けた要素 <span class="caption">任意 · 1行に1要素</span>
+    <textarea id="invention-manual-elements" rows="4" maxlength="4808"
+    placeholder="例：温度を取得するセンサ&#10;取得温度に応じて冷却量を変える制御部">${esc(input.manual_elements.join('\n'))}</textarea>
+    <small class="caption">最大8要素、1要素600文字。「入力した要素を整理」はこの欄を使います。</small></label>`;
+}
+function inventionInputHtml(input, method, disabled) {
+  const llmButton = html`<button id="invention-plan-llm" class="button primary" type="button" ${disabled}>
+    LLMで発明を要素分解</button>`;
+  const localButton = html`<button id="invention-plan-local" class="button primary" type="button" ${disabled}>
+    入力した要素を整理</button>`;
+  return html`<div id="invention-input-area">${inventionMethodHtml(method)}
+    <div class="invention-source-grid">
+    <details class="research-optional" ${input.invention_text ? 'open' : ''}>
+    <summary>請求項・原文を追加（任意）</summary>
+    <label>発明の説明・請求項を貼り付ける <span class="caption">任意</span>
+    <textarea id="invention-text" rows="5" maxlength="20000"
+    placeholder="構成、動作、要素のつながりが分かる原文を入力">${esc(input.invention_text)}</textarea></label></details>
+    ${method !== 'llm' ? inventionManualElementsHtml(input) : ''}</div>
+    <div class="button-row">${method !== 'manual' ? llmButton : ''}
+    ${method !== 'llm' ? localButton : ''}</div></div>`;
+}
+function inventionStrategyOptionHtml(d, value, label) {
+  return html`<option value="${value}" ${d.strategy === value ? 'selected' : ''}>${label}</option>`;
+}
+function inventionPlanHeadingHtml(plan, d) {
+  return html`<div id="invention-stale-plan" class="notice" role="status"
+    ${inventionPlanStale() ? '' : 'hidden'}>
+    発明の入力や調査条件が変わっています。要素分解をやり直してからプレビュー・採用してください。
+    <button type="button" class="button small" id="research-replan-input">入力条件へ戻る</button></div>
+    <div class="invention-plan-heading"><h3>要素の案と検索観点</h3>
+    <span class="pill">${plan.method === 'llm' ? 'LLMによる案' : '手動要素の整理'}</span></div>
+    <p class="caption">${esc(plan.summary || '')}</p>
+    <p class="caption">採用する検索観点にチェックしてください。初期選択は各要素の先頭の観点です。追加の観点は必要に応じて採用します。</p>
+    <div class="invention-strategy"><label>今回の探し方<select id="invention-strategy">
+    ${inventionStrategyOptionHtml(d, 'element', '1要素から探す')}
+    ${inventionStrategyOptionHtml(d, 'combination', '選んだ要素の組合せ · AND')}
+    ${inventionStrategyOptionHtml(d, 'alternatives', '選んだ要素のいずれか · OR')}</select></label>
+    <p id="invention-selection-help" class="caption">${esc(inventionSelectionText(d))}</p></div>`;
+}
+function inventionScopeOptionsHtml(d) {
+  return html`<details class="invention-scope-options"><summary>除外と、分類の組合せを確認</summary>
+    <label>検索全体から除く語句 · 任意（1行に1語句）<textarea data-invention-exclude="all" rows="2"
+    maxlength="6000">${esc(d.exclusions.all.join('\n'))}</textarea></label>
+    <p class="caption">全体のNOTは、選んだ要素を組み合わせた式の外側に適用します。要素内のNOTとは範囲が異なります。</p>
+    <label class="check"><input id="invention-confirm-exclusions" type="checkbox"
+    ${d.confirm_exclusions ? 'checked' : ''}>
+    入力した除外語と、NOTの適用範囲を確認した</label>
+    <label class="check"><input id="invention-confirm-classes" type="checkbox"
+    ${d.confirm_class_intersection ? 'checked' : ''}>
+    語句と分類、または分類同士をANDで結ぶと、同じ文献に条件の同時一致を求め、候補が狭まることを確認した</label></details>`;
+}
+function inventionNotesHtml(notes) {
+  if (!notes.length) return '';
+  return html`<details class="invention-questions"><summary>確認する点 · ${notes.length} 件</summary>
+    <ul>${notes.map((q) => html`<li>${esc(q)}</li>`)}</ul></details>`;
+}
+function inventionPlanReviewHtml(plan, d, notes) {
+  return html`${inventionPlanHeadingHtml(plan, d)}
+    <div id="invention-elements" class="invention-elements">
+    ${plan.elements.map((e) => inventionElementHtml(e, d, plan))}</div>
+    ${inventionScopeOptionsHtml(d)}${inventionNotesHtml(notes)}
+    <div class="invention-bottom">
+    <p class="caption">原文との対応と要素間の関係を見直し、まずは1要素、必要に応じて組合せへ進めます。
+    検索結果は先行技術の候補として確認します。</p>
+    <button id="invention-preview" class="button primary" type="button"
+    ${inventionPlanStale() ? 'disabled' : ''}>選んだ条件をプレビュー →</button></div>
+    <div id="invention-query-preview" aria-live="polite">${inventionPreviewHtml()}</div>`;
+}
+function inventionReviewHtml(plan, d, notes) {
+  const brief = researchBrief();
+  const summary = `${esc(brief.purpose || '調査目的を入力してください')} · ターゲット ${brief.target_ids.length} 件`;
+  return html`<div id="invention-review-area">
+    <button type="button" id="research-edit-input" class="button small">← 入力条件を見直す</button>
+    <p id="research-condition-summary" class="caption">${summary}</p>
+    ${plan ? inventionPlanReviewHtml(plan, d, notes) : '<p class="caption">目的と発明の説明を使って、次に検索する要素を整理します。</p>'}
+    </div>`;
 }
 function inventionWorkbenchHtml(stage = 'all', method = 'all') {
   const input = inventionDraftInput(),
@@ -210,23 +379,45 @@ function inventionWorkbenchHtml(stage = 'all', method = 'all') {
   const notes = [...(plan?.questions || []), ...(plan?.classification_notes || [])];
   const disabled = inventionWorkbenchState.inventionPlanning ? 'disabled' : '';
   const editing = stage === 'elements';
-  const inputHtml = `<div id="invention-input-area">
-    <div class="research-input-method" role="group" aria-label="要素の整理方法"><button type="button" data-research-input-method="llm" aria-pressed="${method === 'llm'}">LLMで分解する</button><button type="button" data-research-input-method="manual" aria-pressed="${method === 'manual'}">自分で要素を入力する</button></div>
-    <p id="research-input-help" class="caption">${method === 'llm' ? '上に入力した説明と選択特許を使います。請求項を追加したい場合だけ原文欄を開いてください。' : '要素を1行ずつ入力して、検索範囲を選ぶ画面へ進みます。'}</p>
-    ${method === 'llm' && getState().settings.provider === 'offline' ? '<div id="research-llm-unavailable" class="notice">LLMは未設定です。手動入力でもこのまま進められます。<button id="research-connect-llm" class="button small" type="button">接続設定を開く</button></div>' : ''}
-    <div class="invention-source-grid"><details class="research-optional" ${input.invention_text ? 'open' : ''}><summary>請求項・原文を追加（任意）</summary><label>発明の説明・請求項を貼り付ける <span class="caption">任意</span><textarea id="invention-text" rows="5" maxlength="20000" placeholder="構成、動作、要素のつながりが分かる原文を入力">${esc(input.invention_text)}</textarea></label></details>
-    ${method !== 'llm' ? `<label>自分で分けた要素 <span class="caption">任意 · 1行に1要素</span><textarea id="invention-manual-elements" rows="4" maxlength="4808" placeholder="例：温度を取得するセンサ&#10;取得温度に応じて冷却量を変える制御部">${esc(input.manual_elements.join('\n'))}</textarea><small class="caption">最大8要素、1要素600文字。「入力した要素を整理」はこの欄を使います。</small></label>` : ''}</div>
-    <div class="button-row">${method !== 'manual' ? `<button id="invention-plan-llm" class="button primary" type="button" ${disabled}>LLMで発明を要素分解</button>` : ''}${method !== 'llm' ? `<button id="invention-plan-local" class="button primary" type="button" ${disabled}>入力した要素を整理</button>` : ''}</div></div>`;
-  const reviewHtml = `<div id="invention-review-area"><button type="button" id="research-edit-input" class="button small">← 入力条件を見直す</button><p id="research-condition-summary" class="caption">${esc(researchBrief().purpose || '調査目的を入力してください')} · ターゲット ${researchBrief().target_ids.length} 件</p>${plan ? `<div id="invention-stale-plan" class="notice" role="status" ${inventionPlanStale() ? '' : 'hidden'}>発明の入力や調査条件が変わっています。要素分解をやり直してからプレビュー・採用してください。<button type="button" class="button small" id="research-replan-input">入力条件へ戻る</button></div><div class="invention-plan-heading"><h3>要素の案と検索観点</h3><span class="pill">${plan.method === 'llm' ? 'LLMによる案' : '手動要素の整理'}</span></div><p class="caption">${esc(plan.summary || '')}</p><p class="caption">採用する検索観点にチェックしてください。初期選択は各要素の先頭の観点です。追加の観点は必要に応じて採用します。</p><div class="invention-strategy"><label>今回の探し方<select id="invention-strategy"><option value="element" ${d.strategy === 'element' ? 'selected' : ''}>1要素から探す</option><option value="combination" ${d.strategy === 'combination' ? 'selected' : ''}>選んだ要素の組合せ · AND</option><option value="alternatives" ${d.strategy === 'alternatives' ? 'selected' : ''}>選んだ要素のいずれか · OR</option></select></label><p id="invention-selection-help" class="caption">${esc(inventionSelectionText(d))}</p></div><div id="invention-elements" class="invention-elements">${plan.elements.map((e) => inventionElementHtml(e, d, plan)).join('')}</div><details class="invention-scope-options"><summary>除外と、分類の組合せを確認</summary><label>検索全体から除く語句 · 任意（1行に1語句）<textarea data-invention-exclude="all" rows="2" maxlength="6000">${esc(d.exclusions.all.join('\n'))}</textarea></label><p class="caption">全体のNOTは、選んだ要素を組み合わせた式の外側に適用します。要素内のNOTとは範囲が異なります。</p><label class="check"><input id="invention-confirm-exclusions" type="checkbox" ${d.confirm_exclusions ? 'checked' : ''}>入力した除外語と、NOTの適用範囲を確認した</label><label class="check"><input id="invention-confirm-classes" type="checkbox" ${d.confirm_class_intersection ? 'checked' : ''}>語句と分類、または分類同士をANDで結ぶと、同じ文献に条件の同時一致を求め、候補が狭まることを確認した</label></details>${notes.length ? `<details class="invention-questions"><summary>確認する点 · ${notes.length} 件</summary><ul>${notes.map((q) => `<li>${esc(q)}</li>`).join('')}</ul></details>` : ''}<div class="invention-bottom"><p class="caption">原文との対応と要素間の関係を見直し、まずは1要素、必要に応じて組合せへ進めます。検索結果は先行技術の候補として確認します。</p><button id="invention-preview" class="button primary" type="button" ${inventionPlanStale() ? 'disabled' : ''}>選んだ条件をプレビュー →</button></div><div id="invention-query-preview" aria-live="polite">${inventionPreviewHtml()}</div>` : '<p class="caption">目的と発明の説明を使って、次に検索する要素を整理します。</p>'}</div>`;
-  return `<section id="invention-workbench" data-render-scope="${esc(plan?.id || 'invention-input')}" class="panel invention-workbench" data-stage="${stage}" aria-label="発明を要素に分けて調査する"><div class="invention-heading"><div><h2>${editing ? '要素ごとの検索範囲' : '検索する要素'}</h2><p class="caption">${editing ? '選んだ要素だけを検索します。語句・分類の詳細は必要な要素を開いて編集できます。' : '目的と発明の説明を使って、次に検索する要素を整理します。'}</p></div><details class="panel-help"><summary role="button" aria-label="要素分解のヘルプ">?</summary><div><p class="invention-data-note">LLMには目的・技術説明・キーワード・入力した原文と要素、選択特許の名称・要約・分類を送り、保存済みの接続設定を使います。手動の整理はLLMへ送信しません。取得していない公報本文・請求項は参照しません。</p></div></details><span class="pill">${plan ? `${plan.elements.length} 要素` : '先行技術の候補を探す'}</span></div>${stage !== 'elements' ? inputHtml : ''}<p id="invention-error" class="invention-error" role="alert" ${inventionWorkbenchState.inventionError ? '' : 'hidden'}>${esc(inventionWorkbenchState.inventionError)}</p>${stage !== 'input' ? reviewHtml : ''}</section>`;
+  const caption = editing
+    ? '選んだ要素だけを検索します。語句・分類の詳細は必要な要素を開いて編集できます。'
+    : '目的と発明の説明を使って、次に検索する要素を整理します。';
+  const error = inventionWorkbenchState.inventionError;
+  const inputHtml = inventionInputHtml(input, method, disabled),
+    reviewHtml = inventionReviewHtml(plan, d, notes);
+  return html`<section id="invention-workbench" data-render-scope="${esc(plan?.id || 'invention-input')}"
+    class="panel invention-workbench" data-stage="${stage}" aria-label="発明を要素に分けて調査する">
+    <div class="invention-heading"><div><h2>${editing ? '要素ごとの検索範囲' : '検索する要素'}</h2>
+    <p class="caption">${caption}</p></div>
+    <details class="panel-help"><summary role="button" aria-label="要素分解のヘルプ">?</summary>
+    <div><p class="invention-data-note">LLMには目的・技術説明・キーワード・入力した原文と要素、選択特許の名称・要約・分類を送り、
+    保存済みの接続設定を使います。手動の整理はLLMへ送信しません。取得していない公報本文・請求項は参照しません。</p></div></details>
+    <span class="pill">${plan ? `${plan.elements.length} 要素` : '先行技術の候補を探す'}</span></div>
+    ${stage !== 'elements' ? inputHtml : ''}
+    <p id="invention-error" class="invention-error" role="alert" ${error ? '' : 'hidden'}>${esc(error)}</p>
+    ${stage !== 'input' ? reviewHtml : ''}</section>`;
 }
 function inventionSelectionText(d) {
-  return `${d.element_ids.length} 要素を選択 · ${d.strategy === 'combination' ? '選んだ要素をANDで結びます。' : d.strategy === 'alternatives' ? '選んだ要素をORで結びます。' : '1つの要素の観点から検索します。'}`;
+  const join =
+    d.strategy === 'combination'
+      ? '選んだ要素をANDで結びます。'
+      : d.strategy === 'alternatives'
+        ? '選んだ要素をORで結びます。'
+        : '1つの要素の観点から検索します。';
+  return `${d.element_ids.length} 要素を選択 · ${join}`;
 }
 function inventionPreviewHtml() {
   const p = inventionWorkbenchState.inventionPlanDraft?.preview;
   if (!p) return '';
-  return `<div class="invention-preview"><h3>検索条件とNOTの範囲</h3>${queryLibraryTreeHtml(p.query?.boolean_tree)}<pre class="expression">${esc(p.expression || '')}</pre>${p.warnings?.length ? `<ul class="invention-warnings">${p.warnings.map((w) => `<li>${esc(w)}</li>`).join('')}</ul>` : ''}<button id="invention-apply" type="button" class="button primary" ${inventionPlanStale() ? 'disabled' : ''}>この条件で検索式を作成 →</button><p class="caption">採用すると検索式の履歴に追加し、設定済みの検索サービス形式で出力できます。</p></div>`;
+  const warnings = p.warnings?.length
+    ? html`<ul class="invention-warnings">${p.warnings.map((w) => html`<li>${esc(w)}</li>`)}</ul>`
+    : '';
+  return html`<div class="invention-preview"><h3>検索条件とNOTの範囲</h3>
+    ${queryLibraryTreeHtml(p.query?.boolean_tree)}
+    <pre class="expression">${esc(p.expression || '')}</pre>${warnings}
+    <button id="invention-apply" type="button" class="button primary"
+    ${inventionPlanStale() ? 'disabled' : ''}>この条件で検索式を作成 →</button>
+    <p class="caption">採用すると検索式の履歴に追加し、設定済みの検索サービス形式で出力できます。</p></div>`;
 }
 function inventionPayload() {
   captureResearchDraft();
