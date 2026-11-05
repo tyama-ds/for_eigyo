@@ -23,6 +23,8 @@ import sys
 import threading
 import time
 import traceback
+import urllib.error
+import urllib.request
 import webbrowser
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
@@ -30,7 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-__version__ = "1.1.3"
+__version__ = "1.1.4"
 
 BASE = Path(__file__).resolve().parent
 APPS_FILE = BASE / "apps.json"
@@ -585,7 +587,9 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
         if u.path == "/api/ping":  # 画面が「サーバーが止まっている」と「一覧の作成で失敗」を見分けるため
-            self._json({"ok": True, "version": __version__})
+            # shutdown: 新しいポータルが起動したとき、この（前の）ポータルを終了させて番号を引き継げる
+            self._json({"ok": True, "app": "App Portal", "version": __version__,
+                        "pid": os.getpid(), "shutdown": True})
             return
         if u.path == "/api/apps":
             fresh = (parse_qs(u.query).get("fresh") or [""])[0] == "1"
@@ -645,6 +649,21 @@ class Handler(BaseHTTPRequestHandler):
             result = launch_app(app) if u.path == "/api/launch" else stop_app(app)
             code = 200 if result.get("ok") else 400
             self._json(result, code)
+            return
+
+        if u.path == "/api/shutdown":  # 新しく起動したポータルへの引き継ぎ
+            ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            if ctype != "application/json":
+                self._json({"ok": False, "error": "Content-Type は application/json"}, 415)
+                return
+            host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]").lower()
+            if host not in ("127.0.0.1", "localhost"):
+                self._json({"ok": False, "error": "forbidden"}, 403)
+                return
+            self._json({"ok": True})
+            print("[App Portal] 新しく起動したポータルに引き継ぐため、こちらは終了します", flush=True)
+            # serve_forever を止める（この処理中のスレッドから直接呼ぶと終わりを待って固まるので別スレッドで）
+            threading.Thread(target=self.server.shutdown, daemon=True).start()
             return
 
         if u.path == "/api/layout":  # カードの並び・グループ・非表示を保存
@@ -716,15 +735,95 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"error": "not found"}, 404)
 
 
+class PortalServer(ThreadingHTTPServer):
+    # Windows の SO_REUSEADDR は「他のプロセスが待ち受け中のポートにも重ねて待ち受ける」ことを許す。
+    # 古いポータルが残っていると新しいポータルも起動したように見え、ブラウザの要求は古い方に届いていた。
+    # Windows では付けない（付けなくても、閉じた直後の同じ番号で起動し直せる）
+    allow_reuse_address = os.name != "nt"
+    daemon_threads = True
+
+
+def _bind(port: int) -> PortalServer | None:
+    try:
+        return PortalServer((HOST, port), Handler)
+    except OSError:
+        return None
+
+
+_NO_PROXY = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def probe_portal(port: int, timeout: float = 2.0) -> dict | None:
+    """port で待ち受けている相手に /api/ping を聞く。
+    ポータルなら ping の内容、HTTP エラーなら {"ok": False, "status": コード}、応答が無ければ None。"""
+    try:
+        with _NO_PROXY.open(f"http://{HOST}:{port}/api/ping", timeout=timeout) as r:
+            data = json.loads(r.read().decode("utf-8"))
+            return data if isinstance(data, dict) else {"ok": False}
+    except urllib.error.HTTPError as e:
+        return {"ok": False, "status": e.code}
+    except (OSError, ValueError):
+        return None
+
+
+def request_shutdown(port: int, timeout: float = 3.0) -> bool:
+    req = urllib.request.Request(
+        f"http://{HOST}:{port}/api/shutdown", data=b"{}", method="POST",
+        headers={"Content-Type": "application/json"})
+    try:
+        with _NO_PROXY.open(req, timeout=timeout) as r:
+            return r.status == 200
+    except (OSError, ValueError):
+        return False
+
+
+def _occupant(info: dict | None) -> str:
+    if info is None:
+        return "応答しないプログラム（固まった古いポータルなど）"
+    if info.get("version"):
+        return f"古いポータル（v{info['version']}）"
+    if info.get("status") == 404:
+        return "古いポータル（v1.1.2 以前）または別のプログラム"
+    return "別のプログラム"
+
+
+def open_server(port: int, log=print, fallback_range: int = 30) -> PortalServer:
+    """port で待ち受ける。使われていたら、前のポータルなら終了させて引き継ぎ、
+    引き継げない相手なら次の空き番号で待ち受ける。"""
+    server = _bind(port)
+    if server:
+        return server
+    info = probe_portal(port)
+    if info and info.get("shutdown"):
+        log(f"[App Portal] {port} 番で動いていた前のポータル（v{info.get('version')}）を終了して引き継ぎます")
+        if request_shutdown(port):
+            deadline = time.monotonic() + 8
+            while time.monotonic() < deadline:
+                server = _bind(port)
+                if server:
+                    return server
+                time.sleep(0.2)
+    for alt in range(port + 1, port + 1 + fallback_range):
+        server = _bind(alt)
+        if server:
+            log(f"[App Portal] {port} 番は {_occupant(info)} が使っているため、{alt} 番で起動します。\n"
+                f"             {port} 番の古いポータルを止めるには、黒いウィンドウをすべて閉じるか、\n"
+                f"             タスクマネージャーの「詳細」タブで python.exe と py.exe を終了してください。")
+            return server
+    raise SystemExit(f"[App Portal] {port}〜{port + fallback_range} 番がすべて使われていて起動できません。"
+                     "タスクマネージャーで python.exe を終了してから起動し直してください。")
+
+
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="App Portal — アプリ呼び出しの窓口")
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
     ap.add_argument("--open", action="store_true", help="起動時にブラウザを開く")
     args = ap.parse_args(argv)
 
-    server = ThreadingHTTPServer((HOST, args.port), Handler)
-    url = f"http://{HOST}:{args.port}"
-    print(f"App Portal v{__version__}: {url}  (Ctrl+C で終了)")
+    server = open_server(args.port, log=lambda m: print(m, flush=True))
+    port = server.server_address[1]
+    url = f"http://{HOST}:{port}"
+    print(f"App Portal v{__version__}: {url}  (Ctrl+C で終了)", flush=True)
     if args.open:
         webbrowser.open(url)
     try:
@@ -733,6 +832,8 @@ def main(argv: list[str] | None = None) -> None:
         print("\n停止します")
         for app in load_apps():
             stop_app(app)
+    finally:
+        server.server_close()
 
 
 if __name__ == "__main__":

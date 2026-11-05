@@ -286,7 +286,9 @@ class HttpApiTests(SandboxMixin, unittest.TestCase):
         self.assertEqual(len(fresh["apps"]), 2)
 
     def test_ping_reports_portal_version(self):
-        self.assertEqual(self.request("/api/ping"), (200, {"ok": True, "version": portal.__version__}))
+        status, body = self.request("/api/ping")
+        self.assertEqual(status, 200)
+        self.assertEqual((body["ok"], body["version"], body["shutdown"]), (True, portal.__version__, True))
 
     def test_unexpected_error_returns_500_with_reason_instead_of_dropping_connection(self):
         with patch.object(portal, "load_apps", side_effect=RuntimeError("boom")):

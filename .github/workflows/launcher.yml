@@ -105,7 +105,26 @@ jobs:
               Write-Host ("GET {0} -> FAILED: {1}" -f $path, $_.Exception.Message); $failed++
             }
           }
+          # 2回目の起動: 前のポータルを終了させて同じ 8770 番を引き継ぐ
+          # （以前は Windows で古いポータルと同じ番号に重ねて待ち受け、要求が古い方に届いていた）
+          $pid1 = $null
+          try { $pid1 = (Invoke-WebRequest "http://127.0.0.1:8770/api/ping" -UseBasicParsing -TimeoutSec 5 -NoProxy).Content | ConvertFrom-Json | Select-Object -ExpandProperty pid } catch {}
+          $log2 = Join-Path $env:RUNNER_TEMP "portal_console2.txt"
+          Start-Process cmd.exe -ArgumentList "/d /c chcp 932 >nul & call `"$launcher\start_portal.bat`" > `"$log2`" 2>&1" -WindowStyle Hidden | Out-Null
+          $pid2 = $null
+          foreach ($i in 1..40) {
+            Start-Sleep -Milliseconds 500
+            try {
+              $p = (Invoke-WebRequest "http://127.0.0.1:8770/api/ping" -UseBasicParsing -TimeoutSec 3 -NoProxy).Content | ConvertFrom-Json
+              if ($p.pid -and $p.pid -ne $pid1) { $pid2 = $p.pid; break }
+            } catch {}
+          }
+          Write-Host ("second start: first pid={0}, now serving pid={1}" -f $pid1, $pid2)
+          if (-not $pid1 -or -not $pid2) { Write-Host "  second start did not take over 8770"; $failed++ }
+          elseif (Get-Process -Id $pid1 -ErrorAction SilentlyContinue) { Write-Host "  first portal is still running"; $failed++ }
           Write-Host "===== portal console ====="
           Get-Content $log -Encoding UTF8 -ErrorAction SilentlyContinue | Select-Object -First 80
+          Write-Host "===== portal console (second start) ====="
+          Get-Content $log2 -Encoding UTF8 -ErrorAction SilentlyContinue | Select-Object -First 80
           Get-Process python*, py -ErrorAction SilentlyContinue | Stop-Process -Force
           if ($failed) { Write-Error "portal check failed in $failed place(s)"; exit 1 }
