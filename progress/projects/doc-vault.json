@@ -1,0 +1,93 @@
+{
+  "slug": "doc-vault",
+  "name": "Doc Vault",
+  "path": "doc-vault/",
+  "summary": "文書管理 × RAG 相談。PDF/Office 文書を取り込むと全文・埋め込み・ナレッジグラフ・要約で索引化し、質問の種類に応じて検索方式を自動で選んで出典付きで回答する。社外秘はローカル LLM、公開資料はクラウド LLM で処理。",
+  "status": "active",
+  "phase": "初版（個人利用）",
+  "progress": 60,
+  "started": "2026-11-05",
+  "updated": "2026-11-05",
+  "version": "0.1.0",
+  "ports": [
+    8760
+  ],
+  "ci": true,
+  "portal": true,
+  "stack": [
+    "Python 標準ライブラリ",
+    "SQLite",
+    "pypdf（任意）",
+    "anthropic SDK（任意）",
+    "ローカルLLM / Claude / OpenAI 互換"
+  ],
+  "milestones": [
+    {
+      "title": "取り込み（PDF/DOCX/PPTX/XLSX/MD/CSV/HTML）と文書管理画面",
+      "state": "done",
+      "date": "2026-11-05"
+    },
+    {
+      "title": "Hybrid 検索・グラフ（PPR）・文書要約・コミュニティ遅延要約",
+      "state": "done",
+      "date": "2026-11-05"
+    },
+    {
+      "title": "質問ルーター・CRAG 再検索・出典付きストリーミング回答",
+      "state": "done",
+      "date": "2026-11-05"
+    },
+    {
+      "title": "DecisionRAG（検索器なしの階層ナビゲーション・Jev 判定）",
+      "state": "done",
+      "date": "2026-11-05"
+    },
+    {
+      "title": "社外秘 / 公開の区分によるローカル・クラウドの使い分け（送信ポリシーの強制）",
+      "state": "done",
+      "date": "2026-11-05"
+    },
+    {
+      "title": "実データ・実 LLM での精度確認と調整",
+      "state": "todo"
+    },
+    {
+      "title": "スキャン PDF の OCR",
+      "state": "todo"
+    },
+    {
+      "title": "共有運用（利用者ごとの権限・部署単位の閲覧制限）",
+      "state": "todo"
+    }
+  ],
+  "next": [
+    "DecisionRAG を実データで Hybrid と比べ、判定モデル（ローカル LLM / Jev）ごとの精度と所要時間を確認",
+    "実際の社内文書とローカル LLM で回答品質を確認し、ルーター・プロンプトを調整",
+    "スキャン PDF の OCR 対応の方式を決める",
+    "共有運用に向けた利用者管理の設計"
+  ],
+  "risks": [
+    "ローカル LLM の性能が低いとグラフ抽出・ルーター判定の質が落ちる（規則ベースの判定と全文検索で最低限は動く）",
+    "埋め込み検索は総当たりのため数万チャンクを超えると遅くなる",
+    "スキャン PDF・図表の中身は現状読めない",
+    "DecisionRAG はノードの説明文の質に左右され、1段目で外れた枝は二度とたどらない（自動モードは Hybrid と融合して補う）"
+  ],
+  "log": [
+    {
+      "date": "2026-11-05",
+      "summary": "クラウド呼び出しのプロキシを修正: Claude SDK が設定を無視して環境変数のプロキシを使っていた（OFF でも経由・URL 指定より環境変数が優先）。URL 空なら Windows のシステム設定も参照、SSL 検査プロキシ向けに OS の証明書ストアも信頼。実 SDK と記録用プロキシで 31 通り確認"
+    },
+    {
+      "date": "2026-11-05",
+      "summary": "DecisionRAG を正式なビームサーチに（経路スコア＝確率の幾何平均で上位 k 本を展開・前の段の次点へのバックトラック・判定回数の上限で切れた件数を表示）。ビーム幅（既定 4）を相談ごとに指定可能に"
+    },
+    {
+      "date": "2026-11-05",
+      "summary": "DecisionRAG（arXiv:2610.35868）を実装: フォルダ→文書→節→段落の階層を判定モデルでたどる検索。判定は LLM（logprobs で確率化）か Jev（OpenRouter Decisions API・公開文書のみ）、最後に選択式で並べ替え。相談ごとに 自動/DecisionRAG/従来型 を選択"
+    },
+    {
+      "date": "2026-11-05",
+      "summary": "初版: 文書管理・RAG 相談（ルーター/Hybrid/グラフPPR/要約/CRAG）・ローカルとクラウドの使い分け・グラフ表示・App Portal 登録"
+    }
+  ]
+}

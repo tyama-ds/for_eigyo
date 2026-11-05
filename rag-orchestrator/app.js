@@ -4,6 +4,7 @@
 const $ = (sel) => document.querySelector(sel);
 const ENGINE_COLORS = {
   graphrag: "#a78bfa", vector: "#5aa2ff", bm25: "#34d399", hybrid: "#f59e0b",
+  decision: "#f9a8d4",
   "nano-graphrag": "#f472b6", lightrag: "#f472b6", minirag: "#fb7185",
   hipporag: "#22d3ee", "rag-anything": "#c084fc",
 };
@@ -72,7 +73,7 @@ document.querySelectorAll(".tab").forEach((btn) => {
     btn.classList.add("active");
     document.querySelectorAll(".panel").forEach((p) => p.classList.add("hidden"));
     $(`#tab-${btn.dataset.tab}`).classList.remove("hidden");
-    if (btn.dataset.tab === "graph") loadGraph();
+    if (btn.dataset.tab === "graph") refreshEngines().then(() => { fillGraphEngineSelect(); loadGraph(); });
     if (btn.dataset.tab === "engines" || btn.dataset.tab === "query") refreshEngines();
     if (btn.dataset.tab === "corpus") refreshCorpus();
   });
@@ -81,15 +82,19 @@ document.querySelectorAll(".tab").forEach((btn) => {
 // ---------------------------------------------------------------- settings
 
 const CFG_FIELDS = ["base_url", "model", "embed_model", "embed_base_url",
+  "decision_judge", "decision_beam", "decision_budget", "jev_endpoint", "jev_model", "jev_proxy_url",
   "context_window", "request_timeout", "max_tokens", "proxy_url"];
 
 async function loadConfig() {
   const cfg = await api("/api/config");
   for (const f of CFG_FIELDS) { const el = $(`#s-${f}`); if (el) el.value = cfg[f] ?? ""; }
   $("#s-use_proxy").checked = !!cfg.use_proxy;
+  $("#s-jev_use_proxy").checked = cfg.jev_use_proxy !== false;
   $("#s-api_key").placeholder = cfg.has_key
     ? "（設定済み。変更する場合のみ入力）" : "（未設定。不要なサーバでは空のまま）";
   $("#s-embed_api_key").placeholder = cfg.has_embed_key ? "（設定済み）" : "（空なら API Key を流用）";
+  $("#s-jev_api_key").placeholder = cfg.has_jev_key ? "（設定済み。変更する場合のみ入力）" : "（未設定）";
+  $("#q-beam").placeholder = `設定の値（${cfg.decision_beam ?? 4}）`;
   updateConnBadge(cfg);
 }
 
@@ -101,12 +106,14 @@ function updateConnBadge(cfg) {
 }
 
 $("#s-save").addEventListener("click", async () => {
-  const body = { use_proxy: $("#s-use_proxy").checked };
+  const body = { use_proxy: $("#s-use_proxy").checked, jev_use_proxy: $("#s-jev_use_proxy").checked };
   for (const f of CFG_FIELDS) body[f] = $(`#s-${f}`).value;
   if ($("#s-api_key").value) body.api_key = $("#s-api_key").value;
   if ($("#s-embed_api_key").value) body.embed_api_key = $("#s-embed_api_key").value;
+  if ($("#s-jev_api_key").value) body.jev_api_key = $("#s-jev_api_key").value;
   const cfg = await api("/api/config", body);
-  $("#s-api_key").value = ""; $("#s-embed_api_key").value = "";
+  $("#s-api_key").value = ""; $("#s-embed_api_key").value = ""; $("#s-jev_api_key").value = "";
+  $("#s-jev_api_key").placeholder = cfg.has_jev_key ? "（設定済み）" : "（未設定）";
   $("#s-msg").textContent = "✅ 保存しました";
   updateConnBadge(cfg);
   refreshEngines();
@@ -230,8 +237,9 @@ $("#q-run").addEventListener("click", async () => {
   if (!question) { $("#q-hint").textContent = "質問を入力してください"; return; }
   if (!ids.length) { $("#q-hint").textContent = "エンジンを選択してください（インデックス構築が必要）"; return; }
   $("#q-hint").textContent = "";
-  const r = await api("/api/query",
-    { question, engines: ids, mode: $("#q-mode").value });
+  const body = { question, engines: ids, mode: $("#q-mode").value };
+  if ($("#q-beam").value.trim()) body.beam = Number($("#q-beam").value);
+  const r = await api("/api/query", body);
   if (r.error) { $("#q-hint").textContent = r.error; return; }
   state.queryJob = r.job_id;
   pollJobs();
@@ -342,6 +350,8 @@ function renderQueryJob(job) {
         </div>
         ${thinkHtml(e.result.think)}
         <div class="answer">${renderText(e.result.answer || "")}</div>
+        ${eid === "decision" && e.result.stats && e.result.stats.route
+          ? `<div class="engine-stats">階層の経路（経路スコア）: ${esc(e.result.stats.route)} ・ ビーム幅 ${esc(e.result.stats.beam)} ・ 判定 ${esc(e.result.stats.calls)} 回${e.result.stats.trimmed ? `（上限で ${esc(e.result.stats.trimmed)} 件未判定）` : ""}（${esc(e.result.stats.judge)}${e.result.stats.soft ? "・確率" : ""}${e.result.stats.choice ? "・選択式で並べ替え" : ""}）${e.result.stats.note ? " ・ " + esc(e.result.stats.note) : ""}</div>` : ""}
         ${cites ? `<div class="citations">${cites}</div>` : ""}
       </div>`);
     } else {
@@ -360,170 +370,147 @@ function renderQueryJob(job) {
 
 // ---------------------------------------------------------------- graph
 
-const graph = { nodes: [], edges: [], dragging: null, hover: null, raf: null };
+// グラフ表示に対応するエンジン（組み込み GraphRAG と GraphML を出力する外部エンジン）
+const GRAPH_ENGINES = ["graphrag", "lightrag", "minirag", "rag-anything", "nano-graphrag"];
+let gview = null;
+let gdata = null;
+
+function graphView() {
+  if (!gview) {
+    gview = new GraphView($("#g-canvas"), {
+      tooltip: $("#g-tooltip"), height: 620,
+      onSelect: (node) => renderGraphDetail(node),
+    });
+  }
+  return gview;
+}
+
+function fillGraphEngineSelect() {
+  /* インデックス構築済みのエンジンを優先して選択肢を作る（未構築は表示のみ） */
+  const sel = $("#g-engine");
+  const current = sel.value;
+  const opts = GRAPH_ENGINES.map((id) => {
+    const eng = state.engines.find((e) => e.id === id);
+    const built = !!(eng && eng.index && eng.index.built);
+    return { id, built, label: `${eng ? eng.name : id}${built ? "" : "（未構築）"}` };
+  });
+  sel.innerHTML = opts.map((o) =>
+    `<option value="${o.id}">${esc(o.label)}</option>`).join("");
+  const keep = opts.find((o) => o.id === current && o.built);
+  const firstBuilt = opts.find((o) => o.built);
+  sel.value = keep ? current : (firstBuilt ? firstBuilt.id : (current || "graphrag"));
+}
 
 async function loadGraph() {
+  if (!state.engines.length) await refreshEngines();
+  if (!$("#g-engine").options.length) fillGraphEngineSelect();
   const engine = $("#g-engine").value;
+  const gv = graphView();
+  gv.resize();
   // 組み込み GraphRAG は LLM 要約つきコミュニティ、外部は自動グループ
   $("#g-com-title").textContent = engine === "graphrag"
     ? "コミュニティ要約" : "コミュニティ（ラベル伝播による自動グループ）";
-  const data = await api(`/api/graph?engine=${encodeURIComponent(engine)}`);
+  $("#g-hint").textContent = "読み込み中…";
+  const limit = $("#g-limit").value;
+  const data = await api(`/api/graph?engine=${encodeURIComponent(engine)}&limit=${limit}`);
+  renderGraphDetail(null);
   if (data.error) {
     $("#g-hint").textContent = data.error;
     $("#g-communities").innerHTML = "";
-    graph.nodes = []; graph.edges = [];
-    drawGraph();
+    $("#g-legend").innerHTML = "";
+    gv.emptyMessage = data.error.slice(0, 70);
+    gdata = null;
+    gv.setData({ nodes: [], edges: [], communities: [] });
     return;
   }
-  $("#g-hint").textContent =
-    `エンティティ ${data.nodes.length} / 関係 ${data.edges.length} / コミュニティ ${data.communities.length}` +
-    (data.truncated ? "（表示は次数上位のみ）" : "");
-  const canvas = $("#g-canvas");
-  const W = canvas.width, H = canvas.height;
-  const communities = [...new Set(data.nodes.map((n) => n.community))];
-  const palette = ["#a78bfa", "#5aa2ff", "#34d399", "#f59e0b", "#f472b6", "#22d3ee",
-    "#fb7185", "#a3e635", "#facc15", "#c084fc", "#4ade80", "#60a5fa"];
-  const comColor = {};
-  communities.forEach((c, i) => { comColor[c] = palette[i % palette.length]; });
-  graph.nodes = data.nodes.map((n, i) => ({
-    ...n,
-    x: W / 2 + Math.cos(i * 2.399) * (80 + 3.1 * i),
-    y: H / 2 + Math.sin(i * 2.399) * (60 + 2.3 * i),
-    vx: 0, vy: 0,
-    r: 5 + Math.min(12, n.degree * 1.6),
-    color: comColor[n.community] || "#8b98b8",
-  }));
-  const byId = Object.fromEntries(graph.nodes.map((n) => [n.id, n]));
-  graph.edges = data.edges
-    .filter((e) => byId[e.source] && byId[e.target])
-    .map((e) => ({ ...e, a: byId[e.source], b: byId[e.target] }));
+  gdata = data;
+  gv.emptyMessage = "";
+  gv.setShowIsolated($("#g-isolated").checked);
+  gv.setData(data);
+  updateGraphHint();
+  renderLegend();
   $("#g-communities").innerHTML = data.communities
     .filter((c) => c.summary)
-    .map((c) => `<div class="community-row"><b>[${esc(c.id)}] ${esc(c.title)}</b>
+    .map((c) => `<div class="community-row" data-com="${esc(c.id)}"><b>[${esc(c.id)}] ${esc(c.title)}</b>
       <span class="muted">（${c.size} エンティティ）</span><br>${esc(c.summary)}</div>`)
     .join("") || '<p class="hint">要約付きコミュニティはありません。</p>';
-  runLayout();
+  document.querySelectorAll("#g-communities [data-com]").forEach((el) => {
+    el.addEventListener("click", () => {
+      gv.highlightCommunity(el.dataset.com);
+      document.querySelectorAll("#g-communities .community-row").forEach((r) =>
+        r.classList.toggle("active", r === el && gv.highlightCom === el.dataset.com));
+      $("#g-canvas").scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  });
 }
 
-function runLayout() {
-  let ticks = 0;
-  cancelAnimationFrame(graph.raf);
-  const step = () => {
-    forceTick();
-    drawGraph();
-    if (++ticks < 240) graph.raf = requestAnimationFrame(step);
-  };
-  step();
+function updateGraphHint() {
+  if (!gdata) return;
+  const st = graphView().stats();
+  const parts = [`エンティティ ${gdata.total_nodes ?? gdata.nodes.length}`,
+    `関係 ${gdata.total_edges ?? gdata.edges.length}`, `コミュニティ ${gdata.communities.length}`];
+  let note = `表示 ${st.shown} ノード`;
+  if (gdata.truncated) note += "（関係の多い順に上限まで）";
+  if (st.isolated && !$("#g-isolated").checked) note += ` ・ 孤立ノード ${st.isolated} 件は非表示`;
+  $("#g-hint").textContent = `${parts.join(" / ")} ・ ${note}。ホイールで拡大縮小、背景ドラッグで移動、クリックで詳細。`;
 }
 
-function forceTick() {
-  const canvas = $("#g-canvas");
-  const W = canvas.width, H = canvas.height;
-  const nodes = graph.nodes;
-  // 反発
-  for (let i = 0; i < nodes.length; i++) {
-    for (let j = i + 1; j < nodes.length; j++) {
-      const a = nodes[i], b = nodes[j];
-      let dx = a.x - b.x, dy = a.y - b.y;
-      let d2 = dx * dx + dy * dy;
-      if (d2 < 1) { dx = Math.random() - .5; dy = Math.random() - .5; d2 = 1; }
-      const f = 900 / d2;
-      const d = Math.sqrt(d2);
-      a.vx += (dx / d) * f; a.vy += (dy / d) * f;
-      b.vx -= (dx / d) * f; b.vy -= (dy / d) * f;
-    }
-  }
-  // ばね（エッジ）
-  for (const e of graph.edges) {
-    const dx = e.b.x - e.a.x, dy = e.b.y - e.a.y;
-    const d = Math.max(1, Math.sqrt(dx * dx + dy * dy));
-    const f = (d - 90) * 0.004 * (0.5 + e.strength / 10);
-    e.a.vx += (dx / d) * f; e.a.vy += (dy / d) * f;
-    e.b.vx -= (dx / d) * f; e.b.vy -= (dy / d) * f;
-  }
-  // 中心への引力 + 更新
-  for (const n of nodes) {
-    n.vx += (W / 2 - n.x) * 0.0015; n.vy += (H / 2 - n.y) * 0.0015;
-    if (graph.dragging === n) { n.vx = 0; n.vy = 0; continue; }
-    n.vx *= 0.85; n.vy *= 0.85;
-    n.x = Math.max(15, Math.min(W - 15, n.x + n.vx));
-    n.y = Math.max(15, Math.min(H - 15, n.y + n.vy));
+function renderLegend() {
+  const items = graphView().legend();
+  $("#g-legend").innerHTML = `<div class="muted">凡例（${$("#g-color").value === "type" ? "種別" : "コミュニティ"}）</div>`
+    + items.map((it) => `<div class="legend-row" data-key="${esc(it.key)}">
+      <span class="sw" style="background:${it.color}"></span>${esc(it.label.slice(0, 28))}
+      <span class="cnt">${it.count}</span></div>`).join("");
+  if ($("#g-color").value === "community") {
+    document.querySelectorAll("#g-legend [data-key]").forEach((el) => {
+      el.addEventListener("click", () => graphView().highlightCommunity(el.dataset.key));
+    });
   }
 }
 
-function drawGraph() {
-  const canvas = $("#g-canvas");
-  const ctx = canvas.getContext("2d");
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  if (!graph.nodes.length) {
-    ctx.fillStyle = "#8b98b8"; ctx.font = "14px sans-serif";
-    ctx.fillText("選択したエンジンのインデックスを構築するとナレッジグラフが表示されます", 30, 40);
+function renderGraphDetail(node) {
+  const box = $("#g-detail");
+  if (!node) {
+    box.innerHTML = '<p class="hint">ノードをクリックすると、説明・関係・出典がここに表示されます。</p>';
     return;
   }
-  for (const e of graph.edges) {
-    ctx.strokeStyle = "rgba(139,152,184,0.35)";
-    ctx.lineWidth = 0.5 + e.strength / 5;
-    ctx.beginPath(); ctx.moveTo(e.a.x, e.a.y); ctx.lineTo(e.b.x, e.b.y); ctx.stroke();
-  }
-  ctx.font = "11px sans-serif";
-  for (const n of graph.nodes) {
-    ctx.fillStyle = n.color;
-    ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2); ctx.fill();
-    if (n === graph.hover) {
-      ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.stroke();
-    }
-    if (n.degree >= 2 || graph.nodes.length <= 40) {
-      ctx.fillStyle = "#e6ecf7";
-      ctx.fillText(n.name.slice(0, 12), n.x + n.r + 3, n.y + 3);
-    }
-  }
+  const rels = graphView().neighbors(node.id);
+  const docs = (node.docs || []).map((d) => `<li>${esc(d)}</li>`).join("");
+  box.innerHTML = `<div class="detail-title">${esc(node.name)}</div>
+    <div class="muted">${esc(node.type || "")}${node.community ? " ・ " + esc(node.community) : ""} ・ 関係 ${rels.length}</div>
+    <p>${esc(node.description || "（説明なし）")}</p>
+    ${docs ? `<div class="muted">出典文書</div><ul>${docs}</ul>` : ""}
+    <div class="muted">関係（強い順）</div>
+    ${rels.slice(0, 40).map((r) => `<div class="detail-rel" data-id="${esc(r.node.id)}">
+      → <b>${esc(r.node.name)}</b> <span class="muted">強さ${r.edge.strength ?? ""}</span><br>
+      <span class="muted">${esc((r.edge.description || "").slice(0, 120))}</span></div>`).join("")
+      || '<p class="hint">関係はありません。</p>'}`;
+  box.querySelectorAll("[data-id]").forEach((el) => {
+    el.addEventListener("click", () => graphView().focus(el.dataset.id));
+  });
 }
 
-function canvasPos(ev) {
-  const canvas = $("#g-canvas");
-  const rect = canvas.getBoundingClientRect();
-  return {
-    x: (ev.clientX - rect.left) * (canvas.width / rect.width),
-    y: (ev.clientY - rect.top) * (canvas.height / rect.height),
-  };
-}
-
-function nodeAt(pos) {
-  for (let i = graph.nodes.length - 1; i >= 0; i--) {
-    const n = graph.nodes[i];
-    const dx = pos.x - n.x, dy = pos.y - n.y;
-    if (dx * dx + dy * dy <= (n.r + 4) ** 2) return n;
-  }
-  return null;
-}
-
-$("#g-canvas").addEventListener("mousedown", (ev) => {
-  graph.dragging = nodeAt(canvasPos(ev));
-});
-window.addEventListener("mouseup", () => { graph.dragging = null; });
-$("#g-canvas").addEventListener("mousemove", (ev) => {
-  const pos = canvasPos(ev);
-  if (graph.dragging) {
-    graph.dragging.x = pos.x; graph.dragging.y = pos.y;
-    drawGraph();
-    return;
-  }
-  const n = nodeAt(pos);
-  graph.hover = n;
-  const tip = $("#g-tooltip");
-  if (n) {
-    tip.classList.remove("hidden");
-    tip.style.left = `${ev.clientX + 14}px`;
-    tip.style.top = `${ev.clientY + 14}px`;
-    tip.innerHTML = `<b>${esc(n.name)}</b>（${esc(n.type)}）
-      <span class="muted">コミュニティ ${esc(n.community)} / 次数 ${n.degree}</span><br>${esc(n.description)}`;
-  } else {
-    tip.classList.add("hidden");
-  }
-  drawGraph();
-});
 $("#g-reload").addEventListener("click", loadGraph);
 $("#g-engine").addEventListener("change", loadGraph);
+$("#g-limit").addEventListener("change", loadGraph);
+$("#g-isolated").addEventListener("change", () => {
+  graphView().setShowIsolated($("#g-isolated").checked);
+  updateGraphHint(); renderLegend();
+});
+$("#g-color").addEventListener("change", () => {
+  graphView().setColorMode($("#g-color").value); renderLegend();
+});
+$("#g-fit").addEventListener("click", () => graphView().fit());
+$("#g-zoom-in").addEventListener("click", () => graphView().zoomBy(1.3));
+$("#g-zoom-out").addEventListener("click", () => graphView().zoomBy(1 / 1.3));
+$("#g-search").addEventListener("keydown", (ev) => {
+  if (ev.key !== "Enter") return;
+  const hits = graphView().search($("#g-search").value);
+  if (hits.length) graphView().focus(hits[0].id);
+  $("#g-hint").textContent = $("#g-search").value
+    ? `「${$("#g-search").value}」に一致: ${hits.length} 件` : "";
+  if (!$("#g-search").value) updateGraphHint();
+});
 
 // ---------------------------------------------------------------- init
 

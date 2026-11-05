@@ -23,9 +23,12 @@ python rag-orchestrator/server.py --port 9500 --open
 4. **質問・比較** — 質問を投げると全エンジンが並列実行され、回答・出典・統計が
    カードで並ぶ。成功エンジンが2つ以上あれば **統合レポート**（一致点・相違点）を生成
 5. **グラフ** — ナレッジグラフ（エンティティ・関係・コミュニティ）を可視化。
-   エンジン切替で **組み込み GraphRAG / LightRAG / nano-graphrag** のグラフを表示できる
-   （外部エンジンは作業ディレクトリの GraphML を読み込み。コミュニティ要約の代わりに
-   ラベル伝播による自動グループで色分け）
+   エンジン切替で **組み込み GraphRAG / LightRAG / nano-graphrag** などのグラフを表示できる
+   （インデックス構築済みのエンジンが自動で選ばれる。外部エンジンは作業ディレクトリの GraphML を読み込み、
+   コミュニティ要約の代わりにラベル伝播による自動グループで色分け）。
+   ホイールで拡大縮小・背景ドラッグで移動・「全体表示」、エンティティ名で検索、ノードをクリックすると
+   説明・関係（強い順）・出典文書を右側に表示し、隣接ノード以外を薄くする。関係の無い孤立ノードは既定で非表示、
+   色分けはコミュニティ / 種別を切替。表示ノード数は関係の多い順に上位150 / 300 / 800 から選ぶ
 
 ## エンジン一覧
 
@@ -35,6 +38,7 @@ python rag-orchestrator/server.py --port 9500 --open
 | **Vector RAG** | 組み込み | 埋め込みAPI | チャンク→埋め込み→コサイン top-k→生成（Naive RAG のベースライン） |
 | **BM25 RAG** | 組み込み | なし | 字句一致（BM25）→top-k→生成。LLM 未設定なら抜粋を返す |
 | **Hybrid RAG** | 組み込み | 埋め込みAPI | ベクトル + BM25 を RRF（Reciprocal Rank Fusion）で融合 |
+| **DecisionRAG** | 組み込み | チャットLLM（または Jev） | 検索器を使わず、文書 → 節 → 段落の階層を判定モデルでたどる（arXiv:2610.35868。下記） |
 | **nano-graphrag** | 外部・実験的 | `pip install nano-graphrag` ※Python 3.10〜3.12（graspologic→gensim 依存のため 3.13 不可） | [gusye1234/nano-graphrag](https://github.com/gusye1234/nano-graphrag)。約1,000行の GraphRAG 実装。グラフタブ表示対応 |
 | **LightRAG** | 外部・実験的 | `pip install lightrag-hku openai` | [HKUDS/LightRAG](https://github.com/HKUDS/LightRAG)。グラフ+ベクトル二層・増分更新。導入が軽い（gensim 不要）。グラフタブ表示対応 |
 | **MiniRAG** | 外部・実験的 | `pip install minirag-hku openai` | [HKUDS/MiniRAG](https://github.com/HKUDS/MiniRAG)（ACL2026）。小型ローカルLLM向け設計の異種グラフ RAG。mini / light / naive 検索。グラフタブ表示対応 |
@@ -43,6 +47,42 @@ python rag-orchestrator/server.py --port 9500 --open
 
 日本語はチャンク分割（段落・句点境界）と CJK バイグラムのトークン化で形態素解析なしに扱う。
 
+## 組み込み DecisionRAG について
+
+Wan, Jünger, Du, Liu, Krishnan, Weinberger（Cornell University / ASAPP）
+"Retriever-Free Retrieval: Navigating Documents with Decision Models"
+（[arXiv:2610.35868](https://arxiv.org/abs/2610.35868)、2026）の方式。BM25 や埋め込みの第1段の検索器を使わず、
+図書館で棚を順にたどるように、コーパスの階層を判定モデルで上から下へたどる。論文では、課題向けの学習なしで
+密ベクトル検索＋8B リランカーを MultiDoc2Dial で R@1 +13.8、Natural Questions で Hit@1 +17.4 ポイント
+上回ったと報告されている（公開コードは無い）。
+
+```
+ingest:  チャンク分割 → 文書ごとの短い要約とキーワード（LLM。ノードの説明文になる）
+         → 階層: 文書 → 節（Markdown 見出しのまとまり）→ 段落
+           文書が 24 を超えるときは文書群の中間ノードを作る（埋め込みがあれば k-means、無ければ並び順）
+query:   展開する枝の子をすべて同じ文脈に並べて一度に二値判定（関連する確率）
+         → ビームサーチ: 経路スコア（根からの確率の幾何平均）の上位 k 本（ビーム幅・既定 4）を展開。
+           判定済みの次点も候補に残すので、展開した先が振るわなければ前の段の次点へ戻る
+         → 段落は経路スコア順 → 上位を選択式で比べて並べ替え → 回答生成
+```
+
+- 判定モデル（設定タブ → DecisionRAG）:
+  - **LLM**: 上の接続先に候補を並べて 0〜9 で採点させる。logprobs を返すサーバ（vLLM / llama.cpp server /
+    OpenAI など）では、採点の数字の確率分布から期待値を求めて確率として使う。返さないサーバでは数字をそのまま使う
+  - **Jev**: 論文で使われた TypeSafe の判定専用モデル。OpenRouter Decisions API の `noul`（yes/no の確率）を
+    候補ごとに、最後の並べ替えに `choice` を使う。OpenRouter の API キーが必要で、**コーパスの本文が外部へ送られる**。
+    既定のモデルは `typesafe/jev-1.14`（多言語の改善をうたう版。論文は 1.13）
+- 結果カードに「階層の経路」（展開した枝と経路スコア、前の段へ戻ったときは［戻り］）、ビーム幅、判定回数を表示する
+- ビーム幅（各段で残す枝の数、既定 4）は設定タブで、質問ごとには「質問・比較」タブの
+  「DecisionRAG のビーム幅」で指定できる（空なら設定の値。API では `/api/query` の `beam`）
+- 1質問あたりの判定回数の上限（既定 8）は設定で変えられる。上限に収まらない段は経路スコアの高い親の子から
+  判定し、判定できなかった件数を結果カードに表示する
+- インデックス構築では文書ごとに LLM を1回呼ぶ（説明文づくり）。説明文の質が判定の精度を左右するため
+- 戻れるのは判定済みの枝だけで、判定回数の上限に達すれば打ち切る。Hybrid など他のエンジンと並べて比べると違いが分かる
+- LLM で判定する場合は、論文のように1回の計算で全候補の確率を読むのではなく、数字を出力させて読む近似
+- [doc-vault](../doc-vault/) にも同じアルゴリズムを入れてある（あちらはフォルダ → 文書 → 節 → 段落の階層で、
+  社外秘 / 公開の区分によって判定モデルを使い分ける）。他の実装の調査は doc-vault の README を参照
+
 ## 組み込み GraphRAG について
 
 note 記事「[GraphRAGってどうなの？2026年最新の研究から](https://note.com/niti_technology/n/nfa976ab900a8)」
@@ -50,13 +90,16 @@ note 記事「[GraphRAGってどうなの？2026年最新の研究から](https:
 再実装したもの。
 
 ```
-ingest:  チャンク分割 → LLMでエンティティ/関係抽出 → 同名マージ → ナレッジグラフ
+ingest:  チャンク分割 → LLMでエンティティ/関係抽出 → 関係の端点を補完 → 同名マージ → ナレッジグラフ
          → コミュニティ検出（ラベル伝播法 ※本家は Leiden 法） → コミュニティ要約（LLM）
          → エンティティ/チャンク埋め込み（設定時のみ）
 query:   global … コミュニティ要約への map-reduce（「全体として何が言える？」型の質問）
          local  … 質問に関連するエンティティ近傍（関係・要約・原文）から回答（個別質問）
          auto   … 質問中に既知エンティティがあれば local、なければ global
 ```
+
+関係の端点がエンティティ一覧に無い場合（ローカル LLM で頻発）は、関係を捨てずに端点をエンティティとして補う
+（本家 GraphRAG と同じ扱い）。以前は捨てていたため、グラフが孤立ノードだらけになることがあった。
 
 - 通常の RAG が苦手な「コーパス全体を俯瞰する質問」（Query-Focused Summarization）に
   global 検索で答えられるのが GraphRAG の主眼
@@ -168,7 +211,8 @@ query:   global … コミュニティ要約への map-reduce（「全体とし�
 | Base URL / API Key / Model | チャット用。例 `http://127.0.0.1:11434/v1` + `qwen3:14b` |
 | Embed Model | 埋め込みモデル。空なら Model を流用。例 `nomic-embed-text` |
 | Embed Base URL / API Key | 埋め込みが別サーバの場合のみ。空なら Base URL / API Key を流用 |
-| プロキシ | OFF なら環境変数も無視して直結。ON で URL 空なら HTTP(S)_PROXY を使用 |
+| プロキシ | OFF なら環境変数も無視して直結。ON で URL 空なら HTTP(S)_PROXY（Windows で未設定ならシステムのプロキシ設定）を使用 |
+| Jev のプロキシ | Jev（DecisionRAG の判定モデル・外部サービス）用に**別に**設定する（既定 ON・URL 空なら環境変数）。ローカル LLM は直結、Jev だけプロキシ経由、という使い方ができる |
 
 推論モデル（Qwen3 / DeepSeek-R1 系）の思考（`<think>…</think>` や `reasoning_content`）は
 回答から分離し、UI では「推論過程」として折りたたみ表示する（デフォルト非表示・▶で展開）。
@@ -182,7 +226,7 @@ python -m unittest discover -s tests -v
 ```
 
 - 実 LLM 不要。`tests/mock_llm.py` の決定論的モック（OpenAI 互換サーバ）を使用
-- ユニット（チャンク分割 / BM25 / コミュニティ検出 / GraphRAG ingest・query）+
+- ユニット（チャンク分割 / BM25 / コミュニティ検出 / GraphRAG ingest・query / DecisionRAG の階層・確率化・ナビゲーション・Jev）+
   API 統合（設定→取込→並列構築→並列質問→統合レポート、部分失敗、グラフAPI）
 
 ## 構成
@@ -190,6 +234,7 @@ python -m unittest discover -s tests -v
 ```
 server.py               HTTP サーバ（標準ライブラリ）+ API
 index.html / style.css / app.js   1画面 UI（タブ: 質問・比較 / コーパス / エンジン / グラフ / 設定）
+graphview.js            グラフビューア（ズーム・パン・検索・詳細表示。doc-vault と共通）
 ragcore/
   config.py             接続設定（llmlab 互換の項目構成）
   llm.py                OpenAI 互換クライアント（chat / embeddings、統計、think除去）
@@ -200,6 +245,8 @@ ragcore/
   engines/
     graphrag.py         組み込み GraphRAG（本体）
     vector.py bm25.py hybrid.py   組み込みベースライン群
+    decision.py         DecisionRAG（階層の構築・判定・ビームでのナビゲーション）
+  jev.py                判定モデル Jev のクライアント（OpenRouter Decisions API）
     external.py         nano-graphrag / LightRAG アダプタ（実験的）
 sample_docs/            動作確認用の架空企業ドキュメント4本
 tests/                  ユニット + API 統合（モックLLM）

@@ -114,39 +114,62 @@ def api_corpus_sample() -> dict:
 GRAPHML_ENGINES = ("lightrag", "nano-graphrag", "minirag", "rag-anything")
 
 
-def api_graph(engine_id: str) -> dict:
+def api_graph(engine_id: str, limit: int = MAX_GRAPH_NODES) -> dict:
     """グラフ可視化用データ。
 
     - graphrag（組み込み）: インデックス JSON から生成
-    - lightrag / nano-graphrag（外部）: 作業ディレクトリの GraphML から生成
+    - lightrag / nano-graphrag 等（外部）: 作業ディレクトリの GraphML から生成
+    ノードは次数（関係の数）の多い順に ``limit`` 件まで返す。
     """
+    limit = max(20, min(int(limit or MAX_GRAPH_NODES), 2000))
     if engine_id in GRAPHML_ENGINES:
         # external.DATA_DIR を呼び出し時に参照する（テストで差し替え可能にするため）
         path = external.DATA_DIR / engine_id / GRAPHML_FILENAME
-        return graphml_graph_payload(path, max_nodes=MAX_GRAPH_NODES)
+        return graphml_graph_payload(path, max_nodes=limit)
     index = store.load_index(engine_id)
     if index is None:
-        return {"error": "インデックス未構築です"}
+        return {"error": "インデックス未構築です。「エンジン」タブでこのエンジンのインデックスを構築してください"}
     if "entities" not in index:
         return {"error": "このエンジンのインデックスはグラフ表示に対応していません"}
+    return builtin_graph_payload(index, max_nodes=limit)
+
+
+def builtin_graph_payload(index: dict, *, max_nodes: int = MAX_GRAPH_NODES) -> dict:
+    """組み込み GraphRAG のインデックスからグラフ表示用ペイロードを作る。"""
     com_of = {}
     for com in index.get("communities") or []:
         for key in com["entity_keys"]:
             com_of[key] = com["id"]
-    entities = sorted(index["entities"], key=lambda e: -e["degree"])[:MAX_GRAPH_NODES]
+    relations = index.get("relations") or []
+    # 次数は関係リストから数え直す（古いインデックスや端点補完後でも整合させる）
+    degree: dict[str, int] = {}
+    for r in relations:
+        degree[r["source"]] = degree.get(r["source"], 0) + 1
+        degree[r["target"]] = degree.get(r["target"], 0) + 1
+    doc_title = {c["id"]: c.get("doc_title", "") for c in index.get("chunks") or []}
+    entities = sorted(index["entities"],
+                      key=lambda e: (-degree.get(e["key"], 0), e["key"]))[:max_nodes]
     keys = {e["key"] for e in entities}
-    nodes = [{"id": e["key"], "name": e["name"], "type": e["type"],
-              "degree": e["degree"], "community": com_of.get(e["key"], ""),
-              "description": e["description"][:300]} for e in entities]
+    nodes = []
+    for e in entities:
+        docs = []
+        for cid in e.get("chunks") or []:
+            title = doc_title.get(cid)
+            if title and title not in docs:
+                docs.append(title)
+        nodes.append({"id": e["key"], "name": e["name"], "type": e["type"],
+                      "degree": degree.get(e["key"], 0), "community": com_of.get(e["key"], ""),
+                      "description": e["description"][:300], "docs": docs[:8]})
     edges = [{"source": r["source"], "target": r["target"],
               "strength": r["strength"], "description": r["description"][:200]}
-             for r in index.get("relations") or []
+             for r in relations
              if r["source"] in keys and r["target"] in keys]
     communities = [{"id": c["id"], "title": c["title"], "size": c["size"],
                     "summary": c["summary"][:500]}
                    for c in index.get("communities") or []]
     return {"nodes": nodes, "edges": edges, "communities": communities,
-            "truncated": len(index["entities"]) > MAX_GRAPH_NODES}
+            "total_nodes": len(index["entities"]), "total_edges": len(relations),
+            "truncated": len(index["entities"]) > max_nodes}
 
 
 def _valid_engine_ids(body: dict) -> list[str]:
@@ -201,6 +224,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send_file(BASE / "style.css", "text/css; charset=utf-8")
         elif route == "/app.js":
             self._send_file(BASE / "app.js", "text/javascript; charset=utf-8")
+        elif route == "/graphview.js":
+            self._send_file(BASE / "graphview.js", "text/javascript; charset=utf-8")
         elif route == "/api/health":
             self._send_json({"ok": True, "app": "rag-orchestrator",
                              "version": __version__})
@@ -221,10 +246,14 @@ class Handler(BaseHTTPRequestHandler):
         elif route == "/api/graph":
             qs = parse_qs(parsed.query)
             engine_id = (qs.get("engine") or ["graphrag"])[0]
+            try:
+                limit = int((qs.get("limit") or [MAX_GRAPH_NODES])[0])
+            except ValueError:
+                limit = MAX_GRAPH_NODES
             if not get_engine(engine_id):
                 self._send_json({"error": f"未知のエンジンです: {engine_id}"}, 400)
             else:
-                self._send_json(api_graph(engine_id))
+                self._send_json(api_graph(engine_id, limit))
         else:
             self.send_error(404)
 
@@ -264,7 +293,14 @@ class Handler(BaseHTTPRequestHandler):
             elif not question:
                 self._send_json({"error": "質問が空です"}, 400)
             else:
-                job = ORCH.start_query(engine_ids, question, mode)
+                options = {}
+                beam = body.get("beam")
+                if beam not in (None, "") and not isinstance(beam, bool):
+                    try:
+                        options["decision_beam"] = max(1, min(10, int(beam)))
+                    except (TypeError, ValueError):
+                        pass
+                job = ORCH.start_query(engine_ids, question, mode, options)
                 self._send_json({"job_id": job.id})
         else:
             self.send_error(404)

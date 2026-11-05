@@ -71,11 +71,96 @@ def mock_chat_response(prompt: str) -> str:
     if task.endswith("answer"):   # local_answer / vector_answer / global_fallback_answer 等
         return f"{task} による回答: 資料に基づく説明です。[S1]"
 
+    if task == "decision_doc_summary":
+        body = prompt.split("# 本文", 1)[-1]
+        found = [name for name, _ in KNOWN_ENTITIES if name in body]
+        return json.dumps({"summary": "・".join(found) + "について述べた文書。",
+                           "keywords": found[:8]}, ensure_ascii=False)
+
+    if task == "decide":
+        return decide(prompt)
+
+    if task == "decide_choice":
+        return decide_choice(prompt)
+
     if task == "synthesis":
         return ("## 統合回答\n各エンジンの回答は概ね一致しています。\n"
                 "## 一致点\n- 資料に基づく説明である点\n## 相違点・片方にしかない情報\nなし")
 
     return "接続OK"
+
+
+def _grams(text: str) -> set[str]:
+    text = text.lower()
+    out = set(re.findall(r"[a-z0-9][a-z0-9\-]+", text))
+    for run in re.findall(r"[぀-ヿ㐀-鿿]+", text):
+        out.update(run[i:i + 2] for i in range(len(run) - 1))
+    return out
+
+
+def decide(prompt: str) -> str:
+    """DecisionRAG の採点: 質問と候補の文字バイグラムの重なりで 0〜9。"""
+    q = prompt.split("# 質問", 1)[-1].split("# 候補", 1)[0]
+    qg = _grams(q)
+    lines = re.findall(r"^\[(\d+)\] (.*)$", prompt.split("# 候補", 1)[-1], re.MULTILINE)
+    return "\n".join(f"{num}={min(9, round(len(qg & _grams(desc)) / max(1, len(qg)) * 14))}"
+                     for num, desc in lines)
+
+
+def decide_choice(prompt: str) -> str:
+    q = prompt.split("# 質問", 1)[-1].split("# 候補", 1)[0]
+    qg = _grams(q)
+    lines = re.findall(r"^([A-T])\. (.*)$", prompt.split("# 候補", 1)[-1], re.MULTILINE)
+    return max(lines, key=lambda t: len(qg & _grams(t[1])))[0] if lines else "A"
+
+
+def decide_logprobs(text: str) -> list[dict]:
+    """採点の出力をトークン列にし、数字のトークンに上位候補の確率を付ける。"""
+    import math
+    toks = []
+    for line in text.splitlines():
+        num, digit = line.split("=")
+        d = int(digit)
+        alt = d - 1 if d > 0 else 1
+        toks += [{"token": num, "logprob": -0.01}, {"token": "=", "logprob": -0.01},
+                 {"token": digit, "logprob": math.log(0.7),
+                  "top_logprobs": [{"token": digit, "logprob": math.log(0.7)},
+                                   {"token": str(alt), "logprob": math.log(0.3)}]},
+                 {"token": "\n", "logprob": -0.01}]
+    return toks
+
+
+def choice_logprobs(letter: str) -> list[dict]:
+    import math
+    other = "B" if letter == "A" else "A"
+    return [{"token": letter, "logprob": math.log(0.8),
+             "top_logprobs": [{"token": letter, "logprob": math.log(0.8)},
+                              {"token": other, "logprob": math.log(0.2)}]}]
+
+
+def jev_answer(body: dict) -> dict:
+    """OpenRouter Decisions API（Jev）のモック。"""
+    state = body.get("state") or {}
+    qg = _grams(str(state.get("query", "")))
+    cands = dict(re.findall(r"^(\d+)\. (.*)$", str(state.get("candidates", "")), re.MULTILINE))
+
+    def rel(text):
+        return min(1.0, len(qg & _grams(text)) / max(1, len(qg)) * 1.6)
+    answers = {}
+    for name, q in (body.get("questions") or {}).items():
+        if q.get("type") == "noul":
+            answers[name] = {"type": "noul", "noul": round(rel(cands.get(name.lstrip("c"), "")), 3)}
+        elif q.get("type") == "choice":
+            raw = {k: rel(v) + 0.01 for k, v in (q.get("criteria") or {}).items()}
+            total = sum(raw.values()) or 1.0
+            probs = {k: v / total for k, v in raw.items()}
+            best = max(probs, key=probs.get)
+            answers[name] = {"type": "choice", "choice": best, "confidence": probs[best],
+                             "probabilities": probs}
+    return {"answers": answers, "usage": {"cost": 0.0001}}
+
+
+REQUESTS: list[dict] = []
 
 
 class MockLLMHandler(BaseHTTPRequestHandler):
@@ -84,15 +169,23 @@ class MockLLMHandler(BaseHTTPRequestHandler):
     def do_POST(self):  # noqa: N802
         length = int(self.headers.get("Content-Length", "0"))
         body = json.loads(self.rfile.read(length).decode("utf-8"))
+        REQUESTS.append({"path": self.path, "body": body})
         if self.path.endswith("/chat/completions"):
             prompt = ""
             for msg in body.get("messages", []):
                 if msg.get("role") == "user":
                     prompt = msg.get("content", "")
-            out = {"choices": [{"message": {
-                "role": "assistant",
-                "content": "<think>考え中…</think>" + mock_chat_response(prompt),
-            }}]}
+            text = mock_chat_response(prompt)
+            choice = {"message": {"role": "assistant", "content": "<think>考え中…</think>" + text}}
+            if body.get("logprobs") and "[TASK:decide]" in prompt:
+                choice["logprobs"] = {"content": [{"token": "<think>考え中…</think>", "logprob": 0}]
+                                      + decide_logprobs(text)}
+            elif body.get("logprobs") and "[TASK:decide_choice]" in prompt:
+                choice["logprobs"] = {"content": [{"token": "<think>考え中…</think>", "logprob": 0}]
+                                      + choice_logprobs(text)}
+            out = {"choices": [choice]}
+        elif self.path.endswith("/decisions"):
+            out = jev_answer(body)
         elif self.path.endswith("/embeddings"):
             texts = body.get("input")
             if isinstance(texts, str):
@@ -136,6 +229,15 @@ class FakeLLMClient:
         if want_think:
             return text, "（テスト用の思考過程）"
         return text
+
+    def chat_logprobs(self, prompt, *, system="", max_tokens=None):
+        self.stats["chat_calls"] += 1
+        text = mock_chat_response(prompt)
+        if "[TASK:decide]" in prompt:
+            return text, decide_logprobs(text)
+        if "[TASK:decide_choice]" in prompt:
+            return text, choice_logprobs(text)
+        return text, None
 
     def embed(self, texts):
         if not self.with_embeddings:

@@ -174,6 +174,24 @@ class TestAuditRegressions(unittest.TestCase):
         self.assertGreaterEqual(index["stats"]["summarized_communities"], 1)
         self.assertEqual(index["warnings"], [])
 
+    def test_relation_endpoints_missing_from_entities_are_inferred(self):
+        # LLM が関係だけ返し、端点をエンティティ一覧に入れない → 端点を補ってグラフを繋ぐ
+        def transform(prompt, clean):
+            if "[TASK:graph_extract]" in prompt:
+                data = json.loads(clean)
+                if len(data["entities"]) >= 2:
+                    data["entities"] = data["entities"][:1]
+                return json.dumps(data, ensure_ascii=False)
+            return clean
+        ctx = EngineContext(llm=TransformLLM(transform), cfg=CFG)
+        index = GraphRAGEngine().ingest(CORPUS, ctx)
+        self.assertGreater(index["stats"]["relations"], 0)
+        self.assertGreater(index["stats"]["inferred_entities"], 0)
+        keys = {e["key"] for e in index["entities"]}
+        for rel in index["relations"]:
+            self.assertIn(rel["source"], keys)
+            self.assertIn(rel["target"], keys)
+
     def test_singleton_summaries_and_warning_when_no_relations(self):
         # 関係が全滅しても、単独コミュニティに要約が付き global が答えられる + 警告
         def transform(prompt, clean):
