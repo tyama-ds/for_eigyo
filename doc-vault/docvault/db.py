@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS chats (
   title TEXT NOT NULL DEFAULT '',
   owner TEXT NOT NULL DEFAULT 'local',
   mode TEXT NOT NULL DEFAULT 'auto',
+  strategy TEXT NOT NULL DEFAULT 'auto',
   scope TEXT NOT NULL DEFAULT '{}',
   touched_internal INTEGER NOT NULL DEFAULT 0,
   created_at REAL NOT NULL,
@@ -155,8 +156,17 @@ def conn() -> sqlite3.Connection:
         c.execute("PRAGMA foreign_keys=OFF")
         with _write_lock:
             c.executescript(SCHEMA)
+            _migrate(c)
         _local.conn, _local.path = c, path
     return c
+
+
+def _migrate(c: sqlite3.Connection) -> None:
+    """古い DB に後から追加した列を足す。"""
+    cols = {r[1] for r in c.execute("PRAGMA table_info(chats)")}
+    if "strategy" not in cols:
+        c.execute("ALTER TABLE chats ADD COLUMN strategy TEXT NOT NULL DEFAULT 'auto'")
+        c.commit()
 
 
 def close() -> None:
@@ -282,11 +292,14 @@ def doc_chunks(doc_id: str) -> list[dict]:
 
 # ---------------------------------------------------------------- 会話
 
-def create_chat(title: str = "", mode: str = "auto", scope: dict | None = None) -> dict:
+def create_chat(title: str = "", mode: str = "auto", scope: dict | None = None,
+                strategy: str = "auto") -> dict:
     cid = new_id("c")
     t = now()
-    write("INSERT INTO chats(id,title,mode,scope,created_at,updated_at) VALUES(?,?,?,?,?,?)",
-          (cid, title or "新しい相談", mode, json.dumps(scope or {}, ensure_ascii=False), t, t))
+    write("INSERT INTO chats(id,title,mode,strategy,scope,created_at,updated_at) "
+          "VALUES(?,?,?,?,?,?,?)",
+          (cid, title or "新しい相談", mode, strategy, json.dumps(scope or {}, ensure_ascii=False),
+           t, t))
     return get_chat(cid)
 
 

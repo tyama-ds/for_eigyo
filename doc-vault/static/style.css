@@ -82,6 +82,7 @@ input.wide-input { width: 100%; max-width: 420px; }
 .badge.busy { color: var(--warn); border-color: var(--warn); }
 .badge.local { color: var(--accent2); border-color: var(--accent2); }
 .badge.cloud { color: var(--accent); border-color: var(--accent); }
+.badge.decision { color: #f9a8d4; border-color: #f9a8d4; }
 
 /* ---------------- chat ---------------- */
 .chat-layout { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 14px;

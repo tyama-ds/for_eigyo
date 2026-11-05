@@ -39,6 +39,7 @@ DEFAULT_PORT = 8760
 STATIC = BASE / "static"
 MAX_UPLOAD = 200 * 1024 * 1024
 TOKEN = ""                     # 空ならトークン不要（127.0.0.1 のみで待ち受け）
+STRATEGIES = ("auto", "decision", "classic")   # 検索方式（自動 / DecisionRAG のみ / 従来型のみ）
 
 STATIC_TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
                 ".js": "text/javascript; charset=utf-8", ".svg": "image/svg+xml"}
@@ -413,7 +414,9 @@ class Handler(BaseHTTPRequestHandler):
             mode = body.get("mode") if body.get("mode") in ("auto", "local", "cloud") \
                 else config.load_config()["policy"]["chat_mode"]
             scope = body.get("scope") if isinstance(body.get("scope"), dict) else {}
-            self._json({"chat": db.create_chat(str(body.get("title") or ""), mode, _clean_scope(scope))})
+            strategy = body.get("strategy") if body.get("strategy") in STRATEGIES else "auto"
+            self._json({"chat": db.create_chat(str(body.get("title") or ""), mode,
+                                               _clean_scope(scope), strategy)})
         elif len(parts) == 4 and parts[:2] == ["api", "chats"]:
             chat_id, action = parts[2], parts[3]
             chat = db.get_chat(chat_id)
@@ -429,6 +432,8 @@ class Handler(BaseHTTPRequestHandler):
                 fields = {}
                 if body.get("mode") in ("auto", "local", "cloud"):
                     fields["mode"] = body["mode"]
+                if body.get("strategy") in STRATEGIES:
+                    fields["strategy"] = body["strategy"]
                 if isinstance(body.get("scope"), dict):
                     fields["scope"] = _clean_scope(body["scope"])
                 if isinstance(body.get("title"), str) and body["title"].strip():

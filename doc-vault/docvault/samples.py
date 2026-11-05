@@ -20,7 +20,10 @@ def _zip(files: dict[str, str]) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for name, text in files.items():
-            zf.writestr(name, text)
+            # 日時を固定する（毎回同じバイト列にして、サンプルの再読み込みで重複登録しない）
+            info = zipfile.ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            zf.writestr(info, text)
     return buf.getvalue()
 
 

@@ -178,6 +178,36 @@ class TestAPIFlow(unittest.TestCase):
         deltas = "".join(e["text"] for e in events if e["type"] == "delta")
         self.assertIn("SkyEdge", deltas)
 
+    def test_05b_decision_rag_strategies(self):
+        # DecisionRAG のみ（検索器なし）: 階層をたどって議事録の段落に着く
+        chat = self.api("/api/chats", {"mode": "local", "strategy": "decision"})["chat"]
+        self.assertEqual(chat["strategy"], "decision")
+        before = len(mock_llm.REQUESTS)
+        done = self.ask(chat["id"], "熱処理炉の温度センサーはいつ交換した？")[-1]["message"]
+        meta = done["meta"]
+        self.assertTrue(meta["via"][0].startswith("DecisionRAG"), (meta["via"], meta["decision"]))
+        self.assertNotIn("BM25", " ".join(meta["via"]))            # 第1段の検索器を使っていない
+        self.assertGreater(meta["decision"]["calls"], 0)
+        self.assertTrue(meta["decision"]["soft"])                   # logprobs から確率で採点
+        self.assertTrue(meta["decision"]["choice"])                 # 最後の選択式の並べ替え
+        self.assertTrue(any("議事録" in s["doc_title"] for s in meta["sources"]), (meta["decision"], [s["doc_title"] for s in meta["sources"]]))
+        decide_reqs = [r["body"] for r in mock_llm.REQUESTS[before:]
+                       if "[TASK:decide]" in json.dumps(r["body"], ensure_ascii=False)]
+        self.assertTrue(decide_reqs)
+        self.assertTrue(all(b.get("logprobs") for b in decide_reqs))
+        self.assertTrue(all(b.get("model") == "local-chat" for b in decide_reqs))
+        # 自動: 事実の質問では DecisionRAG と Hybrid を融合
+        chat = self.api("/api/chats", {"mode": "local"})["chat"]
+        meta = self.ask(chat["id"], "SkyEdge S-2 の保護等級は？")[-1]["message"]["meta"]
+        via = " ".join(meta["via"])
+        self.assertIn("DecisionRAG", via)
+        self.assertIn("ハイブリッド", via)
+        # 従来型: DecisionRAG を使わない（切り替えは相談ごと）
+        self.api(f"/api/chats/{chat['id']}/update", {"strategy": "classic"})
+        meta = self.ask(chat["id"], "保護等級は？")[-1]["message"]["meta"]
+        self.assertNotIn("DecisionRAG", " ".join(meta["via"]))
+        self.assertIsNone(meta["decision"])
+
     def test_06_chat_cloud_mode_excludes_internal(self):
         chat = self.api("/api/chats", {"mode": "cloud"})["chat"]
         events = self.ask(chat["id"], "SkyEdge S-2 の給電方式は？")
@@ -237,13 +267,43 @@ class TestAPIFlow(unittest.TestCase):
         g1 = self.api(f"/api/graph?doc={one['id']}")
         self.assertLessEqual(len(g1["nodes"]), len(g["nodes"]))
 
+    def test_10b_jev_judge(self):
+        """判定モデルに Jev（OpenRouter Decisions API）を使う。公開文書の候補だけが送られる。"""
+        self.api("/api/config", {"rag": {"decision_judge": "jev"},
+                                 "jev": {"endpoint": self.mock_base + "/decisions",
+                                         "api_key": "or-test", "use_proxy": False}})
+        try:
+            self.assertFalse(self.api("/api/config")["jev"].get("api_key"))   # 秘密は返さない
+            before = len(mock_llm.REQUESTS)
+            chat = self.api("/api/chats", {"mode": "cloud", "strategy": "decision"})["chat"]
+            meta = self.ask(chat["id"], "SkyEdge S-2 の給電方式は？")[-1]["message"]["meta"]
+            self.assertIn("jev", meta["decision"]["judges"], meta["decision"])
+            self.assertTrue(meta["decision"]["choice"])                  # 最後の選択式の並べ替え
+            self.assertGreater(meta["decision"]["jev_cost"], 0)
+            self.assertTrue(any("仕様書" in s["doc_title"] for s in meta["sources"]))
+            reqs = [r["body"] for r in mock_llm.REQUESTS[before:] if r["path"].endswith("/decisions")]
+            self.assertTrue(reqs)
+            for body in reqs:
+                self.assertEqual(body["model"], "typesafe/jev-1.14")
+                self.assertIn("candidates", body["state"])
+                kinds = {q["type"] for q in body["questions"].values()}
+                self.assertTrue(kinds <= {"noul", "choice"})
+            # ローカルモード（社外秘を含む）では Jev を使わずローカル LLM で判定する
+            before = len(mock_llm.REQUESTS)
+            chat = self.api("/api/chats", {"mode": "local", "strategy": "decision"})["chat"]
+            meta = self.ask(chat["id"], "熱処理炉の温度センサーはいつ交換した？")[-1]["message"]["meta"]
+            self.assertEqual(meta["decision"]["judges"], ["llm"])
+            self.assertFalse(any(r["path"].endswith("/decisions") for r in mock_llm.REQUESTS[before:]))
+        finally:
+            self.api("/api/config", {"rag": {"decision_judge": "llm"}})
+
     def test_11_no_internal_text_reached_cloud(self):
         """送信記録全体で、クラウド側モデルへ社外秘の本文が送られていないこと。"""
         leaked = []
         cloud_calls = 0
         for req in mock_llm.REQUESTS:
             body = req["body"]
-            if body.get("model") not in ("cloud-chat", "cloud-embed"):
+            if body.get("model") not in ("cloud-chat", "cloud-embed", "typesafe/jev-1.14"):
                 continue
             cloud_calls += 1
             text = json.dumps(body, ensure_ascii=False)

@@ -1,10 +1,10 @@
 """相談（RAG）パイプライン。
 
     質問 ─▶ ルーター ─▶ 戦略別の検索 ─▶ 根拠の十分性チェック ─▶（再検索）─▶ 再順位付け ─▶ 回答生成
-            │            fact     : Hybrid（BM25 + 埋め込み、RRF）
+            │            fact     : DecisionRAG（階層を判定モデルでたどる）+ Hybrid（BM25 + 埋め込み、RRF）
             │            relation : グラフ PPR（HippoRAG 2）+ Hybrid
             │            summary  : 文書要約（RAPTOR）+ コミュニティ要約（LazyGraphRAG）+ Hybrid
-            │            compare  : 対象ごとのマルチクエリ（RAG-Fusion）
+            │            compare  : DecisionRAG + 対象ごとのマルチクエリ（RAG-Fusion）
             │            chat     : 検索しない（Adaptive-RAG / D2-RAG の「検索要否」判定）
             └ 会話履歴から代名詞・省略を補った単独質問へ書き換え
 
@@ -18,7 +18,7 @@ import re
 import time
 from typing import Iterator
 
-from . import db, graph
+from . import db, decision, graph, jev
 from .config import embed_space, load_config
 from .llm import LLM, LLMError, strip_think
 from .retrieval import INDEX, load_chunks
@@ -234,12 +234,57 @@ def retrieve(ctx: Ctx, plan: dict, allowed: set[str], doc_sens: dict[str, str]) 
     k = int(ctx.cfg["rag"]["top_k"])
     q = plan["standalone"]
     query_text = " ".join([q, *plan["keywords"]])
-    ev = {"passages": [], "graph": None, "communities": [], "doc_summaries": [], "via": []}
+    ev = {"passages": [], "graph": None, "communities": [], "doc_summaries": [], "via": [],
+          "decision": None}
     rankings: list[list[str]] = []
-    qv = _qvecs(ctx, query_text, allowed)
+    weights: list[float] = []
+    strategy = ctx.chat.get("strategy") or "auto"
 
+    # DecisionRAG: 検索器を使わず階層をたどる（自動では事実・比較の質問に使う）
+    dec_rank: list[str] = []
+    if ctx.cfg["rag"]["decision"] and strategy != "classic" and (
+            strategy == "decision" or plan["type"] in ("fact", "compare")):
+        jev_client = None
+        if ctx.cfg["rag"].get("decision_judge") == "jev":
+            if jev.ready(ctx.cfg):
+                jev_client = jev.JevClient(ctx.cfg["jev"])
+            else:
+                ctx.warnings.append("DecisionRAG の判定モデルに Jev が選ばれていますが、API キーが未設定です"
+                                    "（LLM で判定します）")
+        res = decision.navigate(ctx, q, allowed, k=k * 2,
+                                beam=int(ctx.cfg["rag"]["decision_beam"]),
+                                budget=int(ctx.cfg["rag"]["decision_budget"]),
+                                use_choice=bool(ctx.cfg["rag"].get("decision_choice", True)),
+                                jev_client=jev_client)
+        ev["decision"] = {"path": res["path"], "calls": res["calls"], "soft": res["soft"],
+                          "hits": len(res["hits"]), "error": res["error"],
+                          "choice": res["choice"], "judges": res["judges"],
+                          "jev_cost": res["jev_cost"]}
+        if res["error"]:
+            ctx.warnings.append(f"DecisionRAG: {res['error']}")
+        route_txt = " → ".join("・".join(f"{x['title']}({x['score']})" for x in lv["kept"][:2])
+                               for lv in res["path"] if lv["kept"])
+        judge_txt = "・".join({"llm": "LLM", "jev": "Jev"}[j] for j in res["judges"]) or "なし"
+        ctx.step("DecisionRAG", f"判定 {res['calls']} 回（{judge_txt}{'・確率' if res['soft'] else ''}"
+                 f"{'・選択式で並べ替え' if res['choice'] else ''}）・段落 {len(res['hits'])} 件"
+                 + (f": {route_txt}" if route_txt else ""))
+        dec_rank = [cid for cid, _ in res["hits"]]
+        if dec_rank:
+            ev["via"].append(f"DecisionRAG（階層 {len(res['path'])} 段・判定 {res['calls']} 回）")
+    if strategy == "decision":
+        if dec_rank:
+            # 論文どおり第1段の検索器を使わない
+            ev["passages"] = _diversify(dec_rank, k=k * 2, per_doc=None)
+            return ev
+        ctx.warnings.append("DecisionRAG で段落が見つからなかったため、従来の検索で補いました")
+    if dec_rank:
+        rankings.append(dec_rank)
+        weights.append(1.5)
+
+    qv = _qvecs(ctx, query_text, allowed)
     base = [cid for cid, _ in _hybrid(ctx, query_text, allowed, k * 3, qv)]
     rankings.append(base)
+    weights.append(1.0)
     ev["via"].append("ハイブリッド（BM25+埋め込み）" if qv else "BM25")
 
     if plan["type"] in ("relation", "compare", "summary") or plan["entities"]:
@@ -251,7 +296,8 @@ def retrieve(ctx: Ctx, plan: dict, allowed: set[str], doc_sens: dict[str, str]) 
                 graph_chunks = [cid for cid, _ in g.rank_chunks(rank, k=k * 3)]
                 if graph_chunks:
                     # relation は グラフを主、他は補助として融合
-                    rankings.insert(0 if plan["type"] == "relation" else 1, graph_chunks)
+                    rankings.append(graph_chunks)
+                    weights.append(1.5 if plan["type"] == "relation" else 0.8)
                     ev["via"].append("グラフ PPR")
                 ctxg = g.context(rank)
                 if ctxg["entities"]:
@@ -273,6 +319,7 @@ def retrieve(ctx: Ctx, plan: dict, allowed: set[str], doc_sens: dict[str, str]) 
             sub = [cid for cid, _ in _hybrid(ctx, f"{t} {q}", allowed, k)]
             if sub:
                 rankings.append(sub)
+                weights.append(1.0)
         if targets:
             ev["via"].append(f"マルチクエリ（{len(targets)}対象）")
 
@@ -293,8 +340,10 @@ def retrieve(ctx: Ctx, plan: dict, allowed: set[str], doc_sens: dict[str, str]) 
                 step = max(1, len(chs) // 6)
                 spread.extend(c["id"] for c in chs[::step][:6])
             rankings.append(spread)
+            weights.append(1.0)
 
-    fused = [cid for cid, _ in rrf_fuse(rankings)] if len(rankings) > 1 else rankings[0]
+    fused = [cid for cid, _ in rrf_fuse(rankings, weights=weights)] if len(rankings) > 1 \
+        else rankings[0]
     ev["passages"] = _diversify(fused, k=k * 2, per_doc=None if len(allowed) <= 2 else 4)
     return ev
 
@@ -401,7 +450,12 @@ def corrective(ctx: Ctx, plan: dict, ev: dict, allowed, doc_sens) -> dict:
     ctx.step("根拠チェック", f"不足 → 再検索: {new_q[:60]}")
     alt = dict(plan, standalone=new_q,
                type="relation" if plan["type"] == "fact" else plan["type"])
-    ev2 = retrieve(ctx, alt, allowed, doc_sens)
+    saved = ctx.chat.get("strategy")
+    ctx.chat = dict(ctx.chat, strategy="classic")       # 再検索では判定を繰り返さない
+    try:
+        ev2 = retrieve(ctx, alt, allowed, doc_sens)
+    finally:
+        ctx.chat = dict(ctx.chat, strategy=saved)
     seen = {p["id"] for p in ev["passages"]}
     merged = ev["passages"][:4] + [p for p in ev2["passages"] if p["id"] not in seen] \
         + ev["passages"][4:]
@@ -529,7 +583,9 @@ def ask(chat_id: str, question: str) -> Iterator[dict]:
     yield {"type": "route", "route": route_info}
 
     # 2. 検索
-    ev = {"passages": [], "graph": None, "communities": [], "doc_summaries": [], "via": []}
+    ev = {"passages": [], "graph": None, "communities": [], "doc_summaries": [], "via": [],
+          "decision": None}
+    route_info["strategy"] = chat.get("strategy") or "auto"
     if route_info["retrieval"]:
         yield {"type": "status", "text": "資料を検索しています…"}
         ev = retrieve(ctx, plan, allowed, doc_sens)
@@ -591,6 +647,7 @@ def ask(chat_id: str, question: str) -> Iterator[dict]:
     if route_info["retrieval"] and sens == "internal" and not chat["touched_internal"]:
         db.update_chat(chat_id, touched_internal=True)
     meta = {"route": route_info, "sources": sources, "via": ev["via"], "profile": prof,
+            "decision": ev.get("decision"),
             "sensitivity": sens, "steps": ctx.steps, "warnings": ctx.warnings,
             "elapsed": round(time.time() - ctx.t0, 2),
             "llm": {"calls": ctx.llm.stats["calls"], "embed_texts": ctx.llm.stats["embed_texts"]}}

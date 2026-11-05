@@ -154,7 +154,7 @@
     {
       "id": "doc-vault",
       "name": "Doc Vault",
-      "description": "文書管理 × RAG 相談。PDF/Word/PowerPoint/Excel を取り込むとグラフ・要約・埋め込みで索引化し、質問の種類に応じて検索方式を自動選択して出典付きで回答。社外秘はローカルLLM、公開資料はクラウドLLMで処理",
+      "description": "文書管理 × RAG 相談。PDF/Word/PowerPoint/Excel を取り込むとグラフ・要約・埋め込みで索引化し、質問の種類に応じて検索方式（DecisionRAG の階層ナビゲーション・Hybrid・グラフ等）を自動選択して出典付きで回答。社外秘はローカルLLM、公開資料はクラウドLLMで処理",
       "icon": "docs",
       "cwd": "../doc-vault",
       "command": [

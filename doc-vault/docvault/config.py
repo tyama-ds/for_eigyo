@@ -52,6 +52,15 @@ DEFAULT_CONFIG: dict = {
         "cloud": {**DEFAULT_PROFILE, "provider": "anthropic", "model": "claude-opus-5-5",
                   "use_proxy": True},
     },
+    # 判定モデル Jev（TypeSafe）を OpenRouter Decisions API 経由で使う設定（公開文書の判定のみ）
+    "jev": {
+        "endpoint": "https://openrouter.ai/api/alpha/decisions",
+        "api_key": "",
+        "model": "typesafe/jev-1.14",
+        "timeout": 60.0,
+        "use_proxy": True,
+        "proxy_url": "",
+    },
     "policy": {
         # 新規取り込み文書の既定区分（迷ったら社外秘扱い）
         "default_sensitivity": "internal",
@@ -69,6 +78,13 @@ DEFAULT_CONFIG: dict = {
         "router": True,            # 質問ルーター（検索要否・戦略の判定、会話からの質問補完）
         "corrective": True,        # 根拠不足なら再検索（CRAG）
         "rerank": False,           # LLM による再順位付け（精度↑・呼び出し+1）
+        # DecisionRAG（arXiv:2610.35868）: 検索器を使わず、文書の階層（フォルダ→文書→節→段落）を
+        # 判定モデルでたどる。自動モードでは事実・比較の質問に使い、Hybrid 検索と融合する
+        "decision": True,
+        "decision_judge": "llm",   # 判定モデル: llm（ローカル/クラウドの LLM）/ jev（論文で使われた Jev）
+        "decision_beam": 4,        # 各段で残す枝の数（ビーム幅 k）
+        "decision_budget": 8,      # 1質問あたりの判定（呼び出し）の上限
+        "decision_choice": True,   # 最後に候補を選択式で並べ替える（論文の multiple-choice 段）
         "max_graph_chunks": 400,   # 1文書あたりグラフ抽出するチャンク数の上限（費用の上限）
     },
 }
@@ -159,15 +175,34 @@ def save_config(update: dict) -> dict:
             cfg["policy"]["chat_mode"] = policy["chat_mode"]
     rag = update.get("rag") if isinstance(update, dict) else None
     if isinstance(rag, dict):
-        for key in ("graph", "doc_summary", "router", "corrective", "rerank"):
+        for key in ("graph", "doc_summary", "router", "corrective", "rerank", "decision",
+                    "decision_choice"):
             if key in rag:
                 cfg["rag"][key] = bool(rag[key])
         for key, lo, hi in (("chunk_size", 300, 4000), ("top_k", 3, 30),
-                            ("max_graph_chunks", 10, 5000)):
+                            ("max_graph_chunks", 10, 5000), ("decision_beam", 1, 10),
+                            ("decision_budget", 2, 30)):
             if key in rag:
                 val = _clamp(rag[key], lo, hi, int)
                 if val is not None:
                     cfg["rag"][key] = val
+        if rag.get("decision_judge") in ("llm", "jev"):
+            cfg["rag"]["decision_judge"] = rag["decision_judge"]
+    jev = update.get("jev") if isinstance(update, dict) else None
+    if isinstance(jev, dict):
+        for key in ("endpoint", "model", "proxy_url"):
+            if isinstance(jev.get(key), str):
+                cfg["jev"][key] = jev[key].strip()
+        if isinstance(jev.get("api_key"), str) and jev["api_key"].strip():
+            cfg["jev"]["api_key"] = jev["api_key"].strip()
+        if jev.get("clear_api_key"):
+            cfg["jev"]["api_key"] = ""
+        if "use_proxy" in jev:
+            cfg["jev"]["use_proxy"] = bool(jev["use_proxy"])
+        if "timeout" in jev:
+            val = _clamp(jev["timeout"], 5, 600, float)
+            if val is not None:
+                cfg["jev"]["timeout"] = val
     with _lock:
         CONFIG_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
     return cfg
@@ -180,6 +215,8 @@ def public_config(cfg: dict) -> dict:
         for key in SECRET_KEYS:
             prof[f"has_{key}"] = bool(prof.get(key))
             prof.pop(key, None)
+    out["jev"]["has_api_key"] = bool(cfg["jev"].get("api_key"))
+    out["jev"].pop("api_key", None)
     for name in PROFILE_NAMES:
         out["profiles"][name]["chat_ready"] = chat_ready(cfg, name)
         out["profiles"][name]["embed_ready"] = embed_ready(cfg, name)

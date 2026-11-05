@@ -42,6 +42,13 @@
                 <option value="cloud">クラウド（公開文書のみ参照）</option>
               </select>
             </label>
+            <label class="mini">検索
+              <select id="chat-strategy" class="inline-select" title="検索の方式">
+                <option value="auto">自動（質問の種類で選ぶ）</option>
+                <option value="decision">DecisionRAG（階層をたどる・検索器なし）</option>
+                <option value="classic">従来型（全文＋埋め込み＋グラフ）</option>
+              </select>
+            </label>
             <label class="mini">範囲
               <select id="chat-folder" class="inline-select" title="検索する文書の範囲"></select>
             </label>
@@ -190,6 +197,29 @@
         <label class="check"><input type="checkbox" id="r-router"> 質問ルーター（検索要否・検索方法の判定と、会話を踏まえた質問の補完）</label>
         <label class="check"><input type="checkbox" id="r-corrective"> 根拠が足りなければ再検索（CRAG）</label>
         <label class="check"><input type="checkbox" id="r-rerank"> LLM で検索結果を並べ替える（精度↑・LLM 呼び出し+1）</label>
+        <h3 class="muted">DecisionRAG（arXiv:2610.35868）</h3>
+        <label class="check"><input type="checkbox" id="r-decision"> 事実・比較の質問で、文書の階層（フォルダ→文書→節→段落）を判定モデルでたどる</label>
+        <label class="check"><input type="checkbox" id="r-decision_choice"> 最後に上位の段落を選択式で比べて並べ替える</label>
+        <div class="row gap">
+          <div><label class="field-label">判定モデル</label>
+            <select id="r-decision_judge">
+              <option value="llm">LLM（ローカル / クラウドの設定を使う）</option>
+              <option value="jev">Jev（論文で使われた判定モデル・公開文書のみ）</option>
+            </select></div>
+          <div><label class="field-label">各段で残す枝の数</label><input type="number" id="r-decision_beam" min="1" max="10"></div>
+          <div><label class="field-label">判定回数の上限</label><input type="number" id="r-decision_budget" min="2" max="30"></div>
+        </div>
+        <details class="adv" id="jev-box"><summary>Jev（TypeSafe）の接続 — OpenRouter Decisions API</summary>
+          <p class="hint">Jev は外部サービスのため、<b>公開文書の候補だけ</b>を判定させます。社外秘を含む段はローカル LLM で判定します。
+            Jev は英語が最も得意で、日本語は 1.14 で改善されたとされています。</p>
+          <label class="field-label">エンドポイント</label><input type="text" id="j-endpoint">
+          <div class="two">
+            <div><label class="field-label">OpenRouter の API キー</label><input type="password" id="j-api_key" autocomplete="off"></div>
+            <div><label class="field-label">モデル</label><input type="text" id="j-model" placeholder="typesafe/jev-1.14"></div>
+          </div>
+          <label class="check"><input type="checkbox" id="j-use_proxy"> プロキシを使う（空なら環境変数 HTTPS_PROXY）</label>
+          <label class="field-label">Proxy URL</label><input type="text" id="j-proxy_url">
+        </details>
         <div class="row gap">
           <div><label class="field-label">回答に使う資料数</label><input type="number" id="r-top_k" min="3" max="30"></div>
           <div><label class="field-label">チャンクの文字数</label><input type="number" id="r-chunk_size" min="300" max="4000"></div>

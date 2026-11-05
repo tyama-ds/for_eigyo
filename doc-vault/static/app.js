@@ -172,6 +172,7 @@ function refreshChatHead() {
     `<option value="${esc(f.path)}">${f.path ? esc(f.path) : "すべての文書"}</option>`).join("");
   $("#chat-title").value = c ? c.title : "";
   $("#chat-mode").value = c ? c.mode : ((state.config && state.config.policy.chat_mode) || "auto");
+  $("#chat-strategy").value = c ? (c.strategy || "auto") : "auto";
   $("#chat-folder").value = c ? (c.scope.folder || "") : "";
   const ids = c ? (c.scope.doc_ids || []) : [];
   $("#chat-scope-docs").innerHTML = ids.map((id) => {
@@ -191,6 +192,7 @@ async function updateChat(fields) {
 }
 
 $("#chat-mode").addEventListener("change", () => updateChat({ mode: $("#chat-mode").value }));
+$("#chat-strategy").addEventListener("change", () => updateChat({ strategy: $("#chat-strategy").value }));
 $("#chat-folder").addEventListener("change", () =>
   updateChat({ scope: { ...(state.chat ? state.chat.scope : {}), folder: $("#chat-folder").value } }));
 $("#chat-title").addEventListener("change", () => updateChat({ title: $("#chat-title").value }));
@@ -245,6 +247,10 @@ function messageHtml(m, idx) {
   else if (route.type) badges.push('<span class="badge ng">LLM なし（抜粋）</span>');
   if (route.retrieval) badges.push(meta.sensitivity === "internal"
     ? '<span class="badge internal">社外秘資料を含む</span>' : '<span class="badge public">公開資料のみ</span>');
+  if (meta.decision && meta.decision.hits) {
+    const j = (meta.decision.judges || []).map((x) => x === "jev" ? "Jev" : "LLM").join("・");
+    badges.push(`<span class="badge decision" title="文書の階層を判定モデルでたどって探しました（判定 ${meta.decision.calls} 回）">DecisionRAG${j ? "・" + esc(j) : ""}</span>`);
+  }
   if (meta.elapsed) badges.push(`<span class="muted">${meta.elapsed}秒</span>`);
   const sources = (meta.sources || []).map((s) => sourceHtml(s, idx)).join("");
   const trace = [];
@@ -254,6 +260,13 @@ function messageHtml(m, idx) {
   if ((route.keywords || []).length) trace.push(`キーワード: ${esc(route.keywords.join("、"))}`);
   if ((meta.via || []).length) trace.push(`検索方法: ${esc(meta.via.join(" → "))}`);
   for (const s of meta.steps || []) trace.push(`${esc(s.t)}秒 ${esc(s.name)}: ${esc(s.detail)}`);
+  if (meta.decision && meta.decision.path) {
+    const lv = meta.decision.path.filter((p) => p.candidates).map((p) =>
+      `段${p.level + 1}: 候補 ${p.candidates} 件 → ` + (p.kept.length
+        ? p.kept.map((k) => `${esc(k.title)}（${k.score}）`).join("、") : "段落のみ"));
+    if (lv.length) trace.push(`DecisionRAG の経路: ${lv.join(" ／ ")}`);
+    if (meta.decision.jev_cost) trace.push(`Jev の費用: $${meta.decision.jev_cost}`);
+  }
   if (meta.llm) trace.push(`LLM 呼び出し: ローカル ${meta.llm.calls.local} 回 / クラウド ${meta.llm.calls.cloud} 回`);
   const warns = (meta.warnings || []).map((w) => `<div class="warn-line">⚠ ${esc(w)}</div>`).join("");
   return `<div class="msg assistant" data-idx="${idx}"><div class="bubble">
@@ -783,6 +796,8 @@ function profileForm(name, p) {
     <div class="test-result" id="test-${name}"></div>`;
 }
 
+const RAG_BOOLS = ["graph", "doc_summary", "router", "corrective", "rerank", "decision", "decision_choice"];
+const RAG_NUMS = ["top_k", "chunk_size", "max_graph_chunks", "decision_beam", "decision_budget"];
 const PROFILE_FIELDS = ["provider", "base_url", "model", "ingest_model", "api_version", "effort", "embed_model",
   "embed_provider", "embed_base_url", "max_tokens", "context_window", "timeout", "proxy_url"];
 
@@ -827,8 +842,14 @@ async function loadSettings() {
       : `${r.chat.ok ? "✅" : "❌"} チャット: ${esc(r.chat.message)}<br>${r.embed.ok ? "✅" : "➖"} 埋め込み: ${esc(r.embed.message)}`;
   }));
   for (const k of ["default_sensitivity", "public_ingest_profile", "chat_mode"]) $(`#p-${k}`).value = cfg.policy[k];
-  for (const k of ["graph", "doc_summary", "router", "corrective", "rerank"]) $(`#r-${k}`).checked = !!cfg.rag[k];
-  for (const k of ["top_k", "chunk_size", "max_graph_chunks"]) $(`#r-${k}`).value = cfg.rag[k];
+  for (const k of RAG_BOOLS) $(`#r-${k}`).checked = !!cfg.rag[k];
+  for (const k of RAG_NUMS) $(`#r-${k}`).value = cfg.rag[k];
+  $("#r-decision_judge").value = cfg.rag.decision_judge || "llm";
+  for (const k of ["endpoint", "model", "proxy_url"]) $(`#j-${k}`).value = cfg.jev[k] || "";
+  $("#j-use_proxy").checked = !!cfg.jev.use_proxy;
+  $("#j-api_key").value = "";
+  $("#j-api_key").placeholder = cfg.jev.has_api_key ? "（設定済み。変更時のみ入力）" : "（未設定）";
+  $("#jev-box").open = cfg.rag.decision_judge === "jev";
   $("#up-sens").value = cfg.policy.default_sensitivity;
 }
 
@@ -842,10 +863,13 @@ async function saveSettings(quiet) {
   }
   const policy = {};
   for (const k of ["default_sensitivity", "public_ingest_profile", "chat_mode"]) policy[k] = $(`#p-${k}`).value;
-  const rag = {};
-  for (const k of ["graph", "doc_summary", "router", "corrective", "rerank"]) rag[k] = $(`#r-${k}`).checked;
-  for (const k of ["top_k", "chunk_size", "max_graph_chunks"]) rag[k] = Number($(`#r-${k}`).value);
-  const cfg = await api("/api/config", { profiles, policy, rag });
+  const rag = { decision_judge: $("#r-decision_judge").value };
+  for (const k of RAG_BOOLS) rag[k] = $(`#r-${k}`).checked;
+  for (const k of RAG_NUMS) rag[k] = Number($(`#r-${k}`).value);
+  const jev = { use_proxy: $("#j-use_proxy").checked };
+  for (const k of ["endpoint", "model", "proxy_url"]) jev[k] = $(`#j-${k}`).value;
+  if ($("#j-api_key").value) jev.api_key = $("#j-api_key").value;
+  const cfg = await api("/api/config", { profiles, policy, rag, jev });
   state.config = cfg;
   if (!quiet) { $("#s-msg").textContent = "✅ 保存しました"; loadSettings(); }
   pollStatus();

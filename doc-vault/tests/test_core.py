@@ -295,3 +295,177 @@ class TestGraph(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDecisionRAG(unittest.TestCase):
+    """DecisionRAG（arXiv:2610.35868）: 階層の構築・確率での採点・ナビゲーション。"""
+
+    def setUp(self):
+        from docvault import decision
+        self.decision = decision
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        db.set_data_dir(Path(self.tmp.name))
+
+    def tearDown(self):
+        db.close()
+        self.tmp.cleanup()
+
+    def add_doc(self, did, title, folder, texts, sens="internal", heading=""):
+        db.write("INSERT INTO documents(id,title,filename,ext,sha256,folder,sensitivity,status,chars,"
+                 "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,0,0)",
+                 (did, title, f"{did}.md", ".md", did, folder, sens, "ready", sum(map(len, texts))))
+        db.executemany("INSERT INTO chunks(id,doc_id,ord,locator,heading,page,text) VALUES(?,?,?,?,?,?,?)",
+                       [(f"{did}#{i}", did, i, f"p.{i + 1}", heading, i + 1, t)
+                        for i, t in enumerate(texts)])
+        db.bump_revision()
+
+    def test_soft_scores_variants(self):
+        lp = [{"token": "<think>", "logprob": 0}, {"token": "1=3", "logprob": 0},
+              {"token": "</think>", "logprob": 0},
+              {"token": "1", "logprob": 0}, {"token": "=", "logprob": 0},
+              {"token": "9", "logprob": -0.1, "top_logprobs": [{"token": "9", "logprob": -0.1},
+                                                              {"token": "0", "logprob": -2.4}]},
+              {"token": "\n", "logprob": 0}, {"token": "2", "logprob": 0},
+              {"token": "= 4", "logprob": 0, "top_logprobs": []}]
+        out = self.decision.soft_scores(lp)
+        self.assertGreater(out[1], 0.85)                      # think 内の 1=3 は無視
+        self.assertAlmostEqual(out[2], 4 / 9)
+        self.assertEqual(self.decision.hard_scores("<think>1=0</think>\n1=9\n[2]: 3"),
+                         {1: 1.0, 2: 3 / 9})
+
+    def test_tree_structure_and_split(self):
+        self.add_doc("a", "品質会議 議事録", "社内/品質", ["熱処理炉の温度を交換した。"] * 3)
+        self.add_doc("b", "不具合集計", "社内/品質", ["ネジ緩みの件数。"])
+        self.add_doc("c", "会社概要", "公開", ["創業は1987年。"], sens="public")
+        long = [f"第{i}節の本文。熱処理炉と硬度の記述。" for i in range(30)]
+        self.add_doc("d", "長い報告書", "", long)
+        tree = self.decision.build_tree(max_children=4)
+        root = tree["root"]
+        kinds = {tree[c]["kind"] for c in root["children"]}
+        self.assertIn("group", kinds)                         # フォルダ
+        self.assertIn("doc", kinds)                           # フォルダなしの文書は直下
+        self.assertEqual(root["docs"], {"a", "b", "c", "d"})
+        self.assertEqual(tree["d:c"]["sens"], "public")
+        self.assertEqual(root["sens"], "internal")
+        # 「社内」は子が「品質」1つだけ → 飛ばして文書が直接並ぶ
+        shanai = tree["f:社内"]
+        self.assertEqual({tree[c]["kind"] for c in shanai["children"]}, {"doc"})
+        # 長い文書は節に分かれ、節が多すぎれば中間ノードにまとめる
+        d = tree["d:d"]
+        self.assertLessEqual(len(d["children"]), 4)
+        self.assertEqual({tree[c]["kind"] for c in d["children"]}, {"group"})
+
+    def test_navigate_finds_passage_within_budget(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import mock_llm
+
+        class FakeLLM:
+            def __init__(self):
+                self.calls = []
+
+            def chat_logprobs(self, profile, prompt, *, sensitivity, **kw):
+                self.calls.append((profile, sensitivity))
+                text = mock_llm.decide(prompt)
+                return text, mock_llm.decide_logprobs(text)
+
+        class FakeCtx:
+            touched = False
+
+            def __init__(self, ready=True):
+                self.llm = FakeLLM()
+                self.ready = ready
+
+            def profile(self, kind, sens):
+                if not self.ready:
+                    return None
+                return "local" if sens != "public" else "cloud"
+
+        self.add_doc("a", "品質会議 議事録", "社内/品質",
+                     ["出席者の一覧。", "熱処理炉の温度センサーを9月10日に交換した。", "次回の予定。"])
+        db.update_doc("a", summary="熱処理炉の温度ばらつき対策（温度センサーの交換）を報告した議事録。",
+                      keywords=["熱処理炉", "温度センサー"])
+        self.add_doc("b", "会社概要", "公開", ["創業は1987年。代表は早瀬凛。"], sens="public")
+        for i in range(6):
+            self.add_doc(f"x{i}", f"無関係な資料{i}", "その他", [f"営業日報その{i}。"])
+        ctx = FakeCtx()
+        res = self.decision.navigate(ctx, "熱処理炉の温度センサーはいつ交換した？",
+                                     {"a", "b", "x0", "x1", "x2", "x3", "x4", "x5"},
+                                     k=4, beam=2, budget=5)
+        self.assertIsNone(res["error"])
+        self.assertTrue(res["soft"])
+        self.assertEqual(res["hits"][0][0], "a#1")
+        self.assertLessEqual(res["calls"], 5)
+        self.assertGreaterEqual(len(res["path"]), 2)
+        # 社外秘を含む候補の判定はローカルだけ
+        self.assertTrue(all(p == "local" for p, s in ctx.llm.calls if s == "internal"))
+        # 許可されていない文書へは降りない
+        res2 = self.decision.navigate(ctx, "熱処理炉の温度センサー", {"b"}, k=4)
+        self.assertFalse(any(cid.startswith("a#") for cid, _ in res2["hits"]))
+        # LLM が無ければ判定せず理由を返す
+        res3 = self.decision.navigate(FakeCtx(ready=False), "熱処理炉", {"a"}, k=4)
+        self.assertEqual(res3["hits"], [])
+        self.assertIn("LLM", res3["error"])
+
+    def test_chat_strategy_migration(self):
+        import sqlite3
+        path = Path(self.tmp.name) / "old"
+        path.mkdir()
+        c = sqlite3.connect(str(path / "docvault.sqlite3"))
+        c.execute("CREATE TABLE chats (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', owner TEXT "
+                  "NOT NULL DEFAULT 'local', mode TEXT NOT NULL DEFAULT 'auto', scope TEXT NOT NULL "
+                  "DEFAULT '{}', touched_internal INTEGER NOT NULL DEFAULT 0, created_at REAL NOT NULL,"
+                  " updated_at REAL NOT NULL)")
+        c.execute("INSERT INTO chats(id,created_at,updated_at) VALUES('old',0,0)")
+        c.commit()
+        c.close()
+        db.set_data_dir(path)
+        self.assertEqual(db.get_chat("old")["strategy"], "auto")       # 古い DB に列を追加
+        self.assertEqual(db.create_chat(strategy="decision")["strategy"], "decision")
+
+
+class TestJev(unittest.TestCase):
+    def test_request_shapes_and_parsing(self):
+        from docvault import jev
+        body = jev.build_binary_request("typesafe/jev-1.14", "質問", ["候補A", "候補B", "候補C"])
+        self.assertEqual(set(body["questions"]), {"c1", "c2", "c3"})
+        self.assertIn("1. 候補A\n2. 候補B", body["state"]["candidates"])     # 共有の文脈
+        q = body["questions"]["c2"]
+        self.assertEqual(q["type"], "noul")
+        self.assertEqual(set(q["criteria"]), {"true", "false"})
+        self.assertIn("candidate 2", q["instructions"])
+        ch = jev.build_choice_request("m", "質問", ["x", "y"])
+        self.assertEqual(set(ch["questions"]["most_relevant"]["criteria"]), {"c1", "c2"})
+        self.assertEqual(jev.parse_binary({"answers": {"c1": {"type": "noul", "noul": 0.9},
+                                                       "c2": {"type": "noul", "noul": 1.4}}}, 2),
+                         {1: 0.9, 2: 1.0})
+        with self.assertRaises(LLMError):
+            jev.parse_binary({"answers": {"c1": {"noul": 0.5}}}, 2)
+        self.assertEqual(jev.parse_choice({"answers": {"most_relevant": {
+            "choice": "c2", "probabilities": {"c1": 0.2, "c2": 0.8}}}}, 2), {1: 0.2, 2: 0.8})
+
+    def test_policy_and_split(self):
+        from docvault import jev
+        client = jev.JevClient({"endpoint": "http://127.0.0.1:9/x", "api_key": "k",
+                                "model": "m", "use_proxy": False, "timeout": 1})
+        with self.assertRaises(PolicyError):
+            client.post({}, sensitivity="internal")
+        sent = []
+
+        def fake_post(body, *, sensitivity):
+            sent.append(body)
+            return {"answers": {name: {"type": "noul", "noul": 0.5} for name in body["questions"]}}
+        client.post = fake_post
+        out = client.binary("q", [f"d{i}" for i in range(120)], sensitivity="public")
+        self.assertEqual([len(b["questions"]) for b in sent], [50, 50, 20])
+        self.assertEqual(len(out), 120)
+
+    def test_llm_choice_probs(self):
+        from docvault.decision import choice_probs
+        lp = [{"token": "<think>A</think>"}, {"token": "B", "logprob": -0.2,
+                                               "top_logprobs": [{"token": "B", "logprob": -0.2},
+                                                                {"token": "A", "logprob": -1.8},
+                                                                {"token": "Z", "logprob": -3}]}]
+        probs = choice_probs(lp, 3)
+        self.assertGreater(probs[1], probs[0])
+        self.assertAlmostEqual(sum(probs.values()), 1.0)
+        self.assertNotIn(25, probs)

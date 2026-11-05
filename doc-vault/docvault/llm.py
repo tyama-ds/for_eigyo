@@ -24,6 +24,7 @@ from .config import chat_ready, embed_ready
 
 # Claude の server-side refusal fallback（"default" 指定）に対応するモデル
 _FALLBACK_MODELS = {"claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5", "claude-fable-5-1"}
+_NO_LOGPROBS: set = set()        # logprobs を拒否した接続先（base_url, model）
 _THINK_BLOCK_RE = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL | re.IGNORECASE)
 
 
@@ -186,6 +187,42 @@ class LLM:
             yield rest
         self._count(profile, sum(len(m["content"]) for m in messages) + len(system),
                     "".join(produced), started)
+
+    def chat_logprobs(self, profile: str, prompt: str | list[dict], *, sensitivity: str,
+                      system: str = "", max_tokens: int | None = None,
+                      purpose: str = "router") -> tuple[str, list | None]:
+        """(回答テキスト（think 未除去）, トークンごとの logprobs) を返す。
+
+        OpenAI 互換 / Azure は logprobs（上位候補つき）を要求する。Claude や logprobs を
+        受け付けない接続先は (テキスト, None)。DecisionRAG の確率スコアに使う。
+        """
+        self.guard(profile, sensitivity)
+        if not self.ready(profile):
+            raise LLMError(f"{_label(profile)} LLM が未設定です（設定タブで接続先とモデルを登録してください）")
+        p = self._prof(profile)
+        key = (p.get("base_url"), p.get("model"))
+        if p["provider"] == "anthropic" or key in _NO_LOGPROBS:
+            return self.chat(profile, prompt, sensitivity=sensitivity, system=system,
+                             max_tokens=max_tokens, purpose=purpose), None
+        messages = _as_messages(prompt)
+        url, headers, payload = self._payload(p, messages, system, max_tokens, purpose)
+        payload["logprobs"] = True
+        payload["top_logprobs"] = 10
+        started = time.time()
+        try:
+            data = self._post_adaptive(p, url, payload, headers)
+        except LLMError as e:
+            if "logprob" not in str(e).lower():
+                raise
+            _NO_LOGPROBS.add(key)                 # 次回からは logprobs を要求しない
+            return self.chat(profile, prompt, sensitivity=sensitivity, system=system,
+                             max_tokens=max_tokens, purpose=purpose), None
+        choices = data.get("choices") or []
+        choice = choices[0] if choices else {}
+        text = (choice.get("message") or {}).get("content") or ""
+        lp = (choice.get("logprobs") or {}).get("content") if isinstance(choice.get("logprobs"), dict) else None
+        self._count(profile, sum(len(m["content"]) for m in messages) + len(system), text, started)
+        return text, (lp if isinstance(lp, list) and lp else None)
 
     # ------------------------------------------------------------ embeddings
     def embed(self, profile: str, texts: list[str], *, sensitivity: str) -> list[list[float]]:
