@@ -10,6 +10,8 @@ import unittest
 from analysis_engine import parse_csv
 import classification_bridge as bridge
 import classification_explorer as explorer
+from refinement_classifications import classification_feedback
+import discovery_engine
 
 
 class ClassificationImportAccuracyTests(unittest.TestCase):
@@ -111,6 +113,52 @@ class ClassificationImportAccuracyTests(unittest.TestCase):
         direct_ipc = next(item for item in result['items'] if item['key'] == 'IPC:G06F16/00')
         self.assertEqual(direct_ipc['origins'][0]['field'], 'ipc')
         self.assertTrue(any(item['key'] == 'CPC:Y02T10/70' for item in result['items']))
+
+    def test_manual_and_imported_fi_keep_the_same_complete_suffix(self):
+        for raw in ('B01D 9/02 601 A', 'B01D9/02 601A', 'B01D9/02,601@A',
+                    'Ｂ０１Ｄ９／０２　６０１Ａ (2026.04)'):
+            with self.subTest(raw=raw):
+                manual = explorer.parse_codes('FI', raw)
+                result = bridge.extract({'fi': raw}, strict=True)
+                self.assertEqual(manual, ['B01D9/02,601@A'])
+                imported = next(item for item in result['items'] if item['kind'] == 'FI')
+                self.assertEqual(imported['code'], manual[0])
+                self.assertTrue(imported['verified'])
+                ipc = next(item for item in result['items'] if item['kind'] == 'IPC')
+                self.assertEqual(ipc['evidence_status'], 'derived_candidate')
+                self.assertEqual(ipc['origins'][0]['method'], 'official_concordance')
+
+    def test_manual_fi_keeps_legacy_suffixes_and_symbol_boundaries(self):
+        for raw in ('G03F1/92A', 'G03F1/92 A', 'G03F1/92@A'):
+            self.assertEqual(explorer.parse_codes('FI', raw), ['G03F1/92@A'])
+        for raw in ('B01D9/02,601A', 'B01D9/02,601 A', 'B01D9/02,601@A'):
+            self.assertEqual(explorer.parse_codes('FI', raw), ['B01D9/02,601@A'])
+        self.assertEqual(explorer.parse_codes('FI', 'B01D9/02 601 A G03F1/92 A; B01D9/02,601@A'),
+                         ['B01D9/02,601@A', 'G03F1/92@A'])
+        for raw in ('G06F3/1', 'B01D9/02 601 AB', 'B01D9/02 601A garbage', 'G05D105:00'):
+            with self.subTest(raw=raw), self.assertRaises(ValueError):
+                explorer.parse_codes('FI', raw)
+
+    def test_invalid_fi_reports_the_field_without_losing_valid_ipc(self):
+        for fi in ('G06F3/1', 'B01D9/02,601@A; G06F3/1'):
+            with self.subTest(fi=fi):
+                row = {'id': 'SYNTHETIC', 'ipc': 'G06F16/00', 'fi': fi,
+                       'cpc': 'Y02T10/70', 'label': 'keep', 'label_source': 'human'}
+                before = copy.deepcopy(row)
+                result = bridge.extract(row)
+                self.assertEqual({item['key'] for item in result['items']},
+                                 {'IPC:G06F16/00', 'CPC:Y02T10/70'})
+                self.assertTrue(any('FI' in error for error in result['errors']))
+                self.assertTrue(any('FI' in warning for warning in result['warnings']))
+                with self.assertRaisesRegex(ValueError, 'FI'):
+                    bridge.extract(row, strict=True)
+                for report, field in ((classification_feedback([row]), 'candidates'),
+                                      (discovery_engine.analyze_patents({}, [row]), 'recommendations')):
+                    item = next(item for item in report[field] if item['key'] == 'IPC:G06F16/00')
+                    self.assertEqual(item['evidence_status'], 'patent_metadata')
+                    self.assertEqual(item['derived_candidate_count'], 0)
+                    self.assertTrue(any('FI' in warning for warning in report['warnings']))
+                self.assertEqual(row, before)
 
     def test_parenthetical_ipc_header_and_explicit_mapping(self):
         for header in ('国際特許分類（ＩＰＣ）', 'ＩＰＣ（国際特許分類）', 'ＩＰＣ分類記号'):

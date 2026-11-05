@@ -147,6 +147,23 @@ class ClassificationExplorerTests(unittest.TestCase):
             with self.subTest(body=body):
                 self.assert_rejected_atomically('/api/classifications/seeds', body)
 
+    def test_printed_fi_seed_preserves_suffix_origin_and_existing_work(self):
+        before = copy.deepcopy(module.STATE)
+        raw = 'Ｂ０１Ｄ ９／０２ ６０１ Ａ; G03F1/92 A'
+        with patch.object(module, 'complete', side_effect=AssertionError('Manual FI must not call an LLM')):
+            state = self.post_ok('/api/classifications/seeds', {'fi_text': raw, 'label': 'Synthetic FI'})
+        rows = self.visible(state)
+        self.assertEqual({row['key'] for row in rows}, {'FI:B01D9/02,601@A', 'FI:G03F1/92@A'})
+        for row in rows:
+            self.assertTrue(row['verified'])
+            self.assertEqual(row['origins'][0]['raw'], raw)
+            self.assertEqual(row['origins'][0]['type'], 'manual')
+        for field in ('selected', 'patents', 'queries'):
+            self.assertEqual(state[field], before[field])
+        for raw in ('B01D9/02 601 A; G06F3/1', 'B01D9/02 601 A garbage',
+                    ';'.join(f'B01D{i}/00' for i in range(1, 102))):
+            self.assert_rejected_atomically('/api/classifications/seeds', {'fi_text': raw, 'ipc_text': 'G06F16/00'})
+
     def test_seed_select_is_explicit_and_skips_navigation_containers(self):
         self.post_ok('/api/selection', {'selected': []})
         state = self.post_ok('/api/classifications/seeds', {'ipc_text': 'H01M;H01M10/00', 'fterm_text': '5H029;5H029AJ00;5H029AJ06'})
