@@ -1,6 +1,7 @@
 #discovery-content {
   min-width: 0;
 }
+/* Exploration lab: one paper surface, then a separate working chart. */
 .discovery-start {
   display: grid;
   grid-template-columns: minmax(280px, 0.85fr) minmax(300px, 1fr);
@@ -8,9 +9,13 @@
   position: relative;
   overflow: hidden;
   padding: 30px;
+  background:
+    radial-gradient(ellipse at 5% 0, var(--surface-hover), transparent 62%),
+    linear-gradient(120deg, var(--bg), var(--surface));
 }
 .discovery-intro .eyebrow {
   font-size: 11px;
+  color: var(--copper);
 }
 .discovery-intro h2 {
   font-size: 28px;
@@ -18,25 +23,10 @@
   line-height: 1.5;
   letter-spacing: 0.01em;
   margin: 15px 0;
+  color: var(--text);
 }
 .discovery-intro .muted {
   max-width: 480px;
-}
-.discovery-flow {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  font-size: 11px;
-  margin-top: 22px;
-}
-.discovery-flow span {
-  padding: 6px var(--space-2);
-  border: 1px solid;
-  border-radius: 7px;
-}
-.discovery-flow b {
-  font-weight: 400;
 }
 .discovery-form {
   padding: var(--space-2) 0;
@@ -48,6 +38,7 @@
 .discovery-form textarea {
   min-height: 105px;
   font-size: 17px;
+  background: var(--surface);
 }
 .discovery-plan-actions {
   display: flex;
@@ -81,18 +72,21 @@
 }
 .discovery-section-title .pill {
   margin-left: auto;
+  border-color: var(--accent-soft);
 }
 .discovery-step-number {
   font:
     13px ui-monospace,
     monospace;
-  border: 1px solid;
+  border: 1px solid var(--accent-soft);
   width: 34px;
   height: 34px;
-  border-radius: var(--radius-control);
+  border-radius: var(--radius-m);
   display: grid;
   place-items: center;
   flex-shrink: 0;
+  color: var(--accent);
+  background: var(--surface-active);
 }
 .discovery-csv-actions {
   display: flex;
@@ -109,13 +103,15 @@
   grid-template-columns: minmax(0, 1fr) auto;
   gap: var(--space-3);
   padding: 17px;
-  border: 1px dashed;
+  border: 1px dashed var(--accent-soft);
   border-radius: 13px;
+  background: var(--bg-raised);
 }
 .discovery-upload label {
   grid-column: 1/-1;
   margin: 0;
   font-size: 13px;
+  color: var(--text);
 }
 .discovery-upload input[type='file'] {
   font-size: 12px;
@@ -128,6 +124,8 @@
   padding: 7px 9px;
   margin-right: 10px;
   cursor: pointer;
+  background: var(--surface-active);
+  color: var(--text-accent);
 }
 .discovery-upload .button {
   padding: 10px;
@@ -185,15 +183,17 @@
   align-items: center;
   gap: 10px;
   padding: 15px var(--space-5);
-  border: 1px solid;
+  border: 1px solid var(--accent-soft);
   border-radius: 13px;
   margin: var(--space-5) 0;
+  background: var(--surface-active);
 }
 .discovery-status > span {
   width: 7px;
   height: 7px;
   flex-shrink: 0;
   border-radius: 50%;
+  background: var(--accent);
 }
 .discovery-status b {
   font-weight: 500;
@@ -205,9 +205,11 @@
   flex: 1;
   min-width: 190px;
   overflow-wrap: anywhere;
+  color: var(--text-muted);
 }
 .discovery-pulse {
   animation: discovery-pulse 1.7s ease-in-out infinite;
+  box-shadow: 0 0 0 5px var(--overlay-accent);
 }
 .discovery-plan-panel,
 .discovery-analysis {
@@ -228,12 +230,14 @@
   margin-top: var(--space-5);
 }
 .discovery-facet {
-  border: 1px solid;
+  border: 1px solid var(--line);
   padding: 18px;
-  border-radius: var(--radius-soft);
+  border-radius: var(--radius-m);
   position: relative;
   min-width: 0;
   overflow-wrap: anywhere;
+  background: linear-gradient(135deg, var(--bg-raised), var(--surface));
+  border-top-color: var(--accent-mid);
 }
 .discovery-facet-number {
   font:
@@ -242,6 +246,7 @@
   display: block;
   margin-bottom: 13px;
   letter-spacing: 0.15em;
+  color: var(--copper);
 }
 .discovery-facet h3 {
   font-size: 14px;
@@ -250,30 +255,35 @@
   font-size: 12px;
   line-height: 1.85;
   margin: 9px 0 0;
+  color: var(--text-muted);
 }
 .discovery-facet small {
   font-size: 10px;
   line-height: 1.8;
   display: block;
   margin-top: 9px;
+  color: var(--text-muted);
 }
 .discovery-warnings {
   padding: 11px 15px;
-  border-left: 2px solid;
+  border-left: 2px solid var(--copper-soft);
   margin: 18px 0 0;
   border-radius: 0 var(--radius-s) var(--radius-s) 0;
+  background: var(--copper-soft);
+  border-color: var(--copper-mid);
 }
 .discovery-warnings p {
   font-size: 12px;
   line-height: 1.85;
   margin: 0;
+  color: var(--copper-strong);
 }
 .discovery-warnings p + p {
   margin-top: 7px;
 }
 .discovery-query-details {
   margin-top: 18px;
-  border-top: 1px solid;
+  border-top: 1px solid var(--line);
   padding-top: var(--space-4);
 }
 .discovery-query-details summary,
@@ -286,6 +296,7 @@
 .discovery-history > summary > span {
   font-size: 11px;
   margin-left: var(--space-2);
+  color: var(--text-muted);
 }
 .discovery-query {
   padding-top: var(--space-4);
@@ -301,20 +312,24 @@
 }
 .discovery-query b {
   font-weight: 500;
+  color: var(--text);
 }
 .discovery-query span {
   font-size: 11px;
+  color: var(--text-muted);
 }
 .discovery-query pre {
   margin: var(--space-2) 0 0;
   padding: var(--space-3) 14px;
-  border: 1px solid;
+  border: 1px solid var(--accent-soft);
   border-radius: 9px;
   font-size: 12px;
   line-height: 1.9;
   font-family: ui-monospace, Consolas, monospace;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  background: var(--surface-hover);
+  color: var(--text-accent);
 }
 .discovery-metrics {
   display: grid;
@@ -325,17 +340,20 @@
 .discovery-metrics > div {
   padding: 17px;
   border-radius: var(--radius-m);
-  border: 1px solid;
+  border: 1px solid var(--line);
+  background: var(--bg-raised);
 }
 .discovery-metrics strong {
   font-size: 27px;
   font-weight: 400;
   display: block;
+  color: var(--accent);
 }
 .discovery-metrics small {
   display: block;
   font-size: 11px;
   margin-top: 7px;
+  color: var(--text-muted);
 }
 .discovery-new-terms {
   margin: 18px 0;
@@ -343,6 +361,7 @@
 }
 .discovery-new-terms > b {
   font-weight: 500;
+  color: var(--text);
 }
 .discovery-tags {
   display: flex;
@@ -352,29 +371,15 @@
 }
 .discovery-tags span {
   font-size: 10px;
-  border: 1px solid;
+  border: 1px solid var(--accent-soft);
   padding: 3px 7px;
   border-radius: 5px;
   overflow-wrap: anywhere;
-}
-.discovery-candidates-heading {
-  display: flex;
-  justify-content: space-between;
-  gap: 14px;
-  align-items: center;
-  margin: 30px 0 var(--space-4);
-}
-.discovery-candidates-heading .caption {
-  margin: 5px 0 0;
-}
-.discovery-candidate-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 13px;
-  align-items: start;
+  color: var(--text-muted);
+  background: var(--surface-hover);
 }
 .discovery-candidate {
-  border: 1px solid;
+  border: 1px solid var(--line);
   padding: 17px;
   border-radius: 15px;
   min-width: 0;
@@ -382,9 +387,11 @@
     border-color 0.2s,
     background 0.2s;
   overflow-wrap: anywhere;
+  background: var(--surface);
 }
 .discovery-candidate.hypothesis {
   border-style: dashed;
+  background: var(--surface-hover);
 }
 .discovery-candidate-label {
   display: flex;
@@ -398,6 +405,7 @@
   height: 16px;
   margin: var(--space-1) 0 0;
   flex-shrink: 0;
+  accent-color: var(--accent);
 }
 .discovery-candidate-label > span {
   display: flex;
@@ -408,6 +416,7 @@
   font-size: 10px;
   margin-bottom: var(--space-2);
   font-weight: 400;
+  color: var(--keep);
 }
 .discovery-candidate-label b {
   font:
@@ -415,6 +424,7 @@
     Consolas,
     monospace;
   line-height: 1.7;
+  color: var(--text);
 }
 .discovery-candidate-title {
   font-size: 12px;
@@ -425,6 +435,7 @@
   font-size: 11px;
   line-height: 1.9;
   margin: 14px 0 10px;
+  color: var(--text-muted);
 }
 .discovery-evidence-count {
   display: flex;
@@ -432,22 +443,27 @@
   gap: 5px 14px;
   font-size: 10px;
   line-height: 1.9;
+  color: var(--text-muted);
 }
 .discovery-evidence-count b {
   font-size: 12px;
   font-weight: 500;
+  color: var(--accent);
 }
 .discovery-evidence {
   margin-top: 15px;
   padding-top: var(--space-3);
   border-top: 1px solid;
+  border-color: var(--line);
 }
 .discovery-evidence summary {
   font-size: 11px;
   cursor: pointer;
+  color: var(--text-muted);
 }
 .discovery-evidence summary > span {
   float: right;
+  color: var(--accent);
 }
 .discovery-evidence ul {
   padding: 0;
@@ -460,6 +476,7 @@
   padding: 10px 0;
   border-bottom: 1px solid;
   line-height: 1.85;
+  border-color: var(--line);
 }
 .discovery-evidence li > b {
   font:
@@ -468,28 +485,28 @@
     monospace;
   display: block;
   line-height: 1.8;
+  color: var(--accent);
 }
 .discovery-evidence li > span {
   display: block;
   font-size: 11px;
   margin-top: var(--space-1);
+  color: var(--text-muted);
 }
 .discovery-evidence li > small {
   display: block;
   font-size: 10px;
   margin-top: var(--space-1);
+  color: var(--text-muted);
 }
 .discovery-evidence em {
   font-size: 9px;
   font-style: normal;
   padding: 2px var(--space-1);
-  border: 1px solid;
-  border-radius: var(--radius-xs);
+  border: 1px solid var(--copper-soft);
+  border-radius: 4px;
   margin-left: 6px;
-}
-.discovery-more {
-  display: flex;
-  margin: 18px auto;
+  color: var(--copper);
 }
 .discovery-adoption {
   display: flex;
@@ -501,20 +518,25 @@
   margin: var(--space-5) 0;
   padding: var(--space-4) 22px;
   backdrop-filter: blur(18px);
-  border: 1px solid;
+  border: 1px solid var(--accent-soft);
   border-radius: 15px;
   z-index: 2;
+  background: var(--overlay-paper);
+  box-shadow: var(--shadow-1);
 }
 .discovery-adoption strong {
   font-size: 24px;
   font-weight: 450;
+  color: var(--accent);
 }
 .discovery-adoption span {
   font-size: 12px;
+  color: var(--text-muted);
 }
 .discovery-adoption p {
   font-size: 11px;
   margin: var(--space-1) 0 0;
+  color: var(--text-muted);
 }
 .discovery-adoption .button {
   flex-shrink: 0;
@@ -532,18 +554,19 @@
 .discovery-history th {
   text-align: left;
   padding: 11px 13px;
-  border-bottom: 1px solid;
+  border-bottom: 1px solid var(--line);
   white-space: nowrap;
 }
 .discovery-history th {
   font-size: 11px;
   font-weight: 400;
+  color: var(--text-muted);
 }
 .discovery-log {
   list-style: none;
   margin: 18px 0 0;
   padding: 0;
-  border-top: 1px solid;
+  border-top: 1px solid var(--line);
   max-height: 240px;
   overflow: auto;
 }
@@ -553,12 +576,14 @@
   font-size: 11px;
   line-height: 1.85;
   padding-top: 9px;
+  color: var(--text-muted);
 }
 .discovery-log time {
   flex-shrink: 0;
   font-family: ui-monospace, monospace;
   max-width: 160px;
   overflow-wrap: anywhere;
+  color: var(--text-muted);
 }
 .discovery-log span {
   overflow-wrap: anywhere;
@@ -566,6 +591,7 @@
 }
 .discovery-architecture {
   margin: 26px 0 0;
+  color: var(--text-muted);
 }
 .discovery-architecture > summary {
   font-size: 13px;
@@ -579,6 +605,7 @@
 }
 .discovery-architecture h3 {
   font-size: 13px;
+  color: var(--text);
 }
 .discovery-architecture p {
   font-size: 12px;
@@ -586,7 +613,7 @@
   margin: 10px 0;
 }
 .discovery-architecture > .caption {
-  border-top: 1px solid;
+  border-top: 1px solid var(--line);
   padding-top: 15px;
   margin-bottom: 0;
   font-size: 11px;
@@ -617,9 +644,6 @@
   .discovery-upload .button {
     justify-self: start;
   }
-  .discovery-candidate-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
   .discovery-workflows {
     grid-template-columns: 1fr 1fr;
   }
@@ -638,9 +662,6 @@
   .discovery-intro .muted {
     max-width: none;
     margin-bottom: 0;
-  }
-  .discovery-flow {
-    margin-top: 15px;
   }
   .discovery-form {
     padding-top: 18px;
@@ -674,13 +695,6 @@
   }
   .discovery-intro .muted {
     font-size: 13px;
-  }
-  .discovery-flow {
-    gap: 5px;
-    font-size: 10px;
-  }
-  .discovery-flow span {
-    padding: 5px;
   }
   .discovery-plan-actions {
     gap: var(--space-3);
@@ -730,16 +744,6 @@
   .discovery-facet p {
     font-size: 11px;
   }
-  .discovery-candidate-grid {
-    grid-template-columns: 1fr;
-  }
-  .discovery-candidates-heading {
-    align-items: flex-start;
-  }
-  .discovery-candidates-heading .button {
-    font-size: 11px;
-    flex-shrink: 0;
-  }
   .discovery-adoption {
     flex-direction: column;
     gap: var(--space-3);
@@ -785,6 +789,7 @@
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 5;
   overflow: hidden;
+  color: var(--text-muted);
 }
 .discovery-definition-parent {
   display: block;
@@ -793,11 +798,15 @@
   border-top: 1px solid;
   font-size: 10px;
   line-height: 1.9;
+  color: var(--text-muted);
+  border-color: var(--accent-soft);
 }
+/* Comparison map: provenance remains visible through color and line style. */
 .discovery-compare-panel {
   margin: 22px 0 var(--space-6);
   padding: var(--space-6);
   overflow: hidden;
+  background: linear-gradient(150deg, var(--surface), var(--bg-raised));
 }
 .discovery-compare-heading {
   display: flex;
@@ -808,29 +817,34 @@
 .discovery-compare-heading .eyebrow {
   font-size: 10px;
   letter-spacing: 0.16em;
+  color: var(--copper);
 }
 .discovery-compare-heading h3 {
   font-size: 21px;
   font-weight: 500;
   margin: 9px 0 0;
+  color: var(--text);
 }
 .discovery-compare-heading p {
   font-size: 12px;
   margin: 6px 0 0;
+  color: var(--text-muted);
 }
 .discovery-view-tabs {
   display: flex;
   flex-shrink: 0;
   gap: var(--space-1);
   padding: var(--space-1);
-  border: 1px solid;
+  border: 1px solid var(--line);
   border-radius: 11px;
+  background: var(--bg-sunken);
 }
 .discovery-view-tabs button {
   border: 0;
   border-radius: 7px;
   padding: 9px 14px;
   font-size: 12px;
+  color: var(--text-muted);
 }
 .discovery-source-filters {
   display: flex;
@@ -842,20 +856,25 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  border: 1px solid;
+  border: 1px solid var(--surface-active);
   padding: 9px var(--space-3);
   border-radius: 9px;
   font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg-raised);
 }
 .discovery-source-filters b {
   font-weight: 500;
   padding: 1px 5px;
-  border-radius: var(--radius-xs);
+  border-radius: 4px;
+  color: var(--text-muted);
+  background: var(--bg);
 }
 .discovery-source-filters i {
   width: 6px;
   height: 6px;
   border-radius: 50%;
+  background: var(--accent-mid);
 }
 .discovery-compare-filters {
   display: flex;
@@ -863,8 +882,9 @@
   align-items: center;
   flex-wrap: wrap;
   padding: 13px;
-  border: 1px solid;
+  border: 1px solid var(--line);
   border-radius: var(--radius-m);
+  background: var(--bg);
 }
 .discovery-compare-filters select {
   width: 155px;
@@ -889,6 +909,7 @@
   gap: 15px;
   margin: 13px 0;
   font-size: 11px;
+  color: var(--text-muted);
 }
 .discovery-compare-status .button {
   font-size: 11px;
@@ -902,9 +923,10 @@
 }
 .discovery-map-side {
   min-width: 0;
-  border: 1px solid;
-  border-radius: var(--radius-soft);
+  border: 1px solid var(--accent-soft);
+  border-radius: var(--radius-m);
   overflow: hidden;
+  background: var(--surface);
 }
 .discovery-map-tools {
   display: flex;
@@ -913,11 +935,14 @@
   gap: 7px;
   padding: 11px 13px;
   border-bottom: 1px solid;
+  background: var(--surface-hover);
+  border-color: var(--accent-soft);
 }
 .discovery-map-tools > span {
   font-size: 10px;
   flex: 1;
   min-width: 150px;
+  color: var(--text-muted);
 }
 .discovery-map-tools .button {
   font-size: 10px;
@@ -927,6 +952,7 @@
   width: 97px;
   padding: 5px 7px;
   font-size: 10px;
+  background: var(--surface);
 }
 .discovery-map-viewport {
   height: 470px;
@@ -935,7 +961,11 @@
   overflow: auto;
   position: relative;
   overscroll-behavior: contain;
-  scrollbar-color: var(--palette-3d6870) var(--palette-0c1825);
+  scrollbar-color: var(--accent-soft) var(--bg);
+  background: radial-gradient(var(--overlay-ink) 0.65px, transparent 0.65px), var(--bg-raised);
+  background-size:
+    20px 20px,
+    auto;
 }
 .discovery-star-map {
   display: block;
@@ -953,6 +983,9 @@
   border-top: 1px solid;
   font-size: 10px;
   line-height: 1.85;
+  color: var(--text-muted);
+  background: var(--bg);
+  border-color: var(--surface-active);
 }
 .discovery-star {
   cursor: pointer;
@@ -964,16 +997,24 @@
   transition:
     fill 0.15s,
     stroke 0.15s;
+  fill: var(--surface-active);
+  stroke: var(--accent-mid);
 }
 .discovery-star.patent circle {
   stroke-dasharray: none;
+  fill: var(--keep-soft);
+  stroke: var(--keep);
 }
 .discovery-star.synthetic circle {
   stroke-dasharray: 2 3;
+  fill: var(--copper-soft);
+  stroke: var(--copper-mid);
 }
 .discovery-star.chosen circle {
   stroke-width: 2.3;
   stroke-dasharray: none;
+  fill: var(--accent);
+  stroke: var(--accent-strong);
 }
 .discovery-star.focused circle {
   stroke-width: 2.2;
@@ -981,6 +1022,7 @@
 .discovery-star:hover circle,
 .discovery-star:focus-visible circle {
   stroke-width: 2.4;
+  stroke: var(--surface);
 }
 .discovery-star text {
   pointer-events: none;
@@ -989,10 +1031,12 @@
 .discovery-star-kind {
   font-size: 10px;
   letter-spacing: 0.06em;
+  fill: var(--text-muted);
 }
 .discovery-star-mark {
   font-size: 15px;
   font-weight: 500;
+  fill: var(--text-accent);
 }
 .discovery-star-code {
   font:
@@ -1000,9 +1044,11 @@
     Consolas,
     monospace;
   font-weight: 550;
+  fill: var(--text);
 }
 .discovery-star-title {
   font-size: 12px;
+  fill: var(--text-muted);
 }
 .discovery-star-regions,
 .discovery-star-links {
@@ -1011,22 +1057,29 @@
 .discovery-star-regions rect {
   stroke-width: 1;
   stroke-dasharray: 3 6;
+  fill: var(--surface);
+  stroke: var(--surface-active);
 }
 .discovery-star-regions text {
   font-size: 11px;
   font-weight: 500;
+  fill: var(--text-muted);
 }
 .discovery-star-regions tspan {
   font-size: 10px;
+  fill: var(--text-muted);
 }
 .discovery-star-links line {
   stroke-dasharray: 2 5;
   stroke-width: 1;
+  stroke: var(--accent-soft);
 }
 .discovery-lasso-path {
   stroke-width: 1.6;
   stroke-dasharray: 5 4;
   pointer-events: none;
+  fill: var(--surface-hover);
+  stroke: var(--accent);
 }
 .discovery-filter-empty {
   padding: 80px 25px;
@@ -1036,6 +1089,7 @@
   position: absolute;
   inset: 0;
   pointer-events: none;
+  color: var(--text-muted);
 }
 .discovery-inspector {
   min-width: 0;
@@ -1043,9 +1097,10 @@
   max-height: 596px;
   overflow: auto;
   overscroll-behavior: contain;
-  scrollbar-color: var(--palette-3d6870) var(--palette-0c1825);
-  border: 1px solid;
-  border-radius: var(--radius-soft);
+  border: 1px solid var(--accent-soft);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  scrollbar-color: var(--accent-soft) var(--bg);
 }
 .discovery-inspector-heading {
   padding: 17px 18px 13px;
@@ -1053,20 +1108,26 @@
   position: sticky;
   top: 0;
   z-index: 1;
+  background: var(--surface-active);
+  border-color: var(--accent-soft);
 }
 .discovery-inspector-heading > span {
   font-size: 9px;
   letter-spacing: 0.15em;
+  color: var(--text-accent);
 }
 .discovery-inspector-heading h4 {
   font-size: 14px;
   font-weight: 500;
   margin: 6px 0 0;
+  color: var(--text);
 }
 .discovery-inspector .discovery-candidate {
   border: 0;
   border-radius: 0;
   padding: 18px;
+  background: transparent;
+  box-shadow: none;
 }
 .discovery-inspector .discovery-candidate-title {
   display: block;
@@ -1074,6 +1135,7 @@
   -webkit-line-clamp: unset;
   font-size: 13px;
   line-height: 1.85;
+  color: var(--text);
 }
 .discovery-inspector .discovery-candidate-label b {
   font-size: 14px;
@@ -1095,9 +1157,10 @@
 }
 .discovery-inspector .discovery-evidence-count {
   padding: 11px;
-  border: 1px solid;
+  border: 1px solid var(--accent-soft);
   border-radius: var(--radius-s);
   gap: var(--space-1) var(--space-3);
+  background: var(--surface-hover);
 }
 .discovery-inspector #discovery-inspector-content > .caption {
   padding: var(--space-5);
@@ -1105,19 +1168,22 @@
 .discovery-definition {
   margin: var(--space-4) 0;
   padding: var(--space-3);
-  border: 1px solid;
+  border: 1px solid var(--accent-soft);
   border-radius: 9px;
+  background: var(--surface-hover);
 }
 .discovery-definition-language {
   display: block;
   font-size: 9px;
   letter-spacing: 0.05em;
+  color: var(--text-accent);
 }
 .discovery-definition p {
   font-size: 11px;
   line-height: 1.95;
   margin: 6px 0 13px;
   overflow-wrap: anywhere;
+  color: var(--text-muted);
 }
 .discovery-definition p:last-child {
   margin-bottom: 0;
@@ -1126,6 +1192,7 @@
   display: block;
   font-size: 9px;
   margin: -8px 0 var(--space-3);
+  color: var(--text-muted);
 }
 .discovery-list-viewport {
   height: 590px;
@@ -1133,7 +1200,7 @@
   min-height: 320px;
   overflow: auto;
   overscroll-behavior: contain;
-  scrollbar-color: var(--palette-3d6870) var(--palette-0c1825);
+  scrollbar-color: var(--accent-soft) var(--bg);
 }
 .discovery-comparison-table {
   border-collapse: collapse;
@@ -1149,6 +1216,9 @@
   font-weight: 400;
   border-bottom: 1px solid;
   padding: var(--space-3) 9px;
+  color: var(--text-muted);
+  background: var(--surface-active);
+  border-color: var(--accent-soft);
 }
 .discovery-comparison-table th:first-child {
   width: 45px;
@@ -1163,11 +1233,14 @@
   font-size: 11px;
   line-height: 1.8;
   overflow-wrap: anywhere;
+  color: var(--text-muted);
+  border-color: var(--surface-active);
 }
 .discovery-comparison-table input {
   width: 16px;
   height: 16px;
   margin-top: 6px;
+  accent-color: var(--accent);
 }
 .discovery-list-focus {
   display: block;
@@ -1176,6 +1249,8 @@
   padding: 0;
   text-align: left;
   line-height: 1.85;
+  background: transparent;
+  color: inherit;
 }
 .discovery-list-focus b {
   display: block;
@@ -1184,6 +1259,7 @@
     Consolas,
     monospace;
   line-height: 1.9;
+  color: var(--text);
 }
 .discovery-list-focus span {
   display: block;
@@ -1195,6 +1271,7 @@
   font-size: 9px;
   line-height: 1.75;
   margin-bottom: 6px;
+  color: var(--accent);
 }
 .discovery-comparison-table td:last-child > span {
   font-size: 10px;
@@ -1203,6 +1280,8 @@
   position: static;
   margin: var(--space-4) 0 0;
   padding: 14px 18px;
+  background: var(--surface-active);
+  border-color: var(--accent-soft);
 }
 .discovery-compare-panel .discovery-adoption .button {
   font-size: 12px;
@@ -1356,10 +1435,9 @@
     padding: 15px;
   }
 }
-
 /* Derived classifications retain their evidence without claiming assigned IPC. */
 .discovery-llm-report {
-  border-left: 3px solid;
+  border-left: 3px solid var(--accent);
   margin-bottom: var(--space-5);
 }
 .discovery-llm-report h3 {
@@ -1372,19 +1450,22 @@
   margin: 18px 0;
 }
 .discovery-llm-targets article {
-  border: 1px solid;
+  border: 1px solid var(--line);
   border-radius: var(--radius-m);
   padding: var(--space-4);
+  background: var(--bg-sunken);
 }
 .discovery-llm-targets article > b {
   display: block;
   font-size: 14px;
+  color: var(--text);
 }
 .discovery-llm-targets article > small {
   display: block;
   margin: 7px 0 var(--space-3);
   font-size: 11px;
   line-height: 1.7;
+  color: var(--text-muted);
 }
 .discovery-llm-tags {
   display: flex;
@@ -1393,35 +1474,43 @@
   margin: var(--space-2) 0;
 }
 .discovery-llm-tags span {
-  border: 1px solid;
+  border: 1px solid var(--line);
   border-radius: 7px;
   padding: 5px 9px;
   font-size: 12px;
   overflow-wrap: anywhere;
+  background: var(--surface);
+  color: var(--text);
 }
 .discovery-llm-facet {
   margin-top: var(--space-3);
 }
 .discovery-llm-facet strong {
   font-size: 12px;
+  color: var(--accent);
 }
 .discovery-plan-request {
   padding: 15px 18px;
-  border: 1px solid;
+  border: 1px solid var(--line);
   border-radius: var(--radius-m);
   font-size: 13px;
   line-height: 1.9;
+  background: var(--surface);
 }
 .discovery-star.derived circle {
   stroke-dasharray: 6 3;
+  fill: var(--copper-soft);
+  stroke: var(--copper);
 }
 .discovery-origin {
   padding: 11px 0;
   font-size: 10px;
-  border-top: 1px solid;
+  border-top: 1px solid var(--line);
+  color: var(--text-muted);
 }
 .discovery-origin summary {
   cursor: pointer;
+  color: var(--copper-strong);
 }
 .discovery-origin p {
   font-size: 10px;
@@ -1431,4 +1520,103 @@
 }
 .discovery-origin b {
   font-weight: 500;
+}
+.discovery-remote small,
+.discovery-summary-arrow {
+  color: var(--text-muted);
+}
+.discovery-status.error {
+  border-color: color-mix(in srgb, var(--exclude) 30%, var(--surface));
+  background: var(--exclude-soft);
+}
+.discovery-status.error > span {
+  background: var(--exclude);
+}
+.discovery-source.synthetic {
+  color: var(--copper);
+}
+.discovery-source-filters i.patent {
+  background: var(--keep);
+}
+.discovery-source-filters i.hypothesis {
+  background: var(--accent);
+}
+.discovery-source-filters i.synthetic {
+  background: var(--copper);
+}
+.discovery-list-source.patent {
+  color: var(--keep);
+}
+.discovery-list-source.synthetic {
+  color: var(--copper);
+}
+.discovery-plan-request.error {
+  border-color: var(--exclude);
+  color: var(--exclude);
+}
+.discovery-plan-request.pending {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.discovery-source-filters i.derived {
+  background: var(--copper);
+}
+.discovery-list-source.derived {
+  color: var(--copper);
+}
+.discovery-facet:nth-child(3n + 2) {
+  background: linear-gradient(135deg, var(--bg-raised), var(--surface));
+  border-color: var(--line);
+  border-top-color: var(--copper-mid);
+}
+.discovery-facet:nth-child(3n) {
+  background: linear-gradient(135deg, var(--bg-raised), var(--surface));
+  border-color: var(--line);
+  border-top-color: color-mix(in srgb, var(--keep) 30%, var(--surface));
+}
+.discovery-candidate.chosen {
+  background: var(--surface-active);
+  border-color: var(--accent-mid);
+}
+.hypothesis .discovery-source {
+  color: color-mix(in srgb, var(--accent) 55%, var(--text-muted));
+}
+.discovery-view-tabs button.active {
+  color: var(--accent);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+}
+.discovery-source-filters button.active {
+  color: var(--accent);
+  border-color: var(--accent-mid);
+  background: var(--surface-active);
+}
+.discovery-map-tools .button.active {
+  background: var(--accent-soft);
+  color: var(--text-accent);
+  border-color: var(--accent-mid);
+}
+.discovery-star:hover circle {
+  stroke: var(--text);
+}
+.discovery-star:focus-visible circle {
+  stroke: var(--text);
+}
+.discovery-star.chosen .discovery-star-kind {
+  fill: var(--surface);
+}
+.discovery-star.chosen .discovery-star-mark {
+  fill: var(--surface);
+}
+.discovery-comparison-table tr.chosen td {
+  background: var(--surface-active);
+}
+.discovery-comparison-table tr:hover td {
+  background: var(--surface-hover);
+}
+.discovery-comparison-table tr.chosen:hover td {
+  background: var(--surface-active);
+}
+.discovery-list-source.hypothesis {
+  color: var(--accent);
 }

@@ -21,7 +21,7 @@
 .ql-library label {
   display: block;
   font-size: 13px;
-  color: var(--muted);
+  color: var(--text-muted);
   margin: 15px 0;
 }
 .ql-library input,
@@ -43,8 +43,8 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   padding: 14px;
-  border-radius: var(--radius-control);
-  background: var(--surface-2, var(--palette-151b26));
+  border-radius: var(--radius-m);
+  background: var(--bg-sunken);
   font-size: 12px;
   max-height: 350px;
   overflow: auto;
@@ -63,7 +63,7 @@
   clip-path: inset(50%);
 }
 .ql-file-label:focus-within {
-  outline: 2px solid var(--cyan);
+  outline: 2px solid var(--accent);
   outline-offset: 3px;
 }
 .ql-library details {
@@ -76,7 +76,7 @@
 }
 .ql-format-help p,
 .ql-reference-note {
-  color: var(--muted);
+  color: var(--text-muted);
 }
 .ql-example-list {
   display: flex;
@@ -92,8 +92,8 @@
   text-align: left;
   padding: 15px 18px;
   border: 1px solid var(--line);
-  border-radius: var(--radius-soft);
-  background: var(--surface, var(--palette-181c28));
+  border-radius: var(--radius-m);
+  background: var(--surface);
   color: var(--text);
   cursor: pointer;
   transition:
@@ -108,16 +108,16 @@
 }
 .ql-example span {
   font-size: 11px;
-  color: var(--muted);
+  color: var(--text-muted);
   margin: 9px 0;
 }
 .ql-example small {
   font-size: 11px;
-  color: var(--cyan);
+  color: var(--accent);
 }
 .ql-example.selected {
-  border-color: var(--cyan);
-  background: color-mix(in srgb, var(--cyan) 9%, var(--surface, var(--palette-181c28)));
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface));
 }
 .ql-work-area {
   min-width: 0;
@@ -142,7 +142,7 @@
   overflow-wrap: anywhere;
 }
 .ql-replacement span {
-  color: var(--muted);
+  color: var(--text-muted);
   font-size: 12px;
 }
 .ql-replacement input {
@@ -152,13 +152,13 @@
   margin-top: var(--space-6);
   padding: var(--space-5);
   border: 1px solid var(--line);
-  border-radius: var(--radius-soft);
+  border-radius: var(--radius-m);
 }
 .ql-preview h4 {
   margin: 10px 0 18px;
 }
 .ql-tree {
-  border-left: 2px solid var(--palette-82719d66);
+  border-left: 2px solid var(--accent-soft);
   padding: 10px 0 10px 14px;
   margin: var(--space-2) 0;
 }
@@ -166,7 +166,7 @@
   font-size: 11px;
   font-weight: 500;
   letter-spacing: 0.02em;
-  color: var(--muted);
+  color: var(--text-muted);
   display: block;
   margin-bottom: var(--space-2);
 }
@@ -180,9 +180,6 @@
   flex-basis: 100%;
   min-width: 0;
 }
-.ql-tree-not {
-  border-color: var(--palette-c88c7355);
-}
 .ql-condition {
   display: inline-block;
   padding: 7px 11px;
@@ -190,26 +187,26 @@
   font-size: 12px;
   line-height: 1.4;
   overflow-wrap: anywhere;
-  background: var(--palette-82719d20);
-  border: 1px solid var(--palette-82719d33);
+  background: var(--bg-sunken);
+  border: 1px solid var(--surface-active);
 }
 .ql-class {
-  background: var(--palette-78998922);
-  border-color: var(--palette-78998933);
+  background: var(--bg-sunken);
+  border-color: var(--keep-soft);
 }
 .ql-warnings,
 .ql-reference-note ul {
   padding-left: var(--space-5);
   line-height: 1.85;
   font-size: 12px;
-  color: var(--muted);
+  color: var(--text-muted);
 }
 .ql-error {
   padding: 13px var(--space-4);
-  border-radius: var(--radius-control);
-  background: var(--palette-7e37352a);
-  border: 1px solid var(--palette-b36e6e66);
-  color: var(--palette-e8b0a3);
+  border-radius: var(--radius-m);
+  background: var(--exclude-soft);
+  border: 1px solid color-mix(in srgb, var(--exclude) 30%, var(--surface));
+  color: var(--exclude);
   font-size: 13px;
 }
 .ql-library button:disabled {
@@ -218,7 +215,7 @@
 }
 .ql-library button:focus-visible,
 .ql-library summary:focus-visible {
-  outline: 2px solid var(--cyan);
+  outline: 2px solid var(--accent);
   outline-offset: 3px;
 }
 .ql-library .button-row {
@@ -265,7 +262,7 @@
 .ql-suggestion {
   margin: var(--space-5) 0;
   padding: var(--space-4) 18px;
-  background: color-mix(in srgb, var(--cyan) 5%, var(--transparent));
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
   border: 1px solid var(--line);
   border-radius: var(--radius-m);
 }
@@ -277,7 +274,7 @@
   padding-left: 18px;
   font-size: 12px;
   line-height: 1.8;
-  color: var(--muted);
+  color: var(--text-muted);
 }
 .ql-suggestion li + li {
   margin-top: 10px;
