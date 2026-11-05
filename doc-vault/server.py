@@ -29,7 +29,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 BASE = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE))
 
-from docvault import __version__, config, db, graph, rag  # noqa: E402
+from docvault import __version__, config, db, decision_api, graph, rag  # noqa: E402
 from docvault.extract import SUPPORTED  # noqa: E402
 from docvault.indexer import ALL_STAGES, INDEXER, register_upload  # noqa: E402
 from docvault.llm import LLM, LLMError  # noqa: E402
@@ -64,6 +64,8 @@ def api_status() -> dict:
 
 
 def api_config_test(body: dict) -> dict:
+    if body.get("judge_api"):                      # 判定 API（Jev / OpenAI / Azure）の接続テスト
+        return decision_api.connection_test(config.load_config())
     name = body.get("profile")
     if name not in config.PROFILE_NAMES:
         return {"error": "profile は local / cloud"}

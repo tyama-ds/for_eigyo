@@ -27,7 +27,7 @@ BASE = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE))
 
 from ragcore import __version__  # noqa: E402
-from ragcore import store  # noqa: E402
+from ragcore import decision_api, store  # noqa: E402
 from ragcore.config import load_config, public_config, save_config  # noqa: E402
 from ragcore.engines import all_engines, external, get_engine  # noqa: E402
 from ragcore.graphio import GRAPHML_FILENAME, graphml_graph_payload  # noqa: E402
@@ -55,9 +55,11 @@ def api_engines() -> dict:
     return {"engines": engines, "corpus_rev": corpus["rev"]}
 
 
-def api_config_test() -> dict:
-    """チャットと埋め込みの疎通試験。"""
+def api_config_test(body: dict | None = None) -> dict:
+    """チャットと埋め込みの疎通試験。judge_api を付けると判定 API（Decisions API）だけを試す。"""
     cfg = load_config()
+    if (body or {}).get("judge_api"):
+        return decision_api.connection_test(cfg)
     llm = LLMClient(cfg)
     out: dict = {}
     try:
@@ -267,7 +269,7 @@ class Handler(BaseHTTPRequestHandler):
             cfg = save_config(body)
             self._send_json(public_config(cfg))
         elif route == "/api/config/test":
-            self._send_json(api_config_test())
+            self._send_json(api_config_test(body))
         elif route == "/api/corpus/add":
             result = api_corpus_add(body)
             self._send_json(result, 400 if "error" in result else 200)

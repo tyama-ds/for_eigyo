@@ -285,33 +285,101 @@ class TestAPIFlow(unittest.TestCase):
         g1 = self.api(f"/api/graph?doc={one['id']}")
         self.assertLessEqual(len(g1["nodes"]), len(g["nodes"]))
 
-    def test_10b_jev_judge(self):
-        """判定モデルに Jev（OpenRouter Decisions API）を使う。公開文書の候補だけが送られる。"""
-        self.api("/api/config", {"rag": {"decision_judge": "jev"},
-                                 "jev": {"endpoint": self.mock_base + "/decisions",
-                                         "api_key": "or-test", "use_proxy": False}})
+    def use_judge_api(self, provider, **sub):
+        self.api("/api/config", {"rag": {"decision_judge": "api"},
+                                 "decision_api": {"provider": provider,
+                                                  provider: {"api_key": f"{provider}-key", "use_proxy": False,
+                                                             **sub}}})
+
+    def decisions_requests(self, before):
+        return [r for r in mock_llm.REQUESTS[before:] if r["path"].split("?")[0].endswith("/decisions")]
+
+    def test_10b_judge_api(self):
+        """判定 API（Jev / OpenAI / Azure OpenAI）で判定する。公開文書の候補だけが送られる。"""
+        cases = [
+            ("openrouter", {"endpoint": self.mock_base + "/decisions"}, "/decisions",
+             "typesafe/jev-1.14"),
+            ("openai", {"endpoint": self.mock_base + "/v1/decisions"}, "/v1/decisions", "gpt-6-luna"),
+            ("azure", {"endpoint": self.mock_base.rsplit("/v1", 1)[0], "model": "luna-deploy"},
+             "/openai/v1/decisions", "luna-deploy"),
+            ("azure", {"endpoint": self.mock_base.rsplit("/v1", 1)[0], "model": "luna-deploy",
+                       "api_version": "2026-10-01-preview"},
+             "/openai/decisions?api-version=2026-10-01-preview", "luna-deploy"),
+        ]
         try:
-            self.assertFalse(self.api("/api/config")["jev"].get("api_key"))   # 秘密は返さない
-            before = len(mock_llm.REQUESTS)
-            chat = self.api("/api/chats", {"mode": "cloud", "strategy": "decision"})["chat"]
-            meta = self.ask(chat["id"], "SkyEdge S-2 の給電方式は？")[-1]["message"]["meta"]
-            self.assertIn("jev", meta["decision"]["judges"], meta["decision"])
-            self.assertTrue(meta["decision"]["choice"])                  # 最後の選択式の並べ替え
-            self.assertGreater(meta["decision"]["jev_cost"], 0)
-            self.assertTrue(any("仕様書" in s["doc_title"] for s in meta["sources"]))
-            reqs = [r["body"] for r in mock_llm.REQUESTS[before:] if r["path"].endswith("/decisions")]
-            self.assertTrue(reqs)
-            for body in reqs:
-                self.assertEqual(body["model"], "typesafe/jev-1.14")
-                self.assertIn("candidates", body["state"])
-                kinds = {q["type"] for q in body["questions"].values()}
-                self.assertTrue(kinds <= {"noul", "choice"})
-            # ローカルモード（社外秘を含む）では Jev を使わずローカル LLM で判定する
+            for provider, sub, path, model in cases:
+                with self.subTest(provider=provider, path=path):
+                    self.use_judge_api(provider, **sub)
+                    pub = self.api("/api/config")["decision_api"]
+                    self.assertTrue(pub[provider]["has_api_key"])
+                    self.assertNotIn("api_key", pub[provider])                    # 秘密は返さない
+                    test = self.api("/api/config/test", {"judge_api": True})      # 接続テスト
+                    self.assertTrue(test["ok"], test)
+                    self.assertTrue(test["url"].endswith(path), test)
+                    before = len(mock_llm.REQUESTS)
+                    chat = self.api("/api/chats", {"mode": "cloud", "strategy": "decision"})["chat"]
+                    meta = self.ask(chat["id"], "SkyEdge S-2 の給電方式は？")[-1]["message"]["meta"]
+                    self.assertIn(provider, meta["decision"]["judges"], meta["decision"])
+                    self.assertTrue(meta["decision"]["choice"])              # 最後の選択式の並べ替え
+                    self.assertGreater(meta["decision"]["api"]["calls"], 0)
+                    if provider == "openrouter":
+                        self.assertGreater(meta["decision"]["api"]["cost"], 0)
+                    else:
+                        self.assertGreater(meta["decision"]["api"]["input_tokens"], 0)
+                    self.assertTrue(any("仕様書" in s["doc_title"] for s in meta["sources"]))
+                    reqs = self.decisions_requests(before)
+                    self.assertTrue(reqs)
+                    for r in reqs:
+                        body = r["body"]
+                        self.assertTrue(r["path"].endswith(path), r["path"])
+                        self.assertEqual(body["model"], model)
+                        if provider == "azure":
+                            self.assertEqual((r["api_key"], r["auth"]), ("azure-key", None))
+                        else:
+                            self.assertEqual(r["auth"], f"Bearer {provider}-key")
+                        if provider == "openrouter":
+                            self.assertIn("candidates", body["state"])
+                            self.assertTrue({q["type"] for q in body["questions"].values()} <= {"noul", "choice"})
+                        else:
+                            self.assertIn("Candidates:", body["input"])
+                            self.assertTrue({q["type"] for q in body["questions"]} <= {"predicate", "choice"})
+                    # ローカルモード（社外秘を含む）では判定 API を使わずローカル LLM で判定する
+                    before = len(mock_llm.REQUESTS)
+                    chat = self.api("/api/chats", {"mode": "local", "strategy": "decision"})["chat"]
+                    meta = self.ask(chat["id"], "熱処理炉の温度センサーはいつ交換した？")[-1]["message"]["meta"]
+                    self.assertEqual(meta["decision"]["judges"], ["llm"])
+                    self.assertFalse(self.decisions_requests(before))
+        finally:
+            self.api("/api/config", {"rag": {"decision_judge": "llm"},
+                                     "decision_api": {"azure": {"allow_internal": False}}})
+
+    def test_10c_azure_allowed_for_internal(self):
+        """Azure で「社外秘も送ってよい」を ON にすると、社外秘を含む段も Azure で判定する。"""
+        self.use_judge_api("azure", endpoint=self.mock_base.rsplit("/v1", 1)[0], model="company-luna",
+                           allow_internal=True)
+        try:
             before = len(mock_llm.REQUESTS)
             chat = self.api("/api/chats", {"mode": "local", "strategy": "decision"})["chat"]
             meta = self.ask(chat["id"], "熱処理炉の温度センサーはいつ交換した？")[-1]["message"]["meta"]
+            self.assertIn("azure", meta["decision"]["judges"], meta["decision"])
+            reqs = self.decisions_requests(before)
+            self.assertTrue(reqs)
+            self.assertTrue(all(r["body"]["model"] == "company-luna" for r in reqs))
+        finally:
+            self.api("/api/config", {"rag": {"decision_judge": "llm"},
+                                     "decision_api": {"azure": {"allow_internal": False}}})
+
+    def test_10d_judge_api_not_configured(self):
+        """判定 API を選んでも未設定なら、警告を出して LLM で判定する。"""
+        self.api("/api/config", {"rag": {"decision_judge": "api"},
+                                 "decision_api": {"provider": "azure",
+                                                  "azure": {"endpoint": "", "model": "", "clear_api_key": True}}})
+        try:
+            self.assertFalse(self.api("/api/config/test", {"judge_api": True})["ok"])
+            chat = self.api("/api/chats", {"mode": "cloud", "strategy": "decision"})["chat"]
+            meta = self.ask(chat["id"], "SkyEdge S-2 の給電方式は？")[-1]["message"]["meta"]
             self.assertEqual(meta["decision"]["judges"], ["llm"])
-            self.assertFalse(any(r["path"].endswith("/decisions") for r in mock_llm.REQUESTS[before:]))
+            self.assertTrue(any("Azure OpenAI" in w and "未設定" in w for w in meta["warnings"]), meta["warnings"])
         finally:
             self.api("/api/config", {"rag": {"decision_judge": "llm"}})
 
@@ -321,7 +389,9 @@ class TestAPIFlow(unittest.TestCase):
         cloud_calls = 0
         for req in mock_llm.REQUESTS:
             body = req["body"]
-            if body.get("model") not in ("cloud-chat", "cloud-embed", "typesafe/jev-1.14"):
+            # 外部の判定 API（Jev・OpenAI・社外秘を許可していない Azure）も対象。10c の Azure は社外秘を許可した接続先
+            if body.get("model") not in ("cloud-chat", "cloud-embed", "typesafe/jev-1.14", "gpt-6-luna",
+                                         "luna-deploy"):
                 continue
             cloud_calls += 1
             text = json.dumps(body, ensure_ascii=False)

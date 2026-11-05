@@ -150,11 +150,48 @@ def jev_answer(body: dict) -> dict:
     return {"answers": answers, "usage": {"cost": 0.0001}}
 
 
+def openai_decision_answer(body: dict) -> dict:
+    """OpenAI / Azure OpenAI の Decisions API のモック（応答の形は公式 SDK の Decision 型に合わせる）。
+
+    predicate は質問と候補の文字の重なりの割合、choice はその正規化。候補の本文に REFUSE を含むと
+    その候補の判定は refusal（回答拒否）になる。
+    """
+    text = str(body.get("input", ""))
+    m = re.search(r"Query:\n(.*?)\n\nCandidates:\n(.*)$", text, re.S)
+    qg = _grams(m.group(1) if m else "")
+    cands = dict(re.findall(r"^(\d+)\. (.*)$", m.group(2) if m else "", re.MULTILINE))
+
+    def rel(t):
+        return min(1.0, len(qg & _grams(t)) / max(1, len(qg)) * 1.6)
+    answers = []
+    for q in body.get("questions") or []:
+        name = q.get("name")
+        if q.get("type") == "predicate":
+            cand = cands.get(str(name or "").lstrip("c"), "")
+            if "REFUSE" in cand:
+                answers.append({"type": "refusal", "name": name})
+            else:
+                answers.append({"type": "predicate", "name": name, "probability": round(rel(cand), 3)})
+        elif q.get("type") == "choice":
+            raw = [(c["value"], rel(str(c.get("description", ""))) + 0.01) for c in q.get("choices") or []]
+            total = sum(v for _, v in raw) or 1.0
+            probs = [{"value": v, "probability": p / total} for v, p in raw]
+            best = max(probs, key=lambda x: x["probability"])
+            answers.append({"type": "choice", "name": name, "choice": best["value"],
+                            "confidence": best["probability"], "probabilities": probs})
+    n = len(text)
+    return {"answers": answers, "model": body.get("model", ""),
+            "usage": {"input_tokens": n, "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+                      "output_tokens": 0, "output_tokens_details": {"reasoning_tokens": 0},
+                      "total_tokens": n}}
+
+
 class MockLLMHandler(BaseHTTPRequestHandler):
     def do_POST(self):  # noqa: N802
         length = int(self.headers.get("Content-Length", "0"))
         body = json.loads(self.rfile.read(length).decode("utf-8"))
-        REQUESTS.append({"path": self.path, "body": body})
+        REQUESTS.append({"path": self.path, "body": body,
+                         "auth": self.headers.get("Authorization"), "api_key": self.headers.get("api-key")})
         if self.path.endswith("/chat/completions"):
             prompt = "\n".join(str(m.get("content", "")) for m in body.get("messages", [])
                                if m.get("role") == "user")
@@ -176,8 +213,8 @@ class MockLLMHandler(BaseHTTPRequestHandler):
             elif body.get("logprobs") and "[TASK:decide_choice]" in last_text:
                 choice["logprobs"] = {"content": choice_logprobs(text)}
             out = {"choices": [choice]}
-        elif self.path.endswith("/decisions"):
-            out = jev_answer(body)
+        elif self.path.split("?", 1)[0].endswith("/decisions"):
+            out = openai_decision_answer(body) if "input" in body else jev_answer(body)
         elif self.path.endswith("/embeddings"):
             texts = body.get("input")
             texts = [texts] if isinstance(texts, str) else texts
