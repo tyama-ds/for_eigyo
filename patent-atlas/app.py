@@ -639,16 +639,9 @@ async def enrich_classification_import(request: Request):
             raise ValueError(
                 "公報番号と内容の不一致、または既存FIとの不一致があるため補完を中止しました。既存判定は変更していません。"
             )
-        previous_rows = STATE["patents"]
-        previous_import = copy.deepcopy(STATE.get("import_info"))
-        try:
+        with ws.transaction(("patents", "import_info"), save=save):
             STATE["patents"] = rows
             STATE["import_info"] = {**(STATE.get("import_info") or {}), "fi_enrichment": report}
-            save()
-        except Exception:
-            STATE["patents"] = previous_rows
-            STATE["import_info"] = previous_import
-            raise
     return public_state()
 
 

@@ -255,20 +255,11 @@ def run_model_training(
     with ws.lock:
         if stop.is_set():
             return dict(status="cancelled")
-        old_rows = copy.deepcopy(state["patents"])
-        old_training = copy.deepcopy(state["training"])
-        try:
+        with ws.transaction(("patents", "training"), check_idle=False, save=save):
             for row in state["patents"]:
                 row["score"] = round(result["scores"][row["id"]], 4)
                 row["score_source"] = mode
             result.pop("scores")
             result.update(mode=mode, job_id=job_id, status="completed")
             state["training"] = result
-            save()
-        except Exception:
-            for row, previous in zip(state["patents"], old_rows):
-                row.clear()
-                row.update(previous)
-            state["training"] = old_training
-            raise
     return result
