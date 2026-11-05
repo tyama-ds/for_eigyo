@@ -1,10 +1,10 @@
-# Patent Atlas 設計の正本（Phase 5）
+# Patent Atlas 設計の正本（Phase 6）
 
 - 棚卸し日: 2026-11-05、画面更新: 2026-11-06
 - 対象: `tyama-ds/for_eigyo` の `patent-atlas/`、Phase 1完了時点 `87e87e8` の棚卸しをPhase 4の画面とPhase 3cのバックエンドに合わせて更新
 - 状態: **現状と目標を区別する。6項目の目標とPhase 3での扱いは利用者が確定済み。**
 - 6項目の判断者: 利用者（本会話）　確定日: 2026-11-05
-- Phase 3a（共通ヘルパー）、3b（Workspace）、3c（明示的なサービス注入・依存の整理・公開状態キャッシュ・統括の部分復元）を実装済み。APIの入出力、設定値、保存形式・保存データ、既存文書の配置を維持。Phase 4で導線を一本化し、Phase 5で表示を維持してCSSを共通化した。
+- Phase 3a（共通ヘルパー）、3b（Workspace）、3c（明示的なサービス注入・依存の整理・公開状態キャッシュ・統括の部分復元）を実装済み。APIの入出力、設定値、保存形式・保存データ、既存文書の配置を維持。Phase 4で導線を一本化し、Phase 5で表示を維持してCSSを共通化し、Phase 6でフロントをネイティブESモジュール・共通描画へ移行した。
 
 ## 1. 現状
 
@@ -14,7 +14,7 @@
 
 CSSのトークンは `static/atlas-theme.css` の単一 `:root` が正本で、明色のみを定義する。`style.css` はリセット・配置・共通部品（button/pill/caption/notice/empty-state）と共通の非表示規則を持つ。色の宣言はトークンを参照し、画面固有の配置は各機能CSSに残す。動作停止とOSのreduced-motionは `atlas-motion.css` を正本とする。空状態は `.empty-state` に統一し、`data-empty` の変数で従来のホストごとの寸法・色を保つ。詳細と比較画像は [Phase 5検証記録](docs/PHASE5_REVIEW.md) を参照。
 
-FastAPIを起点とするローカル単一ユーザーアプリで、HTML/CSS/JavaScriptを同じサーバーから配信する。UIの各スクリプトはES Modulesではなく、共有の `state`、関数、下書き変数を参照する。`static/app.js:api` が `/api` を付けてHTTP呼び出しを行う。
+FastAPIを起点とするローカル単一ユーザーアプリで、HTML/CSS/JavaScriptを同じサーバーから配信する。UIは `static/main.js` を単一のmoduleスクリプトとして読み込み、相対importで29モジュールを読み込む。CDN・バンドラーは使わない。`static/core.js:api` が `/api` を付けてHTTP呼び出しを行い、公開応答の参照は `getState()`、置換は `setState(next)`、行の同一性を保つ更新は `patchRows(rows)` に集約する。
 
 | 置き場所 | 内容・境界 | 根拠 |
 |---|---|---|
@@ -23,7 +23,7 @@ FastAPIを起点とするローカル単一ユーザーアプリで、HTML/CSS/J
 | Pythonの `JOB` / `STOP` / `LOCK` | `ws.job` / `ws.stop` / `ws.lock` の互換参照。STOPは従来どおり停止イベント。`begin_job` がデーモンスレッドを起動 | `workspace.py`: `idle` / `transaction`、`app.py`: `begin_job`, `progress` |
 | `workspace.json` | `{"state": STATE, "settings": 非秘密設定}`。保存先は従来と同じ `PATENT_ATLAS_DATA`、未指定時は `data/`。DATAは `ws.data_dir` の互換参照 | `workspace.py`: `load`, `to_dict`, `save`。`app.py:save` は委譲 |
 | `/api/state` の返り値 | 従来と同じ表示用JSON。ロック下で変更を検出し、分類/収束・秘密設定の有無・ジョブ進捗を含む投影とJSONバイト列を再利用する | `workspace.py:public_state_json`、`app.py:_public_workspace` / `get_state`。dict返却用 `public_state` は独立したコピーを返す |
-| ブラウザー内 `state` | 上記API応答。PythonのSTATEと同じキー集合・オブジェクトではない | [static/app.js](static/app.js): `init`, `refreshJob` |
+| ブラウザー内 `state` | 上記API応答。PythonのSTATEと同じキー集合・オブジェクトではない | [static/core.js](static/core.js): `getState`, `setState`, `patchRows`。取得元は `app.js:init`, `job-ui.js:refreshJob` |
 | UI下書き・表示状態 | `classDraft`, `learningDraft`, `discoveryDraft`, `researchDraft`, `inventionPlanDraft`, `atlasProjection` など。編集だけではサーバーへ保存されない | 各 `static/*-ui.js`, `research-workbench.js`, `invention-workbench.js`, `projection-ui.js` |
 | ブラウザー保存 | 調査・発明の下書きは `sessionStorage`。出力形式・分類言語・動作表示などの設定は `localStorage`。全UI下書きが永続化されるわけではない | [static/research-draft-store.js](static/research-draft-store.js)、`static/app.js`, `classification-ui.js`, `atlas-motion.js` |
 
@@ -236,6 +236,14 @@ register_research_routes(app, ws, research_services)
 | 工程遷移・停止・エラー・リセットのcommit | orchestration |
 
 `tests/test_public_state_cache.py` と `tests/test_service_dependencies.py` の21件で、応答bytesの互換、キャッシュ再利用・無効化・参照の分離、登録時の非変更、load復旧、別Workspaceへの分離、分類根拠/依存、統括の部分復元を隔離データで検証する。Phase 3cの全テストはPython 542件（541成功・既存任意1スキップ）、JavaScript 304件成功。既存テストの変更・削除・新規スキップはない。
+
+### Phase 6：フロントの責務
+
+- `app.js` は初期化とタブ・段階の切替のみ。共有する画面セッションは `ui-session.js`、パネルの描画・操作は分類、検索式、地図、改善、調査ワークベンチ、ラボ、統括、判断エージェント、設定の各モジュールが持つ。各パネルは `render(host, snapshot)` を公開する。入力・詳細の再描画が必要な内部操作は各モジュール内に残す。
+- 各ファイルは利用する関数・状態をimportする。任意モジュールの存在を調べるtypeofガードはなく、ロード失敗は隠さない。通信データの型検証、ResizeObserverなどブラウザー機能の対応判定は別の責務として残す。
+- `core.replaceHtml` は署名で同一HTMLを判別し、未保存入力、利用者が変更したdetailsの開閉、スクロール、フォーカスを保持する。初期状態のdetailsは新しいモードの既定値に従う。子パネルの後続マウントにも退避情報を引き継ぎ、計画・式例の識別子が変わった入力は復元しない。イベントは `listen` / `on` で登録箇所ごとに更新し、再描画で多重実行しない。
+- 分類キー・表示名、エスケープ、判定ラベル、ツールチップ配置、debounceはcoreに集約。囲み選択は `lasso.js` の1実装を使い、分類/ラボの座標・選択先だけを渡す。分類名の優先順位と副次修正は [Phase 6検証記録](docs/PHASE6_REVIEW.md) に記す。
+- テストはjsdomと実ESモジュールのimportを使う。HTTP・時計・他パネルの境界は明示的なモック、描画状態はDOMで確認する。`node:vm` と関数宣言位置からのソース切り出しは使わない。ブラウザーのモジュール全体はPlaywrightでも確認する。開発用依存の導入は `npm ci`。アプリの起動・配信にNodeやnpmは不要。
 
 ## 2. 目標モデル（確定方針と詳細設計の下書き）
 

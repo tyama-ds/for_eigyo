@@ -1,15 +1,15 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const vm = require('node:vm');
+const { loadModule } = require('./module-harness.cjs');
 const fs = require('node:fs');
-const source = fs.readFileSync('static/convergence-ui.js', 'utf8');
+
 const plain = (value) => JSON.parse(JSON.stringify(value));
 const esc = (value) =>
   String(value ?? '').replace(
     /[&<>"']/g,
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]
   );
-function setup() {
+async function setup() {
   const ids = [
     'content',
     'total',
@@ -68,9 +68,25 @@ function setup() {
     setTab: () => {},
     setStep: () => {},
   };
-  vm.createContext(context);
-  vm.runInContext(source, context);
-  return { context, dom, requests, handlers, messages, read: (code) => vm.runInContext(code, context) };
+  context.setState = (next) => (context.state = next);
+  context.getState = () => context.state;
+
+  await loadModule(context, 'convergence-ui.js', [
+    'convergencePercent',
+    'convergenceCount',
+    'convergenceDate',
+    'convergenceDeferred',
+    'convergenceCurrentRecord',
+    'captureConvergenceDraft',
+    'convergenceRecordPayload',
+    'convergenceSeries',
+    'convergenceChart',
+    'convergenceHistoryHtml',
+    'convergenceReviewHtml',
+    'renderConvergence',
+    'convergenceAction',
+  ]);
+  return { context, dom, requests, handlers, messages };
 }
 function records() {
   return [
@@ -97,8 +113,8 @@ function records() {
   ];
 }
 
-test('missing rate or count is not coerced into zero', () => {
-  const c = setup().context;
+test('missing rate or count is not coerced into zero', async () => {
+  const c = (await setup()).context;
   for (const missing of [null, undefined, '', false, '0', NaN]) {
     assert.equal(c.convergencePercent(missing), '—');
     assert.equal(c.convergenceCount(missing), '未記録');
@@ -107,8 +123,8 @@ test('missing rate or count is not coerced into zero', () => {
   assert.equal(c.convergenceCount(0), '0');
   assert.equal(c.convergencePercent(0.045), '4.5%');
 });
-test('missing observations split graph lines and preserve a true zero point', () => {
-  const c = setup().context,
+test('missing observations split graph lines and preserve a true zero point', async () => {
+  const c = (await setup()).context,
     r = [{ rate: null }, { rate: 0.5 }, { rate: 0 }, { rate: null }, { rate: 0.2 }],
     segments = c.convergenceSeries(
       r,
@@ -125,8 +141,8 @@ test('missing observations split graph lines and preserve a true zero point', ()
   assert.match(html, /第2回 · 新しい必要特許の割合 0.0%/);
   assert.doesNotMatch(html, /第1回 · 新しい/);
 });
-test('graphs expose keyboard points, numeric labels and a separate count graph', () => {
-  const c = setup().context,
+test('graphs expose keyboard points, numeric labels and a separate count graph', async () => {
+  const c = (await setup()).context,
     html = c.convergenceChart(records());
   assert.match(html, /tabindex="0" role="img"/);
   assert.match(html, /安定の目安 5%/);
@@ -139,8 +155,8 @@ test('graphs expose keyboard points, numeric labels and a separate count graph',
   const above = c.convergenceChart([{ hit_change_rate: 2 }]);
   assert.match(above, /200.0%（グラフ上端は100%）/);
 });
-test('empty and first baseline records never invent a trend', () => {
-  const s = setup();
+test('empty and first baseline records never invent a trend', async () => {
+  const s = await setup();
   assert.match(s.context.convergenceChart([]), /最初の1回は比較の基準/);
   const html = s.context.convergenceChart([records()[0]]);
   assert.doesNotMatch(html, /class="convergence-point /);
@@ -148,8 +164,8 @@ test('empty and first baseline records never invent a trend', () => {
   s.context.renderConvergence();
   assert.match(s.dom['#convergence-summary'].textContent, /次回から変化を比較/);
 });
-test('count entry validates actual total and binds to the visible CSV', () => {
-  const c = setup().context;
+test('count entry validates actual total and binds to the visible CSV', async () => {
+  const c = (await setup()).context;
   assert.deepEqual(plain(c.convergenceRecordPayload('', '', 'csv1', 443)), {
     total_hits: null,
     query_id: null,
@@ -164,8 +180,8 @@ test('count entry validates actual total and binds to the visible CSV', () => {
     assert.throws(() => c.convergenceRecordPayload(bad, 'q1', 'csv1', 443));
   assert.equal(c.convergenceRecordPayload('0', '', null, 0).total_hits, 0);
 });
-test('polling preserves in-progress inputs and switches drafts only for a new CSV', () => {
-  const s = setup();
+test('polling preserves in-progress inputs and switches drafts only for a new CSV', async () => {
+  const s = await setup();
   s.context.renderConvergence();
   s.dom['#convergence-total'].value = '3200';
   s.dom['#convergence-query'].value = 'q1';
@@ -180,16 +196,16 @@ test('polling preserves in-progress inputs and switches drafts only for a new CS
   assert.equal(s.dom['#convergence-total'].value, '');
   assert.equal(s.dom['#convergence-query'].value, '');
 });
-test('an existing observation prepopulates recorded query and total', () => {
-  const s = setup();
+test('an existing observation prepopulates recorded query and total', async () => {
+  const s = await setup();
   s.context.state.convergence.records = [{ ...records()[1], query_id: 'q1' }];
   s.context.renderConvergence();
   assert.equal(s.dom['#convergence-total'].value, '105');
   assert.equal(s.dom['#convergence-query'].value, 'q1');
   assert.equal(s.dom['#convergence-query-preview'].textContent, 'IPC = G05D');
 });
-test('baseline observations with generated IDs are recognized and updated', () => {
-  const s = setup();
+test('baseline observations with generated IDs are recognized and updated', async () => {
+  const s = await setup();
   s.context.state.search_result = null;
   s.context.state.convergence.records = [
     {
@@ -206,8 +222,8 @@ test('baseline observations with generated IDs are recognized and updated', () =
   assert.equal(s.dom['#convergence-total'].value, '80');
   assert.equal(s.dom['#convergence-query'].value, 'q1');
 });
-test('timestamps support Unix seconds, milliseconds, and ISO strings', () => {
-  const c = setup().context,
+test('timestamps support Unix seconds, milliseconds, and ISO strings', async () => {
+  const c = (await setup()).context,
     seconds = 1789354800,
     iso = new Date(seconds * 1000).toISOString(),
     formatted = c.convergenceDate(seconds);
@@ -222,8 +238,8 @@ test('timestamps support Unix seconds, milliseconds, and ISO strings', () => {
   assert.match(html, /2026\/09\/14/);
   assert.doesNotMatch(html, /1789354800/);
 });
-test('untouched record fields follow auto-record metadata until the user edits', () => {
-  const s = setup();
+test('untouched record fields follow auto-record metadata until the user edits', async () => {
+  const s = await setup();
   s.context.renderConvergence();
   assert.equal(s.dom['#convergence-total'].value, '');
   s.context.state.convergence.records = [{ ...records()[1], query_id: 'q1' }];
@@ -236,8 +252,8 @@ test('untouched record fields follow auto-record metadata until the user edits',
   s.context.renderConvergence();
   assert.equal(s.dom['#convergence-total'].value, '250');
 });
-test('only truly assessed unresolved rows appear in human review', () => {
-  const c = setup().context,
+test('only truly assessed unresolved rows appear in human review', async () => {
+  const c = (await setup()).context,
     valid = { id: 'p', label: null, label_source: 'agent', label_reason: '本文不足', agent_confidence: 0.5 };
   assert.equal(c.convergenceDeferred(valid), true);
   for (const patch of [
@@ -253,8 +269,8 @@ test('only truly assessed unresolved rows appear in human review', () => {
   ])
     assert.equal(c.convergenceDeferred({ ...valid, ...patch }), false);
 });
-test('patent and search text is escaped in cards, chart labels and history', () => {
-  const c = setup().context,
+test('patent and search text is escaped in cards, chart labels and history', async () => {
+  const c = (await setup()).context,
     evil = '<img src=x onerror=alert(1)>';
   const html = c.convergenceReviewHtml(
     { title: evil, abstract: evil, ipc: evil, id: evil, label_reason: evil, agent_confidence: 0.5 },
@@ -271,7 +287,7 @@ test('patent and search text is escaped in cards, chart labels and history', () 
   assert.doesNotMatch(graph, /<img/);
 });
 test('graph stability never completes automatically and running jobs disable writes', async () => {
-  const s = setup();
+  const s = await setup();
   s.context.state.convergence.status = 'stable';
   s.context.renderConvergence();
   assert.equal(s.dom['#convergence-complete'].disabled, true);
@@ -286,7 +302,7 @@ test('graph stability never completes automatically and running jobs disable wri
   assert.equal(s.requests.length, 0);
 });
 test('record action sends explicit input and reuses the observation identity', async () => {
-  const s = setup();
+  const s = await setup();
   s.context.renderConvergence();
   s.dom['#convergence-total'].value = '550';
   s.dom['#convergence-query'].value = 'q1';
@@ -296,10 +312,10 @@ test('record action sends explicit input and reuses the observation identity', a
     body: { total_hits: 550, query_id: 'q1', observation_id: 'csv1' },
   });
   assert.equal(s.requests.length, 1);
-  assert.equal(s.read('convergenceBusy'), false);
+  assert.equal(s.context.convergenceBusy, false);
 });
 test('review cannot relabel an already confirmed row and sends no model request', async () => {
-  const s = setup();
+  const s = await setup();
   await s.context.convergenceAction('review', { id: 'P1', label: 'exclude' });
   assert.equal(s.requests.length, 0);
   s.context.state.patents = [
@@ -313,7 +329,7 @@ test('review cannot relabel an already confirmed row and sends no model request'
   assert.equal(s.requests.length, 1);
 });
 test('review click carries the assessment actually shown even if state changed in another tab', async () => {
-  const s = setup();
+  const s = await setup();
   s.context.state.patents = [
     { id: 'P2', label: null, label_source: 'agent', label_reason: '表示時点の理由', agent_confidence: 0.55 },
   ];
@@ -329,7 +345,7 @@ test('review click carries the assessment actually shown even if state changed i
   });
 });
 test('failed actions preserve drafts and release busy guard without retrying the write', async () => {
-  const s = setup();
+  const s = await setup();
   s.context.renderConvergence();
   s.dom['#convergence-total'].value = '230';
   s.context.api = async (path, body) => {
@@ -337,14 +353,14 @@ test('failed actions preserve drafts and release busy guard without retrying the
     throw Error('保存に失敗');
   };
   await assert.rejects(s.context.convergenceAction('record'), /保存に失敗/);
-  assert.equal(s.read('convergenceBusy'), false);
+  assert.equal(s.context.convergenceBusy, false);
   assert.equal(s.dom['#convergence-total'].value, '230');
   assert.equal(s.dom['#convergence-error'].hidden, false);
   assert.match(s.dom['#convergence-error'].textContent, /保存に失敗/);
   assert.equal(s.requests.length, 1);
 });
 test('changed server state refreshes on conflict without silently resubmitting', async () => {
-  const s = setup();
+  const s = await setup();
   s.context.renderConvergence();
   s.context.api = async (path, body) => {
     s.requests.push({ path, body });
@@ -358,7 +374,7 @@ test('changed server state refreshes on conflict without silently resubmitting',
     s.requests.map((r) => r.path),
     ['/convergence/record', '/state']
   );
-  assert.equal(s.read('convergenceBusy'), false);
+  assert.equal(s.context.convergenceBusy, false);
 });
 test('styles preserve hidden controls and users motion settings', () => {
   const css = fs.readFileSync('static/convergence-ui.css', 'utf8');

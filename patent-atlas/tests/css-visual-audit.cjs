@@ -6,6 +6,13 @@ const assert = require('node:assert/strict');
 
 async function route(request) {
   const url = new URL(request.request().url());
+  if (process.env.CSS_BASELINE_STATIC && url.pathname === '/') {
+    const response = await request.fetch();
+    return request.fulfill({
+      response,
+      body: fs.readFileSync(path.join(process.env.CSS_BASELINE_STATIC, 'index.html'), 'utf8'),
+    });
+  }
   if (process.env.CSS_BASELINE_STATIC && url.pathname.startsWith('/static/')) {
     const name = url.pathname.slice('/static/'.length);
     if (name !== path.basename(name)) throw new Error('Unexpected static asset path');
@@ -18,6 +25,14 @@ async function capture(page, output, name) {
   // Wait for the existing debounced draft save before measuring or capturing the navigation.
   await page.waitForFunction(() => !document.querySelector('[data-draft-state="pending"]'));
   await page.evaluate(() => document.fonts.ready);
+  // Normalize pointer focus for layout comparisons; focus preservation has separate regression tests.
+  if (!name.startsWith('components-')) {
+    await page.mouse.move(1, 1);
+    await page.evaluate(() => document.activeElement?.blur());
+    await page.evaluate(
+      () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+    );
+  }
   const styles = await page.evaluate(() => {
     const properties = [
       'display',

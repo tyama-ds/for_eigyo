@@ -1,38 +1,70 @@
+import {
+  debounce,
+  tooltipPosition,
+  replaceHtml,
+  listen,
+  classificationKey as keyOf,
+  $,
+  api,
+  setState,
+  getState,
+  esc,
+  on,
+  $$,
+  run,
+  toast,
+  busy,
+  safeUrl,
+} from './core.js';
+import { setTab, setStep } from './app.js';
+import { appState } from './ui-session.js';
+import PatentClassLabels from './classification-labels.js';
+import { renderStep } from './workflow-ui.js';
+import PatentClassLayout from './classification-layout.js';
+import { enableLasso } from './lasso.js';
+
+const hideClassTooltipLater = debounce(hideClassTooltip, 180);
+
+export const classificationUiState = {
+  classFocusKey: null,
+  classSourceMode: 'keywords',
+  classDraft: null,
+  classUndo: [],
+  classBusy: false,
+  classLayoutCache: undefined,
+  classMotionController: undefined,
+  classLanguage: 'ja',
+  classTooltipTimer: undefined,
+  classTranslationPending: false,
+  classProposalView: false,
+  classProposalAttempt: null,
+  classSelectionStale: false,
+};
 /* Hierarchy browsing, source patents, and explicit selection are separate actions. */
-let classFocusKey = null,
-  classSourceMode = 'keywords',
-  classDraft = null,
-  classUndo = [],
-  classBusy = false;
+
 const targetPatentIds = new Set();
-let classLayoutCache;
-let classMotionController;
+
 function syncClassMotion() {
-  classMotionController?.();
+  classificationUiState.classMotionController?.();
 }
-let classLanguage = 'ja',
-  classTooltipTimer;
-let classTranslationPending = false;
-let classProposalView = false,
-  classProposalAttempt = null;
-let classSelectionStale = false;
+
 function classSelectionSyncHtml() {
-  return classSelectionStale
+  return classificationUiState.classSelectionStale
     ? '<div class="class-proposal-error" role="alert">最新の分類・選択を取得できていません。古い選択による上書きを防ぐため、分類の変更と初案作成を一時停止しています。<button id="class-resync" class="button small">最新の状態を再取得</button></div>'
     : '';
 }
 function blockStaleClassSelection() {
-  classSelectionStale = true;
-  classUndo = [];
-  selectionSave = Promise.reject(
+  classificationUiState.classSelectionStale = true;
+  classificationUiState.classUndo = [];
+  appState.selectionSave = Promise.reject(
     new Error('最新の分類・選択との同期が必要です。「対話で探索」で最新の状態を再取得してください。')
   );
-  selectionSave.catch(() => {});
+  appState.selectionSave.catch(() => {});
 }
 async function syncClassSelection() {
-  if (classBusy) return false;
+  if (classificationUiState.classBusy) return false;
   captureClassDraft();
-  classBusy = true;
+  classificationUiState.classBusy = true;
   const root = $('#step-content');
   if (root) {
     root.inert = true;
@@ -51,26 +83,26 @@ async function syncClassSelection() {
       'settings',
       'classification_catalog',
     ];
-    state = {
-      ...state,
+    setState({
+      ...getState(),
       ...Object.fromEntries(
         fields
           .filter((field) => Object.prototype.hasOwnProperty.call(fresh, field))
           .map((field) => [field, fresh[field]])
       ),
-    };
-    selectionSave = Promise.resolve();
-    classSelectionStale = false;
-    classUndo = [];
-    classProposalView = false;
-    classFocusKey = null;
-    if (classProposalAttempt) classProposalAttempt.synced = true;
+    });
+    appState.selectionSave = Promise.resolve();
+    classificationUiState.classSelectionStale = false;
+    classificationUiState.classUndo = [];
+    classificationUiState.classProposalView = false;
+    classificationUiState.classFocusKey = null;
+    if (classificationUiState.classProposalAttempt) classificationUiState.classProposalAttempt.synced = true;
     return true;
   } catch (error) {
     blockStaleClassSelection();
     throw error;
   } finally {
-    classBusy = false;
+    classificationUiState.classBusy = false;
     if (root) {
       root.inert = false;
       root.removeAttribute('aria-busy');
@@ -78,12 +110,12 @@ async function syncClassSelection() {
   }
 }
 function classProposalItems() {
-  return (state.candidate_proposal?.items || []).filter((item) =>
-    state.candidates.some((c) => keyOf(c) === keyOf(item))
+  return (getState().candidate_proposal?.items || []).filter((item) =>
+    getState().candidates.some((c) => keyOf(c) === keyOf(item))
   );
 }
 function classProposalReason(item) {
-  const proposal = (state.candidate_proposal?.items || []).find((row) => keyOf(row) === keyOf(item));
+  const proposal = (getState().candidate_proposal?.items || []).find((row) => keyOf(row) === keyOf(item));
   return proposal?.reason || item.llm_reason || '';
 }
 function classProposalReasonHtml(item) {
@@ -104,7 +136,7 @@ function classRejectedBroader(item) {
 function classRejectedCandidateHtml(item, index) {
   const revision = item.revision,
     broader = classRejectedBroader(item),
-    proposal = state.candidate_proposal;
+    proposal = getState().candidate_proposal;
   const reasonRepeated = revision?.status === 'retired' && item.reason === revision.explanation;
   const sources = (Array.isArray(revision?.sources) ? revision.sources : []).filter(
     (source) => typeof source?.url === 'string' && /^https:\/\//i.test(source.url)
@@ -124,10 +156,10 @@ function classElementSummaryHtml(proposal) {
   return `<details class="class-element-summary" open><summary>${proposal.decomposition_method === 'llm' ? '技術を分けた探索要素' : '辞書で探した入力語句'} · ${elements.length}</summary><p class="caption">要素ごとに検索し、候補を和集合として提示します。分類は選ぶまで検索式へ入りません。</p>${elements.map((e) => `<article class="class-proposal-item"><strong>${esc(e.name)} ${missing.has(e.id) ? '<span class="pill">分類未発見</span>' : ''}</strong><p class="caption">${esc(e.relation || '')}</p><p>${(e.terms || []).map(esc).join(' / ')}</p></article>`).join('')}</details>`;
 }
 function classProposalPanelHtml() {
-  const proposal = state.candidate_proposal,
-    error = classProposalAttempt?.status === 'error';
+  const proposal = getState().candidate_proposal,
+    error = classificationUiState.classProposalAttempt?.status === 'error';
   const failure = error
-    ? `<p class="class-proposal-error" role="alert">${classProposalAttempt.action === 'broader' ? '上位候補を追加できませんでした。' : '今回の候補生成に失敗しました。'}<br>${esc(classProposalAttempt.message)}<br>${classSelectionStale ? '最新の状態を取得するまで、分類の変更は停止しています。' : classProposalAttempt.synced ? '他の操作で変更された最新の候補・選択を再取得しました。入力の下書きは保持しています。' : '前回の候補・選択は保持しています。'}</p>`
+    ? `<p class="class-proposal-error" role="alert">${classificationUiState.classProposalAttempt.action === 'broader' ? '上位候補を追加できませんでした。' : '今回の候補生成に失敗しました。'}<br>${esc(classificationUiState.classProposalAttempt.message)}<br>${classificationUiState.classSelectionStale ? '最新の状態を取得するまで、分類の変更は停止しています。' : classificationUiState.classProposalAttempt.synced ? '他の操作で変更された最新の候補・選択を再取得しました。入力の下書きは保持しています。' : '前回の候補・選択は保持しています。'}</p>`
     : '';
   if (!proposal)
     return `${failure}<div class="class-proposal-heading"><span class="eyebrow">LLM RESPONSE</span><h3>提案の反映先を確認</h3></div><p class="caption">これまでのLLM返答の記録はありません。「LLMで要素分解し、分類定義を照合」を有効にして候補を見直すと、要素分解・辞書検索・定義照合の結果をここに表示します。</p>`;
@@ -137,9 +169,9 @@ function classProposalPanelHtml() {
   const accepted = Number(proposal.accepted_count ?? rows.length),
     returned = Number(proposal.returned_count ?? rows.length),
     isLlm = proposal.llm_used === true;
-  const differs = String(proposal.keywords || '') !== String(state.keywords || '');
+  const differs = String(proposal.keywords || '') !== String(getState().keywords || '');
   const title =
-    error && classProposalAttempt.action !== 'broader'
+    error && classificationUiState.classProposalAttempt.action !== 'broader'
       ? '前回の候補生成結果'
       : isLlm
         ? '今回のLLM提案'
@@ -147,11 +179,11 @@ function classProposalPanelHtml() {
   return `${failure}<div class="class-proposal-heading"><span class="eyebrow">LLM RESPONSE</span><h3>${title}</h3></div><p class="class-proposal-context">対象：${esc(proposal.keywords || 'キーワードなし')}${differs ? ' <b>（現在のテーマとは異なります）</b>' : ''}</p>${classElementSummaryHtml(proposal)}${
     !isLlm
       ? '<p class="caption">今回はLLMからの提案を取得していません。辞書・既存の起点から生成した候補を地図に表示しています。</p>'
-      : `<div class="class-proposal-metrics"><span><b>${returned}</b>返却</span><span><b>${accepted}</b>候補に反映</span><span><b>${Number(proposal.new_count || 0)}</b>新規</span><span><b>${Number(proposal.existing_count || 0)}</b>既存と重複</span><span><b>${Number(proposal.rejected_count ?? rejected.length)}</b>除外</span></div><p class="caption">反映した候補はコンステレーションで確認できます。<b>検索式に使うには分類を選び、「この条件で初案をつくる」を押してください。</b>候補への反映だけでは選択・検索式は変わりません。</p>${available.length ? `<button id="class-proposal-map" class="button small wide ${classProposalView ? 'subtle' : ''}">${classProposalView ? '地図に今回のLLM候補を表示中' : '今回のLLM候補を地図で見る'} (${available.length})</button>` : ''}<div class="class-proposal-items">${rows
+      : `<div class="class-proposal-metrics"><span><b>${returned}</b>返却</span><span><b>${accepted}</b>候補に反映</span><span><b>${Number(proposal.new_count || 0)}</b>新規</span><span><b>${Number(proposal.existing_count || 0)}</b>既存と重複</span><span><b>${Number(proposal.rejected_count ?? rejected.length)}</b>除外</span></div><p class="caption">反映した候補はコンステレーションで確認できます。<b>検索式に使うには分類を選び、「この条件で初案をつくる」を押してください。</b>候補への反映だけでは選択・検索式は変わりません。</p>${available.length ? `<button id="class-proposal-map" class="button small wide ${classificationUiState.classProposalView ? 'subtle' : ''}">${classificationUiState.classProposalView ? '地図に今回のLLM候補を表示中' : '今回のLLM候補を地図で見る'} (${available.length})</button>` : ''}<div class="class-proposal-items">${rows
           .map((item) => {
             const key = keyOf(item),
-              actual = state.candidates.find((c) => keyOf(c) === key),
-              selected = state.selected.includes(key);
+              actual = getState().candidates.find((c) => keyOf(c) === key),
+              selected = getState().selected.includes(key);
             const kind =
               item.is_new === true || item.status === 'new'
                 ? '新規'
@@ -168,42 +200,52 @@ function classProposalPanelHtml() {
 function renderClassProposalFeedback() {
   const host = $('#class-proposal-feedback');
   if (!host) return;
-  host.innerHTML = classProposalPanelHtml();
+  replaceHtml(host, classProposalPanelHtml());
   on('#class-proposal-map', 'click', showClassProposalMap);
   $$('[data-proposal-select]', host).forEach((button) =>
-    button.addEventListener('click', () => toggleClass(button.dataset.proposalSelect))
+    listen(
+      button,
+      'click',
+      () => toggleClass(button.dataset.proposalSelect),
+      undefined,
+      'classification-ui.js:1'
+    )
   );
   $$('[data-proposal-broader]', host).forEach((button) =>
-    button.addEventListener(
+    listen(
+      button,
       'click',
-      run(() => addClassProposalBroader(Number(button.dataset.proposalBroader)))
+      run(() => addClassProposalBroader(Number(button.dataset.proposalBroader))),
+      undefined,
+      'classification-ui.js:2'
     )
   );
 }
 function showClassProposalMap() {
-  if (classBusy || !classProposalItems().length) return;
+  if (classificationUiState.classBusy || !classProposalItems().length) return;
   captureClassDraft();
-  classProposalView = true;
-  classFocusKey = keyOf(classProposalItems()[0]);
+  classificationUiState.classProposalView = true;
+  classificationUiState.classFocusKey = keyOf(classProposalItems()[0]);
   renderClassResponse();
   $('#class-svg')?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
 }
 async function suggestClassCandidates(body) {
-  classProposalAttempt = null;
+  classificationUiState.classProposalAttempt = null;
   try {
     if (await requestClassState(() => api('/candidates', body))) {
-      classProposalView = false;
-      classFocusKey = null;
+      classificationUiState.classProposalView = false;
+      classificationUiState.classFocusKey = null;
       renderClassResponse();
     }
   } catch (error) {
-    classProposalAttempt = { status: 'error', message: error.message };
+    classificationUiState.classProposalAttempt = { status: 'error', message: error.message };
     if (error.status === 409) {
       blockStaleClassSelection();
       try {
         await syncClassSelection();
       } catch (syncError) {
-        classProposalAttempt.message += ' 最新の状態の再取得にも失敗しました：' + syncError.message;
+        classificationUiState.classProposalAttempt.message +=
+          ' 最新の状態の再取得にも失敗しました：' + syncError.message;
       }
     }
     renderClassResponse();
@@ -211,15 +253,15 @@ async function suggestClassCandidates(body) {
   }
 }
 async function addClassProposalBroader(index) {
-  if (classBusy || !Number.isInteger(index) || index < 0) return false;
-  const proposal = state.candidate_proposal,
+  if (classificationUiState.classBusy || !Number.isInteger(index) || index < 0) return false;
+  const proposal = getState().candidate_proposal,
     rejected = (proposal?.rejected || []).find(
       (item, position) => classRejectedCandidateIndex(item, position) === index
     );
   const broader = rejected && classRejectedBroader(rejected);
   if (!proposal?.id || !broader || rejected.broader_added === true) return false;
   captureClassDraft();
-  classProposalAttempt = null;
+  classificationUiState.classProposalAttempt = null;
   try {
     if (
       !(await requestClassState(() =>
@@ -227,21 +269,26 @@ async function addClassProposalBroader(index) {
       ))
     )
       return false;
-    classProposalView = false;
-    classFocusKey = keyOf(broader);
+    classificationUiState.classProposalView = false;
+    classificationUiState.classFocusKey = keyOf(broader);
     renderClassResponse();
-    if (activeTab === 'explore' && step === 0)
+    if (appState.activeTab === 'explore' && appState.step === 0)
       $('#class-svg')?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
     toast('上位IPC ' + broader.code + ' を候補に追加しました。地図で選択すると初案に使えます。');
     return true;
   } catch (error) {
-    classProposalAttempt = { status: 'error', action: 'broader', message: error.message };
+    classificationUiState.classProposalAttempt = {
+      status: 'error',
+      action: 'broader',
+      message: error.message,
+    };
     if (error.status === 409) {
       blockStaleClassSelection();
       try {
         await syncClassSelection();
       } catch (syncError) {
-        classProposalAttempt.message += ' 最新の状態の再取得にも失敗しました：' + syncError.message;
+        classificationUiState.classProposalAttempt.message +=
+          ' 最新の状態の再取得にも失敗しました：' + syncError.message;
       }
     }
     renderClassResponse();
@@ -249,12 +296,13 @@ async function addClassProposalBroader(index) {
   }
 }
 try {
-  if (globalThis.localStorage?.getItem('patent-class-label-language') === 'en') classLanguage = 'en';
+  if (localStorage?.getItem('patent-class-label-language') === 'en')
+    classificationUiState.classLanguage = 'en';
 } catch (_) {
   /* Display preferences are optional. */
 }
 function classTitle(item) {
-  return PatentClassLabels.label(item, classLanguage);
+  return PatentClassLabels.label(item, classificationUiState.classLanguage);
 }
 function classScopeText(item) {
   if (item.kind === 'IPC' && item.selection_scope === 'subtree')
@@ -277,45 +325,54 @@ function applyClassTranslations(rows) {
     ])
   );
   const merge = (item) => ({ ...item, ...(byKey.get(keyOf(item)) || {}) });
-  state.candidates = state.candidates.map(merge);
-  if (state.discovery?.plan)
-    state.discovery.plan.candidate_hypotheses = (state.discovery.plan.candidate_hypotheses || []).map(merge);
-  if (state.discovery?.analysis)
-    state.discovery.analysis.recommendations = (state.discovery.analysis.recommendations || []).map(merge);
+  getState().candidates = getState().candidates.map(merge);
+  if (getState().discovery?.plan)
+    getState().discovery.plan.candidate_hypotheses = (
+      getState().discovery.plan.candidate_hypotheses || []
+    ).map(merge);
+  if (getState().discovery?.analysis)
+    getState().discovery.analysis.recommendations = (getState().discovery.analysis.recommendations || []).map(
+      merge
+    );
 }
 function renderClassTranslationStatus() {
   const host = $('#class-translation-status');
   if (!host) return;
   const list = classificationItems(),
     missing = list.filter((c) => c.kind === 'IPC' && c.verified && !c.title_ja);
-  const fallbackCount = list.filter((c) => PatentClassLabels.fallback(c, classLanguage)).length;
-  host.innerHTML = `名称のみ切り替えます。ホバーで日本語・英語の定義を表示。${fallbackCount ? ` 未収録の${fallbackCount}件は原文で表示します。` : ''}${missing.length ? `<button id="class-translate-missing" class="button small subtle" ${classTranslationPending ? 'disabled' : ''}>${classTranslationPending ? '日本語名を取得中…' : `未収録の日本語を取得 (${missing.length})`}</button><span class="class-translation-network">未収録の分類コードをJ-PlatPatへ送信。設定中のproxyを使用します。</span>` : ''}`;
+  const fallbackCount = list.filter((c) =>
+    PatentClassLabels.fallback(c, classificationUiState.classLanguage)
+  ).length;
+  replaceHtml(
+    host,
+    `名称のみ切り替えます。ホバーで日本語・英語の定義を表示。${fallbackCount ? ` 未収録の${fallbackCount}件は原文で表示します。` : ''}${missing.length ? `<button id="class-translate-missing" class="button small subtle" ${classificationUiState.classTranslationPending ? 'disabled' : ''}>${classificationUiState.classTranslationPending ? '日本語名を取得中…' : `未収録の日本語を取得 (${missing.length})`}</button><span class="class-translation-network">未収録の分類コードをJ-PlatPatへ送信。設定中のproxyを使用します。</span>` : ''}`
+  );
   on('#class-translate-missing', 'click', async () => {
-    if (classTranslationPending) return;
-    classTranslationPending = true;
+    if (classificationUiState.classTranslationPending) return;
+    classificationUiState.classTranslationPending = true;
     renderClassTranslationStatus();
     try {
       const result = await api('/classifications/translations', {
         codes: missing.slice(0, 48).map((c) => c.code),
       });
       applyClassTranslations(result.translations);
-      if (activeTab === 'explore' && step === 0) {
+      if (appState.activeTab === 'explore' && appState.step === 0) {
         drawClassNodes();
         updateSelectedClasses();
         renderClassFocus();
       }
       toast(result.warnings?.length ? result.warnings.join(' ') : '日本語の分類名を保存しました。');
     } finally {
-      classTranslationPending = false;
-      if (activeTab === 'explore' && step === 0) renderClassTranslationStatus();
+      classificationUiState.classTranslationPending = false;
+      if (appState.activeTab === 'explore' && appState.step === 0) renderClassTranslationStatus();
     }
   });
 }
 function setClassLanguage(value) {
   if (!['ja', 'en'].includes(value)) return;
-  classLanguage = value;
+  classificationUiState.classLanguage = value;
   try {
-    globalThis.localStorage?.setItem('patent-class-label-language', value);
+    localStorage?.setItem('patent-class-label-language', value);
   } catch (_) {}
   drawClassNodes();
   updateSelectedClasses();
@@ -324,13 +381,13 @@ function setClassLanguage(value) {
   if (focus) classDetail(focus);
 }
 function hideClassTooltip() {
-  clearTimeout(classTooltipTimer);
+  hideClassTooltipLater.cancel();
   const tip = $('#class-tooltip');
   if (tip) tip.hidden = true;
 }
 function queueHideClassTooltip() {
-  clearTimeout(classTooltipTimer);
-  classTooltipTimer = setTimeout(hideClassTooltip, 180);
+  hideClassTooltipLater.cancel();
+  hideClassTooltipLater();
 }
 function classNamesHtml(item) {
   const names = PatentClassLabels.bilingual(item);
@@ -342,34 +399,43 @@ function positionClassTooltip(event, node) {
   const box = node.getBoundingClientRect(),
     x = Number.isFinite(event?.clientX) ? event.clientX : box.right,
     y = Number.isFinite(event?.clientY) ? event.clientY : box.top;
-  const bounds = tip.getBoundingClientRect(),
-    margin = 12;
-  let left = x + 16,
-    top = y + 16;
-  if (left + bounds.width > window.innerWidth - margin) left = x - bounds.width - 16;
-  if (top + bounds.height > window.innerHeight - margin) top = y - bounds.height - 12;
-  tip.style.left = Math.max(margin, Math.min(left, window.innerWidth - bounds.width - margin)) + 'px';
-  tip.style.top = Math.max(margin, Math.min(top, window.innerHeight - bounds.height - margin)) + 'px';
+  const position = tooltipPosition(
+    { x, y },
+    tip.getBoundingClientRect(),
+    { width: window.innerWidth, height: window.innerHeight },
+    { gap: 16, reverseY: 12 }
+  );
+  tip.style.left = position.left + 'px';
+  tip.style.top = position.top + 'px';
 }
 function showClassTooltip(item, event, node) {
-  if (classBusy || $('#class-svg')?.dataset.drawing) return;
-  clearTimeout(classTooltipTimer);
+  if (classificationUiState.classBusy || $('#class-svg')?.dataset.drawing) return;
+  hideClassTooltipLater.cancel();
   let tip = $('#class-tooltip');
   if (!tip) {
     tip = document.createElement('div');
     tip.id = 'class-tooltip';
     tip.className = 'class-tooltip';
     tip.setAttribute('role', 'tooltip');
-    tip.addEventListener('mouseenter', () => clearTimeout(classTooltipTimer));
-    tip.addEventListener('mouseleave', queueHideClassTooltip);
+    listen(
+      tip,
+      'mouseenter',
+      () => clearTimeout(classificationUiState.classTooltipTimer),
+      undefined,
+      'classification-ui.js:3'
+    );
+    listen(tip, 'mouseleave', queueHideClassTooltip, undefined, 'classification-ui.js:4');
     document.body.appendChild(tip);
   }
-  tip.innerHTML = `<strong>${esc(item.kind)} ${esc(item.code)}</strong>${classScopeText(item) ? `<p class="caption">${esc(classScopeText(item))}</p>` : ''}${classNamesHtml(item)}${classProposalReasonHtml(item)}${PatentClassLabels.fallback(item, classLanguage) ? `<p class="caption">${esc(PatentClassLabels.fallback(item, classLanguage))}</p>` : ''}`;
+  replaceHtml(
+    tip,
+    `<strong>${esc(item.kind)} ${esc(item.code)}</strong>${classScopeText(item) ? `<p class="caption">${esc(classScopeText(item))}</p>` : ''}${classNamesHtml(item)}${classProposalReasonHtml(item)}${PatentClassLabels.fallback(item, classificationUiState.classLanguage) ? `<p class="caption">${esc(PatentClassLabels.fallback(item, classificationUiState.classLanguage))}</p>` : ''}`
+  );
   tip.hidden = false;
   positionClassTooltip(event, node);
 }
 function classLayoutMode() {
-  return state.settings?.classification_layout === 'grid' ? 'grid' : 'semantic';
+  return getState().settings?.classification_layout === 'grid' ? 'grid' : 'semantic';
 }
 function describeClassLayout() {
   const grid = $('#classification-layout')?.value === 'grid';
@@ -379,21 +445,27 @@ function describeClassLayout() {
       : '材料・製法などの技術項目、分類名・関連語、正式な分類階層から近い候補をまとめます。まとまりには見出しが付きます。同じ候補は同じ配置を保ち、距離は近さの目安です。';
 }
 function classificationItems() {
-  const keys = classProposalView ? classProposalItems().map(keyOf) : state.classification_view?.keys;
+  const keys = classificationUiState.classProposalView
+    ? classProposalItems().map(keyOf)
+    : getState().classification_view?.keys;
   return keys
-    ? keys.map((k) => state.candidates.find((c) => keyOf(c) === k)).filter(Boolean)
-    : state.candidates;
+    ? keys.map((k) => getState().candidates.find((c) => keyOf(c) === k)).filter(Boolean)
+    : getState().candidates;
 }
 function classFocus() {
   return (
-    state.candidates.find((c) => keyOf(c) === classFocusKey) ||
-    state.classification_view?.focus ||
-    state.candidates.find((c) => keyOf(c) === state.selected[0]) ||
+    getState().candidates.find((c) => keyOf(c) === classificationUiState.classFocusKey) ||
+    getState().classification_view?.focus ||
+    getState().candidates.find((c) => keyOf(c) === getState().selected[0]) ||
     classificationItems()[0]
   );
 }
 function captureClassDraft() {
-  if ($('#keywords')) classDraft = { ...(classDraft || {}), keywords: $('#keywords').value };
+  if ($('#keywords'))
+    classificationUiState.classDraft = {
+      ...(classificationUiState.classDraft || {}),
+      keywords: $('#keywords').value,
+    };
   for (const id of [
     'seed-ipc',
     'seed-fi',
@@ -403,73 +475,75 @@ function captureClassDraft() {
     'target-search',
     'class-search',
   ])
-    if ($('#' + id)) classDraft[id] = $('#' + id).value;
+    if ($('#' + id)) classificationUiState.classDraft[id] = $('#' + id).value;
 }
 function resetClassExplorer() {
-  classFocusKey = null;
-  classDraft = null;
-  classUndo = [];
-  classProposalView = false;
-  classProposalAttempt = null;
-  if (classSelectionStale) selectionSave = Promise.resolve();
-  classSelectionStale = false;
+  classificationUiState.classFocusKey = null;
+  classificationUiState.classDraft = null;
+  classificationUiState.classUndo = [];
+  classificationUiState.classProposalView = false;
+  classificationUiState.classProposalAttempt = null;
+  if (classificationUiState.classSelectionStale) appState.selectionSave = Promise.resolve();
+  classificationUiState.classSelectionStale = false;
   targetPatentIds.clear();
 }
 async function requestClassState(request) {
-  if (classBusy) return false;
-  if (classSelectionStale)
+  if (classificationUiState.classBusy) return false;
+  if (classificationUiState.classSelectionStale)
     throw new Error('最新の分類・選択との同期が必要です。「最新の状態を再取得」を押してください。');
-  classBusy = true;
+  classificationUiState.classBusy = true;
   $('#step-content').inert = true;
   $('#step-content').setAttribute('aria-busy', 'true');
   try {
-    await selectionSave.catch(async (error) => {
+    await appState.selectionSave.catch(async (error) => {
       const fresh = await api('/state');
-      state.selected = fresh.selected;
-      selectionSave = Promise.resolve();
-      classUndo = [];
+      getState().selected = fresh.selected;
+      appState.selectionSave = Promise.resolve();
+      classificationUiState.classUndo = [];
       updateSelectedClasses();
       throw new Error(
         '選択を保存できなかったため、保存済みの状態に戻しました。再操作してください。 ' + error.message
       );
     });
-    state = await request();
+    setState(await request());
     return true;
   } finally {
-    classBusy = false;
+    classificationUiState.classBusy = false;
     $('#step-content').inert = false;
     $('#step-content').removeAttribute('aria-busy');
   }
 }
 function renderClassResponse() {
-  if (activeTab === 'explore' && step === 0) renderStep();
+  if (appState.activeTab === 'explore' && appState.step === 0) renderStep();
 }
 function sourcePanel() {
-  const draft = classDraft || {};
-  if (classSourceMode === 'manual')
+  const draft = classificationUiState.classDraft || {};
+  if (classificationUiState.classSourceMode === 'manual')
     return `<div class="seed-panel"><label>推薦するIPC<textarea id="seed-ipc" rows="2" placeholder="H01M 10/00&#10;A61K 9/00">${esc(draft['seed-ipc'] || '')}</textarea></label><label>推薦するFI<textarea id="seed-fi" rows="2" placeholder="B60L50/60; B60L15/20@A">${esc(draft['seed-fi'] || '')}</textarea></label><label>推薦するF-term<textarea id="seed-fterm" rows="2" placeholder="5H029AM11, 5H029AJ06">${esc(draft['seed-fterm'] || '')}</textarea></label><details><summary>CPCも指定する</summary><label>CPC<textarea id="seed-cpc" rows="2" placeholder="H01M10/0562">${esc(draft['seed-cpc'] || '')}</textarea></label></details><label>出典メモ（任意）<input id="seed-label" value="${esc(draft['seed-label'] || '')}" placeholder="例：ターゲット JP… の分類"></label><button id="add-seeds" class="button primary wide">この分類を起点にする ↗</button><p class="caption">空白・改行・カンマ区切りで複数入力。名称は辞書から取得します。IPC / FI / CPC / F-termは別々の欄に入力。FIの複数コードは改行・セミコロンで区切ってください。</p></div>`;
-  if (classSourceMode === 'patent')
+  if (classificationUiState.classSourceMode === 'patent')
     return `<div class="seed-panel"><p class="caption">取り込み済みのIPC・Fタームを起点にします。FI・Fタームから得たIPC候補は、元の付与IPCと区別して表示します。要否判定は保持します。</p><input id="target-search" aria-label="ターゲット特許を検索" placeholder="公報番号・名称で検索" value="${esc(draft['target-search'] || '')}"><div id="target-patent-list" class="target-patent-list"></div><button id="use-targets" class="button primary wide">選んだ特許を起点にする ↗</button><p class="caption">公報番号からの外部取得は未接続です。CSVを取り込むか「分類指定」へ分類を貼り付けてください。</p><button class="button subtle small" id="target-import">CSVを取り込む →</button></div>`;
-  return `<label class="check"><input type="checkbox" id="use-llm" ${state.settings.provider !== 'offline' ? 'checked' : ''}>LLMで要素分解し、分類定義を照合</label><button id="suggest" class="button primary wide">キーワードから候補を見直す ↗</button><section id="class-proposal-feedback" class="class-proposal-feedback" aria-label="LLM候補の反映結果" aria-live="polite">${classProposalPanelHtml()}</section><div class="hint-card"><h3>技術の要素ごとに、分類を探す。</h3><p>入力技術を構成・機能・手段に分け、各要素から公式IPC・FIを探します。LLMは取得した分類の定義を照合し、候補と対応理由を返します。</p></div><p class="caption">IPC ${Number(state.classification_catalog?.ipc?.count || 0).toLocaleString()}分類・2026.01 / 英語名称。収録IPC全コードの日本語名をJPO公開データから照合済み（名称の公開時点は2026-08-18）。FI ${Number(state.classification_catalog?.fi?.count || 0).toLocaleString()}分類・2026.04（全分野）。F-term階層は5H029を収録。</p>`;
+  return `<label class="check"><input type="checkbox" id="use-llm" ${getState().settings.provider !== 'offline' ? 'checked' : ''}>LLMで要素分解し、分類定義を照合</label><button id="suggest" class="button primary wide">キーワードから候補を見直す ↗</button><section id="class-proposal-feedback" class="class-proposal-feedback" aria-label="LLM候補の反映結果" aria-live="polite">${classProposalPanelHtml()}</section><div class="hint-card"><h3>技術の要素ごとに、分類を探す。</h3><p>入力技術を構成・機能・手段に分け、各要素から公式IPC・FIを探します。LLMは取得した分類の定義を照合し、候補と対応理由を返します。</p></div><p class="caption">IPC ${Number(getState().classification_catalog?.ipc?.count || 0).toLocaleString()}分類・2026.01 / 英語名称。収録IPC全コードの日本語名をJPO公開データから照合済み（名称の公開時点は2026-08-18）。FI ${Number(getState().classification_catalog?.fi?.count || 0).toLocaleString()}分類・2026.04（全分野）。F-term階層は5H029を収録。</p>`;
 }
-function renderClassifications() {
-  if (!classDraft) classDraft = { keywords: state.keywords };
-  const view = classProposalView
+function renderClassifications(host = $('#step-content'), snapshot = getState()) {
+  if (!classificationUiState.classDraft) classificationUiState.classDraft = { keywords: snapshot.keywords };
+  const view = classificationUiState.classProposalView
       ? {
           direction: 'llm_proposal',
           total: classProposalItems().length,
           note: '今回のLLM提案を表示中です。「分野をまたぐ候補」で全体に戻れます。',
         }
-      : state.classification_view || {},
+      : snapshot.classification_view || {},
     list = classificationItems();
-  $('#step-content').innerHTML =
-    `${classSelectionSyncHtml()}<div class="explorer-grid classification-explorer"><div class="panel prompt-panel"><span class="eyebrow">CHOOSE YOUR STARTING POINT</span><h2>起点を決めて、<br>範囲を探る。</h2><label>全文キーワード（任意）<textarea id="keywords" rows="3" placeholder="分類のみの検索なら空欄">${esc(classDraft.keywords ?? state.keywords)}</textarea></label><p class="caption">入力した語句はAND条件になります。英語フレーズは &quot;solid electrolyte&quot; のように囲みます。</p><div class="source-tabs" role="group" aria-label="分類の起点"><button data-source="keywords" class="${classSourceMode === 'keywords' ? 'active' : ''}">キーワード</button><button data-source="manual" class="${classSourceMode === 'manual' ? 'active' : ''}">分類指定</button><button data-source="patent" class="${classSourceMode === 'patent' ? 'active' : ''}">特許から</button></div>${sourcePanel()}</div>
- <div class="panel canvas-panel"><div class="canvas-header"><div><h3>分類のコンステレーション</h3><p>${list.length} / ${view.total ?? list.length} 件を表示 · ${classLayoutMode() === 'semantic' ? '近い技術を、近くに' : '分類を整列して表示'}</p></div><div class="canvas-toolbar"><label class="class-language-control">名称<select id="class-language" aria-label="コンステレーションの表示言語"><option value="ja" ${classLanguage === 'ja' ? 'selected' : ''}>日本語</option><option value="en" ${classLanguage === 'en' ? 'selected' : ''}>English</option></select></label><button class="icon-button" id="class-layout-settings">配置：${classLayoutMode() === 'semantic' ? '意味の近さ' : '整列'} ⚙</button><button class="icon-button ${tool === 'lasso' ? 'active' : ''}" id="lasso-tool">◌ 囲んで選択</button><button class="icon-button" id="add-class">＋ 推薦</button></div></div>
- <div id="class-translation-status" class="class-translation-note"></div><div class="classification-search"><select id="browse-kind" aria-label="探索する分類体系"><option value="IPC">IPC</option><option value="FI" ${view.kind === 'FI' ? 'selected' : ''}>FI</option><option value="F-term" ${view.kind === 'F-term' ? 'selected' : ''}>F-term</option><option value="CPC" ${view.kind === 'CPC' ? 'selected' : ''}>CPC</option></select><input id="class-search" aria-label="分類コード・名称を検索" placeholder="分類コード・名称（日本語 / 英語）" value="${esc(classDraft['class-search'] || '')}"><button id="find-class" class="button small">探す</button></div>
+  replaceHtml(
+    host,
+    `${classSelectionSyncHtml()}<div class="explorer-grid classification-explorer"><div class="panel prompt-panel"><span class="eyebrow">CHOOSE YOUR STARTING POINT</span><h2>起点を決めて、<br>範囲を探る。</h2><label>全文キーワード（任意）<textarea id="keywords" rows="3" placeholder="分類のみの検索なら空欄">${esc(classificationUiState.classDraft.keywords ?? snapshot.keywords)}</textarea></label><p class="caption">入力した語句はAND条件になります。英語フレーズは &quot;solid electrolyte&quot; のように囲みます。</p><div class="source-tabs" role="group" aria-label="分類の起点"><button data-source="keywords" class="${classificationUiState.classSourceMode === 'keywords' ? 'active' : ''}">キーワード</button><button data-source="manual" class="${classificationUiState.classSourceMode === 'manual' ? 'active' : ''}">分類指定</button><button data-source="patent" class="${classificationUiState.classSourceMode === 'patent' ? 'active' : ''}">特許から</button></div>${sourcePanel()}</div>
+ <div class="panel canvas-panel"><div class="canvas-header"><div><h3>分類のコンステレーション</h3><p>${list.length} / ${view.total ?? list.length} 件を表示 · ${classLayoutMode() === 'semantic' ? '近い技術を、近くに' : '分類を整列して表示'}</p></div><div class="canvas-toolbar"><label class="class-language-control">名称<select id="class-language" aria-label="コンステレーションの表示言語"><option value="ja" ${classificationUiState.classLanguage === 'ja' ? 'selected' : ''}>日本語</option><option value="en" ${classificationUiState.classLanguage === 'en' ? 'selected' : ''}>English</option></select></label><button class="icon-button" id="class-layout-settings">配置：${classLayoutMode() === 'semantic' ? '意味の近さ' : '整列'} ⚙</button><button class="icon-button ${appState.tool === 'lasso' ? 'active' : ''}" id="lasso-tool">◌ 囲んで選択</button><button class="icon-button" id="add-class">＋ 推薦</button></div></div>
+ <div id="class-translation-status" class="class-translation-note"></div><div class="classification-search"><select id="browse-kind" aria-label="探索する分類体系"><option value="IPC">IPC</option><option value="FI" ${view.kind === 'FI' ? 'selected' : ''}>FI</option><option value="F-term" ${view.kind === 'F-term' ? 'selected' : ''}>F-term</option><option value="CPC" ${view.kind === 'CPC' ? 'selected' : ''}>CPC</option></select><input id="class-search" aria-label="分類コード・名称を検索" placeholder="分類コード・名称（日本語 / 英語）" value="${esc(classificationUiState.classDraft['class-search'] || '')}"><button id="find-class" class="button small">探す</button></div>
  <div class="browse-shortcuts"><button id="class-roots" class="button subtle small">全分野から</button><button id="class-overview" class="button subtle small">分野をまたぐ候補</button><button id="class-seeds" class="button subtle small">推薦した分類</button></div><div class="class-trail">${(view.trail || []).map((t) => `<button class="trail-item" data-code="${esc(t.code)}" data-kind="${esc(t.kind)}" title="${esc(t.title)}">${esc(t.code)}</button>`).join('<span>›</span>')}</div>${view.focus && ['children', 'broader'].includes(view.direction) ? `<p class="class-scope-note">現在は <b>${esc(view.focus.kind)} ${esc(view.focus.code)}</b> の枝を表示しています。他分野も含めて見渡すには「分野をまたぐ候補」を選べます。</p>` : ''}<div id="class-focus" class="class-focus"></div>
- <div class="canvas-wrap"><svg id="class-svg" class="constellation ${tool === 'lasso' ? 'lasso-mode' : ''}" viewBox="0 0 1000 530" aria-label="分類候補。クリックで起点を選び、囲んで複数選択" role="group"><g id="class-regions" aria-hidden="true"></g><g id="class-neighbors" aria-hidden="true"></g><g id="class-links" aria-hidden="true"></g><g id="class-nodes"></g><path class="lasso-path" id="class-lasso"/></svg>${!list.length ? '<div class="canvas-empty"><div class="empty-state-icon">◎</div><h3>技術の起点を、見つける。</h3><p>「全分野から」で階層をたどるか、IPC・F-termを直接指定できます。</p></div>' : ''}<div class="float-hint">クリックで起点と選択 · 囲んで一括選択</div></div>
+ <div class="canvas-wrap"><svg id="class-svg" class="constellation ${appState.tool === 'lasso' ? 'lasso-mode' : ''}" viewBox="0 0 1000 530" aria-label="分類候補。クリックで起点を選び、囲んで複数選択" role="group"><g id="class-regions" aria-hidden="true"></g><g id="class-neighbors" aria-hidden="true"></g><g id="class-links" aria-hidden="true"></g><g id="class-nodes"></g><path class="lasso-path" id="class-lasso"/></svg>${!list.length ? '<div class="canvas-empty"><div class="empty-state-icon">◎</div><h3>技術の起点を、見つける。</h3><p>「全分野から」で階層をたどるか、IPC・F-termを直接指定できます。</p></div>' : ''}<div class="float-hint">クリックで起点と選択 · 囲んで一括選択</div></div>
  <div id="class-detail" class="detail-strip" aria-live="polite"></div><div class="browse-note">${esc(view.note || '候補を見渡す操作では、保存済みの検索式は変わりません。')}${view.next_offset != null ? '<button id="class-next" class="button small">次の24件 →</button>' : ''}${view.offset > 0 ? '<button id="class-prev" class="button small">← 前の24件</button>' : ''}</div><div class="canvas-footer"><div class="legend"><span><i></i>IPC</span><span><i class="amber"></i>F-term</span><span><i class="blue"></i>CPC</span><span>FI</span></div><span>上位IPCも選択可 · 破線：未確認 · ◇：案内用</span></div></div></div>
- <div class="selection-bar"><div class="selection-main"><div class="selected-content" id="selected-classes"></div><p class="caption">上位IPCは下位分類を含む範囲として初案に使えます。分類同士はORで接続し、親を残して子を追加しても狭まらないため、置き換えか個別解除で調整してください。</p><div class="button-row"><button id="clear-class" class="button small subtle">すべて解除</button><button id="undo-class" class="button small subtle" ${classUndo.length ? '' : 'disabled'}>選択を1つ戻す</button></div></div><button class="button primary" id="to-query">この条件で初案をつくる →</button></div><details class="list-toggle"><summary>表示中の分類をリストで確認する</summary><div class="class-list" id="class-list"></div></details>`;
+ <div class="selection-bar"><div class="selection-main"><div class="selected-content" id="selected-classes"></div><p class="caption">上位IPCは下位分類を含む範囲として初案に使えます。分類同士はORで接続し、親を残して子を追加しても狭まらないため、置き換えか個別解除で調整してください。</p><div class="button-row"><button id="clear-class" class="button small subtle">すべて解除</button><button id="undo-class" class="button small subtle" ${classificationUiState.classUndo.length ? '' : 'disabled'}>選択を1つ戻す</button></div></div><button class="button primary" id="to-query">この条件で初案をつくる →</button></div><details class="list-toggle"><summary>表示中の分類をリストで確認する</summary><div class="class-list" id="class-list"></div></details>`
+  );
   drawClassNodes();
   updateSelectedClasses();
   renderClassFocus();
@@ -488,29 +562,35 @@ function renderClassifications() {
     $('#classification-layout').scrollIntoView({ block: 'center', behavior: 'smooth' });
   });
   $$('.source-tabs button').forEach((el) =>
-    el.addEventListener('click', () => {
-      captureClassDraft();
-      classSourceMode = el.dataset.source;
-      renderStep();
-    })
+    listen(
+      el,
+      'click',
+      () => {
+        captureClassDraft();
+        classificationUiState.classSourceMode = el.dataset.source;
+        renderStep();
+      },
+      undefined,
+      'classification-ui.js:5'
+    )
   );
   on('#suggest', 'click', async (e) =>
     busy(e.currentTarget, '候補を探しています…', async () => {
       captureClassDraft();
-      const body = { keywords: classDraft.keywords, use_llm: $('#use-llm').checked };
+      const body = { keywords: classificationUiState.classDraft.keywords, use_llm: $('#use-llm').checked };
       await suggestClassCandidates(body);
     })
   );
   on('#clear-class', 'click', () => changeClassSelection([]));
   on('#undo-class', 'click', undoClassSelection);
   on('#lasso-tool', 'click', () => {
-    tool = tool === 'lasso' ? 'click' : 'lasso';
-    $('#class-svg').classList.toggle('lasso-mode', tool === 'lasso');
-    $('#lasso-tool').classList.toggle('active', tool === 'lasso');
+    appState.tool = appState.tool === 'lasso' ? 'click' : 'lasso';
+    $('#class-svg').classList.toggle('lasso-mode', appState.tool === 'lasso');
+    $('#lasso-tool').classList.toggle('active', appState.tool === 'lasso');
   });
   on('#add-class', 'click', () => {
     captureClassDraft();
-    classSourceMode = 'manual';
+    classificationUiState.classSourceMode = 'manual';
     renderStep();
   });
   on('#find-class', 'click', () =>
@@ -530,9 +610,12 @@ function renderClassifications() {
   on('#class-overview', 'click', () => browseClasses({ direction: 'overview' }));
   on('#class-seeds', 'click', () => browseClasses({ direction: 'seeds' }));
   $$('.trail-item').forEach((el) =>
-    el.addEventListener(
+    listen(
+      el,
       'click',
-      run(() => browseClasses({ direction: 'children', code: el.dataset.code, kind: el.dataset.kind }))
+      run(() => browseClasses({ direction: 'children', code: el.dataset.code, kind: el.dataset.kind })),
+      undefined,
+      'classification-ui.js:6'
     )
   );
   on('#class-next', 'click', () =>
@@ -557,11 +640,11 @@ function renderClassifications() {
     busy(e.currentTarget, '追加しています…', async () => {
       captureClassDraft();
       await addClassSeeds({
-        ipc_text: classDraft['seed-ipc'] || '',
-        fi_text: classDraft['seed-fi'] || '',
-        fterm_text: classDraft['seed-fterm'] || '',
-        cpc_text: classDraft['seed-cpc'] || '',
-        label: classDraft['seed-label'] || '利用者の推薦',
+        ipc_text: classificationUiState.classDraft['seed-ipc'] || '',
+        fi_text: classificationUiState.classDraft['seed-fi'] || '',
+        fterm_text: classificationUiState.classDraft['seed-fterm'] || '',
+        cpc_text: classificationUiState.classDraft['seed-cpc'] || '',
+        label: classificationUiState.classDraft['seed-label'] || '利用者の推薦',
       });
     })
   );
@@ -575,18 +658,18 @@ function renderClassifications() {
       addClassSeeds({ patent_ids: [...targetPatentIds] })
     )
   );
-  if (classSourceMode === 'patent') renderTargetPatents();
+  if (classificationUiState.classSourceMode === 'patent') renderTargetPatents();
   on('#to-query', 'click', async (e) =>
     busy(e.currentTarget, '初案を作成中…', async () => {
       captureClassDraft();
-      const words = classDraft.keywords;
+      const words = classificationUiState.classDraft.keywords;
       if (
         await requestClassState(async () => {
           await api('/keywords', { keywords: words });
           return api('/query', {});
         })
       ) {
-        viewedQueryId = null;
+        appState.viewedQueryId = null;
         setStep(1);
       }
     })
@@ -595,111 +678,136 @@ function renderClassifications() {
 async function browseClasses(body) {
   captureClassDraft();
   if (!(await requestClassState(() => api('/classifications/browse', body)))) return;
-  classProposalView = false;
-  const focus = state.classification_view?.focus;
-  classFocusKey = focus ? keyOf(focus) : null;
+  classificationUiState.classProposalView = false;
+  const focus = getState().classification_view?.focus;
+  classificationUiState.classFocusKey = focus ? keyOf(focus) : null;
   renderClassResponse();
 }
 async function addClassSeeds(body) {
   captureClassDraft();
   if (!(await requestClassState(() => api('/classifications/seeds', { ...body, select: false })))) return;
-  classProposalView = false;
-  classFocusKey = state.classification_view.keys[0] || null;
+  classificationUiState.classProposalView = false;
+  classificationUiState.classFocusKey = getState().classification_view.keys[0] || null;
   renderClassResponse();
   toast('起点を追加しました。検索に使う分類を選んでください。');
 }
 function renderTargetPatents() {
-  for (const id of targetPatentIds) if (!state.patents.some((p) => p.id === id)) targetPatentIds.delete(id);
+  for (const id of targetPatentIds)
+    if (!getState().patents.some((p) => p.id === id)) targetPatentIds.delete(id);
   const query = ($('#target-search')?.value || '').toLowerCase();
-  const rows = state.patents.filter((p) => (p.id + ' ' + p.title).toLowerCase().includes(query));
-  $('#target-patent-list').innerHTML =
+  const rows = getState().patents.filter((p) => (p.id + ' ' + p.title).toLowerCase().includes(query));
+  replaceHtml(
+    $('#target-patent-list'),
     rows
       .slice(0, 30)
       .map(
         (p) =>
           `<label class="target-row"><input type="checkbox" data-id="${esc(p.id)}" ${targetPatentIds.has(p.id) ? 'checked' : ''}><span><b>${esc(p.id)}</b><small>${esc(p.title)}</small><small>${p.ipc ? 'IPC：' + esc(p.ipc) : 'IPC未取込'}${p.fi ? `<br>FI：${esc(p.fi)}` : ''}${p.fterm ? `<br>Fターム：${esc(p.fterm)}` : ''}</small></span></label>`
       )
-      .join('') || '<p class="caption">対象特許がありません。</p>';
+      .join('') || '<p class="caption">対象特許がありません。</p>'
+  );
   $('#target-patent-list').insertAdjacentHTML(
     'beforeend',
     `<p class="caption">${rows.length} 件中 ${Math.min(30, rows.length)} 件表示 · 選択 ${targetPatentIds.size} 件</p>`
   );
   $$('#target-patent-list input').forEach((el) =>
-    el.addEventListener('change', () => {
-      if (el.checked) targetPatentIds.add(el.dataset.id);
-      else targetPatentIds.delete(el.dataset.id);
-      renderTargetPatents();
-    })
+    listen(
+      el,
+      'change',
+      () => {
+        if (el.checked) targetPatentIds.add(el.dataset.id);
+        else targetPatentIds.delete(el.dataset.id);
+        renderTargetPatents();
+      },
+      undefined,
+      'classification-ui.js:7'
+    )
   );
 }
 function rememberClassSelection() {
-  classUndo.push([...state.selected]);
-  if (classUndo.length > 30) classUndo.shift();
+  classificationUiState.classUndo.push([...getState().selected]);
+  if (classificationUiState.classUndo.length > 30) classificationUiState.classUndo.shift();
 }
 function changeClassSelection(next) {
-  if (classBusy || classSelectionStale) return;
+  if (classificationUiState.classBusy || classificationUiState.classSelectionStale) return;
   rememberClassSelection();
-  state.selected = [...new Set(next)];
+  getState().selected = [...new Set(next)];
   updateSelectedClasses();
   persistSelection();
 }
 function undoClassSelection() {
-  if (classBusy || classSelectionStale || !classUndo.length) return;
-  state.selected = classUndo
+  if (
+    classificationUiState.classBusy ||
+    classificationUiState.classSelectionStale ||
+    !classificationUiState.classUndo.length
+  )
+    return;
+  getState().selected = classificationUiState.classUndo
     .pop()
-    .filter((k) => state.candidates.some((c) => keyOf(c) === k && c.selectable !== false));
+    .filter((k) => getState().candidates.some((c) => keyOf(c) === k && c.selectable !== false));
   updateSelectedClasses();
   persistSelection();
 }
 function persistSelection() {
-  if (classSelectionStale) return;
-  const selected = [...state.selected];
-  selectionSave = selectionSave.catch(() => {}).then(() => api('/selection', { selected }));
-  selectionSave.catch((error) => toast(error.message, true));
+  if (classificationUiState.classSelectionStale) return;
+  const selected = [...getState().selected];
+  appState.selectionSave = appState.selectionSave.catch(() => {}).then(() => api('/selection', { selected }));
+  appState.selectionSave.catch((error) => toast(error.message, true));
 }
 function toggleClass(code) {
-  if (classBusy || classSelectionStale) return;
-  const c = state.candidates.find((c) => keyOf(c) === code);
+  if (classificationUiState.classBusy || classificationUiState.classSelectionStale) return;
+  const c = getState().candidates.find((c) => keyOf(c) === code);
   if (!c) return;
-  classFocusKey = code;
+  classificationUiState.classFocusKey = code;
   renderClassFocus();
   classDetail(c);
   if (c.selectable !== false)
     changeClassSelection(
-      state.selected.includes(code) ? state.selected.filter((k) => k !== code) : [...state.selected, code]
+      getState().selected.includes(code)
+        ? getState().selected.filter((k) => k !== code)
+        : [...getState().selected, code]
     );
 }
 function updateSelectedClasses() {
   if (!$('#selected-classes')) return;
-  $('#selected-classes').innerHTML =
-    `<span class="selected-count"><b>${state.selected.length.toString().padStart(2, '0')}</b> 件を検索に使用</span>${state.selected
-      .map((k) => {
-        const c = state.candidates.find((c) => keyOf(c) === k);
+  replaceHtml(
+    $('#selected-classes'),
+    `<span class="selected-count"><b>${getState().selected.length.toString().padStart(2, '0')}</b> 件を検索に使用</span>${getState()
+      .selected.map((k) => {
+        const c = getState().candidates.find((c) => keyOf(c) === k);
         return `<button class="chip remove-class" data-key="${esc(k)}" title="選択から解除">${esc(c?.kind || '')} ${esc(c?.code || k)} ×</button>`;
       })
-      .join('')}`;
+      .join('')}`
+  );
   $$('.remove-class').forEach((el) =>
-    el.addEventListener('click', () =>
-      changeClassSelection(state.selected.filter((k) => k !== el.dataset.key))
+    listen(
+      el,
+      'click',
+      () => changeClassSelection(getState().selected.filter((k) => k !== el.dataset.key)),
+      undefined,
+      'classification-ui.js:8'
     )
   );
   $$('.node, #class-list button[data-code]').forEach((n) => {
-    const yes = state.selected.includes(n.dataset.code);
+    const yes = getState().selected.includes(n.dataset.code);
     n.classList.toggle('selected', yes);
     n.classList.toggle('active', yes);
     n.setAttribute('aria-pressed', String(yes));
     const mark = $('.selection-mark', n);
     if (mark) mark.textContent = yes ? '✓' : n.dataset.selectable === 'false' ? '◇' : '';
   });
-  if ($('#undo-class')) $('#undo-class').disabled = !classUndo.length;
+  if ($('#undo-class')) $('#undo-class').disabled = !classificationUiState.classUndo.length;
   renderClassProposalFeedback();
 }
 function renderClassFocus() {
   const c = classFocus();
   if (!$('#class-focus')) return;
-  $('#class-focus').innerHTML = c
-    ? `<div><span class="eyebrow">探索の起点</span><b>${esc(c.kind)} ${esc(c.code)}</b><span class="focus-title">${esc(classTitle(c))}</span>${classScopeText(c) ? `<small>${esc(classScopeText(c))}</small>` : ''}</div><div class="focus-actions"><button id="class-broader" class="button small">↗ 広げる</button><button id="class-narrower" class="button small">↘ 狭める</button><button id="replace-class" class="button small subtle" ${c.selectable === false ? 'disabled' : ''}>選択をこの分類に置き換える</button></div>`
-    : '<p class="caption">分類をクリックすると、広げる・狭める起点になります。</p>';
+  replaceHtml(
+    $('#class-focus'),
+    c
+      ? `<div><span class="eyebrow">探索の起点</span><b>${esc(c.kind)} ${esc(c.code)}</b><span class="focus-title">${esc(classTitle(c))}</span>${classScopeText(c) ? `<small>${esc(classScopeText(c))}</small>` : ''}</div><div class="focus-actions"><button id="class-broader" class="button small">↗ 広げる</button><button id="class-narrower" class="button small">↘ 狭める</button><button id="replace-class" class="button small subtle" ${c.selectable === false ? 'disabled' : ''}>選択をこの分類に置き換える</button></div>`
+      : '<p class="caption">分類をクリックすると、広げる・狭める起点になります。</p>'
+  );
   if (!c) return;
   on('#class-broader', 'click', () => browseClasses({ direction: 'broader', kind: c.kind, code: c.code }));
   on('#class-narrower', 'click', () => browseClasses({ direction: 'children', kind: c.kind, code: c.code }));
@@ -722,7 +830,8 @@ function classDetail(c) {
   const matches = c.matched_classifications || [];
   const source = safeUrl(c.source);
   $('#class-detail').classList.add('visible');
-  $('#class-detail').innerHTML =
+  replaceHtml(
+    $('#class-detail'),
     `<b>${esc(c.kind)} ${esc(c.code)} · ${esc(classTitle(c))}</b> <span class="pill">${c.verified ? 'コード・定義を辞書で確認済み' : '存在・定義は未確認'}</span>${c.evidence_status === 'derived_candidate' ? '<span class="pill">対応づけによるIPC候補 · 付与IPCとは別</span>' : ''}${c.evidence_status === 'hypothesis' ? '<span class="pill">探索仮説・適合性は確認待ち</span>' : ''}${classNamesHtml(c)}${facets.length ? `<p class="class-facet-tags">${facets.map((label) => `<span>${esc(label)}</span>`).join('')}</p>` : ''}<p>${esc(c.reason || '公式分類の階層を確認できます。')}</p>${classProposalReasonHtml(c)}${c.parent ? `<span class="caption">公式の上位分類：${esc(c.parent)}</span>` : ''}${
       matches.length
         ? `<details class="class-match-details"><summary>推薦の起点になった分類 ${matches.length} 件</summary>${matches
@@ -735,13 +844,14 @@ function classDetail(c) {
               ''
             )}${matches.length > 12 ? '<p class="caption">代表の12件を表示しています。</p>' : ''}</details>`
         : ''
-    }${(c.origins || c.classification_origins || []).map((o) => `<p class="caption">${o.type === 'patent' ? 'ターゲット特許' : o.type === 'discovery' ? '探索ラボ' : o.type === 'fi_to_ipc' ? 'FIから得たIPC候補' : o.type === 'fterm_theme_to_ipc' ? 'Fタームのテーマ範囲から得たIPC候補' : '利用者の推薦'}：${esc(o.patent_id || '')} ${esc(o.label)}${o.raw ? `<br>入力原文：${esc(o.raw)}` : ''}${o.warning ? `<br>${esc(o.warning)}` : ''}</p>`).join('')}${source ? `<a href="${esc(source)}" target="_blank" rel="noopener noreferrer">公式分類表を確認 ↗</a>` : ''}`;
+    }${(c.origins || c.classification_origins || []).map((o) => `<p class="caption">${o.type === 'patent' ? 'ターゲット特許' : o.type === 'discovery' ? '探索ラボ' : o.type === 'fi_to_ipc' ? 'FIから得たIPC候補' : o.type === 'fterm_theme_to_ipc' ? 'Fタームのテーマ範囲から得たIPC候補' : '利用者の推薦'}：${esc(o.patent_id || '')} ${esc(o.label)}${o.raw ? `<br>入力原文：${esc(o.raw)}` : ''}${o.warning ? `<br>${esc(o.warning)}` : ''}</p>`).join('')}${source ? `<a href="${esc(source)}" target="_blank" rel="noopener noreferrer">公式分類表を確認 ↗</a>` : ''}`
+  );
 }
 function drawClassNodes() {
   hideClassTooltip();
   renderClassTranslationStatus();
-  classMotionController = null;
-  cancelAnimationFrame(animation);
+  classificationUiState.classMotionController = null;
+  cancelAnimationFrame(appState.animation);
   const list = classificationItems(),
     svg = $('#class-svg'),
     mode = classLayoutMode();
@@ -761,12 +871,19 @@ function drawClassNodes() {
       c.group,
     ]),
   ]);
-  if (classLayoutCache?.key !== cacheKey)
-    classLayoutCache = {
+  if (classificationUiState.classLayoutCache?.key !== cacheKey)
+    classificationUiState.classLayoutCache = {
       key: cacheKey,
       value: PatentClassLayout.compute(list, { mode, width: requestedWidth }),
     };
-  const { positions, width, height, method, groups = [], links = [] } = classLayoutCache.value;
+  const {
+    positions,
+    width,
+    height,
+    method,
+    groups = [],
+    links = [],
+  } = classificationUiState.classLayoutCache.value;
   svg.dataset.layout = mode;
   svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
   svg.style.height = `${Math.max(380, (height * svg.parentElement.clientWidth) / width)}px`;
@@ -781,16 +898,19 @@ function drawClassNodes() {
     mode === 'semantic'
       ? `${method}で配置 · まとまりの見出しは技術の目安 / 実線：正式な親子関係 · 点線：名称・技術項目の近さ`
       : '等間隔の一覧表示 / 実線：表示中の正式な親子関係';
-  $('#class-regions').innerHTML =
+  replaceHtml(
+    $('#class-regions'),
     mode === 'semantic'
       ? groups
           .map((group) => {
             const b = group.bounds;
-            return `<g class="class-region"><rect x="${b.x}" y="${b.y}" width="${b.width}" height="${b.height}" rx="30"/><text x="${b.x + 16}" y="${b.y + 23}" data-width="${b.width - 32}">${esc(PatentClassLabels.group(group.label, classLanguage))}<tspan class="class-region-count"> · ${group.memberIndices.length}</tspan></text></g>`;
+            return `<g class="class-region"><rect x="${b.x}" y="${b.y}" width="${b.width}" height="${b.height}" rx="30"/><text x="${b.x + 16}" y="${b.y + 23}" data-width="${b.width - 32}">${esc(PatentClassLabels.group(group.label, classificationUiState.classLanguage))}<tspan class="class-region-count"> · ${group.memberIndices.length}</tspan></text></g>`;
           })
           .join('')
-      : '';
-  $('#class-neighbors').innerHTML =
+      : ''
+  );
+  replaceHtml(
+    $('#class-neighbors'),
     mode === 'semantic'
       ? links
           .map((link) => {
@@ -800,66 +920,102 @@ function drawClassNodes() {
             return `<line class="class-neighbor" data-from="${link.from}" data-to="${link.to}" x1="${a[0]}" y1="${a[1]}" x2="${b[0]}" y2="${b[1]}"><title>${esc(link.reason || '名称・技術項目が近い候補')}</title></line>`;
           })
           .join('')
-      : '';
-  $('#class-nodes').innerHTML = list
-    .map((c, i) => {
-      const p = positions[i],
-        r = 36,
-        title = classTitle(c);
-      return `<g class="node ${c.kind === 'F-term' ? 'fterm' : c.kind === 'CPC' ? 'cpc' : ''} ${!c.verified ? 'unverified' : ''} ${c.selectable === false ? 'navigation-node' : ''}" data-code="${esc(keyOf(c))}" data-selectable="${c.selectable !== false}" data-i="${i}" transform="translate(${p[0]} ${p[1]})" role="button" tabindex="0" aria-label="${esc(c.kind + ' ' + c.code + ' ' + title)}" aria-describedby="class-tooltip" aria-pressed="false"><title>${esc(PatentClassLabels.tooltip(c))}</title><circle class="node-circle" r="${r}"/><text class="node-kind" y="-6">${esc(c.kind)}</text><text class="node-code" y="53">${esc(c.code)}</text><text class="node-title" y="74">${esc(title.length > 21 ? title.slice(0, 19) + '…' : title)}</text><text class="selection-mark" y="17"></text></g>`;
-    })
-    .join('');
-  $('#class-links').innerHTML = list
-    .map((c, i) => {
-      const pi = list.findIndex((p) => p.kind === c.kind && p.code === c.parent);
-      if (pi < 0) return '';
-      return `<line data-from="${pi}" data-to="${i}" x1="${positions[pi][0]}" y1="${positions[pi][1]}" x2="${positions[i][0]}" y2="${positions[i][1]}" stroke="#7898aa40" stroke-width="1"/>`;
-    })
-    .join('');
-  $('#class-list').innerHTML = list
-    .map(
-      (c) =>
-        `<button type="button" data-code="${esc(keyOf(c))}" aria-pressed="false" title="${esc(PatentClassLabels.tooltip(c))}">${esc(c.kind)} ${esc(c.code)}<br>${esc(classTitle(c))}<br><span class="caption">${c.selectable === false ? '案内用・選択不可' : c.selection_scope === 'subtree' ? '上位IPC・下位を含む' : c.verified ? '辞書で確認済み' : '未確認候補'} ${(c.origins || []).length ? '· 推薦した分類' : ''}</span></button>`
-    )
-    .join('');
+      : ''
+  );
+  replaceHtml(
+    $('#class-nodes'),
+    list
+      .map((c, i) => {
+        const p = positions[i],
+          r = 36,
+          title = classTitle(c);
+        return `<g class="node ${c.kind === 'F-term' ? 'fterm' : c.kind === 'CPC' ? 'cpc' : ''} ${!c.verified ? 'unverified' : ''} ${c.selectable === false ? 'navigation-node' : ''}" data-code="${esc(keyOf(c))}" data-selectable="${c.selectable !== false}" data-i="${i}" transform="translate(${p[0]} ${p[1]})" role="button" tabindex="0" aria-label="${esc(c.kind + ' ' + c.code + ' ' + title)}" aria-describedby="class-tooltip" aria-pressed="false"><title>${esc(PatentClassLabels.tooltip(c))}</title><circle class="node-circle" r="${r}"/><text class="node-kind" y="-6">${esc(c.kind)}</text><text class="node-code" y="53">${esc(c.code)}</text><text class="node-title" y="74">${esc(title.length > 21 ? title.slice(0, 19) + '…' : title)}</text><text class="selection-mark" y="17"></text></g>`;
+      })
+      .join('')
+  );
+  replaceHtml(
+    $('#class-links'),
+    list
+      .map((c, i) => {
+        const pi = list.findIndex((p) => p.kind === c.kind && p.code === c.parent);
+        if (pi < 0) return '';
+        return `<line data-from="${pi}" data-to="${i}" x1="${positions[pi][0]}" y1="${positions[pi][1]}" x2="${positions[i][0]}" y2="${positions[i][1]}" stroke="#7898aa40" stroke-width="1"/>`;
+      })
+      .join('')
+  );
+  replaceHtml(
+    $('#class-list'),
+    list
+      .map(
+        (c) =>
+          `<button type="button" data-code="${esc(keyOf(c))}" aria-pressed="false" title="${esc(PatentClassLabels.tooltip(c))}">${esc(c.kind)} ${esc(c.code)}<br>${esc(classTitle(c))}<br><span class="caption">${c.selectable === false ? '案内用・選択不可' : c.selection_scope === 'subtree' ? '上位IPC・下位を含む' : c.verified ? '辞書で確認済み' : '未確認候補'} ${(c.origins || []).length ? '· 推薦した分類' : ''}</span></button>`
+      )
+      .join('')
+  );
   $$('.node', svg).forEach((n) => {
     const c = list[Number(n.dataset.i)];
-    n.addEventListener('mouseenter', (e) => {
-      classDetail(c);
-      showClassTooltip(c, e, n);
-    });
-    n.addEventListener('mousemove', (e) => positionClassTooltip(e, n));
-    n.addEventListener('mouseleave', queueHideClassTooltip);
-    n.addEventListener('focus', (e) => {
-      classDetail(c);
-      showClassTooltip(c, e, n);
-    });
-    n.addEventListener('blur', queueHideClassTooltip);
-    n.addEventListener('click', () => {
-      if (!svg.dataset.dragged) toggleClass(keyOf(c));
-    });
-    n.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') hideClassTooltip();
-      if (e.key === ' ' || e.key === 'Enter') {
-        e.preventDefault();
-        toggleClass(keyOf(c));
-      }
-    });
+    listen(
+      n,
+      'mouseenter',
+      (e) => {
+        classDetail(c);
+        showClassTooltip(c, e, n);
+      },
+      undefined,
+      'classification-ui.js:9'
+    );
+    listen(n, 'mousemove', (e) => positionClassTooltip(e, n), undefined, 'classification-ui.js:10');
+    listen(n, 'mouseleave', queueHideClassTooltip, undefined, 'classification-ui.js:11');
+    listen(
+      n,
+      'focus',
+      (e) => {
+        classDetail(c);
+        showClassTooltip(c, e, n);
+      },
+      undefined,
+      'classification-ui.js:12'
+    );
+    listen(n, 'blur', queueHideClassTooltip, undefined, 'classification-ui.js:13');
+    listen(
+      n,
+      'click',
+      () => {
+        if (!svg.dataset.dragged) toggleClass(keyOf(c));
+      },
+      undefined,
+      'classification-ui.js:14'
+    );
+    listen(
+      n,
+      'keydown',
+      (e) => {
+        if (e.key === 'Escape') hideClassTooltip();
+        if (e.key === ' ' || e.key === 'Enter') {
+          e.preventDefault();
+          toggleClass(keyOf(c));
+        }
+      },
+      undefined,
+      'classification-ui.js:15'
+    );
   });
-  $$('#class-list button').forEach((n) => n.addEventListener('click', () => toggleClass(n.dataset.code)));
+  $$('#class-list button').forEach((n) =>
+    listen(n, 'click', () => toggleClass(n.dataset.code), undefined, 'classification-ui.js:16')
+  );
   let lassoBefore;
   enableLasso(
     svg,
     '#class-lasso',
     '.node[data-selectable="true"]',
     (node) => {
-      if (classBusy || classSelectionStale) return;
-      if (!lassoBefore) lassoBefore = [...state.selected];
-      if (!state.selected.includes(node.dataset.code)) state.selected.push(node.dataset.code);
+      if (classificationUiState.classBusy || classificationUiState.classSelectionStale) return;
+      if (!lassoBefore) lassoBefore = [...getState().selected];
+      if (!getState().selected.includes(node.dataset.code)) getState().selected.push(node.dataset.code);
     },
     () => {
       if (lassoBefore) {
-        classUndo.push(lassoBefore);
+        classificationUiState.classUndo.push(lassoBefore);
         lassoBefore = null;
       }
       updateSelectedClasses();
@@ -884,8 +1040,8 @@ function drawClassNodes() {
       edges = $$('#class-links line, #class-neighbors line', svg);
     const moving = () =>
       document.contains(svg) &&
-      activeTab === 'explore' &&
-      step === 0 &&
+      appState.activeTab === 'explore' &&
+      appState.step === 0 &&
       document.documentElement.dataset.atlasMotion !== 'static' &&
       !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const tick = (time) => {
@@ -907,12 +1063,64 @@ function drawClassNodes() {
           line.setAttribute('y2', b[1]);
         });
       }
-      animation = requestAnimationFrame(tick);
+      appState.animation = requestAnimationFrame(tick);
     };
-    classMotionController = () => {
-      cancelAnimationFrame(animation);
-      if (moving()) animation = requestAnimationFrame(tick);
+    classificationUiState.classMotionController = () => {
+      cancelAnimationFrame(appState.animation);
+      if (moving()) appState.animation = requestAnimationFrame(tick);
     };
     syncClassMotion();
   }
 }
+
+export {
+  targetPatentIds,
+  syncClassMotion,
+  classSelectionSyncHtml,
+  syncClassSelection,
+  classProposalReasonHtml,
+  classElementSummaryHtml,
+  classProposalPanelHtml,
+  showClassProposalMap,
+  suggestClassCandidates,
+  addClassProposalBroader,
+  classScopeText,
+  applyClassTranslations,
+  setClassLanguage,
+  hideClassTooltip,
+  classNamesHtml,
+  describeClassLayout,
+  classificationItems,
+  captureClassDraft,
+  resetClassExplorer,
+  requestClassState,
+  renderClassifications,
+  browseClasses,
+  renderTargetPatents,
+  changeClassSelection,
+  undoClassSelection,
+  persistSelection,
+  toggleClass,
+  updateSelectedClasses,
+  renderClassFocus,
+  classDetail,
+  drawClassNodes,
+};
+
+export function initClassification() {
+  on('#cancel-classification', 'click', () => $('#classification-dialog').close());
+  on('#classification-form', 'submit', async (e) => {
+    e.preventDefault();
+    setState(
+      await api('/classification', {
+        kind: $('#new-class-kind').value,
+        code: $('#new-class-code').value,
+        title: $('#new-class-title').value,
+      })
+    );
+    $('#classification-dialog').close();
+    renderStep();
+  });
+}
+
+export { renderClassifications as render };

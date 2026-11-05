@@ -1,8 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const vm = require('node:vm');
-const source = fs.readFileSync('static/query-library-ui.js', 'utf8');
+const { loadModule } = require('./module-harness.cjs');
+
 const plain = (value) => JSON.parse(JSON.stringify(value));
 const entry = () => ({
   id: 'e1',
@@ -37,7 +37,7 @@ const entry = () => ({
     },
   },
 });
-function setup() {
+async function setup() {
   const requests = [],
     navigation = [],
     dom = {};
@@ -54,23 +54,35 @@ function setup() {
     setStep: (step) => navigation.push(step),
     setTimeout,
   };
-  vm.createContext(c);
-  vm.runInContext(source, c);
+  c.setState = (next) => (c.state = next);
+  c.getState = () => c.state;
+
+  await loadModule(c, 'query-library-ui.js', [
+    'queryLibraryTreeHtml',
+    'queryLibraryHtml',
+    'queryLibraryChoose',
+    'queryLibraryInvalidate',
+    'queryLibraryPayload',
+    'queryLibraryAcceptSuggestion',
+    'queryLibraryReadFile',
+    'queryLibraryPortable',
+    'queryLibraryAction',
+  ]);
   return {
     c,
     requests,
     navigation,
     dom,
-    read: (expr) => vm.runInContext(expr, c),
+
     set: (key, value) => {
       c.tmp = value;
-      vm.runInContext(`queryLibraryDraft.${key}=tmp`, c);
+      c.queryLibraryDraft[key] = c.tmp;
       delete c.tmp;
     },
   };
 }
-test('empty library offers paste/file and explicit import formats', () => {
-  const { c } = setup(),
+test('empty library offers paste/file and explicit import formats', async () => {
+  const { c } = await setup(),
     html = c.queryLibraryHtml({ library: [] });
   assert.match(html, /ql-file/);
   assert.match(html, /ql-text/);
@@ -78,8 +90,8 @@ test('empty library offers paste/file and explicit import formats', () => {
   assert.match(html, /J-PlatPat/);
   assert.doesNotMatch(html, /id="ql-apply"/);
 });
-test('editable example preserves original purpose and offers current workbench purpose', () => {
-  const { c } = setup(),
+test('editable example preserves original purpose and offers current workbench purpose', async () => {
+  const { c } = await setup(),
     html = c.queryLibraryHtml(c.state.research_workbench);
   assert.match(html, /先行技術調査/);
   assert.match(html, /今回の目的/);
@@ -87,8 +99,8 @@ test('editable example preserves original purpose and offers current workbench p
   assert.match(html, /ql-preview/);
   assert.doesNotMatch(html, /id="ql-apply"/);
 });
-test('reference-only examples cannot be adapted or downloaded as structure', () => {
-  const { c } = setup();
+test('reference-only examples cannot be adapted or downloaded as structure', async () => {
+  const { c } = await setup();
   c.state.research_workbench.library[0].status = 'reference_only';
   c.state.research_workbench.library[0].issues = ['未対応構文'];
   const html = c.queryLibraryHtml(c.state.research_workbench);
@@ -96,8 +108,8 @@ test('reference-only examples cannot be adapted or downloaded as structure', () 
   assert.doesNotMatch(html, /id="ql-preview"|id="ql-apply"|id="ql-download"/);
   assert.throws(() => c.queryLibraryPortable(c.state.research_workbench.library[0]));
 });
-test('all imported content is escaped including tree values and errors', () => {
-  const s = setup(),
+test('all imported content is escaped including tree values and errors', async () => {
+  const s = await setup(),
     evil = '<img src=x onerror="alert(1)">';
   const e = s.c.state.research_workbench.library[0];
   for (const k of ['id', 'name', 'purpose', 'original_text', 'source_format']) e[k] = evil;
@@ -111,7 +123,7 @@ test('all imported content is escaped including tree values and errors', () => {
   assert.doesNotMatch(s.c.queryLibraryTreeHtml({ op: 'class', value: evil, system: evil }), /<img/);
 });
 test('preview sends exact full-phrase mappings and an explicit target purpose', async () => {
-  const s = setup();
+  const s = await setup();
   s.c.queryLibraryChoose('e1');
   s.set('edits', { 車両: '航空機', 自動車: '自動車' });
   s.set('classEdits', { 'IPC:B60': 'B64' });
@@ -128,10 +140,10 @@ test('preview sends exact full-phrase mappings and an explicit target purpose', 
       },
     },
   ]);
-  assert.equal(s.read('queryLibraryDraft.preview.preview_hash'), 'h1');
+  assert.equal(s.c.queryLibraryDraft.preview.preview_hash, 'h1');
 });
 test('apply requires reviewed preview and carries stale-state hash', async () => {
-  const s = setup();
+  const s = await setup();
   await assert.rejects(s.c.queryLibraryAction('apply'), /プレビュー/);
   assert.equal(s.requests.length, 0);
   await s.c.queryLibraryAction('preview');
@@ -149,15 +161,15 @@ test('apply requires reviewed preview and carries stale-state hash', async () =>
   assert.deepEqual(s.navigation, ['explore', 1]);
 });
 test('edits after preview invalidate apply and do not send a write', async () => {
-  const s = setup();
+  const s = await setup();
   await s.c.queryLibraryAction('preview');
   s.set('edits', { 車両: '航空機' });
   await assert.rejects(s.c.queryLibraryAction('apply'), /変わりました/);
   assert.equal(s.requests.length, 1);
-  assert.equal(s.read('queryLibraryDraft.preview'), null);
+  assert.equal(s.c.queryLibraryDraft.preview, null);
 });
 test('blank replacements fail before network and failed preview keeps drafts', async () => {
-  const s = setup();
+  const s = await setup();
   s.c.queryLibraryChoose('e1');
   s.set('edits', { 車両: '' });
   await assert.rejects(s.c.queryLibraryAction('preview'), /空欄/);
@@ -167,12 +179,12 @@ test('blank replacements fail before network and failed preview keeps drafts', a
     throw Error('接続失敗');
   };
   await assert.rejects(s.c.queryLibraryAction('preview'), /接続失敗/);
-  assert.equal(s.read('queryLibraryDraft.edits["車両"]'), '航空機');
-  assert.equal(s.read('queryLibraryDraft.busy'), false);
-  assert.equal(s.read('queryLibraryDraft.preview'), null);
+  assert.equal(s.c.queryLibraryDraft.edits['車両'], '航空機');
+  assert.equal(s.c.queryLibraryDraft.busy, false);
+  assert.equal(s.c.queryLibraryDraft.preview, null);
 });
 test('file reader enforces limits before reading and auto selects JSON', async () => {
-  const s = setup();
+  const s = await setup();
   let read = false;
   await assert.rejects(
     s.c.queryLibraryReadFile({
@@ -186,12 +198,12 @@ test('file reader enforces limits before reading and auto selects JSON', async (
   );
   assert.equal(read, false);
   await s.c.queryLibraryReadFile({ size: 2, name: 'example.json', text: async () => '{}' });
-  assert.equal(s.read('queryLibraryDraft.source_format'), 'portable_json');
-  assert.equal(s.read('queryLibraryDraft.text'), '{}');
-  assert.equal(s.read('queryLibraryDraft.name'), 'example');
+  assert.equal(s.c.queryLibraryDraft.source_format, 'portable_json');
+  assert.equal(s.c.queryLibraryDraft.text, '{}');
+  assert.equal(s.c.queryLibraryDraft.name, 'example');
 });
-test('portable download contains original logical tree only, no workspace settings', () => {
-  const s = setup(),
+test('portable download contains original logical tree only, no workspace settings', async () => {
+  const s = await setup(),
     e = entry();
   e.query.settings = { api_key: 'secret' };
   const data = plain(s.c.queryLibraryPortable(e));
@@ -199,8 +211,8 @@ test('portable download contains original logical tree only, no workspace settin
   assert.deepEqual(data.query, { boolean_tree: e.query.boolean_tree });
   assert.equal(JSON.stringify(data).includes('secret'), false);
 });
-test('preview shows nested AND OR NOT and apply only when a preview exists', () => {
-  const s = setup();
+test('preview shows nested AND OR NOT and apply only when a preview exists', async () => {
+  const s = await setup();
   s.c.queryLibraryChoose('e1');
   s.set('preview', { query: entry().query, preview_hash: 'h1', warnings: [] });
   const html = s.c.queryLibraryHtml(s.c.state.research_workbench);
@@ -210,7 +222,7 @@ test('preview shows nested AND OR NOT and apply only when a preview exists', () 
   assert.match(html, /id="ql-apply"/);
 });
 test('busy guard prevents duplicate requests', async () => {
-  const s = setup();
+  const s = await setup();
   s.set('busy', true);
   await s.c.queryLibraryAction('import');
   await s.c.queryLibraryAction('preview');
@@ -224,21 +236,21 @@ test('styles preserve hidden alerts and honor reduced motion/static setting', ()
   assert.match(css, /prefers-reduced-motion:\s*reduce/);
   assert.match(css, /data-atlas-motion=(?:static|'static'|"static")/);
 });
-test('object-prototype keyword names are retained as ordinary literal terms', () => {
-  const s = setup();
+test('object-prototype keyword names are retained as ordinary literal terms', async () => {
+  const s = await setup();
   const e = entry();
   e.terms = ['__proto__', 'constructor'];
   s.c.queryLibraryChoose(e.id);
-  vm.runInContext(
-    'queryLibraryDraft.edits["__proto__"]="literal replacement";queryLibraryDraft.edits.constructor="new literal";',
-    s.c
-  );
+  (() => {
+    s.c.queryLibraryDraft.edits['__proto__'] = 'literal replacement';
+    s.c.queryLibraryDraft.edits.constructor = 'new literal';
+  })();
   const payload = plain(s.c.queryLibraryPayload(e, s.c.state.research_workbench));
   assert.equal(payload.replacements.__proto__, 'literal replacement');
   assert.equal(payload.replacements.constructor, 'new literal');
 });
 test('LLM suggestion only fills editable proposals and invalidates an old preview', async () => {
-  const s = setup();
+  const s = await setup();
   s.c.queryLibraryChoose('e1');
   s.set('adaptPurpose', '航空機の調査');
   s.set('adaptGoal', '航空機の経路制御に応用する');
@@ -261,19 +273,19 @@ test('LLM suggestion only fills editable proposals and invalidates an old previe
       body: { example_id: 'e1', purpose: '航空機の調査', goal: '航空機の経路制御に応用する' },
     },
   ]);
-  assert.equal(s.read('queryLibraryDraft.edits["車両"]'), '航空機');
-  assert.equal(s.read('queryLibraryDraft.preview'), null);
+  assert.equal(s.c.queryLibraryDraft.edits['車両'], '航空機');
+  assert.equal(s.c.queryLibraryDraft.preview, null);
   assert.equal(JSON.stringify(s.c.state), before);
   assert.equal(s.navigation.length, 0);
   assert.match(s.c.queryLibraryHtml(s.c.state.research_workbench), /対象機器の変更/);
 });
 test('LLM suggestions require both purpose and technical goal before network', async () => {
-  const s = setup();
+  const s = await setup();
   await assert.rejects(s.c.queryLibraryAction('suggest'), /技術説明/);
   assert.equal(s.requests.length, 0);
 });
 test('failed or invalid LLM suggestion preserves manual edits and shows error', async () => {
-  const s = setup();
+  const s = await setup();
   s.c.queryLibraryChoose('e1');
   s.set('adaptGoal', '技術の説明');
   s.set('edits', { 車両: '搬送機' });
@@ -281,7 +293,7 @@ test('failed or invalid LLM suggestion preserves manual edits and shows error', 
     throw Error('LLM失敗');
   };
   await assert.rejects(s.c.queryLibraryAction('suggest'), /LLM失敗/);
-  assert.equal(s.read('queryLibraryDraft.edits["車両"]'), '搬送機');
+  assert.equal(s.c.queryLibraryDraft.edits['車両'], '搬送機');
   assert.throws(
     () =>
       s.c.queryLibraryAcceptSuggestion(entry(), {
@@ -292,10 +304,10 @@ test('failed or invalid LLM suggestion preserves manual edits and shows error', 
       }),
     /元の検索式/
   );
-  assert.equal(s.read('queryLibraryDraft.edits["車両"]'), '搬送機');
+  assert.equal(s.c.queryLibraryDraft.edits['車両'], '搬送機');
 });
-test('suggestion reasons are escaped and changes clear stale reasons', () => {
-  const s = setup();
+test('suggestion reasons are escaped and changes clear stale reasons', async () => {
+  const s = await setup();
   s.c.queryLibraryChoose('e1');
   s.set('suggestion', {
     replacements: {},
@@ -305,5 +317,5 @@ test('suggestion reasons are escaped and changes clear stale reasons', () => {
   });
   assert.doesNotMatch(s.c.queryLibraryHtml(s.c.state.research_workbench), /<img>/);
   s.c.queryLibraryInvalidate();
-  assert.equal(s.read('queryLibraryDraft.suggestion'), null);
+  assert.equal(s.c.queryLibraryDraft.suggestion, null);
 });

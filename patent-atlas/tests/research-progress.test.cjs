@@ -1,8 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const vm = require('node:vm');
-const source = fs.readFileSync('static/research-progress.js', 'utf8');
+
+const { loadModule } = require('./module-harness.cjs');
 
 function makeHost() {
   return {
@@ -26,7 +25,7 @@ function makeHost() {
   };
 }
 
-function setup() {
+async function setup() {
   let now = 1000,
     host = makeHost(),
     nextTimer = 0;
@@ -45,8 +44,16 @@ function setup() {
       timers.delete(id);
     },
   };
-  vm.createContext(context);
-  vm.runInContext(source, context);
+  context.setState = (next) => (context.state = next);
+  context.getState = () => context.state;
+
+  await loadModule(context, 'research-progress.js', [
+    'researchProgressIsRunning',
+    'researchProgressStart',
+    'researchProgressFinish',
+    'researchProgressHtml',
+    'renderResearchProgress',
+  ]);
   return {
     context,
     timers,
@@ -63,14 +70,13 @@ function setup() {
     replaceHost: (value) => {
       host = value;
     },
-    read: (expression) => vm.runInContext(expression, context),
   };
 }
 
 const localSettings = { provider: 'local', model: 'local-model', llm_timeout: 120 };
 
-test('idle is empty and a manual operation does not expose LLM configuration', () => {
-  const s = setup(),
+test('idle is empty and a manual operation does not expose LLM configuration', async () => {
+  const s = await setup(),
     c = s.context;
   assert.equal(c.researchProgressHtml(), '');
   assert.equal(c.researchProgressIsRunning(), false);
@@ -85,8 +91,8 @@ test('idle is empty and a manual operation does not expose LLM configuration', (
   assert.match(html, /入力は保持しています/);
 });
 
-test('elapsed time comes from the clock and indeterminate status claims no percent or remaining time', () => {
-  const s = setup(),
+test('elapsed time comes from the clock and indeterminate status claims no percent or remaining time', async () => {
+  const s = await setup(),
     c = s.context;
   c.researchProgressStart({ label: '発明の要素分解', useLlm: true, settings: localSettings });
   assert.match(c.researchProgressHtml(), /経過 <span data-research-progress-elapsed>0:00/);
@@ -99,8 +105,8 @@ test('elapsed time comes from the clock and indeterminate status claims no perce
   assert.doesNotMatch(html, /<progress[^>]*(?:value|max)=|残り|%/);
 });
 
-test('timer ticks change only the elapsed node, without recreating the live status', () => {
-  const s = setup(),
+test('timer ticks change only the elapsed node, without recreating the live status', async () => {
+  const s = await setup(),
     c = s.context;
   c.researchProgressStart({ useLlm: true, settings: localSettings });
   const rendered = s.host.renders;
@@ -112,8 +118,8 @@ test('timer ticks change only the elapsed node, without recreating the live stat
   assert.match(s.host.innerHTML, /aria-live="off">経過/);
 });
 
-test('rerendering into a new container retains the same elapsed state and one timer', () => {
-  const s = setup(),
+test('rerendering into a new container retains the same elapsed state and one timer', async () => {
+  const s = await setup(),
     c = s.context;
   const token = c.researchProgressStart({ label: '観点の起案', useLlm: true, settings: localSettings });
   s.advance(95000);
@@ -129,8 +135,8 @@ test('rerendering into a new container retains the same elapsed state and one ti
   assert.equal(s.host.clock.textContent, '1:36');
 });
 
-test('a duplicate start cannot replace or restart an in-flight request', () => {
-  const s = setup(),
+test('a duplicate start cannot replace or restart an in-flight request', async () => {
+  const s = await setup(),
     c = s.context;
   const token = c.researchProgressStart({ label: '最初の処理', useLlm: true, settings: localSettings });
   s.advance(40000);
@@ -143,8 +149,8 @@ test('a duplicate start cannot replace or restart an in-flight request', () => {
   assert.equal(c.researchProgressFinish(token), true);
 });
 
-test('successful completion stops its timer and freezes its elapsed duration', () => {
-  const s = setup(),
+test('successful completion stops its timer and freezes its elapsed duration', async () => {
+  const s = await setup(),
     c = s.context;
   const token = c.researchProgressStart({ label: '観点の起案' });
   s.advance(125000);
@@ -162,8 +168,8 @@ test('successful completion stops its timer and freezes its elapsed duration', (
   assert.match(c.researchProgressHtml(), /is-complete/);
 });
 
-test('late or missing tokens cannot finish a later request or clear its timer', () => {
-  const s = setup(),
+test('late or missing tokens cannot finish a later request or clear its timer', async () => {
+  const s = await setup(),
     c = s.context;
   const first = c.researchProgressStart({ label: '一つ目' });
   c.researchProgressFinish(first);
@@ -179,8 +185,8 @@ test('late or missing tokens cannot finish a later request or clear its timer', 
   assert.equal(c.researchProgressIsRunning(), true);
 });
 
-test('failure shows a persistent escaped reason, retains input guidance, and drops Error metadata', () => {
-  const s = setup(),
+test('failure shows a persistent escaped reason, retains input guidance, and drops Error metadata', async () => {
+  const s = await setup(),
     c = s.context;
   const token = c.researchProgressStart({ useLlm: true, settings: localSettings });
   const error = {
@@ -201,11 +207,11 @@ test('failure shows a persistent escaped reason, retains input guidance, and dro
   s.replaceHost(makeHost());
   c.renderResearchProgress();
   assert.match(s.host.innerHTML, /&lt;script&gt;失敗/);
-  assert.doesNotMatch(s.read('JSON.stringify(researchProgressCurrent)'), /secret-stack|secret-key|api_key/);
+  assert.doesNotMatch(JSON.stringify(s.context.researchProgressCurrent), /secret-stack|secret-key|api_key/);
 });
 
-test('only public display fields are copied from settings, and later changes do not rewrite the operation', () => {
-  const s = setup(),
+test('only public display fields are copied from settings, and later changes do not rewrite the operation', async () => {
+  const s = await setup(),
     c = s.context;
   const settings = {
     provider: 'openai',
@@ -222,7 +228,7 @@ test('only public display fields are copied from settings, and later changes do 
   settings.model = 'changed-model';
   settings.llm_timeout = 600;
   const html = c.researchProgressHtml(),
-    stored = s.read('JSON.stringify(researchProgressCurrent)');
+    stored = JSON.stringify(s.context.researchProgressCurrent);
   assert.match(html, /外部LLM/);
   assert.match(html, /300秒／回/);
   assert.match(html, /&lt;img/);
@@ -231,8 +237,8 @@ test('only public display fields are copied from settings, and later changes do 
   assert.doesNotMatch(stored, /private-|api_key|proxy|ops_secret|base_url|"settings"/);
 });
 
-test('a temporarily absent container does not stop the operation or leak a finished timer', () => {
-  const s = setup(),
+test('a temporarily absent container does not stop the operation or leak a finished timer', async () => {
+  const s = await setup(),
     c = s.context;
   s.replaceHost(null);
   const token = c.researchProgressStart({ useLlm: true, settings: localSettings });
@@ -249,9 +255,9 @@ test('a temporarily absent container does not stop the operation or leak a finis
   assert.match(s.host.innerHTML, /通信エラー/);
 });
 
-test('invalid wait settings do not become invented timeout values', () => {
+test('invalid wait settings do not become invented timeout values', async () => {
   for (const llm_timeout of [undefined, '120', true, 29, 601, NaN]) {
-    const s = setup(),
+    const s = await setup(),
       c = s.context;
     c.researchProgressStart({ useLlm: true, settings: { provider: 'local', llm_timeout } });
     const html = c.researchProgressHtml();
@@ -260,8 +266,8 @@ test('invalid wait settings do not become invented timeout values', () => {
   }
 });
 
-test('negative clock movement cannot produce a negative elapsed display', () => {
-  const s = setup(),
+test('negative clock movement cannot produce a negative elapsed display', async () => {
+  const s = await setup(),
     c = s.context;
   c.researchProgressStart({ label: '時計の検証' });
   s.advance(-5000);

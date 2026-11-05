@@ -1,17 +1,43 @@
+import { bindLasso, insidePolygon as discoveryPointInPolygon } from './lasso.js';
+import {
+  judgmentLabel,
+  classificationKey as discoveryKey,
+  replaceHtml,
+  listen,
+  getState,
+  $,
+  setState,
+  esc,
+  $$,
+  on,
+  api,
+  toast,
+  run,
+} from './core.js';
+import PatentClassLabels from './classification-labels.js';
+import PatentClassLayout from './classification-layout.js';
+import { updateChrome } from './workspace-chrome.js';
+import { setTab, setStep } from './app.js';
+import { appState } from './ui-session.js';
+import { captureClassDraft } from './classification-ui.js';
+
+export const discoveryUiState = {
+  discoveryDraft: null,
+  discoveryRequestPending: false,
+  discoveryVisibleCount: 24,
+  discoveryResultsSignature: '',
+  discoveryHistorySignature: '',
+  discoveryPlanRequestState: null,
+  discoveryFocusKey: null,
+  discoveryLassoMode: false,
+  discoveryMapCache: null,
+  discoveryMapObserver: null,
+  discoveryAdopting: false,
+};
 /* Discovery is a reviewable workspace: importing evidence never selects a class. */
-let discoveryDraft = null,
-  discoveryRequestPending = false,
-  discoveryVisibleCount = 24;
+
 const discoveryPicked = new Set();
-const discoveryLassoTargets = new WeakMap();
-let discoveryResultsSignature = '',
-  discoveryHistorySignature = '';
-let discoveryPlanRequestState = null;
-let discoveryFocusKey = null,
-  discoveryLassoMode = false,
-  discoveryMapCache = null,
-  discoveryMapObserver = null,
-  discoveryAdopting = false;
+
 const discoveryCompare = {
   mode: 'map',
   facet: 'all',
@@ -22,10 +48,7 @@ const discoveryCompare = {
   zoom: 'normal',
 };
 
-function discoveryKey(item) {
-  return item.key || `${item.kind}:${item.code}`;
-}
-function discoveryItems(discovery = state.discovery || {}) {
+function discoveryItems(discovery = getState().discovery || {}) {
   const recommendations = discovery.analysis?.recommendations || [];
   const known = new Set(recommendations.map(discoveryKey));
   return [
@@ -35,7 +58,7 @@ function discoveryItems(discovery = state.discovery || {}) {
 }
 function captureDiscoveryDraft() {
   if (!$('#discovery-keywords')) return;
-  discoveryDraft = {
+  discoveryUiState.discoveryDraft = {
     keywords: $('#discovery-keywords').value,
     english_terms: $('#discovery-english').value,
     use_llm: $('#discovery-use-llm').checked,
@@ -45,15 +68,15 @@ function captureDiscoveryDraft() {
   };
 }
 function resetDiscoveryDraft() {
-  discoveryDraft = null;
+  discoveryUiState.discoveryDraft = null;
   discoveryPicked.clear();
-  discoveryVisibleCount = 24;
-  discoveryPlanRequestState = null;
-  discoveryFocusKey = null;
-  discoveryLassoMode = false;
-  discoveryMapCache = null;
-  discoveryMapObserver?.disconnect();
-  discoveryMapObserver = null;
+  discoveryUiState.discoveryVisibleCount = 24;
+  discoveryUiState.discoveryPlanRequestState = null;
+  discoveryUiState.discoveryFocusKey = null;
+  discoveryUiState.discoveryLassoMode = false;
+  discoveryUiState.discoveryMapCache = null;
+  discoveryUiState.discoveryMapObserver?.disconnect();
+  discoveryUiState.discoveryMapObserver = null;
   Object.assign(discoveryCompare, {
     mode: 'map',
     facet: 'all',
@@ -63,10 +86,10 @@ function resetDiscoveryDraft() {
     language: 'ja',
     zoom: 'normal',
   });
-  discoveryResultsSignature = '';
-  discoveryHistorySignature = '';
+  discoveryUiState.discoveryResultsSignature = '';
+  discoveryUiState.discoveryHistorySignature = '';
   const root = $('#discovery-content');
-  if (root) root.innerHTML = '';
+  if (root) replaceHtml(root, '');
 }
 function discoveryTextList(values) {
   return (values || [])
@@ -77,7 +100,7 @@ function discoverySource(source) {
   return typeof source === 'string' ? source : JSON.stringify(source || 'CSV');
 }
 function discoveryPlanChanged() {
-  const plan = state.discovery?.plan;
+  const plan = getState().discovery?.plan;
   return Boolean(
     plan &&
     $('#discovery-keywords') &&
@@ -87,14 +110,14 @@ function discoveryPlanChanged() {
 }
 function mergeDiscoveryResponse(result, adopt = false) {
   const fields = adopt ? ['candidates', 'classification_view', 'discovery', 'job'] : ['discovery', 'job'];
-  state = {
-    ...state,
+  setState({
+    ...getState(),
     ...Object.fromEntries(
       fields
         .filter((field) => Object.prototype.hasOwnProperty.call(result, field))
         .map((field) => [field, result[field]])
     ),
-  };
+  });
 }
 function discoveryWarnings(values) {
   return values?.length
@@ -169,38 +192,19 @@ function discoveryCandidateHtml(item) {
     .filter(Boolean)
     .join('\n');
   const facets = discoveryTextList(item.facets).map(
-    (value) => state.discovery?.plan?.facets?.find((facet) => facet.id === value)?.label || value
+    (value) => getState().discovery?.plan?.facets?.find((facet) => facet.id === value)?.label || value
   );
-  return `<article class="discovery-candidate ${metadata ? 'with-evidence' : 'hypothesis'} ${discoveryPicked.has(key) ? 'chosen' : ''}"><label class="discovery-candidate-label" title="${esc(preview)}"><input type="checkbox" data-discovery-key="${esc(key)}" ${discoveryPicked.has(key) ? 'checked' : ''} ${item.selectable === false ? 'disabled' : ''}><span><small class="discovery-source ${syntheticCount ? 'synthetic' : ''}">${esc(sourceLabel)}</small><b>${esc(item.kind)} ${esc(item.code)}</b><span class="discovery-candidate-title">${esc(discoveryTitle(item))}</span></span></label>${facets.length ? `<div class="discovery-tags">${facets.map((value) => `<span>${esc(value)}</span>`).join('')}</div>` : ''}<p class="discovery-reason">${esc(reason)}</p>${discoveryOriginHtml(item)}${metadata ? `<div class="discovery-evidence-count"><span><b>${Number(item.support_count || 0)}</b> 公報</span><span><b>${Number(item.family_count || 0)}</b> ファミリー等</span><span>人の必要 ${Number(item.positive_count || 0)} / AIの必要 ${Number(item.ai_positive_count || 0)}</span><span>不要 ${Number(item.negative_count || 0)}（人 ${Number(item.human_negative_count || 0)} / AI ${Number(item.ai_negative_count || 0)}）</span></div>` : ''}<details class="discovery-evidence" data-discovery-detail="${esc(key)}"><summary>${metadata ? '根拠の公報を見る' : '候補の位置づけ'} <span>↗</span></summary>${metadata ? `<ul>${evidence.map((row) => `<li><b>${esc(row.patent_id || '公報番号なし')}${row.synthetic ? '<em>架空サンプル</em>' : ''}</b><span>${esc(row.title || '名称なし')}</span><small>${esc(discoverySource(row.source))} · ${row.label === 'keep' ? '必要' : row.label === 'exclude' ? '不要' : '未判定'}${row.family_id ? ` · ファミリー ${esc(row.family_id)}` : ''}</small></li>`).join('') || '<li>表示できる公報情報がありません。</li>'}</ul>${item.support_count > evidence.length ? `<p class="caption">支持する公報 ${Number(item.support_count)} 件から、ファミリー等の代表公報 ${evidence.length} 件を表示。</p>` : ''}` : '<p class="caption">分類辞書に基づく探索候補です。公報中の出現件数を示すものではありません。CSV検証または外部検索を行うと、実際の公報から得た候補を比較できます。</p>'}</details></article>`;
+  return `<article class="discovery-candidate ${metadata ? 'with-evidence' : 'hypothesis'} ${discoveryPicked.has(key) ? 'chosen' : ''}"><label class="discovery-candidate-label" title="${esc(preview)}"><input type="checkbox" data-discovery-key="${esc(key)}" ${discoveryPicked.has(key) ? 'checked' : ''} ${item.selectable === false ? 'disabled' : ''}><span><small class="discovery-source ${syntheticCount ? 'synthetic' : ''}">${esc(sourceLabel)}</small><b>${esc(item.kind)} ${esc(item.code)}</b><span class="discovery-candidate-title">${esc(discoveryTitle(item))}</span></span></label>${facets.length ? `<div class="discovery-tags">${facets.map((value) => `<span>${esc(value)}</span>`).join('')}</div>` : ''}<p class="discovery-reason">${esc(reason)}</p>${discoveryOriginHtml(item)}${metadata ? `<div class="discovery-evidence-count"><span><b>${Number(item.support_count || 0)}</b> 公報</span><span><b>${Number(item.family_count || 0)}</b> ファミリー等</span><span>人の必要 ${Number(item.positive_count || 0)} / AIの必要 ${Number(item.ai_positive_count || 0)}</span><span>不要 ${Number(item.negative_count || 0)}（人 ${Number(item.human_negative_count || 0)} / AI ${Number(item.ai_negative_count || 0)}）</span></div>` : ''}<details class="discovery-evidence" data-discovery-detail="${esc(key)}"><summary>${metadata ? '根拠の公報を見る' : '候補の位置づけ'} <span>↗</span></summary>${metadata ? `<ul>${evidence.map((row) => `<li><b>${esc(row.patent_id || '公報番号なし')}${row.synthetic ? '<em>架空サンプル</em>' : ''}</b><span>${esc(row.title || '名称なし')}</span><small>${esc(discoverySource(row.source))} · ${judgmentLabel(row.label)}${row.family_id ? ` · ファミリー ${esc(row.family_id)}` : ''}</small></li>`).join('') || '<li>表示できる公報情報がありません。</li>'}</ul>${item.support_count > evidence.length ? `<p class="caption">支持する公報 ${Number(item.support_count)} 件から、ファミリー等の代表公報 ${evidence.length} 件を表示。</p>` : ''}` : '<p class="caption">分類辞書に基づく探索候補です。公報中の出現件数を示すものではありません。CSV検証または外部検索を行うと、実際の公報から得た候補を比較できます。</p>'}</details></article>`;
 }
 function discoveryLabels(item) {
-  if (typeof PatentClassLabels !== 'undefined' && PatentClassLabels.bilingual)
-    return PatentClassLabels.bilingual(item);
-  const title = String(item.title || item.label || '');
-  return {
-    ja: item.title_ja || (/[\u3040-\u30ff\u3400-\u9fff]/u.test(title) ? title : ''),
-    en: item.title_en || item.title_official || (!/[\u3040-\u30ff\u3400-\u9fff]/u.test(title) ? title : ''),
-    jaStatus: item.title_ja_status || '',
-    enStatus: '',
-  };
+  return PatentClassLabels.bilingual(item);
 }
 function discoveryTitle(item, language = discoveryCompare.language) {
-  if (typeof PatentClassLabels !== 'undefined' && PatentClassLabels.label)
-    return String(PatentClassLabels.label(item, language) || item.code);
-  const labels = discoveryLabels(item);
-  return (language === 'en' ? labels.en || labels.ja : labels.ja || labels.en) || item.title || item.code;
+  return PatentClassLabels.label(item, language);
 }
 function discoveryBilingualHtml(item) {
   const labels = discoveryLabels(item);
-  const status = (code) =>
-    typeof PatentClassLabels !== 'undefined'
-      ? PatentClassLabels.status(code)
-      : {
-          official: '公式名称',
-          app_caption: 'アプリ内の説明名',
-          app_translation: 'アプリ内の参考訳',
-          unavailable: '未収録',
-        }[code] || '参考名称';
+  const status = (code) => PatentClassLabels.status(code);
   return `<div class="discovery-definition"><span class="discovery-definition-language">日本語${labels.ja ? ` · ${esc(status(labels.jaStatus))}` : ''}${item.title_ja_version ? ` · ${esc(item.title_ja_version)}` : ''}</span><p lang="ja">${esc(labels.ja || '日本語名称は未収録です。英語の定義を確認してください。')}${item.title_ja_parent ? `<span class="discovery-definition-parent">上位：${esc(item.parent || item.title_ja_parent_code || '')} ${esc(item.title_ja_parent)}</span>` : ''}</p><span class="discovery-definition-language">English${labels.en ? ` · ${esc(status(labels.enStatus))}` : ''}${item.title_en_version ? ` · ${esc(item.title_en_version)}` : ''}</span><p lang="en">${esc(labels.en || '英語名称は未収録です。')}${item.title_en_parent ? `<span class="discovery-definition-parent">Parent: ${esc(item.parent || item.title_en_parent_code || '')} ${esc(item.title_en_parent)}</span>` : ''}</p></div>`;
 }
 function discoveryEvidenceType(item) {
@@ -255,18 +259,18 @@ function discoveryComparisonHtml(items) {
        `<button data-discovery-source="${value}" class="${value === discoveryCompare.source ? 'active' : ''}" aria-pressed="${value === discoveryCompare.source}"><i class="${value}"></i>${label}<b>${count}</b></button>`
    )
    .join('')}</div>
- <div class="discovery-compare-filters"><select id="discovery-facet-filter" aria-label="技術の観点"><option value="all">すべての観点</option>${(state.discovery?.plan?.facets || []).map((facet) => `<option value="${esc(facet.id)}" ${facet.id === discoveryCompare.facet ? 'selected' : ''}>${esc(facet.label)}</option>`).join('')}</select><input id="discovery-class-search" aria-label="分類コード・名称で絞り込む" placeholder="分類コード・名称を探す" value="${esc(discoveryCompare.search)}"><select id="discovery-label-language" aria-label="地図・一覧の名称表示"><option value="ja" ${discoveryCompare.language === 'ja' ? 'selected' : ''}>日本語を優先</option><option value="en" ${discoveryCompare.language === 'en' ? 'selected' : ''}>English</option></select><label class="check"><input id="discovery-selected-only" type="checkbox" ${discoveryCompare.selectedOnly ? 'checked' : ''}>選択済み</label></div>
+ <div class="discovery-compare-filters"><select id="discovery-facet-filter" aria-label="技術の観点"><option value="all">すべての観点</option>${(getState().discovery?.plan?.facets || []).map((facet) => `<option value="${esc(facet.id)}" ${facet.id === discoveryCompare.facet ? 'selected' : ''}>${esc(facet.label)}</option>`).join('')}</select><input id="discovery-class-search" aria-label="分類コード・名称で絞り込む" placeholder="分類コード・名称を探す" value="${esc(discoveryCompare.search)}"><select id="discovery-label-language" aria-label="地図・一覧の名称表示"><option value="ja" ${discoveryCompare.language === 'ja' ? 'selected' : ''}>日本語を優先</option><option value="en" ${discoveryCompare.language === 'en' ? 'selected' : ''}>English</option></select><label class="check"><input id="discovery-selected-only" type="checkbox" ${discoveryCompare.selectedOnly ? 'checked' : ''}>選択済み</label></div>
  <div class="discovery-compare-status"><span id="discovery-visible-status"></span><button id="discovery-clear" class="button subtle small">選択を解除</button></div><div id="discovery-comparison-body">${discoveryComparisonBodyHtml()}</div>
  <div class="discovery-adoption"><div><strong id="discovery-picked-count">${[...discoveryPicked].filter((key) => items.some((item) => discoveryKey(item) === key && item.selectable !== false)).length}</strong><span> 件を手動探索へ</span><p>選んだ分類を候補に追加し、検索条件は移動先で確認できます。</p></div><button id="discovery-adopt" class="button primary discovery-action">選んだ分類を手動探索へ送る →</button></div></section>`;
 }
 function discoveryComparisonBodyHtml() {
   const items = discoveryFilteredItems();
-  if (!items.some((item) => discoveryKey(item) === discoveryFocusKey))
-    discoveryFocusKey = items[0] ? discoveryKey(items[0]) : null;
-  const focus = items.find((item) => discoveryKey(item) === discoveryFocusKey);
+  if (!items.some((item) => discoveryKey(item) === discoveryUiState.discoveryFocusKey))
+    discoveryUiState.discoveryFocusKey = items[0] ? discoveryKey(items[0]) : null;
+  const focus = items.find((item) => discoveryKey(item) === discoveryUiState.discoveryFocusKey);
   const view =
     discoveryCompare.mode === 'map'
-      ? `<div class="discovery-map-tools"><span>クリックで選択 · 重ねて根拠を表示</span><button id="discovery-lasso-toggle" class="button subtle small ${discoveryLassoMode ? 'active' : ''}" aria-pressed="${discoveryLassoMode}">◌ 囲んで選択</button><select id="discovery-map-zoom" aria-label="地図の表示倍率"><option value="normal" ${discoveryCompare.zoom === 'normal' ? 'selected' : ''}>標準</option><option value="fit" ${discoveryCompare.zoom === 'fit' ? 'selected' : ''}>全体を見る</option><option value="large" ${discoveryCompare.zoom === 'large' ? 'selected' : ''}>拡大</option></select></div><div class="discovery-map-viewport" id="discovery-map-viewport" tabindex="0" aria-label="分類候補の地図。地図内をスクロールできます"><svg id="discovery-class-map" class="discovery-star-map ${discoveryLassoMode ? 'lasso-on' : ''}" role="group" aria-label="意味の近さから配置した分類候補"></svg>${!items.length ? '<div class="discovery-filter-empty">該当する候補はありません。<br>出典・観点・検索語を見直してください。</div>' : ''}</div><div class="discovery-map-caption">距離と見出しは技術の近さの目安です。色は出典、円内の数字は支持公報数、? は仮説です。<br>未収録の名称はもう一方の言語を表示します。地図内をスクロールできます。「全体を見る」で配置全体を確認できます。</div>`
+      ? `<div class="discovery-map-tools"><span>クリックで選択 · 重ねて根拠を表示</span><button id="discovery-lasso-toggle" class="button subtle small ${discoveryUiState.discoveryLassoMode ? 'active' : ''}" aria-pressed="${discoveryUiState.discoveryLassoMode}">◌ 囲んで選択</button><select id="discovery-map-zoom" aria-label="地図の表示倍率"><option value="normal" ${discoveryCompare.zoom === 'normal' ? 'selected' : ''}>標準</option><option value="fit" ${discoveryCompare.zoom === 'fit' ? 'selected' : ''}>全体を見る</option><option value="large" ${discoveryCompare.zoom === 'large' ? 'selected' : ''}>拡大</option></select></div><div class="discovery-map-viewport" id="discovery-map-viewport" tabindex="0" aria-label="分類候補の地図。地図内をスクロールできます"><svg id="discovery-class-map" class="discovery-star-map ${discoveryUiState.discoveryLassoMode ? 'lasso-on' : ''}" role="group" aria-label="意味の近さから配置した分類候補"></svg>${!items.length ? '<div class="discovery-filter-empty">該当する候補はありません。<br>出典・観点・検索語を見直してください。</div>' : ''}</div><div class="discovery-map-caption">距離と見出しは技術の近さの目安です。色は出典、円内の数字は支持公報数、? は仮説です。<br>未収録の名称はもう一方の言語を表示します。地図内をスクロールできます。「全体を見る」で配置全体を確認できます。</div>`
       : `<div class="discovery-list-viewport"><table class="discovery-comparison-table"><thead><tr><th>選択</th><th>分類・名称</th><th>根拠</th></tr></thead><tbody>${items.map((item) => `<tr class="${discoveryPicked.has(discoveryKey(item)) ? 'chosen' : ''}" data-discovery-row="${esc(discoveryKey(item))}"><td><input type="checkbox" data-discovery-key="${esc(discoveryKey(item))}" aria-label="${esc(item.code)} を選択" ${discoveryPicked.has(discoveryKey(item)) ? 'checked' : ''} ${item.selectable === false ? 'disabled' : ''}></td><td><button class="discovery-list-focus" data-discovery-focus="${esc(discoveryKey(item))}"><b>${esc(item.kind)} ${esc(item.code)}</b><span>${esc(discoveryTitle(item))}</span></button></td><td><small class="discovery-list-source ${discoveryEvidenceType(item)}">${esc(discoveryEvidenceLabel(item))}</small>${discoveryHasEvidence(item) ? `<span>${Number(item.support_count || 0)} 公報<br>${Number(item.family_count || 0)} ファミリー等</span>` : '<span>公報による検証待ち</span>'}</td></tr>`).join('') || '<tr><td colspan="3">該当する候補はありません。絞り込み条件を見直してください。</td></tr>'}</tbody></table></div>`;
   return `<div class="discovery-comparison-layout"><div class="discovery-map-side">${view}</div><aside class="discovery-inspector" id="discovery-inspector" aria-label="確認中の分類の詳細"><div class="discovery-inspector-heading"><span>INSPECT THE EVIDENCE</span><h4>分類と根拠</h4></div><div id="discovery-inspector-content">${focus ? discoveryInspectorHtml(focus) : '<p class="caption">分類を選ぶと、名称・出典・根拠の公報を確認できます。</p>'}</div></aside></div>`;
 }
@@ -282,10 +286,10 @@ function discoveryInspectorHtml(item) {
 }
 function renderDiscoveryInspector(item) {
   if (!item || !$('#discovery-inspector-content')) return;
-  discoveryFocusKey = discoveryKey(item);
-  $('#discovery-inspector-content').innerHTML = discoveryInspectorHtml(item);
+  discoveryUiState.discoveryFocusKey = discoveryKey(item);
+  replaceHtml($('#discovery-inspector-content'), discoveryInspectorHtml(item));
   $$('.discovery-star').forEach((node) =>
-    node.classList.toggle('focused', node.dataset.discoveryFocus === discoveryFocusKey)
+    node.classList.toggle('focused', node.dataset.discoveryFocus === discoveryUiState.discoveryFocusKey)
   );
   bindDiscoveryCheckboxes($('#discovery-inspector-content'));
 }
@@ -296,15 +300,13 @@ function discoveryShortTitle(item) {
 function discoveryMapHtml(items, layout) {
   const { positions, groups = [], links = [] } = layout;
   const groupTitle = (label) =>
-    typeof PatentClassLabels !== 'undefined' && PatentClassLabels.group
-      ? PatentClassLabels.group(label, discoveryCompare.language)
-      : label;
+    PatentClassLabels.group ? PatentClassLabels.group(label, discoveryCompare.language) : label;
   return `<g class="discovery-star-regions" aria-hidden="true">${groups.map((group) => `<g><rect x="${group.bounds.x}" y="${group.bounds.y}" width="${group.bounds.width}" height="${group.bounds.height}" rx="24"/><text x="${group.bounds.x + 13}" y="${group.bounds.y + 22}" data-width="${Math.max(1, group.bounds.width - 26)}">${esc(groupTitle(group.label))}<tspan> · ${group.memberIndices.length}</tspan></text></g>`).join('')}</g><g class="discovery-star-links" aria-hidden="true">${links.map((link) => (positions[link.from] && positions[link.to] ? `<line x1="${positions[link.from][0]}" y1="${positions[link.from][1]}" x2="${positions[link.to][0]}" y2="${positions[link.to][1]}"/>` : '')).join('')}</g><g>${items
     .map((item, index) => {
       const position = positions[index],
         key = discoveryKey(item),
         selected = discoveryPicked.has(key);
-      return `<g class="discovery-star ${discoveryEvidenceType(item)} ${selected ? 'chosen' : ''} ${key === discoveryFocusKey ? 'focused' : ''}" data-discovery-focus="${esc(key)}" data-discovery-index="${index}" data-discovery-selectable="${item.selectable !== false}" transform="translate(${position[0]} ${position[1]})" role="button" tabindex="0" aria-label="${esc(item.kind + ' ' + item.code + ' ' + discoveryTitle(item) + ' · ' + discoveryEvidenceLabel(item))}" aria-pressed="${selected}"><title>${esc(item.kind + ' ' + item.code + '\n' + discoveryTitle(item) + '\n' + discoveryEvidenceLabel(item))}</title><circle r="32"/><text class="discovery-star-kind" y="-5">${esc(item.kind)}</text><text class="discovery-star-mark" y="15">${selected ? '✓' : discoveryHasEvidence(item) ? Number(item.support_count || 0) : '?'}</text><text class="discovery-star-code" y="49">${esc(item.code)}</text><text class="discovery-star-title" y="69">${esc(discoveryShortTitle(item))}</text></g>`;
+      return `<g class="discovery-star ${discoveryEvidenceType(item)} ${selected ? 'chosen' : ''} ${key === discoveryUiState.discoveryFocusKey ? 'focused' : ''}" data-discovery-focus="${esc(key)}" data-discovery-index="${index}" data-discovery-selectable="${item.selectable !== false}" transform="translate(${position[0]} ${position[1]})" role="button" tabindex="0" aria-label="${esc(item.kind + ' ' + item.code + ' ' + discoveryTitle(item) + ' · ' + discoveryEvidenceLabel(item))}" aria-pressed="${selected}"><title>${esc(item.kind + ' ' + item.code + '\n' + discoveryTitle(item) + '\n' + discoveryEvidenceLabel(item))}</title><circle r="32"/><text class="discovery-star-kind" y="-5">${esc(item.kind)}</text><text class="discovery-star-mark" y="15">${selected ? '✓' : discoveryHasEvidence(item) ? Number(item.support_count || 0) : '?'}</text><text class="discovery-star-code" y="49">${esc(item.code)}</text><text class="discovery-star-title" y="69">${esc(discoveryShortTitle(item))}</text></g>`;
     })
     .join('')}</g><path id="discovery-lasso-path" class="discovery-lasso-path"/>`;
 }
@@ -312,7 +314,7 @@ function renderDiscoveryMap() {
   const svg = $('#discovery-class-map'),
     viewport = $('#discovery-map-viewport');
   if (!svg || !viewport) return;
-  discoveryMapObserver?.disconnect();
+  discoveryUiState.discoveryMapObserver?.disconnect();
   const items = discoveryFilteredItems(),
     width = viewport.clientWidth > 720 ? 900 : 620;
   const semanticItems = items.map((item) => ({
@@ -321,22 +323,15 @@ function renderDiscoveryMap() {
     title_en: discoveryLabels(item).en,
   }));
   const cacheKey = JSON.stringify([width, semanticItems]);
-  if (discoveryMapCache?.key !== cacheKey) {
-    const layout =
-      typeof PatentClassLayout !== 'undefined'
-        ? PatentClassLayout.compute(semanticItems, { mode: 'semantic', width })
-        : {
-            width,
-            height: Math.max(380, Math.ceil(items.length / 3) * 142 + 85),
-            positions: items.map((_, i) => [(width / 3) * ((i % 3) + 0.5), 85 + Math.floor(i / 3) * 142]),
-          };
-    discoveryMapCache = { key: cacheKey, layout };
+  if (discoveryUiState.discoveryMapCache?.key !== cacheKey) {
+    const layout = PatentClassLayout.compute(semanticItems, { mode: 'semantic', width });
+    discoveryUiState.discoveryMapCache = { key: cacheKey, layout };
   }
-  const layout = discoveryMapCache.layout;
+  const layout = discoveryUiState.discoveryMapCache.layout;
   svg.setAttribute('viewBox', `0 0 ${layout.width} ${layout.height}`);
   svg.setAttribute('width', layout.width);
   svg.setAttribute('height', layout.height);
-  svg.innerHTML = discoveryMapHtml(items, layout);
+  replaceHtml(svg, discoveryMapHtml(items, layout));
   updateDiscoveryMapZoom();
   $$('.discovery-star-title, .discovery-star-code', svg).forEach((label) => {
     if (label.getComputedTextLength() > 164) {
@@ -353,30 +348,49 @@ function renderDiscoveryMap() {
   });
   $$('.discovery-star', svg).forEach((node) => {
     const item = items[Number(node.dataset.discoveryIndex)];
-    node.addEventListener('mouseenter', () => {
-      if (!svg.dataset.drawing) renderDiscoveryInspector(item);
-    });
-    node.addEventListener('focus', () => renderDiscoveryInspector(item));
-    node.addEventListener('click', () => {
-      if (svg.dataset.dragged) return;
-      renderDiscoveryInspector(item);
-      toggleDiscoveryPicked(discoveryKey(item));
-    });
-    node.addEventListener('keydown', (event) => {
-      if (event.key === ' ' || event.key === 'Enter') {
-        event.preventDefault();
+    listen(
+      node,
+      'mouseenter',
+      () => {
+        if (!svg.dataset.drawing) renderDiscoveryInspector(item);
+      },
+      undefined,
+      'discovery-ui.js:1'
+    );
+    listen(node, 'focus', () => renderDiscoveryInspector(item), undefined, 'discovery-ui.js:2');
+    listen(
+      node,
+      'click',
+      () => {
+        if (svg.dataset.dragged) return;
         renderDiscoveryInspector(item);
         toggleDiscoveryPicked(discoveryKey(item));
-      }
-    });
+      },
+      undefined,
+      'discovery-ui.js:3'
+    );
+    listen(
+      node,
+      'keydown',
+      (event) => {
+        if (event.key === ' ' || event.key === 'Enter') {
+          event.preventDefault();
+          renderDiscoveryInspector(item);
+          toggleDiscoveryPicked(discoveryKey(item));
+        }
+      },
+      undefined,
+      'discovery-ui.js:4'
+    );
   });
   bindDiscoveryLasso(svg, items, layout.positions);
-  if (typeof ResizeObserver !== 'undefined') {
-    discoveryMapObserver = new ResizeObserver(() => {
+  if (window.ResizeObserver) {
+    discoveryUiState.discoveryMapObserver = new window.ResizeObserver(() => {
       const wanted = viewport.clientWidth > 720 ? 900 : 620;
-      if (wanted !== discoveryMapCache?.layout.width && viewport.clientWidth) renderDiscoveryMap();
+      if (wanted !== discoveryUiState.discoveryMapCache?.layout.width && viewport.clientWidth)
+        renderDiscoveryMap();
     });
-    discoveryMapObserver.observe(viewport);
+    discoveryUiState.discoveryMapObserver.observe(viewport);
   }
 }
 function updateDiscoveryMapZoom() {
@@ -385,18 +399,9 @@ function updateDiscoveryMapZoom() {
   svg.style.width = discoveryCompare.zoom === 'large' ? '150%' : '100%';
   svg.style.height = discoveryCompare.zoom === 'fit' ? '100%' : 'auto';
 }
-function discoveryPointInPolygon(point, polygon) {
-  let inside = false;
-  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-    const a = polygon[i],
-      b = polygon[j];
-    if (a.y > point.y !== b.y > point.y && point.x < ((b.x - a.x) * (point.y - a.y)) / (b.y - a.y) + a.x)
-      inside = !inside;
-  }
-  return inside;
-}
+
 function applyDiscoveryLasso(keys) {
-  if (discoveryAdopting) return;
+  if (discoveryUiState.discoveryAdopting) return;
   const allowed = new Set(
     discoveryFilteredItems()
       .filter((item) => item.selectable !== false)
@@ -406,61 +411,28 @@ function applyDiscoveryLasso(keys) {
   updateDiscoveryPickedDisplay();
 }
 function bindDiscoveryLasso(svg, items, positions) {
-  discoveryLassoTargets.set(svg, { items, positions, path: $('#discovery-lasso-path', svg) });
-  if (svg.dataset.lassoBound) return;
-  svg.dataset.lassoBound = '1';
-  let polygon = [],
-    pointer = null,
-    dragged = false;
-  const coordinate = (event) => {
-    const point = svg.createSVGPoint();
-    point.x = event.clientX;
-    point.y = event.clientY;
-    return point.matrixTransform(svg.getScreenCTM().inverse());
-  };
-  svg.addEventListener('pointerdown', (event) => {
-    if (!discoveryLassoMode || event.button !== 0) return;
-    pointer = event.pointerId;
-    polygon = [coordinate(event)];
-    dragged = false;
-    svg.dataset.drawing = '1';
-  });
-  svg.addEventListener('pointermove', (event) => {
-    if (event.pointerId !== pointer) return;
-    const point = coordinate(event);
-    if (Math.hypot(point.x - polygon[0].x, point.y - polygon[0].y) < 5 && !dragged) return;
-    dragged = true;
-    if (!svg.hasPointerCapture(pointer)) svg.setPointerCapture(pointer);
-    polygon.push(point);
-    const { path } = discoveryLassoTargets.get(svg);
-    path.setAttribute('d', 'M' + polygon.map((point) => `${point.x},${point.y}`).join(' L') + ' Z');
-  });
-  const finish = (event, cancelled = false) => {
-    if (event.pointerId !== pointer) return;
-    if (svg.hasPointerCapture(pointer)) svg.releasePointerCapture(pointer);
-    pointer = null;
-    delete svg.dataset.drawing;
-    const { items, positions, path } = discoveryLassoTargets.get(svg);
-    path.setAttribute('d', '');
-    if (dragged && !cancelled && polygon.length > 3) {
-      svg.dataset.dragged = '1';
+  bindLasso(svg, {
+    enabled: () => discoveryUiState.discoveryLassoMode,
+    dragAtThreshold: true,
+    coordinate: (event) => {
+      const point = svg.createSVGPoint();
+      point.x = event.clientX;
+      point.y = event.clientY;
+      return point.matrixTransform(svg.getScreenCTM().inverse());
+    },
+    path: () => $('#discovery-lasso-path', svg),
+    complete: (polygon) =>
       applyDiscoveryLasso(
         items
           .filter((item, index) =>
             discoveryPointInPolygon({ x: positions[index][0], y: positions[index][1] }, polygon)
           )
           .map(discoveryKey)
-      );
-      setTimeout(() => {
-        delete svg.dataset.dragged;
-      }, 0);
-    }
-  };
-  svg.addEventListener('pointerup', (event) => finish(event));
-  svg.addEventListener('pointercancel', (event) => finish(event, true));
+      ),
+  });
 }
 function toggleDiscoveryPicked(key, checked) {
-  if (discoveryAdopting) return;
+  if (discoveryUiState.discoveryAdopting) return;
   const item = discoveryItems().find((row) => discoveryKey(row) === key);
   if (!item || item.selectable === false) return;
   if (checked === undefined ? !discoveryPicked.has(key) : checked) discoveryPicked.add(key);
@@ -501,14 +473,20 @@ function updateDiscoveryVisibleStatus() {
 function bindDiscoveryCheckboxes(root = $('#discovery-results')) {
   if (!root) return;
   $$('[data-discovery-key]', root).forEach((node) =>
-    node.addEventListener('change', () => toggleDiscoveryPicked(node.dataset.discoveryKey, node.checked))
+    listen(
+      node,
+      'change',
+      () => toggleDiscoveryPicked(node.dataset.discoveryKey, node.checked),
+      undefined,
+      'discovery-ui.js:9'
+    )
   );
 }
 function renderDiscoveryComparisonBody() {
   const body = $('#discovery-comparison-body');
   if (!body) return;
-  discoveryMapObserver?.disconnect();
-  body.innerHTML = discoveryComparisonBodyHtml();
+  discoveryUiState.discoveryMapObserver?.disconnect();
+  replaceHtml(body, discoveryComparisonBodyHtml());
   bindDiscoveryComparisonBody();
   updateDiscoveryVisibleStatus();
   updateDiscoveryControls();
@@ -521,16 +499,16 @@ function bindDiscoveryComparisonBody() {
       renderDiscoveryInspector(
         discoveryItems().find((item) => discoveryKey(item) === node.dataset.discoveryFocus)
       );
-    node.addEventListener('mouseenter', show);
-    node.addEventListener('focus', show);
-    node.addEventListener('click', show);
+    listen(node, 'mouseenter', show, undefined, 'discovery-ui.js:10');
+    listen(node, 'focus', show, undefined, 'discovery-ui.js:11');
+    listen(node, 'click', show, undefined, 'discovery-ui.js:12');
   });
   on('#discovery-lasso-toggle', 'click', () => {
-    discoveryLassoMode = !discoveryLassoMode;
+    discoveryUiState.discoveryLassoMode = !discoveryUiState.discoveryLassoMode;
     const button = $('#discovery-lasso-toggle');
-    button.classList.toggle('active', discoveryLassoMode);
-    button.setAttribute('aria-pressed', String(discoveryLassoMode));
-    $('#discovery-class-map')?.classList.toggle('lasso-on', discoveryLassoMode);
+    button.classList.toggle('active', discoveryUiState.discoveryLassoMode);
+    button.setAttribute('aria-pressed', String(discoveryUiState.discoveryLassoMode));
+    $('#discovery-class-map')?.classList.toggle('lasso-on', discoveryUiState.discoveryLassoMode);
   });
   on('#discovery-map-zoom', 'change', (event) => {
     discoveryCompare.zoom = event.target.value;
@@ -539,26 +517,38 @@ function bindDiscoveryComparisonBody() {
 }
 function bindDiscoveryComparison() {
   $$('[data-discovery-mode]').forEach((node) =>
-    node.addEventListener('click', () => {
-      discoveryCompare.mode = node.dataset.discoveryMode;
-      $$('[data-discovery-mode]').forEach((button) => {
-        const active = button.dataset.discoveryMode === discoveryCompare.mode;
-        button.classList.toggle('active', active);
-        button.setAttribute('aria-pressed', String(active));
-      });
-      renderDiscoveryComparisonBody();
-    })
+    listen(
+      node,
+      'click',
+      () => {
+        discoveryCompare.mode = node.dataset.discoveryMode;
+        $$('[data-discovery-mode]').forEach((button) => {
+          const active = button.dataset.discoveryMode === discoveryCompare.mode;
+          button.classList.toggle('active', active);
+          button.setAttribute('aria-pressed', String(active));
+        });
+        renderDiscoveryComparisonBody();
+      },
+      undefined,
+      'discovery-ui.js:13'
+    )
   );
   $$('[data-discovery-source]').forEach((node) =>
-    node.addEventListener('click', () => {
-      discoveryCompare.source = node.dataset.discoverySource;
-      $$('[data-discovery-source]').forEach((button) => {
-        const active = button.dataset.discoverySource === discoveryCompare.source;
-        button.classList.toggle('active', active);
-        button.setAttribute('aria-pressed', String(active));
-      });
-      renderDiscoveryComparisonBody();
-    })
+    listen(
+      node,
+      'click',
+      () => {
+        discoveryCompare.source = node.dataset.discoverySource;
+        $$('[data-discovery-source]').forEach((button) => {
+          const active = button.dataset.discoverySource === discoveryCompare.source;
+          button.classList.toggle('active', active);
+          button.setAttribute('aria-pressed', String(active));
+        });
+        renderDiscoveryComparisonBody();
+      },
+      undefined,
+      'discovery-ui.js:14'
+    )
   );
   on('#discovery-facet-filter', 'change', (event) => {
     discoveryCompare.facet = event.target.value;
@@ -630,86 +620,45 @@ function discoveryHistoryHtml(discovery) {
       : ''
   }${archiveHtml}</details>`;
 }
-function discoveryReplaceHtml(selector, html) {
-  const target = $(selector);
-  if (!target) return;
-  const open = new Map(
-    $$('details[data-discovery-detail]', target).map((node) => [node.dataset.discoveryDetail, node.open])
-  );
-  const scroll = ['#discovery-map-viewport', '#discovery-inspector', '.discovery-list-viewport'].map(
-    (selector) => {
-      const node = $(selector, target);
-      return { selector, top: node?.scrollTop || 0, left: node?.scrollLeft || 0 };
-    }
-  );
-  const active =
-    typeof document !== 'undefined' && target.contains?.(document.activeElement)
-      ? document.activeElement
-      : null;
-  const focus = active?.id
-    ? { id: active.id, start: active.selectionStart, end: active.selectionEnd }
-    : active?.dataset.discoveryFocus
-      ? { key: active.dataset.discoveryFocus }
-      : null;
-  target.innerHTML = html;
-  $$('details[data-discovery-detail]', target).forEach((node) => {
-    if (open.has(node.dataset.discoveryDetail)) node.open = open.get(node.dataset.discoveryDetail);
-  });
-  const restore = () => {
-    scroll.forEach((position) => {
-      const node = $(position.selector, target);
-      if (node) {
-        node.scrollTop = position.top;
-        node.scrollLeft = position.left;
-      }
-    });
-    if (focus) {
-      const node = focus.id
-        ? $('#' + focus.id, target)
-        : $$('[data-discovery-focus]', target).find((node) => node.dataset.discoveryFocus === focus.key);
-      node?.focus({ preventScroll: true });
-      if (Number.isInteger(focus.start) && node?.setSelectionRange)
-        node.setSelectionRange(focus.start, focus.end);
-    }
-  };
-  restore();
-  return restore;
-}
-function renderDiscovery() {
-  const root = $('#discovery-content');
-  if (!root || !state) return;
-  const discovery = state.discovery || {};
+
+function renderDiscovery(root = $('#discovery-content'), snapshot = getState()) {
+  if (!root || !snapshot) return;
+  const discovery = snapshot.discovery || {};
   if (!$('#discovery-keywords')) {
-    discoveryDraft ||= {
-      keywords: discovery.plan?.keywords || state.keywords || '',
+    discoveryUiState.discoveryDraft ||= {
+      keywords: discovery.plan?.keywords || snapshot.keywords || '',
       english_terms: discovery.plan?.user_english_terms || '',
       use_llm: false,
       max_rounds: 2,
       max_queries: 6,
       per_query: 10,
     };
-    root.innerHTML = discoveryFormHtml(discoveryDraft);
-    discoveryResultsSignature = '';
-    discoveryHistorySignature = '';
+    replaceHtml(root, discoveryFormHtml(discoveryUiState.discoveryDraft));
+    discoveryUiState.discoveryResultsSignature = '';
+    discoveryUiState.discoveryHistorySignature = '';
     bindDiscoveryForm();
   }
-  const resultSignature = JSON.stringify([discovery.plan, discovery.analysis, discoveryVisibleCount]);
-  if (resultSignature !== discoveryResultsSignature) {
-    discoveryResultsSignature = resultSignature;
+  const resultSignature = JSON.stringify([
+    discovery.plan,
+    discovery.analysis,
+    discoveryUiState.discoveryVisibleCount,
+  ]);
+  if (resultSignature !== discoveryUiState.discoveryResultsSignature) {
+    discoveryUiState.discoveryResultsSignature = resultSignature;
     const allowed = new Set(
       discoveryItems(discovery)
         .filter((item) => item.selectable !== false)
         .map(discoveryKey)
     );
     for (const key of discoveryPicked) if (!allowed.has(key)) discoveryPicked.delete(key);
-    const restore = discoveryReplaceHtml('#discovery-results', discoveryResultsHtml(discovery));
+    const restore = replaceHtml($('#discovery-results'), discoveryResultsHtml(discovery));
     bindDiscoveryResults();
     restore?.();
   }
   const historySignature = JSON.stringify([discovery.rounds, discovery.logs, discovery.archives]);
-  if (historySignature !== discoveryHistorySignature) {
-    discoveryHistorySignature = historySignature;
-    discoveryReplaceHtml('#discovery-history', discoveryHistoryHtml(discovery));
+  if (historySignature !== discoveryUiState.discoveryHistorySignature) {
+    discoveryUiState.discoveryHistorySignature = historySignature;
+    replaceHtml($('#discovery-history'), discoveryHistoryHtml(discovery));
   }
   const statusLabels = {
     idle: '開始前',
@@ -719,17 +668,19 @@ function renderDiscovery() {
     error: '探索を確認してください',
     stopped: '探索を停止しました',
   };
-  $('#discovery-progress').innerHTML =
+  replaceHtml(
+    $('#discovery-progress'),
     discovery.status && discovery.status !== 'idle'
-      ? `<div class="discovery-status ${discovery.status === 'error' ? 'error' : ''}"><span class="${discovery.status === 'running' ? 'discovery-pulse' : ''}"></span><b>${esc(statusLabels[discovery.status] || discovery.status)}</b>${discovery.last_error ? `<p>${esc(discovery.last_error)}</p>` : '<p>候補を確認し、必要な範囲を手動探索へ引き継げます。</p>'}${discovery.status === 'running' && state.job?.status === 'running' ? '<button id="discovery-stop" class="button subtle small">停止する</button>' : ''}</div>`
-      : '';
+      ? `<div class="discovery-status ${discovery.status === 'error' ? 'error' : ''}"><span class="${discovery.status === 'running' ? 'discovery-pulse' : ''}"></span><b>${esc(statusLabels[discovery.status] || discovery.status)}</b>${discovery.last_error ? `<p>${esc(discovery.last_error)}</p>` : '<p>候補を確認し、必要な範囲を手動探索へ引き継げます。</p>'}${discovery.status === 'running' && snapshot.job?.status === 'running' ? '<button id="discovery-stop" class="button subtle small">停止する</button>' : ''}</div>`
+      : ''
+  );
   on('#discovery-stop', 'click', async () => {
     await api('/job/stop', {});
     toast('停止を依頼しました。実行中の通信が終わると停止します。');
   });
   $('#discovery-manual-count').textContent =
-    `手動探索に ${Number(state.patents?.length || 0)} 件${state.demo ? ' · 架空サンプル' : ''}`;
-  const opsReady = Boolean(state.settings?.ops_key_set && state.settings?.ops_secret_set);
+    `手動探索に ${Number(snapshot.patents?.length || 0)} 件${snapshot.demo ? ' · 架空サンプル' : ''}`;
+  const opsReady = Boolean(snapshot.settings?.ops_key_set && snapshot.settings?.ops_secret_set);
   $('#discovery-ops-status').textContent = opsReady
     ? 'EPO OPSの認証情報は設定済みです。Proxyが必要な環境では接続設定も確認してください。'
     : 'EPO OPSのキーとシークレットは未設定です。CSVの分析はこのまま利用できます。自動検索を使う際に接続設定を行ってください。';
@@ -739,33 +690,36 @@ function renderDiscovery() {
 function renderDiscoveryPlanRequest() {
   const host = $('#discovery-llm-request-status');
   if (!host) return;
-  const request = discoveryPlanRequestState;
-  host.innerHTML = !request
-    ? ''
-    : request.status === 'running'
-      ? '<p class="discovery-plan-request pending">探索計画を作成中です。提案の検証と保存が終わるまで、現在の計画を表示しています。</p>'
-      : request.status === 'error'
-        ? `<p class="discovery-plan-request error">今回の計画は作成できませんでした：${esc(request.message)}<br>表示中の結果は変更前の計画です。</p>`
-        : '';
+  const request = discoveryUiState.discoveryPlanRequestState;
+  replaceHtml(
+    host,
+    !request
+      ? ''
+      : request.status === 'running'
+        ? '<p class="discovery-plan-request pending">探索計画を作成中です。提案の検証と保存が終わるまで、現在の計画を表示しています。</p>'
+        : request.status === 'error'
+          ? `<p class="discovery-plan-request error">今回の計画は作成できませんでした：${esc(request.message)}<br>表示中の結果は変更前の計画です。</p>`
+          : ''
+  );
 }
 function updateDiscoveryControls() {
-  const unavailable = discoveryRequestPending || state.job?.status === 'running';
-  const needsPlan = !state.discovery?.plan || discoveryPlanChanged();
+  const unavailable = discoveryUiState.discoveryRequestPending || getState().job?.status === 'running';
+  const needsPlan = !getState().discovery?.plan || discoveryPlanChanged();
   $$('#discovery-content .discovery-action').forEach((button) => {
     button.disabled = Boolean(unavailable);
   });
   if ($('#discovery-run'))
     $('#discovery-run').disabled = Boolean(
-      unavailable || !state.settings?.ops_key_set || !state.settings?.ops_secret_set || needsPlan
+      unavailable || !getState().settings?.ops_key_set || !getState().settings?.ops_secret_set || needsPlan
     );
   if ($('#discovery-analyze'))
-    $('#discovery-analyze').disabled = Boolean(unavailable || !state.patents?.length || needsPlan);
+    $('#discovery-analyze').disabled = Boolean(unavailable || !getState().patents?.length || needsPlan);
   if ($('#discovery-import'))
     $('#discovery-import').disabled = Boolean(
       unavailable || !$('#discovery-csv-file')?.files?.length || needsPlan
     );
   if ($('#discovery-plan-note'))
-    $('#discovery-plan-note').textContent = !state.discovery?.plan
+    $('#discovery-plan-note').textContent = !getState().discovery?.plan
       ? '① 探索計画を作成 → ② CSVで検証 → ③ 次のCSVを追加、の順に進めます。'
       : `${discoveryPlanChanged() ? 'テーマ・英語検索語が変更されています。「探索計画を作る」で反映してからCSVを分析してください。' : '現在の探索計画でCSVを分析します。'} 計画を作り直すと新しい蓄積を開始し、以前の計画は記録に保存します。`;
   const allowed = new Set(
@@ -778,39 +732,42 @@ function updateDiscoveryControls() {
   if ($('#discovery-picked-count')) $('#discovery-picked-count').textContent = selected.length;
   $$('[data-discovery-key]').forEach((node) => {
     const item = discoveryItems().find((item) => discoveryKey(item) === node.dataset.discoveryKey);
-    node.disabled = Boolean(discoveryAdopting || item?.selectable === false);
+    node.disabled = Boolean(discoveryUiState.discoveryAdopting || item?.selectable === false);
   });
   $$('.discovery-star').forEach((node) =>
     node.setAttribute(
       'aria-disabled',
-      String(discoveryAdopting || node.dataset.discoverySelectable === 'false')
+      String(discoveryUiState.discoveryAdopting || node.dataset.discoverySelectable === 'false')
     )
   );
 }
 async function requestDiscovery(path, body, options) {
-  if (discoveryRequestPending || state.job?.status === 'running') return false;
+  if (discoveryUiState.discoveryRequestPending || getState().job?.status === 'running') return false;
   captureDiscoveryDraft();
-  discoveryRequestPending = true;
+  discoveryUiState.discoveryRequestPending = true;
   updateDiscoveryControls();
   if (path === '/discovery/plan') {
-    discoveryPlanRequestState = { status: 'running' };
+    discoveryUiState.discoveryPlanRequestState = { status: 'running' };
     renderDiscoveryPlanRequest();
   }
   try {
     const result = await api(path, body, options);
     mergeDiscoveryResponse(result.job_id ? await api('/state') : result);
-    if (path === '/discovery/plan') discoveryPlanRequestState = null;
+    if (path === '/discovery/plan') discoveryUiState.discoveryPlanRequestState = null;
     updateChrome();
     return true;
   } catch (error) {
     if (path === '/discovery/plan') {
-      discoveryPlanRequestState = { status: 'error', message: error.message || String(error) };
+      discoveryUiState.discoveryPlanRequestState = {
+        status: 'error',
+        message: error.message || String(error),
+      };
       renderDiscoveryPlanRequest();
     }
     throw error;
   } finally {
-    discoveryRequestPending = false;
-    if (activeTab === 'discovery') renderDiscovery();
+    discoveryUiState.discoveryRequestPending = false;
+    if (appState.activeTab === 'discovery') renderDiscovery();
   }
 }
 function discoveryLimits(draft) {
@@ -826,19 +783,26 @@ function discoveryLimits(draft) {
 }
 function bindDiscoveryForm() {
   $$('#discovery-content input:not([type=file]), #discovery-content textarea').forEach((node) =>
-    node.addEventListener('input', () => {
-      captureDiscoveryDraft();
-      updateDiscoveryControls();
-    })
+    listen(
+      node,
+      'input',
+      () => {
+        captureDiscoveryDraft();
+        updateDiscoveryControls();
+      },
+      undefined,
+      'discovery-ui.js:15'
+    )
   );
   on('#discovery-plan', 'click', async () => {
     captureDiscoveryDraft();
-    if (!discoveryDraft.keywords.trim()) throw new Error('調べたい技術・キーワードを入力してください。');
+    if (!discoveryUiState.discoveryDraft.keywords.trim())
+      throw new Error('調べたい技術・キーワードを入力してください。');
     if (
       await requestDiscovery('/discovery/plan', {
-        keywords: discoveryDraft.keywords,
-        english_terms: discoveryDraft.english_terms,
-        use_llm: discoveryDraft.use_llm,
+        keywords: discoveryUiState.discoveryDraft.keywords,
+        english_terms: discoveryUiState.discoveryDraft.english_terms,
+        use_llm: discoveryUiState.discoveryDraft.use_llm,
       })
     )
       toast('探索計画を作成しました。CSVで候補を検証できます。');
@@ -866,7 +830,7 @@ function bindDiscoveryForm() {
   });
   on('#discovery-run', 'click', async () => {
     captureDiscoveryDraft();
-    if (await requestDiscovery('/discovery/run', discoveryLimits(discoveryDraft)))
+    if (await requestDiscovery('/discovery/run', discoveryLimits(discoveryUiState.discoveryDraft)))
       toast('自動検索を開始しました。上限内で探索を繰り返します。');
   });
   on('#discovery-settings', 'click', () => {
@@ -877,12 +841,15 @@ function bindDiscoveryForm() {
 }
 function bindDiscoveryResults() {
   $$('.discovery-copy-query').forEach((node) =>
-    node.addEventListener(
+    listen(
+      node,
       'click',
       run(async () => {
         await navigator.clipboard.writeText(node.dataset.discoveryQuery);
         toast('EPO OPS形式の検索式をコピーしました。');
-      })
+      }),
+      undefined,
+      'discovery-ui.js:16'
     )
   );
   bindDiscoveryComparison();
@@ -894,7 +861,7 @@ function bindDiscoveryResults() {
   on('#discovery-adopt', 'click', adoptDiscoveryClasses);
 }
 async function adoptDiscoveryClasses() {
-  if (discoveryRequestPending || state.job?.status === 'running') return;
+  if (discoveryUiState.discoveryRequestPending || getState().job?.status === 'running') return;
   const allowed = new Set(
     discoveryItems()
       .filter((item) => item.selectable !== false)
@@ -904,21 +871,56 @@ async function adoptDiscoveryClasses() {
   if (!keys.length) throw new Error('送る分類にチェックを入れてください。');
   captureDiscoveryDraft();
   captureClassDraft();
-  discoveryRequestPending = true;
-  discoveryAdopting = true;
+  discoveryUiState.discoveryRequestPending = true;
+  discoveryUiState.discoveryAdopting = true;
   updateDiscoveryControls();
   try {
-    await selectionSave;
+    await appState.selectionSave;
     mergeDiscoveryResponse(await api('/discovery/adopt', { keys }), true);
     updateChrome();
     discoveryPicked.clear();
-    discoveryResultsSignature = '';
+    discoveryUiState.discoveryResultsSignature = '';
     setTab('explore');
-    if (step !== 0) setStep(0);
+    if (appState.step !== 0) setStep(0);
     toast(`${keys.length} 件を候補へ追加しました。検索に使う分類を選んでください。`);
   } finally {
-    discoveryRequestPending = false;
-    discoveryAdopting = false;
-    if (activeTab === 'discovery') renderDiscovery();
+    discoveryUiState.discoveryRequestPending = false;
+    discoveryUiState.discoveryAdopting = false;
+    if (appState.activeTab === 'discovery') renderDiscovery();
   }
 }
+
+export {
+  discoveryPicked,
+  discoveryCompare,
+  discoveryItems,
+  captureDiscoveryDraft,
+  discoveryPlanChanged,
+  discoveryLlmProposalHtml,
+  discoveryHasEvidence,
+  discoveryCandidateHtml,
+  discoveryTitle,
+  discoveryBilingualHtml,
+  discoveryEvidenceType,
+  discoveryEvidenceLabel,
+  discoveryFilteredItems,
+  discoveryComparisonHtml,
+  discoveryComparisonBodyHtml,
+  discoveryInspectorHtml,
+  discoveryMapHtml,
+  renderDiscoveryMap,
+  discoveryPointInPolygon,
+  applyDiscoveryLasso,
+  toggleDiscoveryPicked,
+  updateDiscoveryPickedDisplay,
+  discoveryQueryHtml,
+  discoveryResultsHtml,
+  discoveryHistoryHtml,
+  renderDiscovery,
+  updateDiscoveryControls,
+  requestDiscovery,
+  discoveryLimits,
+  adoptDiscoveryClasses,
+};
+
+export { renderDiscovery as render };

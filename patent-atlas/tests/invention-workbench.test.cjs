@@ -1,14 +1,14 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const vm = require('node:vm');
-const source = fs.readFileSync('static/invention-workbench.js', 'utf8');
+
+const { loadModule } = require('./module-harness.cjs');
+
 const esc = (value) =>
   String(value ?? '').replace(
     /[&<>"']/g,
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]
   );
-function setup() {
+async function setup() {
   const dom = {},
     groups = {},
     handlers = new Map(),
@@ -114,8 +114,22 @@ function setup() {
     },
     busy: async (_button, _message, fn) => fn(),
   };
-  vm.createContext(context);
-  vm.runInContext(source, context);
+  context.setState = (next) => (context.state = next);
+  context.getState = () => context.state;
+  await loadModule(context, 'invention-workbench.js', [
+    'inventionDraftInput',
+    'inventionPlanState',
+    'captureInventionDraft',
+    'inventionPlanStale',
+    'invalidateInventionPreview',
+    'inventionWorkbenchHtml',
+    'inventionPayload',
+    'inventionShowError',
+    'requestInventionPlan',
+    'previewInvention',
+    'applyInvention',
+    'bindInventionWorkbench',
+  ]);
   return {
     context,
     dom,
@@ -125,15 +139,14 @@ function setup() {
     navigation,
     plan,
     input,
-    read: (expression) => vm.runInContext(expression, context),
   };
 }
 function plain(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-test('default is one element, classification hypotheses are inactive, and saved plan is immutable', () => {
-  const s = setup(),
+test('default is one element, classification hypotheses are inactive, and saved plan is immutable', async () => {
+  const s = await setup(),
     c = s.context,
     before = JSON.stringify(c.state);
   const d = c.inventionPlanState();
@@ -152,8 +165,8 @@ test('default is one element, classification hypotheses are inactive, and saved 
   assert.match(html, /取得していない公報本文・請求項は参照しません/);
   assert.equal(JSON.stringify(c.state), before);
 });
-test('each selected element serializes edited perspectives and explicit nested joins', () => {
-  const s = setup(),
+test('each selected element serializes edited perspectives and explicit nested joins', async () => {
+  const s = await setup(),
     c = s.context,
     d = c.inventionPlanState();
   d.strategy = 'combination';
@@ -175,8 +188,8 @@ test('each selected element serializes edited perspectives and explicit nested j
   d.element_ids = ['e2'];
   assert.deepEqual(plain(c.inventionPayload().elements.map((e) => e.id)), ['e2']);
 });
-test('global and element NOT remain separately scoped and require explicit confirmation', () => {
-  const s = setup(),
+test('global and element NOT remain separately scoped and require explicit confirmation', async () => {
+  const s = await setup(),
     c = s.context,
     d = c.inventionPlanState();
   d.exclusions.all = ['玩具'];
@@ -197,8 +210,8 @@ test('global and element NOT remain separately scoped and require explicit confi
   ]);
   assert.deepEqual([...d.exclusions.e1], ['赤外線']);
 });
-test('inactive classifications do not alter text search and class intersection consent is explicit', () => {
-  const s = setup(),
+test('inactive classifications do not alter text search and class intersection consent is explicit', async () => {
+  const s = await setup(),
     c = s.context,
     d = c.inventionPlanState(),
     p = d.elements[0].perspectives[0];
@@ -210,7 +223,7 @@ test('inactive classifications do not alter text search and class intersection c
   assert.deepEqual([...c.inventionPayload().elements[0].perspectives[0].classification_keys], ['IPC:G01K']);
   assert.equal(c.inventionPayload().confirm_class_intersection, true);
 });
-test('changed brief, claims, manual elements or targets require a new plan', () => {
+test('changed brief, claims, manual elements or targets require a new plan', async () => {
   for (const mutate of [
     (c) => (c.researchBrief().purpose = '別の目的'),
     (c) => (c.researchBrief().goal = '別技術'),
@@ -220,7 +233,7 @@ test('changed brief, claims, manual elements or targets require a new plan', () 
     (c) => (c.inventionDraftInput().invention_text += '追記'),
     (c) => c.inventionDraftInput().manual_elements.push('新要素'),
   ]) {
-    const s = setup(),
+    const s = await setup(),
       c = s.context;
     c.inventionPlanState();
     assert.equal(c.inventionPlanStale(), false);
@@ -229,8 +242,8 @@ test('changed brief, claims, manual elements or targets require a new plan', () 
     assert.throws(() => c.inventionPayload(), /要素分解をやり直し/);
   }
 });
-test('stale plan visibly disables preview while keeping edited terms on rerender and import', () => {
-  const s = setup(),
+test('stale plan visibly disables preview while keeping edited terms on rerender and import', async () => {
+  const s = await setup(),
     c = s.context,
     d = c.inventionPlanState();
   d.elements[0].perspectives[0].terms = ['編集した語'];
@@ -243,8 +256,8 @@ test('stale plan visibly disables preview while keeping edited terms on rerender
   assert.match(html, /編集済みの請求項/);
   assert.equal(c.inventionPlanState(), d);
 });
-test('all source text, IDs, classifications and query warnings are escaped', () => {
-  const s = setup(),
+test('all source text, IDs, classifications and query warnings are escaped', async () => {
+  const s = await setup(),
     c = s.context;
   s.plan.elements[0].name = '<img src=x>';
   s.plan.elements[0].relation = '<svg>';
@@ -276,8 +289,8 @@ test('all source text, IDs, classifications and query warnings are escaped', () 
     assert.match(html, new RegExp(`&lt;${text}&gt;`));
   }
 });
-test('UI capture reads terms, selection, classification modes, joins and each exclusion scope', () => {
-  const s = setup(),
+test('UI capture reads terms, selection, classification modes, joins and each exclusion scope', async () => {
+  const s = await setup(),
     c = s.context,
     d = c.inventionPlanState();
   s.dom['#invention-elements'] = {};
@@ -314,7 +327,7 @@ test('UI capture reads terms, selection, classification modes, joins and each ex
   assert.equal(d.confirm_exclusions, true);
 });
 test('preview responses cannot restore stale edited conditions, even during an in-flight request', async () => {
-  const s = setup(),
+  const s = await setup(),
     c = s.context,
     d = c.inventionPlanState();
   let resolve;
@@ -327,7 +340,7 @@ test('preview responses cannot restore stale edited conditions, even during an i
   assert.equal(d.preview, null);
 });
 test('preview failures retain input and previous successful preview without applying anything', async () => {
-  const s = setup(),
+  const s = await setup(),
     c = s.context,
     d = c.inventionPlanState();
   d.preview = { preview_hash: 'previous' };
@@ -342,7 +355,7 @@ test('preview failures retain input and previous successful preview without appl
   assert.equal(s.navigation.length, 0);
 });
 test('planning preserves edits typed while waiting and does not discard a prior draft on failure', async () => {
-  const s = setup(),
+  const s = await setup(),
     c = s.context;
   c.inventionPlanState();
   let resolve;
@@ -364,10 +377,10 @@ test('planning preserves edits typed while waiting and does not discard a prior 
   };
   await assert.rejects(c.requestInventionPlan(true), /LLMが失敗/);
   assert.deepEqual([...c.inventionPlanState().elements[0].perspectives[0].terms], ['保持する編集']);
-  assert.equal(s.read('inventionPlanning'), false);
+  assert.equal(s.context.inventionPlanning, false);
 });
 test('manual planning validates bounded explicit elements and sends selected research context', async () => {
-  const s = setup(),
+  const s = await setup(),
     c = s.context;
   c.inventionDraftInput().manual_elements = [];
   await assert.rejects(c.requestInventionPlan(false), /1行ずつ/);
@@ -383,7 +396,7 @@ test('manual planning validates bounded explicit elements and sends selected res
   assert.deepEqual([...s.calls[0].body.brief.target_ids], ['JP1']);
 });
 test('apply uses exact preview hash, blocks changed payloads, and navigates only after success', async () => {
-  const s = setup(),
+  const s = await setup(),
     c = s.context,
     d = c.inventionPlanState();
   c.api = async (path, body) => {
@@ -406,8 +419,8 @@ test('apply uses exact preview hash, blocks changed payloads, and navigates only
   ]);
 });
 
-test('only adopted perspectives enter the payload and deselected edits survive rerender', () => {
-  const s = setup(),
+test('only adopted perspectives enter the payload and deselected edits survive rerender', async () => {
+  const s = await setup(),
     c = s.context,
     d = c.inventionPlanState();
   d.element_ids = ['e2'];
@@ -434,7 +447,7 @@ test('only adopted perspectives enter the payload and deselected edits survive r
 });
 
 test('a selected element with no adopted perspective reports its name without sending a request', async () => {
-  const s = setup(),
+  const s = await setup(),
     c = s.context,
     d = c.inventionPlanState();
   d.element_ids = ['e2'];
@@ -445,8 +458,8 @@ test('a selected element with no adopted perspective reports its name without se
   assert.doesNotThrow(() => c.inventionPayload());
 });
 
-test('classification AND confirmation ignores unadopted perspectives and unselected elements', () => {
-  const s = setup(),
+test('classification AND confirmation ignores unadopted perspectives and unselected elements', async () => {
+  const s = await setup(),
     c = s.context,
     d = c.inventionPlanState();
   d.element_ids = ['e2'];
@@ -463,8 +476,8 @@ test('classification AND confirmation ignores unadopted perspectives and unselec
   assert.doesNotThrow(() => c.inventionPayload());
 });
 
-test('classification intersection across perspectives or elements counts only adopted active classes', () => {
-  const s = setup(),
+test('classification intersection across perspectives or elements counts only adopted active classes', async () => {
+  const s = await setup(),
     c = s.context,
     d = c.inventionPlanState();
   d.element_ids = ['e2'];
@@ -487,8 +500,8 @@ test('classification intersection across perspectives or elements counts only ad
   assert.doesNotThrow(() => c.inventionPayload());
 });
 
-test('adoption checkbox captures selection, retains edited terms, and invalidates a preview', () => {
-  const s = setup(),
+test('adoption checkbox captures selection, retains edited terms, and invalidates a preview', async () => {
+  const s = await setup(),
     c = s.context,
     d = c.inventionPlanState();
   d.element_ids = ['e2'];
@@ -534,7 +547,7 @@ test('adoption checkbox captures selection, retains edited terms, and invalidate
 });
 
 test('changing adopted perspectives while preview is pending cannot restore the earlier preview', async () => {
-  const s = setup(),
+  const s = await setup(),
     c = s.context,
     d = c.inventionPlanState();
   d.element_ids = ['e2'];
@@ -548,8 +561,8 @@ test('changing adopted perspectives while preview is pending cannot restore the 
   assert.equal(d.preview, null);
 });
 
-test('boundary-ellipsis evidence adjustment is disclosed only for the exact status and stays escaped', () => {
-  const s = setup(),
+test('boundary-ellipsis evidence adjustment is disclosed only for the exact status and stays escaped', async () => {
+  const s = await setup(),
     c = s.context,
     e = s.plan.elements[0];
   e.evidence = [
@@ -571,25 +584,25 @@ test('boundary-ellipsis evidence adjustment is disclosed only for the exact stat
 });
 
 test('guided validation errors display inline and restore controls without starting a request', async () => {
-  const s = setup(),
+  const s = await setup(),
     c = s.context;
   let updated = 0,
     started = 0;
-  c.applyResearchInputMethod = () => updated++;
+  c.syncResearchPlanningControls = () => updated++;
   c.researchProgressStart = () => started++;
   c.researchFlowValidate = () => {
     throw new Error('今回の検索目的を入力してください。');
   };
   await assert.rejects(c.requestInventionPlan(true), /検索目的/);
-  assert.match(s.read('inventionError'), /検索目的/);
-  assert.equal(s.read('inventionPlanning'), false);
+  assert.match(s.context.inventionError, /検索目的/);
+  assert.equal(s.context.inventionPlanning, false);
   assert.equal(updated, 1);
   assert.equal(started, 0);
   assert.equal(s.calls.length, 0);
 });
 
 test('element planning reports progress, preserves pending edits and chooses the corresponding guided stage', async () => {
-  const s = setup(),
+  const s = await setup(),
     c = s.context,
     events = [];
   let running = false,
@@ -610,7 +623,7 @@ test('element planning reports progress, preserves pending edits and chooses the
   c.researchDraftScheduleSave = () => {};
   c.researchFlowAfterPlan = (edited) => events.push('stage:' + edited);
   c.renderResearchWorkbench = () => events.push('render');
-  c.applyResearchInputMethod = () => events.push('controls');
+  c.syncResearchPlanningControls = () => events.push('controls');
   c.api = () => new Promise((yes) => (resolve = yes));
   const pending = c.requestInventionPlan(true);
   await assert.rejects(c.requestInventionPlan(true), /起案中/);
@@ -644,7 +657,7 @@ test('element planning reports progress, preserves pending edits and chooses the
 });
 
 test('preview reveals the result and adoption retains typed input while clearing the old revision preview', async () => {
-  const s = setup(),
+  const s = await setup(),
     c = s.context,
     d = c.inventionPlanState(),
     events = [];
@@ -671,8 +684,8 @@ test('preview reveals the result and adoption retains typed input while clearing
   assert.equal(events.at(-1), 'rebase:4');
 });
 
-test('editing invention input clears the old inline error without changing progress history', () => {
-  const s = setup(),
+test('editing invention input clears the old inline error without changing progress history', async () => {
+  const s = await setup(),
     c = s.context;
   let input;
   const progress = { status: 'error', error: '接続失敗' };
@@ -688,9 +701,9 @@ test('editing invention input clears the old inline error without changing progr
   c.inventionShowError('要素を入力してください。');
   c.bindInventionWorkbench();
   c.captureInventionDraft();
-  assert.match(s.read('inventionError'), /要素/);
+  assert.match(s.context.inventionError, /要素/);
   input();
-  assert.equal(s.read('inventionError'), '');
+  assert.equal(s.context.inventionError, '');
   assert.equal(s.dom['#invention-error'].hidden, true);
   assert.equal(s.dom['#invention-error'].textContent, '');
   assert.deepEqual([...c.inventionDraftInput().manual_elements], ['修正した要素']);

@@ -1,13 +1,15 @@
-/* Motion is a browser preference; it never changes the patent workspace. */
-'use strict';
-(function () {
+import { syncClassMotion } from './classification-ui.js';
+
+export const atlasMotionState = {
+  motionController: undefined,
+};
+export function createMotion({ document, window, localStorage, onChange = () => {} }) {
   const storageKey = 'patent-atlas-motion';
   const choices = new Set(['system', 'dynamic', 'static']);
   const root = document.documentElement;
-  const media =
-    typeof window.matchMedia === 'function'
-      ? window.matchMedia('(prefers-reduced-motion: reduce)')
-      : { matches: false };
+  const media = Boolean(window.matchMedia)
+    ? window.matchMedia('(prefers-reduced-motion: reduce)')
+    : { matches: false };
   const running = new Map();
   let mode = 'system';
   try {
@@ -33,7 +35,7 @@
   function enter(element, options = {}) {
     // Rapid navigation replaces the visual effect, without delaying navigation.
     cancelAll();
-    if (!element || !enabled() || typeof element.animate !== 'function') return;
+    if (!element || !enabled() || !element.animate) return;
     const direction = options.direction < 0 ? -1 : 1;
     const isStep = options.kind === 'step';
     const offset = isStep ? `${direction * 18}px, 0, 0` : `${direction * 8}px, 12px, 0`;
@@ -61,7 +63,7 @@
     root.dataset.atlasMotion = enabled() ? 'dynamic' : 'static';
     root.dataset.atlasMotionPreference = mode;
     if (!enabled()) cancelAll();
-    globalThis.syncClassMotion?.();
+    onChange();
     const select = document.getElementById('atlas-motion-mode');
     if (select) {
       select.value = mode;
@@ -88,11 +90,36 @@
       ?.addEventListener('change', (event) => setMode(event.currentTarget.value));
   }
 
-  window.PatentAtlasMotion = { enter, cancel, cancelAll, enabled, setMode };
   // Apply the preference before the first API response renders the workspace.
   apply();
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true });
   else init();
-  if (typeof media.addEventListener === 'function') media.addEventListener('change', apply);
-  else if (typeof media.addListener === 'function') media.addListener(apply);
-})();
+  if (media.addEventListener) media.addEventListener('change', apply);
+  else if (media.addListener) media.addListener(apply);
+
+  return { enter, cancel, cancelAll, enabled, setMode };
+}
+
+export function initMotion() {
+  atlasMotionState.motionController = createMotion({
+    document,
+    window,
+    localStorage,
+    onChange: syncClassMotion,
+  });
+}
+export function enter(...args) {
+  return atlasMotionState.motionController?.enter(...args);
+}
+export function cancel(...args) {
+  return atlasMotionState.motionController?.cancel(...args);
+}
+export function cancelAll() {
+  return atlasMotionState.motionController?.cancelAll();
+}
+export function enabled() {
+  return atlasMotionState.motionController?.enabled() ?? false;
+}
+export function setMode(value) {
+  return atlasMotionState.motionController?.setMode(value);
+}

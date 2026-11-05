@@ -1,14 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const vm = require('node:vm');
-const source = fs.readFileSync('static/query-output.js', 'utf8');
-const appSource = fs.readFileSync('static/app.js', 'utf8');
-const urlHelpers = appSource.slice(appSource.indexOf('const esc ='), appSource.indexOf('const keyOf ='));
+const { loadModule } = require('./module-harness.cjs');
 
-test('shared URL validation accepts only HTTP and HTTPS strings', () => {
-  const c = vm.createContext({});
-  vm.runInContext(urlHelpers, c);
+test('shared URL validation accepts only HTTP and HTTPS strings', async () => {
+  const c = {};
+  await loadModule(c, 'core.js', ['safeUrl']);
   for (const value of [
     'javascript:alert(1)',
     'JavaScript:alert(1)',
@@ -56,14 +53,15 @@ test('query output omits unsafe source and service links and retains safe links'
     sources: [],
     url: '',
   };
-  const c = vm.createContext({
+  const c = {
     $: node,
     $$: () => [],
     exportRequest: 0,
     outputEdits: new Map(),
     api: async () => result,
-  });
-  vm.runInContext(urlHelpers + '\n' + source, c);
+  };
+  (await loadModule(c, 'core.js', ['safeUrl']),
+    await loadModule(c, 'query-output.js', ['queryCard', 'requestOutput', 'historyHtml']));
   for (const url of [
     'javascript:alert(1)',
     'data:text/html,test',
@@ -89,16 +87,17 @@ test('query output omits unsafe source and service links and retains safe links'
   }
 });
 
-test('query history and format identifiers cannot break out of HTML attributes', () => {
+test('query history and format identifiers cannot break out of HTML attributes', async () => {
   const id = 'x" onclick="alert(1)';
   const query = { id, type: '初案', version: 1, expression: '', created_at: '' };
-  const c = vm.createContext({
+  const c = {
     state: { queries: [query] },
     formatCatalog: [{ id, name: '形式' }],
     outputFormat: id,
     outputEdits: new Map(),
-  });
-  vm.runInContext(urlHelpers + '\n' + source, c);
+  };
+  (await loadModule(c, 'core.js', ['safeUrl']),
+    await loadModule(c, 'query-output.js', ['queryCard', 'requestOutput', 'historyHtml']));
   assert.match(c.historyHtml(), /data-id="x&quot; onclick=&quot;alert\(1\)"/);
   assert.match(c.queryCard(query), /option value="x&quot; onclick=&quot;alert\(1\)"/);
 });
@@ -115,8 +114,9 @@ test('a delayed edit from a previous history card preserves the current export',
       throw new Error('obsolete request must not be sent');
     },
   };
-  vm.createContext(context);
-  vm.runInContext(source, context);
+  context.setState = (next) => (context.state = next);
+  context.getState = () => context.state;
+  await loadModule(context, 'query-output.js', ['queryCard', 'requestOutput', 'historyHtml']);
   await context.requestOutput({ id: 'old' });
   assert.equal(context.currentOutput, current);
   assert.equal(context.exportRequest, 8);
@@ -125,13 +125,14 @@ test('a delayed edit from a previous history card preserves the current export',
 
 test('a delayed edit after leaving the search step has no side effects', async () => {
   const context = { currentOutput: null, exportRequest: 8, $: () => null };
-  vm.createContext(context);
-  vm.runInContext(source, context);
+  context.setState = (next) => (context.state = next);
+  context.getState = () => context.state;
+  await loadModule(context, 'query-output.js', ['queryCard', 'requestOutput', 'historyHtml']);
   await context.requestOutput({ id: 'old' });
   assert.equal(context.exportRequest, 8);
 });
 
-test('query cards include actual classification-change evidence through the shared lexical helper', () => {
+test('query cards include actual classification-change evidence through the shared lexical helper', async () => {
   const context = {
     formatCatalog: [{ id: 'jplatpat', name: 'J-PlatPat' }],
     outputFormat: 'jplatpat',
@@ -142,17 +143,13 @@ test('query cards include actual classification-change evidence through the shar
         (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]
       ),
   };
-  vm.createContext(context);
+  context.setState = (next) => (context.state = next);
+  context.getState = () => context.state;
   const refinementSource = fs.readFileSync('static/refinement-ui.js', 'utf8');
   // Exercise a shared script binding that is not a globalThis property. Use the
   // real refinement renderer so query-card integration cannot silently vanish.
-  vm.runInContext(
-    `const classificationChangesHtml=(()=>{${refinementSource}\nreturn classificationChangesHtml;})();`,
-    context
-  );
-  assert.equal(vm.runInContext('typeof classificationChangesHtml', context), 'function');
-  assert.equal(context.classificationChangesHtml, undefined);
-  vm.runInContext(source, context);
+  await loadModule(context, 'refinement-ui.js', ['classificationChangesHtml']);
+  await loadModule(context, 'query-output.js', ['queryCard']);
   const query = {
     id: 'refined',
     version: 2,

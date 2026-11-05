@@ -1,10 +1,29 @@
-'use strict';
+import { replaceHtml, listen, getState, $, esc, $$, on } from './core.js';
+import {
+  researchBrief,
+  captureResearchDraft,
+  renderResearchWorkbench,
+  researchWorkbenchState,
+} from './research-workbench.js';
+import {
+  inventionDraftInput,
+  inventionPlan,
+  inventionPlanStale,
+  inventionWorkbenchState,
+} from './invention-workbench.js';
+import { setTab, setStep } from './app.js';
+import { appState } from './ui-session.js';
+import { researchDraftFlush, researchDraftStatusHtml } from './research-draft-store.js';
+import { renderResearchProgress } from './research-progress.js';
+
+export const researchGuidanceState = {
+  researchFlowStage: null,
+  researchFlowWorkspace: null,
+  researchFlowInputMethod: null,
+  researchFlowEditor: 'invention',
+};
 
 /* One visible workflow; legacy panel names are internal destinations, not tabs. */
-let researchFlowStage = null;
-let researchFlowWorkspace = null;
-let researchFlowInputMethod = null;
-let researchFlowEditor = 'invention';
 
 function researchFlowHasElements(plan) {
   return Array.isArray(plan?.elements) && plan.elements.length > 0;
@@ -103,11 +122,11 @@ function researchFlowValidate(useLlm) {
     researchBrief(),
     inventionDraftInput(),
     useLlm ? 'llm' : 'manual',
-    state.settings
+    getState().settings
   );
   if (!issue) return;
-  researchFlowStage = 'input';
-  researchFlowInputMethod = useLlm ? 'llm' : 'manual';
+  researchGuidanceState.researchFlowStage = 'input';
+  researchGuidanceState.researchFlowInputMethod = useLlm ? 'llm' : 'manual';
   applyResearchFlowStage();
   const target = $('#' + issue.field);
   target?.focus?.();
@@ -119,17 +138,17 @@ function researchFlowNavigate(action) {
   const destination = researchFlowDestination(action);
   if (!destination) return;
   const item = researchFlowActions(
-    state,
-    researchFlowStage,
-    activeTab,
-    step,
+    getState(),
+    researchGuidanceState.researchFlowStage,
+    appState.activeTab,
+    appState.step,
     researchBrief().entry_mode
   ).find((row) => row.id === action);
   if (item?.disabled) return;
-  if (typeof captureResearchDraft === 'function' && activeTab === 'workbench') captureResearchDraft();
-  if (destination.stage) researchFlowStage = destination.stage;
-  if (typeof researchDraftFlush === 'function') researchDraftFlush();
-  const same = activeTab === destination.tab;
+  if (appState.activeTab === 'workbench') captureResearchDraft();
+  if (destination.stage) researchGuidanceState.researchFlowStage = destination.stage;
+  researchDraftFlush();
+  const same = appState.activeTab === destination.tab;
   setTab(destination.tab);
   if (destination.stage && same) renderResearchWorkbench(destination.stage);
   if (destination.step !== undefined) setStep(destination.step);
@@ -158,12 +177,12 @@ function researchFlowTools(stage) {
     : tools;
 }
 function researchOpenTool(tab, targetStep, editor) {
-  if (activeTab === 'workbench' && typeof captureResearchDraft === 'function') captureResearchDraft();
+  if (appState.activeTab === 'workbench') captureResearchDraft();
   if (tab === 'workbench') {
-    researchFlowStage = 'elements';
-    researchFlowEditor = editor || 'invention';
+    researchGuidanceState.researchFlowStage = 'elements';
+    researchGuidanceState.researchFlowEditor = editor || 'invention';
   }
-  const same = activeTab === tab;
+  const same = appState.activeTab === tab;
   setTab(tab);
   if (tab === 'explore') setStep(Number(targetStep));
   else if (tab === 'workbench' && same) renderResearchWorkbench('elements');
@@ -171,91 +190,119 @@ function researchOpenTool(tab, targetStep, editor) {
 }
 function renderResearchFlowHeader() {
   const host = $('#research-flow-header');
-  if (!host || !state) return;
+  if (!host || !getState()) return;
   const actions = researchFlowActions(
-    state,
-    researchFlowStage || 'input',
-    activeTab,
-    step,
+    getState(),
+    researchGuidanceState.researchFlowStage || 'input',
+    appState.activeTab,
+    appState.step,
     researchBrief().entry_mode
   );
   const stage = actions.find((row) => row.active)?.id;
-  host.innerHTML = `<div class="research-flow-nav">${actions
-    .map(
-      (action, index) =>
-        `<button type="button" data-flow-action="${action.id}" ${action.disabled ? `disabled title="${esc(action.reason)}"` : ''} ${action.active ? 'aria-current="step"' : ''}><span>${index + 1}</span><b>${esc(action.label)}<small>${esc(action.note)}</small></b></button>`
-    )
-    .join('')}</div>
-    <div class="research-flow-save">${typeof researchDraftStatusHtml === 'function' ? researchDraftStatusHtml() : ''}</div>
+  replaceHtml(
+    host,
+    `<div class="research-flow-nav">${actions
+      .map(
+        (action, index) =>
+          `<button type="button" data-flow-action="${action.id}" ${action.disabled ? `disabled title="${esc(action.reason)}"` : ''} ${action.active ? 'aria-current="step"' : ''}><span>${index + 1}</span><b>${esc(action.label)}<small>${esc(action.note)}</small></b></button>`
+      )
+      .join('')}</div>
+    <div class="research-flow-save">${researchDraftStatusHtml()}</div>
     <div class="research-stage-tools" role="group" aria-label="この段階で使う機能">${researchFlowTools(stage)
       .map(
         ([tab, s, label, editor]) =>
-          `<button type="button" class="button small" data-stage-tool="${tab}" data-stage-step="${s}" data-stage-editor="${editor || ''}" aria-pressed="${activeTab === tab && (tab !== 'workbench' || researchFlowEditor === editor)}">${label}</button>`
+          `<button type="button" class="button small" data-stage-tool="${tab}" data-stage-step="${s}" data-stage-editor="${editor || ''}" aria-pressed="${appState.activeTab === tab && (tab !== 'workbench' || researchGuidanceState.researchFlowEditor === editor)}">${label}</button>`
       )
-      .join('')}</div>`;
+      .join('')}</div>`
+  );
   $$('[data-flow-action]', host).forEach((button) =>
-    button.addEventListener('click', () => researchFlowNavigate(button.dataset.flowAction))
+    listen(
+      button,
+      'click',
+      () => researchFlowNavigate(button.dataset.flowAction),
+      undefined,
+      'research-guidance.js:1'
+    )
   );
   $$('[data-stage-tool]', host).forEach((button) =>
-    button.addEventListener('click', () =>
-      researchOpenTool(button.dataset.stageTool, button.dataset.stageStep, button.dataset.stageEditor)
+    listen(
+      button,
+      'click',
+      () => researchOpenTool(button.dataset.stageTool, button.dataset.stageStep, button.dataset.stageEditor),
+      undefined,
+      'research-guidance.js:2'
     )
   );
   $('.workspace-heading')?.classList.toggle(
     'is-compact',
-    Boolean(state.patents.length || state.queries.length)
+    Boolean(getState().patents.length || getState().queries.length)
   );
 }
 function researchFlowAfterPlan(edited = false) {
-  researchFlowStage = edited ? 'input' : 'elements';
+  researchGuidanceState.researchFlowStage = edited ? 'input' : 'elements';
 }
 function prepareResearchFlow(stage) {
-  const workspace = state.research_workbench?.id;
-  if (researchFlowWorkspace !== workspace) {
-    researchFlowWorkspace = workspace;
-    researchFlowStage = null;
-    researchFlowInputMethod = null;
-    researchFlowEditor = researchBrief().entry_mode === 'examples' ? 'library' : 'invention';
+  const workspace = getState().research_workbench?.id;
+  if (researchGuidanceState.researchFlowWorkspace !== workspace) {
+    researchGuidanceState.researchFlowWorkspace = workspace;
+    researchGuidanceState.researchFlowStage = null;
+    researchGuidanceState.researchFlowInputMethod = null;
+    researchGuidanceState.researchFlowEditor =
+      researchBrief().entry_mode === 'examples' ? 'library' : 'invention';
   }
-  if (stage) researchFlowStage = stage;
-  if (!researchFlowStage)
-    researchFlowStage =
+  if (stage) researchGuidanceState.researchFlowStage = stage;
+  if (!researchGuidanceState.researchFlowStage)
+    researchGuidanceState.researchFlowStage =
       researchFlowHasElements(inventionPlan()) && !inventionPlanStale() ? 'elements' : 'input';
-  if (!researchFlowInputMethod)
-    researchFlowInputMethod =
-      inventionDraftInput().manual_elements.length || state.settings.provider === 'offline'
+  if (!researchGuidanceState.researchFlowInputMethod)
+    researchGuidanceState.researchFlowInputMethod =
+      inventionDraftInput().manual_elements.length || getState().settings.provider === 'offline'
         ? 'manual'
         : 'llm';
-  return researchFlowStage;
+  return researchGuidanceState.researchFlowStage;
 }
 function applyResearchInputMethod() {
   // Only pending-operation state changes after rendering; stage/method select the markup itself.
-  const running = Boolean(inventionPlanning || researchPlanning);
+  const running = Boolean(
+    inventionWorkbenchState.inventionPlanning || researchWorkbenchState.researchPlanning
+  );
   const llm = $('#invention-plan-llm'),
     local = $('#invention-plan-local');
-  if (llm) llm.disabled = running || state.settings.provider === 'offline';
+  if (llm) llm.disabled = running || getState().settings.provider === 'offline';
   if (local) local.disabled = running;
 }
 function applyResearchFlowStage() {
-  renderResearchWorkbench(researchFlowStage || 'input');
+  renderResearchWorkbench(researchGuidanceState.researchFlowStage || 'input');
 }
 function mountResearchGuidance() {
   $$('[data-research-input-method]').forEach((button) =>
-    button.addEventListener('click', () => {
-      captureResearchDraft();
-      researchFlowInputMethod = button.dataset.researchInputMethod;
-      renderResearchWorkbench('input');
-    })
+    listen(
+      button,
+      'click',
+      () => {
+        captureResearchDraft();
+        researchGuidanceState.researchFlowInputMethod = button.dataset.researchInputMethod;
+        renderResearchWorkbench('input');
+      },
+      undefined,
+      'research-guidance.js:3'
+    )
   );
   $$('[data-research-resume]').forEach((button) =>
-    button.addEventListener('click', () => researchFlowNavigate(button.dataset.researchResume))
+    listen(
+      button,
+      'click',
+      () => researchFlowNavigate(button.dataset.researchResume),
+      undefined,
+      'research-guidance.js:4'
+    )
   );
   on('#research-connect-llm', 'click', () => setTab('settings'));
   on('#research-edit-input', 'click', () => researchFlowNavigate('input'));
   on('#research-replan-input', 'click', () => researchFlowNavigate('input'));
   applyResearchInputMethod();
   renderResearchFlowHeader();
-  if (typeof renderResearchProgress === 'function') renderResearchProgress();
+  renderResearchProgress();
 }
 function researchFlowRevealPreview() {
   const node = $('#invention-query-preview');
@@ -264,3 +311,21 @@ function researchFlowRevealPreview() {
   node.scrollIntoView?.({ block: 'start', behavior: 'auto' });
   node.focus?.({ preventScroll: true });
 }
+
+export {
+  researchFlowActions,
+  researchFlowEntryMode,
+  researchFlowDestination,
+  researchFlowPreflight,
+  researchFlowValidate,
+  researchFlowNavigate,
+  researchFlowTools,
+  researchOpenTool,
+  renderResearchFlowHeader,
+  researchFlowAfterPlan,
+  prepareResearchFlow,
+  applyResearchInputMethod,
+  applyResearchFlowStage,
+  mountResearchGuidance,
+  researchFlowRevealPreview,
+};

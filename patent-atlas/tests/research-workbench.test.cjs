@@ -1,14 +1,14 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const vm = require('node:vm');
-const source = fs.readFileSync('static/research-workbench.js', 'utf8');
+
+const { loadModule } = require('./module-harness.cjs');
+
 const esc = (value) =>
   String(value ?? '').replace(
     /[&<>"']/g,
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]
   );
-function setup() {
+async function setup() {
   const dom = { '#research-workbench': { innerHTML: '' } },
     groups = {},
     handlers = new Map(),
@@ -41,6 +41,12 @@ function setup() {
   };
   const context = {
     state,
+    prepareResearchFlow: (stage) =>
+      stage ||
+      (context.state.research_workbench.plan && context.researchFlowEditor === 'concepts'
+        ? 'elements'
+        : 'input'),
+    researchFlowEditor: 'concepts',
     activeTab: 'workbench',
     esc,
     structuredClone,
@@ -65,8 +71,26 @@ function setup() {
     uploadFile: async () => {},
     pendingImportMode: 'replace',
   };
-  vm.createContext(context);
-  vm.runInContext(source, context);
+  context.setState = (next) => (context.state = next);
+  context.getState = () => context.state;
+  await loadModule(context, 'research-workbench.js', [
+    'researchBrief',
+    'captureResearchDraft',
+    'captureResearchPlan',
+    'syncResearchPlanningControls',
+    'researchPlanState',
+    'researchGroupOptions',
+    'researchLogicHtml',
+    'researchTargetOptions',
+    'researchPlanHtml',
+    'invalidateResearchPreview',
+    'researchPlanPayload',
+    'renderResearchWorkbench',
+    'previewResearchPlan',
+    'initResearchWorkbench',
+    'researchClassificationProvenance',
+    'requestResearchPlan',
+  ]);
   return {
     context,
     dom,
@@ -74,7 +98,6 @@ function setup() {
     handlers,
     calls,
     navigation,
-    read: (expression) => vm.runInContext(expression, context),
   };
 }
 function plan(classes = []) {
@@ -121,8 +144,8 @@ function classification(origins) {
   };
 }
 
-test('four input modes use one radio group, with seed discovery leading into seed-based work', () => {
-  const s = setup(),
+test('four input modes use one radio group, with seed discovery leading into seed-based work', async () => {
+  const s = await setup(),
     c = s.context;
   c.renderResearchWorkbench();
   let html = s.dom['#research-workbench'].innerHTML;
@@ -140,8 +163,8 @@ test('four input modes use one radio group, with seed discovery leading into see
   assert.match(html, /仮のIPC/);
   assert.match(html, /research-promote/);
 });
-test('examples and individual tools have separate entry views and leave saved provider settings unchanged', () => {
-  const s = setup(),
+test('examples and individual tools have separate entry views and leave saved provider settings unchanged', async () => {
+  const s = await setup(),
     c = s.context,
     before = JSON.stringify(c.state.settings);
   c.researchBrief().entry_mode = 'examples';
@@ -156,8 +179,8 @@ test('examples and individual tools have separate entry views and leave saved pr
   assert.equal(JSON.stringify(c.state.settings), before);
   assert.equal(c.state.keywords, '既存KW');
 });
-test('target rendering escapes IDs, document text, and all imported classifications', () => {
-  const s = setup(),
+test('target rendering escapes IDs, document text, and all imported classifications', async () => {
+  const s = await setup(),
     c = s.context;
   c.state.patents = [
     { id: '<img>', title: '<script>名称', ipc: '<ipc>', fi: '<fi>', fterm: '<fterm>', cpc: '<cpc>' },
@@ -169,8 +192,8 @@ test('target rendering escapes IDs, document text, and all imported classificati
   assert.match(html, /checked/);
   assert.match(html, /&lt;fi&gt;/);
 });
-test('capturing the brief preserves selected IDs, hidden filtered selections, and optional aspects', () => {
-  const s = setup(),
+test('capturing the brief preserves selected IDs, hidden filtered selections, and optional aspects', async () => {
+  const s = await setup(),
     c = s.context;
   s.dom['#research-purpose'] = { value: '新しい目的' };
   s.dom['#research-goal'] = { value: '新しい説明' };
@@ -185,8 +208,8 @@ test('capturing the brief preserves selected IDs, hidden filtered selections, an
   assert.deepEqual([...d.user_aspects], ['機能']);
   assert.equal(c.state.research_workbench.brief.purpose, '周辺調査');
 });
-test('unselected optional/exclude concepts never silently become NOT conditions', () => {
-  const s = setup(),
+test('unselected optional/exclude concepts never silently become NOT conditions', async () => {
+  const s = await setup(),
     c = s.context,
     p = plan();
   p.concepts.push({
@@ -206,8 +229,8 @@ test('unselected optional/exclude concepts never silently become NOT conditions'
   assert.equal(draft.concepts[2].selected, false);
   assert.equal(JSON.stringify(p), before);
 });
-test('editing a concept persists on rerender of its plan but a new plan clears the old draft', () => {
-  const s = setup(),
+test('editing a concept persists on rerender of its plan but a new plan clears the old draft', async () => {
+  const s = await setup(),
     c = s.context,
     p = plan();
   const first = c.researchPlanState(p);
@@ -218,13 +241,13 @@ test('editing a concept persists on rerender of its plan but a new plan clears t
   assert.equal(fresh.concepts[0].terms[0], '走行');
   assert.equal(fresh.classification_keys.length, 0);
 });
-test('payload sends only selected concepts and preserves their explicit roles and edited terms', () => {
-  const s = setup(),
+test('payload sends only selected concepts and preserves their explicit roles and edited terms', async () => {
+  const s = await setup(),
     c = s.context,
     p = plan();
   c.state.research_workbench.plan = p;
   c.researchPlanState(p);
-  const draft = s.read('researchPlanDraft');
+  const draft = s.context.researchPlanDraft;
   draft.concepts[1].selected = true;
   draft.classification_keys = ['IPC:B60'];
   const payload = c.researchPlanPayload();
@@ -233,18 +256,22 @@ test('payload sends only selected concepts and preserves their explicit roles an
   assert.equal(payload.concepts[1].role, 'exclude');
   assert.deepEqual([...payload.classification_keys], ['IPC:B60']);
 });
-test('preview is invalidated before edited conditions can be adopted', () => {
-  const s = setup(),
+test('preview is invalidated before edited conditions can be adopted', async () => {
+  const s = await setup(),
     c = s.context;
   c.researchPlanState(plan());
-  s.read("researchPlanDraft.preview={preview_hash:'old',query:{boolean_tree:{}},expression:'old'}");
+  s.context.researchPlanDraft.preview = {
+    preview_hash: 'old',
+    query: { boolean_tree: {} },
+    expression: 'old',
+  };
   s.dom['#research-query-preview'] = { innerHTML: 'old' };
   c.invalidateResearchPreview();
-  assert.equal(s.read('researchPlanDraft.preview'), null);
+  assert.equal(s.context.researchPlanDraft.preview, null);
   assert.equal(s.dom['#research-query-preview'].innerHTML, '');
 });
-test('optional aspect dialog rejects excess or long items and commits valid input only', () => {
-  const s = setup(),
+test('optional aspect dialog rejects excess or long items and commits valid input only', async () => {
+  const s = await setup(),
     c = s.context;
   let closed = false;
   s.dom['#research-aspects-text'] = { value: 'a\nb' };
@@ -260,8 +287,8 @@ test('optional aspect dialog rejects excess or long items and commits valid inpu
   s.dom['#research-aspects-text'].value = 'a'.repeat(161);
   assert.throws(() => submit({ preventDefault: () => {} }), /160/);
 });
-test('promoting discovery to target mode requires a selected real patent', () => {
-  const s = setup(),
+test('promoting discovery to target mode requires a selected real patent', async () => {
+  const s = await setup(),
     c = s.context;
   c.researchBrief().entry_mode = 'discover';
   c.renderResearchWorkbench();
@@ -273,8 +300,8 @@ test('promoting discovery to target mode requires a selected real patent', () =>
   assert.equal(c.researchBrief().entry_mode, 'target');
   assert.equal(c.researchBrief().target_ids[0], 'JP1');
 });
-test('classification provenance escapes imported publication identifiers', () => {
-  const s = setup(),
+test('classification provenance escapes imported publication identifiers', async () => {
+  const s = await setup(),
     c = s.context,
     html = c.researchPlanHtml(
       plan([classification([{ type: 'patent', patent_id: '<img src=x onerror=alert(1)>' }])])
@@ -282,25 +309,25 @@ test('classification provenance escapes imported publication identifiers', () =>
   assert.doesNotMatch(html, /<img src=x/);
   assert.match(html, /&lt;img/);
 });
-test('catalog-derived concept hypotheses are not represented as patent evidence', () => {
-  const s = setup(),
+test('catalog-derived concept hypotheses are not represented as patent evidence', async () => {
+  const s = await setup(),
     c = s.context,
     html = c.researchPlanHtml(plan([classification([{ type: 'catalog' }, { type: 'concept_hypothesis' }])]));
   assert.doesNotMatch(html, /特許からの根拠/);
   assert.match(html, /仮説/);
 });
-test('FI and F-term correspondences are distinguished from directly assigned IPC', () => {
+test('FI and F-term correspondences are distinguished from directly assigned IPC', async () => {
   for (const [type, pattern] of [
     ['fi_to_ipc', /FI[^<]*(対応|由来|抽出|候補)/],
     ['fterm_theme_to_ipc', /F.?ターム[^<]*(対応|由来|候補)/],
   ]) {
-    const s = setup(),
+    const s = await setup(),
       c = s.context,
       html = c.researchPlanHtml(plan([classification([{ type, patent_id: 'JP1' }])]));
     assert.match(html, pattern);
   }
 });
-test('changed purpose, goals, keywords, target selection or mode cannot silently reuse the old plan', () => {
+test('changed purpose, goals, keywords, target selection or mode cannot silently reuse the old plan', async () => {
   for (const [field, value] of [
     ['purpose', '別の目的'],
     ['goal', '別の技術'],
@@ -309,7 +336,7 @@ test('changed purpose, goals, keywords, target selection or mode cannot silently
     ['user_aspects', ['新観点']],
     ['entry_mode', 'discover'],
   ]) {
-    const s = setup(),
+    const s = await setup(),
       c = s.context,
       p = plan();
     c.state.research_workbench.plan = p;
@@ -319,7 +346,7 @@ test('changed purpose, goals, keywords, target selection or mode cannot silently
   }
 });
 test('an LLM response cannot discard brief edits entered while it was waiting', async () => {
-  const s = setup(),
+  const s = await setup(),
     c = s.context;
   c.renderResearchWorkbench();
   s.dom['#research-error'] = { textContent: '' };
@@ -337,7 +364,7 @@ test('an LLM response cannot discard brief edits entered while it was waiting', 
   assert.equal(c.researchBrief().goal, '利用者の追加入力');
 });
 test('late planning error remains its original error after changing to another entry view', async () => {
-  const s = setup(),
+  const s = await setup(),
     c = s.context;
   c.renderResearchWorkbench();
   s.dom['#research-error'] = { textContent: '' };
@@ -352,7 +379,7 @@ test('late planning error remains its original error after changing to another e
   assert.equal(c.researchBrief().entry_mode, 'tools');
 });
 test('adding a target does not reselect a saved target the user just unchecked', async () => {
-  const s = setup(),
+  const s = await setup(),
     c = s.context;
   c.state.research_workbench.brief.target_ids = ['JP-old'];
   c.state.patents = [{ id: 'JP-old', title: '前の特許' }];
@@ -376,8 +403,8 @@ test('adding a target does not reselect a saved target the user just unchecked',
   });
   assert.deepEqual([...c.researchBrief().target_ids], ['JP-new']);
 });
-test('saved seed references remain selectable after the search-result CSV is replaced', () => {
-  const s = setup(),
+test('saved seed references remain selectable after the search-result CSV is replaced', async () => {
+  const s = await setup(),
     c = s.context;
   c.state.research_workbench.target_patents = [
     { id: 'JP-seed', title: '基準の公報', ipc: 'B60W', fi: 'B60W 60/00' },
@@ -391,8 +418,8 @@ test('saved seed references remain selectable after the search-result CSV is rep
   assert.match(html, /JP-result/);
   assert.equal(JSON.stringify(c.state), before);
 });
-test('current CSV and reference with same publication ID produce one selectable target', () => {
-  const s = setup(),
+test('current CSV and reference with same publication ID produce one selectable target', async () => {
+  const s = await setup(),
     c = s.context;
   c.state.research_workbench.target_patents = [{ id: 'JP-same', title: '保存した基準', ipc: 'B60' }];
   c.state.patents = [{ id: 'JP-same', title: '現在のメタデータ', ipc: 'B60W' }];
@@ -401,7 +428,7 @@ test('current CSV and reference with same publication ID produce one selectable 
   assert.match(html, /現在のメタデータ/);
 });
 test('planning guard prevents duplicate concurrent LLM requests and clears after failure', async () => {
-  const s = setup(),
+  const s = await setup(),
     c = s.context;
   let reject,
     calls = 0;
@@ -414,11 +441,11 @@ test('planning guard prevents duplicate concurrent LLM requests and clears after
   assert.equal(calls, 1);
   reject(new Error('失敗'));
   await assert.rejects(pending, /失敗/);
-  assert.equal(s.read('researchPlanning'), false);
+  assert.equal(s.context.researchPlanning, false);
 });
 
-test('previous plan is visibly marked after an entry change while original input and send guard survive', () => {
-  const s = setup(),
+test('previous plan is visibly marked after an entry change while original input and send guard survive', async () => {
+  const s = await setup(),
     c = s.context,
     p = plan();
   p.brief = structuredClone(c.state.research_workbench.brief);
@@ -446,14 +473,14 @@ test('previous plan is visibly marked after an entry change while original input
   );
 });
 
-test('brief edits show the previous-plan notice immediately without erasing concept edits', () => {
-  const s = setup(),
+test('brief edits show the previous-plan notice immediately without erasing concept edits', async () => {
+  const s = await setup(),
     c = s.context,
     p = plan();
   p.brief = structuredClone(c.state.research_workbench.brief);
   c.state.research_workbench.plan = p;
   c.researchPlanState(p);
-  s.read('researchPlanDraft').concepts[0].terms = ['保持する観点'];
+  s.context.researchPlanDraft.concepts[0].terms = ['保持する観点'];
   let inputHandler;
   s.dom['#research-purpose'] = { value: '変更後の目的' };
   s.dom['#research-stale-plan'] = { hidden: true };
@@ -464,7 +491,7 @@ test('brief edits show the previous-plan notice immediately without erasing conc
   inputHandler();
   assert.equal(s.dom['#research-stale-plan'].hidden, false);
   assert.equal(c.researchBrief().purpose, '変更後の目的');
-  assert.equal(s.read('researchPlanDraft').concepts[0].terms[0], '保持する観点');
+  assert.equal(s.context.researchPlanDraft.concepts[0].terms[0], '保持する観点');
   assert.throws(() => c.researchPlanPayload(), /もう一度起案/);
 });
 
@@ -526,8 +553,8 @@ function unionPlan() {
   return p;
 }
 
-test('proposed union groups survive preview payload without selecting optional or excluded concepts', () => {
-  const s = setup(),
+test('proposed union groups survive preview payload without selecting optional or excluded concepts', async () => {
+  const s = await setup(),
     c = s.context,
     p = unionPlan();
   c.state.research_workbench.plan = p;
@@ -549,8 +576,8 @@ test('proposed union groups survive preview payload without selecting optional o
   assert.doesNotMatch(html, /速度制御|玩具/);
 });
 
-test('group control supports merging then separating one concept with readable names and no raw IDs', () => {
-  const s = setup(),
+test('group control supports merging then separating one concept with readable names and no raw IDs', async () => {
+  const s = await setup(),
     c = s.context,
     p = unionPlan(),
     d = c.researchPlanState(p),
@@ -568,8 +595,8 @@ test('group control supports merging then separating one concept with readable n
   assert.match(c.researchGroupOptions(p, d, system), /条件 · 運転システム \/ 車両/);
 });
 
-test('unique independent defaults never collide with a proposed group identifier', () => {
-  const s = setup(),
+test('unique independent defaults never collide with a proposed group identifier', async () => {
+  const s = await setup(),
     c = s.context,
     p = unionPlan();
   p.concepts[0].or_group = 'ui_3';
@@ -578,9 +605,9 @@ test('unique independent defaults never collide with a proposed group identifier
   assert.notEqual(d.concepts[2].or_group, d.concepts[0].or_group);
 });
 
-test('explicit must-have aspects cannot be merged into OR and are not offered to other groups', () => {
+test('explicit must-have aspects cannot be merged into OR and are not offered to other groups', async () => {
   for (const legacy of [false, true]) {
-    const s = setup(),
+    const s = await setup(),
       c = s.context,
       p = unionPlan();
     p.concepts[2].name = '必須: 車両';
@@ -599,8 +626,8 @@ test('explicit must-have aspects cannot be merged into OR and are not offered to
   }
 });
 
-test('explicit exclusion is separate from unions even if an old draft contains a group', () => {
-  const s = setup(),
+test('explicit exclusion is separate from unions even if an old draft contains a group', async () => {
+  const s = await setup(),
     c = s.context,
     p = unionPlan();
   c.state.research_workbench.plan = p;
@@ -614,8 +641,8 @@ test('explicit exclusion is separate from unions even if an old draft contains a
   assert.equal((html.match(/class="research-logic-set"/g) || []).length, 2);
 });
 
-test('capturing group edits preserves plan metadata, edited terms and selection state', () => {
-  const s = setup(),
+test('capturing group edits preserves plan metadata, edited terms and selection state', async () => {
+  const s = await setup(),
     c = s.context,
     p = unionPlan();
   c.state.research_workbench.plan = p;
@@ -635,12 +662,12 @@ test('capturing group edits preserves plan metadata, edited terms and selection 
     system = payload.concepts.find((x) => x.id === 'system');
   assert.equal(system.or_group, 'ui_3');
   assert.deepEqual([...system.terms], ['運転システム', '走行制御']);
-  assert.equal(s.read('researchPlanDraft').concepts[1].group_reason, '技術の代替表現として拾う');
-  assert.equal(s.read('researchPlanDraft').concepts[3].selected, false);
+  assert.equal(s.context.researchPlanDraft.concepts[1].group_reason, '技術の代替表現として拾う');
+  assert.equal(s.context.researchPlanDraft.concepts[3].selected, false);
 });
 
-test('changing a group updates the live set diagram and invalidates the prior preview', () => {
-  const s = setup(),
+test('changing a group updates the live set diagram and invalidates the prior preview', async () => {
+  const s = await setup(),
     c = s.context,
     p = unionPlan();
   c.state.research_workbench.plan = p;
@@ -665,14 +692,14 @@ test('changing a group updates the live set diagram and invalidates the prior pr
   c.renderResearchWorkbench();
   s.groups['.research-concept'][1].children['select[data-or-group]'].value = 'ui_3';
   handler();
-  assert.equal(s.read('researchPlanDraft').preview, null);
+  assert.equal(s.context.researchPlanDraft.preview, null);
   assert.equal(s.dom['#research-query-preview'].innerHTML, '');
   assert.match(s.dom['#research-logic'].innerHTML, /運転システム/);
-  assert.equal(s.read('researchPlanDraft').concepts[1].or_group, 'ui_3');
+  assert.equal(s.context.researchPlanDraft.concepts[1].or_group, 'ui_3');
 });
 
-test('group reasons and live query terms escape untrusted model strings', () => {
-  const s = setup(),
+test('group reasons and live query terms escape untrusted model strings', async () => {
+  const s = await setup(),
     c = s.context,
     p = unionPlan();
   p.concepts[0].name = '<img>';
@@ -684,8 +711,8 @@ test('group reasons and live query terms escape untrusted model strings', () => 
   assert.match(html, /&lt;svg&gt;/);
 });
 
-test('filtering targets preserves the preview, and changing to discovery keeps the selected targets', () => {
-  const s = setup(),
+test('filtering targets preserves the preview, and changing to discovery keeps the selected targets', async () => {
+  const s = await setup(),
     c = s.context,
     p = plan();
   c.state.research_workbench.plan = p;
@@ -711,8 +738,8 @@ test('filtering targets preserves the preview, and changing to discovery keeps t
   assert.deepEqual([...c.researchBrief().target_ids], ['JP1']);
 });
 
-test('all entry views refresh the flow header and the guided view mounts after rendering', () => {
-  const s = setup(),
+test('all entry views refresh the flow header and the guided view mounts after rendering', async () => {
+  const s = await setup(),
     c = s.context,
     events = [];
   c.mountResearchGuidance = () => events.push('mount');
@@ -726,7 +753,7 @@ test('all entry views refresh the flow header and the guided view mounts after r
 });
 
 test('legacy planning uses shared progress, captures edits before rebasing, and releases failure state', async () => {
-  const s = setup(),
+  const s = await setup(),
     c = s.context,
     events = [];
   let running = false;
@@ -773,7 +800,7 @@ test('legacy planning uses shared progress, captures edits before rebasing, and 
 });
 
 test('a legacy preview returned after a concept edit is discarded', async () => {
-  const s = setup(),
+  const s = await setup(),
     c = s.context;
   c.state.research_workbench.plan = plan();
   const d = c.researchPlanState(c.state.research_workbench.plan);
@@ -786,10 +813,23 @@ test('a legacy preview returned after a concept edit is discarded', async () => 
   assert.equal(d.preview, null);
 });
 
-test('editing research inputs clears the old invention alert, while capture and rerender preserve it', () => {
-  const s = setup(),
+test('editing research inputs clears the old invention alert, while capture and rerender preserve it', async () => {
+  const s = await setup(),
     c = s.context;
-  vm.runInContext(fs.readFileSync('static/invention-workbench.js', 'utf8'), c);
+  await loadModule(c, 'invention-workbench.js', [
+    'inventionDraftInput',
+    'inventionPlanState',
+    'captureInventionDraft',
+    'inventionPlanStale',
+    'invalidateInventionPreview',
+    'inventionWorkbenchHtml',
+    'inventionPayload',
+    'inventionShowError',
+    'requestInventionPlan',
+    'previewInvention',
+    'applyInvention',
+    'bindInventionWorkbench',
+  ]);
   let input;
   s.dom['#invention-error'] = { textContent: '', hidden: true };
   s.dom['#research-purpose'] = { value: '先行技術を調査' };
@@ -799,10 +839,10 @@ test('editing research inputs clears the old invention alert, while capture and 
   c.inventionShowError('まず今回の検索目的を入力してください。');
   c.captureResearchDraft();
   c.renderResearchWorkbench();
-  assert.match(s.read('inventionError'), /検索目的/);
+  assert.match(s.context.inventionError, /検索目的/);
   assert.equal(s.dom['#invention-error'].hidden, false);
   input();
-  assert.equal(s.read('inventionError'), '');
+  assert.equal(s.context.inventionError, '');
   assert.equal(s.dom['#invention-error'].textContent, '');
   assert.equal(s.dom['#invention-error'].hidden, true);
   assert.equal(c.researchBrief().purpose, '先行技術を調査');

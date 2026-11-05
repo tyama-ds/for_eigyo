@@ -1,4 +1,23 @@
-'use strict';
+import {
+  debounce,
+  tooltipPosition,
+  replaceHtml,
+  listen,
+  esc,
+  getState,
+  on,
+  $,
+  busy,
+  setState,
+  api,
+  toast,
+  $$,
+} from './core.js';
+import { updateChrome } from './workspace-chrome.js';
+import { showPatent, updatePicked } from './map-ui.js';
+import { appState, colors } from './ui-session.js';
+
+const scheduleProjectionEvaluation = debounce(projectionFetchEvaluation, 600);
 /* Enrich the existing map without replacing learning controls or user labels. */
 const atlasProjection = {
   method: 'pca',
@@ -52,14 +71,14 @@ function projectionTooltipHtml(row) {
   return `<b>${esc(row.id)} · ${esc(row.title)}</b><p>${esc(row.abstract || '要約がありません。')}</p><small>IPC ${esc(row.ipc || '未取込')}${row.fi ? ' / FI ' + esc(row.fi) : ''}${row.cpc ? ' / CPC ' + esc(row.cpc) : ''}</small>${row.label_reason ? `<p>${esc(row.label_source === 'human' ? '人の判断' : 'AIの判断')}：${esc(row.label_reason)}</p>` : ''}<small>クリックで選択 · ダブルクリックで追跡</small>`;
 }
 function projectionAdoptionHtml() {
-  const query = state.queries?.at(-1),
-    records = state.research_workbench?.adoptions || [];
+  const query = getState().queries?.at(-1),
+    records = getState().research_workbench?.adoptions || [];
   if (!query)
     return '<h3>検索式の採用</h3><details class="panel-help"><summary role="button" aria-label="検索式の採用のヘルプ">?</summary><div><p>上の指標は現在の特許データに対する確認結果です。実検索母集団の再現率ではありません。</p></div></details><p class="caption">初案または次の検索式を作成すると、確認結果と採用理由を記録できます。</p>';
-  const observed = state.search_result?.query_id,
+  const observed = getState().search_result?.query_id,
     linked = observed === query.id,
-    busy = state.job?.status === 'running';
-  return `<div class="panel-heading"><div><span class="eyebrow">DECISION RECORD</span><h3>検索式 v${Number(query.version || state.queries.length)} の採用</h3></div><details class="panel-help"><summary role="button" aria-label="検索式の採用のヘルプ">?</summary><div><p>上の指標は現在の特許データに対する確認結果です。実検索母集団の再現率ではありません。</p></div></details></div><p class="caption">採用は調査の完了・収束とは別に記録します。</p>${!linked ? `<p class="projection-adoption-notice">${observed ? '現在のCSVは別の検索式の結果として記録されています。' : '現在のCSVとこの検索式の対応は未確認です。'}この式の検索性能を実測した結果としては扱いません。</p><label class="check"><input id="projection-adopt-unlinked" type="checkbox">現在のCSVは参考資料として扱い、採用理由を記録する</label>` : ''}<label>採用理由<textarea id="projection-adopt-note" rows="2" maxlength="2000" placeholder="例：必要例の回収と境界候補の確認を行い、この目的には十分と判断した"></textarea></label><div class="button-row"><button id="projection-adopt" class="button primary" data-query-id="${esc(query.id)}" ${busy ? 'disabled' : ''}>この検索式の採用を記録</button><span class="caption">現在のS/N・確認候補・データとの対応を保存</span></div>${
+    busy = getState().job?.status === 'running';
+  return `<div class="panel-heading"><div><span class="eyebrow">DECISION RECORD</span><h3>検索式 v${Number(query.version || getState().queries.length)} の採用</h3></div><details class="panel-help"><summary role="button" aria-label="検索式の採用のヘルプ">?</summary><div><p>上の指標は現在の特許データに対する確認結果です。実検索母集団の再現率ではありません。</p></div></details></div><p class="caption">採用は調査の完了・収束とは別に記録します。</p>${!linked ? `<p class="projection-adoption-notice">${observed ? '現在のCSVは別の検索式の結果として記録されています。' : '現在のCSVとこの検索式の対応は未確認です。'}この式の検索性能を実測した結果としては扱いません。</p><label class="check"><input id="projection-adopt-unlinked" type="checkbox">現在のCSVは参考資料として扱い、採用理由を記録する</label>` : ''}<label>採用理由<textarea id="projection-adopt-note" rows="2" maxlength="2000" placeholder="例：必要例の回収と境界候補の確認を行い、この目的には十分と判断した"></textarea></label><div class="button-row"><button id="projection-adopt" class="button primary" data-query-id="${esc(query.id)}" ${busy ? 'disabled' : ''}>この検索式の採用を記録</button><span class="caption">現在のS/N・確認候補・データとの対応を保存</span></div>${
     records.length
       ? `<details class="projection-adoption-history"><summary>採用の記録 ${records.length} 件</summary>${records
           .slice(-5)
@@ -75,23 +94,25 @@ function projectionAdoptionHtml() {
 function projectionBindAdoption() {
   on('#projection-adopt', 'click', async (e) => {
     const button = e.currentTarget,
-      query = state.queries?.at(-1);
+      query = getState().queries?.at(-1);
     if (!query || query.id !== button.dataset.queryId)
       throw new Error('検索式が更新されました。地図を開き直して確認してください。');
     const note = $('#projection-adopt-note').value.trim();
     if (!note) throw new Error('採用理由を入力してください。');
-    const linked = state.search_result?.query_id === query.id;
+    const linked = getState().search_result?.query_id === query.id;
     if (!linked && !$('#projection-adopt-unlinked')?.checked)
       throw new Error('CSVと検索式の対応を確認し、参考資料として扱う場合はチェックしてください。');
     await busy(button, '記録中…', async () => {
-      state = await api('/research/adopt', {
-        query_id: query.id,
-        note,
-        allow_unlinked: !linked,
-        revision: state.research_workbench?.revision,
-      });
+      setState(
+        await api('/research/adopt', {
+          query_id: query.id,
+          note,
+          allow_unlinked: !linked,
+          revision: getState().research_workbench?.revision,
+        })
+      );
       updateChrome();
-      $('#projection-adoption').innerHTML = projectionAdoptionHtml();
+      replaceHtml($('#projection-adoption'), projectionAdoptionHtml());
       projectionBindAdoption();
       toast('検索式の採用理由と現在の評価を記録しました。');
     });
@@ -123,7 +144,7 @@ function projectionZoom(factor, center = { x: 500, y: 290 }) {
 }
 function projectionFocus(id) {
   const point = atlasProjection.positions.get(id),
-    row = state.patents.find((r) => r.id === id);
+    row = getState().patents.find((r) => r.id === id);
   if (!point || !row) return;
   const k = Math.max(2, atlasProjection.zoom.k);
   atlasProjection.zoom = { k, x: 500 - point.x * k, y: 290 - point.y * k };
@@ -137,25 +158,33 @@ function projectionFocus(id) {
 function projectionRenderPins() {
   const host = $('#projection-pins');
   if (!host) return;
-  const ids = new Set(state.patents.map((r) => r.id));
+  const ids = new Set(getState().patents.map((r) => r.id));
   for (const id of atlasProjection.pins) if (!ids.has(id)) atlasProjection.pins.delete(id);
-  host.innerHTML =
+  replaceHtml(
+    host,
     [...atlasProjection.pins]
       .map(
         (id, i) =>
           `<span class="projection-pin" style="--pin-color:${projectionPinColor(id)}"><button data-pin-focus="${esc(id)}" title="この特許を中心に表示">${i + 1}. ${esc(id)}</button><button data-pin-remove="${esc(id)}" aria-label="${esc(id)}の追跡を解除">×</button></span>`
       )
       .join('') ||
-    '<span class="caption">追跡する特許を選び「選択を追跡に固定」。方式を切り替えても同じ公報を色・番号・移動線で追えます。</span>';
+      '<span class="caption">追跡する特許を選び「選択を追跡に固定」。方式を切り替えても同じ公報を色・番号・移動線で追えます。</span>'
+  );
   $$('[data-pin-focus]', host).forEach((n) =>
-    n.addEventListener('click', () => projectionFocus(n.dataset.pinFocus))
+    listen(n, 'click', () => projectionFocus(n.dataset.pinFocus), undefined, 'projection-ui.js:1')
   );
   $$('[data-pin-remove]', host).forEach((n) =>
-    n.addEventListener('click', () => {
-      atlasProjection.pins.delete(n.dataset.pinRemove);
-      projectionRenderPins();
-      projectionDecorate();
-    })
+    listen(
+      n,
+      'click',
+      () => {
+        atlasProjection.pins.delete(n.dataset.pinRemove);
+        projectionRenderPins();
+        projectionDecorate();
+      },
+      undefined,
+      'projection-ui.js:2'
+    )
   );
 }
 function projectionDecorate() {
@@ -169,27 +198,36 @@ function projectionDecorate() {
   });
   const pins = $('#projection-pin-labels');
   if (pins) {
-    pins.innerHTML = [...atlasProjection.pins]
-      .map((id, i) => {
-        const p = atlasProjection.positions.get(id);
-        return p
-          ? `<text x="${p.x + 10}" y="${p.y - 10}" fill="${projectionPinColor(id)}">${i + 1}</text>`
-          : '';
-      })
-      .join('');
+    replaceHtml(
+      pins,
+      [...atlasProjection.pins]
+        .map((id, i) => {
+          const p = atlasProjection.positions.get(id);
+          return p
+            ? `<text x="${p.x + 10}" y="${p.y - 10}" fill="${projectionPinColor(id)}">${i + 1}</text>`
+            : '';
+        })
+        .join('')
+    );
   }
 }
 function projectionShowTooltip(row, event) {
   showPatent(row);
   const el = $('#projection-tooltip');
   if (!el) return;
-  el.innerHTML = projectionTooltipHtml(row);
+  replaceHtml(el, projectionTooltipHtml(row));
   el.hidden = false;
   const wrap = el.parentElement.getBoundingClientRect(),
     x = event.clientX ?? wrap.left + 30,
     y = event.clientY ?? wrap.top + 30;
-  el.style.left = Math.max(8, Math.min(x - wrap.left + 14, wrap.width - 350)) + 'px';
-  el.style.top = Math.max(8, Math.min(y - wrap.top + 14, wrap.height - el.offsetHeight - 8)) + 'px';
+  const position = tooltipPosition(
+    { x: x - wrap.left, y: y - wrap.top },
+    { width: 342, height: el.offsetHeight },
+    wrap,
+    { edge: 8, gap: 14, flip: false }
+  );
+  el.style.left = position.left + 'px';
+  el.style.top = position.top + 'px';
 }
 function projectionHideTooltip() {
   const el = $('#projection-tooltip');
@@ -203,58 +241,89 @@ function projectionDraw(data, animate = true) {
   projectionHideTooltip();
   const old = atlasProjection.positions,
     next = new Map(data.points.map((p) => [p.id, projectionPoint(p)])),
-    byId = new Map(state.patents.map((r) => [r.id, r]));
-  host.innerHTML =
+    byId = new Map(getState().patents.map((r) => [r.id, r]));
+  replaceHtml(
+    host,
     data.points
       .map((p) => {
         const row = byId.get(p.id);
         if (!row) return '';
         const start = old.get(p.id) || next.get(p.id);
-        return `<circle class="point ${esc(row.label || '')} ${picked.has(p.id) ? 'selected' : ''}" data-id="${esc(p.id)}" cx="${start.x}" cy="${start.y}" r="${state.patents.length > 700 ? 3.5 : 5.5}" style="${!row.label ? 'fill:' + colors[(row.cluster || 0) % colors.length] : ''}" role="button" tabindex="0" aria-pressed="${picked.has(p.id)}" aria-label="${esc(p.id + ' ' + row.title)}"/>`;
+        return `<circle class="point ${esc(row.label || '')} ${appState.picked.has(p.id) ? 'selected' : ''}" data-id="${esc(p.id)}" cx="${start.x}" cy="${start.y}" r="${getState().patents.length > 700 ? 3.5 : 5.5}" style="${!row.label ? 'fill:' + colors[(row.cluster || 0) % colors.length] : ''}" role="button" tabindex="0" aria-pressed="${appState.picked.has(p.id)}" aria-label="${esc(p.id + ' ' + row.title)}"/>`;
       })
-      .join('') + '<g id="projection-pin-labels" aria-hidden="true"></g>';
-  const tracked = [...new Set([...atlasProjection.pins, ...picked])];
-  $('#projection-trails').innerHTML = tracked
-    .map((id) => {
-      const a = old.get(id),
-        b = next.get(id);
-      return a && b
-        ? `<path d="M${a.x} ${a.y} L${b.x} ${b.y}" stroke="${projectionPinColor(id)}"/><circle cx="${a.x}" cy="${a.y}" r="4" stroke="${projectionPinColor(id)}"/>`
-        : '';
-    })
-    .join('');
+      .join('') + '<g id="projection-pin-labels" aria-hidden="true"></g>'
+  );
+  const tracked = [...new Set([...atlasProjection.pins, ...appState.picked])];
+  replaceHtml(
+    $('#projection-trails'),
+    tracked
+      .map((id) => {
+        const a = old.get(id),
+          b = next.get(id);
+        return a && b
+          ? `<path d="M${a.x} ${a.y} L${b.x} ${b.y}" stroke="${projectionPinColor(id)}"/><circle cx="${a.x}" cy="${a.y}" r="4" stroke="${projectionPinColor(id)}"/>`
+          : '';
+      })
+      .join('')
+  );
   const nodes = $$('#map-points .point');
   nodes.forEach((node) => {
     const row = byId.get(node.dataset.id);
-    node.addEventListener('mouseenter', (e) =>
-      projectionShowTooltip(state.patents.find((r) => r.id === row.id) || row, e)
+    listen(
+      node,
+      'mouseenter',
+      (e) => projectionShowTooltip(getState().patents.find((r) => r.id === row.id) || row, e),
+      undefined,
+      'projection-ui.js:3'
     );
-    node.addEventListener('mouseleave', projectionHideTooltip);
-    node.addEventListener('focus', (e) =>
-      projectionShowTooltip(state.patents.find((r) => r.id === row.id) || row, e)
+    listen(node, 'mouseleave', projectionHideTooltip, undefined, 'projection-ui.js:4');
+    listen(
+      node,
+      'focus',
+      (e) => projectionShowTooltip(getState().patents.find((r) => r.id === row.id) || row, e),
+      undefined,
+      'projection-ui.js:5'
     );
-    node.addEventListener('blur', projectionHideTooltip);
-    node.addEventListener('click', () => {
-      if (svg.dataset.dragged) return;
-      picked.has(row.id) ? picked.delete(row.id) : picked.add(row.id);
-      updatePicked();
-      showPatent(row);
-    });
-    node.addEventListener('dblclick', (e) => {
-      e.preventDefault();
-      atlasProjection.pins.has(row.id)
-        ? atlasProjection.pins.delete(row.id)
-        : atlasProjection.pins.add(row.id);
-      projectionRenderPins();
-      projectionDecorate();
-    });
-    node.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        picked.has(row.id) ? picked.delete(row.id) : picked.add(row.id);
+    listen(node, 'blur', projectionHideTooltip, undefined, 'projection-ui.js:6');
+    listen(
+      node,
+      'click',
+      () => {
+        if (svg.dataset.dragged) return;
+        appState.picked.has(row.id) ? appState.picked.delete(row.id) : appState.picked.add(row.id);
         updatePicked();
-      }
-    });
+        showPatent(row);
+      },
+      undefined,
+      'projection-ui.js:7'
+    );
+    listen(
+      node,
+      'dblclick',
+      (e) => {
+        e.preventDefault();
+        atlasProjection.pins.has(row.id)
+          ? atlasProjection.pins.delete(row.id)
+          : atlasProjection.pins.add(row.id);
+        projectionRenderPins();
+        projectionDecorate();
+      },
+      undefined,
+      'projection-ui.js:8'
+    );
+    listen(
+      node,
+      'keydown',
+      (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          appState.picked.has(row.id) ? appState.picked.delete(row.id) : appState.picked.add(row.id);
+          updatePicked();
+        }
+      },
+      undefined,
+      'projection-ui.js:9'
+    );
   });
   const duration = animate && !projectionStill() && old.size ? 1000 : 0,
     startTime = performance.now();
@@ -282,7 +351,7 @@ function projectionDraw(data, animate = true) {
 function projectionRenderEvaluation() {
   const panel = $('#projection-evaluation');
   if (!panel) return;
-  panel.innerHTML = projectionEvaluationHtml(atlasProjection.evaluation);
+  replaceHtml(panel, projectionEvaluationHtml(atlasProjection.evaluation));
   on('#projection-boundary', 'change', (e) => {
     atlasProjection.boundary = e.target.checked;
     projectionDecorate();
@@ -290,13 +359,13 @@ function projectionRenderEvaluation() {
     if (details) details.open = atlasProjection.boundary;
   });
   $$('[data-projection-focus]', panel).forEach((n) =>
-    n.addEventListener('click', () => projectionFocus(n.dataset.projectionFocus))
+    listen(n, 'click', () => projectionFocus(n.dataset.projectionFocus), undefined, 'projection-ui.js:10')
   );
   projectionDecorate();
 }
 async function projectionRequest(method) {
   const token = ++atlasProjection.request,
-    dataset = projectionDatasetKey(state.patents),
+    dataset = projectionDatasetKey(getState().patents),
     host = $('#map-svg');
   if (!host) return;
   $('#projection-status').textContent =
@@ -307,13 +376,13 @@ async function projectionRequest(method) {
     if (
       token !== atlasProjection.request ||
       $('#map-svg') !== host ||
-      projectionDatasetKey(state.patents) !== dataset
+      projectionDatasetKey(getState().patents) !== dataset
     )
       return;
     const data = result.projection;
     if (!data || data.method !== method || !Array.isArray(data.points))
       throw new Error('配置応答の形式が不正です。');
-    const expected = new Set(state.patents.map((r) => r.id));
+    const expected = new Set(getState().patents.map((r) => r.id));
     if (
       data.points.length !== expected.size ||
       new Set(data.points.map((p) => p.id)).size !== expected.size ||
@@ -328,7 +397,7 @@ async function projectionRequest(method) {
     projectionRenderEvaluation();
     projectionRenderPins();
     const detailId = $('#patent-detail')?.dataset.patentId,
-      detailRow = state.patents.find((row) => row.id === detailId);
+      detailRow = getState().patents.find((row) => row.id === detailId);
     if (detailRow) showPatent(detailRow);
     $('#projection-status').textContent =
       `${data.metadata.algorithm || method.toUpperCase()} · ${data.metadata.representation || ''}。`;
@@ -350,7 +419,7 @@ async function projectionRequest(method) {
 }
 async function projectionFetchEvaluation() {
   const token = ++atlasProjection.evaluationRequest,
-    key = projectionDatasetKey(state.patents),
+    key = projectionDatasetKey(getState().patents),
     host = $('#projection-evaluation');
   if (!host) return;
   try {
@@ -358,36 +427,36 @@ async function projectionFetchEvaluation() {
     if (
       token !== atlasProjection.evaluationRequest ||
       $('#projection-evaluation') !== host ||
-      key !== projectionDatasetKey(state.patents)
+      key !== projectionDatasetKey(getState().patents)
     )
       return;
     atlasProjection.evaluation = result.evaluation || result;
     projectionRenderEvaluation();
   } catch (error) {
     if ($('#projection-evaluation') === host)
-      host.innerHTML = `<p class="caption">評価を更新できませんでした。${esc(error.message)}</p>`;
+      replaceHtml(host, `<p class="caption">評価を更新できませんでした。${esc(error.message)}</p>`);
   }
 }
 function updateProjectionAssessment() {
   if (!$('#projection-evaluation')) return;
-  if ($('#projection-adopt')) $('#projection-adopt').disabled = state.job?.status === 'running';
-  clearTimeout(atlasProjection.timer);
-  atlasProjection.timer = setTimeout(projectionFetchEvaluation, 600);
+  if ($('#projection-adopt')) $('#projection-adopt').disabled = getState().job?.status === 'running';
+  scheduleProjectionEvaluation.cancel();
+  scheduleProjectionEvaluation();
   projectionDecorate();
 }
 function bindProjectionControls() {
   on('#projection-method', 'change', (e) => projectionRequest(e.target.value));
   on('#projection-pin', 'click', () => {
-    if (!picked.size) {
+    if (!appState.picked.size) {
       toast('追跡する特許を地図上で選択してください。');
       return;
     }
-    for (const id of picked) atlasProjection.pins.add(id);
+    for (const id of appState.picked) atlasProjection.pins.add(id);
     projectionRenderPins();
     projectionDecorate();
   });
   on('#projection-pan', 'click', () => {
-    tool = 'pan';
+    appState.tool = 'pan';
     $('#projection-pan').classList.add('active');
     $('#map-lasso-tool').classList.remove('active');
     $('#map-svg').classList.remove('lasso-mode');
@@ -403,31 +472,45 @@ function bindProjectionControls() {
   const point = (e) => new DOMPoint(e.clientX, e.clientY).matrixTransform(svg.getScreenCTM().inverse());
   let down = null,
     moved = false;
-  svg.addEventListener(
+  listen(
+    svg,
     'wheel',
     (e) => {
       e.preventDefault();
       projectionHideTooltip();
       projectionZoom(e.deltaY < 0 ? 1.12 : 1 / 1.12, point(e));
     },
-    { passive: false }
+    { passive: false },
+    'projection-ui.js:11'
   );
-  svg.addEventListener('pointerdown', (e) => {
-    if (tool !== 'pan' || e.button !== 0) return;
-    down = { p: point(e), ...atlasProjection.zoom };
-    moved = false;
-    svg.setPointerCapture(e.pointerId);
-    projectionHideTooltip();
-  });
-  svg.addEventListener('pointermove', (e) => {
-    if (!down) return;
-    const p = point(e),
-      dx = p.x - down.p.x,
-      dy = p.y - down.p.y;
-    if (Math.hypot(dx, dy) > 3) moved = true;
-    atlasProjection.zoom = { k: down.k, x: down.x + dx, y: down.y + dy };
-    projectionSetZoom();
-  });
+  listen(
+    svg,
+    'pointerdown',
+    (e) => {
+      if (appState.tool !== 'pan' || e.button !== 0) return;
+      down = { p: point(e), ...atlasProjection.zoom };
+      moved = false;
+      svg.setPointerCapture(e.pointerId);
+      projectionHideTooltip();
+    },
+    undefined,
+    'projection-ui.js:12'
+  );
+  listen(
+    svg,
+    'pointermove',
+    (e) => {
+      if (!down) return;
+      const p = point(e),
+        dx = p.x - down.p.x,
+        dy = p.y - down.p.y;
+      if (Math.hypot(dx, dy) > 3) moved = true;
+      atlasProjection.zoom = { k: down.k, x: down.x + dx, y: down.y + dy };
+      projectionSetZoom();
+    },
+    undefined,
+    'projection-ui.js:13'
+  );
   const finish = (e) => {
     if (!down) return;
     down = null;
@@ -437,8 +520,8 @@ function bindProjectionControls() {
     }
     if (svg.hasPointerCapture(e.pointerId)) svg.releasePointerCapture(e.pointerId);
   };
-  svg.addEventListener('pointerup', finish);
-  svg.addEventListener('pointercancel', finish);
+  listen(svg, 'pointerup', finish, undefined, 'projection-ui.js:14');
+  listen(svg, 'pointercancel', finish, undefined, 'projection-ui.js:15');
 }
 function mountProjectionWorkbench() {
   const svg = $('#map-svg');
@@ -446,8 +529,8 @@ function mountProjectionWorkbench() {
   ++atlasProjection.request;
   ++atlasProjection.evaluationRequest;
   cancelAnimationFrame(atlasProjection.frame);
-  clearTimeout(atlasProjection.timer);
-  const dataset = projectionDatasetKey(state.patents);
+  scheduleProjectionEvaluation.cancel();
+  const dataset = projectionDatasetKey(getState().patents);
   if (atlasProjection.dataset !== dataset) {
     atlasProjection.data = null;
     atlasProjection.evaluation = null;
@@ -463,7 +546,7 @@ function mountProjectionWorkbench() {
     'afterend',
     '<div class="panel projection-adoption" id="projection-adoption"></div>'
   );
-  $('#projection-adoption').innerHTML = projectionAdoptionHtml();
+  replaceHtml($('#projection-adoption'), projectionAdoptionHtml());
   projectionBindAdoption();
   const wrap = svg.parentElement;
   wrap.classList.add('projection-canvas-wrap');
@@ -471,7 +554,7 @@ function mountProjectionWorkbench() {
     'beforeend',
     '<div id="projection-tooltip" class="projection-tooltip" role="tooltip" hidden></div>'
   );
-  $('#map-clusters').innerHTML = '';
+  replaceHtml($('#map-clusters'), '');
   const trails = document.createElementNS('http://www.w3.org/2000/svg', 'g');
   trails.id = 'projection-trails';
   trails.setAttribute('aria-hidden', 'true');
@@ -489,7 +572,7 @@ function mountProjectionWorkbench() {
     projectionFetchEvaluation();
   } else {
     const prior = {
-      points: state.patents.map((r) => ({
+      points: getState().patents.map((r) => ({
         id: r.id,
         x: Number.isFinite(r.x) ? r.x : 0.5,
         y: Number.isFinite(r.y) ? r.y : 0.5,
@@ -501,10 +584,29 @@ function mountProjectionWorkbench() {
 }
 
 function projectionTrackPatent(id) {
-  if (!state.patents.some((p) => p.id === id)) return;
+  if (!getState().patents.some((p) => p.id === id)) return;
   atlasProjection.pins.add(id);
   projectionRenderPins();
   projectionDecorate();
   projectionFocus(id);
   $('#map-svg')?.scrollIntoView({ behavior: projectionStill() ? 'instant' : 'smooth', block: 'center' });
 }
+
+export {
+  atlasProjection,
+  projectionDatasetKey,
+  projectionStill,
+  projectionEvaluationHtml,
+  projectionTooltipHtml,
+  projectionAdoptionHtml,
+  projectionPinColor,
+  projectionSetZoom,
+  projectionZoom,
+  projectionRenderPins,
+  projectionDraw,
+  projectionRenderEvaluation,
+  projectionRequest,
+  updateProjectionAssessment,
+  mountProjectionWorkbench,
+  projectionTrackPatent,
+};

@@ -1,14 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const vm = require('node:vm');
 
-const explorerSource = fs.readFileSync('static/classification-ui.js', 'utf8');
-const appSource = fs.readFileSync('static/app.js', 'utf8');
-const tabSource = appSource.slice(
-  appSource.indexOf('function setTab('),
-  appSource.indexOf('function setStep(')
-);
+const { loadModule, createDom } = require('./module-harness.cjs');
+
 const A = 'IPC:A01B1/04',
   B = 'IPC:H01M10/0562';
 
@@ -38,8 +32,8 @@ function deferred() {
 
 const flush = () => new Promise(setImmediate);
 
-test('element summary explains dictionary mode, missing elements and escapes model text', () => {
-  const s = setup();
+test('element summary explains dictionary mode, missing elements and escapes model text', async () => {
+  const s = await setup();
   const html = s.context.classElementSummaryHtml({
     decomposition_method: 'llm',
     elements: [
@@ -61,40 +55,25 @@ test('element summary explains dictionary mode, missing elements and escapes mod
   );
 });
 
-function setup(apiHandler = async () => snapshot()) {
-  const root = {
-    inert: false,
-    attributes: {},
-    setAttribute(name, value) {
-      this.attributes[name] = value;
-    },
-    removeAttribute(name) {
-      delete this.attributes[name];
-    },
-  };
-  const targetList = {
-    innerHTML: '',
-    insertAdjacentHTML(_position, text) {
-      this.innerHTML += text;
-    },
-  };
-  const dom = {
-    '#step-content': root,
-    '#keywords': { value: 'original' },
-    '#seed-ipc': { value: '' },
-    '#class-search': { value: '' },
-    '#target-search': { value: '' },
-    '#target-patent-list': targetList,
-  };
+async function setup(apiHandler = async () => snapshot()) {
+  const testDom = createDom();
+  const root = testDom.window.document.querySelector('#step-content');
+  root.innerHTML = `<input id="keywords" value="original"><textarea id="seed-ipc"></textarea><input id="class-search"><input id="target-search"><div id="target-patent-list"></div><div id="class-detail"></div><div><svg id="class-svg"><g id="class-regions"></g><g id="class-neighbors"></g><g id="class-nodes"></g><g id="class-links"></g><path id="class-lasso"></path></svg></div><div id="class-list"></div>`;
+  testDom.window.SVGElement.prototype.getComputedTextLength = () => 0;
+  const dom = new Proxy(
+    {},
+    { get: (target, key) => target[key] || testDom.window.document.querySelector(key) }
+  );
   const requests = [],
     notices = [];
   const context = {
+    testDom,
     state: snapshot(),
     selectionSave: Promise.resolve(),
     activeTab: 'explore',
     step: 0,
-    $: (selector) => dom[selector] || null,
-    $$: () => [],
+    $: (selector, host) => (host ? host.querySelector(selector) : dom[selector] || null),
+    $$: (selector, host = testDom.window.document) => [...host.querySelectorAll(selector)],
     keyOf: (item) => item.key || `${item.kind}:${item.code}`,
     esc: (text) =>
       String(text ?? '').replace(
@@ -114,38 +93,67 @@ function setup(apiHandler = async () => snapshot()) {
     clearTimeout,
     PatentClassLabels: require('../static/classification-labels.js'),
   };
-  vm.createContext(context);
-  vm.runInContext(explorerSource + '\n' + tabSource, context);
+  context.setState = (next) => (context.state = next);
+  context.getState = () => context.state;
+  (await loadModule(context, 'classification-ui.js', [
+    'captureClassDraft',
+    'syncClassMotion',
+    'classSelectionSyncHtml',
+    'syncClassSelection',
+    'classProposalReasonHtml',
+    'classElementSummaryHtml',
+    'classProposalPanelHtml',
+    'showClassProposalMap',
+    'suggestClassCandidates',
+    'addClassProposalBroader',
+    'classScopeText',
+    'applyClassTranslations',
+    'setClassLanguage',
+    'classNamesHtml',
+    'classificationItems',
+    'requestClassState',
+    'browseClasses',
+    'renderTargetPatents',
+    'changeClassSelection',
+    'undoClassSelection',
+    'persistSelection',
+    'toggleClass',
+    'updateSelectedClasses',
+    'renderClassFocus',
+    'classDetail',
+    'drawClassNodes',
+  ]),
+    await loadModule(context, 'app.js', ['setTab']));
   // Keep state transitions and request functions real. Rendering is a boundary
   // stub: repaint the captured draft as the actual template does, without a DOM.
-  vm.runInContext(
-    `
-    classDraft = {keywords: 'original'};
-    function renderStep() {
-      rendered++;
-      dom['#keywords'].value = classDraft.keywords;
-      dom['#seed-ipc'].value = classDraft['seed-ipc'] || '';
-      dom['#class-search'].value = classDraft['class-search'] || '';
-    }
-    function updateSelectedClasses() { selectionPaints++; }
-    function renderClassFocus() {}
-    function classDetail() {}
-    function drawClassNodes() { rendered++; }
-  `,
-    context
-  );
+  (() => {
+    context.classDraft = { keywords: 'original' };
+    context.renderStep = function () {
+      context.rendered++;
+      context.dom['#keywords'].value = context.classDraft.keywords;
+      context.dom['#seed-ipc'].value = context.classDraft['seed-ipc'] || '';
+      context.dom['#class-search'].value = context.classDraft['class-search'] || '';
+    };
+    context.updateSelectedClasses = function () {
+      context.selectionPaints++;
+    };
+    context.renderClassFocus = function () {};
+    context.classDetail = function () {};
+    context.drawClassNodes = function () {
+      context.rendered++;
+    };
+  })();
   return {
     context,
     dom,
     root,
     requests,
     notices,
-    read: (expression) => vm.runInContext(expression, context),
   };
 }
 
-test('switching tabs retains the keyword, manual seed and classification-search drafts', () => {
-  const s = setup();
+test('switching tabs retains the keyword, manual seed and classification-search drafts', async () => {
+  const s = await setup();
   s.dom['#keywords'].value = 'edited "solid electrolyte"';
   s.dom['#seed-ipc'].value = 'H01M 10/00\nA01B 1/04';
   s.dom['#class-search'].value = 'solar cell';
@@ -160,23 +168,17 @@ test('switching tabs retains the keyword, manual seed and classification-search 
 test('background job completion captures Step 00 drafts before repainting', async () => {
   for (const status of ['done', 'cancelled', 'error']) {
     const fresh = { ...snapshot(), job: { id: 'job-1', kind: 'discovery', status, error: '保存失敗' } };
-    const s = setup(async () => fresh);
+    const s = await setup(async () => fresh);
     s.context.state.job = { id: 'job-1', kind: 'discovery', status: 'running' };
     s.context.shownJob = null;
     s.context.updateChrome = () => {};
     s.dom['#keywords'].value = '未保存の技術要素';
     s.dom['#seed-ipc'].value = 'B60L50/60';
     s.dom['#class-search'].value = '編集中の分類';
-    vm.runInContext(
-      appSource.slice(
-        appSource.indexOf('function syncRunningLlmJudgments('),
-        appSource.indexOf('function download(')
-      ),
-      s.context
-    );
+    await loadModule(s.context, 'job-ui.js', ['refreshJob']);
     await s.context.refreshJob();
     assert.equal(s.context.rendered, 1);
-    assert.equal(s.read('classDraft.keywords'), '未保存の技術要素');
+    assert.equal(s.context.classDraft.keywords, '未保存の技術要素');
     assert.equal(s.dom['#keywords'].value, '未保存の技術要素');
     assert.equal(s.dom['#seed-ipc'].value, 'B60L50/60');
     assert.equal(s.dom['#class-search'].value, '編集中の分類');
@@ -184,17 +186,11 @@ test('background job completion captures Step 00 drafts before repainting', asyn
   }
 });
 
-test('classification detail links allow only HTTP or HTTPS sources and escape attributes', () => {
-  const s = setup();
+test('classification detail links allow only HTTP or HTTPS sources and escape attributes', async () => {
+  const s = await setup();
   s.dom['#class-detail'] = { innerHTML: '', classList: { add() {} } };
-  vm.runInContext(
-    appSource.slice(appSource.indexOf('function safeUrl('), appSource.indexOf('const keyOf =')) +
-      explorerSource.slice(
-        explorerSource.indexOf('function classDetail('),
-        explorerSource.indexOf('function drawClassNodes(')
-      ),
-    s.context
-  );
+  (await loadModule(s.context, 'core.js', ['safeUrl']),
+    await loadModule(s.context, 'classification-ui.js', ['classDetail']));
   for (const source of ['javascript:alert(1)', 'data:text/html,test', '//example.test', '', null]) {
     s.context.classDetail({ ...candidate(A), source });
     assert.doesNotMatch(s.dom['#class-detail'].innerHTML, /\bhref\s*=/);
@@ -206,8 +202,8 @@ test('classification detail links allow only HTTP or HTTPS sources and escape at
   );
 });
 
-test('clicking the active tab keeps the current DOM and draft without repainting', () => {
-  const s = setup();
+test('clicking the active tab keeps the current DOM and draft without repainting', async () => {
+  const s = await setup();
   s.dom['#keywords'].value = 'work in progress';
   s.dom['#seed-ipc'].value = 'C01B25/00';
   s.context.setTab('explore');
@@ -217,21 +213,21 @@ test('clicking the active tab keeps the current DOM and draft without repainting
   assert.equal(s.requests.length, 0);
 });
 
-test('constellation language changes labels only while retaining drafts and selections', () => {
-  const s = setup();
+test('constellation language changes labels only while retaining drafts and selections', async () => {
+  const s = await setup();
   s.dom['#keywords'].value = 'unsaved draft';
   const before = JSON.stringify(s.context.state);
   s.context.setClassLanguage('en');
-  assert.equal(s.read('classLanguage'), 'en');
+  assert.equal(s.context.classLanguage, 'en');
   s.context.setClassLanguage('ja');
-  assert.equal(s.read('classLanguage'), 'ja');
+  assert.equal(s.context.classLanguage, 'ja');
   assert.equal(s.dom['#keywords'].value, 'unsaved draft');
   assert.equal(JSON.stringify(s.context.state), before);
   assert.equal(s.requests.length, 0);
 });
 
 test('upper IPC clicks save selection, toggle off and undo while F-term containers stay navigation only', async () => {
-  const s = setup();
+  const s = await setup();
   s.context.state.selected = [];
   s.context.state.candidates = ['IPC:H', 'IPC:H04', 'IPC:H04L'].map((key) => ({
     ...candidate(key),
@@ -252,8 +248,8 @@ test('upper IPC clicks save selection, toggle off and undo while F-term containe
   assert.deepEqual([...s.requests.at(-1).body.selected], ['IPC:H', 'IPC:H04', 'IPC:H04L']);
 });
 
-test('hover definitions escape both languages and identify reference translations', () => {
-  const s = setup();
+test('hover definitions escape both languages and identify reference translations', async () => {
+  const s = await setup();
   const html = s.context.classNamesHtml({
     kind: 'IPC',
     code: 'C01D15/00',
@@ -269,8 +265,8 @@ test('hover definitions escape both languages and identify reference translation
   assert.doesNotMatch(html, /<日本語>|<English>/);
 });
 
-test('a translation response merges language fields only after newer workspace edits', () => {
-  const s = setup();
+test('a translation response merges language fields only after newer workspace edits', async () => {
+  const s = await setup();
   s.context.state.keywords = 'new topic';
   s.context.state.selected = [B];
   const title = s.context.state.candidates[0].title;
@@ -285,13 +281,13 @@ test('a translation response merges language fields only after newer workspace e
 
 test('browsing rejects concurrent selection edits, preserves selection, and unlocks after its response', async () => {
   const reply = deferred();
-  const s = setup((path, body) =>
+  const s = await setup((path, body) =>
     path === '/classifications/browse' ? reply.promise : snapshot(body.selected)
   );
   const pending = s.context.browseClasses({ direction: 'roots', kind: 'IPC' });
   await flush();
   assert.equal(s.root.inert, true);
-  assert.equal(s.root.attributes['aria-busy'], 'true');
+  assert.equal(s.root.getAttribute('aria-busy'), 'true');
   s.context.changeClassSelection([A, B]);
   s.context.undoClassSelection();
   assert.deepEqual([...s.context.state.selected], [A]);
@@ -299,8 +295,8 @@ test('browsing rejects concurrent selection edits, preserves selection, and unlo
   reply.resolve(snapshot());
   await pending;
   assert.equal(s.root.inert, false);
-  assert.equal(s.root.attributes['aria-busy'], undefined);
-  assert.equal(s.read('classBusy'), false);
+  assert.equal(s.root.getAttribute('aria-busy'), null);
+  assert.equal(s.context.classBusy, false);
   assert.deepEqual([...s.context.state.selected], [A]);
   s.context.changeClassSelection([A, B]);
   await s.context.selectionSave;
@@ -309,7 +305,7 @@ test('browsing rejects concurrent selection edits, preserves selection, and unlo
 
 test('a second browse does not create an out-of-order request while the first is pending', async () => {
   const reply = deferred();
-  const s = setup(() => reply.promise);
+  const s = await setup(() => reply.promise);
   const first = s.context.browseClasses({ direction: 'roots', kind: 'IPC' });
   await flush();
   await s.context.browseClasses({ direction: 'search', kind: 'IPC', text: 'battery' });
@@ -322,7 +318,7 @@ test('a second browse does not create an out-of-order request while the first is
 
 test('a response after leaving the explorer does not repaint or switch the current tab', async () => {
   const reply = deferred();
-  const s = setup(() => reply.promise);
+  const s = await setup(() => reply.promise);
   const pending = s.context.browseClasses({ direction: 'roots', kind: 'IPC' });
   await flush();
   s.context.setTab('agent');
@@ -335,20 +331,20 @@ test('a response after leaving the explorer does not repaint or switch the curre
 
 test('a failed browse releases the interaction lock and a subsequent browse succeeds', async () => {
   let attempts = 0;
-  const s = setup(async () => {
+  const s = await setup(async () => {
     if (++attempts === 1) throw new Error('temporary read failure');
     return snapshot();
   });
   await assert.rejects(s.context.browseClasses({ direction: 'roots' }), /temporary read failure/);
   assert.equal(s.root.inert, false);
-  assert.equal(s.read('classBusy'), false);
+  assert.equal(s.context.classBusy, false);
   await s.context.browseClasses({ direction: 'roots' });
   assert.equal(attempts, 2);
   assert.equal(s.context.rendered, 1);
 });
 
 test('a failed selection save restores persisted selection and permits the next operation', async () => {
-  const s = setup(async (path) => {
+  const s = await setup(async (path) => {
     if (path === '/selection') throw new Error('selection write failed');
     return snapshot([A]);
   });
@@ -357,7 +353,7 @@ test('a failed selection save restores persisted selection and permits the next 
   assert.deepEqual([...s.context.state.selected], [B], 'the initial change is optimistic');
   await assert.rejects(s.context.browseClasses({ direction: 'roots' }), /保存済みの状態に戻しました/);
   assert.deepEqual([...s.context.state.selected], [A]);
-  assert.equal(s.read('classUndo.length'), 0);
+  assert.equal(s.context.classUndo.length, 0);
   assert.equal(s.root.inert, false);
   await s.context.selectionSave;
   assert.equal(s.requests.filter((r) => r.path === '/classifications/browse').length, 0);
@@ -367,7 +363,7 @@ test('a failed selection save restores persisted selection and permits the next 
 });
 
 test('undo after browsing restores the previous selection even when it is off the current page', async () => {
-  const s = setup(async (path, body) => {
+  const s = await setup(async (path, body) => {
     const value = snapshot(path === '/selection' ? body.selected : [B]);
     value.classification_view = { keys: [B], focus: candidate(B) };
     return value;
@@ -382,12 +378,15 @@ test('undo after browsing restores the previous selection even when it is off th
   assert.deepEqual([...s.requests.at(-1).body.selected], [A]);
 });
 
-test('target list reconciles IDs after a CSV replacement without dropping still-present targets', () => {
-  const s = setup();
+test('target list reconciles IDs after a CSV replacement without dropping still-present targets', async () => {
+  const s = await setup();
   s.context.state.patents = [{ id: 'NEW-1', title: 'Replacement patent', ipc: 'H01M10/00' }];
-  s.read("targetPatentIds.add('OLD-1'); targetPatentIds.add('NEW-1');");
+  (() => {
+    s.context.targetPatentIds.add('OLD-1');
+    s.context.targetPatentIds.add('NEW-1');
+  })();
   s.context.renderTargetPatents();
-  assert.deepEqual([...s.read('[...targetPatentIds]')], ['NEW-1']);
+  assert.deepEqual([...[...s.context.targetPatentIds]], ['NEW-1']);
   assert.match(s.dom['#target-patent-list'].innerHTML, /選択 1 件/);
   assert.doesNotMatch(s.dom['#target-patent-list'].innerHTML, /OLD-1/);
 });
@@ -413,15 +412,15 @@ function proposalSnapshot() {
   return value;
 }
 
-test('legacy workspaces show no historical reply without inventing LLM results', () => {
-  const s = setup();
+test('legacy workspaces show no historical reply without inventing LLM results', async () => {
+  const s = await setup();
   assert.match(s.context.classProposalPanelHtml(), /LLM返答の記録はありません/);
   assert.doesNotMatch(s.context.classProposalPanelHtml(), /候補に反映<\/span>/);
   assert.equal(s.context.classProposalReasonHtml({ ...candidate(A), reason: 'dictionary evidence' }), '');
 });
 
-test('proposal feedback explains counts, duplicate codes, exclusions, reasons, and separate selection', () => {
-  const s = setup();
+test('proposal feedback explains counts, duplicate codes, exclusions, reasons, and separate selection', async () => {
+  const s = await setup();
   s.context.state = proposalSnapshot();
   const html = s.context.classProposalPanelHtml();
   assert.match(html, /<b>3<\/b>返却/);
@@ -441,8 +440,8 @@ test('proposal feedback explains counts, duplicate codes, exclusions, reasons, a
   assert.doesNotMatch(html, /<existing reason>|<invalid>|<notice>/);
 });
 
-test('dictionary-only responses and older themes are identified explicitly', () => {
-  const s = setup();
+test('dictionary-only responses and older themes are identified explicitly', async () => {
+  const s = await setup();
   s.context.state = proposalSnapshot();
   s.context.state.candidate_proposal.llm_used = false;
   s.context.state.keywords = 'new theme';
@@ -453,7 +452,7 @@ test('dictionary-only responses and older themes are identified explicitly', () 
 });
 
 test('showing returned codes on the map is a display filter and does not select or persist them', async () => {
-  const s = setup(async () => proposalSnapshot());
+  const s = await setup(async () => proposalSnapshot());
   s.context.state = proposalSnapshot();
   s.context.state.candidate_proposal.items = [s.context.state.candidate_proposal.items[1]];
   const before = JSON.stringify(s.context.state);
@@ -472,7 +471,7 @@ test('showing returned codes on the map is a display filter and does not select 
 });
 
 test('proposal choice uses ordinary persistent selection while map filtering remains unchanged', async () => {
-  const s = setup(async (_path, body) => snapshot(body.selected));
+  const s = await setup(async (_path, body) => snapshot(body.selected));
   s.context.state = proposalSnapshot();
   s.context.showClassProposalMap();
   s.context.toggleClass(B);
@@ -489,7 +488,7 @@ test('proposal choice uses ordinary persistent selection while map filtering rem
 
 test('failed suggestion is labelled separately from the retained previous successful response', async () => {
   let fail = true;
-  const s = setup(async () => {
+  const s = await setup(async () => {
     if (fail) throw new Error('<model failed>');
     return proposalSnapshot();
   });
@@ -511,8 +510,8 @@ test('failed suggestion is labelled separately from the retained previous succes
   assert.doesNotMatch(html, /今回の候補生成に失敗しました/);
 });
 
-test('hover proposal reasons are escaped and distinguish relevance from official definitions', () => {
-  const s = setup();
+test('hover proposal reasons are escaped and distinguish relevance from official definitions', async () => {
+  const s = await setup();
   s.context.state = proposalSnapshot();
   const html = s.context.classProposalReasonHtml(s.context.state.candidates[0]);
   assert.match(html, /LLMの提案理由/);
@@ -522,15 +521,12 @@ test('hover proposal reasons are escaped and distinguish relevance from official
 });
 
 test('API errors expose the HTTP status even when the response body is not JSON', async () => {
-  const apiSource = appSource.slice(
-    appSource.indexOf('async function api('),
-    appSource.indexOf('function on(')
-  );
   const context = {
     fetch: async () => ({ ok: false, status: 409, json: async () => ({ detail: 'another edit won' }) }),
   };
-  vm.createContext(context);
-  vm.runInContext(apiSource, context);
+  context.setState = (next) => (context.state = next);
+  context.getState = () => context.state;
+  await loadModule(context, 'core.js', ['api']);
   await assert.rejects(
     context.api('/candidates', {}),
     (error) => error.status === 409 && error.message === 'another edit won'
@@ -551,7 +547,7 @@ test('API errors expose the HTTP status even when the response body is not JSON'
 test('a 409 refreshes concurrent selections before enabling edits and preserves local drafts', async () => {
   const reply = deferred(),
     conflict = Object.assign(new Error('concurrent edit'), { status: 409 });
-  const s = setup(async (path, body) => {
+  const s = await setup(async (path, body) => {
     if (path === '/candidates') throw conflict;
     if (path === '/state') return reply.promise;
     return snapshot(body.selected);
@@ -559,7 +555,7 @@ test('a 409 refreshes concurrent selections before enabling edits and preserves 
   s.context.state = proposalSnapshot();
   s.dom['#keywords'].value = 'unsaved keyword draft';
   s.dom['#seed-ipc'].value = 'IPC draft';
-  s.read(`classUndo.push(${JSON.stringify([A])});`);
+  s.context.classUndo.push([A]);
   const pending = s.context.suggestClassCandidates({ keywords: 'unsaved keyword draft', use_llm: true });
   await flush();
   assert.equal(s.root.inert, true);
@@ -577,7 +573,7 @@ test('a 409 refreshes concurrent selections before enabling edits and preserves 
   assert.equal(s.context.state.keywords, 'server theme');
   assert.equal(s.dom['#keywords'].value, 'unsaved keyword draft');
   assert.equal(s.dom['#seed-ipc'].value, 'IPC draft');
-  assert.equal(s.read('classUndo.length'), 0);
+  assert.equal(s.context.classUndo.length, 0);
   assert.equal(s.root.inert, false);
   assert.match(s.context.classProposalPanelHtml(), /最新の候補・選択を再取得しました/);
   s.context.toggleClass(A);
@@ -587,7 +583,7 @@ test('a 409 refreshes concurrent selections before enabling edits and preserves 
 
 test('failed conflict refresh blocks old selection writes across modes until explicit refresh succeeds', async () => {
   let available = false;
-  const s = setup(async (path, body) => {
+  const s = await setup(async (path, body) => {
     if (path === '/candidates') throw Object.assign(new Error('concurrent edit'), { status: 409 });
     if (path === '/state') {
       if (!available) throw new Error('offline');
@@ -597,7 +593,7 @@ test('failed conflict refresh blocks old selection writes across modes until exp
   });
   s.context.state = proposalSnapshot();
   await assert.rejects(s.context.suggestClassCandidates({ use_llm: true }), (error) => error.status === 409);
-  assert.equal(s.read('classSelectionStale'), true);
+  assert.equal(s.context.classSelectionStale, true);
   assert.match(s.context.classSelectionSyncHtml(), /古い選択による上書きを防ぐ/);
   await assert.rejects(s.context.selectionSave, /同期が必要/);
   s.context.toggleClass(B);
@@ -612,7 +608,7 @@ test('failed conflict refresh blocks old selection writes across modes until exp
   assert.equal(s.requests.filter((request) => ['/selection', '/query'].includes(request.path)).length, 0);
   available = true;
   await s.context.syncClassSelection();
-  assert.equal(s.read('classSelectionStale'), false);
+  assert.equal(s.context.classSelectionStale, false);
   await s.context.selectionSave;
   s.context.toggleClass(A);
   await s.context.selectionSave;
@@ -658,8 +654,8 @@ function broaderProposalSnapshot(added = false) {
   return value;
 }
 
-test('rejected candidates show escaped revision evidence, safe official links and a separate verified parent', () => {
-  const s = setup();
+test('rejected candidates show escaped revision evidence, safe official links and a separate verified parent', async () => {
+  const s = await setup();
   s.context.state = broaderProposalSnapshot();
   const html = s.context.classProposalPanelHtml();
   assert.match(html, /旧版の分類/);
@@ -683,7 +679,7 @@ test('rejected candidates show escaped revision evidence, safe official links an
 });
 
 test('parent controls remain compatible with old metadata and never offer unverified parents', async () => {
-  const s = setup();
+  const s = await setup();
   s.context.state = broaderProposalSnapshot(true);
   assert.match(s.context.classProposalPanelHtml(), /上位分類を候補に追加済み/);
   assert.doesNotMatch(s.context.classProposalPanelHtml(), /data-proposal-broader=/);
@@ -706,7 +702,7 @@ test('parent controls remain compatible with old metadata and never offer unveri
 
 test('adding a parent uses its rejected proposal index, preserves selection and focuses the expanded map', async () => {
   const reply = deferred();
-  const s = setup(() => reply.promise);
+  const s = await setup(() => reply.promise);
   s.context.state = broaderProposalSnapshot();
   s.context.showClassProposalMap();
   s.dom['#keywords'].value = 'unsaved draft';
@@ -725,8 +721,8 @@ test('adding a parent uses its rejected proposal index, preserves selection and 
   reply.resolve(broaderProposalSnapshot(true));
   assert.equal(await pending, true);
   assert.equal(s.root.inert, false);
-  assert.equal(s.read('classProposalView'), false);
-  assert.equal(s.read('classFocusKey'), PARENT);
+  assert.equal(s.context.classProposalView, false);
+  assert.equal(s.context.classFocusKey, PARENT);
   assert.deepEqual([...s.context.classificationItems().map((row) => row.key)], [A, B, PARENT]);
   assert.deepEqual([...s.context.state.selected], [A]);
   assert.equal(s.dom['#keywords'].value, 'unsaved draft');
@@ -737,7 +733,7 @@ test('adding a parent uses its rejected proposal index, preserves selection and 
 test('a stale parent proposal refreshes concurrent edits and labels the parent action failure correctly', async () => {
   const conflict = Object.assign(new Error('<proposal changed>'), { status: 409 }),
     reply = deferred();
-  const s = setup(async (path) => {
+  const s = await setup(async (path) => {
     if (path === '/candidates/broader') throw conflict;
     if (path === '/state') return reply.promise;
     throw new Error('unexpected mutation');
@@ -758,7 +754,7 @@ test('a stale parent proposal refreshes concurrent edits and labels the parent a
   assert.deepEqual([...s.context.state.selected], [B]);
   assert.equal(s.context.state.candidate_proposal.id, 'new-proposal');
   assert.equal(s.dom['#keywords'].value, 'unsaved new topic');
-  assert.equal(s.read('classSelectionStale'), false);
+  assert.equal(s.context.classSelectionStale, false);
   assert.equal(s.root.inert, false);
   const html = s.context.classProposalPanelHtml();
   assert.match(html, /上位候補を追加できませんでした/);
@@ -772,14 +768,14 @@ test('a stale parent proposal refreshes concurrent edits and labels the parent a
 });
 
 test('a failed refresh after adding a stale parent blocks selection and subsequent parent writes', async () => {
-  const s = setup(async (path) => {
+  const s = await setup(async (path) => {
     if (path === '/candidates/broader') throw Object.assign(new Error('stale proposal'), { status: 409 });
     if (path === '/state') throw new Error('offline');
     throw new Error('unexpected mutation');
   });
   s.context.state = broaderProposalSnapshot();
   await assert.rejects(s.context.addClassProposalBroader(2), (error) => error.status === 409);
-  assert.equal(s.read('classSelectionStale'), true);
+  assert.equal(s.context.classSelectionStale, true);
   assert.match(s.context.classProposalPanelHtml(), /最新の状態を取得するまで、分類の変更は停止/);
   s.context.toggleClass(B);
   s.context.persistSelection();

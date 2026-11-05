@@ -4,8 +4,8 @@
   "path": "patent-atlas/",
   "summary": "IPC・Fターム候補の選択、特許CSVの可視化と要不要判定、学習・LLM 判定から検索式を更新するローカルアプリ。",
   "status": "active",
-  "phase": "Phase 5 CSSトークン・共通部品の統合完了",
-  "progress": 70,
+  "phase": "Phase 6 フロントのESモジュール化・共通描画・jsdom移行完了",
+  "progress": 75,
   "started": "2026-09-14",
   "ports": [
     8810
@@ -64,6 +64,11 @@
       "title": "Phase 5：CSSのトークン・共通部品・非表示規則の統合",
       "state": "done",
       "date": "2026-11-06"
+    },
+    {
+      "title": "Phase 6：フロントのモジュール化とテスト基盤",
+      "state": "done",
+      "date": "2026-11-06"
     }
   ],
   "next": [
@@ -73,6 +78,10 @@
     "共有サーバー向けの認証・マルチユーザー分離は未実装（127.0.0.1 前提）"
   ],
   "log": [
+    {
+      "date": "2026-11-06",
+      "summary": "Phase 6：coreの状態コンテナと共通描画、明示importのネイティブESモジュール29本へ移行。appは初期化・タブ/段階切替へ分離。分類名・キー、lasso、tooltip、debounce等を共通化し、判定後メモ・分類リスト開閉・過去式編集を保持。別計画への古い入力混入を防止。VMの関数切り出しを廃止しjsdomで実モジュールを検証。Python542件（541成功・既存任意1スキップ）、JS327件成功（既存314件を保持）。API・設定・保存データ・CSSは無変更。隔離CSV8件のPlaywrightで入力保持を確認し、Phase 4と同一操作の20画面でスタイル差分0・画像差分0。claudecode不在のためdashboardは指定どおり--checkのみ。"
+    },
     {
       "date": "2026-11-06",
       "summary": "Phase 5：明色の単一rootへ色・余白・角丸トークンを集約し、style.cssの旧テーマを分離。button/pill/caption/notice/empty-stateを共通化し、hidden規則13→1、important40→7。CSS/JSの個別キャッシュバスターを撤去。API・設定・保存データ・画面文言は無変更。既存テスト3件は共通CSS参照へ同等の期待値を移し、回帰5件追加。Python542件（541成功・既存任意1スキップ）、JS314件成功。隔離CSV8件・Playwright/Edgeの20ケースで計算済みスタイルと画像の差分0、主要画面1440×900と幅390/900px・hover/focusを確認。CSS15ファイル、8921→9949行（色を丸めず個別トークン化したため増加）。claudecode不在のためdashboardは指定どおり--checkのみ。"

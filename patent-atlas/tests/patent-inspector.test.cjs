@@ -2,62 +2,39 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { previewHtml, positionPreview, createController } = require('../static/patent-inspector.js');
 
-class Element {
-  constructor(name = 'div') {
-    this.name = name;
-    this.listeners = new Map();
-    this.children = [];
-    this.dataset = {};
-    this.attributes = {};
-    this.style = {};
-    this.innerHTML = '';
-    this.hidden = false;
-    this.isConnected = false;
-    this.parent = null;
-  }
-  addEventListener(name, callback) {
+const { createDom } = require('./module-harness.cjs');
+function Element(name = 'div') {
+  return document.createElement(name);
+}
+function trackEvents(win) {
+  const proto = win.EventTarget.prototype;
+  const add = proto.addEventListener,
+    remove = proto.removeEventListener;
+  proto.addEventListener = function (name, fn, options) {
+    this.listeners ||= new Map();
     if (!this.listeners.has(name)) this.listeners.set(name, new Set());
-    this.listeners.get(name).add(callback);
-  }
-  removeEventListener(name, callback) {
-    this.listeners.get(name)?.delete(callback);
-  }
-  fire(name, extra = {}) {
-    const event = { type: name, target: this, ...extra };
-    for (const callback of this.listeners.get(name) || []) callback(event);
-  }
-  appendChild(child) {
-    this.children.push(child);
-    child.parent = this;
-    child.isConnected = this.isConnected;
-    return child;
-  }
-  contains(child) {
-    return !!child && (this === child || this.children.some((item) => item.contains(child)));
-  }
-  closest() {
-    return this.name === 'tr' && this.dataset.patentId ? this : this.parent?.closest() || null;
-  }
-  setAttribute(name, value) {
-    this.attributes[name] = value;
-  }
-  getBoundingClientRect() {
-    return this.name === 'tr'
-      ? { left: 25, top: 100, bottom: 150, width: 900, height: 50 }
-      : { width: 460, height: 520 };
-  }
+    this.listeners.get(name).add(fn);
+    return add.call(this, name, fn, options);
+  };
+  proto.removeEventListener = function (name, fn, options) {
+    this.listeners?.get(name)?.delete(fn);
+    return remove.call(this, name, fn, options);
+  };
+  proto.fire = function (name, extra = {}) {
+    const event = new win.Event(name, { bubbles: false });
+    for (const [key, value] of Object.entries(extra)) Object.defineProperty(event, key, { value });
+    this.dispatchEvent(event);
+  };
 }
 function setup() {
-  const doc = new Element('document'),
-    win = new Element('window'),
-    timers = new Map(),
+  const dom = createDom(),
+    doc = dom.window.document,
+    win = dom.window;
+  doc.body.innerHTML = '';
+  trackEvents(win);
+  const timers = new Map(),
     observers = [];
   let timerId = 0;
-  doc.body = new Element('body');
-  doc.body.isConnected = true;
-  doc.getElementById = (id) => doc.body.children.find((item) => item.id === id) || null;
-  doc.createElement = (name) => new Element(name);
-  doc.activeElement = doc.body;
   Object.assign(win, {
     innerWidth: 1024,
     innerHeight: 768,
@@ -81,6 +58,7 @@ function setup() {
   });
   const root = doc.body.appendChild(new Element('tbody'));
   const row = root.appendChild(new Element('tr'));
+  row.tabIndex = 0;
   row.dataset.patentId = 'JP-1';
   const button = row.appendChild(new Element('button'));
   const otherRow = root.appendChild(new Element('tr'));
@@ -118,7 +96,7 @@ function setup() {
       root.fire('mouseover', { target, clientX: 930, clientY: 700 });
     },
     focus(target = row) {
-      doc.activeElement = target;
+      target.focus();
       root.fire('focusin', { target });
     },
   };
@@ -209,7 +187,7 @@ test('hover shows the requested row without changing any patent data', () => {
   s.hover();
   assert.equal(s.panel().hidden, false);
   assert.ok(s.panel().innerHTML.includes('自動運転システム'));
-  assert.equal(s.panel().attributes.role, 'tooltip');
+  assert.equal(s.panel().getAttribute('role'), 'tooltip');
   assert.equal(JSON.stringify(s.patents), before);
   s.hover(s.otherRow);
   assert.ok(s.panel().innerHTML.includes('別の特許'));
@@ -293,7 +271,7 @@ test('row removal, outside scrolling, resize and explicit navigation hide all cl
   s.api.hide();
   assert.equal(s.panel().hidden, true);
   s.hover();
-  s.root.children = s.root.children.filter((row) => row !== s.row);
+  s.row.remove();
   s.observers.at(-1).callback();
   assert.equal(s.panel().hidden, true);
 });

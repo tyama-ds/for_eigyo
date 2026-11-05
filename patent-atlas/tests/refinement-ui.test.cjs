@@ -1,8 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const vm = require('node:vm');
-const source = fs.readFileSync('static/refinement-ui.js', 'utf8');
+
+const { loadModule } = require('./module-harness.cjs');
+
 const esc = (value) =>
   String(value ?? '').replace(
     /[&<>"']/g,
@@ -72,7 +72,7 @@ function result() {
     classifications: feedback(),
   };
 }
-function setup(apiHandler = async (path) => (path === '/refinement' ? result() : {})) {
+async function setup(apiHandler = async (path) => (path === '/refinement' ? result() : {})) {
   const dom = {},
     inputs = [],
     requests = [],
@@ -156,8 +156,17 @@ function setup(apiHandler = async (path) => (path === '/refinement' ? result() :
     toast: (...args) => notices.push(args),
     busy: async (_button, _message, action) => action(),
   };
-  vm.createContext(context);
-  vm.runInContext(source, context);
+  context.setState = (next) => (context.state = next);
+  context.getState = () => context.state;
+
+  await loadModule(context, 'refinement-ui.js', [
+    'refinementClassRows',
+    'refinementInitialKeys',
+    'refinementReplacementKeys',
+    'refinementIpcHtml',
+    'renderRefinementWorkspace',
+    'classificationChangesHtml',
+  ]);
   return {
     context,
     dom,
@@ -165,13 +174,13 @@ function setup(apiHandler = async (path) => (path === '/refinement' ? result() :
     requests,
     notices,
     rendered,
-    read: (expression) => vm.runInContext(expression, context),
+
     click: (id) => dom[id].events.get('click')({ currentTarget: dom[id] }),
   };
 }
 
-test('initial selection unions active and recommended codes without predicted-only candidates', () => {
-  const s = setup(),
+test('initial selection unions active and recommended codes without predicted-only candidates', async () => {
+  const s = await setup(),
     f = feedback();
   f.active_keys.push(IPC);
   f.recommended_keys.push(NEXT);
@@ -179,8 +188,8 @@ test('initial selection unions active and recommended codes without predicted-on
   assert.ok(!s.context.refinementInitialKeys(f).includes(PREDICTED));
 });
 
-test('recommended replacement retains non-IPC classifications and does not mutate evidence', () => {
-  const s = setup(),
+test('recommended replacement retains non-IPC classifications and does not mutate evidence', async () => {
+  const s = await setup(),
     f = feedback(),
     before = JSON.stringify(f);
   assert.deepEqual(Array.from(s.context.refinementReplacementKeys(f)), [FT, CPC, NEXT]);
@@ -192,10 +201,12 @@ test('recommended replacement retains non-IPC classifications and does not mutat
   assert.equal(f.candidates[0].title, '電池');
 });
 
-test('rendered checkboxes select recommendations and active codes but not prediction-only evidence', () => {
-  const s = setup();
+test('rendered checkboxes select recommendations and active codes but not prediction-only evidence', async () => {
+  const s = await setup();
   s.context.refinement = { classifications: feedback() };
-  s.read('refinementClassPicked=new Set(refinementInitialKeys(refinement.classifications))');
+  s.context.refinementClassPicked = new Set(
+    s.context.refinementInitialKeys(s.context.refinement.classifications)
+  );
   const html = s.context.refinementIpcHtml(feedback());
   const inputFor = (key) =>
     [...html.matchAll(/<input[^>]*>/g)]
@@ -209,8 +220,8 @@ test('rendered checkboxes select recommendations and active codes but not predic
   assert.ok(html.includes('予測：必要寄り 8'));
 });
 
-test('classification labels, evidence identifiers, reasons, warnings and history are escaped', () => {
-  const s = setup(),
+test('classification labels, evidence identifiers, reasons, warnings and history are escaped', async () => {
+  const s = await setup(),
     bad = '<img src=x onerror="bad()">&\'x\'';
   const f = {
     note: bad,
@@ -244,14 +255,14 @@ test('classification labels, evidence identifiers, reasons, warnings and history
 });
 
 test('replacement and restore controls are explicit and preserve current CPC/F-term', async () => {
-  const s = setup();
+  const s = await setup();
   s.context.renderRefinementWorkspace();
   await flush();
   s.click('#refinement-recommend-ipc');
-  assert.deepEqual(Array.from(s.read('[...refinementClassPicked]')), [FT, CPC, NEXT]);
+  assert.deepEqual(Array.from([...s.context.refinementClassPicked]), [FT, CPC, NEXT]);
   assert.match(s.dom['#refinement-ipc-change'].textContent, /追加 1 \/ 解除 1/);
   s.click('#refinement-restore-ipc');
-  assert.deepEqual(Array.from(s.read('[...refinementClassPicked]')), [IPC, FT, CPC]);
+  assert.deepEqual(Array.from([...s.context.refinementClassPicked]), [IPC, FT, CPC]);
   assert.match(s.dom['#refinement-ipc-change'].textContent, /追加 0 \/ 解除 0/);
 });
 
@@ -259,7 +270,7 @@ test('a late refinement read cannot overwrite a newer workspace instance', async
   const first = deferred(),
     second = deferred();
   let reads = 0;
-  const s = setup(() => (++reads === 1 ? first.promise : second.promise));
+  const s = await setup(() => (++reads === 1 ? first.promise : second.promise));
   s.context.renderRefinementWorkspace();
   s.context.renderRefinementWorkspace();
   const latest = {
@@ -282,19 +293,19 @@ test('a late refinement read cannot overwrite a newer workspace instance', async
 
 test('a refinement read arriving after leaving the step does not paint or enable it', async () => {
   const pending = deferred(),
-    s = setup(() => pending.promise);
+    s = await setup(() => pending.promise);
   s.context.renderRefinementWorkspace();
   const html = s.dom['#include-terms'].innerHTML;
   s.context.step = 2;
   pending.resolve(result());
   await flush();
   assert.equal(s.dom['#include-terms'].innerHTML, html);
-  assert.equal(s.read('refinementLoaded'), false);
+  assert.equal(s.context.refinementLoaded, false);
 });
 
 test('a late read error after switching tabs does not show an error in the new screen', async () => {
   const pending = deferred(),
-    s = setup(() => pending.promise);
+    s = await setup(() => pending.promise);
   s.context.renderRefinementWorkspace();
   const host = s.dom['#refinement-ipc-options'],
     html = host.innerHTML;
@@ -306,19 +317,19 @@ test('a late read error after switching tabs does not show an error in the new s
 });
 
 test('current read errors are escaped and leave proposal unavailable', async () => {
-  const s = setup(async () => {
+  const s = await setup(async () => {
     throw Error('<img src=x>');
   });
   s.context.renderRefinementWorkspace();
   await flush();
   assert.ok(s.dom['#refinement-ipc-options'].innerHTML.includes('&lt;img src=x&gt;'));
   assert.ok(!s.dom['#refinement-ipc-options'].innerHTML.includes('<img'));
-  assert.equal(s.read('refinementLoaded'), false);
+  assert.equal(s.context.refinementLoaded, false);
   assert.equal(s.notices.length, 1);
 });
 
 test('proposal payload contains only the reviewed classifications and checked terms', async () => {
-  const s = setup(async (path, body) =>
+  const s = await setup(async (path, body) =>
     path === '/refinement' ? result() : { queries: [{ id: 'next' }], job: { status: 'idle' } }
   );
   s.context.renderRefinementWorkspace();
@@ -337,7 +348,7 @@ test('proposal payload contains only the reviewed classifications and checked te
 
 test('a late proposal cannot overwrite or unlock a newly rendered refinement instance', async () => {
   const pending = deferred(),
-    s = setup(async (path) => (path === '/refinement' ? result() : pending.promise));
+    s = await setup(async (path) => (path === '/refinement' ? result() : pending.promise));
   s.context.renderRefinementWorkspace();
   await flush();
   const oldControls = s.dom['#refinement-controls'];

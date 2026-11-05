@@ -1,11 +1,56 @@
-'use strict';
+import {
+  classificationTitle,
+  replaceHtml,
+  listen,
+  getState,
+  $,
+  $$,
+  esc,
+  api,
+  setState,
+  toast,
+  on,
+  busy,
+} from './core.js';
+import {
+  researchDraftScheduleSave,
+  researchDraftFlush,
+  researchDraftRebase,
+} from './research-draft-store.js';
+import {
+  researchBrief,
+  researchClassificationProvenance,
+  captureResearchDraft,
+  researchWorkbenchState,
+  syncResearchPlanningControls,
+  renderResearchWorkbench,
+} from './research-workbench.js';
+import { queryLibraryTreeHtml } from './query-library-ui.js';
+import {
+  researchGuidanceState,
+  researchFlowValidate,
+  researchFlowAfterPlan,
+  researchFlowRevealPreview,
+} from './research-guidance.js';
+import {
+  researchProgressIsRunning,
+  researchProgressStart,
+  researchProgressFinish,
+} from './research-progress.js';
+import { updateChrome } from './workspace-chrome.js';
+import { setTab, setStep } from './app.js';
+
+export const inventionWorkbenchState = {
+  inventionInputDraft: null,
+  inventionPlanDraft: null,
+  inventionPlanning: false,
+  inventionError: '',
+};
+
 /* Invention elements → search perspectives → explicit Boolean scopes. */
-let inventionInputDraft = null,
-  inventionPlanDraft = null,
-  inventionPlanning = false,
-  inventionError = '';
+
 function inventionPlan() {
-  return state.research_workbench?.invention?.plan || null;
+  return getState().research_workbench?.invention?.plan || null;
 }
 function inventionInput(value = {}) {
   return {
@@ -15,9 +60,9 @@ function inventionInput(value = {}) {
 }
 function inventionDraftInput() {
   return (
-    inventionInputDraft ||
-    (inventionInputDraft = inventionInput(
-      state.research_workbench?.invention?.input || inventionPlan()?.input
+    inventionWorkbenchState.inventionInputDraft ||
+    (inventionWorkbenchState.inventionInputDraft = inventionInput(
+      getState().research_workbench?.invention?.input || inventionPlan()?.input
     ))
   );
 }
@@ -29,8 +74,8 @@ function inventionLines(value) {
 }
 function inventionPlanState(plan = inventionPlan()) {
   if (!plan) return null;
-  if (inventionPlanDraft?.id !== plan.id)
-    inventionPlanDraft = {
+  if (inventionWorkbenchState.inventionPlanDraft?.id !== plan.id)
+    inventionWorkbenchState.inventionPlanDraft = {
       id: plan.id,
       strategy: 'element',
       element_ids: plan.elements.slice(0, 1).map((e) => e.id),
@@ -51,15 +96,15 @@ function inventionPlanState(plan = inventionPlan()) {
       preview: null,
       previewPayload: null,
     };
-  return inventionPlanDraft;
+  return inventionWorkbenchState.inventionPlanDraft;
 }
 function captureInventionDraft() {
   const input = inventionDraftInput();
   if ($('#invention-text')) input.invention_text = $('#invention-text').value;
   if ($('#invention-manual-elements'))
     input.manual_elements = inventionLines($('#invention-manual-elements').value);
-  if (typeof researchDraftScheduleSave === 'function') researchDraftScheduleSave();
-  const d = inventionPlanDraft;
+  researchDraftScheduleSave();
+  const d = inventionWorkbenchState.inventionPlanDraft;
   if (!d || !$('#invention-elements')) return;
   if ($('#invention-strategy')) d.strategy = $('#invention-strategy').value;
   d.element_ids = $$('[data-invention-use]:checked').map((el) => el.value);
@@ -76,8 +121,8 @@ function captureInventionDraft() {
   for (const el of $$('[data-invention-join]')) d.perspective_joins[el.dataset.inventionJoin] = el.value;
   for (const el of $$('[data-invention-exclude]'))
     d.exclusions[el.dataset.inventionExclude] = inventionLines(el.value);
-  d.confirm_exclusions = $('#invention-confirm-exclusions')?.checked || false;
-  d.confirm_class_intersection = $('#invention-confirm-classes')?.checked || false;
+  d.confirm_exclusions = $('#invention-confirm-exclusions')?.checked;
+  d.confirm_class_intersection = $('#invention-confirm-classes')?.checked;
 }
 function inventionBriefKey(brief = {}) {
   return JSON.stringify({
@@ -104,29 +149,23 @@ function inventionPlanStale() {
   );
 }
 function invalidateInventionPreview() {
-  if (inventionPlanDraft) {
-    inventionPlanDraft.preview = null;
-    inventionPlanDraft.previewPayload = null;
+  if (inventionWorkbenchState.inventionPlanDraft) {
+    inventionWorkbenchState.inventionPlanDraft.preview = null;
+    inventionWorkbenchState.inventionPlanDraft.previewPayload = null;
   }
   const host = $('#invention-query-preview');
-  if (host) host.innerHTML = '';
+  if (host) replaceHtml(host, '');
   const stale = inventionPlanStale(),
     notice = $('#invention-stale-plan');
   if (notice) notice.hidden = !stale;
   for (const button of $$('#invention-preview,[data-invention-single]'))
-    button.disabled = stale || inventionPlanning;
+    button.disabled = stale || inventionWorkbenchState.inventionPlanning;
 }
 function inventionClassLabel(c) {
-  return [c.kind || c.system || '', c.code || '', c.title_short_ja || c.title_ja || c.title || '']
-    .filter(Boolean)
-    .join(' ');
+  return [c.kind || c.system || '', c.code || '', classificationTitle(c)].filter(Boolean).join(' ');
 }
 function inventionClassProvenance(c) {
-  return typeof researchClassificationProvenance === 'function'
-    ? researchClassificationProvenance(c)
-    : (c.origins || []).some((o) => o.type === 'patent')
-      ? '公報の分類欄'
-      : '分類候補・仮説';
+  return researchClassificationProvenance(c);
 }
 function inventionPerspectiveHtml(element, p, d, plan) {
   const suggested = new Set([...(p.classification_keys || []), ...(p.retrieved_classification_keys || [])]),
@@ -169,23 +208,23 @@ function inventionWorkbenchHtml(stage = 'all', method = 'all') {
     plan = inventionPlan(),
     d = inventionPlanState(plan);
   const notes = [...(plan?.questions || []), ...(plan?.classification_notes || [])];
-  const disabled = inventionPlanning ? 'disabled' : '';
+  const disabled = inventionWorkbenchState.inventionPlanning ? 'disabled' : '';
   const editing = stage === 'elements';
   const inputHtml = `<div id="invention-input-area">
     <div class="research-input-method" role="group" aria-label="要素の整理方法"><button type="button" data-research-input-method="llm" aria-pressed="${method === 'llm'}">LLMで分解する</button><button type="button" data-research-input-method="manual" aria-pressed="${method === 'manual'}">自分で要素を入力する</button></div>
     <p id="research-input-help" class="caption">${method === 'llm' ? '上に入力した説明と選択特許を使います。請求項を追加したい場合だけ原文欄を開いてください。' : '要素を1行ずつ入力して、検索範囲を選ぶ画面へ進みます。'}</p>
-    ${method === 'llm' && state.settings.provider === 'offline' ? '<div id="research-llm-unavailable" class="notice">LLMは未設定です。手動入力でもこのまま進められます。<button id="research-connect-llm" class="button small" type="button">接続設定を開く</button></div>' : ''}
+    ${method === 'llm' && getState().settings.provider === 'offline' ? '<div id="research-llm-unavailable" class="notice">LLMは未設定です。手動入力でもこのまま進められます。<button id="research-connect-llm" class="button small" type="button">接続設定を開く</button></div>' : ''}
     <div class="invention-source-grid"><details class="research-optional" ${input.invention_text ? 'open' : ''}><summary>請求項・原文を追加（任意）</summary><label>発明の説明・請求項を貼り付ける <span class="caption">任意</span><textarea id="invention-text" rows="5" maxlength="20000" placeholder="構成、動作、要素のつながりが分かる原文を入力">${esc(input.invention_text)}</textarea></label></details>
     ${method !== 'llm' ? `<label>自分で分けた要素 <span class="caption">任意 · 1行に1要素</span><textarea id="invention-manual-elements" rows="4" maxlength="4808" placeholder="例：温度を取得するセンサ&#10;取得温度に応じて冷却量を変える制御部">${esc(input.manual_elements.join('\n'))}</textarea><small class="caption">最大8要素、1要素600文字。「入力した要素を整理」はこの欄を使います。</small></label>` : ''}</div>
     <div class="button-row">${method !== 'manual' ? `<button id="invention-plan-llm" class="button primary" type="button" ${disabled}>LLMで発明を要素分解</button>` : ''}${method !== 'llm' ? `<button id="invention-plan-local" class="button primary" type="button" ${disabled}>入力した要素を整理</button>` : ''}</div></div>`;
   const reviewHtml = `<div id="invention-review-area"><button type="button" id="research-edit-input" class="button small">← 入力条件を見直す</button><p id="research-condition-summary" class="caption">${esc(researchBrief().purpose || '調査目的を入力してください')} · ターゲット ${researchBrief().target_ids.length} 件</p>${plan ? `<div id="invention-stale-plan" class="notice" role="status" ${inventionPlanStale() ? '' : 'hidden'}>発明の入力や調査条件が変わっています。要素分解をやり直してからプレビュー・採用してください。<button type="button" class="button small" id="research-replan-input">入力条件へ戻る</button></div><div class="invention-plan-heading"><h3>要素の案と検索観点</h3><span class="pill">${plan.method === 'llm' ? 'LLMによる案' : '手動要素の整理'}</span></div><p class="caption">${esc(plan.summary || '')}</p><p class="caption">採用する検索観点にチェックしてください。初期選択は各要素の先頭の観点です。追加の観点は必要に応じて採用します。</p><div class="invention-strategy"><label>今回の探し方<select id="invention-strategy"><option value="element" ${d.strategy === 'element' ? 'selected' : ''}>1要素から探す</option><option value="combination" ${d.strategy === 'combination' ? 'selected' : ''}>選んだ要素の組合せ · AND</option><option value="alternatives" ${d.strategy === 'alternatives' ? 'selected' : ''}>選んだ要素のいずれか · OR</option></select></label><p id="invention-selection-help" class="caption">${esc(inventionSelectionText(d))}</p></div><div id="invention-elements" class="invention-elements">${plan.elements.map((e) => inventionElementHtml(e, d, plan)).join('')}</div><details class="invention-scope-options"><summary>除外と、分類の組合せを確認</summary><label>検索全体から除く語句 · 任意（1行に1語句）<textarea data-invention-exclude="all" rows="2" maxlength="6000">${esc(d.exclusions.all.join('\n'))}</textarea></label><p class="caption">全体のNOTは、選んだ要素を組み合わせた式の外側に適用します。要素内のNOTとは範囲が異なります。</p><label class="check"><input id="invention-confirm-exclusions" type="checkbox" ${d.confirm_exclusions ? 'checked' : ''}>入力した除外語と、NOTの適用範囲を確認した</label><label class="check"><input id="invention-confirm-classes" type="checkbox" ${d.confirm_class_intersection ? 'checked' : ''}>語句と分類、または分類同士をANDで結ぶと、同じ文献に条件の同時一致を求め、候補が狭まることを確認した</label></details>${notes.length ? `<details class="invention-questions"><summary>確認する点 · ${notes.length} 件</summary><ul>${notes.map((q) => `<li>${esc(q)}</li>`).join('')}</ul></details>` : ''}<div class="invention-bottom"><p class="caption">原文との対応と要素間の関係を見直し、まずは1要素、必要に応じて組合せへ進めます。検索結果は先行技術の候補として確認します。</p><button id="invention-preview" class="button primary" type="button" ${inventionPlanStale() ? 'disabled' : ''}>選んだ条件をプレビュー →</button></div><div id="invention-query-preview" aria-live="polite">${inventionPreviewHtml()}</div>` : '<p class="caption">目的と発明の説明を使って、次に検索する要素を整理します。</p>'}</div>`;
-  return `<section id="invention-workbench" class="panel invention-workbench" data-stage="${stage}" aria-label="発明を要素に分けて調査する"><div class="invention-heading"><div><h2>${editing ? '要素ごとに、検索範囲を選ぶ。' : '発明の整理方法を選ぶ。'}</h2><p class="caption">${editing ? '選んだ要素だけを検索します。語句・分類の詳細は必要な要素を開いて編集できます。' : '目的と発明の説明を使って、次に検索する要素を整理します。'}</p></div><details class="panel-help"><summary role="button" aria-label="要素分解のヘルプ">?</summary><div><p class="invention-data-note">LLMには目的・技術説明・キーワード・入力した原文と要素、選択特許の名称・要約・分類を送り、保存済みの接続設定を使います。手動の整理はLLMへ送信しません。取得していない公報本文・請求項は参照しません。</p></div></details><span class="pill">${plan ? `${plan.elements.length} 要素` : '先行技術の候補を探す'}</span></div>${stage !== 'elements' ? inputHtml : ''}<p id="invention-error" class="invention-error" role="alert" ${inventionError ? '' : 'hidden'}>${esc(inventionError)}</p>${stage !== 'input' ? reviewHtml : ''}</section>`;
+  return `<section id="invention-workbench" data-render-scope="${esc(plan?.id || 'invention-input')}" class="panel invention-workbench" data-stage="${stage}" aria-label="発明を要素に分けて調査する"><div class="invention-heading"><div><h2>${editing ? '要素ごとに、検索範囲を選ぶ。' : '発明の整理方法を選ぶ。'}</h2><p class="caption">${editing ? '選んだ要素だけを検索します。語句・分類の詳細は必要な要素を開いて編集できます。' : '目的と発明の説明を使って、次に検索する要素を整理します。'}</p></div><details class="panel-help"><summary role="button" aria-label="要素分解のヘルプ">?</summary><div><p class="invention-data-note">LLMには目的・技術説明・キーワード・入力した原文と要素、選択特許の名称・要約・分類を送り、保存済みの接続設定を使います。手動の整理はLLMへ送信しません。取得していない公報本文・請求項は参照しません。</p></div></details><span class="pill">${plan ? `${plan.elements.length} 要素` : '先行技術の候補を探す'}</span></div>${stage !== 'elements' ? inputHtml : ''}<p id="invention-error" class="invention-error" role="alert" ${inventionWorkbenchState.inventionError ? '' : 'hidden'}>${esc(inventionWorkbenchState.inventionError)}</p>${stage !== 'input' ? reviewHtml : ''}</section>`;
 }
 function inventionSelectionText(d) {
   return `${d.element_ids.length} 要素を選択 · ${d.strategy === 'combination' ? '選んだ要素をANDで結びます。' : d.strategy === 'alternatives' ? '選んだ要素をORで結びます。' : '1つの要素の観点から検索します。'}`;
 }
 function inventionPreviewHtml() {
-  const p = inventionPlanDraft?.preview;
+  const p = inventionWorkbenchState.inventionPlanDraft?.preview;
   if (!p) return '';
   return `<div class="invention-preview"><span class="eyebrow">REVIEW SEARCH SCOPE</span><h3>検索条件とNOTの範囲</h3>${queryLibraryTreeHtml(p.query?.boolean_tree)}<pre class="expression">${esc(p.expression || '')}</pre>${p.warnings?.length ? `<ul class="invention-warnings">${p.warnings.map((w) => `<li>${esc(w)}</li>`).join('')}</ul>` : ''}<button id="invention-apply" type="button" class="button primary" ${inventionPlanStale() ? 'disabled' : ''}>この条件で検索式を作成 →</button><p class="caption">採用すると検索式の履歴に追加し、設定済みの検索サービス形式で出力できます。</p></div>`;
 }
@@ -227,7 +266,7 @@ function inventionPayload() {
       '採用した観点で語句と分類、または分類同士をANDで結びます。分類の組合せを確認し、確認欄をチェックしてください。'
     );
   return {
-    revision: state.research_workbench.revision,
+    revision: getState().research_workbench.revision,
     plan_id: d.id,
     strategy: d.strategy,
     element_ids: [...d.element_ids],
@@ -252,25 +291,30 @@ function inventionNeedsClassConfirmation(elements, d) {
   );
 }
 function inventionShowError(error) {
-  inventionError = error?.message || String(error || '');
+  inventionWorkbenchState.inventionError = error?.message || String(error || '');
   const el = $('#invention-error');
   if (el) {
-    el.textContent = inventionError;
-    el.hidden = !inventionError;
+    el.textContent = inventionWorkbenchState.inventionError;
+    el.hidden = !inventionWorkbenchState.inventionError;
   }
 }
-function inventionRefresh() {
-  const host = $('#invention-workbench');
+function inventionRefresh(host = $('#invention-workbench')) {
   if (host) {
-    host.outerHTML = inventionWorkbenchHtml(
-      typeof researchFlowStage === 'undefined' ? 'all' : researchFlowStage,
-      typeof researchFlowInputMethod === 'undefined' ? 'all' : researchFlowInputMethod
+    const markup = inventionWorkbenchHtml(
+      researchGuidanceState.researchFlowStage,
+      researchGuidanceState.researchFlowInputMethod
     );
+    const template = document.createElement('template');
+    template.innerHTML = markup;
+    replaceHtml(host, template.content.firstElementChild.innerHTML, {
+      scope: template.content.firstElementChild.dataset.renderScope,
+    });
+    host.dataset.stage = researchGuidanceState.researchFlowStage;
     bindInventionWorkbench();
   }
 }
 function inventionRefreshSelection() {
-  const d = inventionPlanDraft;
+  const d = inventionWorkbenchState.inventionPlanDraft;
   if (!d) return;
   for (const el of $$('[data-invention-use]')) el.checked = d.element_ids.includes(el.value);
   for (const el of $$('[data-invention-card]'))
@@ -282,37 +326,35 @@ function inventionRefreshSelection() {
 }
 async function requestInventionPlan(useLlm) {
   if (
-    inventionPlanning ||
-    (typeof researchPlanning !== 'undefined' && researchPlanning) ||
-    (typeof researchProgressIsRunning === 'function' && researchProgressIsRunning())
+    inventionWorkbenchState.inventionPlanning ||
+    researchWorkbenchState.researchPlanning ||
+    researchProgressIsRunning()
   )
     throw new Error('要素分解または観点の起案中です。完了を待ってください。');
   captureResearchDraft();
   captureInventionDraft();
   const submitted = structuredClone(inventionDraftInput()),
     brief = structuredClone(researchBrief());
-  inventionPlanning = true;
+  inventionWorkbenchState.inventionPlanning = true;
   inventionShowError('');
   let progressToken = null,
     failure;
   try {
-    if (typeof researchFlowValidate === 'function') researchFlowValidate(useLlm);
+    researchFlowValidate(useLlm);
     if (submitted.invention_text.length > 20000) throw new Error('発明の説明・請求項は20000文字以内です。');
     if (submitted.manual_elements.length > 8 || submitted.manual_elements.some((t) => t.length > 600))
       throw new Error('手動要素は8件まで、1要素600文字以内です。');
     if (!useLlm && !submitted.manual_elements.length)
       throw new Error('「自分で分けた要素」に1行ずつ要素を入力してください。');
-    if (typeof researchProgressStart === 'function')
-      progressToken = researchProgressStart({
-        label: '発明を要素・観点に整理',
-        useLlm,
-        settings: state.settings,
-      });
-    if (typeof syncResearchPlanningControls === 'function') syncResearchPlanningControls();
-    else if (typeof applyResearchInputMethod === 'function') applyResearchInputMethod();
-    if (typeof researchDraftFlush === 'function') researchDraftFlush();
+    progressToken = researchProgressStart({
+      label: '発明を要素・観点に整理',
+      useLlm,
+      settings: getState().settings,
+    });
+    syncResearchPlanningControls();
+    researchDraftFlush();
     const result = await api('/research/invention/plan', {
-      revision: state.research_workbench.revision,
+      revision: getState().research_workbench.revision,
       brief,
       ...submitted,
       use_llm: useLlm,
@@ -321,17 +363,17 @@ async function requestInventionPlan(useLlm) {
     captureInventionDraft();
     const inputEdited = inventionInputKey(inventionDraftInput()) !== inventionInputKey(submitted),
       briefEdited = inventionBriefKey(researchBrief()) !== inventionBriefKey(brief);
-    state = result;
+    setState(result);
     if (!inputEdited)
-      inventionInputDraft = inventionInput(result.research_workbench?.invention?.input || submitted);
-    if (!briefEdited && typeof researchDraft !== 'undefined')
-      researchDraft = structuredClone(result.research_workbench.brief);
-    inventionPlanDraft = null;
-    if (typeof researchDraftRebase === 'function') researchDraftRebase();
-    if (typeof researchDraftScheduleSave === 'function') researchDraftScheduleSave();
-    if (typeof researchFlowAfterPlan === 'function') researchFlowAfterPlan(inputEdited || briefEdited);
-    if (typeof renderResearchWorkbench === 'function') renderResearchWorkbench();
-    else inventionRefresh();
+      inventionWorkbenchState.inventionInputDraft = inventionInput(
+        result.research_workbench?.invention?.input || submitted
+      );
+    if (!briefEdited) researchWorkbenchState.researchDraft = structuredClone(result.research_workbench.brief);
+    inventionWorkbenchState.inventionPlanDraft = null;
+    researchDraftRebase();
+    researchDraftScheduleSave();
+    researchFlowAfterPlan(inputEdited || briefEdited);
+    renderResearchWorkbench();
     updateChrome();
     if (inputEdited || briefEdited)
       toast('要素分解中の入力変更を保持しています。変更後の条件で要素分解をやり直してください。');
@@ -340,11 +382,9 @@ async function requestInventionPlan(useLlm) {
     inventionShowError(error);
     throw error;
   } finally {
-    inventionPlanning = false;
-    if (progressToken !== null && typeof researchProgressFinish === 'function')
-      researchProgressFinish(progressToken, failure);
-    if (typeof syncResearchPlanningControls === 'function') syncResearchPlanningControls();
-    else if (typeof applyResearchInputMethod === 'function') applyResearchInputMethod();
+    inventionWorkbenchState.inventionPlanning = false;
+    if (progressToken !== null) researchProgressFinish(progressToken, failure);
+    syncResearchPlanningControls();
   }
 }
 async function previewInvention() {
@@ -353,9 +393,9 @@ async function previewInvention() {
     const payload = inventionPayload(),
       key = JSON.stringify(payload),
       planId = payload.plan_id;
-    if (typeof researchDraftFlush === 'function') researchDraftFlush();
+    researchDraftFlush();
     const result = await api('/research/invention/preview', payload);
-    if (inventionPlanDraft?.id !== planId || inventionPlanStale()) return;
+    if (inventionWorkbenchState.inventionPlanDraft?.id !== planId || inventionPlanStale()) return;
     let current;
     try {
       current = JSON.stringify(inventionPayload());
@@ -363,14 +403,14 @@ async function previewInvention() {
       return;
     }
     if (current !== key) return;
-    inventionPlanDraft.preview = result;
-    inventionPlanDraft.previewPayload = key;
+    inventionWorkbenchState.inventionPlanDraft.preview = result;
+    inventionWorkbenchState.inventionPlanDraft.previewPayload = key;
     const host = $('#invention-query-preview');
     if (host) {
-      host.innerHTML = inventionPreviewHtml();
+      replaceHtml(host, inventionPreviewHtml());
       bindInventionApply();
     }
-    if (typeof researchFlowRevealPreview === 'function') researchFlowRevealPreview();
+    researchFlowRevealPreview();
   } catch (error) {
     inventionShowError(error);
     throw error;
@@ -379,20 +419,20 @@ async function previewInvention() {
 async function applyInvention() {
   try {
     const payload = inventionPayload(),
-      d = inventionPlanDraft;
+      d = inventionWorkbenchState.inventionPlanDraft;
     if (!d.preview || d.previewPayload !== JSON.stringify(payload))
       throw new Error('条件が変わっています。もう一度プレビューしてください。');
-    if (typeof researchDraftFlush === 'function') researchDraftFlush();
+    researchDraftFlush();
     const result = await api('/research/invention/apply', {
       ...payload,
       expected_preview_hash: d.preview.preview_hash,
     });
     captureResearchDraft();
     captureInventionDraft();
-    state = result;
+    setState(result);
     invalidateInventionPreview();
-    if (typeof researchDraftRebase === 'function') researchDraftRebase();
-    if (typeof researchDraftScheduleSave === 'function') researchDraftScheduleSave();
+    researchDraftRebase();
+    researchDraftScheduleSave();
     updateChrome();
     setTab('explore');
     setStep(1);
@@ -414,40 +454,69 @@ function bindInventionWorkbench() {
       busy(e.currentTarget, '要素を整理しています…', () => requestInventionPlan(llm))
     );
   for (const el of $$('#invention-workbench input,#invention-workbench textarea,#invention-workbench select'))
-    el.addEventListener('input', () => {
-      inventionShowError('');
-      captureInventionDraft();
-      const d = inventionPlanDraft;
-      if (d && el.matches?.('[data-invention-use]') && d.strategy === 'element' && el.checked)
-        d.element_ids = [el.value];
-      if (d && el.id === 'invention-strategy' && d.strategy === 'element')
-        d.element_ids = d.element_ids.slice(0, 1);
-      invalidateInventionPreview();
-      inventionRefreshSelection();
-      if (el.matches?.('[data-invention-class-mode]')) {
-        const detail = $('.invention-classifications', el.closest('[data-invention-perspective]'));
-        if (detail) {
-          detail.open = el.value !== 'text';
-          const summary = $('summary', detail);
-          if (summary)
-            summary.textContent =
-              el.value === 'text' ? '分類候補を選ぶ（語句だけでは未使用）' : '分類候補を選ぶ';
-        }
-      }
-    });
-  for (const el of $$('[data-invention-single]'))
-    el.addEventListener('click', () =>
-      busy(el, '確認中…', async () => {
-        captureResearchDraft();
+    listen(
+      el,
+      'input',
+      () => {
+        inventionShowError('');
         captureInventionDraft();
-        const d = inventionPlanState();
-        d.strategy = 'element';
-        d.element_ids = [el.dataset.inventionSingle];
-        inventionRefreshSelection();
+        const d = inventionWorkbenchState.inventionPlanDraft;
+        if (d && el.matches?.('[data-invention-use]') && d.strategy === 'element' && el.checked)
+          d.element_ids = [el.value];
+        if (d && el.id === 'invention-strategy' && d.strategy === 'element')
+          d.element_ids = d.element_ids.slice(0, 1);
         invalidateInventionPreview();
-        await previewInvention();
-      })
+        inventionRefreshSelection();
+        if (el.matches?.('[data-invention-class-mode]')) {
+          const detail = $('.invention-classifications', el.closest('[data-invention-perspective]'));
+          if (detail) {
+            detail.open = el.value !== 'text';
+            const summary = $('summary', detail);
+            if (summary)
+              summary.textContent =
+                el.value === 'text' ? '分類候補を選ぶ（語句だけでは未使用）' : '分類候補を選ぶ';
+          }
+        }
+      },
+      undefined,
+      'invention-workbench.js:1'
+    );
+  for (const el of $$('[data-invention-single]'))
+    listen(
+      el,
+      'click',
+      () =>
+        busy(el, '確認中…', async () => {
+          captureResearchDraft();
+          captureInventionDraft();
+          const d = inventionPlanState();
+          d.strategy = 'element';
+          d.element_ids = [el.dataset.inventionSingle];
+          inventionRefreshSelection();
+          invalidateInventionPreview();
+          await previewInvention();
+        }),
+      undefined,
+      'invention-workbench.js:2'
     );
   on('#invention-preview', 'click', (e) => busy(e.currentTarget, '確認中…', previewInvention));
   bindInventionApply();
 }
+
+export {
+  inventionPlan,
+  inventionDraftInput,
+  inventionPlanState,
+  captureInventionDraft,
+  inventionPlanStale,
+  invalidateInventionPreview,
+  inventionWorkbenchHtml,
+  inventionPayload,
+  inventionShowError,
+  requestInventionPlan,
+  previewInvention,
+  applyInvention,
+  bindInventionWorkbench,
+};
+
+export { inventionRefresh as render };

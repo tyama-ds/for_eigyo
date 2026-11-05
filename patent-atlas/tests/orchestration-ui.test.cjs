@@ -1,8 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const vm = require('node:vm');
+const { loadModule } = require('./module-harness.cjs');
 const fs = require('node:fs');
-const source = fs.readFileSync('static/orchestration-ui.js', 'utf8');
+
 const esc = (value) =>
   String(value ?? '').replace(
     /[&<>"']/g,
@@ -17,8 +17,9 @@ function deferred() {
   });
   return { resolve, reject, promise };
 }
-function setup() {
+async function setup() {
   const ids = [
+    'convergence-placeholder',
     'content',
     'criteria',
     'judge',
@@ -86,7 +87,7 @@ function setup() {
   };
   const context = {
     state,
-    $: (s) => dom[s] || null,
+    $: (s) => (s === '#convergence-content' ? dom['#orchestration-convergence-placeholder'] : dom[s] || null),
     $$: (s) => selectors[s] || [],
     esc,
     on: (id, event, fn) => handlers.set(id + ':' + event, fn),
@@ -100,13 +101,26 @@ function setup() {
     setStep: () => {},
     selectionSave: Promise.resolve(),
   };
-  vm.createContext(context);
-  vm.runInContext(source, context);
-  return { context, dom, selectors, requests, handlers, read: (code) => vm.runInContext(code, context) };
+  context.setState = (next) => (context.state = next);
+  context.getState = () => context.state;
+  await loadModule(context, 'orchestration-ui.js', [
+    'orchestrationDefaults',
+    'orchestrationOptions',
+    'orchestrationCounts',
+    'orchestrationPercent',
+    'filterOrchestrationCandidates',
+    'orchestrationCheckpointHtml',
+    'renderOrchestrationProgress',
+    'orchestrationResumePayload',
+    'orchestrationReviewPayload',
+    'startOrchestration',
+    'orchestrationAction',
+  ]);
+  return { context, dom, selectors, requests, handlers };
 }
 
-test('defaults start empty without inheriting keywords or judgment criteria and retain saved workflow criteria', () => {
-  const s = setup();
+test('defaults start empty without inheriting keywords or judgment criteria and retain saved workflow criteria', async () => {
+  const s = await setup();
   s.context.state.training = { criteria: '保存済みの基準' };
   assert.equal(s.context.orchestrationDefaults().criteria, '');
   s.context.state.keywords = '入力済みキーワード';
@@ -125,8 +139,8 @@ test('defaults start empty without inheriting keywords or judgment criteria and 
   assert.equal(d.judge, false);
   assert.equal(d.max_items, 100);
 });
-test('input validates numeric boundaries and offline cycle can skip LLM', () => {
-  const c = setup().context,
+test('input validates numeric boundaries and offline cycle can skip LLM', async () => {
+  const c = (await setup()).context,
     valid = { criteria: '', judge: false, learning: 'none', max_items: 5000, threshold: 0.8, review: true };
   assert.equal(c.orchestrationOptions(valid).judge, false);
   assert.equal(c.orchestrationOptions(valid).review, true);
@@ -137,8 +151,8 @@ test('input validates numeric boundaries and offline cycle can skip LLM', () => 
   assert.throws(() => c.orchestrationOptions({ ...valid, judge: true }), /判定の基準/);
   assert.throws(() => c.orchestrationOptions({ ...valid, learning: 'llm' }), /学習方式/);
 });
-test('global counts keep human, AI, deferred and unprocessed categories distinct', () => {
-  const c = setup().context,
+test('global counts keep human, AI, deferred and unprocessed categories distinct', async () => {
+  const c = (await setup()).context,
     counts = c.orchestrationCounts([
       { label: 'keep', label_source: 'human', ipc: 'H01M' },
       { label: 'exclude', label_source: 'agent', fi: 'B01D' },
@@ -164,16 +178,16 @@ test('global counts keep human, AI, deferred and unprocessed categories distinct
     fterm: 1,
   });
 });
-test('interrupted progress is never presented as successful 100 percent', () => {
-  const c = setup().context;
+test('interrupted progress is never presented as successful 100 percent', async () => {
+  const c = (await setup()).context;
   for (const status of ['running', 'paused', 'error', 'review'])
     assert.ok(c.orchestrationPercent(100, status) < 100);
   assert.equal(c.orchestrationPercent(22, 'waiting_csv'), 100);
   assert.equal(c.orchestrationPercent('x', 'running'), 0);
   assert.equal(c.orchestrationPercent(-5, 'running'), 0);
 });
-test('candidate cards distinguish derived IPC and escape untrusted text', () => {
-  const c = setup().context,
+test('candidate cards distinguish derived IPC and escape untrusted text', async () => {
+  const c = (await setup()).context,
     html = c.orchestrationCheckpointHtml({
       type: 'classifications',
       selected_keys: ['IPC:H01M'],
@@ -195,8 +209,8 @@ test('candidate cards distinguish derived IPC and escape untrusted text', () => 
   assert.match(html, /data-orchestration-key="IPC:H01M" checked/);
   assert.match(html, /data-orchestration-key="IPC:A"  disabled/);
 });
-test('checkpoint displays initially selected candidates first without mutating saved order', () => {
-  const s = setup(),
+test('checkpoint displays initially selected candidates first without mutating saved order', async () => {
+  const s = await setup(),
     candidates = [
       { kind: 'IPC', code: 'H01M', title: '電池' },
       { kind: 'IPC', code: 'G05D', title: '車両制御', title_en: 'Vehicle control' },
@@ -218,8 +232,8 @@ test('checkpoint displays initially selected candidates first without mutating s
   assert.match(html, /Vehicle control/);
   assert.match(html, /表示 3 \/ 3 件 · 選択 1 件/);
 });
-test('candidate filtering keeps hidden selections in the review payload and restores all rows', () => {
-  const s = setup();
+test('candidate filtering keeps hidden selections in the review payload and restores all rows', async () => {
+  const s = await setup();
   s.dom['#orchestration-candidate-search'] = { value: 'Ｇ０５Ｄ 1/00' };
   s.dom['#orchestration-candidate-count'] = { textContent: '' };
   s.dom['#orchestration-candidate-empty'] = { hidden: true };
@@ -263,8 +277,8 @@ test('candidate filtering keeps hidden selections in the review payload and rest
   assert.equal(s.dom['#orchestration-candidate-empty'].hidden, true);
   assert.equal(checked[0].checked, true);
 });
-test('progress polls preserve checkpoint search input and hidden filter results', () => {
-  const s = setup();
+test('progress polls preserve checkpoint search input and hidden filter results', async () => {
+  const s = await setup();
   s.context.state.orchestration = {
     id: 'search',
     status: 'review',
@@ -282,8 +296,8 @@ test('workflow hidden state wins over button and candidate display declarations'
   const css = fs.readFileSync('static/style.css', 'utf8');
   assert.match(css, /\[hidden\]\s*\{\s*display\s*:\s*none\s*!important/);
 });
-test('query review sends an intentional empty selection and only checked terms', () => {
-  const s = setup();
+test('query review sends an intentional empty selection and only checked terms', async () => {
+  const s = await setup();
   s.selectors['[data-orchestration-key]'] = [
     { checked: false, dataset: { orchestrationKey: 'IPC:H01M' } },
     { checked: true, disabled: true, dataset: { orchestrationKey: 'IPC:A' } },
@@ -299,8 +313,8 @@ test('query review sends an intentional empty selection and only checked terms',
     exclude_terms: [],
   });
 });
-test('polling preserves inputs and checkpoint DOM selections for the same review', () => {
-  const s = setup();
+test('polling preserves inputs and checkpoint DOM selections for the same review', async () => {
+  const s = await setup();
   s.context.state.orchestration = {
     id: 'one',
     cycle: 1,
@@ -328,8 +342,8 @@ test('polling preserves inputs and checkpoint DOM selections for the same review
   s.context.renderOrchestrationProgress();
   assert.match(s.dom['#orchestration-checkpoint'].innerHTML, /次の検索式を確認/);
 });
-test('current job counts cannot be borrowed from previous LLM training', () => {
-  const s = setup();
+test('current job counts cannot be borrowed from previous LLM training', async () => {
+  const s = await setup();
   s.context.state.orchestration = { id: 'o', status: 'running', stage: 'assess', progress: 30 };
   s.context.state.job = { id: 'job-new', kind: 'orchestration', status: 'running' };
   s.context.state.training = { job_id: 'job-old', mode: 'llm', completed_count: 88, total_count: 100 };
@@ -340,8 +354,8 @@ test('current job counts cannot be borrowed from previous LLM training', () => {
   assert.match(s.dom['#orchestration-stage-progress'].innerHTML, /88 \/ 100/);
   assert.match(s.dom['#orchestration-stage-progress'].innerHTML, /progress/);
 });
-test('review, paused, waiting CSV actions are offered only in their states', () => {
-  const s = setup();
+test('review, paused, waiting CSV actions are offered only in their states', async () => {
+  const s = await setup();
   for (const status of ['idle', 'running', 'review', 'paused', 'error', 'waiting_csv']) {
     s.context.state.orchestration = { status };
     s.context.renderOrchestrationProgress();
@@ -351,7 +365,7 @@ test('review, paused, waiting CSV actions are offered only in their states', () 
   }
 });
 test('duplicate actions are prevented and failure releases the action guard', async () => {
-  const s = setup(),
+  const s = await setup(),
     request = deferred();
   s.context.api = async (path, body) => {
     s.requests.push({ path, body });
@@ -362,10 +376,10 @@ test('duplicate actions are prevented and failure releases the action guard', as
   assert.equal(s.requests.length, 1);
   request.reject(Error('network failed'));
   await assert.rejects(first, /network failed/);
-  assert.equal(s.read('orchestrationStarting'), false);
+  assert.equal(s.context.orchestrationStarting, false);
 });
 test('start waits for classification selection persistence before sending a workflow request', async () => {
-  const s = setup(),
+  const s = await setup(),
     saved = deferred();
   s.context.selectionSave = saved.promise;
   const pending = s.context.startOrchestration();
@@ -378,7 +392,7 @@ test('start waits for classification selection persistence before sending a work
   assert.equal(s.requests.at(-1).path, '/state');
 });
 test('CSV merge mode and FI column stay independent from IPC', () => {
-  const app = fs.readFileSync('static/app.js', 'utf8'),
+  const app = fs.readFileSync('static/query-output.js', 'utf8'),
     classification = fs.readFileSync('static/classification-ui.js', 'utf8');
   assert.match(app, /fi:\s*'FI'/);
   assert.match(app, /\/upload\?merge=/);
@@ -387,8 +401,8 @@ test('CSV merge mode and FI column stay independent from IPC', () => {
   assert.match(classification, /FI：\$\{esc\(p.fi\)\}/);
   assert.match(classification, /Fターム：\$\{esc\(p.fterm\)\}/);
 });
-test('training failures allow mode recovery without changing judgment options', () => {
-  const s = setup();
+test('training failures allow mode recovery without changing judgment options', async () => {
+  const s = await setup();
   s.context.state.orchestration = { status: 'error', stage: 'train' };
   s.context.renderOrchestrationProgress();
   assert.equal(s.dom['#orchestration-learning'].disabled, false);
@@ -403,8 +417,8 @@ test('training failures allow mode recovery without changing judgment options', 
   s.context.state.orchestration.stage = 'assess';
   assert.deepEqual(plain(s.context.orchestrationResumePayload()), {});
 });
-test('classification review remains the current stage after discovery completes', () => {
-  const s = setup();
+test('classification review remains the current stage after discovery completes', async () => {
+  const s = await setup();
   s.context.state.orchestration = {
     status: 'review',
     stage: 'classifications',
@@ -413,8 +427,8 @@ test('classification review remains the current stage after discovery completes'
   s.context.renderOrchestrationProgress();
   assert.match(s.dom['#orchestration-timeline'].innerHTML, /<li class="current" aria-current="step">/);
 });
-test('review identifies selections added in another tab without repainting checkboxes', () => {
-  const s = setup();
+test('review identifies selections added in another tab without repainting checkboxes', async () => {
+  const s = await setup();
   s.dom['#orchestration-additional-selection'] = { textContent: '' };
   s.context.state.selected = ['IPC:H01M', 'IPC:B01D'];
   s.context.state.orchestration = {
@@ -436,16 +450,16 @@ test('review identifies selections added in another tab without repainting check
   assert.match(s.dom['#orchestration-additional-selection'].textContent, /IPC:G05D/);
   assert.equal(s.dom['#orchestration-checkpoint'].innerHTML, 'review selection');
 });
-test('legacy agent deferred judgments are counted without declaring them fresh', () => {
-  const c = setup().context;
+test('legacy agent deferred judgments are counted without declaring them fresh', async () => {
+  const c = (await setup()).context;
   const result = c.orchestrationCounts([
     { label: null, label_source: 'agent', label_reason: '保留', agent_confidence: 0.6 },
   ]);
   assert.equal(result.deferred, 1);
   assert.equal(result.pending, 0);
 });
-test('cleared AI judgments and invalid saved confidence remain unprocessed even with an old decision', () => {
-  const c = setup().context,
+test('cleared AI judgments and invalid saved confidence remain unprocessed even with an old decision', async () => {
+  const c = (await setup()).context,
     old = {
       label: null,
       llm_decision: 'keep',
@@ -476,10 +490,38 @@ test('cleared AI judgments and invalid saved confidence remain unprocessed even 
   assert.equal(boundaries.exclude, 1);
   assert.equal(boundaries.pending, 0);
 });
-test('discovery separates derived IPC candidates from assigned IPC and search hypotheses', () => {
-  const s = setup();
+test('discovery separates derived IPC candidates from assigned IPC and search hypotheses', async () => {
+  const s = await setup();
   s.context.state.discovery = { plan: { facets: [] } };
-  vm.runInContext(fs.readFileSync('static/discovery-ui.js', 'utf8'), s.context);
+  await loadModule(s.context, 'discovery-ui.js', [
+    'discoveryItems',
+    'discoveryPlanChanged',
+    'discoveryLlmProposalHtml',
+    'discoveryHasEvidence',
+    'discoveryCandidateHtml',
+    'discoveryTitle',
+    'discoveryBilingualHtml',
+    'discoveryEvidenceType',
+    'discoveryEvidenceLabel',
+    'discoveryFilteredItems',
+    'discoveryComparisonHtml',
+    'discoveryComparisonBodyHtml',
+    'discoveryInspectorHtml',
+    'discoveryMapHtml',
+    'renderDiscoveryMap',
+    'discoveryPointInPolygon',
+    'applyDiscoveryLasso',
+    'toggleDiscoveryPicked',
+    'updateDiscoveryPickedDisplay',
+    'discoveryQueryHtml',
+    'discoveryResultsHtml',
+    'discoveryHistoryHtml',
+    'renderDiscovery',
+    'updateDiscoveryControls',
+    'requestDiscovery',
+    'discoveryLimits',
+    'adoptDiscoveryClasses',
+  ]);
   const item = {
     key: 'IPC:G05D',
     kind: 'IPC',
@@ -510,7 +552,7 @@ test('discovery separates derived IPC candidates from assigned IPC and search hy
   assert.match(html, /対応元を確認/);
   assert.ok(!html.includes('<script>'));
   assert.match(html, /&lt;script&gt;/);
-  s.read("discoveryCompare.source='derived'");
+  s.context.discoveryCompare.source = 'derived';
   assert.equal(
     s.context.discoveryFilteredItems([item, { ...item, key: 'IPC:A', evidence_status: 'hypothesis' }]).length,
     1
