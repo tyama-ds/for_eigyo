@@ -1,10 +1,10 @@
-# Patent Atlas 設計の正本（Phase 7）
+# Patent Atlas 設計の正本（Phase 10）
 
 - 棚卸し日: 2026-11-05、画面更新: 2026-11-06
 - 対象: `tyama-ds/for_eigyo` の `patent-atlas/`、Phase 1完了時点 `87e87e8` の棚卸しをPhase 4の画面とPhase 3cのバックエンドに合わせて更新
 - 状態: **現状と目標を区別する。6項目の目標とPhase 3での扱いは利用者が確定済み。**
 - 6項目の判断者: 利用者（本会話）　確定日: 2026-11-05
-- Phase 3a（共通ヘルパー）、3b（Workspace）、3c（明示的なサービス注入・依存の整理・公開状態キャッシュ・統括の部分復元）を実装済み。APIの入出力、設定値、保存形式・保存データ、既存文書の配置を維持。Phase 4で導線を一本化し、Phase 5で表示を維持してCSSを共通化し、Phase 6でフロントをネイティブESモジュール・共通描画へ移行した。Phase 7で `app.py` を起動・ミドルウェア・ルート登録・薄いハンドラだけにし、中核処理を用途別モジュールへ移して公開状態キャッシュを明示的な無効化に切り替えた。
+- Phase 3a（共通ヘルパー）、3b（Workspace）、3c（明示的なサービス注入・依存の整理・公開状態キャッシュ・統括の部分復元）を実装済み。APIの入出力、設定値、保存形式・保存データ、既存文書の配置を維持。Phase 4で導線を一本化し、Phase 5で表示を維持してCSSを共通化し、Phase 6でフロントをネイティブESモジュール・共通描画へ移行した。Phase 7で `app.py` を起動・ミドルウェア・ルート登録・薄いハンドラだけにし、中核処理を用途別モジュールへ移して公開状態キャッシュを明示的な無効化に切り替えた。Phase 8でCSSトークンを単一 `:root` の38個に集約し、Phase 9で見出しを機能名にしてテンプレートを部品関数へ分割、Phase 10で検索式の採点と共起グラフ（1.9）を追加し、文書を README / ARCHITECTURE / CHANGELOG / docs に整理した（第4節）。
 
 ## 1. 現状
 
@@ -12,7 +12,7 @@
 
 ### 1.1 実行構造と状態の置き場所
 
-CSSのトークンは `static/atlas-theme.css` の単一 `:root` が正本で、明色のみを定義する。`style.css` はリセット・配置・共通部品（button/pill/caption/notice/empty-state）と共通の非表示規則を持つ。色の宣言はトークンを参照し、画面固有の配置は各機能CSSに残す。動作停止とOSのreduced-motionは `atlas-motion.css` を正本とする。空状態は `.empty-state` に統一し、`data-empty` の変数で従来のホストごとの寸法・色を保つ。詳細と比較画像は [Phase 5検証記録](docs/PHASE5_REVIEW.md) を参照。
+CSSのトークンは `static/atlas-theme.css` の単一 `:root` が正本で、明色のみを定義する。`style.css` はリセット・配置・共通部品（button/pill/caption/notice/empty-state）と共通の非表示規則を持つ。色の宣言はトークンを参照し、画面固有の配置は各機能CSSに残す。動作停止とOSのreduced-motionは `atlas-motion.css` を正本とする。空状態は `.empty-state` に統一し、`data-empty` の変数で従来のホストごとの寸法・色を保つ。経緯は [CHANGELOG.md](CHANGELOG.md) のPhase 5・Phase 8の記録を参照。
 
 FastAPIを起点とするローカル単一ユーザーアプリで、HTML/CSS/JavaScriptを同じサーバーから配信する。UIは `static/main.js` を単一のmoduleスクリプトとして読み込み、相対importで29モジュールを読み込む。CDN・バンドラーは使わない。`static/core.js:api` が `/api` を付けてHTTP呼び出しを行い、公開応答の参照は `getState()`、置換は `setState(next)`、行の同一性を保つ更新は `patchRows(rows)` に集約する。
 
@@ -253,12 +253,23 @@ Phase 7で署名（SHA-256）による変更検出を廃止し、明示的な無
 
 `tests/test_public_state_cache.py` と `tests/test_service_dependencies.py` の21件で、応答bytesの互換、キャッシュ再利用・無効化・参照の分離、登録時の非変更、load復旧、別Workspaceへの分離、分類根拠/依存、統括の部分復元を隔離データで検証する。Phase 3cの全テストはPython 542件（541成功・既存任意1スキップ）、JavaScript 304件成功。Phase 7ではPython 543件（542成功・既存任意1スキップ、`test_app.py` にキャッシュ再利用と判定変更後の再投影の1件を追加）、JavaScript 327件成功。テストの削除・新規スキップはなく、変更は直接書換え後の取得に `invalidate_public_state()` を加えた上記3ファイルの5箇所だけである。
 
+### 1.9 検索式の採点と共起グラフ（Phase 10）
+
+`query_scoring.py` と `term_graph.py` は純粋なエンジンで、Workspace・設定・ロック・LLMに触れず、引数の特許行と検索式dictだけから結果を返す。呼び出すのは `query_service.refinement_options`（`GET /api/refinement` の `graph` / `score`）と `query_service.refinement_score`（`POST /api/refinement/score`）だけで、どちらも読み取り専用で `ws.state` を変更しない。
+
+| モジュール | 責務 | 主な関数 |
+|---|---|---|
+| [query_scoring.py](query_scoring.py) | 保存済み検索式の論理木（`query_formats.build_tree`）を取込済みの行に対して評価し、必要の捕捉・不要の混入・未判定の一致を数える。分類はIPC/CPCの上位記号が下位を含む、F-termは前方一致、FIは基底一致で照合し、不正な分類欄は補修せず読み飛ばす | `row_codes`, `evaluate`, `with_terms`（追加語をAND、除外語をNOTで木に加える）, `score_tree`, `score_query`, `compare` |
+| [term_graph.py](term_graph.py) | タイトル＋要約の語（`CountVectorizer`、二値、最大16,000語）、公報IPCの主グループ、公報と人の判定からなる共起グラフ。必要側に偏る追加語・不要側だけの除外語を根拠経路（必要行で最も共起するIPC主グループ・例の公報ID）付きで返し、必要行の集合が強く重なる語の組（Jaccard 0.6以上、共有2件以上）をOR群の仮説にする。各候補には `score_tree` による見込み件数を付ける | `TermGraph.suggest` / `evidence` / `class_terms`, `graph_suggestions` |
+
+採点は取込済みCSVと人の判定に対する再計算であり、検索母集団の再現率・適合率ではない。予測ラベルは判定として数えない。代替表現の候補は同義語辞書ではなく、採否は利用者が改善画面で選ぶ。既存の必要特許保護（必要特許に出現する語のNOT拒否）は `query_service._checked_terms` が従来どおり行う。
+
 ### Phase 6：フロントの責務
 
 - `app.js` は初期化とタブ・段階の切替のみ。共有する画面セッションは `ui-session.js`、パネルの描画・操作は分類、検索式、地図、改善、調査ワークベンチ、ラボ、統括、判断エージェント、設定の各モジュールが持つ。各パネルは `render(host, snapshot)` を公開する。入力・詳細の再描画が必要な内部操作は各モジュール内に残す。
 - 各ファイルは利用する関数・状態をimportする。任意モジュールの存在を調べるtypeofガードはなく、ロード失敗は隠さない。通信データの型検証、ResizeObserverなどブラウザー機能の対応判定は別の責務として残す。
 - `core.replaceHtml` は署名で同一HTMLを判別し、未保存入力、利用者が変更したdetailsの開閉、スクロール、フォーカスを保持する。初期状態のdetailsは新しいモードの既定値に従う。子パネルの後続マウントにも退避情報を引き継ぎ、計画・式例の識別子が変わった入力は復元しない。イベントは `listen` / `on` で登録箇所ごとに更新し、再描画で多重実行しない。
-- 分類キー・表示名、エスケープ、判定ラベル、ツールチップ配置、debounceはcoreに集約。囲み選択は `lasso.js` の1実装を使い、分類/ラボの座標・選択先だけを渡す。分類名の優先順位と副次修正は [Phase 6検証記録](docs/PHASE6_REVIEW.md) に記す。
+- 分類キー・表示名、エスケープ、判定ラベル、ツールチップ配置、debounceはcoreに集約。囲み選択は `lasso.js` の1実装を使い、分類/ラボの座標・選択先だけを渡す。分類名の優先順位と副次修正は [CHANGELOG.md](CHANGELOG.md) のPhase 6の記録に記す。
 - テストはjsdomと実ESモジュールのimportを使う。HTTP・時計・他パネルの境界は明示的なモック、描画状態はDOMで確認する。`node:vm` と関数宣言位置からのソース切り出しは使わない。ブラウザーのモジュール全体はPlaywrightでも確認する。開発用依存の導入は `npm ci`。アプリの起動・配信にNodeやnpmは不要。
 
 ## 2. 目標モデル（確定方針と詳細設計の下書き）
@@ -356,15 +367,21 @@ Phase 3bでは `to_dict()` を保存形式のシリアライズ元、`Workspace.
 - `to_dict()` と実ファイル保存の責務、秘密設定の保存範囲: Phase 3bの現行契約は1.7・2.4。保存スキーマを将来変更する場合の移行方針は別途検討。
 - 目標モデルの承認範囲・後続フェーズの対象: ____________________
 
-## 4. 既存Markdownの整理案（移動・統合は未実施）
+## 4. Markdownの整理（実施済み）
 
-この追加前のアプリ直下にはMarkdownが11本ある。既存の内容を削除せず、設計・操作説明・過去の実施記録を分ける案とする。
+Phase 2で起案した整理案をPhase 10で実施した。アプリ直下のMarkdownは README / ARCHITECTURE / CHANGELOG の3本、操作ガイドと設計根拠は `docs/` に置く。
 
-| 現在の文書 | 整理案 |
+| 文書 | 内容 |
 |---|---|
-| [AUDIT.md](AUDIT.md)、[WORKFLOW_AUDIT.md](WORKFLOW_AUDIT.md)、[ELEMENT_CLASSIFICATION_AUDIT.md](ELEMENT_CLASSIFICATION_AUDIT.md)、[USABILITY_IMPROVEMENTS.md](USABILITY_IMPROVEMENTS.md)、[PROMPT_RESEARCH.md](PROMPT_RESEARCH.md) | `CHANGELOG.md` 相当の1本へ時系列で統合する。各記録の元文書名、日付、検証条件、出典リンク、制約・未解決事項を保持する。プロンプト調査の根拠も単なる「修正済み」の一行へ潰さない |
-| [CLASSIFICATION_GUIDE.md](CLASSIFICATION_GUIDE.md)、[DISCOVERY_GUIDE.md](DISCOVERY_GUIDE.md)、[ORCHESTRATION_GUIDE.md](ORCHESTRATION_GUIDE.md)、[RESEARCH_WORKBENCH_GUIDE.md](RESEARCH_WORKBENCH_GUIDE.md)、[INVENTION_SEARCH_GUIDE.md](INVENTION_SEARCH_GUIDE.md) | `docs/` へ移し、操作ガイドとして維持する。モードの採否が決まってから重複説明を整理する |
-| [README.md](README.md) | 起動・依存・主要導線への入口として残し、承認済み設計と `docs/` へ案内する |
-| `ARCHITECTURE.md`（本書） | 現状の棚卸し、承認した設計、未決事項を区別して維持する。過去の監査結果を現行仕様として上書き転記しない |
+| [README.md](README.md) | 概要、起動、画面の流れ（5段階・補助機能・開始方法）、採点と候補、設定、CSV、LLM接続、学習方式、検索サービス別の出力、保存と構成、検証、分類の出典 |
+| `ARCHITECTURE.md`（本書） | 現状の棚卸し、承認した設計、未決事項。過去の監査結果を現行仕様として上書き転記しない |
+| [CHANGELOG.md](CHANGELOG.md) | 旧 `AUDIT.md`、`WORKFLOW_AUDIT.md`、`ELEMENT_CLASSIFICATION_AUDIT.md`、`USABILITY_IMPROVEMENTS.md`、`docs/PHASE4_REVIEW.md`、`docs/PHASE5_REVIEW.md`、`docs/PHASE6_REVIEW.md` を新しい順に統合し、Phase 7〜9と採点・共起グラフ、日次自動改善の停止決定を追加。各記録は日付 / 変更 / 根拠 / 検証範囲 / 未解決で書く |
+| [docs/CLASSIFICATION_GUIDE.md](docs/CLASSIFICATION_GUIDE.md) | 分類コンステレーションの操作と収録範囲 |
+| [docs/RESEARCH_WORKBENCH_GUIDE.md](docs/RESEARCH_WORKBENCH_GUIDE.md) | 開始方法、観点から作る、過去の式から作る、地図・採用 |
+| [docs/INVENTION_SEARCH_GUIDE.md](docs/INVENTION_SEARCH_GUIDE.md) | 発明要素からの検索 |
+| [docs/DISCOVERY_GUIDE.md](docs/DISCOVERY_GUIDE.md) | 探索ラボ |
+| [docs/ORCHESTRATION_GUIDE.md](docs/ORCHESTRATION_GUIDE.md) | 統括モード、収束グラフと保留の確認、API |
+| [docs/PROMPT_RESEARCH.md](docs/PROMPT_RESEARCH.md) | 検索戦略プロンプトの設計と研究根拠 |
+| [tests/README.md](tests/README.md)、`resources/*/README.md` | テスト環境、分類データの取得元と再生成手順 |
 
-統合時には日付不明の記録を推定日で確定せず、過去記録内のACTIVE等を現在の運用状態と混同しない。移動後の相対リンクも更新対象となる。**Phase 2では本書のみを追加した。Phase 3a・3bでも上表の文書の移動・統合・削除は行わない。**
+統合時に日付不明の記録を推定日で確定せず、過去記録内のACTIVE等を現在の運用状態と混同しない。旧文書の画面比較用画像（`docs/screenshots/phase4`〜`phase6`）は削除し、`phase8`・`phase9` を残す。操作ガイド内の旧UIの呼称（Step番号、入口カード、「対話で探索」、「表示・接続設定」）は現在の段階名・ピル名に置き換えた。モードの採否（第3節）が決まってからの重複説明の整理は未実施。
