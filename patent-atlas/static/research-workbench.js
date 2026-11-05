@@ -1,9 +1,57 @@
-'use strict';
+import {
+  classificationTitle,
+  replaceHtml,
+  listen,
+  getState,
+  $,
+  $$,
+  esc,
+  on,
+  busy,
+  api,
+  setState,
+  toast,
+} from './core.js';
+import {
+  captureInventionDraft,
+  inventionWorkbenchState,
+  invalidateInventionPreview,
+  inventionWorkbenchHtml,
+  inventionShowError,
+  bindInventionWorkbench,
+} from './invention-workbench.js';
+import {
+  researchDraftScheduleSave,
+  researchDraftFlush,
+  researchDraftRebase,
+} from './research-draft-store.js';
+import {
+  researchProgressIsRunning,
+  researchProgressStart,
+  researchProgressFinish,
+} from './research-progress.js';
+import {
+  applyResearchInputMethod,
+  prepareResearchFlow,
+  researchGuidanceState,
+  researchOpenTool,
+  mountResearchGuidance,
+} from './research-guidance.js';
+import { queryLibraryTreeHtml, queryLibraryHtml, bindQueryLibrary } from './query-library-ui.js';
+import { setTab, setStep } from './app.js';
+import { appState } from './ui-session.js';
+import { uploadFile } from './query-output.js';
+import { updateChrome } from './workspace-chrome.js';
+
+export const researchWorkbenchState = {
+  researchDraft: null,
+  researchPlanDraft: null,
+  researchImportPending: false,
+  researchPlanning: false,
+};
+
 /* Four entry paths use one existing workspace and preserve connection/output settings. */
-let researchDraft = null,
-  researchPlanDraft = null,
-  researchImportPending = false,
-  researchPlanning = false;
+
 const researchEntries = [
   ['target', '01', 'ターゲットから作る', '特許の分類と技術要素を出発点に、周辺へ広げる。'],
   ['discover', '02', 'ターゲットを探す', '漠然とした説明を観点に分け、最初の特許を見つける。'],
@@ -12,13 +60,13 @@ const researchEntries = [
 ];
 function researchBrief() {
   return (
-    researchDraft ||
-    (researchDraft = structuredClone(
-      state.research_workbench?.brief || {
+    researchWorkbenchState.researchDraft ||
+    (researchWorkbenchState.researchDraft = structuredClone(
+      getState().research_workbench?.brief || {
         entry_mode: 'target',
         purpose: '',
         goal: '',
-        keywords: state.keywords || '',
+        keywords: getState().keywords || '',
         user_aspects: [],
         target_ids: [],
       }
@@ -26,7 +74,7 @@ function researchBrief() {
   );
 }
 function captureResearchDraft() {
-  if (typeof captureInventionDraft === 'function') captureInventionDraft();
+  captureInventionDraft();
   const brief = researchBrief();
   for (const [field, id] of [
     ['purpose', 'research-purpose'],
@@ -37,12 +85,14 @@ function captureResearchDraft() {
   if ($('#research-target-options'))
     brief.target_ids = $$('.research-target input:checked').map((el) => el.value);
   captureResearchPlan();
-  if (typeof researchDraftScheduleSave === 'function') researchDraftScheduleSave();
+  researchDraftScheduleSave();
 }
 function captureResearchPlan() {
-  if (!$('#research-concepts') || !researchPlanDraft) return;
-  researchPlanDraft.concepts = $$('.research-concept').map((el) => {
-    const previous = researchPlanDraft.concepts.find((c) => c.id === el.dataset.concept);
+  if (!$('#research-concepts') || !researchWorkbenchState.researchPlanDraft) return;
+  researchWorkbenchState.researchPlanDraft.concepts = $$('.research-concept').map((el) => {
+    const previous = researchWorkbenchState.researchPlanDraft.concepts.find(
+      (c) => c.id === el.dataset.concept
+    );
     return {
       ...previous,
       id: el.dataset.concept,
@@ -55,15 +105,17 @@ function captureResearchPlan() {
         .filter(Boolean),
     };
   });
-  researchPlanDraft.classification_keys = $$('.research-class input:checked').map((el) => el.value);
-  researchPlanDraft.acknowledge_unmapped = $('#research-unmapped-ack')?.checked || false;
-  if (typeof researchDraftScheduleSave === 'function') researchDraftScheduleSave();
+  researchWorkbenchState.researchPlanDraft.classification_keys = $$('.research-class input:checked').map(
+    (el) => el.value
+  );
+  researchWorkbenchState.researchPlanDraft.acknowledge_unmapped = $('#research-unmapped-ack')?.checked;
+  researchDraftScheduleSave();
 }
 function researchPlanningActive() {
   return (
-    researchPlanning ||
-    (typeof inventionPlanning !== 'undefined' && inventionPlanning) ||
-    (typeof researchProgressIsRunning === 'function' && researchProgressIsRunning())
+    researchWorkbenchState.researchPlanning ||
+    inventionWorkbenchState.inventionPlanning ||
+    researchProgressIsRunning()
   );
 }
 function syncResearchPlanningControls() {
@@ -71,12 +123,12 @@ function syncResearchPlanningControls() {
     const button = $('#' + id);
     if (button) button.disabled = researchPlanningActive();
   }
-  if (typeof applyResearchInputMethod === 'function') applyResearchInputMethod();
+  applyResearchInputMethod();
 }
 function researchPlanState(plan) {
   if (!plan) return null;
-  if (researchPlanDraft?.id !== plan.id)
-    researchPlanDraft = {
+  if (researchWorkbenchState.researchPlanDraft?.id !== plan.id)
+    researchWorkbenchState.researchPlanDraft = {
       id: plan.id,
       concepts: plan.concepts.map((c) => ({
         ...c,
@@ -88,7 +140,7 @@ function researchPlanState(plan) {
       classification_keys: [],
       preview: null,
     };
-  return researchPlanDraft;
+  return researchWorkbenchState.researchPlanDraft;
 }
 function researchOwnGroup(concept, plan) {
   const reserved = new Set(plan.concepts.map((c) => c.or_group).filter(Boolean));
@@ -99,7 +151,7 @@ function researchOwnGroup(concept, plan) {
 function researchConceptGroupLocked(concept, plan) {
   if (concept.locked_and || concept.role === 'exclude') return true;
   // Older saved plans predate locked_and. Preserve a user's explicit must-have aspect.
-  return (plan.brief?.user_aspects || state.research_workbench?.brief?.user_aspects || []).some(
+  return (plan.brief?.user_aspects || getState().research_workbench?.brief?.user_aspects || []).some(
     (aspect) =>
       /^(必須|required)\s*[:：]/i.test(aspect) &&
       (aspect === concept.name || aspect.replace(/^(必須|required)\s*[:：]\s*/i, '') === concept.name)
@@ -161,17 +213,17 @@ function researchLogicHtml(plan, draft) {
   return `<div class="research-logic-heading"><b>現在の語句の組合せ</b><span>同じ条件に入れるとOR、別の条件にするとAND</span></div><div class="research-logic-equation">${groupHtml || '<p class="caption">含める観点を選ぶと、組合せを確認できます。</p>'}</div>${excluded.length ? `<div class="research-logic-exclude"><b>NOT · 除外</b>${excluded.map(termsHtml).join('<b class="research-logic-or">OR</b>')}</div>` : ''}${draft.classification_keys.length ? '<p class="caption">選択した分類の和集合を、この語句の式にANDで加えます。</p>' : ''}`;
 }
 function refreshResearchLogic() {
-  const plan = state.research_workbench?.plan,
-    draft = researchPlanDraft;
+  const plan = getState().research_workbench?.plan,
+    draft = researchWorkbenchState.researchPlanDraft;
   if (!plan || !draft) return;
   const host = $('#research-logic');
-  if (host) host.innerHTML = researchLogicHtml(plan, draft);
+  if (host) replaceHtml(host, researchLogicHtml(plan, draft));
   for (const element of $$('.research-concept')) {
     const current = draft.concepts.find((c) => c.id === element.dataset.concept),
       source = plan.concepts.find((c) => c.id === element.dataset.concept),
       select = $('select[data-or-group]', element);
     if (select) {
-      select.innerHTML = researchGroupOptions(plan, draft, current);
+      replaceHtml(select, researchGroupOptions(plan, draft, current));
       select.disabled = researchConceptGroupLocked(source, plan) || current.role === 'exclude';
     }
     const help = $('.research-group-help', element);
@@ -187,8 +239,8 @@ function refreshResearchLogic() {
 }
 function researchTargetOptions() {
   const ids = new Set(researchBrief().target_ids),
-    references = new Map((state.research_workbench?.target_patents || []).map((p) => [p.id, p]));
-  for (const p of state.patents) {
+    references = new Map((getState().research_workbench?.target_patents || []).map((p) => [p.id, p]));
+  for (const p of getState().patents) {
     const old = references.get(p.id) || {},
       merged = { ...p };
     for (const field of ['title', 'abstract', 'ipc', 'fi', 'fterm', 'cpc'])
@@ -234,35 +286,35 @@ function researchPlanHtml(plan) {
      const tag = researchClassificationProvenance(c),
        hypothesis = tag.includes('仮説'),
        origins = c.origins || [];
-     return `<label class="research-class ${hypothesis ? 'hypothesis' : ''}"><input type="checkbox" value="${esc(c.key)}" ${selected.has(c.key) ? 'checked' : ''} ${c.selectable ? '' : 'disabled'}><span><small>${tag} · ${c.verified ? '分類表に存在' : '存在未確認'}</small><b>${esc(c.kind)} ${esc(c.code)}</b><span>${esc(c.title_short_ja || c.title_ja || c.title)}</span><small>${esc(c.reason || '')}${origins.map((o) => (o.patent_id ? ' / ' + esc(o.patent_id) : '')).join('')}</small></span></label>`;
+     return `<label class="research-class ${hypothesis ? 'hypothesis' : ''}"><input type="checkbox" value="${esc(c.key)}" ${selected.has(c.key) ? 'checked' : ''} ${c.selectable ? '' : 'disabled'}><span><small>${tag} · ${c.verified ? '分類表に存在' : '存在未確認'}</small><b>${esc(c.kind)} ${esc(c.code)}</b><span>${esc(classificationTitle(c))}</span><small>${esc(c.reason || '')}${origins.map((o) => (o.patent_id ? ' / ' + esc(o.patent_id) : '')).join('')}</small></span></label>`;
    })
    .join('')}</div></details>
  ${[...(plan.questions || []), ...(plan.classification_notes || [])].length ? `<details class="research-notes"><summary>確認する点・根拠の限界</summary><ul>${[...(plan.questions || []), ...(plan.classification_notes || [])].map((t) => `<li>${esc(t)}</li>`).join('')}</ul></details>` : ''}
  <div class="button-row"><button class="button primary" id="research-preview">検索条件をプレビュー →</button></div><div id="research-query-preview" aria-live="polite">${researchPreviewHtml()}</div>`;
 }
 function researchPreviewHtml() {
-  const p = researchPlanDraft?.preview;
+  const p = researchWorkbenchState.researchPlanDraft?.preview;
   return p
     ? `<div class="research-preview"><h3>今回の検索条件</h3>${queryLibraryTreeHtml(p.query.boolean_tree)}<pre class="expression">${esc(p.expression)}</pre><p class="caption">採用後、保存済みの検索サービス形式で出力します。分類が未確認の場合は出力画面で確認できます。</p><button class="button primary" id="research-apply">この条件で検索式を作成 →</button></div>`
     : '';
 }
 function invalidateResearchPreview() {
-  if (researchPlanDraft) researchPlanDraft.preview = null;
-  if ($('#research-query-preview')) $('#research-query-preview').innerHTML = '';
+  if (researchWorkbenchState.researchPlanDraft) researchWorkbenchState.researchPlanDraft.preview = null;
+  if ($('#research-query-preview')) replaceHtml($('#research-query-preview'), '');
   const notice = $('#research-stale-plan');
-  if (notice) notice.hidden = !(state.research_workbench?.plan && researchBriefChanged());
-  if (typeof invalidateInventionPreview === 'function') invalidateInventionPreview();
+  if (notice) notice.hidden = !(getState().research_workbench?.plan && researchBriefChanged());
+  invalidateInventionPreview();
 }
 function researchPlanPayload() {
   captureResearchDraft();
   if (researchBriefChanged())
     throw new Error('入力条件が観点案の作成後に変わっています。観点をもう一度起案してください。');
   captureResearchPlan();
-  const plan = state.research_workbench.plan;
+  const plan = getState().research_workbench.plan;
   return {
-    revision: state.research_workbench.revision,
-    plan_id: researchPlanDraft.id,
-    concepts: researchPlanDraft.concepts
+    revision: getState().research_workbench.revision,
+    plan_id: researchWorkbenchState.researchPlanDraft.id,
+    concepts: researchWorkbenchState.researchPlanDraft.concepts
       .filter((c) => c.selected)
       .map(({ id, role, terms, or_group }) => ({
         id,
@@ -277,8 +329,8 @@ function researchPlanPayload() {
             ? ''
             : or_group,
       })),
-    classification_keys: researchPlanDraft.classification_keys,
-    acknowledge_unmapped: researchPlanDraft.acknowledge_unmapped,
+    classification_keys: researchWorkbenchState.researchPlanDraft.classification_keys,
+    acknowledge_unmapped: researchWorkbenchState.researchPlanDraft.acknowledge_unmapped,
   };
 }
 function researchToolsHtml() {
@@ -299,19 +351,18 @@ function researchBriefHtml(brief, mode, concepts = false) {
  <details class="research-targets" ${mode === 'target' ? 'open' : ''}><summary>ターゲット特許を指定 · ${brief.target_ids.length} 件</summary><p class="caption">名称・要約と、取り込んだIPC / FI / Fターム / CPCを参照します。最大20件。FIのIPC部・Fタームの対応候補は根拠を区別します。</p><div class="button-row"><button class="button small" id="research-upload">CSVを追加</button><button class="button small" id="research-target-add">特許情報を入力</button></div><input id="research-csv-file" type="file" accept=".csv,.tsv" hidden><input id="research-target-filter" type="search" placeholder="番号・名称で候補を絞る" aria-label="ターゲット候補を検索"><div id="research-target-options">${researchTargetOptions()}</div>${mode === 'discover' ? '<button class="button small" id="research-promote">選んだ特許から作る →</button>' : ''}</details>
  ${concepts ? `<div class="research-plan-actions"><button class="button primary" id="research-plan-llm">LLMで観点・広げ方を起案 ↗</button><button class="button" id="research-plan-local">入力をそのまま整理</button><p class="caption">LLMには目的・観点と、選択した特許の名称・要約・分類を送ります。保存済みの接続設定を使います。「入力を整理」は通信しません。</p></div>` : ''}<div id="research-error" role="alert"></div></div></div>`;
 }
-function renderResearchWorkbench(stage) {
-  const host = $('#research-workbench');
+function renderResearchWorkbench(stage, host = $('#research-workbench'), snapshot = getState()) {
   if (!host) return;
-  stage = typeof prepareResearchFlow === 'function' ? prepareResearchFlow(stage) : stage || 'input';
-  const wb = state.research_workbench || {},
+  stage = prepareResearchFlow(stage);
+  const wb = snapshot.research_workbench || {},
     brief = researchBrief(),
     mode = brief.entry_mode;
-  const editor = typeof researchFlowEditor === 'undefined' ? 'invention' : researchFlowEditor;
-  const method = typeof researchFlowInputMethod === 'undefined' ? 'manual' : researchFlowInputMethod;
+  const editor = researchGuidanceState.researchFlowEditor;
+  const method = researchGuidanceState.researchFlowInputMethod;
   const modes = `<fieldset class="research-modes"><legend>調査の開始方法</legend>${researchEntries.map(([id, n, title, description]) => `<label title="${esc(description)}"><input type="radio" name="research-mode" data-research-mode="${id}" value="${id}" ${mode === id ? 'checked' : ''}><span>${title}</span></label>`).join('')}</fieldset>`;
   const resume =
-    state.queries.length || state.patents.length
-      ? `<aside class="research-resume"><div><b>保存した調査から再開</b><span>${state.queries.length} 件の検索式 · ${state.patents.length} 件の特許</span></div><div class="button-row">${state.queries.length ? '<button type="button" class="button small" data-research-resume="query">保存済みの式を開く</button>' : ''}${state.patents.length ? '<button type="button" class="button small" data-research-resume="review">取り込み済み特許を確認</button>' : ''}</div></aside>`
+    getState().queries.length || getState().patents.length
+      ? `<aside class="research-resume"><div><b>保存した調査から再開</b><span>${getState().queries.length} 件の検索式 · ${getState().patents.length} 件の特許</span></div><div class="button-row">${getState().queries.length ? '<button type="button" class="button small" data-research-resume="query">保存済みの式を開く</button>' : ''}${getState().patents.length ? '<button type="button" class="button small" data-research-resume="review">取り込み済み特許を確認</button>' : ''}</div></aside>`
       : '';
   let content;
   const showLibrary = mode === 'examples' && (stage === 'input' || editor === 'library');
@@ -323,54 +374,67 @@ function renderResearchWorkbench(stage) {
       `<div class="panel research-plan"><div id="research-stale-plan" class="notice" role="status" ${wb.plan && researchBriefChanged() ? '' : 'hidden'}>表示している内容は前回の案です。入力条件が変わったため、観点をもう一度起案してからプレビュー・採用してください。</div>${researchPlanHtml(wb.plan)}</div>`;
   else
     content =
-      (stage === 'input' ? researchBriefHtml(brief, mode) : '') +
-      (typeof inventionWorkbenchHtml === 'function' ? inventionWorkbenchHtml(stage, method) : '');
-  host.innerHTML = `${stage === 'input' ? '<div class="research-heading"><h2>今回の調査は、どこから始めますか。</h2></div>' + modes + resume : ''}${content}`;
+      (stage === 'input' ? researchBriefHtml(brief, mode) : '') + inventionWorkbenchHtml(stage, method);
+  replaceHtml(
+    host,
+    `${stage === 'input' ? '<div class="research-heading"><h2>今回の調査は、どこから始めますか。</h2></div>' + modes + resume : ''}${content}`
+  );
   if (host.dataset) host.dataset.flowStage = stage;
   $$('.research-brief input,.research-brief textarea').forEach((el) => {
     if (el.id === 'research-target-filter') return;
-    el.addEventListener('input', () => {
-      if (typeof inventionShowError === 'function') inventionShowError('');
-      captureResearchDraft();
-      invalidateResearchPreview();
-    });
+    listen(
+      el,
+      'input',
+      () => {
+        inventionShowError('');
+        captureResearchDraft();
+        invalidateResearchPreview();
+      },
+      undefined,
+      'research-workbench.js:1'
+    );
   });
   $$('[data-research-mode]').forEach((el) =>
-    el.addEventListener('click', () => {
-      captureResearchDraft();
-      researchDraft.entry_mode = el.dataset.researchMode;
-      if (typeof researchFlowEditor !== 'undefined')
-        researchFlowEditor = researchDraft.entry_mode === 'examples' ? 'library' : 'invention';
-      if (typeof researchFlowStage !== 'undefined') researchFlowStage = 'input';
-      invalidateResearchPreview();
-      if (typeof researchDraftScheduleSave === 'function') researchDraftScheduleSave();
-      renderResearchWorkbench();
-    })
+    listen(
+      el,
+      'click',
+      () => {
+        captureResearchDraft();
+        researchWorkbenchState.researchDraft.entry_mode = el.dataset.researchMode;
+        researchGuidanceState.researchFlowEditor =
+          researchWorkbenchState.researchDraft.entry_mode === 'examples' ? 'library' : 'invention';
+        researchGuidanceState.researchFlowStage = 'input';
+        invalidateResearchPreview();
+        researchDraftScheduleSave();
+        renderResearchWorkbench();
+      },
+      undefined,
+      'research-workbench.js:2'
+    )
   );
   $$('[data-open-tab]').forEach((el) =>
-    el.addEventListener('click', () => {
-      if (typeof researchOpenTool === 'function')
+    listen(
+      el,
+      'click',
+      () => {
         researchOpenTool(el.dataset.openTab, el.dataset.openStep, el.dataset.openEditor);
-      else {
-        setTab(el.dataset.openTab);
-        if (el.dataset.openTab === 'explore') setStep(Number(el.dataset.openStep));
-      }
-    })
+      },
+      undefined,
+      'research-workbench.js:3'
+    )
   );
   if (showLibrary) {
     bindQueryLibrary();
-    if (typeof mountResearchGuidance === 'function') mountResearchGuidance();
-    else if (typeof renderResearchFlowHeader === 'function') renderResearchFlowHeader();
+    mountResearchGuidance();
     return;
   }
   if (mode === 'tools' && stage === 'input') {
-    if (typeof mountResearchGuidance === 'function') mountResearchGuidance();
-    else if (typeof renderResearchFlowHeader === 'function') renderResearchFlowHeader();
+    mountResearchGuidance();
     return;
   }
   on('#research-aspects-open', 'click', () => {
     captureResearchDraft();
-    $('#research-aspects-text').value = researchDraft.user_aspects.join('\n');
+    $('#research-aspects-text').value = researchWorkbenchState.researchDraft.user_aspects.join('\n');
     $('#research-aspects-dialog').showModal();
   });
   on('#research-target-filter', 'input', (e) => {
@@ -381,13 +445,13 @@ function renderResearchWorkbench(stage) {
   on('#research-upload', 'click', () => $('#research-csv-file').click());
   on('#research-csv-file', 'change', async (e) => {
     captureResearchDraft();
-    if (typeof researchDraftFlush === 'function') researchDraftFlush();
-    researchImportPending = true;
-    pendingImportMode = 'merge';
+    researchDraftFlush();
+    researchWorkbenchState.researchImportPending = true;
+    appState.pendingImportMode = 'merge';
     try {
       await uploadFile(e.target.files[0]);
     } catch (error) {
-      researchImportPending = false;
+      researchWorkbenchState.researchImportPending = false;
       throw error;
     }
   });
@@ -397,8 +461,9 @@ function renderResearchWorkbench(stage) {
   });
   on('#research-promote', 'click', () => {
     captureResearchDraft();
-    if (!researchDraft.target_ids.length) throw new Error('ターゲット特許を選んでください。');
-    researchDraft.entry_mode = 'target';
+    if (!researchWorkbenchState.researchDraft.target_ids.length)
+      throw new Error('ターゲット特許を選んでください。');
+    researchWorkbenchState.researchDraft.entry_mode = 'target';
     invalidateResearchPreview();
     renderResearchWorkbench();
   });
@@ -410,29 +475,41 @@ function renderResearchWorkbench(stage) {
       busy(e.currentTarget, '観点を整理しています…', () => requestResearchPlan(llm))
     );
   $$('[data-abstract]').forEach((el) =>
-    el.addEventListener('click', () => {
-      const field = $('textarea', el.closest('.research-concept'));
-      const values = field.value.split(/\r?\n/);
-      if (!values.includes(el.dataset.abstract))
-        field.value += (field.value ? '\n' : '') + el.dataset.abstract;
-      captureResearchPlan();
-      invalidateResearchPreview();
-      refreshResearchLogic();
-    })
+    listen(
+      el,
+      'click',
+      () => {
+        const field = $('textarea', el.closest('.research-concept'));
+        const values = field.value.split(/\r?\n/);
+        if (!values.includes(el.dataset.abstract))
+          field.value += (field.value ? '\n' : '') + el.dataset.abstract;
+        captureResearchPlan();
+        invalidateResearchPreview();
+        refreshResearchLogic();
+      },
+      undefined,
+      'research-workbench.js:4'
+    )
   );
   $$('.research-plan input,.research-plan textarea,.research-plan select').forEach((el) =>
-    el.addEventListener('input', () => {
-      captureResearchPlan();
-      invalidateResearchPreview();
-      refreshResearchLogic();
-    })
+    listen(
+      el,
+      'input',
+      () => {
+        captureResearchPlan();
+        invalidateResearchPreview();
+        refreshResearchLogic();
+      },
+      undefined,
+      'research-workbench.js:5'
+    )
   );
   on('#research-preview', 'click', (e) => busy(e.currentTarget, '確認中…', previewResearchPlan));
   bindResearchApply();
   refreshResearchLogic();
-  if (typeof bindInventionWorkbench === 'function') bindInventionWorkbench();
+  bindInventionWorkbench();
   syncResearchPlanningControls();
-  if (typeof mountResearchGuidance === 'function') mountResearchGuidance();
+  mountResearchGuidance();
 }
 async function previewResearchPlan() {
   if ($('#research-error')) $('#research-error').textContent = '';
@@ -440,9 +517,9 @@ async function previewResearchPlan() {
     const body = researchPlanPayload(),
       key = JSON.stringify(body),
       planId = body.plan_id;
-    if (typeof researchDraftFlush === 'function') researchDraftFlush();
+    researchDraftFlush();
     const result = await api('/research/preview', body);
-    if (researchPlanDraft?.id !== planId || researchBriefChanged()) return;
+    if (researchWorkbenchState.researchPlanDraft?.id !== planId || researchBriefChanged()) return;
     let current;
     try {
       current = JSON.stringify(researchPlanPayload());
@@ -450,10 +527,10 @@ async function previewResearchPlan() {
       return;
     }
     if (current !== key) return;
-    researchPlanDraft.preview = result;
+    researchWorkbenchState.researchPlanDraft.preview = result;
     const host = $('#research-query-preview');
     if (host) {
-      host.innerHTML = researchPreviewHtml();
+      replaceHtml(host, researchPreviewHtml());
       bindResearchApply();
     }
   } catch (error) {
@@ -464,19 +541,20 @@ async function previewResearchPlan() {
 function bindResearchApply() {
   on('#research-apply', 'click', (e) =>
     busy(e.currentTarget, '作成中…', async () => {
-      const preview = researchPlanDraft.preview,
+      const preview = researchWorkbenchState.researchPlanDraft.preview,
         body = researchPlanPayload(),
         submitted = JSON.stringify(researchBrief());
       if (!preview) throw new Error('最新の検索条件をプレビューしてから採用してください。');
-      if (typeof researchDraftFlush === 'function') researchDraftFlush();
+      researchDraftFlush();
       const result = await api('/research/apply', { ...body, expected_preview_hash: preview.preview_hash });
       captureResearchDraft();
       const edited = JSON.stringify(researchBrief()) !== submitted;
-      state = result;
-      if (!edited) researchDraft = structuredClone(state.research_workbench.brief);
-      if (researchPlanDraft) researchPlanDraft.preview = null;
-      if (typeof researchDraftRebase === 'function') researchDraftRebase();
-      if (typeof researchDraftScheduleSave === 'function') researchDraftScheduleSave();
+      setState(result);
+      if (!edited)
+        researchWorkbenchState.researchDraft = structuredClone(getState().research_workbench.brief);
+      if (researchWorkbenchState.researchPlanDraft) researchWorkbenchState.researchPlanDraft.preview = null;
+      researchDraftRebase();
+      researchDraftScheduleSave();
       updateChrome();
       setTab('explore');
       setStep(1);
@@ -496,7 +574,7 @@ function initResearchWorkbench() {
       throw new Error('観点は8件まで、1件160文字以内です。');
     researchBrief().user_aspects = values;
     invalidateResearchPreview();
-    if (typeof researchDraftScheduleSave === 'function') researchDraftScheduleSave();
+    researchDraftScheduleSave();
     $('#research-aspects-dialog').close();
     renderResearchWorkbench();
   });
@@ -507,20 +585,20 @@ function initResearchWorkbench() {
     const values = Object.fromEntries(new FormData(e.currentTarget));
     values.target_ids = [...researchBrief().target_ids];
     await busy($('#research-target-save'), '追加中…', async () => {
-      if (typeof researchDraftFlush === 'function') researchDraftFlush();
+      researchDraftFlush();
       const result = await api('/research/targets/add', values);
       captureResearchDraft();
       const selected = [...researchBrief().target_ids];
-      state = result;
+      setState(result);
       researchBrief().target_ids = [
-        ...new Set([...selected, state.research_workbench.last_added_target_id || values.id]),
+        ...new Set([...selected, getState().research_workbench.last_added_target_id || values.id]),
       ];
       invalidateResearchPreview();
       $('#research-target-dialog').close();
       e.target.reset();
       renderResearchWorkbench();
-      if (typeof researchDraftRebase === 'function') researchDraftRebase();
-      if (typeof researchDraftScheduleSave === 'function') researchDraftScheduleSave();
+      researchDraftRebase();
+      researchDraftScheduleSave();
       updateChrome();
     });
   });
@@ -548,10 +626,10 @@ function researchClassificationProvenance(c) {
   return tags.join(' / ') || (c.llm_proposed ? 'LLMからの仮説' : '観点からの仮説');
 }
 function researchBriefChanged() {
-  const plan = state.research_workbench?.plan;
+  const plan = getState().research_workbench?.plan;
   if (!plan) return true;
   const brief = researchBrief(),
-    saved = plan.brief || state.research_workbench.brief;
+    saved = plan.brief || getState().research_workbench.brief;
   return (
     ['purpose', 'goal', 'keywords', 'entry_mode'].some(
       (key) => String(brief[key] || '').trim() !== String(saved[key] || '').trim()
@@ -567,33 +645,32 @@ async function requestResearchPlan(useLlm) {
   if (researchPlanningActive()) throw new Error('観点または要素を起案中です。完了を待ってください。');
   captureResearchDraft();
   const submitted = structuredClone(researchBrief());
-  researchPlanning = true;
+  researchWorkbenchState.researchPlanning = true;
   let progressToken = null,
     failure;
   if ($('#research-error')) $('#research-error').textContent = '';
   try {
-    if (typeof researchProgressStart === 'function')
-      progressToken = researchProgressStart({
-        label: '観点・広げ方を作成',
-        useLlm,
-        settings: state.settings,
-      });
+    progressToken = researchProgressStart({
+      label: '観点・広げ方を作成',
+      useLlm,
+      settings: getState().settings,
+    });
     syncResearchPlanningControls();
-    if (typeof researchDraftFlush === 'function') researchDraftFlush();
+    researchDraftFlush();
     const result = await api('/research/plan', {
-      revision: state.research_workbench.revision,
+      revision: getState().research_workbench.revision,
       brief: submitted,
       use_llm: useLlm,
     });
     captureResearchDraft();
     const edited = JSON.stringify(researchBrief()) !== JSON.stringify(submitted);
-    state = result;
-    if (!edited) researchDraft = structuredClone(state.research_workbench.brief);
-    researchPlanDraft = null;
-    if (typeof researchDraftRebase === 'function') researchDraftRebase();
-    if (typeof researchDraftScheduleSave === 'function') researchDraftScheduleSave();
-    if (!edited && typeof researchFlowEditor !== 'undefined') researchFlowEditor = 'concepts';
-    if (activeTab === 'workbench') renderResearchWorkbench(edited ? 'input' : 'elements');
+    setState(result);
+    if (!edited) researchWorkbenchState.researchDraft = structuredClone(getState().research_workbench.brief);
+    researchWorkbenchState.researchPlanDraft = null;
+    researchDraftRebase();
+    researchDraftScheduleSave();
+    if (!edited) researchGuidanceState.researchFlowEditor = 'concepts';
+    if (appState.activeTab === 'workbench') renderResearchWorkbench(edited ? 'input' : 'elements');
     updateChrome();
     if (edited) toast('起案中の入力変更は保持しています。新しい条件で観点を再作成してください。');
   } catch (error) {
@@ -601,9 +678,31 @@ async function requestResearchPlan(useLlm) {
     if ($('#research-error')) $('#research-error').textContent = error.message;
     throw error;
   } finally {
-    researchPlanning = false;
-    if (progressToken !== null && typeof researchProgressFinish === 'function')
-      researchProgressFinish(progressToken, failure);
+    researchWorkbenchState.researchPlanning = false;
+    if (progressToken !== null) researchProgressFinish(progressToken, failure);
     syncResearchPlanningControls();
   }
+}
+
+export {
+  researchBrief,
+  captureResearchDraft,
+  captureResearchPlan,
+  syncResearchPlanningControls,
+  researchPlanState,
+  researchGroupOptions,
+  researchLogicHtml,
+  researchTargetOptions,
+  researchPlanHtml,
+  invalidateResearchPreview,
+  researchPlanPayload,
+  renderResearchWorkbench,
+  previewResearchPlan,
+  initResearchWorkbench,
+  researchClassificationProvenance,
+  requestResearchPlan,
+};
+
+export function render(host, snapshot, stage) {
+  return renderResearchWorkbench(stage, host, snapshot);
 }

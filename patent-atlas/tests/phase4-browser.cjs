@@ -49,7 +49,10 @@ const cssAudit = process.env.CSS_AUDIT ? require('./css-visual-audit.cjs') : nul
     });
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, reducedMotion: 'reduce' });
     const errors = [];
-    page.on('pageerror', (e) => errors.push(e.message));
+    page.on('pageerror', (e) => {
+      errors.push(e.message);
+      console.error(e.stack);
+    });
     await page.route('**/*', (route) => {
       if (new URL(route.request().url()).origin !== origin) return route.abort();
       return cssAudit ? cssAudit.route(route) : route.continue();
@@ -68,7 +71,7 @@ const cssAudit = process.env.CSS_AUDIT ? require('./css-visual-audit.cjs') : nul
     }
     async function shot(name, stage) {
       await page.waitForFunction(() => !document.querySelector('#toast')?.classList.contains('visible'));
-      await page.evaluate(() => scrollTo(0, 0));
+      await page.evaluate(() => scrollTo({ top: 0, left: 0, behavior: 'instant' }));
       await page.evaluate(
         () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
       );
@@ -102,6 +105,20 @@ const cssAudit = process.env.CSS_AUDIT ? require('./css-visual-audit.cjs') : nul
         await page.locator('[data-research-mode]:checked').getAttribute('data-research-mode'),
         mode
       );
+      if (process.env.PHASE6_CHECKS && mode === 'examples') {
+        await page.locator('#ql-text').fill('[温度/TX]');
+        await page.locator('.ql-format-help summary').click();
+        await page.evaluate(async () => {
+          const { render: queryLibraryRefresh } = await import('/static/query-library-ui.js');
+          queryLibraryRefresh();
+          queryLibraryRefresh();
+        });
+        assert.equal(await page.locator('#query-library').count(), 1);
+        assert.equal(await page.locator('#ql-text').inputValue(), '[温度/TX]');
+        assert.equal(await page.locator('.ql-format-help').evaluate((node) => node.open), true);
+        await page.locator('#ql-text').fill('');
+        await page.locator('.ql-format-help summary').click();
+      }
       if (cssAudit && ['examples', 'tools'].includes(mode)) await shot('mode-' + mode, 'input');
     }
     await page.locator('#research-purpose').fill('先行技術調査（架空データによる画面確認）');
@@ -146,6 +163,7 @@ const cssAudit = process.env.CSS_AUDIT ? require('./css-visual-audit.cjs') : nul
       buffer: Buffer.from('公報番号,発明の名称,要約,IPC\n' + rows.join('\n')),
     });
     await page.waitForSelector('#patent-rows tr', { timeout: 60000 });
+    if (process.env.PHASE6_CHECKS) await page.locator('#projection-adopt-note').fill('判定境界を確認中');
     for (let i = 0; i < 8; i++) {
       const response = page.waitForResponse(
         (r) => r.url().endsWith('/api/labels') && r.request().method() === 'POST'
@@ -154,6 +172,10 @@ const cssAudit = process.env.CSS_AUDIT ? require('./css-visual-audit.cjs') : nul
         .locator(`#patent-rows [data-id="JP202600000${i + 1}A"][data-label="${i < 4 ? 'keep' : 'exclude'}"]`)
         .click();
       await response;
+    }
+    if (process.env.PHASE6_CHECKS) {
+      assert.equal(await page.locator('#projection-adopt-note').inputValue(), '判定境界を確認中');
+      await page.locator('#projection-adopt-note').fill('');
     }
     await shot('04-review', 'review');
     assert.doesNotMatch(await page.locator('#projection-status').textContent(), /証明ではなく/);
@@ -196,6 +218,15 @@ const cssAudit = process.env.CSS_AUDIT ? require('./css-visual-audit.cjs') : nul
       await tool('explore');
       await page.locator('#class-roots').click();
       await page.waitForFunction(() => document.querySelectorAll('#class-svg .node').length > 0);
+      if (process.env.PHASE6_CHECKS) {
+        await page.locator('.list-toggle summary').click();
+        await page.evaluate(async () => {
+          const { render: renderClassifications } = await import('/static/classification-ui.js');
+          renderClassifications();
+        });
+        assert.equal(await page.locator('.list-toggle').evaluate((node) => node.open), true);
+        await page.locator('.list-toggle summary').click();
+      }
       await shot('12-classifications', 'elements');
       await page.locator('#class-svg').scrollIntoViewIfNeeded();
       await cssAudit.capture(page, output, '13-classification-map');

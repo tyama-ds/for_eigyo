@@ -1,16 +1,14 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const vm = require('node:vm');
-const appSource = fs.readFileSync('static/app.js', 'utf8');
-const source = appSource.slice(
-  appSource.indexOf('function fillSettings()'),
-  appSource.indexOf('function renderStep()')
-);
-function setup(settings = {}) {
-  const dom = {},
+
+const { loadModule, createDom } = require('./module-harness.cjs');
+
+async function setup(settings = {}) {
+  const testDom = createDom(),
     calls = [];
+  const dom = new Proxy({}, { get: (_target, selector) => testDom.window.document.querySelector(selector) });
   const context = {
+    testDom,
     state: {
       settings: {
         provider: 'local',
@@ -24,7 +22,7 @@ function setup(settings = {}) {
         ...settings,
       },
     },
-    $: (selector) => (dom[selector] ??= { value: '', checked: false, textContent: '' }),
+    $: (selector) => dom[selector],
     describeClassLayout: () => {},
     updateChrome: () => {},
     selectionSave: Promise.resolve(),
@@ -33,17 +31,18 @@ function setup(settings = {}) {
       return { settings: { ...context.state.settings, ...body } };
     },
   };
-  vm.createContext(context);
-  vm.runInContext(source, context);
+  context.setState = (next) => (context.state = next);
+  context.getState = () => context.state;
+  await loadModule(context, 'settings-panel.js', ['fillSettings', 'saveSettings']);
   context.fillSettings();
   return { context, dom, calls };
 }
-test('legacy settings show the default and existing timeout fills exactly', () => {
-  assert.equal(setup().dom['#llm-timeout'].value, 120);
-  assert.equal(setup({ llm_timeout: 300 }).dom['#llm-timeout'].value, 300);
+test('legacy settings show the default and existing timeout fills exactly', async () => {
+  assert.equal((await setup()).dom['#llm-timeout'].value, '120');
+  assert.equal((await setup({ llm_timeout: 300 })).dom['#llm-timeout'].value, '300');
 });
 test('timeout saves as a number alongside unchanged connection values', async () => {
-  const { context, dom, calls } = setup();
+  const { context, dom, calls } = await setup();
   dom['#llm-timeout'].value = '300';
   await context.saveSettings();
   assert.equal(calls.length, 1);
@@ -51,11 +50,11 @@ test('timeout saves as a number alongside unchanged connection values', async ()
   assert.equal(calls[0].body.llm_timeout, 300);
   assert.equal(calls[0].body.model, 'preserved');
   assert.equal(calls[0].body.base_url, 'http://127.0.0.1:1234/v1');
-  assert.equal(dom['#llm-timeout'].value, 300);
+  assert.equal(dom['#llm-timeout'].value, '300');
 });
 test('blank, fractional and out-of-range waits cannot send a settings mutation', async () => {
   for (const value of ['', '29', '601', '120.5', 'bad']) {
-    const { context, dom, calls } = setup();
+    const { context, dom, calls } = await setup();
     dom['#llm-timeout'].value = value;
     await assert.rejects(context.saveSettings(), /30〜600秒の整数/);
     assert.equal(calls.length, 0);

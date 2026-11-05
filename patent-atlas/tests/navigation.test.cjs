@@ -1,10 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const vm = require('node:vm');
+const { loadModule, createDom } = require('./module-harness.cjs');
 const html = fs.readFileSync('static/index.html', 'utf8');
-const app = fs.readFileSync('static/app.js', 'utf8');
-const guidance = fs.readFileSync('static/research-guidance.js', 'utf8');
 
 function element(id, tab) {
   const classes = new Set();
@@ -24,7 +22,7 @@ function element(id, tab) {
     },
   };
 }
-function setup(empty = false) {
+async function setup(empty = false) {
   const tabs = [element('', 'workbench'), element('', 'settings')];
   const views = ['workbench-tab', 'settings-tab'].map((id) => element(id));
   const panels = ['research-workbench', 'explore-tab', 'discovery-tab', 'agent-tab', 'orchestration-tab'].map(
@@ -57,30 +55,39 @@ function setup(empty = false) {
     'renderOrchestration',
   ])
     context[name] = () => {};
-  vm.createContext(context);
-  vm.runInContext(
-    guidance + '\n' + app.slice(app.indexOf('function setTab('), app.indexOf('function setStep(')),
-    context
-  );
+  context.setState = (next) => (context.state = next);
+  context.getState = () => context.state;
+  (await loadModule(context, 'research-guidance.js', [
+    'researchFlowActions',
+    'researchFlowEntryMode',
+    'researchFlowDestination',
+    'researchFlowPreflight',
+    'researchFlowValidate',
+    'researchFlowNavigate',
+    'researchFlowTools',
+    'renderResearchFlowHeader',
+    'researchFlowAfterPlan',
+    'applyResearchFlowStage',
+    'mountResearchGuidance',
+    'researchFlowRevealPreview',
+  ]),
+    await loadModule(context, 'app.js', ['setTab']));
   return { context, tabs, views, panels, hero, host };
 }
 
 test('index has one persistent navigation and exactly one view per primary tab', () => {
-  assert.equal((html.match(/<nav\b/g) || []).length, 1);
-  assert.match(html, /<nav id="research-flow-header"/);
-  const tabs = [...html.matchAll(/<button\b[^>]*class="tab\b[^>]*data-tab="([^"]+)"/g)].map((m) => m[1]);
-  const views = [...html.matchAll(/<section\b[^>]*id="([^"]+)-tab"[^>]*class="view\b/g)].map((m) => m[1]);
+  const document = createDom().window.document;
+  assert.equal(document.querySelectorAll('nav').length, 1);
+  assert.equal(document.querySelector('nav').id, 'research-flow-header');
+  const tabs = [...document.querySelectorAll('button.tab')].map((node) => node.dataset.tab);
+  const views = [...document.querySelectorAll('section.view')].map((node) => node.id.replace(/-tab$/, ''));
   assert.deepEqual(tabs.sort(), ['settings', 'workbench']);
   assert.deepEqual(views.sort(), tabs);
-  assert.doesNotMatch(html, /research-workspace-shortcuts|class="stepper"|research-journey/);
-  assert.doesNotMatch(
-    app.slice(app.indexOf('function setStep('), app.indexOf('function updateChrome(')),
-    /shortcuts|\.open\s*=/
-  );
+  assert.equal(document.querySelector('#research-workspace-shortcuts,.stepper,.research-journey'), null);
 });
 
-test('all internal tools select the research tab and one corresponding panel', () => {
-  const s = setup();
+test('all internal tools select the research tab and one corresponding panel', async () => {
+  const s = await setup();
   for (const tab of ['workbench', 'explore', 'discovery', 'agent', 'orchestration', 'settings']) {
     s.context.setTab(tab);
     const primary = tab === 'settings' ? tab : 'workbench';
@@ -100,14 +107,14 @@ test('all internal tools select the research tab and one corresponding panel', (
   }
 });
 
-test('five navigation stages remain rendered on every panel, stage and settings', () => {
-  const s = setup();
+test('five navigation stages remain rendered on every panel, stage and settings', async () => {
+  const s = await setup();
   for (const tab of ['workbench', 'explore', 'discovery', 'agent', 'orchestration', 'settings']) {
     for (let step = 0; step < 4; step++) {
       s.context.activeTab = tab;
       s.context.step = step;
       for (const stage of ['input', 'elements']) {
-        vm.runInContext(`researchFlowStage='${stage}'`, s.context);
+        s.context.researchFlowStage = stage;
         s.context.renderResearchFlowHeader();
         assert.equal((s.host.innerHTML.match(/data-flow-action=/g) || []).length, 5);
         assert.doesNotMatch(s.host.innerHTML, /<details|<nav/);
@@ -116,8 +123,8 @@ test('five navigation stages remain rendered on every panel, stage and settings'
   }
 });
 
-test('unavailable stages expose their reason and hero depends only on patent/query counts', () => {
-  const s = setup(true);
+test('unavailable stages expose their reason and hero depends only on patent/query counts', async () => {
+  const s = await setup(true);
   s.context.state.research_workbench = {};
   s.context.renderResearchFlowHeader();
   for (const id of ['elements', 'review', 'refine'])
@@ -131,8 +138,8 @@ test('unavailable stages expose their reason and hero depends only on patent/que
   }
 });
 
-test('retained tools belong to the appropriate stage, including the library editor', () => {
-  const { context: c } = setup();
+test('retained tools belong to the appropriate stage, including the library editor', async () => {
+  const { context: c } = await setup();
   assert.deepEqual(
     Array.from(c.researchFlowTools('elements'), (row) => row[0]),
     ['workbench', 'workbench', 'explore', 'discovery']

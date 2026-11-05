@@ -1,8 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const vm = require('node:vm');
-const source = fs.readFileSync('static/discovery-ui.js', 'utf8');
+
+const { loadModule } = require('./module-harness.cjs');
+
 const key = 'IPC:H01M10/0562';
 const candidate = {
   kind: 'IPC',
@@ -12,7 +12,7 @@ const candidate = {
   evidence_status: 'hypothesis',
 };
 
-function setup() {
+async function setup() {
   const nodes = Object.fromEntries(
     [
       'content',
@@ -84,13 +84,43 @@ function setup() {
     },
     nodes,
   };
-  vm.createContext(context);
-  vm.runInContext(source, context);
+  context.setState = (next) => (context.state = next);
+  context.getState = () => context.state;
+
+  await loadModule(context, 'discovery-ui.js', [
+    'discoveryItems',
+    'discoveryPlanChanged',
+    'discoveryLlmProposalHtml',
+    'discoveryHasEvidence',
+    'discoveryCandidateHtml',
+    'discoveryTitle',
+    'discoveryBilingualHtml',
+    'discoveryEvidenceType',
+    'discoveryEvidenceLabel',
+    'discoveryFilteredItems',
+    'discoveryComparisonHtml',
+    'discoveryComparisonBodyHtml',
+    'discoveryInspectorHtml',
+    'discoveryMapHtml',
+    'renderDiscoveryMap',
+    'discoveryPointInPolygon',
+    'applyDiscoveryLasso',
+    'toggleDiscoveryPicked',
+    'updateDiscoveryPickedDisplay',
+    'discoveryQueryHtml',
+    'discoveryResultsHtml',
+    'discoveryHistoryHtml',
+    'renderDiscovery',
+    'updateDiscoveryControls',
+    'requestDiscovery',
+    'discoveryLimits',
+    'adoptDiscoveryClasses',
+  ]);
   return context;
 }
 
-test('redrawing the map binds lasso once and uses the latest candidates, positions and path', () => {
-  const c = setup(),
+test('redrawing the map binds lasso once and uses the latest candidates, positions and path', async () => {
+  const c = await setup(),
     listeners = new Map(),
     paths = [];
   let registrations = 0;
@@ -137,9 +167,11 @@ test('redrawing the map binds lasso once and uses the latest candidates, positio
   c.renderDiscoveryMap();
   assert.equal(registrations, 4);
   assert.equal(paths.length, 2);
-  vm.runInContext('discoveryLassoMode = true', c);
+  c.discoveryLassoMode = true;
   const emit = (name, x, y) => listeners.get(name)({ pointerId: 1, button: 0, clientX: x, clientY: y });
   emit('pointerdown', 0, 0);
+  emit('pointermove', 5, 0);
+  assert.match(paths[1].d, /L5,0/);
   emit('pointermove', 40, 0);
   emit('pointermove', 40, 40);
   emit('pointermove', 0, 40);
@@ -147,11 +179,11 @@ test('redrawing the map binds lasso once and uses the latest candidates, positio
   assert.match(paths[1].d, /^M0,0/);
   emit('pointerup', 0, 0);
   assert.equal(paths[1].d, '');
-  assert.deepEqual(Array.from(vm.runInContext('discoveryPicked', c)), ['IPC:B60L50/60']);
+  assert.deepEqual(Array.from(c.discoveryPicked), ['IPC:B60L50/60']);
 });
 
-test('metadata supersedes a matching hypothesis without changing source selections', () => {
-  const c = setup();
+test('metadata supersedes a matching hypothesis without changing source selections', async () => {
+  const c = await setup();
   c.state.discovery.analysis = {
     recommendations: [{ ...candidate, evidence_status: 'patent_metadata', support_count: 2 }],
   };
@@ -162,8 +194,8 @@ test('metadata supersedes a matching hypothesis without changing source selectio
   assert.equal(c.state.discovery.plan.candidate_hypotheses[0].evidence_status, 'hypothesis');
 });
 
-test('LLM feedback distinguishes legacy plans, offline plans and zero-change LLM responses', () => {
-  const c = setup();
+test('LLM feedback distinguishes legacy plans, offline plans and zero-change LLM responses', async () => {
+  const c = await setup();
   assert.match(c.discoveryLlmProposalHtml({}), /反映記録がありません/);
   assert.match(c.discoveryLlmProposalHtml({ llm_proposal: { used: false } }), /LLMを使わず/);
   const html = c.discoveryLlmProposalHtml({
@@ -176,8 +208,8 @@ test('LLM feedback distinguishes legacy plans, offline plans and zero-change LLM
   assert.doesNotMatch(html, /ここへ反映しました/);
 });
 
-test('LLM feedback shows actual additions and destinations while escaping model text', () => {
-  const c = setup();
+test('LLM feedback shows actual additions and destinations while escaping model text', async () => {
+  const c = await setup();
   const plan = {
     llm_proposal: {
       used: true,
@@ -204,7 +236,7 @@ test('LLM feedback shows actual additions and destinations while escaping model 
 });
 
 test('failed plan creation preserves prior results and explicitly identifies them as previous', async () => {
-  const c = setup();
+  const c = await setup();
   c.nodes['#discovery-llm-request-status'] = { innerHTML: '' };
   const previous = JSON.stringify(c.state.discovery);
   c.api = async () => {
@@ -222,8 +254,8 @@ test('failed plan creation preserves prior results and explicitly identifies the
   assert.equal(c.nodes['#discovery-llm-request-status'].innerHTML, '');
 });
 
-test('publications and query strings are escaped; synthetic evidence is explicitly identified', () => {
-  const c = setup();
+test('publications and query strings are escaped; synthetic evidence is explicitly identified', async () => {
+  const c = await setup();
   const html = c.discoveryCandidateHtml({
     ...candidate,
     title: '<script>bad()</script>',
@@ -250,9 +282,9 @@ test('publications and query strings are escaped; synthetic evidence is explicit
   assert.ok(query.includes('&lt;reason&gt;'));
 });
 
-test('poll renders preserve editable form values and checked candidate keys', () => {
-  const c = setup();
-  vm.runInContext(`discoveryPicked.add('${key}')`, c);
+test('poll renders preserve editable form values and checked candidate keys', async () => {
+  const c = await setup();
+  c.discoveryPicked.add(key);
   c.renderDiscovery();
   const result = c.nodes['#discovery-results'].innerHTML;
   assert.ok(result.includes('checked'));
@@ -270,8 +302,8 @@ test('poll renders preserve editable form values and checked candidate keys', ()
   );
 });
 
-test('CSV and OPS actions require a plan; OPS additionally requires credentials', () => {
-  const c = setup();
+test('CSV and OPS actions require a plan; OPS additionally requires credentials', async () => {
+  const c = await setup();
   c.state.discovery.plan = null;
   c.nodes['#discovery-csv-file'].files = [{ name: 'patents.csv' }];
   c.updateDiscoveryControls();
@@ -287,8 +319,8 @@ test('CSV and OPS actions require a plan; OPS additionally requires credentials'
   assert.equal(c.nodes['#discovery-run'].disabled, false);
 });
 
-test('search caps reject empty, fractional and out-of-range inputs', () => {
-  const c = setup();
+test('search caps reject empty, fractional and out-of-range inputs', async () => {
+  const c = await setup();
   assert.deepEqual(
     JSON.parse(JSON.stringify(c.discoveryLimits({ max_rounds: '2', max_queries: '6', per_query: '10' }))),
     { max_rounds: 2, max_queries: 6, per_query: 10 }
@@ -303,7 +335,7 @@ test('search caps reject empty, fractional and out-of-range inputs', () => {
 });
 
 test('adoption waits for a pending manual selection and sends only explicitly checked valid candidates', async () => {
-  const c = setup();
+  const c = await setup();
   let resolveSelection, request;
   c.selectionSave = new Promise((resolve) => {
     resolveSelection = resolve;
@@ -312,7 +344,10 @@ test('adoption waits for a pending manual selection and sends only explicitly ch
     request = { path, body };
     return { ...c.state, candidates: [candidate] };
   };
-  vm.runInContext(`discoveryPicked.add('${key}'); discoveryPicked.add('IPC:STALE')`, c);
+  (() => {
+    c.discoveryPicked.add(key);
+    c.discoveryPicked.add('IPC:STALE');
+  })();
   const pending = c.adoptDiscoveryClasses();
   await Promise.resolve();
   assert.equal(request, undefined);
@@ -325,22 +360,22 @@ test('adoption waits for a pending manual selection and sends only explicitly ch
 });
 
 test('failed manual selection save prevents adoption and retains the checked candidates', async () => {
-  const c = setup();
+  const c = await setup();
   let requests = 0;
   c.selectionSave = Promise.reject(new Error('save failed'));
   c.api = async () => {
     requests++;
     return c.state;
   };
-  vm.runInContext(`discoveryPicked.add('${key}')`, c);
+  c.discoveryPicked.add(key);
   await assert.rejects(c.adoptDiscoveryClasses(), /save failed/);
   assert.equal(requests, 0);
   assert.equal(c.activeTab, 'discovery');
-  assert.equal(vm.runInContext(`discoveryPicked.has('${key}')`, c), true);
+  assert.equal(c.discoveryPicked.has(key), true);
 });
 
-test('changing user English terms requires a new plan, including saved plans without that field', () => {
-  const c = setup();
+test('changing user English terms requires a new plan, including saved plans without that field', async () => {
+  const c = await setup();
   c.nodes['#discovery-keywords'].value = 'saved topic';
   assert.equal(c.discoveryPlanChanged(), false);
   c.nodes['#discovery-english'].value = 'solid electrolyte';
@@ -354,8 +389,8 @@ test('changing user English terms requires a new plan, including saved plans wit
   assert.ok(c.nodes['#discovery-plan-note'].textContent.includes('以前の計画は記録に保存'));
 });
 
-test('initial draft restores raw user English input, never generated search terms', () => {
-  const c = setup();
+test('initial draft restores raw user English input, never generated search terms', async () => {
+  const c = await setup();
   delete c.nodes['#discovery-keywords'];
   c.state.discovery.plan.user_english_terms = 'cell structure, sulfide electrolyte';
   c.state.discovery.plan.english_terms = ['generated phrase'];
@@ -364,11 +399,11 @@ test('initial draft restores raw user English input, never generated search term
   assert.ok(html.includes('>cell structure, sulfide electrolyte</textarea>'));
   assert.ok(!html.includes('generated phrase'));
   assert.ok(html.includes('例：solid state battery, solid electrolyte'));
-  assert.equal(vm.runInContext('discoveryDraft.english_terms', c), 'cell structure, sulfide electrolyte');
+  assert.equal(c.discoveryDraft.english_terms, 'cell structure, sulfide electrolyte');
 });
 
-test('archived plans render without rounds and update when only archives change', () => {
-  const c = setup();
+test('archived plans render without rounds and update when only archives change', async () => {
+  const c = await setup();
   c.renderDiscovery();
   c.state.discovery.archives = [{ id: 'archive/1?x=<a>', keywords: '<old theme>', time: '2026-09-12' }];
   c.renderDiscovery();
@@ -380,7 +415,7 @@ test('archived plans render without rounds and update when only archives change'
 
 test('request responses update only discovery and job after a newer manual edit', async () => {
   for (const path of ['/discovery/plan', '/discovery/analyze', '/discovery/import', '/discovery/run']) {
-    const c = setup();
+    const c = await setup();
     c.activeTab = 'explore';
     let resolveRequest;
     const stale = {
@@ -423,7 +458,7 @@ test('request responses update only discovery and job after a newer manual edit'
 });
 
 test('adoption merges only candidate view, discovery and job after a concurrent manual edit', async () => {
-  const c = setup();
+  const c = await setup();
   let resolveRequest;
   const stale = {
     ...c.state,
@@ -440,7 +475,7 @@ test('adoption merges only candidate view, discovery and job after a concurrent 
     new Promise((resolve) => {
       resolveRequest = resolve;
     });
-  vm.runInContext(`discoveryPicked.add('${key}')`, c);
+  c.discoveryPicked.add(key);
   const pending = c.adoptDiscoveryClasses();
   await new Promise(setImmediate);
   c.state = {
@@ -463,8 +498,8 @@ test('adoption merges only candidate view, discovery and job after a concurrent 
   assert.equal(c.activeTab, 'explore');
 });
 
-test('OPS lower-bound totals and partial retrieval remain explicit in history', () => {
-  const c = setup();
+test('OPS lower-bound totals and partial retrieval remain explicit in history', async () => {
+  const c = await setup();
   const html = c.discoveryHistoryHtml({
     rounds: [
       {
@@ -517,38 +552,41 @@ function comparisonItems() {
   ];
 }
 
-test('facet, bilingual text, source and selection filters preserve every underlying candidate', () => {
-  const c = setup(),
+test('facet, bilingual text, source and selection filters preserve every underlying candidate', async () => {
+  const c = await setup(),
     items = comparisonItems();
   c.state.discovery.plan.candidate_hypotheses = items;
-  vm.runInContext("discoveryCompare.source = 'patent'", c);
+  c.discoveryCompare.source = 'patent';
   assert.deepEqual(
     Array.from(c.discoveryFilteredItems(), (item) => item.code),
     ['H01M4/04']
   );
-  vm.runInContext("discoveryCompare.source = 'synthetic'", c);
+  c.discoveryCompare.source = 'synthetic';
   assert.deepEqual(
     Array.from(c.discoveryFilteredItems(), (item) => item.code),
     ['G01R31/36']
   );
-  vm.runInContext(
-    "discoveryCompare.source = 'all'; discoveryCompare.facet = 'process'; discoveryCompare.search = 'electrode'",
-    c
-  );
+  (() => {
+    c.discoveryCompare.source = 'all';
+    c.discoveryCompare.facet = 'process';
+    c.discoveryCompare.search = 'electrode';
+  })();
   assert.equal(c.discoveryFilteredItems().length, 1);
-  vm.runInContext("discoveryCompare.search = '電解質'", c);
+  c.discoveryCompare.search = '電解質';
   assert.equal(c.discoveryFilteredItems().length, 0);
-  vm.runInContext(
-    `discoveryCompare.facet = 'all'; discoveryCompare.search = ''; discoveryCompare.selectedOnly = true; discoveryPicked.add('${key}')`,
-    c
-  );
+  (() => {
+    c.discoveryCompare.facet = 'all';
+    c.discoveryCompare.search = '';
+    c.discoveryCompare.selectedOnly = true;
+    c.discoveryPicked.add(key);
+  })();
   assert.equal(c.discoveryFilteredItems()[0].code, candidate.code);
   assert.equal(c.discoveryItems().length, 3);
   assert.deepEqual(c.state.selected, ['IPC:A01B1/00']);
 });
 
-test('comparison map represents all candidates with scoped nodes, exact accessible names and explicit source types', () => {
-  const c = setup(),
+test('comparison map represents all candidates with scoped nodes, exact accessible names and explicit source types', async () => {
+  const c = await setup(),
     items = comparisonItems();
   c.PatentClassLayout = require('../static/classification-layout.js');
   c.PatentClassLabels = require('../static/classification-labels.js');
@@ -566,8 +604,8 @@ test('comparison map represents all candidates with scoped nodes, exact accessib
   assert.equal(c.discoveryTitle(items[0], 'ja'), '固体電解質');
 });
 
-test('map is the default and a single bilingual inspector replaces the flat candidate wall', () => {
-  const c = setup(),
+test('map is the default and a single bilingual inspector replaces the flat candidate wall', async () => {
+  const c = await setup(),
     items = comparisonItems();
   c.state.discovery.plan.candidate_hypotheses = items;
   c.PatentClassLabels = require('../static/classification-labels.js');
@@ -584,8 +622,8 @@ test('map is the default and a single bilingual inspector replaces the flat cand
   assert.ok(inspected.includes('<details open class="discovery-evidence"'));
 });
 
-test('map picking and lasso stay local, reject navigation nodes and preserve hidden checked keys', () => {
-  const c = setup(),
+test('map picking and lasso stay local, reject navigation nodes and preserve hidden checked keys', async () => {
+  const c = await setup(),
     items = comparisonItems();
   items.push({ ...candidate, kind: 'F-term', code: '5H029', selectable: false });
   c.state.discovery.plan.candidate_hypotheses = items;
@@ -595,12 +633,9 @@ test('map picking and lasso stay local, reject navigation nodes and preserve hid
   };
   c.toggleDiscoveryPicked(key, true);
   c.toggleDiscoveryPicked('F-term:5H029', true);
-  vm.runInContext("discoveryCompare.source = 'patent'", c);
+  c.discoveryCompare.source = 'patent';
   c.applyDiscoveryLasso(['IPC:H01M4/04', 'IPC:G01R31/36', 'IPC:UNKNOWN', 'F-term:5H029']);
-  assert.deepEqual(
-    Array.from(vm.runInContext('[...discoveryPicked].sort()', c)),
-    [key, 'IPC:H01M4/04'].sort()
-  );
+  assert.deepEqual(Array.from([...c.discoveryPicked].sort()), [key, 'IPC:H01M4/04'].sort());
   assert.deepEqual(c.state.selected, ['IPC:A01B1/00']);
   assert.equal(apiCalls, 0);
   const polygon = [
@@ -613,11 +648,14 @@ test('map picking and lasso stay local, reject navigation nodes and preserve hid
   assert.equal(c.discoveryPointInPolygon({ x: 110, y: 50 }, polygon), false);
 });
 
-test('list mode provides every filtered row without losing checked state across updates', () => {
-  const c = setup(),
+test('list mode provides every filtered row without losing checked state across updates', async () => {
+  const c = await setup(),
     items = comparisonItems();
   c.state.discovery.plan.candidate_hypotheses = items;
-  vm.runInContext(`discoveryCompare.mode = 'list'; discoveryPicked.add('${key}')`, c);
+  (() => {
+    c.discoveryCompare.mode = 'list';
+    c.discoveryPicked.add(key);
+  })();
   const html = c.discoveryComparisonBodyHtml();
   assert.ok(!html.includes('id="discovery-class-map"'));
   assert.equal((html.match(/data-discovery-row=/g) || []).length, 3);
@@ -626,12 +664,12 @@ test('list mode provides every filtered row without losing checked state across 
     recommendations: [{ ...items[0], evidence_status: 'patent_metadata', support_count: 2 }],
   };
   c.renderDiscovery();
-  assert.equal(vm.runInContext('discoveryCompare.mode', c), 'list');
-  assert.equal(vm.runInContext(`discoveryPicked.has('${key}')`, c), true);
+  assert.equal(c.discoveryCompare.mode, 'list');
+  assert.equal(c.discoveryPicked.has(key), true);
 });
 
 test('adoption freezes its local selection until the requested snapshot is handed off', async () => {
-  const c = setup(),
+  const c = await setup(),
     items = comparisonItems();
   c.state.discovery.plan.candidate_hypotheses = items;
   let complete;
@@ -643,15 +681,15 @@ test('adoption freezes its local selection until the requested snapshot is hande
   const pending = c.adoptDiscoveryClasses();
   c.toggleDiscoveryPicked('IPC:H01M4/04', true);
   c.applyDiscoveryLasso(['IPC:G01R31/36']);
-  assert.deepEqual(Array.from(vm.runInContext('[...discoveryPicked]', c)), [key]);
+  assert.deepEqual(Array.from([...c.discoveryPicked]), [key]);
   complete();
   await pending;
-  assert.equal(vm.runInContext('discoveryAdopting', c), false);
+  assert.equal(c.discoveryAdopting, false);
   assert.deepEqual(c.state.selected, ['IPC:A01B1/00']);
 });
 
-test('short official leaves retain bilingual parent context and catalogue version', () => {
-  const c = setup();
+test('short official leaves retain bilingual parent context and catalogue version', async () => {
+  const c = await setup();
   c.PatentClassLabels = require('../static/classification-labels.js');
   const html = c.discoveryBilingualHtml({
     ...candidate,
@@ -677,8 +715,8 @@ test('short official leaves retain bilingual parent context and catalogue versio
   assert.ok(escaped.includes('&lt;version&gt;'));
 });
 
-test('semantic headings carry their actual available group width for text fitting', () => {
-  const c = setup(),
+test('semantic headings carry their actual available group width for text fitting', async () => {
+  const c = await setup(),
     item = comparisonItems()[0];
   const html = c.discoveryMapHtml([item], {
     positions: [[100, 100]],

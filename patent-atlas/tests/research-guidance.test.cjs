@@ -1,11 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const vm = require('node:vm');
+const { loadModule } = require('./module-harness.cjs');
 const source = fs.readFileSync('static/research-guidance.js', 'utf8');
 const plain = (value) => JSON.parse(JSON.stringify(value));
 
-function setup({ mode = 'target', targets = [], planMode = 'target', hasPlan = true } = {}) {
+async function setup({ mode = 'target', targets = [], planMode = 'target', hasPlan = true } = {}) {
   const brief = {
     entry_mode: mode,
     purpose: '先行技術を探す',
@@ -46,9 +46,23 @@ function setup({ mode = 'target', targets = [], planMode = 'target', hasPlan = t
     $: (selector) => dom[selector] || null,
     $$: () => [],
   };
-  vm.createContext(context);
-  vm.runInContext(source, context);
-  context.applyResearchFlowStage = () => calls.push(['stage', vm.runInContext('researchFlowStage', context)]);
+  context.setState = (next) => (context.state = next);
+  context.getState = () => context.state;
+  await loadModule(context, 'research-guidance.js', [
+    'researchFlowActions',
+    'researchFlowEntryMode',
+    'researchFlowDestination',
+    'researchFlowPreflight',
+    'researchFlowValidate',
+    'researchFlowNavigate',
+    'researchFlowTools',
+    'renderResearchFlowHeader',
+    'researchFlowAfterPlan',
+    'applyResearchFlowStage',
+    'mountResearchGuidance',
+    'researchFlowRevealPreview',
+  ]);
+  context.applyResearchFlowStage = () => calls.push(['stage', context.researchFlowStage]);
   return {
     context,
     state,
@@ -56,12 +70,11 @@ function setup({ mode = 'target', targets = [], planMode = 'target', hasPlan = t
     plan,
     calls,
     dom,
-    read: (expression) => vm.runInContext(expression, context),
   };
 }
 
-test('five stages reflect actual data prerequisites and highlight only the visible guided step', () => {
-  const c = setup().context;
+test('five stages reflect actual data prerequisites and highlight only the visible guided step', async () => {
+  const c = (await setup()).context;
   const empty = {
     patents: [],
     queries: [],
@@ -125,8 +138,8 @@ test('five stages reflect actual data prerequisites and highlight only the visib
   assert.equal(c.researchFlowActions(populated).find((row) => row.id === 'refine').disabled, true);
 });
 
-test('destinations map to existing routes and reject unknown or inherited object keys', () => {
-  const c = setup().context;
+test('destinations map to existing routes and reject unknown or inherited object keys', async () => {
+  const c = (await setup()).context;
   const expected = {
     input: { tab: 'workbench', stage: 'input' },
     elements: { tab: 'workbench', stage: 'elements' },
@@ -140,8 +153,8 @@ test('destinations map to existing routes and reject unknown or inherited object
     assert.equal(c.researchFlowDestination(action), null);
 });
 
-test('preflight requires purpose and real manual elements without requiring LLM configuration', () => {
-  const c = setup().context,
+test('preflight requires purpose and real manual elements without requiring LLM configuration', async () => {
+  const c = (await setup()).context,
     settings = { provider: 'offline' },
     brief = { purpose: '  ', goal: '説明あり' };
   assert.equal(
@@ -161,8 +174,8 @@ test('preflight requires purpose and real manual elements without requiring LLM 
   assert.equal(JSON.stringify({ brief, input, settings }), before);
 });
 
-test('LLM decomposition accepts each supported source but not keywords or blank lines alone', () => {
-  const c = setup().context,
+test('LLM decomposition accepts each supported source but not keywords or blank lines alone', async () => {
+  const c = (await setup()).context,
     settings = { provider: 'local' };
   const brief = { purpose: '先行技術探索', goal: '', keywords: '電池 冷却', target_ids: [] };
   assert.equal(
@@ -178,8 +191,8 @@ test('LLM decomposition accepts each supported source but not keywords or blank 
     assert.equal(c.researchFlowPreflight({ ...brief, ...patch }, input, 'llm', settings), null);
 });
 
-test('unconfigured LLM and an unknown method receive actionable guidance before any request', () => {
-  const c = setup().context,
+test('unconfigured LLM and an unknown method receive actionable guidance before any request', async () => {
+  const c = (await setup()).context,
     brief = { purpose: '先行技術探索', goal: '温度による制御' };
   for (const provider of [undefined, 'offline', '', 'unknown']) {
     const issue = c.researchFlowPreflight(brief, {}, 'llm', { provider });
@@ -194,8 +207,8 @@ test('unconfigured LLM and an unknown method receive actionable guidance before 
   );
 });
 
-test('mode selection remains stable when navigating the shared stages', () => {
-  const c = setup().context;
+test('mode selection remains stable when navigating the shared stages', async () => {
+  const c = (await setup()).context;
   for (const entry_mode of ['target', 'discover', 'examples', 'tools'])
     assert.equal(
       c.researchFlowEntryMode({ entry_mode, target_ids: ['seed'] }, { brief: { entry_mode: 'target' } }),
@@ -206,14 +219,14 @@ test('mode selection remains stable when navigating the shared stages', () => {
   assert.equal(c.researchFlowEntryMode({}, null), 'discover');
 });
 
-test('navigation from examples or tools keeps the mode and edits while rendering the chosen stage', () => {
+test('navigation from examples or tools keeps the mode and edits while rendering the chosen stage', async () => {
   for (const mode of ['examples', 'tools']) {
-    const s = setup({ mode, targets: ['seed'] }),
+    const s = await setup({ mode, targets: ['seed'] }),
       c = s.context;
     const original = structuredClone(s.brief);
     c.researchFlowNavigate('elements');
     assert.equal(s.brief.entry_mode, mode);
-    assert.equal(s.read('researchFlowStage'), 'elements');
+    assert.equal(s.context.researchFlowStage, 'elements');
     assert.equal(s.calls.filter(([name]) => name === 'render').length, 1);
     assert.deepEqual(
       s.calls.find(([name]) => name === 'flush'),
@@ -224,8 +237,8 @@ test('navigation from examples or tools keeps the mode and edits while rendering
   }
 });
 
-test('disabled and unknown navigation leave drafts and workspace untouched, while CSV remains reachable', () => {
-  const s = setup({ mode: 'target', hasPlan: false }),
+test('disabled and unknown navigation leave drafts and workspace untouched, while CSV remains reachable', async () => {
+  const s = await setup({ mode: 'target', hasPlan: false }),
     c = s.context;
   s.state.patents = [];
   s.state.queries = [];
@@ -241,8 +254,8 @@ test('disabled and unknown navigation leave drafts and workspace untouched, whil
   assert.equal(JSON.stringify({ state: s.state, brief: s.brief }), before);
 });
 
-test('validation reveals the matching input method and focuses the missing field without clearing input', () => {
-  const s = setup(),
+test('validation reveals the matching input method and focuses the missing field without clearing input', async () => {
+  const s = await setup(),
     c = s.context,
     input = { manual_elements: [], invention_text: '保持する原文' };
   c.inventionDraftInput = () => input;
@@ -251,11 +264,14 @@ test('validation reveals the matching input method and focuses the missing field
     focus: () => s.calls.push(['focus']),
     scrollIntoView: () => s.calls.push(['scroll']),
   };
-  s.read("researchFlowStage='elements'; researchFlowInputMethod='llm'");
+  (() => {
+    s.context.researchFlowStage = 'elements';
+    s.context.researchFlowInputMethod = 'llm';
+  })();
   assert.throws(() => c.researchFlowValidate(false), /要素を1行/);
-  assert.equal(s.read('researchFlowStage'), 'input');
-  assert.equal(s.read('researchFlowInputMethod'), 'manual');
-  assert.deepEqual(s.calls, [['stage', 'input'], ['focus'], ['scroll']]);
+  assert.equal(s.context.researchFlowStage, 'input');
+  assert.equal(s.context.researchFlowInputMethod, 'manual');
+  assert.deepEqual(s.calls, [['render'], ['focus'], ['scroll']]);
   assert.equal(JSON.stringify({ brief: s.brief, input }), original);
 });
 

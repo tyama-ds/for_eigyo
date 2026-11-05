@@ -1,11 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const vm = require('node:vm');
+const { loadModule } = require('./module-harness.cjs');
 const script = fs.readFileSync('static/research-draft-store.js', 'utf8');
 const clone = (value) => JSON.parse(JSON.stringify(value));
 
-function setup(options = {}) {
+async function setup(options = {}) {
   const saved = options.saved || new Map(),
     listeners = new Map(),
     timers = new Map();
@@ -102,8 +102,18 @@ function setup(options = {}) {
     delete context.inventionPlanDraft;
     delete state.research_workbench.invention;
   }
-  vm.createContext(context);
-  vm.runInContext(script, context);
+  context.setState = (next) => (context.state = next);
+  context.getState = () => context.state;
+
+  await loadModule(context, 'research-draft-store.js', [
+    'researchDraftRebase',
+    'researchDraftStatusHtml',
+    'researchDraftFlush',
+    'researchDraftScheduleSave',
+    'researchDraftRestore',
+    'researchDraftReset',
+    'initResearchDraftStore',
+  ]);
   function seedEdits() {
     context.researchDraft = {
       ...clone(brief),
@@ -164,17 +174,16 @@ function setup(options = {}) {
     timers,
     status,
     seedEdits,
-    read: (expression) => vm.runInContext(expression, context),
   };
 }
 
-test('reload restores edited input and selections atomically, without previews or server writes', () => {
-  const first = setup();
+test('reload restores edited input and selections atomically, without previews or server writes', async () => {
+  const first = await setup();
   first.seedEdits();
   const before = JSON.stringify(first.context);
   assert.equal(first.context.researchDraftFlush(), true);
   assert.equal(JSON.stringify(first.context), before);
-  const second = setup({ saved: first.saved }),
+  const second = await setup({ saved: first.saved }),
     serverBefore = JSON.stringify(second.context.state);
   assert.equal(second.context.initResearchDraftStore(), true);
   assert.equal(JSON.stringify(second.context.state), serverBefore);
@@ -197,8 +206,8 @@ test('reload restores edited input and selections atomically, without previews o
   assert.match(second.context.researchDraftStatusHtml(), /このタブの下書きを復元/);
 });
 
-test('only editable fields are stored; settings, source prose, and review tokens never enter storage', () => {
-  const s = setup();
+test('only editable fields are stored; settings, source prose, and review tokens never enter storage', async () => {
+  const s = await setup();
   s.seedEdits();
   assert.equal(s.context.researchDraftFlush(), true);
   const raw = [...s.saved.values()][0];
@@ -220,8 +229,8 @@ test('only editable fields are stored; settings, source prose, and review tokens
   assert.ok(raw.includes('温度検出'));
 });
 
-test('a different server revision, plan, or workspace never automatically restores older edits', () => {
-  const first = setup();
+test('a different server revision, plan, or workspace never automatically restores older edits', async () => {
+  const first = await setup();
   first.seedEdits();
   first.context.researchDraftFlush();
   for (const change of [
@@ -230,7 +239,7 @@ test('a different server revision, plan, or workspace never automatically restor
     (s) => (s.research_workbench.invention.plan.id = 'ip2'),
     (s) => (s.research_workbench.id = 'workspace-b'),
   ]) {
-    const next = setup({ saved: first.saved });
+    const next = await setup({ saved: first.saved });
     change(next.context.state);
     const before = JSON.stringify(next.context.state);
     assert.equal(next.context.researchDraftRestore(), false);
@@ -240,8 +249,8 @@ test('a different server revision, plan, or workspace never automatically restor
   }
 });
 
-test('pending edits cannot be written under a new revision until caller explicitly rebases the response', () => {
-  const s = setup();
+test('pending edits cannot be written under a new revision until caller explicitly rebases the response', async () => {
+  const s = await setup();
   s.context.initResearchDraftStore();
   s.seedEdits();
   s.context.researchDraftFlush();
@@ -253,14 +262,14 @@ test('pending edits cannot be written under a new revision until caller explicit
   s.context.researchDraft.goal = '応答反映後に保持した入力';
   assert.equal(s.context.researchDraftRebase(), true);
   assert.equal(s.context.researchDraftFlush(), true);
-  const next = setup({ saved: s.saved });
+  const next = await setup({ saved: s.saved });
   next.context.state.research_workbench.revision++;
   assert.equal(next.context.researchDraftRestore(), true);
   assert.equal(next.context.researchDraft.goal, '応答反映後に保持した入力');
 });
 
-test('new plan response excludes the former plan draft while keeping valid current inputs', () => {
-  const s = setup();
+test('new plan response excludes the former plan draft while keeping valid current inputs', async () => {
+  const s = await setup();
   s.context.initResearchDraftStore();
   s.seedEdits();
   s.context.state.research_workbench.plan.id = 'rp-new';
@@ -275,8 +284,8 @@ test('new plan response excludes the former plan draft while keeping valid curre
   assert.equal(record.context.invention_plan_id, 'ip-new');
 });
 
-test('switching projects does not copy old live forms into the new project', () => {
-  const s = setup();
+test('switching projects does not copy old live forms into the new project', async () => {
+  const s = await setup();
   s.context.initResearchDraftStore();
   s.seedEdits();
   s.context.researchDraftFlush();
@@ -292,15 +301,15 @@ test('switching projects does not copy old live forms into the new project', () 
   assert.equal(s.context.inventionPlanDraft, null);
 });
 
-test('corrupt records and invalid references cannot partially replace a live draft', () => {
-  const first = setup();
+test('corrupt records and invalid references cannot partially replace a live draft', async () => {
+  const first = await setup();
   first.seedEdits();
   first.context.researchDraftFlush();
   const [key, raw] = [...first.saved.entries()][0];
   const wrong = JSON.parse(raw);
   wrong.drafts.invention_plan.elements[1].perspectives[0].id = 'missing';
   for (const content of ['not json', 'null', JSON.stringify(wrong)]) {
-    const next = setup({ saved: new Map([[key, content]]) });
+    const next = await setup({ saved: new Map([[key, content]]) });
     next.context.researchDraft = { already: 'editing' };
     assert.equal(next.context.researchDraftRestore(), false);
     assert.deepEqual(next.context.researchDraft, { already: 'editing' });
@@ -308,9 +317,9 @@ test('corrupt records and invalid references cannot partially replace a live dra
   }
 });
 
-test('storage denial and quota failures leave editable inputs intact and show a visible failure', () => {
+test('storage denial and quota failures leave editable inputs intact and show a visible failure', async () => {
   for (const options of [{ readError: true }, { writeError: true }]) {
-    const s = setup(options);
+    const s = await setup(options);
     s.seedEdits();
     const before = JSON.stringify(s.context.researchDraft);
     assert.doesNotThrow(() => s.context.initResearchDraftStore());
@@ -320,21 +329,21 @@ test('storage denial and quota failures leave editable inputs intact and show a 
   }
 });
 
-test('missing invention feature still saves and restores the common research draft', () => {
-  const first = setup({ noInvention: true });
+test('missing invention feature still saves and restores the common research draft', async () => {
+  const first = await setup({ noInvention: true });
   first.seedEdits();
   assert.equal(first.context.researchDraftFlush(), true);
-  const next = setup({ saved: first.saved, noInvention: true });
+  const next = await setup({ saved: first.saved, noInvention: true });
   assert.equal(next.context.researchDraftRestore(), true);
   assert.equal(next.context.researchDraft.keywords, '温度 自動車');
   assert.equal('inventionInputDraft' in next.context, false);
 });
 
-test('repeated initialization never overwrites subsequent edits or duplicates unload listeners', () => {
-  const first = setup();
+test('repeated initialization never overwrites subsequent edits or duplicates unload listeners', async () => {
+  const first = await setup();
   first.seedEdits();
   first.context.researchDraftFlush();
-  const next = setup({ saved: first.saved });
+  const next = await setup({ saved: first.saved });
   assert.equal(next.context.initResearchDraftStore(), true);
   next.context.researchDraft.goal = '復元後の新しい編集';
   assert.equal(next.context.initResearchDraftStore(), false);
@@ -343,8 +352,8 @@ test('repeated initialization never overwrites subsequent edits or duplicates un
   assert.equal(next.listeners.get('beforeunload').length, 1);
 });
 
-test('debounce saves the latest edit and unchanged server updates do not cancel it', () => {
-  const s = setup();
+test('debounce saves the latest edit and unchanged server updates do not cancel it', async () => {
+  const s = await setup();
   s.context.initResearchDraftStore();
   s.seedEdits();
   s.context.researchDraftScheduleSave();
@@ -358,8 +367,8 @@ test('debounce saves the latest edit and unchanged server updates do not cancel 
   assert.equal(JSON.parse([...s.saved.values()][0]).drafts.brief.goal, '最後の入力');
 });
 
-test('pagehide captures the final keystroke and flushes without a scheduled timer', () => {
-  const s = setup();
+test('pagehide captures the final keystroke and flushes without a scheduled timer', async () => {
+  const s = await setup();
   s.seedEdits();
   s.context.captureResearchDraft = () => {
     s.context.researchDraft.goal = '最後のキー入力';
@@ -371,8 +380,8 @@ test('pagehide captures the final keystroke and flushes without a scheduled time
   assert.equal(s.timers.size, 0);
 });
 
-test('reset removes only this workspace tab record, never server state or active edits', () => {
-  const s = setup();
+test('reset removes only this workspace tab record, never server state or active edits', async () => {
+  const s = await setup();
   s.seedEdits();
   s.context.researchDraftFlush();
   s.saved.set('unrelated', 'keep');

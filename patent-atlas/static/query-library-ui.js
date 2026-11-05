@@ -1,5 +1,32 @@
+import { esc as qlEsc, replaceHtml, listen, getState, api, setState } from './core.js';
+import {
+  researchDraftFlush,
+  researchDraftRebase,
+  researchDraftScheduleSave,
+} from './research-draft-store.js';
+import { updateChrome } from './workspace-chrome.js';
+import { setTab, setStep } from './app.js';
+
+export const queryLibraryUiState = {
+  queryLibraryDraft: {
+    selected: null,
+    text: '',
+    name: '',
+    purpose: '',
+    source_format: 'jplatpat',
+    edits: Object.create(null),
+    classEdits: Object.create(null),
+    adaptPurpose: null,
+    adaptGoal: null,
+    suggestion: null,
+    preview: null,
+    previewPayload: null,
+    error: '',
+    busy: false,
+  },
+};
 /* Prior query examples: preserve Boolean scopes, preview edits, then apply. */
-'use strict';
+
 const queryLibraryFormats = [
   ['jplatpat', 'J-PlatPat'],
   ['portable_json', 'Patent Atlas JSON'],
@@ -11,33 +38,13 @@ const queryLibraryFormats = [
   ['google_patents', 'Google Patents'],
   ['reference', 'その他・不明'],
 ];
-let queryLibraryDraft = {
-  selected: null,
-  text: '',
-  name: '',
-  purpose: '',
-  source_format: 'jplatpat',
-  edits: Object.create(null),
-  classEdits: Object.create(null),
-  adaptPurpose: null,
-  adaptGoal: null,
-  suggestion: null,
-  preview: null,
-  previewPayload: null,
-  error: '',
-  busy: false,
-};
-const qlEsc = (value) =>
-  String(value ?? '').replace(
-    /[&<>"']/g,
-    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]
-  );
+
 function queryLibraryEntries(workbench) {
   return Array.isArray(workbench?.library) ? workbench.library : [];
 }
 function queryLibrarySelected(workbench) {
   const entries = queryLibraryEntries(workbench);
-  return entries.find((e) => e.id === queryLibraryDraft.selected) || entries[0] || null;
+  return entries.find((e) => e.id === queryLibraryUiState.queryLibraryDraft.selected) || entries[0] || null;
 }
 function queryLibraryLabel(format) {
   return queryLibraryFormats.find(([id]) => id === format)?.[1] || String(format || '元のサービス未指定');
@@ -54,7 +61,7 @@ function queryLibraryTreeHtml(node) {
   return `<div class="ql-tree ql-tree-${qlEsc(node.op)}"><b>${label}</b><div>${node.children.map(queryLibraryTreeHtml).join('')}</div></div>`;
 }
 function queryLibraryHtml(workbench = {}) {
-  const d = queryLibraryDraft,
+  const d = queryLibraryUiState.queryLibraryDraft,
     entries = queryLibraryEntries(workbench),
     selected = queryLibrarySelected(workbench),
     isSelected = selected?.id === d.selected;
@@ -65,7 +72,7 @@ function queryLibraryHtml(workbench = {}) {
   const goal = isSelected && d.adaptGoal !== null ? d.adaptGoal : workbench.brief?.goal || '';
   const suggestion = isSelected ? d.suggestion : null;
   const disabled = d.busy ? 'disabled' : '';
-  return `<section id="query-library" class="ql-library" aria-label="過去の検索式から作る">
+  return `<section id="query-library" data-render-scope="${qlEsc(selected?.id || 'library')}" class="ql-library" aria-label="過去の検索式から作る">
  <div class="ql-heading"><div><span class="eyebrow">QUERY LIBRARY</span><h2>良い検索式を、次の調査へ。</h2><p class="caption">元の式を残したまま、観点・語句・分類を調整し、プレビューして採用します。</p></div><span class="pill">${entries.length}件の検索式例</span></div>
  <div class="ql-layout"><section class="panel ql-import"><h3>検索式例を取り込む</h3><label>名前<input id="ql-name" maxlength="160" value="${qlEsc(d.name)}" placeholder="例：車両制御の先行技術調査" ${disabled}></label>
  <label>元の検索サービス<select id="ql-source" ${disabled}>${queryLibraryFormats.map(([id, label]) => `<option value="${id}" ${d.source_format === id ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
@@ -90,37 +97,40 @@ function queryLibraryHtml(workbench = {}) {
  }</section></div>
  <p id="ql-error" class="ql-error" role="alert" ${d.error ? '' : 'hidden'}>${qlEsc(d.error)}</p></section>`;
 }
-function queryLibraryRefresh() {
-  const host = document.getElementById('query-library');
+function queryLibraryRefresh(host = document.getElementById('query-library'), snapshot = getState()) {
   if (!host) return;
-  host.outerHTML = queryLibraryHtml(state.research_workbench || {});
+  const template = document.createElement('template');
+  template.innerHTML = queryLibraryHtml(snapshot.research_workbench || {});
+  replaceHtml(host, template.content.firstElementChild.innerHTML, {
+    scope: template.content.firstElementChild.dataset.renderScope,
+  });
   bindQueryLibrary();
 }
 function queryLibraryChoose(id) {
-  queryLibraryDraft.selected = id;
-  queryLibraryDraft.edits = Object.create(null);
-  queryLibraryDraft.classEdits = Object.create(null);
-  queryLibraryDraft.adaptPurpose = null;
-  queryLibraryDraft.adaptGoal = null;
-  queryLibraryDraft.suggestion = null;
-  queryLibraryDraft.preview = null;
-  queryLibraryDraft.previewPayload = null;
-  queryLibraryDraft.error = '';
+  queryLibraryUiState.queryLibraryDraft.selected = id;
+  queryLibraryUiState.queryLibraryDraft.edits = Object.create(null);
+  queryLibraryUiState.queryLibraryDraft.classEdits = Object.create(null);
+  queryLibraryUiState.queryLibraryDraft.adaptPurpose = null;
+  queryLibraryUiState.queryLibraryDraft.adaptGoal = null;
+  queryLibraryUiState.queryLibraryDraft.suggestion = null;
+  queryLibraryUiState.queryLibraryDraft.preview = null;
+  queryLibraryUiState.queryLibraryDraft.previewPayload = null;
+  queryLibraryUiState.queryLibraryDraft.error = '';
 }
 function queryLibraryInvalidate() {
-  queryLibraryDraft.preview = null;
-  queryLibraryDraft.previewPayload = null;
-  queryLibraryDraft.suggestion = null;
+  queryLibraryUiState.queryLibraryDraft.preview = null;
+  queryLibraryUiState.queryLibraryDraft.previewPayload = null;
+  queryLibraryUiState.queryLibraryDraft.suggestion = null;
   const suggestion = document.getElementById('ql-suggestion');
   if (suggestion) {
-    suggestion.innerHTML = '';
+    replaceHtml(suggestion, '');
     suggestion.hidden = true;
   }
   const host = document.getElementById('ql-preview-area');
-  if (host) host.innerHTML = '<p class="caption">条件が変わりました。もう一度プレビューしてください。</p>';
+  if (host) replaceHtml(host, '<p class="caption">条件が変わりました。もう一度プレビューしてください。</p>');
 }
 function queryLibraryPayload(entry, workbench) {
-  const d = queryLibraryDraft;
+  const d = queryLibraryUiState.queryLibraryDraft;
   if (!entry || entry.status !== 'editable') throw Error('調整できる検索式例を選んでください。');
   const replacements = Object.create(null),
     class_replacements = Object.create(null);
@@ -178,22 +188,25 @@ function queryLibraryAcceptSuggestion(entry, result) {
   )
     throw Error('置換理由を確認できません。入力欄は保持しています。');
   queryLibraryInvalidate();
-  queryLibraryDraft.edits = Object.assign(Object.create(null), result.replacements);
-  queryLibraryDraft.classEdits = Object.assign(Object.create(null), result.class_replacements);
-  queryLibraryDraft.suggestion = result;
+  queryLibraryUiState.queryLibraryDraft.edits = Object.assign(Object.create(null), result.replacements);
+  queryLibraryUiState.queryLibraryDraft.classEdits = Object.assign(
+    Object.create(null),
+    result.class_replacements
+  );
+  queryLibraryUiState.queryLibraryDraft.suggestion = result;
 }
 async function queryLibraryReadFile(file) {
   if (!file) return;
   if (file.size > 400000) throw Error('ファイルは400KB以内、本文100,000文字以内にしてください。');
   const text = await file.text();
   if (text.length > 100000) throw Error('本文を100,000文字以内にしてください。');
-  queryLibraryDraft.text = text;
-  if (!queryLibraryDraft.name)
-    queryLibraryDraft.name = String(file.name || '')
+  queryLibraryUiState.queryLibraryDraft.text = text;
+  if (!queryLibraryUiState.queryLibraryDraft.name)
+    queryLibraryUiState.queryLibraryDraft.name = String(file.name || '')
       .replace(/\.(?:json|txt)$/i, '')
       .slice(0, 160);
-  if (/\.json$/i.test(file.name || '')) queryLibraryDraft.source_format = 'portable_json';
-  queryLibraryDraft.error = '';
+  if (/\.json$/i.test(file.name || '')) queryLibraryUiState.queryLibraryDraft.source_format = 'portable_json';
+  queryLibraryUiState.queryLibraryDraft.error = '';
   queryLibraryRefresh();
 }
 function queryLibraryPortable(entry) {
@@ -218,44 +231,43 @@ function queryLibraryDownload(entry) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 async function queryLibraryAction(action) {
-  const d = queryLibraryDraft;
+  const d = queryLibraryUiState.queryLibraryDraft;
   if (d.busy) return;
-  let entry = queryLibrarySelected(state.research_workbench || {});
+  let entry = queryLibrarySelected(getState().research_workbench || {});
   if (entry && entry.id !== d.selected) queryLibraryChoose(entry.id);
   d.error = '';
   d.busy = true;
   queryLibraryRefresh();
   try {
-    if ((action === 'import' || action === 'apply') && typeof researchDraftFlush === 'function')
-      researchDraftFlush();
+    if (action === 'import' || action === 'apply') researchDraftFlush();
     if (action === 'import') {
       if (!d.text.trim()) throw Error('検索式かJSONを入力してください。');
-      const oldIds = new Set(queryLibraryEntries(state.research_workbench).map((e) => e.id));
+      const oldIds = new Set(queryLibraryEntries(getState().research_workbench).map((e) => e.id));
       const result = await api('/research/library/import', {
         text: d.text,
         source_format: d.source_format,
         name: d.name,
         purpose: d.purpose,
       });
-      state = result.state || result;
-      if (typeof researchDraftRebase === 'function') {
+      setState(result.state || result);
+      {
         researchDraftRebase();
         researchDraftScheduleSave();
       }
-      const added = queryLibraryEntries(state.research_workbench).find((e) => !oldIds.has(e.id));
+      const added = queryLibraryEntries(getState().research_workbench).find((e) => !oldIds.has(e.id));
       if (added) queryLibraryChoose(added.id);
       d.text = '';
       d.name = '';
       d.purpose = '';
     } else if (action === 'suggest') {
       if (!entry || entry.status !== 'editable') throw Error('調整できる検索式例を選んでください。');
-      const purpose = String(d.adaptPurpose ?? state.research_workbench?.brief?.purpose ?? '').trim(),
-        goal = String(d.adaptGoal ?? state.research_workbench?.brief?.goal ?? '').trim();
+      const purpose = String(d.adaptPurpose ?? getState().research_workbench?.brief?.purpose ?? '').trim(),
+        goal = String(d.adaptGoal ?? getState().research_workbench?.brief?.goal ?? '').trim();
       if (!purpose || !goal) throw Error('今回の調査目的と、適応先の技術説明を入力してください。');
       const result = await api('/research/library/suggest', { example_id: entry.id, purpose, goal });
       queryLibraryAcceptSuggestion(entry, result);
     } else if (action === 'preview') {
-      const payload = queryLibraryPayload(entry, state.research_workbench);
+      const payload = queryLibraryPayload(entry, getState().research_workbench);
       d.preview = null;
       d.previewPayload = null;
       const result = await api('/research/library/adapt', payload);
@@ -265,7 +277,7 @@ async function queryLibraryAction(action) {
       d.previewPayload = payload;
     } else if (action === 'apply') {
       if (!d.preview?.preview_hash || !d.previewPayload) throw Error('先に条件をプレビューしてください。');
-      const current = queryLibraryPayload(entry, state.research_workbench);
+      const current = queryLibraryPayload(entry, getState().research_workbench);
       if (JSON.stringify(current) !== JSON.stringify(d.previewPayload)) {
         queryLibraryInvalidate();
         throw Error('条件が変わりました。もう一度プレビューしてください。');
@@ -274,18 +286,18 @@ async function queryLibraryAction(action) {
         ...d.previewPayload,
         expected_preview_hash: d.preview.preview_hash,
       });
-      state = result.state || result;
+      setState(result.state || result);
       d.preview = null;
       d.previewPayload = null;
-      if (typeof researchDraftRebase === 'function') {
+      {
         researchDraftRebase();
         researchDraftScheduleSave();
       }
-      if (typeof updateChrome === 'function') updateChrome();
-      if (typeof setTab === 'function') setTab('explore');
-      if (typeof setStep === 'function') setStep(1);
+      updateChrome();
+      setTab('explore');
+      setStep(1);
     }
-    if (typeof updateChrome === 'function') updateChrome();
+    updateChrome();
   } catch (error) {
     d.error = error.message || '処理に失敗しました。入力内容は保持しています。';
     throw error;
@@ -296,23 +308,28 @@ async function queryLibraryAction(action) {
 }
 function bindQueryLibrary() {
   const root = document.getElementById('query-library');
-  if (!root || root.dataset.bound) return;
-  root.dataset.bound = 'true';
-  const entry = queryLibrarySelected(state.research_workbench || {});
-  if (entry && entry.id !== queryLibraryDraft.selected) queryLibraryChoose(entry.id);
-  const listen = (selector, event, handler) => {
-    root.querySelector(selector)?.addEventListener(event, async (e) => {
-      try {
-        await handler(e);
-      } catch (error) {
-        queryLibraryDraft.error = error.message;
-        const box = document.getElementById('ql-error');
-        if (box) {
-          box.textContent = error.message;
-          box.hidden = false;
+  if (!root) return;
+  const entry = queryLibrarySelected(getState().research_workbench || {});
+  if (entry && entry.id !== queryLibraryUiState.queryLibraryDraft.selected) queryLibraryChoose(entry.id);
+  const listenField = (selector, event, handler) => {
+    listen(
+      root.querySelector(selector),
+      event,
+      async (e) => {
+        try {
+          await handler(e);
+        } catch (error) {
+          queryLibraryUiState.queryLibraryDraft.error = error.message;
+          const box = document.getElementById('ql-error');
+          if (box) {
+            box.textContent = error.message;
+            box.hidden = false;
+          }
         }
-      }
-    });
+      },
+      undefined,
+      'query-library-ui.js:1'
+    );
   };
   for (const [selector, key] of [
     ['#ql-name', 'name'],
@@ -320,38 +337,73 @@ function bindQueryLibrary() {
     ['#ql-text', 'text'],
     ['#ql-source', 'source_format'],
   ])
-    listen(selector, selector === '#ql-source' ? 'change' : 'input', (e) => {
-      queryLibraryDraft[key] = e.target.value;
+    listenField(selector, selector === '#ql-source' ? 'change' : 'input', (e) => {
+      queryLibraryUiState.queryLibraryDraft[key] = e.target.value;
     });
-  listen('#ql-adapt-purpose', 'input', (e) => {
-    queryLibraryDraft.adaptPurpose = e.target.value;
+  listenField('#ql-adapt-purpose', 'input', (e) => {
+    queryLibraryUiState.queryLibraryDraft.adaptPurpose = e.target.value;
     queryLibraryInvalidate();
   });
-  listen('#ql-adapt-goal', 'input', (e) => {
-    queryLibraryDraft.adaptGoal = e.target.value;
+  listenField('#ql-adapt-goal', 'input', (e) => {
+    queryLibraryUiState.queryLibraryDraft.adaptGoal = e.target.value;
     queryLibraryInvalidate();
   });
   root.querySelectorAll('[data-ql-select]').forEach((button) =>
-    button.addEventListener('click', () => {
-      if (queryLibraryDraft.busy) return;
-      queryLibraryChoose(button.dataset.qlSelect);
-      queryLibraryRefresh();
-    })
+    listen(
+      button,
+      'click',
+      () => {
+        if (queryLibraryUiState.queryLibraryDraft.busy) return;
+        queryLibraryChoose(button.dataset.qlSelect);
+        queryLibraryRefresh();
+      },
+      undefined,
+      'query-library-ui.js:2'
+    )
   );
   root.querySelectorAll('[data-ql-term]').forEach((input) =>
-    input.addEventListener('input', () => {
-      queryLibraryDraft.edits[entry.terms[Number(input.dataset.qlTerm)]] = input.value;
-      queryLibraryInvalidate();
-    })
+    listen(
+      input,
+      'input',
+      () => {
+        queryLibraryUiState.queryLibraryDraft.edits[entry.terms[Number(input.dataset.qlTerm)]] = input.value;
+        queryLibraryInvalidate();
+      },
+      undefined,
+      'query-library-ui.js:3'
+    )
   );
   root.querySelectorAll('[data-ql-class]').forEach((input) =>
-    input.addEventListener('input', () => {
-      queryLibraryDraft.classEdits[entry.classification_terms[Number(input.dataset.qlClass)]] = input.value;
-      queryLibraryInvalidate();
-    })
+    listen(
+      input,
+      'input',
+      () => {
+        queryLibraryUiState.queryLibraryDraft.classEdits[
+          entry.classification_terms[Number(input.dataset.qlClass)]
+        ] = input.value;
+        queryLibraryInvalidate();
+      },
+      undefined,
+      'query-library-ui.js:4'
+    )
   );
-  listen('#ql-file', 'change', (e) => queryLibraryReadFile(e.target.files?.[0]));
+  listenField('#ql-file', 'change', (e) => queryLibraryReadFile(e.target.files?.[0]));
   for (const action of ['import', 'suggest', 'preview', 'apply'])
-    listen('#ql-' + action, 'click', () => queryLibraryAction(action));
-  listen('#ql-download', 'click', () => queryLibraryDownload(entry));
+    listenField('#ql-' + action, 'click', () => queryLibraryAction(action));
+  listenField('#ql-download', 'click', () => queryLibraryDownload(entry));
 }
+
+export {
+  queryLibraryTreeHtml,
+  queryLibraryHtml,
+  queryLibraryChoose,
+  queryLibraryInvalidate,
+  queryLibraryPayload,
+  queryLibraryAcceptSuggestion,
+  queryLibraryReadFile,
+  queryLibraryPortable,
+  queryLibraryAction,
+  bindQueryLibrary,
+};
+
+export { queryLibraryRefresh as render };

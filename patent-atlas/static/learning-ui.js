@@ -1,17 +1,23 @@
-/* Map-local training controls. Polls update progress without rebuilding the form. */
-let learningDraft = {
-  mode: 'lightweight',
-  criteria: '',
-  max_items: 100,
-  threshold: 0.8,
-  include_agent: false,
-  search: '',
-  filter: 'all',
+import { $, esc, getState, $$, api, toast, on } from './core.js';
+import { refreshJob } from './job-ui.js';
+
+export const learningUiState = {
+  learningDraft: {
+    mode: 'lightweight',
+    criteria: '',
+    max_items: 100,
+    threshold: 0.8,
+    include_agent: false,
+    search: '',
+    filter: 'all',
+  },
+  learningStarting: false,
 };
-let learningStarting = false;
+/* Map-local training controls. Polls update progress without rebuilding the form. */
+
 function captureLearningDraft() {
   if (!$('#training-mode')) return;
-  learningDraft = {
+  learningUiState.learningDraft = {
     mode: $('#training-mode').value,
     criteria: $('#llm-training-criteria')?.value || '',
     max_items: $('#llm-training-limit')?.value ?? 100,
@@ -22,7 +28,7 @@ function captureLearningDraft() {
   };
 }
 function learningControlsHtml() {
-  const d = learningDraft;
+  const d = learningUiState.learningDraft;
   return `<div class="learning-row"><label class="learning-mode-label">学習・判定方式<select id="training-mode" aria-label="学習方式"><option value="lightweight" ${d.mode === 'lightweight' ? 'selected' : ''}>軽量学習 · TF-IDF</option><option value="transformer" ${d.mode === 'transformer' ? 'selected' : ''}>Transformer本体を微調整</option><option value="llm" ${d.mode === 'llm' ? 'selected' : ''}>LLMにおまかせ</option></select></label><button class="button primary" id="train-button">学習する ↗</button><label class="check" id="include-agent-control"><input id="include-agent" type="checkbox" ${d.include_agent ? 'checked' : ''}>エージェントの判定を含める</label><a class="button subtle small" href="/api/export/labels" download>判定をCSVで保存 ↓</a></div>
  <div id="llm-training-options" class="llm-training-options" hidden><label>判定基準（空欄なら採用した式の目的・観点、未設定なら探索キーワード）<textarea id="llm-training-criteria" rows="2" maxlength="5000" placeholder="例：製造工程や界面の改善を含み、充電設備だけの特許は除く">${esc(d.criteria)}</textarea></label><p id="llm-training-used-criteria" class="caption" hidden></p><div class="llm-training-limits"><label>今回判定する上限<input id="llm-training-limit" type="number" min="1" max="5000" step="1" value="${esc(d.max_items)}"></label><label>判定を採用する信頼度<input id="llm-training-threshold" type="number" min="0.5" max="1" step="0.05" value="${esc(d.threshold)}"></label></div><p class="caption">設定したLLMへタイトル・要約・IPCと判定例を渡します。採用した式があれば目的・観点も参照し、入力した判定基準を優先します。人の確定判定を優先し、低信頼の回答は保留。LLMの重みは学習しません。</p></div>
  <p id="learning-mode-note" class="caption learning-mode-note"></p>
@@ -54,9 +60,9 @@ function learningProgressState(job, training) {
 function renderLearningProgress() {
   const host = $('#learning-progress');
   if (!host) return;
-  const j = state.job || {},
-    p = learningProgressState(j, state.training),
-    busy = learningStarting || j.status === 'running';
+  const j = getState().job || {},
+    p = learningProgressState(j, getState().training),
+    busy = learningUiState.learningStarting || j.status === 'running';
   host.hidden = !p.visible;
   host.dataset.status = p.status;
   $('#map-training-progress').value = p.percent;
@@ -91,8 +97,8 @@ function renderLearningProgress() {
   if ($('#next-refine')) $('#next-refine').disabled = busy;
 }
 function renderLearningMode() {
-  const job = state.job || {},
-    training = state.training;
+  const job = getState().job || {},
+    training = getState().training;
   if (job.status === 'running' && job.kind === 'training') {
     const mode = $('#training-mode');
     if (mode && ['lightweight', 'transformer', 'llm'].includes(job.mode)) mode.value = job.mode;
@@ -129,16 +135,16 @@ function renderLearningMode() {
   $('#include-agent-control').hidden = llm;
   $('#train-button').textContent = llm ? 'LLMで判定する ↗' : '学習する ↗';
   $('#learning-mode-note').textContent = llm
-    ? state.settings.provider === 'offline'
+    ? getState().settings.provider === 'offline'
       ? 'LLMが未接続です。「表示・接続設定」でLocal LLMまたはAPIを設定してください。'
-      : `接続先：${state.settings.provider === 'local' ? 'Local LLM' : 'LLM API'} · ${state.settings.model || 'モデル未設定'}。未判定の特許から順に判定します。`
+      : `接続先：${getState().settings.provider === 'local' ? 'Local LLM' : 'LLM API'} · ${getState().settings.model || 'モデル未設定'}。未判定の特許から順に判定します。`
     : '軽量学習は必要・不要が各2件、Transformerは各4件から。関連度を計算し、次の式の特徴語・IPC候補に反映します。';
   renderLearningProgress();
 }
 async function startMapTraining() {
-  if (learningStarting || state.job?.status === 'running') return;
+  if (learningUiState.learningStarting || getState().job?.status === 'running') return;
   captureLearningDraft();
-  const d = learningDraft,
+  const d = learningUiState.learningDraft,
     body = { mode: d.mode, include_agent: d.include_agent };
   if (d.mode === 'llm') {
     const limit = Number(d.max_items),
@@ -149,11 +155,11 @@ async function startMapTraining() {
       throw new Error('信頼度は0.5〜1の数値にしてください。');
     Object.assign(body, { criteria: d.criteria, max_items: limit, threshold });
   }
-  learningStarting = true;
+  learningUiState.learningStarting = true;
   renderLearningProgress();
   try {
     const result = await api('/train', body);
-    state.job = {
+    getState().job = {
       id: result.job_id,
       kind: 'training',
       mode: d.mode,
@@ -164,10 +170,10 @@ async function startMapTraining() {
     };
     await refreshJob();
     $('#learning-progress')?.scrollIntoView?.({ block: 'nearest', behavior: 'auto' });
-    if (state.job.status === 'running')
+    if (getState().job.status === 'running')
       toast(d.mode === 'llm' ? 'LLM判定を開始しました。' : '学習を開始しました。');
   } finally {
-    learningStarting = false;
+    learningUiState.learningStarting = false;
     renderLearningProgress();
   }
 }
@@ -186,10 +192,20 @@ function bindLearningControls() {
   on('#train-button', 'click', startMapTraining);
   on('#map-training-stop', 'click', async () => {
     await api('/job/stop', {});
-    state.job.stop_requested = true;
+    getState().job.stop_requested = true;
     renderLearningProgress();
   });
-  if ($('#patent-search')) $('#patent-search').value = learningDraft.search;
-  if ($('#label-filter')) $('#label-filter').value = learningDraft.filter;
+  if ($('#patent-search')) $('#patent-search').value = learningUiState.learningDraft.search;
+  if ($('#label-filter')) $('#label-filter').value = learningUiState.learningDraft.filter;
   renderLearningMode();
 }
+
+export {
+  captureLearningDraft,
+  learningControlsHtml,
+  learningProgressState,
+  renderLearningProgress,
+  renderLearningMode,
+  startMapTraining,
+  bindLearningControls,
+};

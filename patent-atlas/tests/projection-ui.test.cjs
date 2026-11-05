@@ -1,23 +1,24 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const vm = require('node:vm');
+const { loadModule, createDom } = require('./module-harness.cjs');
 const fs = require('node:fs');
-const source = fs.readFileSync('static/projection-ui.js', 'utf8');
+
 const esc = (value) =>
   String(value ?? '').replace(
     /[&<>"']/g,
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]
   );
-function setup() {
-  const dom = {
-    '#map-svg': {},
-    '#projection-method': { value: 'pca', disabled: false },
-    '#projection-status': { textContent: '' },
-    '#projection-evaluation': { innerHTML: '' },
-  };
+async function setup() {
+  const testDom = createDom(),
+    document = testDom.window.document;
+  document.documentElement.dataset.atlasMotion = 'static';
+  document.querySelector('#step-content').innerHTML =
+    '<svg id="map-svg"></svg><input id="projection-method" value="pca"><div id="projection-status"></div><div id="projection-evaluation"></div>';
+  const dom = new Proxy({}, { get: (target, key) => target[key] || document.querySelector(key) });
   const calls = [],
     notices = [];
   const context = {
+    testDom,
     state: {
       patents: [
         { id: 'a', title: '一', abstract: '内容' },
@@ -33,7 +34,7 @@ function setup() {
     },
     toast: (...a) => notices.push(a),
     on: () => {},
-    document: { documentElement: { dataset: { atlasMotion: 'static' } } },
+    document,
     window: { matchMedia: () => ({ matches: false }) },
     setTimeout,
     clearTimeout,
@@ -41,12 +42,26 @@ function setup() {
     cancelAnimationFrame: () => {},
     requestAnimationFrame: () => 0,
   };
-  vm.createContext(context);
-  vm.runInContext(source, context);
+  context.setState = (next) => (context.state = next);
+  context.getState = () => context.state;
+  await loadModule(context, 'projection-ui.js', [
+    'projectionDatasetKey',
+    'projectionStill',
+    'projectionEvaluationHtml',
+    'projectionTooltipHtml',
+    'projectionAdoptionHtml',
+    'projectionPinColor',
+    'projectionSetZoom',
+    'projectionZoom',
+    'projectionRenderPins',
+    'projectionDraw',
+    'projectionRenderEvaluation',
+    'projectionRequest',
+  ]);
   context.projectionDraw = () => {};
   context.projectionRenderEvaluation = () => {};
   context.projectionRenderPins = () => {};
-  return { context, dom, calls, notices, read: (s) => vm.runInContext(s, context) };
+  return { context, dom, calls, notices };
 }
 function deferred() {
   let resolve, reject;
@@ -69,8 +84,8 @@ function result(method = 'pca') {
     evaluation: { human_keep: 1 },
   };
 }
-test('dataset key depends on content and order but not labels or projections', () => {
-  const { context: c } = setup();
+test('dataset key depends on content and order but not labels or projections', async () => {
+  const { context: c } = await setup();
   const a = [
     { id: 'a', title: 'x', abstract: 'y' },
     { id: 'b', title: 'z' },
@@ -85,8 +100,8 @@ test('dataset key depends on content and order but not labels or projections', (
   );
   assert.notEqual(c.projectionDatasetKey(a), c.projectionDatasetKey([...a].reverse()));
 });
-test('review scope, null denominators, AI counts and unsafe text are rendered honestly', () => {
-  const { context: c } = setup();
+test('review scope, null denominators, AI counts and unsafe text are rendered honestly', async () => {
+  const { context: c } = await setup();
   const html = c.projectionEvaluationHtml({
     human_keep: 1,
     human_exclude: 0,
@@ -109,8 +124,8 @@ test('review scope, null denominators, AI counts and unsafe text are rendered ho
   assert.doesNotMatch(html, /<img>|<script>|Infinity/);
   assert.match(html, /30 \/ 100/);
 });
-test('tooltip escapes patent content and includes abstract and classifications', () => {
-  const { context: c } = setup();
+test('tooltip escapes patent content and includes abstract and classifications', async () => {
+  const { context: c } = await setup();
   const html = c.projectionTooltipHtml({
     id: '<img>',
     title: '"title"',
@@ -127,14 +142,14 @@ test('tooltip escapes patent content and includes abstract and classifications',
   assert.match(html, /人の判断/);
   assert.doesNotMatch(html, /<script>/);
 });
-test('pin color is identity-based, not current row position', () => {
-  const { context: c } = setup();
+test('pin color is identity-based, not current row position', async () => {
+  const { context: c } = await setup();
   const before = c.projectionPinColor('JP1');
   c.state.patents.reverse();
   assert.equal(c.projectionPinColor('JP1'), before);
 });
-test('static and OS reduced-motion both disable travel animation', () => {
-  const { context: c } = setup();
+test('static and OS reduced-motion both disable travel animation', async () => {
+  const { context: c } = await setup();
   assert.equal(c.projectionStill(), true);
   c.document.documentElement.dataset.atlasMotion = 'dynamic';
   assert.equal(c.projectionStill(), false);
@@ -142,27 +157,26 @@ test('static and OS reduced-motion both disable travel animation', () => {
   assert.equal(c.projectionStill(), true);
 });
 test('new projection response keeps selected method and pinned identities', async () => {
-  const s = setup(),
+  const s = await setup(),
     c = s.context;
   c.api = async () => result('tsne');
-  s.read("atlasProjection.pins.add('b')");
+  s.context.atlasProjection.pins.add('b');
   await c.projectionRequest('tsne');
-  assert.equal(s.read('atlasProjection.method'), 'tsne');
-  assert.equal(s.read("atlasProjection.pins.has('b')"), true);
+  assert.equal(s.context.atlasProjection.method, 'tsne');
+  assert.equal(s.context.atlasProjection.pins.has('b'), true);
   assert.equal(s.dom['#projection-method'].disabled, false);
 });
 test('switching projection refreshes the already open patent detail without changing its identity or tracking', async () => {
-  const s = setup(),
-    c = s.context,
-    app = fs.readFileSync('static/app.js', 'utf8'),
-    start = app.indexOf('function showPatent('),
-    end = app.indexOf('\nasync function applyLabels(', start);
-  vm.runInContext(app.slice(start, end), c);
+  const s = await setup(),
+    c = s.context;
+  await loadModule(c, 'map-ui.js', ['showPatent']);
   c.state.clusters = [];
   s.dom['#patent-detail'] = { dataset: {}, innerHTML: '' };
-  s.read(
-    "atlasProjection.data={method:'pca',metadata:{algorithm:'中心化した特徴表現のPCA'}};atlasProjection.pins.add('b');atlasProjection.zoom={x:12,y:35,k:2}"
-  );
+  (() => {
+    s.context.atlasProjection.data = { method: 'pca', metadata: { algorithm: '中心化した特徴表現のPCA' } };
+    s.context.atlasProjection.pins.add('b');
+    s.context.atlasProjection.zoom = { x: 12, y: 35, k: 2 };
+  })();
   c.showPatent(c.state.patents[1]);
   assert.match(s.dom['#patent-detail'].innerHTML, /中心化した特徴表現のPCA/);
   const fresh = result('tsne');
@@ -172,11 +186,11 @@ test('switching projection refreshes the already open patent detail without chan
   assert.match(s.dom['#patent-detail'].innerHTML, /t-SNE/);
   assert.doesNotMatch(s.dom['#patent-detail'].innerHTML, /中心化した特徴表現のPCA/);
   assert.equal(s.dom['#patent-detail'].dataset.patentId, 'b');
-  assert.equal(s.read("atlasProjection.pins.has('b')"), true);
-  assert.equal(s.read('JSON.stringify(atlasProjection.zoom)'), '{"x":12,"y":35,"k":2}');
+  assert.equal(s.context.atlasProjection.pins.has('b'), true);
+  assert.equal(JSON.stringify(s.context.atlasProjection.zoom), '{"x":12,"y":35,"k":2}');
 });
 test('failed projection leaves the open patent detail describing the retained method', async () => {
-  const s = setup(),
+  const s = await setup(),
     c = s.context;
   s.dom['#patent-detail'] = { dataset: { patentId: 'b' }, innerHTML: 'PCA current detail' };
   let redraws = 0;
@@ -189,20 +203,20 @@ test('failed projection leaves the open patent detail describing the retained me
   assert.equal(s.dom['#patent-detail'].innerHTML, 'PCA current detail');
 });
 test('failed UMAP leaves previous coordinates and method unchanged', async () => {
-  const s = setup(),
+  const s = await setup(),
     c = s.context;
-  s.read("atlasProjection.data={method:'pca',points:[{id:'a',x:.1,y:.2}]} ");
+  s.context.atlasProjection.data = { method: 'pca', points: [{ id: 'a', x: 0.1, y: 0.2 }] };
   c.api = async () => {
     throw new Error('pip install umap-learn');
   };
   await c.projectionRequest('umap');
-  assert.equal(s.read('atlasProjection.data.points[0].x'), 0.1);
-  assert.equal(s.read('atlasProjection.method'), 'pca');
+  assert.equal(s.context.atlasProjection.data.points[0].x, 0.1);
+  assert.equal(s.context.atlasProjection.method, 'pca');
   assert.match(s.dom['#projection-status'].textContent, /pip install/);
   assert.equal(s.dom['#projection-method'].value, 'pca');
 });
 test('late response cannot replace newer method selection', async () => {
-  const s = setup(),
+  const s = await setup(),
     c = s.context,
     a = deferred(),
     b = deferred();
@@ -213,10 +227,10 @@ test('late response cannot replace newer method selection', async () => {
   await second;
   a.resolve(result('pca'));
   await first;
-  assert.equal(s.read('atlasProjection.method'), 'tsne');
+  assert.equal(s.context.atlasProjection.method, 'tsne');
 });
 test('dataset replaced while projection is running rejects response', async () => {
-  const s = setup(),
+  const s = await setup(),
     c = s.context,
     a = deferred();
   c.api = () => a.promise;
@@ -224,10 +238,10 @@ test('dataset replaced while projection is running rejects response', async () =
   c.state.patents[0].abstract = 'changed';
   a.resolve(result('tsne'));
   await pending;
-  assert.equal(s.read('atlasProjection.data'), null);
+  assert.equal(s.context.atlasProjection.data, null);
 });
 test('detached map cannot receive a stale projection', async () => {
-  const s = setup(),
+  const s = await setup(),
     c = s.context,
     a = deferred();
   c.api = () => a.promise;
@@ -235,7 +249,7 @@ test('detached map cannot receive a stale projection', async () => {
   s.dom['#map-svg'] = {};
   a.resolve(result('tsne'));
   await pending;
-  assert.equal(s.read('atlasProjection.data'), null);
+  assert.equal(s.context.atlasProjection.data, null);
 });
 test('duplicate or nonfinite returned coordinates never replace a valid layout', async () => {
   for (const points of [
@@ -249,28 +263,28 @@ test('duplicate or nonfinite returned coordinates never replace a valid layout',
     ],
     [{ id: 'a', x: 0, y: 0 }],
   ]) {
-    const s = setup(),
+    const s = await setup(),
       c = s.context;
     c.api = async () => ({ ...result('tsne'), projection: { ...result('tsne').projection, points } });
     await c.projectionRequest('tsne');
-    assert.equal(s.read('atlasProjection.data'), null);
+    assert.equal(s.context.atlasProjection.data, null);
     assert.equal(s.notices.length, 1);
   }
 });
-test('zoom is bounded and preserves cursor anchor', () => {
-  const s = setup(),
+test('zoom is bounded and preserves cursor anchor', async () => {
+  const s = await setup(),
     c = s.context;
   c.projectionSetZoom = () => {};
   c.projectionZoom(2, { x: 100, y: 50 });
-  assert.equal(s.read('atlasProjection.zoom.k'), 2);
-  assert.equal(s.read('atlasProjection.zoom.x'), -100);
+  assert.equal(s.context.atlasProjection.zoom.k, 2);
+  assert.equal(s.context.atlasProjection.zoom.x, -100);
   c.projectionZoom(100);
-  assert.equal(s.read('atlasProjection.zoom.k'), 12);
+  assert.equal(s.context.atlasProjection.zoom.k, 12);
   c.projectionZoom(0.0001);
-  assert.equal(s.read('atlasProjection.zoom.k'), 0.5);
+  assert.equal(s.context.atlasProjection.zoom.k, 0.5);
 });
-test('adoption labels unknown CSV provenance instead of presenting S/N as validation of the new query', () => {
-  const { context: c } = setup();
+test('adoption labels unknown CSV provenance instead of presenting S/N as validation of the new query', async () => {
+  const { context: c } = await setup();
   c.state.queries = [{ id: 'q-new', version: 3 }];
   c.state.search_result = { query_id: 'q-old' };
   let html = c.projectionAdoptionHtml();
@@ -282,8 +296,8 @@ test('adoption labels unknown CSV provenance instead of presenting S/N as valida
   assert.doesNotMatch(html, /projection-adopt-unlinked/);
   assert.match(html, /検索式 v3/);
 });
-test('adoption history escapes untrusted notes and does not require any existing query', () => {
-  const { context: c } = setup();
+test('adoption history escapes untrusted notes and does not require any existing query', async () => {
+  const { context: c } = await setup();
   assert.match(c.projectionAdoptionHtml(), /初案または次の検索式/);
   c.state.queries = [{ id: '<unsafe>', version: 1 }];
   c.state.research_workbench = {

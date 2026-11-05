@@ -1,34 +1,22 @@
-'use strict';
+import { esc as researchProgressEscape, replaceHtml } from './core.js';
 
+export const researchProgressState = {
+  researchProgressCurrent: null,
+  researchProgressSequence: 0,
+  researchProgressTimer: null,
+};
 /* Display only: no request, workspace mutation, or connection-secret storage. */
-let researchProgressCurrent = null;
-let researchProgressSequence = 0;
-let researchProgressTimer = null;
 
 function researchProgressNow() {
-  const monotonic = globalThis.performance?.now?.();
+  const monotonic = performance?.now?.();
   return Number.isFinite(monotonic) ? monotonic : Date.now();
 }
 
-function researchProgressEscape(value) {
-  return String(value ?? '').replace(
-    /[&<>"']/g,
-    (character) =>
-      ({
-        '&': '&amp;',
-        '<': '&lt;',
-        '>': '&gt;',
-        '"': '&quot;',
-        "'": '&#39;',
-      })[character]
-  );
-}
-
 function researchProgressIsRunning() {
-  return researchProgressCurrent?.status === 'running';
+  return researchProgressState.researchProgressCurrent?.status === 'running';
 }
 
-function researchProgressElapsed(progress = researchProgressCurrent) {
+function researchProgressElapsed(progress = researchProgressState.researchProgressCurrent) {
   if (!progress) return '0:00';
   const end = progress.finishedAt ?? researchProgressNow();
   const seconds = Math.max(0, Math.floor((end - progress.startedAt) / 1000));
@@ -36,7 +24,7 @@ function researchProgressElapsed(progress = researchProgressCurrent) {
 }
 
 function researchProgressHost() {
-  return typeof document === 'undefined' ? null : document.getElementById('research-progress');
+  return document.getElementById('research-progress');
 }
 
 function researchProgressTick() {
@@ -44,7 +32,10 @@ function researchProgressTick() {
   const host = researchProgressHost();
   if (!host) return;
   const clock = host.querySelector('[data-research-progress-elapsed]');
-  if (host.dataset.researchProgressToken !== String(researchProgressCurrent.token) || !clock) {
+  if (
+    host.dataset.researchProgressToken !== String(researchProgressState.researchProgressCurrent.token) ||
+    !clock
+  ) {
     renderResearchProgress();
     return;
   }
@@ -65,8 +56,8 @@ function researchProgressStart({ label, useLlm = false, settings = {} } = {}) {
         : 'llm'
     : 'manual';
   const timeout = settings?.llm_timeout;
-  researchProgressCurrent = {
-    token: ++researchProgressSequence,
+  researchProgressState.researchProgressCurrent = {
+    token: ++researchProgressState.researchProgressSequence,
     label: typeof label === 'string' && label.trim() ? label.trim().slice(0, 160) : '案の作成',
     provider,
     model: usesLlm && typeof settings?.model === 'string' ? settings.model.trim().slice(0, 160) : '',
@@ -77,13 +68,14 @@ function researchProgressStart({ label, useLlm = false, settings = {} } = {}) {
     error: '',
   };
   renderResearchProgress();
-  if (researchProgressTimer !== null) clearInterval(researchProgressTimer);
-  researchProgressTimer = setInterval(researchProgressTick, 1000);
-  return researchProgressCurrent.token;
+  if (researchProgressState.researchProgressTimer !== null)
+    clearInterval(researchProgressState.researchProgressTimer);
+  researchProgressState.researchProgressTimer = setInterval(researchProgressTick, 1000);
+  return researchProgressState.researchProgressCurrent.token;
 }
 
 function researchProgressFinish(token, error) {
-  const progress = researchProgressCurrent;
+  const progress = researchProgressState.researchProgressCurrent;
   if (!progress || progress.token !== token || progress.status !== 'running') return false;
   const failed = error !== undefined && error !== null;
   progress.finishedAt = researchProgressNow();
@@ -97,14 +89,15 @@ function researchProgressFinish(token, error) {
           : '処理を完了できませんでした。'
       ).slice(0, 800)
     : '';
-  if (researchProgressTimer !== null) clearInterval(researchProgressTimer);
-  researchProgressTimer = null;
+  if (researchProgressState.researchProgressTimer !== null)
+    clearInterval(researchProgressState.researchProgressTimer);
+  researchProgressState.researchProgressTimer = null;
   renderResearchProgress();
   return true;
 }
 
 function researchProgressHtml() {
-  const progress = researchProgressCurrent;
+  const progress = researchProgressState.researchProgressCurrent;
   if (!progress) return '';
   const running = progress.status === 'running';
   const failed = progress.status === 'error';
@@ -136,8 +129,17 @@ function researchProgressHtml() {
 function renderResearchProgress() {
   const host = researchProgressHost();
   if (!host) return;
-  host.hidden = researchProgressCurrent === null;
-  host.innerHTML = researchProgressHtml();
-  if (researchProgressCurrent) host.dataset.researchProgressToken = String(researchProgressCurrent.token);
+  host.hidden = researchProgressState.researchProgressCurrent === null;
+  replaceHtml(host, researchProgressHtml());
+  if (researchProgressState.researchProgressCurrent)
+    host.dataset.researchProgressToken = String(researchProgressState.researchProgressCurrent.token);
   else delete host.dataset.researchProgressToken;
 }
+
+export {
+  researchProgressIsRunning,
+  researchProgressStart,
+  researchProgressFinish,
+  researchProgressHtml,
+  renderResearchProgress,
+};
