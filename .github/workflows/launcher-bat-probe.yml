@@ -1,0 +1,52 @@
+name: launcher bat probe (temporary)
+
+on:
+  push:
+    branches: [claude/app-launcher-portal-8zgtko]
+    paths: [".github/workflows/launcher-bat-probe.yml", "launcher/start_portal.bat"]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run start_portal.bat as "Download ZIP" delivers it (LF) and with CRLF
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          # ZIP で届くのと同じバイト列（リポジトリの中身そのまま）を使う。
+          # PowerShell のパイプは文字列に変えてしまうので、cmd のリダイレクトでバイトのまま書き出す
+          $co = [System.IO.File]::ReadAllBytes("launcher/start_portal.bat")
+          Write-Host ("checked-out bat (git の CRLF 変換後): {0} bytes, CR count = {1}" -f $co.Length, ($co | Where-Object { $_ -eq 13 }).Count)
+          cmd /c "git -c core.autocrlf=false cat-file blob HEAD:launcher/start_portal.bat > repo_lf.bat"
+          $lf = [System.IO.File]::ReadAllBytes("repo_lf.bat")
+          Write-Host ("repo blob (ZIP と同じ): {0} bytes, CR count = {1}" -f $lf.Length, ($lf | Where-Object { $_ -eq 13 }).Count)
+          $crlfText = [System.Text.Encoding]::UTF8.GetString($lf).Replace("`r`n", "`n").Replace("`n", "`r`n")
+          $crlf = [System.Text.UTF8Encoding]::new($false).GetBytes($crlfText)
+          $stub = "import sys; print('LAUNCHER REACHED args=' + repr(sys.argv[1:]))"
+          $cases = @(
+            @{ name = "LF";          dir = "probe_lf";             bytes = $lf },
+            @{ name = "CRLF";        dir = "probe_crlf";           bytes = $crlf },
+            @{ name = "LF+JPdir";    dir = "probe 日本語_lf";       bytes = $lf },
+            @{ name = "CRLF+JPdir";  dir = "probe 日本語_crlf";     bytes = $crlf }
+          )
+          foreach ($c in $cases) {
+            $d = Join-Path $PWD $c.dir
+            New-Item -ItemType Directory -Force $d | Out-Null
+            [System.IO.File]::WriteAllBytes((Join-Path $d "start_portal.bat"), $c.bytes)
+            Set-Content -Path (Join-Path $d "launcher.py") -Value $stub -Encoding utf8
+            foreach ($cp in 932, 437) {
+              $bat = Join-Path $d "start_portal.bat"
+              $out = cmd /d /c "chcp $cp >nul & call `"$bat`" --probe < nul & echo EXITCODE=%ERRORLEVEL%" 2>&1 | Out-String
+              $reached = $out -match "LAUNCHER REACHED"
+              Write-Host ("===== case={0} codepage={1} -> launcher reached: {2}" -f $c.name, $cp, $reached)
+              Write-Host $out
+            }
+          }
