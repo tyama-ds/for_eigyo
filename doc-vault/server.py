@@ -19,6 +19,7 @@ import os
 import secrets
 import sys
 import threading
+import urllib.request
 import webbrowser
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -523,8 +524,52 @@ def startup() -> None:
             INDEXER.enqueue(d["id"], ALL_STAGES if not d["chars"] else ("embed", "graph", "summary"))
 
 
+class Server(ThreadingHTTPServer):
+    # Windows の SO_REUSEADDR は、他のプロセスが待ち受け中のポートにも重ねて待ち受けることを許す。
+    # start.bat を2回ダブルクリックすると2つ目も起動したように見え、2つの取り込み処理が同じデータを
+    # 書き換えてしまうため、Windows では付けない（付けなくても、終了した直後の同じ番号で起動し直せる）
+    allow_reuse_address = os.name != "nt"
+    daemon_threads = True
+
+
+def running_app(url: str, timeout: float = 2.0) -> str | None:
+    """url で待ち受けている相手のアプリ名（/api/health の app）。応答が無い・別物なら None。"""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))   # 127.0.0.1 をプロキシに送らない
+    try:
+        with opener.open(url + "/api/health", timeout=timeout) as r:
+            app = json.loads(r.read().decode("utf-8")).get("app")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return str(app) if app else None
+
+
+def explain_busy_port(url: str, port: int, error: OSError, *, open_browser: bool) -> int:
+    """待ち受けに失敗したとき: Doc Vault がもう動いていればそれを開いて 0、それ以外は理由を表示して 1。"""
+    app = running_app(url)
+    if app == "doc-vault":
+        print(f"Doc Vault はすでに起動しています: {url}")
+        if open_browser:
+            webbrowser.open(url)
+        return 0
+    print(f"[エラー] ポート {port} で待ち受けられません（{error}）")
+    if app:
+        print(f"  別のアプリ（{app}）が使っています。")
+    print(f"  別の番号で起動するには --port を付けてください（例: --port {port + 1}）")
+    return 1
+
+
+def _safe_stdio() -> None:
+    # 出力をファイルやパイプに送ると、英語版 Windows では日本語を書けずに落ちるため、書けない文字は置き換える
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def main() -> None:
     global TOKEN
+    _safe_stdio()
     parser = argparse.ArgumentParser(description="Doc Vault server")
     parser.add_argument("--host", default=HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
@@ -544,9 +589,12 @@ def main() -> None:
     TOKEN = args.token
     if args.host not in ("127.0.0.1", "localhost", "::1") and not TOKEN:
         TOKEN = secrets.token_urlsafe(12)
-    threading.Thread(target=startup, daemon=True).start()
-    server = ThreadingHTTPServer((args.host, args.port), Handler)
     url = f"http://{'127.0.0.1' if args.host in ('0.0.0.0', '::') else args.host}:{args.port}"
+    try:
+        server = Server((args.host, args.port), Handler)
+    except OSError as e:
+        sys.exit(explain_busy_port(url, args.port, e, open_browser=args.open))
+    threading.Thread(target=startup, daemon=True).start()     # 待ち受けられてから取り込みを再開する
     print(f"Doc Vault {__version__}: {url}  (Ctrl+C で終了)")
     print(f"  データ: {db.DATA_DIR}")
     if TOKEN:
