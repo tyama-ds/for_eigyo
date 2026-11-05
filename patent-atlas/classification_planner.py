@@ -3,6 +3,7 @@
 import copy
 import re
 from classification_retrieval import retrieve_elements
+from common import json_schema, validate_llm_object
 
 ELEMENT_SYSTEM = """特許検索のため、入力技術を構成・機能・実現手段・要素間の関係に分解してください。
 特定分野に固定せず、具体的な入力から2〜6要素、最大8要素を作ります。単純な技術なら1要素でも構いません。
@@ -25,13 +26,9 @@ reasonは提供定義と要素の対応を60字程度で説明してください
 {"selections":[{"key":"提供された分類キー","element_ids":["e1"],"relation":"direct","reason":"定義との対応"}]}"""
 
 
-def _object(properties):
-    return dict(type="object", additionalProperties=False, properties=properties, required=list(properties))
-
-
 def element_schema():
     text = dict(type="string", minLength=1, maxLength=160)
-    element = _object(
+    element = json_schema(
         dict(
             id=dict(type="string", pattern=r"^e[1-8]$"),
             name=text,
@@ -39,7 +36,7 @@ def element_schema():
             relation=dict(type="string", maxLength=300),
         )
     )
-    return _object(
+    return json_schema(
         dict(
             elements=dict(type="array", minItems=1, maxItems=8, items=element),
             questions=dict(type="array", maxItems=3, items=dict(type="string", maxLength=300)),
@@ -48,15 +45,19 @@ def element_schema():
 
 
 def validate_elements(result):
-    if not isinstance(result, dict) or set(result) != {"elements", "questions"}:
-        raise ValueError("LLMの要素分解には elements と questions が必要です。分類コードの直接生成は採用しません。")
+    validate_llm_object(
+        result,
+        {"elements", "questions"},
+        message="LLMの要素分解には elements と questions が必要です。分類コードの直接生成は採用しません。",
+    )
     elements = result["elements"]
     if not isinstance(elements, list) or not 1 <= len(elements) <= 8:
         raise ValueError("技術要素は1〜8件で返してください。")
     seen = set()
     for e in elements:
-        if not isinstance(e, dict) or set(e) != {"id", "name", "terms", "relation"}:
-            raise ValueError("各要素には id / name / terms / relation が必要です。")
+        validate_llm_object(
+            e, {"id", "name", "terms", "relation"}, message="各要素には id / name / terms / relation が必要です。"
+        )
         if not isinstance(e["id"], str) or not re.fullmatch(r"e[1-8]", e["id"]) or e["id"] in seen:
             raise ValueError("技術要素のIDが不正または重複しています。")
         seen.add(e["id"])
@@ -93,12 +94,12 @@ def review(text, elements, candidates, settings, complete, context=None):
         return [], []
     allowed = {r["kind"] + ":" + r["code"]: r for r in candidates[:96]}
     element_ids = {e["id"] for e in elements}
-    schema = _object(
+    schema = json_schema(
         dict(
             selections=dict(
                 type="array",
                 maxItems=24,
-                items=_object(
+                items=json_schema(
                     dict(
                         key=dict(type="string", enum=list(allowed)),
                         element_ids=dict(
@@ -126,17 +127,14 @@ def review(text, elements, candidates, settings, complete, context=None):
     if context:
         payload["research_context"] = copy.deepcopy(context)
     result = complete(settings, REVIEW_SYSTEM, payload, response_schema=schema)
-    if (
-        not isinstance(result, dict)
-        or set(result) != {"selections"}
-        or not isinstance(result["selections"], list)
-        or len(result["selections"]) > 24
-    ):
+    validate_llm_object(
+        result, {"selections"}, message="LLMの分類照合は selections 配列で返してください。前回の案は保持しています。"
+    )
+    if not isinstance(result["selections"], list) or len(result["selections"]) > 24:
         raise ValueError("LLMの分類照合は selections 配列で返してください。前回の案は保持しています。")
     selected, seen, rejected = [], set(), []
     for item in result["selections"]:
-        if not isinstance(item, dict) or set(item) != {"key", "element_ids", "relation", "reason"}:
-            raise ValueError("分類照合の項目が不正です。")
+        validate_llm_object(item, {"key", "element_ids", "relation", "reason"}, message="分類照合の項目が不正です。")
         key = item["key"]
         if not isinstance(key, str) or key not in allowed:
             rejected.append(dict(kind="", code=str(key)[:100], reason="提示した公式分類候補にないキーです。"))

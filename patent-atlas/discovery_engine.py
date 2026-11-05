@@ -10,7 +10,6 @@ from __future__ import annotations
 from collections import defaultdict
 from copy import deepcopy
 from datetime import datetime, timezone
-from functools import lru_cache
 from hashlib import sha256
 import re
 import unicodedata
@@ -20,6 +19,7 @@ import classification_bridge
 import classification_retrieval
 import classification_explorer as explorer
 from catalog import keywords as parse_keywords
+from common import is_plain_term, text_contains, validate_llm_object
 
 
 MAX_RECOMMENDATIONS = 60
@@ -91,76 +91,10 @@ def _english(values, limit=8):
             if isinstance(v, str)
             and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 '\-/,.]{0,99}", v.strip())
             and re.search(r"[A-Za-z]", v)
-            and not re.search(r"\b(?:AND|OR|NOT|PROX)\b", v)
+            and is_plain_term(v)
         ),
         limit,
     )
-
-
-def _definition_words(text):
-    """Literal definition words, without cross-reference text in parentheses."""
-    clean, depth = [], 0
-    for char in text:
-        if char == "(":
-            depth += 1
-        elif char == ")":
-            depth = max(0, depth - 1)
-        elif not depth:
-            clean.append(char)
-    words = set()
-    stop = {"a", "an", "and", "or", "of", "for", "by", "in", "to", "with", "the", "thereof", "therefor", "e", "g", "i"}
-    for word in re.findall(r"[a-z]+", "".join(clean).casefold()):
-        if word in stop:
-            continue
-        if word.startswith("manufactur"):
-            word = "manufactur"
-        elif word.endswith("ies") and len(word) > 4:
-            word = word[:-3] + "y"
-        elif word.endswith("es") and word[:-2].endswith(("ss", "sh", "ch")):
-            word = word[:-2]
-        elif word.endswith("s") and not word.endswith("ss") and len(word) > 3:
-            word = word[:-1]
-        if word.endswith("ing") and len(word) > 6:
-            word = word[:-3]
-        words.add(word)
-    return frozenset(words)
-
-
-@lru_cache(maxsize=2048)
-def _nearby_definitions(code):
-    """Only the symbol and two group parents; macro headings cannot justify a hit."""
-    result = []
-    item = classification_catalog.lookup("IPC", code)
-    while item and "/" in item["code"] and len(result) < 3:
-        result.append(_definition_words(item["title"]))
-        item = classification_catalog.parent("IPC", item["code"])
-    return tuple(result)
-
-
-def _dictionary_matches(text, limit=2):
-    required = _definition_words(text)
-    if not required:
-        return []
-    ranked = []
-    for row in classification_catalog.search("IPC", text, limit=200):
-        if "/" not in row["code"]:
-            continue
-        definitions = _nearby_definitions(row["code"])
-        if not definitions or not (required & definitions[0]):
-            continue
-        # Broad ancestor headings often enumerate alternatives (e.g. lithium,
-        # sodium and potassium). Such words cannot validate an unrelated child.
-        if not required <= set().union(*definitions):
-            continue
-        locations = [next(i for i, words in enumerate(definitions) if word in words) for word in required]
-        own_matches = len(required & definitions[0])
-        precision = own_matches / max(1, len(definitions[0]))
-        score = sum((1, 0.6, 0.3)[position] for position in locations) * 4 + precision * 16
-        ranked.append((score, row))
-    # Equal textual support should expose the broader process before a highly
-    # specialised sibling (e.g. sintering generally before reaction sintering).
-    ranked.sort(key=lambda value: (-value[0], len(value[1]["ancestors"])))
-    return [row for _, row in ranked[:limit]]
 
 
 def _query(topic_terms, facet_id, label, terms=(), ipc_codes=(), reason=""):
@@ -211,8 +145,7 @@ def _family(patent):
 
 
 def _facets_for(patent, facets):
-    text = (str(patent.get("title", "")) + " " + str(patent.get("abstract", ""))).casefold()
-    return [f["id"] for f in facets if any(t.casefold() in text for t in f["terms"] + f["english_terms"])]
+    return [f["id"] for f in facets if any(text_contains(patent, t) for t in f["terms"] + f["english_terms"])]
 
 
 def _classifications(patent, warnings):
@@ -224,8 +157,13 @@ def _classifications(patent, warnings):
 def validate_llm_plan(value):
     """Reject unrelated or malformed model JSON before replacing a saved plan."""
     fields = ("english_terms", "facets", "candidate_hypotheses")
-    if not isinstance(value, dict) or not any(key in value for key in fields):
-        raise ValueError("LLMの探索計画に english_terms または facets がありません。既存の計画は保持しました。")
+    validate_llm_object(
+        value,
+        (),
+        any_keys=fields,
+        allow_extra=True,
+        message="LLMの探索計画に english_terms または facets がありません。既存の計画は保持しました。",
+    )
     for name in fields:
         if name not in value:
             continue

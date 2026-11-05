@@ -12,7 +12,7 @@ import json
 import re
 from uuid import uuid4
 
-from query_formats import _class, _literal, build_tree
+from query_formats import _class, _literal, build_tree, tree_data
 
 MAX_INPUT = 100_000
 MAX_NODES = 256
@@ -38,14 +38,6 @@ def _string(value, label, limit=500, *, empty=True):
     return value.strip()
 
 
-def _node_dict(node):
-    if node.op == "text":
-        return {"op": "text", "value": node.value}
-    if node.op == "class":
-        return {"op": "class", "value": node.value, "system": node.system}
-    return {"op": node.op, "children": [_node_dict(c) for c in node.children]}
-
-
 def validate_tree(tree):
     """Return only canonical, bounded data; never trust imported extra fields."""
     count = 0
@@ -66,7 +58,7 @@ def validate_tree(tree):
                 if any(c in value for c in "\r\n\t"):
                     raise ValueError("検索語句に改行やタブを含められません。")
                 return {"op": "text", "value": _literal(value)}
-            return _node_dict(_class(value, node.get("system")))
+            return tree_data(_class(value, node.get("system")))
         if op not in ("and", "or", "not"):
             raise ValueError("未対応の論理演算子です。AND・OR・二項のNOTで記述してください。")
         children = node.get("children")
@@ -129,7 +121,7 @@ def _parse_jplatpat(text):
             elif re.search(r"\s", value):
                 raise ValueError("空白を含む句は引用符で囲んでください。単語への分割は行いません。")
             return {"op": "text", "value": value}
-        return _node_dict(_class(value, {"IP": "IPC", "FI": "FI", "CP": "CPC", "FT": "F-term"}[field]))
+        return tree_data(_class(value, {"IP": "IPC", "FI": "FI", "CP": "CPC", "FT": "F-term"}[field]))
 
     def sequence(depth):
         nonlocal index
@@ -266,7 +258,7 @@ def parse_example(text, source_format="jplatpat", name="", purpose=""):
                 # OR classifications, OR inclusions, then AND NOT exclusions.
                 if not any(query.get(k) for k in ("keywords", "classifications")):
                     raise ValueError("JSONに構造化した条件がありません。expressionだけの式は参照として保持します。")
-                tree = validate_tree(_node_dict(build_tree(query)))
+                tree = validate_tree(tree_data(build_tree(query)))
         elif source_format == "jplatpat":
             tree = _parse_jplatpat(text)
         else:
@@ -309,7 +301,7 @@ def adapt_example(entry, replacements=None, class_replacements=None):
         elif node["op"] == "class":
             key = node["system"] + ":" + node["value"]
             if key in class_replacements:
-                node = _node_dict(_class(class_replacements[key], node["system"]))
+                node = tree_data(_class(class_replacements[key], node["system"]))
         elif "children" in node:
             node["children"] = [change(child) for child in node["children"]]
         return node
@@ -325,18 +317,3 @@ def adapt_example(entry, replacements=None, class_replacements=None):
         "class_replacements": class_replacements,
     }
     return query
-
-
-def portable_example(entry):
-    """A plain-data export that a user can edit and re-import on another PC."""
-    if not isinstance(entry, dict) or entry.get("status") != "editable":
-        raise ValueError("参照専用の例は構造化JSONに変換できません。元の式をコピーしてください。")
-    query, _, _ = _query_from_tree(validate_tree(entry["query"]["boolean_tree"]))
-    return {
-        "schema_version": 1,
-        "name": entry.get("name", ""),
-        "purpose": entry.get("purpose", ""),
-        "facets": deepcopy(entry.get("facets", [])),
-        "source_format": entry.get("source_format", ""),
-        "query": query,
-    }

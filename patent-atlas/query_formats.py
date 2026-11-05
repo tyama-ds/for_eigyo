@@ -7,6 +7,7 @@ Reference verification is not a claim that a live database executed the query.
 
 from dataclasses import dataclass
 import re
+from common import is_plain_term
 
 VERIFIED_AT = "2026-09-12"
 PROFILES = {
@@ -243,13 +244,12 @@ def _strings(value, name, max_items=100):
 
 
 def _literal(value):
-    # Do not pretend punctuation/wildcards have identical escaping semantics on every DB.
-    if re.search(r"""[\x00-\x1f\x7f"'\[\](){}\\/:=+*?$#^~<>|!;]""", value):
+    if not is_plain_term(value, literal=True):
+        if value.upper() in {"AND", "OR", "NOT", "ANDNOT", "ADJ", "NEAR", "SAME", "WITH"}:
+            raise ValueError("演算子だけの語句は出力できません: " + value)
         raise ValueError(
             "この形式変換では検索演算子・引用符等を含む語句を扱えません。出力用語句を修正してください: " + value
         )
-    if value.upper() in {"AND", "OR", "NOT", "ANDNOT", "ADJ", "NEAR", "SAME", "WITH"}:
-        raise ValueError("演算子だけの語句は出力できません: " + value)
     return value
 
 

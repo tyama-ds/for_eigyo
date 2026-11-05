@@ -1,12 +1,11 @@
 """Pure state and validation helpers for the CSV orchestration cycle."""
 
-import hashlib
-import json
 import math
 import time
 import uuid
 
 from llm_judgment import is_assessed
+from common import fingerprint as hash_fingerprint, label_counts
 
 
 STEPS = [
@@ -26,9 +25,7 @@ def fingerprint(patents):
     fields = ("id", "title", "abstract", "ipc", "fi", "fterm", "applicant", "year", "family", "family_id")
     rows = [{field: row.get(field) for field in fields} for row in patents]
     rows.sort(key=lambda row: str(row.get("id")))
-    return hashlib.sha256(
-        json.dumps(rows, ensure_ascii=False, sort_keys=True, allow_nan=False).encode("utf-8")
-    ).hexdigest()
+    return hash_fingerprint(rows)
 
 
 def checked_options(body, keywords):
@@ -65,14 +62,8 @@ def checked_options(body, keywords):
 
 
 def summary(patents):
-    return dict(
-        documents=len(patents),
-        keep=sum(row.get("label") == "keep" for row in patents),
-        exclude=sum(row.get("label") == "exclude" for row in patents),
-        deferred=sum(not row.get("label") and is_assessed(row) for row in patents),
-        unprocessed=sum(not is_assessed(row) for row in patents),
-        human=sum(row.get("label_source") == "human" for row in patents),
-    )
+    counts = label_counts(patents, deferred_empty_only=True)
+    return dict(documents=len(patents), **counts, human=sum(row.get("label_source") == "human" for row in patents))
 
 
 def fresh_rows(patents):

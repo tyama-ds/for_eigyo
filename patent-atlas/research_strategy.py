@@ -13,6 +13,7 @@ import re
 from catalog import keywords as parse_keywords
 from llm import complete
 from prompt_templates import PROMPT_VERSION, RESEARCH_PLAN_SYSTEM
+from common import is_plain_term, text_contains, json_schema, validate_llm_object
 
 MAX_CONCEPTS = 8
 MAX_TERMS = 12
@@ -111,12 +112,7 @@ def normalize_brief(brief):
 
 def _term(value):
     value = _text(value, "検索語", 160, empty=False)
-    # Renderer-owned Boolean syntax cannot be smuggled through a term field.
-    if (
-        re.search(r"[\x00-\x1f\x7f*?\[\]{}|<>:=]", value)
-        or re.search(r"\b(?:AND|OR|NOT|ANDNOT|NEAR|ADJ|PROX)\b", value)
-        or re.search(r"/(?:IP|FI|FT|CP|TX|TI|AB|CL)\b", value, re.I)
-    ):
+    if not is_plain_term(value):
         raise ValueError(
             "検索語にはBoolean式・フィールド指定・ワイルドカードではなく単語やフレーズを指定してください。"
         )
@@ -195,11 +191,7 @@ def selected_sources(patents, target_ids):
 
 
 def _evidence_ids(terms, sources):
-    return [
-        row["id"]
-        for row in sources
-        if any(term.casefold() in (row["title"] + "\n" + row["abstract"]).casefold() for term in terms)
-    ]
+    return [row["id"] for row in sources if any(text_contains(row, term, separate_fields=True) for term in terms)]
 
 
 def _aspect_role(value):
@@ -293,11 +285,8 @@ def response_schema(source_ids):
     evidence = {"type": "string"}
     if source_ids:
         evidence["enum"] = list(source_ids)
-    return {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["purpose", "summary", "concepts", "questions"],
-        "properties": {
+    return json_schema(
+        {
             "purpose": {"type": "string"},
             "summary": {"type": "string"},
             "questions": {"type": "array", "maxItems": 5, "items": {"type": "string"}},
@@ -305,11 +294,8 @@ def response_schema(source_ids):
                 "type": "array",
                 "minItems": 1,
                 "maxItems": MAX_CONCEPTS,
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "required": ["id", "name", "role", "terms", "abstract_terms", "reason", "evidence_ids"],
-                    "properties": {
+                "items": json_schema(
+                    {
                         "id": {"type": "string"},
                         "name": {"type": "string"},
                         "role": {"type": "string", "enum": sorted(_ROLES)},
@@ -320,15 +306,22 @@ def response_schema(source_ids):
                         "group_reason": {"type": "string", "maxLength": 300},
                         "evidence_ids": {"type": "array", "maxItems": len(source_ids), "items": evidence},
                     },
-                },
+                    required=["id", "name", "role", "terms", "abstract_terms", "reason", "evidence_ids"],
+                    additional_properties=False,
+                ),
             },
         },
-    }
+        required=["purpose", "summary", "concepts", "questions"],
+        additional_properties=False,
+    )
 
 
 def _validate_result(result, anchors, source_ids, purpose):
-    if not isinstance(result, dict) or set(result) != {"purpose", "summary", "concepts", "questions"}:
-        raise ValueError("LLMの探索計画にはpurpose / summary / concepts / questionsが必要です。")
+    validate_llm_object(
+        result,
+        {"purpose", "summary", "concepts", "questions"},
+        message="LLMの探索計画にはpurpose / summary / concepts / questionsが必要です。",
+    )
     returned_purpose = _text(result["purpose"], "検索目的", 300, empty=False)
     if returned_purpose != purpose:
         raise ValueError("LLMが検索目的を書き換えました。元の目的を保持して再実行してください。")
@@ -343,8 +336,12 @@ def _validate_result(result, anchors, source_ids, purpose):
     required_fields = {"id", "name", "role", "terms", "abstract_terms", "reason", "evidence_ids"}
     allowed_fields = required_fields | {"or_group", "group_reason"}
     for item in items:
-        if not isinstance(item, dict) or not required_fields <= set(item) or not set(item) <= allowed_fields:
-            raise ValueError("LLMの観点に必要な項目が不足しているか、不要な項目が含まれています。")
+        validate_llm_object(
+            item,
+            required_fields,
+            optional_keys=allowed_fields - required_fields,
+            message="LLMの観点に必要な項目が不足しているか、不要な項目が含まれています。",
+        )
         concept_id = _text(item["id"], "観点ID", 64, empty=False)
         if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", concept_id) or concept_id in seen:
             raise ValueError("LLMの観点IDの形式または重複を確認してください。")

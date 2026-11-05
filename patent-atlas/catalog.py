@@ -1,3 +1,5 @@
+from common import tokenize_keywords as keywords
+
 """Small, source-linked seed catalog. This is NOT a complete classification index."""
 
 CATALOG = [
@@ -66,38 +68,6 @@ CATALOG = [
         source="https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/F_TERM/ja/fTermList/fTermList5H029.html",
     ),
 ]
-
-
-def keywords(text):
-    import re
-
-    if not isinstance(text, str):
-        raise ValueError("キーワードは文字列で入力してください。")
-    if text.count('"') % 2:
-        raise ValueError("フレーズを囲む二重引用符が閉じていません。")
-    out = []
-    for match in re.finditer(r'"([^"\r\n]+)"|([^\s,、;；]+)', text.strip()):
-        quoted, bare = match.groups()
-        if (
-            quoted is not None
-            and match.end() < len(text.strip())
-            and not re.match(r"[\s,、;；]", text.strip()[match.end()])
-        ):
-            raise ValueError("フレーズ同士は空白またはカンマで区切ってください。")
-        term = (quoted if quoted is not None else bare).strip()
-        if '"' in term or (
-            bare and (bare.upper() in {"AND", "OR", "NOT", "ANDNOT", "NEAR", "ADJ"} or re.search(r"[()\[\]{}|]", bare))
-        ):
-            raise ValueError(
-                '入力欄はキーワード用です。Boolean式は入力できません。複合語は "solid electrolyte" のように二重引用符で囲んでください。'
-            )
-        if not term or len(term) > 500:
-            raise ValueError("各キーワードは1〜500文字にしてください。")
-        if term not in out:
-            out.append(term)
-    if len(out) > 24:
-        raise ValueError("キーワードは24個までです。超過分を削除せず入力を停止しました。")
-    return out
 
 
 def suggest(text):

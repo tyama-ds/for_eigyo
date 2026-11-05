@@ -11,7 +11,8 @@ import copy
 import re
 
 from llm import complete
-from query_formats import describe_tree, tree_data, tree_from_data
+from query_formats import Node, describe_tree, group, tree_data, tree_from_data
+from common import is_plain_term, text_contains, json_schema, validate_llm_object
 
 PROMPT_VERSION = "invention-2026-11-02-elements-v2"
 MAX_ELEMENTS = 8
@@ -75,7 +76,7 @@ def _strings(value, label, maximum, length, *, minimum=0):
 
 def _term(value):
     value = _text(value, "検索語", 160, required=True)
-    if re.search(r"\b(?:AND|OR|NOT|ANDNOT|NEAR\d*|ADJ\d*|PROX\d*|SAME|WITH)\b", value, re.I):
+    if not is_plain_term(value):
         raise ValueError("検索語はBoolean式ではなく単語・フレーズを指定してください。")
     # The existing exporter is the authority for supported literal punctuation.
     tree_from_data(dict(op="text", value=value))
@@ -166,13 +167,12 @@ def _source_texts(data, sources):
 def _evidence(value, texts):
     result, seen = [], set()
     for item in _array(value, "要素の根拠", 8):
-        if not isinstance(item, dict) or set(item) != {"source_id", "quote"}:
-            raise ValueError("根拠にはsource_idとquoteを指定してください。")
+        validate_llm_object(item, {"source_id", "quote"}, message="根拠にはsource_idとquoteを指定してください。")
         source_id = _text(item["source_id"], "根拠資料ID", 200, required=True)
         quote = _text(item["quote"], "根拠引用", 600, required=True, trim=False)
         fields = texts.get(source_id, [])
         original_quote = None
-        if not any(quote in text for text in fields):
+        if not any(text_contains({"title": text}, quote, exact=True, separate_fields=True) for text in fields):
             # Correct only an explicit boundary omission marker. Never repair
             # the wording, join source fields, or bridge an internal omission.
             fragment = re.sub(r"^(?:\.{3}|…)+|(?:\.{3}|…)+$", "", quote)
@@ -180,7 +180,7 @@ def _evidence(value, texts):
                 fragment != quote
                 and len(fragment.strip()) >= 4
                 and not re.search(r"\.{3}|…", fragment)
-                and any(fragment in text for text in fields)
+                and any(text_contains({"title": text}, fragment, exact=True, separate_fields=True) for text in fields)
             ):
                 original_quote, quote = quote, fragment
             else:
@@ -239,9 +239,6 @@ def response_schema(source_ids, classification_keys):
     def string(limit):
         return {"type": "string", "maxLength": limit}
 
-    def obj(properties):
-        return dict(type="object", additionalProperties=False, required=list(properties), properties=properties)
-
     def array(item, maximum, minimum=0):
         return dict(type="array", items=item, maxItems=maximum, minItems=minimum)
 
@@ -252,7 +249,7 @@ def response_schema(source_ids, classification_keys):
     source_schema["enum"] = list(source_ids)
     # Keep model generation compact; the reviewed editor/import contract still
     # accepts up to three perspectives and twelve alternatives per perspective.
-    perspective = obj(
+    perspective = json_schema(
         dict(
             id=string(16),
             name=string(160),
@@ -261,24 +258,27 @@ def response_schema(source_ids, classification_keys):
             reason=string(400),
         )
     )
-    element = obj(
+    element = json_schema(
         dict(
             id=string(16),
             name=string(160),
             description=string(600),
             relation=string(400),
-            evidence=array(obj(dict(source_id=source_schema, quote=string(600))), 1),
+            evidence=array(json_schema(dict(source_id=source_schema, quote=string(600))), 1),
             perspectives=array(perspective, 1, 1),
         )
     )
-    return obj(
+    return json_schema(
         dict(purpose=string(300), summary=string(1000), elements=array(element, 8, 1), questions=array(string(400), 2))
     )
 
 
 def _validate_plan(result, data, sources, pool, purpose, anchors):
-    if not isinstance(result, dict) or set(result) != {"purpose", "summary", "elements", "questions"}:
-        raise ValueError("LLM計画にはpurpose / summary / elements / questionsを指定してください。")
+    validate_llm_object(
+        result,
+        {"purpose", "summary", "elements", "questions"},
+        message="LLM計画にはpurpose / summary / elements / questionsを指定してください。",
+    )
     if _text(result["purpose"], "検索目的", 300, required=True) != purpose:
         raise ValueError("LLMが検索目的を書き換えました。")
     summary = _text(result["summary"], "計画要約", 1000, required=True)
@@ -286,7 +286,8 @@ def _validate_plan(result, data, sources, pool, purpose, anchors):
     texts, elements, count = _source_texts(data, sources), [], 0
     for index, item in enumerate(_array(result["elements"], "技術要素", 8, minimum=1), 1):
         fields = {"id", "name", "description", "relation", "evidence", "perspectives"}
-        if not isinstance(item, dict) or set(item) != fields or item["id"] != f"e{index}":
+        validate_llm_object(item, fields, message="技術要素の項目とID（e1,e2…）を確認してください。")
+        if item["id"] != f"e{index}":
             raise ValueError("技術要素の項目とID（e1,e2…）を確認してください。")
         evidence = _evidence(item["evidence"], texts)
         element = dict(
@@ -301,11 +302,8 @@ def _validate_plan(result, data, sources, pool, purpose, anchors):
         )
         for number, perspective in enumerate(_array(item["perspectives"], "検索観点", 3, minimum=1), 1):
             fields = {"id", "name", "terms", "classification_keys", "reason"}
-            if (
-                not isinstance(perspective, dict)
-                or set(perspective) != fields
-                or perspective["id"] != f"e{index}p{number}"
-            ):
+            validate_llm_object(perspective, fields, message="検索観点の項目とID（e1p1,e1p2…）を確認してください。")
+            if perspective["id"] != f"e{index}p{number}":
                 raise ValueError("検索観点の項目とID（e1p1,e1p2…）を確認してください。")
             terms, keys = _terms(perspective["terms"]), _class_keys(perspective["classification_keys"], pool)
             if not terms and not keys:
@@ -412,12 +410,6 @@ def plan_invention(input_data, sources, candidates, settings, use_llm=False):
     return plan
 
 
-def _group(op, children):
-    if not children:
-        raise ValueError("空の検索条件は作成できません。")
-    return children[0] if len(children) == 1 else dict(op=op, children=children)
-
-
 def compose_invention_query(plan, payload, candidates):
     """Build one selected statement, preserving local versus global NOT scopes."""
     if not isinstance(plan, dict) or not isinstance(payload, dict):
@@ -469,7 +461,7 @@ def compose_invention_query(plan, payload, candidates):
         terms = _terms(item["terms"])
         if not terms:
             raise ValueError("除外条件の検索語を空にできません。")
-        by_scope[scope] = _group("or", [dict(op="text", value=term) for term in terms])
+        by_scope[scope] = group("or", [Node("text", value=term) for term in terms])
         exclusions.append(dict(scope=scope, terms=terms))
     if exclusions and not confirms["confirm_exclusions"]:
         raise ValueError("NOT除外の範囲と検索漏れを確認してから適用してください。")
@@ -507,19 +499,19 @@ def compose_invention_query(plan, payload, candidates):
                 raise ValueError("選択した結合方法に必要な検索語・分類が空です。")
             operands = []
             if mode != "class":
-                operands.append(_group("or", [dict(op="text", value=term) for term in terms]))
+                operands.append(group("or", [Node("text", value=term) for term in terms]))
             if mode != "text":
                 class_nodes = []
                 for key in keys:
                     row = pool[key]
-                    class_nodes.append(dict(op="class", value=row["code"], system=row["kind"]))
+                    class_nodes.append(Node("class", value=row["code"], system=row["kind"]))
                     if key not in class_keys_used:
                         classifications.append(copy.deepcopy(row))
                         class_keys_used.add(key)
-                operands.append(_group("or", class_nodes))
+                operands.append(group("or", class_nodes))
                 classes_in_perspectives += 1
             needs_class_confirmation |= mode == "and"
-            nodes.append(_group("and" if mode == "and" else "or", operands))
+            nodes.append(group("and" if mode == "and" else "or", operands))
             actual = copy.deepcopy(known[perspective_id])
             actual.update(terms=terms, classification_keys=keys, class_mode=mode)
             perspectives.append(actual)
@@ -527,9 +519,9 @@ def compose_invention_query(plan, payload, candidates):
         join = joins.get(element_id, "and")
         needs_class_confirmation |= join == "and" and classes_in_perspectives > 1
         element_class_counts.append(classes_in_perspectives)
-        node = _group(join, nodes)
+        node = group(join, nodes)
         if element_id in by_scope:
-            node = dict(op="not", children=[node, by_scope[element_id]])
+            node = Node("not", children=(node, by_scope[element_id]))
         trees.append(node)
         actual_element = copy.deepcopy(definition)
         actual_element.update(perspectives=perspectives, perspective_join=join)
@@ -541,10 +533,10 @@ def compose_invention_query(plan, payload, candidates):
         raise ValueError(
             "語句と分類または分類同士をANDで交差すると検索漏れの可能性があります。分類の交差を確認してから適用してください。"
         )
-    tree = _group("or" if strategy == "alternatives" else "and", trees)
+    tree = group("or" if strategy == "alternatives" else "and", trees)
     if "all" in by_scope:
-        tree = dict(op="not", children=[tree, by_scope["all"]])
-    checked = tree_from_data(tree)
+        tree = Node("not", children=(tree, by_scope["all"]))
+    checked = tree_from_data(tree_data(tree))
     boolean_tree = tree_data(checked)
     context = dict(
         method=plan.get("method", ""),

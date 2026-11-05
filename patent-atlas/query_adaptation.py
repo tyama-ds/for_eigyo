@@ -5,6 +5,7 @@ import copy
 from llm import complete
 from prompt_templates import PROMPT_VERSION
 from query_library import adapt_example, validate_tree
+from common import json_schema, validate_llm_object
 
 
 ADAPTATION_SYSTEM = """あなたは特許調査の検索式例を、今回の目的・技術領域に合わせて調整する補助者です。
@@ -59,38 +60,31 @@ def _schema(terms, classifications):
     def mapping(keys):
         # Explicit properties work with providers requiring strict JSON Schema;
         # local models are also checked semantically after generation.
-        return {
-            "type": "object",
-            "properties": {key: {"type": "string"} for key in keys},
-            "required": list(keys),
-            "additionalProperties": False,
-        }
+        return json_schema({key: {"type": "string"} for key in keys}, required=list(keys), additional_properties=False)
 
-    return {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["replacements", "class_replacements", "reasons", "questions"],
-        "properties": {
+    return json_schema(
+        {
             "replacements": mapping(terms),
             "class_replacements": mapping(classifications),
             "reasons": {
                 "type": "array",
                 "maxItems": 64,
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "required": ["kind", "original", "replacement", "reason"],
-                    "properties": {
+                "items": json_schema(
+                    {
                         "kind": {"type": "string", "enum": ["term", "classification"]},
                         "original": {"type": "string"},
                         "replacement": {"type": "string"},
                         "reason": {"type": "string"},
                     },
-                },
+                    required=["kind", "original", "replacement", "reason"],
+                    additional_properties=False,
+                ),
             },
             "questions": {"type": "array", "maxItems": 5, "items": {"type": "string"}},
         },
-    }
+        required=["replacements", "class_replacements", "reasons", "questions"],
+        additional_properties=False,
+    )
 
 
 def suggest_adaptation(entry, purpose, goal, settings):
@@ -127,8 +121,11 @@ def suggest_adaptation(entry, purpose, goal, settings):
         copy.deepcopy(payload),
         response_schema=_schema(terms, classifications),
     )
-    if not isinstance(result, dict) or set(result) != {"replacements", "class_replacements", "reasons", "questions"}:
-        raise ValueError("LLMの置換提案にはreplacements/class_replacements/reasons/questionsが必要です。")
+    validate_llm_object(
+        result,
+        {"replacements", "class_replacements", "reasons", "questions"},
+        message="LLMの置換提案にはreplacements/class_replacements/reasons/questionsが必要です。",
+    )
     if not isinstance(result["replacements"], dict) or not isinstance(result["class_replacements"], dict):
         raise ValueError("LLMの語句・分類の置換案はキーと値の組み合わせで指定してください。")
     # This catches unknown source keys, empty replacements, syntax injection,
@@ -143,8 +140,9 @@ def suggest_adaptation(entry, purpose, goal, settings):
         raise ValueError("置換の理由は64件以内で指定してください。")
     checked, seen = [], set()
     for item in reasons:
-        if not isinstance(item, dict) or set(item) != {"kind", "original", "replacement", "reason"}:
-            raise ValueError("置換の理由の形式を確認してください。")
+        validate_llm_object(
+            item, {"kind", "original", "replacement", "reason"}, message="置換の理由の形式を確認してください。"
+        )
         kind = item["kind"]
         if kind not in ("term", "classification"):
             raise ValueError("置換理由の種類はterm/classificationで指定してください。")

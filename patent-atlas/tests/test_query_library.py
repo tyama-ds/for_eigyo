@@ -3,7 +3,7 @@ import itertools
 import json
 import unittest
 
-from query_library import adapt_example, parse_example, portable_example, validate_tree
+from query_library import adapt_example, parse_example, validate_tree
 from query_formats import build_tree, export_query
 
 
@@ -107,7 +107,7 @@ class QueryLibraryTests(unittest.TestCase):
 
     def test_portable_round_trip_does_not_import_runtime_or_fabricated_verification(self):
         entry = parse_example("[車両/TX+自動車/TX]*[B60/IP]", name="車両")
-        data = portable_example(entry)
+        data = {"schema_version": 1, "name": entry["name"], "query": copy.deepcopy(entry["query"])}
         data["query"]["api_key"] = "do-not-import"
         data["query"]["classifications"][0]["verified"] = True
         data["settings"] = {"proxy": "do-not-import"}

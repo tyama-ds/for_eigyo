@@ -2,7 +2,6 @@
 
 import copy
 import hashlib
-import json
 import re
 import time
 import uuid
@@ -11,11 +10,11 @@ import threading
 from fastapi import HTTPException
 
 import classification_bridge
-import classification_retrieval
 import classification_explorer as explorer
 from catalog import keywords
 from query_formats import Node, build_tree, describe_tree, group, terms_of, tree_data, tree_from_data, walk_tree
 from workspace_import import merge_patents, publication_key
+from common import fingerprint, text_contains
 
 MAX_SAVED_TARGETS = 5000
 
@@ -42,10 +41,6 @@ def new_workbench():
         target_patents=[],
         invention=None,
     )
-
-
-def fingerprint(value):
-    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False, allow_nan=False).encode()).hexdigest()
 
 
 def checked_brief(body, existing, patents):
@@ -440,7 +435,7 @@ def register_research_routes(app, context):
         current_keep_ids = {r["id"] for r in state["patents"] if r.get("label") == "keep"}
         protected_ids = current_keep_ids | set(plan["target_ids"])
         kept = [r for r in source_patents() if r["id"] in protected_ids]
-        if any(t.casefold() in (r["title"] + " " + r.get("abstract", "")).casefold() for t in excluded for r in kept):
+        if any(text_contains(r, t) for t in excluded for r in kept):
             raise ValueError(
                 "ターゲットまたは必要特許にも現れる語を除外しようとしています。除外観点を見直してください。"
             )

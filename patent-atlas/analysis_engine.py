@@ -14,6 +14,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import precision_recall_fscore_support
 from sklearn.model_selection import GroupShuffleSplit
+from common import tokenize_keywords, text_contains
 
 ALIASES = {
     "id": ["id", "公報番号", "公開番号", "公開・公表番号", "出願番号", "publication number", "publication_number"],
@@ -213,9 +214,9 @@ def map_patents(rows, keywords):
             "count": len(indices),
             "terms": terms,
         }
-    keys = re.split(r"[\s,、;]+", keywords.strip())
+    keys = tokenize_keywords(keywords)
     for i, r in enumerate(rows):
-        matched = [w for w in keys if w and w.lower() in docs[i].lower()]
+        matched = [w for w in keys if text_contains(r, w, max_length=6000)]
         r.update(
             x=round(float(coords[i, 0]), 5),
             y=round(float(coords[i, 1]), 5),
@@ -377,9 +378,9 @@ def refinement_terms(rows):
             word = features[index].strip()
             if len(word) < 3 or re.search(r"[\s。、，,（）()]", word) or any(word in s or s in word for s in out):
                 continue
-            if any(word in text for text in protected):
+            if any(text_contains({"title": text}, word) for text in protected):
                 continue
-            if any(word in text for text in source):
+            if any(text_contains({"title": text}, word) for text in source):
                 out.append(word)
             if len(out) == 5:
                 break

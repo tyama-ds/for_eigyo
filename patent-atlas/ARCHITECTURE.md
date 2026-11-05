@@ -1,10 +1,10 @@
-# Patent Atlas 設計の正本（Phase 2・承認前の下書き）
+# Patent Atlas 設計の正本（Phase 3a）
 
 - 棚卸し日: 2026-11-05
-- 対象: `tyama-ds/for_eigyo` の `patent-atlas/`、Phase 1完了時点のコミット `87e87e8`
-- 状態: **現状はコードから確認した事実。目標モデルはレビュー用の案であり、採否は人が決める。**
-- 設計承認者: ____________________　承認日: ____________________
-- このフェーズではコード、設定、保存データ、既存文書の配置を変更しない。リファクタの実施指示として扱うのは、判断待ちを埋めて承認した後とする。
+- 対象: `tyama-ds/for_eigyo` の `patent-atlas/`、Phase 1完了時点 `87e87e8` の棚卸しをPhase 3aの実装に合わせて更新
+- 状態: **現状と目標を区別する。6項目の目標とPhase 3での扱いは利用者が確定済み。**
+- 6項目の判断者: 利用者（本会話）　確定日: 2026-11-05
+- Phase 3aは共通ヘルパーの統合のみ。3b（Workspace）と3c（注入・依存の整理）は未実施。設定、保存データ、CSS、既存文書の配置を変更しない。
 
 ## 1. 現状
 
@@ -137,82 +137,43 @@ register_research_routes(app, globals())
 - 分類の日本語取得 `/classifications/translations` はキャッシュと表示用返り値を更新する。UIで `candidates` / `discovery` の表示名を反映するが、サーバーの保存STATEを直接書き換えるAPIではない。
 - 各画面は `settings` / `job` も参照するが、それらは1.2のSTATEキーには含まれない。LLM・学習・ラボ・エージェント・統括は共通 `JOB` を使い、同時開始は `idle()` で制限する。
 
-### 1.6 重複・類似処理の棚卸し（`file:function`）
+### 1.6 共通ヘルパーと残る用途別の契約（Phase 3a）
 
-以下は統合候補の一覧であり、同じ名前・似たコードだから同じ仕様という意味ではない。とくに完全な公報ID、検索用の正規化キー、ラベル、予測スコアの意味を先に決める必要がある。
+`common.py` は標準ライブラリだけに依存し、STATE・ファイルI/O・LLM通信を持たない。下表の呼び出し元は同じ実装へ委譲する。互換名や、用途別の入力の選び方を決める薄い関数は残すが、旧アルゴリズムは残さない。
 
-#### 公報IDと重複の判定
+| 共通実装 | 使用箇所（`file:function`） | 保持する用途別の契約 |
+|---|---|---|
+| `normalize_publication_id` | `workspace_import.py:publication_key`、`discovery_routes.py:_document_key`、`convergence_engine.py:publication_key`（import別名） | 引数が行かIDかだけを呼び出し元で吸収。比較キーを作るだけで原文IDは書き換えない |
+| `tokenize_keywords` | `catalog.py:keywords`（import別名）、`classification_retrieval.py:phrases`、`analysis_engine.py:map_patents`、`discovery_routes.py:register_discovery_routes.create_plan` | 通常のキーワードは空白区切り、引用符内は句、24項目・各500文字。辞書検索は空白を含む技術説明を保持し、先頭24項目、説明単位の500文字制限やBoolean入力検査は適用しない。英語起点語は空白を保持し、ルート側の8項目・英数字等の制限を維持 |
+| `is_plain_term` | `research_strategy.py:_term`、`invention_strategy.py:_term`、`query_formats.py:_literal`、`catalog.py:keywords`（tokenizer経由）、`discovery_engine.py:_english` | 入力検索語は厳密に検査。出力側は既存の引用付きリテラルの契約を `literal=True` で維持し、単語内部で演算として解釈しない。DB固有の追加制限は各rendererが維持 |
+| `text_contains` | `research_routes.py:register_research_routes.proposed_query`、`invention_routes.py:register_invention_routes.proposed`、`research_strategy.py:_evidence_ids`、`discovery_engine.py:_facets_for`、`analysis_engine.py:map_patents` / `refinement_terms.choose`、`invention_strategy.py:_evidence` | 通常は名称・要約のNFKC＋casefold部分一致。マップは既存の先頭6000文字の範囲。研究の根拠と発明側の除外保護は名称/要約を別々に照合。発明の原文引用は `exact=True, separate_fields=True` により表記・大小文字・フィールド境界の完全一致を維持 |
+| `keep_rows` / `label_counts` / `is_assessed` | `orchestration_engine.py:summary` / `fresh_rows`、`convergence_engine.py:_counts` / `build_record`、`projection_engine.py:compute_evaluation`、`llm_judgment.py:human_examples` / `run` ほか | ラベルから集計し、スコアをkeepへ昇格させない。人だけのS/Nと、人・AIを含む収束件数は区別。保留はAIの理由・有限の確信度を要求。`llm_judgment.is_assessed` は互換importとして維持 |
+| `fingerprint` | `research_routes.py:fingerprint`（import）、`orchestration_engine.py:fingerprint`、`llm_judgment.py:context_fingerprint`、`convergence_routes.py:evidence_signature` | UTF-8・キー順固定のJSONのSHA-256。統括はラベル/スコア/座標を除いた本文等、収束は判定情報を含む根拠、研究は呼び出し元の対象、LLMは照合文脈を入力とする。入力対象と並べ替えを共通化して意味を変えない。LLMの文脈なしは引き続き `None` |
+| `validate_llm_object` | `research_strategy.py:_validate_result`、`invention_strategy.py:_validate_plan` / `_evidence`、`query_adaptation.py:suggest_adaptation`、`classification_planner.py:validate_elements` / `review`、`llm_judgment.py:validate_decisions`、`discovery_engine.py:validate_llm_plan` | オブジェクトの必須/任意/余分なキーを検査。探索ラボとLLM判定の既存の余分なキー許容も明示。目的・アンカー・ID完全一致・提示分類・原文引用・値域・件数などの業務検証は各呼び出し元に残す |
+| `json_schema` | `research_strategy.py:response_schema`、`invention_strategy.py:response_schema`、`query_adaptation.py:_schema`、`classification_planner.py:element_schema` / `review`、`llm_judgment.py:response_schema` | 既存の必須/任意キー、件数、enum、値域を保持。子スキーマをコピーし共有による変更を防ぐ。ラボの自由形式計画に新たな応答スキーマを強制しない |
+| `query_formats.py:tree_data` / `group` | `query_library.py` の木の辞書化、`invention_strategy.py:compose_invention_query` のグループ化 | 旧 `_node_dict` / `_group` を削除。発明側は内部でNodeを組み立て、最後に従来の木の検証を通して同じ辞書形式を返す。OR/AND/枝別NOTの範囲を保持 |
 
-| 箇所 | 現在の規則・差分 |
-|---|---|
-| `workspace_import.py:publication_key` | 大文字化し英数字以外を除去。英数字が残らない場合は `raw:` + 原文。全角のNFKC変換はしない |
-| `discovery_routes.py:_document_key` | ほぼ同じ英数字除去と `raw:` フォールバックを独自に実装 |
-| `convergence_engine.py:publication_key` | NFKC、strip、大文字化、英数字除去。フォールバックは正規化後テキストで、`raw:` 接頭辞はない |
-| `refinement_classifications.py:classification_feedback` | 関数内で大文字化・英数字除去。ID欠落は行番号、除去後が空なら元のIDを使用 |
-| `analysis_engine.py:parse_csv` / `backfill_fi` | CSV内の重複やFI追加の照合はID文字列の完全一致。FI追加は名称・要約・content_keyの整合も確認 |
-| `discovery_engine.py:analyze_patents` / `_family` | 分析時はstripした公報IDでまとめる。ファミリー不明時は公報IDへ戻す。取込時の正規化と同じではない |
-| `research_routes.py:merge_target_references` / `source_patents` | 保存参照はIDの完全一致で統合。手入力追加の `add_target` は `publication_key` で主集合の代表IDに合わせる |
+#### 統一に伴う差分と互換境界
 
-具体例: `JP-123-A1` と `JP123A1` は取込統合では一致するが、CSV内の完全一致による重複排除は同じ規則ではない。全角IDの扱いも収束と取込で異なる。このPhaseでは規則を変更しない。
+1. 公報IDは3経路ともNFKC・前後空白除去・大文字化・英数字抽出に統一した。例: `ＪＰ－１２３Ａ１` と `JP123A1` を同一とする。英数字が残らない場合は収束側の正規化後テキストへ統一し、取込/ラボ側の内部的な `raw:` 接頭辞は使わない。元の保存IDを一括変換する処理は実装しない。重複候補が出た既存集合は、従来どおり取込時に重複を通知して止める場合がある。
+2. キーワード分割にもNFKCを適用するため全角区切り・引用符を解釈し、正規化後の同一語をまとめる。引用符の閉じ忘れ、空の引用、区切りなしの引用の連結を拒否する。マップも引用された句を単一語句として扱う。原文文献、調査テーマ全体、入力の下書きをこの処理で上書きしない。
+3. 編集用検索語の検査は従来の発明側と出力側を基準に、NFKC後の構文記号と大小文字を問わないBoolean語・近接演算子を拒否する厳密な方式へ統一した。従来の研究・ラボ・通常キーワード欄より厳しくなる。出力時の引用付きリテラルでは、既存の `NEAR3` や句中の `AND` を文字列として保持できる一方、USPTO等の固有制限は引き続き適用される。存在する語句を勝手にBoolean構造へ変換しない。
+4. 通常の語一致は全半角・互換文字を同一視するため、以前見逃していた表記も根拠・除外保護の対象になる。DBの全文検索や意味判定を再現するものではない。発明の引用だけは原文一致のため正規化しない。
+5. 用途別の集計差は保持した。統括の `human` は未判定へ戻した人の行も含むが、収束の `human_count` とS/Nは人のkeep/excludeのみ。古いデータの文字列 `label='unsure'` についても、統括の保留は空ラベルのみ、それ以外の集計はkeep/exclude以外、という既存の違いを `deferred_empty_only` で明示した。LLM実行の人ラベル件数は引き続き0件のキーを省く。
+6. ハッシュは既存のバイト列形式を維持し、非有限値を拒否する。収束の根拠署名も他の3経路と同じ `allow_nan=False` に統一した。正常なJSON値のハッシュは変わらない（公報IDの正規化に伴う照合キーの差は上記1のとおり）。
 
-#### キーワード・語句の分割と検証
+#### 指定範囲外として残す関連処理
 
-| 箇所 | 現在の規則・差分 |
-|---|---|
-| `catalog.py:keywords` | 空白・カンマ・読点・セミコロンで分割し、二重引用符内の句を保持。最大24語、閉じ忘れやBoolean式を拒否。重複は原文一致 |
-| `classification_retrieval.py:phrases` | NFKC後、引用符・カンマ・読点・セミコロン・改行を扱うが、通常の空白では語を分離しない。先頭24項目に制限 |
-| `discovery_routes.py:register_discovery_routes.create_plan` | 手入力の英語起点語をカンマ・セミコロン・改行・読点で分割。英数字・空白・ハイフン、8項目など独自制限 |
-| `research_strategy.py:_term` / `_term_array` / `_unique_terms` | 検索語の構文混入を検証し、大文字小文字を畳んだ重複を整理。元の語を優先して残す |
-| `invention_strategy.py:_term` / `_terms` | Boolean語の拒否と `query_formats.py:tree_from_data` による検証。casefoldした重複はエラー。研究観点側と同一の許可規則ではない |
-| `discovery_engine.py:_unique` / `_english` | 長さ、件数、casefoldによる重複整理と英語語句の制限 |
-| `static/invention-workbench.js:inventionLines`、`static/research-workbench.js:captureResearchPlan` / `bindResearchApply` | 1行を1語句として扱うUI側処理。キーワード欄の空白分割と混同しない |
+- `refinement_classifications.py:classification_feedback` の行優先順位・公報ID照合、`analysis_engine.py:parse_csv` / `backfill_fi` のCSV内照合、`discovery_engine.py:analyze_patents` / `_family` の分析時集合、`research_routes.py:merge_target_references` / `source_patents` の保存参照は今回の3実装の統合対象外。各用途の保存形式や代表行を勝手に変更しない。
+- `classification_retrieval.py:tokens` とTF-IDF用のトークン化は特徴量抽出であり、入力語句の分割器ではない。UIの行単位入力も今回変更しない。
+- `app.py:make_query` / `agent.action` の除外語の保護、`analysis_engine.py:train` / `refinement_terms`、`refinement_classifications.py:_decision` / `_priority`、`discovery_engine.py:analyze_patents` は用途固有の予測・保護・支持を担う。Phase 3aで指定された共通化先以外の処理は維持する。
+- `llm.py:_response_content` / `_text_content` / `_without_thinking` / `_parse_model_json` は従来から共通の通信応答/JSON入口。今回の `validate_llm_object` はその後のオブジェクト形検証だけで、JSONパーサーの置き換えではない。
 
-`classification_retrieval.py:tokens`、`discovery_engine.py:_definition_words`、`analysis_engine.py:refinement_terms` の正規表現も語を取り出すが、こちらは辞書検索・分析の特徴量用であり、入力語句の分割器と同じ責務ではない。
+#### 削除した旧実装・検証
 
-#### 語が文献に現れるかの判定
+削除: `discovery_engine.py:_nearby_definitions` / `_dictionary_matches` と、それらだけが使っていた `_definition_words`、`query_library.py:portable_example`、`prompt_templates.py:classification_prompt` / `judgment_prompt`、`research_routes.py` の未使用 `classification_retrieval` import。旧シリアライズ・グループ化・スキーマ組み立ての重複実装も共通関数へ置き換えた。
 
-| 箇所 | 現在の規則・用途 |
-|---|---|
-| `app.py:make_query` | 必要特許を落とす除外語の確認と、追加語による既知必要特許の保持数。casefoldした名称/要約の部分一致。除外側は名称と要約を区切りなしで連結する箇所もある |
-| `app.py:agent.action` | 自動追加語が既知の必要特許を落とさないか、同様の部分一致で確認 |
-| `analysis_engine.py:refinement_terms.choose` | TF-IDF由来の候補語が正/負文献に現れるか、必要文献を除外しないかを部分一致で確認 |
-| `research_routes.py:register_research_routes.proposed_query` | ターゲット・現在の必要特許に現れる除外語を部分一致で検出し、適用を拒否 |
-| `invention_routes.py:register_invention_routes.proposed` | ターゲット・必要特許への除外語の出現を部分一致で検出。枝の範囲を示す警告にするが、全文や枝全体の一致とはみなさない |
-| `research_strategy.py:_evidence_ids`、`discovery_engine.py:_facets_for` | 語句と名称/要約の部分一致で根拠IDや観点を関連付ける |
-
-これらはDBの検索構文・全文検索・意味的な適合判定を再現するものではない。単語境界、連結時の区切り、拒否か警告かも異なるため、共通化する際は契約を分ける必要がある。
-
-#### keep・保留・予測の扱い
-
-| 箇所 | 現在の規則・用途 |
-|---|---|
-| `llm_judgment.py:is_assessed` | keep/excludeの確定ラベル、または有効なAIの理由・確信度を持つ保留を「判定済み」とする。keep判定そのものではない |
-| `llm_judgment.py:validate_decisions` | LLMの `keep/exclude/unsure` と閾値から保存ラベルを決める。低確信度/unsureは `label=None`。確信度と関連度は別項目 |
-| `analysis_engine.py:train` | 既定は人のkeep/excludeのみ学習に使い、`include_agent` 指定で他の確定ラベルも対象にする |
-| `analysis_engine.py:refinement_terms` | keep/excludeラベルで正負集合を作り、未ラベルのスコア0.8以上/0.2以下も候補語へ寄与させる |
-| `refinement_classifications.py:_decision` / `_priority` | 確定ラベルを優先。未ラベルの有限スコアから `predicted_keep/predicted_exclude` を別集計。重複時は人→AI→その他を優先 |
-| `discovery_engine.py:analyze_patents` | 人のkeep、AIのkeep、exclude、未確認、架空文献を分けて分類支持へ反映 |
-| `projection_engine.py:compute_evaluation` | S/N等は人のkeep/excludeを中心に計算。AI・その他・保留の件数を別表示 |
-| `convergence_engine.py:_counts` / `_priority` / `build_record` | 収束のkeep/exclude数には人・AIを含め、人の件数と保留を別計上。重複公報の代表選択も実装 |
-| `orchestration_engine.py:summary` / `fresh_rows` | ラベル件数を集計し、共通 `is_assessed` で未処理・保留を区別 |
-| `app.py:make_query`、`research_routes.py:proposed_query`、`invention_routes.py:proposed` | 必要特許の保護に `label == 'keep'` を使用。人のkeepだけに限定していない |
-
-同じkeepでも「学習対象」「収束の件数」「人が評価したS/N」「分類支持」「NOTから保護する集合」は別の契約になっている。共通関数1個に寄せること自体は未決定。
-
-#### LLM応答検証
-
-| 箇所 | 検証内容・共通化時の境界 |
-|---|---|
-| `llm.py:_response_content` / `_text_content` / `_without_thinking` / `_parse_model_json` | 応答形式、テキストブロック、think領域、JSON囲み、JSON構文の共通入口。業務上の正しさの検証ではない |
-| `app.py:llm_candidate_rows` / `normalize_llm_classification` / `agent.action` | 候補の型・コードの形式と辞書確認。エージェントの選択結果は `normalize_selection` で既存候補・選択可否を照合 |
-| `classification_planner.py:validate_elements` / `review` | 要素配列と提示済み分類キー・要素ID・関係・理由を検証。任意の分類コードを確認済みにしない |
-| `llm_judgment.py:validate_decisions` | バッチのID完全一致・重複/欠落防止、判定、確信度・関連度の有限範囲、理由 |
-| `discovery_engine.py:validate_llm_plan` | ラボの英語語句・観点等の型、長さ、必須の内容 |
-| `research_strategy.py:_validate_result` | 観点、入力アンカー、目的、根拠ID、OR/必須の構造など |
-| `invention_strategy.py:_validate_plan` / `_evidence` | 発明要素・観点、原文の引用、提示分類、起点・手入力要素の保持など |
-| `query_adaptation.py:suggest_adaptation` | 既存語/分類だけを置換する制限、置換先と理由の整合、未定義キー・重複・理由欠落 |
-
-型・件数・文字列長・重複の検査は複数箇所にある。一方、JSON解析の入口は既に `llm.py` に共通化されている。`query_library.py:_unique_json` は取り込んだ式例JSON用で、LLM応答用の別パーサーではない。用途別の検証を失うような一括置換はこの棚卸しからは決めない。
+`tests/test_common.py` で全角IDの取込、キーワードの引用/上限、用途別の厳密性、原文引用、ラベル/保留、ハッシュ、LLM形検証・スキーマを検証する。検証はPython 502件実行（501件成功・既存の任意Transformer 1件スキップ）、JavaScript 304件成功。既存APIテストは変更しない。削除した関数を直接呼んでいた `test_discovery_engine.py` と `test_query_library.py` だけは、ケースと主要assertを残して現行の辞書検索・JSON取込契約へ移した。
 
 ### 1.7 永続化・復元と現状の境界
 
@@ -228,15 +189,15 @@ register_research_routes(app, globals())
 
 ルート同士のimportに加え、`research_strategy.py:plan_research` と `invention_strategy.py:plan_invention` は `llm.complete` を呼ぶ。分類処理には辞書・キャッシュの読込もある。「engine名のファイルはすべて純粋関数」という状態にはなっていない。
 
-## 2. 目標モデル（人が承認するための下書き）
+## 2. 目標モデル（確定方針と詳細設計の下書き）
 
-ここからは現状の説明ではなく、今回指定された方向を整理した案である。クラス構成、保存スキーマ変更、移行手順、モードの統廃合はまだ実装・決定しない。
+ここからは現状の説明ではなく、今回指定された方向を整理した案である。第3節の6方針は確定している。クラス構成、保存スキーマ変更、移行手順の詳細は未実装であり、将来のモード統廃合をPhase 3で先取りしない。
 
 ### 2.1 エンティティ案
 
 | エンティティ | 主なフィールド・責務案 | 現状との対応・未確定事項 |
 |---|---|---|
-| `Workspace` | 調査条件、特許集合、分類候補と選択、検索式履歴、計画、判定、観測/収束、採用記録を所有。更新と保存の境界を提供 | 現在のSTATE全体。検索結果・ターゲット参照・ラボ観測をどの関係で持つかは判断待ち |
+| `Workspace` | 調査条件、特許集合、分類候補と選択、検索式履歴、計画、判定、観測/収束、採用記録を所有。更新と保存の境界を提供 | 現在のSTATE全体。目標ではラボも主特許集合を参照する。ターゲット参照・観測履歴の保存方式は後続設計 |
 | `Patent` | `id`, `title`, `abstract`, `ipc`, `fi`, `fterm`, `cpc`, `label`, `label_source`, `label_reason`, `score`, `score_source` | 現在は行dict。公報の原文IDと照合キーを区別し、分類原文・出典を保持する。`applicant`, `family`, 公開日等の既存項目も移行で捨てない |
 | `ClassificationCandidate` | `key=kind:code`, `origins`, `verified`, `selectable` と分類定義・推薦理由 | `verified` は辞書上の存在/定義の確認であり、公報への実付与や主題との適合を保証しない。実付与IPC、FI由来、Fターム対応候補、LLM仮説を分離した由来を保持 |
 | `Query` | `id`, `version`, `boolean_tree`, `classifications`, `include_terms`, `exclude_terms`, `keyword_context` | 論理木と語/分類の原子を正本とし、DB別式は出力。目的、要素/観点、起点、元式、採用理由等の既存根拠も保持。`keywords` とテーマ文脈を同一視しない |
@@ -268,8 +229,8 @@ register_research_routes(app, globals())
 | 過去式の取込・適応 | 検索式設計の初期値。取り込んだOR/AND/NOTと変更理由を保持する |
 | コンステレーション・要素/観点編集 | 分類と語句の候補を、目的・根拠に結び付けて選ぶ |
 | CSV・マップ・LLM/軽量/Transformer | 実際の結果集合を判定し、確認すべき境界と次の式の根拠を得る |
-| 探索ラボ | 関連特許・分類・語句を増やす工程候補。独立機能として残すかは判断待ち |
-| 判断エージェント・統括 | 同じ工程を自動で進める制御候補。別の判定/検索式の正本を持たせるかは判断待ち |
+| 探索ラボ | 中核ループ内で関連特許・分類・語句を増やす工程に統合する目標。Phase 3では独立維持 |
+| 判断エージェント・統括 | 中核ループの自動実行へ統合する目標。判断エージェントは統括の「1サイクル・確認なし」へ寄せる。Phase 3では両入口・現行工程を維持 |
 | 収束・採用 | 同じ検索条件・母集団で反復の変化を記録し、終了理由を残す。マップ上の見た目や学習損失だけで網羅性を保証しない |
 | 設定・保存・下書き | どの入口でも同じ接続先・条件・判定を引き継ぐ横断機能 |
 
@@ -301,20 +262,20 @@ engines（純粋な計算・検証） ← workspace（状態・永続化・工�
 - 表示用 `public_state()`、保存用 `to_dict()`、ブラウザー下書きの形式は同じものとして扱わない。
 - 接続設定と秘密情報の保持方針は別に明示し、このPhaseでDB・モデル・プロキシの設定を変更しない。
 
-## 3. 判断待ち（人が記入する）
+## 3. 確定した判断（目標モデルとPhase 3での扱い）
 
-空欄は未決定を意味する。選択肢の記載順は推薦・採用を意味しない。このPhaseでは選択、機能削除、スケジュール変更を行わない。
+2026-11-05に利用者が以下を確定した。Phase 3の作業では「Phase 3での扱い」に従い、将来の統廃合を先取りしない。
 
-| 判断する問い | 現状・検討材料 | 人が記入する決定・理由 |
+| 項目 | 目標モデル | Phase 3での扱い |
 |---|---|---|
-| 探索ラボ（discovery）を中核ループへ統合するか、独立機能として残すか、削除するか | 独自の計画・蓄積集合があり、統括が主集合へ統合する経路もある。過去アーカイブと分類の出典をどう残すかが必要 | 決定: ____________________　理由/移行条件: ____________________ |
-| 統括（orchestration）を「中核ループの自動実行」として作り直すか | 現状はCSV起点の分類確認・判定・任意学習・改善式・次CSV待ち。共有サービス利用と独自工程管理が併存 | 決定: ____________________　自動化範囲/人の確認点: ____________________ |
-| 判断エージェントと統括の重複をどちらへ寄せるか | 判定・学習サービスは共通だが、エージェントは分類選択からの1サイクル、統括は確認待ち・再開工程を持つ | 決定: ____________________　残す入口/移行方法: ____________________ |
-| EPO OPS連携（`patent_search.py`）を残すか | 現状はラボの取得経路。標準保存はOPSキー/シークレットを除外するため通常1セッション限定。接続済み設定とCSV方式を考慮 | 決定: ____________________　認証の保持方針: ____________________ |
-| ダークテーマ（`static/style.css`）を廃止してよいか | `style.css` は暗色の基礎定義だが、後に読む `atlas-theme.css` が明色へ上書きする。`style.css` は共通レイアウトも含むので、暗色廃止とファイル全削除は同義ではない | 決定: ____________________　残す共通スタイル: ____________________ |
-| 日次自動改善（`USABILITY_IMPROVEMENTS.md`）を設計確定まで停止するか | 台帳には過去のACTIVE記録があるが、この会話では後に停止指示が出ている。台帳を現在の自動化サービスの状態証明とみなさない。このPhaseで再開しない | 決定: ____________________　再開条件/責任者: ____________________ |
+| 探索ラボ | 中核ループへ統合し、`state['discovery']['patents']` の独立コピーを廃止。ワークスペースの特許集合を参照する | 独立機能・独立集合を維持 |
+| 統括 | 中核ループの自動実行モードへ再設計し、独自サイクル状態を中核ループの段階に対応づける | 現行工程を維持 |
+| 判断エージェント | 統括に統合し専用タブを廃止。統括の「1サイクル・確認なし」モードにする | 両入口を維持 |
+| EPO OPS連携 | 維持。秘密設定をディスクに保存しないため、再起動時に再入力が必要な任意機能 | 現行の連携・秘密設定非保存を維持 |
+| CSS | ダークテーマ（`style.css`のテーマ層）を廃止。現在の表示は`atlas-theme.css`の上書きによる明色。共通レイアウトの全削除とは区別する | CSSは変更しない。テーマ層の整理はPhase 5で実施 |
+| 日次自動改善 | 設計確定まで停止継続。再開時は回帰テストと不具合修正に限定 | 停止継続。Phase 3を再開指示とみなさない |
 
-目標モデルを実装に移す前に埋める補足欄:
+後続設計の補足欄（上記6項目の確定・Phase 3a着手を妨げる条件ではない）:
 
 - Patentの同一性（原文ID/照合キー/全角/欠落ID）: ____________________
 - 3つの特許集合の所有関係・参照の保存方針: ____________________
@@ -334,4 +295,4 @@ engines（純粋な計算・検証） ← workspace（状態・永続化・工�
 | [README.md](README.md) | 起動・依存・主要導線への入口として残し、承認済み設計と `docs/` へ案内する |
 | `ARCHITECTURE.md`（本書） | 現状の棚卸し、承認した設計、未決事項を区別して維持する。過去の監査結果を現行仕様として上書き転記しない |
 
-統合時には日付不明の記録を推定日で確定せず、過去記録内のACTIVE等を現在の運用状態と混同しない。移動後の相対リンクも更新対象となる。**このPhaseで追加するのは本書のみで、上表の移動・統合・削除は行っていない。**
+統合時には日付不明の記録を推定日で確定せず、過去記録内のACTIVE等を現在の運用状態と混同しない。移動後の相対リンクも更新対象となる。**Phase 2では本書のみを追加した。Phase 3aでも上表の文書の移動・統合・削除は行わない。**

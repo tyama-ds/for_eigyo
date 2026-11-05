@@ -5,13 +5,11 @@ Network access and workspace writes are injected by the caller.
 """
 
 import copy
-import hashlib
-import json
 import math
 import re
-from collections import Counter
 from prompt_templates import JUDGMENT_SYSTEM, PROMPT_VERSION
 from query_formats import tree_from_data, tree_data
+from common import fingerprint, is_assessed, keep_rows, label_counts, json_schema, validate_llm_object
 
 
 BATCH_SIZE = 4
@@ -34,16 +32,6 @@ def _finite_probability(value, name):
     if not math.isfinite(number) or not 0 <= number <= 1:
         raise ValueError(name + "は0〜1の有限な数値で指定してください。")
     return number
-
-
-def is_assessed(row):
-    """Recognize a saved verdict, including deferred judgments from older agents."""
-    if row.get("label") in ("keep", "exclude"):
-        return True
-    if row.get("label_source") != "agent" or not str(row.get("label_reason") or "").strip():
-        return False
-    value = row.get("agent_confidence")
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and 0 <= value <= 1
 
 
 def snapshot_query_context(query):
@@ -122,9 +110,7 @@ def snapshot_query_context(query):
 def context_fingerprint(context):
     if context is None:
         return None
-    return hashlib.sha256(
-        json.dumps(context, ensure_ascii=False, sort_keys=True, allow_nan=False).encode("utf-8")
-    ).hexdigest()
+    return fingerprint(context)
 
 
 def prepare(body, rows, keywords, provider, *, allow_empty=False, adopted_query=None):
@@ -225,7 +211,7 @@ def _patent_text(row, *, example=False):
 def human_examples(rows):
     examples = []
     for label in ("keep", "exclude"):
-        found = [row for row in rows if row.get("label_source") == "human" and row.get("label") == label]
+        found = keep_rows(rows, label=label, source="human")
         for row in found[:EXAMPLES_PER_LABEL]:
             examples.append(
                 dict(**_patent_text(row, example=True), decision=label, reason=str(row.get("label_reason") or "")[:200])
@@ -235,34 +221,38 @@ def human_examples(rows):
 
 def response_schema(expected_ids):
     """Constrain local generation; application validation still checks unique IDs."""
-    return {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["decisions"],
-        "properties": {
+    return json_schema(
+        {
             "decisions": {
                 "type": "array",
                 "minItems": len(expected_ids),
                 "maxItems": len(expected_ids),
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "required": ["id", "decision", "confidence", "relevance", "reason"],
-                    "properties": {
+                "items": json_schema(
+                    {
                         "id": {"type": "string", "enum": list(expected_ids)},
                         "decision": {"type": "string", "enum": ["keep", "exclude", "unsure"]},
                         "confidence": {"type": "number"},
                         "relevance": {"type": "number"},
                         "reason": {"type": "string"},
                     },
-                },
+                    required=["id", "decision", "confidence", "relevance", "reason"],
+                    additional_properties=False,
+                ),
             }
         },
-    }
+        required=["decisions"],
+        additional_properties=False,
+    )
 
 
 def validate_decisions(result, expected_ids, threshold):
-    if not isinstance(result, dict) or not isinstance(result.get("decisions"), list):
+    validate_llm_object(
+        result,
+        ("decisions",),
+        allow_extra=True,
+        message="LLMのJSONには decisions 配列が必要です。このバッチは保存せず停止しました。",
+    )
+    if not isinstance(result.get("decisions"), list):
         raise ValueError("LLMのJSONには decisions 配列が必要です。このバッチは保存せず停止しました。")
     decisions = result["decisions"]
     expected = set(expected_ids)
@@ -329,13 +319,11 @@ def run(rows, options, request, publish, cancelled):
         max_items=options["max_items"],
         available_count=options["available_count"],
         example_count=len(examples),
-        human_label_counts=dict(
-            Counter(
-                row["label"]
-                for row in rows
-                if row.get("label_source") == "human" and row.get("label") in ("keep", "exclude")
-            )
-        ),
+        human_label_counts={
+            key: count
+            for key, count in label_counts(rows, source="human").items()
+            if key in ("keep", "exclude") and count
+        },
         label_counts={"keep": 0, "exclude": 0},
         batch_size=BATCH_SIZE,
         evaluation_note="重み学習・独立評価は行っていません。関連度と確信度はLLMの推定値です。低確信度とunsureは保留します。",

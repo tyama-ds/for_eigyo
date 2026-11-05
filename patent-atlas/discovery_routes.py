@@ -15,6 +15,7 @@ from analysis_engine import parse_csv
 from discovery_engine import propose_plan, analyze_patents, validate_llm_plan
 from patent_search import search_ops
 from prompt_templates import DISCOVERY_SYSTEM
+from common import normalize_publication_id, tokenize_keywords
 
 
 def new_discovery():
@@ -39,7 +40,7 @@ def public_discovery(value):
 
 
 def _document_key(row):
-    return re.sub(r"[^A-Z0-9]", "", str(row["id"]).upper()) or "raw:" + str(row["id"])
+    return normalize_publication_id(row["id"])
 
 
 def merge_documents(existing, incoming, source, live_labels=False):
@@ -146,7 +147,7 @@ def register_discovery_routes(app, context):
             raise ValueError("探索する技術を入力してください。")
         english = context["checked_text"](body.get("english_terms", ""), 1000)
         # Validate user vocabulary before an optional paid/network model call.
-        additions = [part.strip() for part in re.split(r"[,;\n、]+", english) if part.strip()]
+        additions = tokenize_keywords(english, split_spaces=False, limit=None)
         if len(additions) > 8 or any(
             len(part) > 120 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 \-]*", part) for part in additions
         ):

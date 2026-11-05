@@ -8,13 +8,12 @@ from __future__ import annotations
 
 import copy
 import math
-import re
-import unicodedata
 from collections import Counter
 
 import classification_catalog
 from classification_explorer import parse_codes
 from llm_judgment import is_assessed
+from common import normalize_publication_id as publication_key, keep_rows, label_counts
 
 
 THRESHOLDS = dict(new_keep_rate=0.05, topic_shift_rate=0.05, hit_change_rate=0.05)
@@ -54,12 +53,6 @@ _PUBLIC = (
     "query_id",
     "expression",
 )
-
-
-def publication_key(value):
-    """Use the same publication identity despite spaces, hyphens or full width."""
-    text = unicodedata.normalize("NFKC", str(value or "")).strip().upper()
-    return re.sub(r"[^A-Z0-9]", "", text) or text
 
 
 def _integer(value):
@@ -109,12 +102,14 @@ def _subclasses(row):
 
 
 def _counts(rows):
+    counts = label_counts(rows)
+    human = label_counts(rows, source="human")
     return dict(
-        keep_count=sum(row.get("label") == "keep" for row in rows),
-        exclude_count=sum(row.get("label") == "exclude" for row in rows),
-        deferred_count=sum(row.get("label") not in ("keep", "exclude") and is_assessed(row) for row in rows),
-        unprocessed_count=sum(not is_assessed(row) for row in rows),
-        human_count=sum(row.get("label_source") == "human" and row.get("label") in ("keep", "exclude") for row in rows),
+        keep_count=counts["keep"],
+        exclude_count=counts["exclude"],
+        deferred_count=counts["deferred"],
+        unprocessed_count=counts["unprocessed"],
+        human_count=human["keep"] + human["exclude"],
     )
 
 
@@ -243,7 +238,8 @@ def build_record(rows, observation, previous_records, *, total_hits=None, query=
         for key in ("id", "format", "platform", "created_at")
         if isinstance(query, dict) and isinstance(query.get(key), (str, int))
     }
-    keep = {key: row for key, row in unique.items() if row.get("label") == "keep"}
+    keep_ids = {id(row) for row in keep_rows(unique.values())}
+    keep = {key: row for key, row in unique.items() if id(row) in keep_ids}
     distribution, classified = Counter(), 0
     for row in keep.values():
         subclasses = _subclasses(row)

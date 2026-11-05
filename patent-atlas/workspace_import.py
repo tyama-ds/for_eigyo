@@ -1,12 +1,11 @@
 """Append search results without replacing previously reviewed patents."""
 
 import copy
-import re
+from common import normalize_publication_id
 
 
 def publication_key(row):
-    identifier = str(row["id"])
-    return re.sub(r"[^A-Z0-9]", "", identifier.upper()) or "raw:" + identifier
+    return normalize_publication_id(row["id"])
 
 
 def merge_patents(existing, incoming):

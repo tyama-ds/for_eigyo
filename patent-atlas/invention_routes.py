@@ -11,6 +11,7 @@ import classification_explorer as explorer
 import classification_retrieval
 from research_strategy import selected_sources
 from invention_strategy import plan_invention, compose_invention_query
+from common import text_contains
 
 
 def register_invention_routes(app, context, services):
@@ -162,9 +163,7 @@ def register_invention_routes(app, context, services):
             hits = [
                 p["id"]
                 for p in protected.values()
-                if any(
-                    term.casefold() in (p.get("title", "") + "\n" + p.get("abstract", "")).casefold() for term in terms
-                )
+                if any(text_contains(p, term, separate_fields=True) for term in terms)
             ]
             if hits:
                 scope = "検索全体" if exclusion["scope"] == "all" else exclusion["scope"] + " の枝"

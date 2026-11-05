@@ -1,8 +1,6 @@
 """Persist observations of actual search-result imports and human review checkpoints."""
 
 import copy
-import hashlib
-import json
 import time
 import uuid
 from functools import wraps
@@ -13,6 +11,7 @@ from catalog import keywords
 from convergence_engine import build_record, summarize
 from llm_judgment import is_assessed
 from workspace_import import publication_key
+from common import fingerprint
 
 
 def query_matches_theme(query, theme):
@@ -62,7 +61,7 @@ def observed_rows(state, observation):
 def evidence_signature(rows):
     fields = ("title", "abstract", "ipc", "label", "label_source", "label_reason", "agent_confidence")
     values = sorted((publication_key(row), {field: row.get(field) for field in fields}) for row in rows)
-    return hashlib.sha256(json.dumps(values, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+    return fingerprint(values)
 
 
 def tracking_for(state):

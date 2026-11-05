@@ -99,11 +99,3 @@ confidenceは判定への自己申告の確信度、relevanceは判断基準に�
 human_examplesはIDのない参考例です。参考例を含めたり入力にないIDを作ったりしません。
 数値は0以上1以下の有限なJSON数値、reasonは80文字程度の非空の日本語文字列です。"""
 )
-
-
-def classification_prompt():
-    return CLASSIFICATION_SYSTEM
-
-
-def judgment_prompt():
-    return JUDGMENT_SYSTEM

@@ -16,6 +16,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 from analysis_engine import texts, vectorize
 from llm_judgment import is_assessed
 from workspace_import import publication_key
+from common import keep_rows, label_counts
 
 MAX_PATENTS = 5000
 
@@ -168,12 +169,14 @@ def _finite_score(value):
 
 def compute_evaluation(rows, target_ids=None):
     rows = _rows(rows)
-    human = [r for r in rows if r.get("label_source") == "human" and r.get("label") in ("keep", "exclude")]
-    machine = [r for r in rows if r.get("label_source") == "agent" and r.get("label") in ("keep", "exclude")]
+    human = keep_rows(rows, label=("keep", "exclude"), source="human")
+    machine = keep_rows(rows, label=("keep", "exclude"), source="agent")
     unknown_source = [
         r for r in rows if r.get("label_source") not in ("human", "agent") and r.get("label") in ("keep", "exclude")
     ]
-    keep = sum(r["label"] == "keep" for r in human)
+    counts = label_counts(human)
+    machine_counts = label_counts(machine)
+    keep = counts["keep"]
     exclude = len(human) - keep
     held = [r for r in rows if r.get("label") not in ("keep", "exclude") and is_assessed(r)]
     targets = {}
@@ -186,8 +189,8 @@ def compute_evaluation(rows, target_ids=None):
         human_keep=keep,
         human_exclude=exclude,
         human_reviewed=len(human),
-        machine_keep=sum(r["label"] == "keep" for r in machine),
-        machine_exclude=sum(r["label"] == "exclude" for r in machine),
+        machine_keep=machine_counts["keep"],
+        machine_exclude=machine_counts["exclude"],
         hold_count=len(held),
         unknown_source_count=len(unknown_source),
         unreviewed_count=len(rows) - len(human) - len(machine) - len(unknown_source) - len(held),

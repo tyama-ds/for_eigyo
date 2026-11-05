@@ -93,14 +93,23 @@ class DiscoveryEngineTests(unittest.TestCase):
             self.assertNotIn(code, rows)
 
     def test_dictionary_matching_needs_nearby_definitions_not_class_headings_or_crossrefs(self):
-        lithium = {r["code"] for r in engine._dictionary_matches("lithium compounds", limit=200)}
+        lithium = {
+            r["code"] for r in engine.classification_retrieval.search_definitions("IPC", "lithium compounds", limit=200)
+        }
         self.assertIn("C01D15/00", lithium)
         self.assertNotIn("C01D13/00", lithium)
-        coating = {r["code"] for r in engine._dictionary_matches("coating electrodes", limit=200)}
+        coating = {
+            r["code"]
+            for r in engine.classification_retrieval.search_definitions("IPC", "coating electrodes", limit=200)
+        }
         self.assertFalse(any(code.startswith("B23H") for code in coating))
-        solid = {r["code"] for r in engine._dictionary_matches("solid electrolyte", limit=200)}
+        solid = {
+            r["code"] for r in engine.classification_retrieval.search_definitions("IPC", "solid electrolyte", limit=200)
+        }
         self.assertIn("H01M10/0562", solid)
-        top_solid = {r["code"] for r in engine._dictionary_matches("solid electrolyte")}
+        top_solid = {
+            r["code"] for r in engine.classification_retrieval.search_definitions("IPC", "solid electrolyte", limit=2)
+        }
         self.assertNotIn("H01M8/04291", top_solid)
 
     def test_untranslated_japanese_never_becomes_an_unrelated_english_query(self):

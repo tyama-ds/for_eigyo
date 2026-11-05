@@ -15,14 +15,14 @@ import unicodedata
 import classification_catalog as ipc
 import fi_catalog as fi
 from classification_translations import _bundle
+from common import tokenize_keywords
 
 STOP = set("a an and are as at be by for from in into is it of on or the to with using used thereof therefor".split())
 
 
 def phrases(text):
-    text = unicodedata.normalize("NFKC", str(text))
-    parts = re.findall(r'"([^"]+)"|([^",、;；\n]+)', text)
-    return list(dict.fromkeys(t.strip() for pair in parts for t in pair if t.strip()))[:24]
+    # Definition retrieval accepts whole descriptions, not Boolean term input.
+    return tokenize_keywords(str(text), split_spaces=False, truncate=True, validate_terms=False, max_term_length=None)
 
 
 def clean(text):
