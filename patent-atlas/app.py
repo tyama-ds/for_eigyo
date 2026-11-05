@@ -32,15 +32,12 @@ from discovery_routes import new_discovery, public_discovery, register_discovery
 from orchestration_routes import register_orchestration_routes
 from convergence_routes import display_convergence, display_search_result, new_observation, register_convergence_routes
 from workspace_import import merge_patents
+from workspace import Workspace
 from research_routes import register_research_routes, refined_tree
 from query_formats import Node, group, tree_data, tree_from_data, describe_tree, terms_of
 from research_strategy import suggest_keyword_or_group
 
 ROOT = Path(__file__).parent
-DATA = Path(os.environ.get("PATENT_ATLAS_DATA", str(ROOT / "data")))
-DATA.mkdir(parents=True, exist_ok=True)
-classification_translations.configure_cache(DATA)
-LOCK = threading.RLock()
 DEFAULT_SETTINGS = dict(
     provider="offline",
     base_url="http://localhost:11434/v1",
@@ -57,58 +54,67 @@ DEFAULT_SETTINGS = dict(
     llm_timeout=120,
 )
 SECRET_SETTINGS = ("api_key", "proxy", "ops_key", "ops_secret")
-STATE = dict(
-    keywords="",
-    candidates=[],
-    selected=[],
-    patents=[],
-    clusters=[],
-    queries=[],
-    training=None,
-    agent_log=[],
-    demo=False,
-    import_info=None,
-    classification_view=None,
-    candidate_proposal=None,
-    discovery=None,
+
+
+def _recover_workspace(workspace):
+    if workspace.settings["classification_layout"] not in ("semantic", "grid"):
+        workspace.settings["classification_layout"] = DEFAULT_SETTINGS["classification_layout"]
+    try:
+        workspace.settings["llm_timeout"] = validate_timeout(workspace.settings.get("llm_timeout", 120))
+    except ValueError:
+        workspace.settings["llm_timeout"] = DEFAULT_SETTINGS["llm_timeout"]
+    if not isinstance(workspace.state.get("discovery"), dict):
+        workspace.state["discovery"] = new_discovery()
+    elif workspace.state["discovery"].get("status") == "running":
+        workspace.state["discovery"].update(
+            status="stopped", last_error="前回の探索はアプリの終了で中断しました。保存済みの結果から再開できます。"
+        )
+    if (workspace.state.get("training") or {}).get("mode") == "llm" and workspace.state["training"].get(
+        "status"
+    ) == "running":
+        workspace.state["training"].update(
+            status="cancelled",
+            stage="中断",
+            message="前回のLLM判定はアプリの終了で中断しました。保存済みの判定を保持しています。",
+        )
+
+
+ws = Workspace(
+    Path(os.environ.get("PATENT_ATLAS_DATA", str(ROOT / "data"))),
+    state=dict(
+        keywords="",
+        candidates=[],
+        selected=[],
+        patents=[],
+        clusters=[],
+        queries=[],
+        training=None,
+        agent_log=[],
+        demo=False,
+        import_info=None,
+        classification_view=None,
+        candidate_proposal=None,
+        discovery=None,
+    ),
+    settings=DEFAULT_SETTINGS.copy(),
+    job=dict(
+        id=None,
+        status="idle",
+        progress=0,
+        message="",
+        error=None,
+        kind=None,
+        mode=None,
+        started_at=None,
+        completed_at=None,
+        stop_requested=False,
+    ),
+    secret_settings=SECRET_SETTINGS,
 )
-SETTINGS = DEFAULT_SETTINGS.copy()
-try:
-    saved = json.loads((DATA / "workspace.json").read_text(encoding="utf-8"))
-    STATE.update(saved.get("state", {}))
-    SETTINGS.update(saved.get("settings", {}))
-except (FileNotFoundError, ValueError):
-    pass
-if SETTINGS["classification_layout"] not in ("semantic", "grid"):
-    SETTINGS["classification_layout"] = DEFAULT_SETTINGS["classification_layout"]
-try:
-    SETTINGS["llm_timeout"] = validate_timeout(SETTINGS.get("llm_timeout", 120))
-except ValueError:
-    SETTINGS["llm_timeout"] = DEFAULT_SETTINGS["llm_timeout"]
-if not isinstance(STATE.get("discovery"), dict):
-    STATE["discovery"] = new_discovery()
-elif STATE["discovery"].get("status") == "running":
-    STATE["discovery"].update(
-        status="stopped", last_error="前回の探索はアプリの終了で中断しました。保存済みの結果から再開できます。"
-    )
-if (STATE.get("training") or {}).get("mode") == "llm" and STATE["training"].get("status") == "running":
-    STATE["training"].update(
-        status="cancelled",
-        stage="中断",
-        message="前回のLLM判定はアプリの終了で中断しました。保存済みの判定を保持しています。",
-    )
-JOB = dict(
-    id=None,
-    status="idle",
-    progress=0,
-    message="",
-    error=None,
-    kind=None,
-    mode=None,
-    started_at=None,
-    completed_at=None,
-    stop_requested=False,
-)
+ws.load(after_load=_recover_workspace)
+# Compatibility references for existing routes and callers; Phase 3c changes injection.
+STATE, SETTINGS, LOCK, JOB, DATA = ws.state, ws.settings, ws.lock, ws.job, ws.data_dir
+classification_translations.configure_cache(DATA)
 STOP = threading.Event()
 app = FastAPI(title="Patent Atlas", docs_url="/api/docs")
 
@@ -141,19 +147,11 @@ async def value_error(request, error):
 
 
 def save():
-    settings = {k: v for k, v in SETTINGS.items() if k not in SECRET_SETTINGS}
-    target = DATA / "workspace.json"
-    temp = DATA / "workspace.tmp"
-    temp.write_text(
-        json.dumps(dict(state=STATE, settings=settings), ensure_ascii=False, indent=2, allow_nan=False),
-        encoding="utf-8",
-    )
-    temp.replace(target)
+    return ws.save()
 
 
 def idle():
-    if JOB["status"] == "running":
-        raise HTTPException(409, "処理中です。完了を待つか停止してください。")
+    return ws.idle()
 
 
 def classification_key(candidate):
@@ -217,34 +215,27 @@ def display_discovery(discovery):
     return value
 
 
+def _public_workspace(state):
+    return {
+        **{key: value for key, value in state.items() if key != "convergence_tracking"},
+        "convergence": display_convergence(state),
+        "search_result": display_search_result(state),
+        "selected": normalize_selection(state["selected"]),
+        "candidate_proposal": display_candidate_proposal(state.get("candidate_proposal")),
+        "discovery": display_discovery(state["discovery"]),
+        "candidates": [
+            {**display_labels(c, selection=True), "key": classification_key(c)} for c in state["candidates"]
+        ],
+        "classification_catalog": {
+            "ipc": explorer.ipc_catalog.metadata(),
+            "fterm": explorer.fterm_catalog.metadata(),
+            "fi": explorer.fi_catalog.metadata(),
+        },
+    }
+
+
 def public_state():
-    with LOCK:
-        return copy.deepcopy(
-            {
-                **{key: value for key, value in STATE.items() if key != "convergence_tracking"},
-                "convergence": display_convergence(STATE),
-                "search_result": display_search_result(STATE),
-                "selected": normalize_selection(STATE["selected"]),
-                "candidate_proposal": display_candidate_proposal(STATE.get("candidate_proposal")),
-                "discovery": display_discovery(STATE["discovery"]),
-                "candidates": [
-                    {**display_labels(c, selection=True), "key": classification_key(c)} for c in STATE["candidates"]
-                ],
-                "classification_catalog": {
-                    "ipc": explorer.ipc_catalog.metadata(),
-                    "fterm": explorer.fterm_catalog.metadata(),
-                    "fi": explorer.fi_catalog.metadata(),
-                },
-                "settings": {
-                    **{k: v for k, v in SETTINGS.items() if k not in SECRET_SETTINGS},
-                    "api_key_set": bool(SETTINGS["api_key"]),
-                    "proxy_set": bool(SETTINGS["proxy"]),
-                    "ops_key_set": bool(SETTINGS["ops_key"]),
-                    "ops_secret_set": bool(SETTINGS["ops_secret"]),
-                },
-                "job": JOB,
-            }
-        )
+    return ws.public_state(_public_workspace)
 
 
 def progress(value, message):
@@ -865,25 +856,21 @@ def candidates(body: dict):
                 409,
                 "候補の生成中に分類・選択・キーワードまたはLLM設定が変更されました。現在の操作を保持しました。内容を確認して再実行してください。",
             )
-        STATE.update(
-            keywords=text,
-            candidates=pool,
-            selected=selected,
-            classification_view=dict(
-                keys=[classification_key(c) for c in rows],
-                direction="overview",
-                note=note,
-                total=len(rows),
-                next_offset=None,
-                trail=[],
-            ),
-        )
-        STATE["candidate_proposal"] = proposal
-        try:
-            save()
-        except Exception:
-            STATE.update(before)
-            raise
+        with ws.transaction(watched_fields, save=save):
+            STATE.update(
+                keywords=text,
+                candidates=pool,
+                selected=selected,
+                classification_view=dict(
+                    keys=[classification_key(c) for c in rows],
+                    direction="overview",
+                    note=note,
+                    total=len(rows),
+                    next_offset=None,
+                    trail=[],
+                ),
+            )
+            STATE["candidate_proposal"] = proposal
     return public_state()
 
 
@@ -925,11 +912,7 @@ def add_rejected_broader_candidate(body: dict):
         item = rejected_candidate_guidance(rejected).get("broader_candidate")
         if not item or not item.get("verified") or not item.get("selectable"):
             raise ValueError("この候補から確認できる上位IPCはありません。分類指定から確認してください。")
-        before = {
-            name: copy.deepcopy(STATE.get(name))
-            for name in ("candidates", "selected", "classification_view", "candidate_proposal")
-        }
-        try:
+        with ws.transaction(("candidates", "selected", "classification_view", "candidate_proposal"), save=save):
             old = next((row for row in STATE["candidates"] if classification_key(row) == item["key"]), None)
             row = copy.deepcopy(old or item)
             origin = dict(
@@ -951,10 +934,6 @@ def add_rejected_broader_candidate(body: dict):
                 note=f"{rejected['code']} を置換せず、確認済みの広い探索起点 {item['code']} を候補に追加しました。検索式に使うには選択してください。",
             )
             rejected["broader_added"] = True
-            save()
-        except Exception:
-            STATE.update(before)
-            raise
     return public_state()
 
 
@@ -1065,23 +1044,11 @@ def query(body: dict):
             raise ValueError("改善案の指定は true / false にしてください。")
         if "classification_keys" in body and (not refine or not isinstance(body["classification_keys"], list)):
             raise ValueError("改善案の分類は体系付きキーのリストで指定してください。")
-        before = copy.deepcopy(STATE)
-        pending = DATA / "workspace.tmp"
-        pending_before = pending.read_bytes() if pending.exists() else None
-        try:
+        with ws.transaction(save=save, restore_pending=True):
             make_query(
                 refine, body.get("include"), body.get("exclude"), classification_keys=body.get("classification_keys")
             )
             result = public_state()
-            save()
-        except Exception:
-            STATE.clear()
-            STATE.update(before)
-            if pending_before is None:
-                pending.unlink(missing_ok=True)
-            else:
-                pending.write_bytes(pending_before)
-            raise
     return result
 
 
@@ -1125,11 +1092,10 @@ async def upload(request: Request):
         else:
             parsed["import_mode"] = "replace"
         clusters = map_patents(rows, STATE["keywords"])
-        previous = copy.deepcopy(STATE)
         training_metadata = copy.deepcopy(STATE["training"]) if merge_mode == "true" else None
         if training_metadata and report["added"]:
             training_metadata.update(dataset_changed=True, added_since_training=report["added"])
-        try:
+        with ws.transaction(save=save):
             STATE.update(
                 patents=rows,
                 clusters=clusters,
@@ -1138,11 +1104,6 @@ async def upload(request: Request):
                 import_info=parsed,
                 search_result=observation,
             )
-            save()
-        except Exception:
-            STATE.clear()
-            STATE.update(previous)
-            raise
     return public_state()
 
 

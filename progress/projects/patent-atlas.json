@@ -4,7 +4,7 @@
   "path": "patent-atlas/",
   "summary": "IPC・Fターム候補の選択、特許CSVの可視化と要不要判定、学習・LLM 判定から検索式を更新するローカルアプリ。",
   "status": "active",
-  "phase": "Phase 3a 共通ヘルパーの統合完了",
+  "phase": "Phase 3b Workspaceクラスの導入完了",
   "progress": 70,
   "started": "2026-09-14",
   "ports": [
@@ -52,13 +52,16 @@
     }
   ],
   "next": [
-    "Phase 3b：Workspaceと保存・復元の共通化（挙動維持）",
-    "Phase 3c：明示的なサービス注入と依存関係の整理（挙動維持）"
+    "Phase 3c：明示的なサービス注入と依存関係の整理（未着手）"
   ],
   "risks": [
     "共有サーバー向けの認証・マルチユーザー分離は未実装（127.0.0.1 前提）"
   ],
   "log": [
+    {
+      "date": "2026-11-05",
+      "summary": "Phase 3b：Workspaceに既存state/settings/job・RLock・保存先を集約し、load/save・snapshot/restore・transaction・公開状態を実装。既存グローバル名は同一オブジェクトの互換参照とし、保存形式・秘密項目除外・中断復旧・一時ファイル復元・LLMのバッチ保存を維持。共通の復元定型9箇所と統括プレビューを置換。隔離データの回帰19件追加、Python521件（520成功・既存任意1スキップ）・JS304件成功、既存テスト無変更。Phase 3c、公開状態キャッシュ・統括の部分snapshot最適化は未実施。claudecode不在のためdashboardは--checkのみ実行し欠落で終了。"
+    },
     {
       "date": "2026-11-05",
       "summary": "Phase 3a：設計6判断を目標モデルとPhase 3の扱いに分けて確定。公報ID・語句分割/照合・ラベル集計・fingerprint・LLM形検証/スキーマをcommon.pyへ統合し、指定の重複・未使用関数を削除。NFKCと厳密化の差分、原文引用・用途別集計の互換境界をARCHITECTURE.mdに記録。回帰19件追加、Python502件（501成功・既存任意1スキップ）・JS304件成功。APIテスト無変更。削除関数を呼んでいたエンジンテスト2件はケースを維持して現行経路へ変更。claudecode不在のためdashboardは--checkのみ。"

@@ -72,23 +72,18 @@ def merge_documents(existing, incoming, source, live_labels=False):
 
 
 def register_discovery_routes(app, context):
+    ws = context["ws"]
     state, settings, lock = context["STATE"], context["SETTINGS"], context["LOCK"]
     save, idle, public_state = context["save"], context["idle"], context["public_state"]
     stop_event = context["STOP"]
 
     @contextmanager
     def atomic_workspace(*fields):
-        before = {field: copy.deepcopy(state[field]) for field in fields if field in state}
         archives_to_write = []
         try:
-            yield archives_to_write
-            context["save"]()
+            with ws.transaction(fields, save=context["save"]):
+                yield archives_to_write
         except Exception as error:
-            for field in fields:
-                if field in before:
-                    state[field] = before[field]
-                else:
-                    state.pop(field, None)
             if isinstance(error, (ValueError, HTTPException)):
                 raise
             raise ValueError("探索ラボの保存に失敗しました。変更前の状態を保持しています。") from None

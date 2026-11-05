@@ -25,6 +25,7 @@ from convergence_routes import record_result
 
 
 def register_orchestration_routes(app, context):
+    ws = context["ws"]
     state, settings, lock = context["STATE"], context["SETTINGS"], context["LOCK"]
     idle = context["idle"]
 
@@ -43,15 +44,10 @@ def register_orchestration_routes(app, context):
         @wraps(action)
         def wrapped(*args, **kwargs):
             with lock:
-                previous = copy.deepcopy(state)
-                previous_job = copy.deepcopy(context["JOB"])
                 try:
-                    return action(*args, **kwargs)
+                    with ws.transaction(check_idle=False, persist=False, include_job=True):
+                        return action(*args, **kwargs)
                 except Exception as exc:
-                    state.clear()
-                    state.update(previous)
-                    context["JOB"].clear()
-                    context["JOB"].update(previous_job)
                     if not isinstance(exc, (ValueError, HTTPException)):
                         raise ValueError(
                             "工程の保存に失敗しました。変更前の状態を保持しています。保存先を確認してください。"
@@ -61,19 +57,12 @@ def register_orchestration_routes(app, context):
         return wrapped
 
     def commit(operation):
-        with lock:
-            before = copy.deepcopy(state)
-            try:
-                result = operation()
-                value = workspace()
-                value["summary"].update(summary(state["patents"]))
-                refresh_steps(value)
-                save()
-                return result
-            except Exception:
-                state.clear()
-                state.update(before)
-                raise
+        with ws.transaction(check_idle=False, save=save):
+            result = operation()
+            value = workspace()
+            value["summary"].update(summary(state["patents"]))
+            refresh_steps(value)
+            return result
 
     def log(value, message):
         value["logs"] = (value.get("logs", []) + [dict(time=time.strftime("%H:%M:%S"), message=message)])[-150:]
@@ -173,7 +162,7 @@ def register_orchestration_routes(app, context):
         return selectable, selected
 
     def preview_query(selected, include=None, exclude=None):
-        before = copy.deepcopy(state)
+        before = ws.snapshot()
         try:
             return copy.deepcopy(
                 context["make_query"](
@@ -185,8 +174,7 @@ def register_orchestration_routes(app, context):
                 )
             )
         finally:
-            state.clear()
-            state.update(before)
+            ws.restore(before)
 
     def checkpoint(kind, candidates, selected, query=None):
         value = workspace()

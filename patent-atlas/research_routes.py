@@ -152,6 +152,7 @@ def refined_tree(previous, classifications, include, exclude):
 
 
 def register_research_routes(app, context):
+    ws = context["ws"]
     from research_strategy import plan_research
     from query_library import parse_example, adapt_example
     from projection_engine import project_patents, compute_evaluation
@@ -194,21 +195,9 @@ def register_research_routes(app, context):
 
     def commit(action):
         # Call under the same workspace lock; a failed save cannot partially apply.
-        before = copy.deepcopy(state)
-        pending = context["DATA"] / "workspace.tmp"
-        pending_before = pending.read_bytes() if pending.exists() else None
-        try:
+        with ws.transaction(save=save, restore_pending=True):
             action()
             workbench()["revision"] += 1
-            save()
-        except Exception:
-            state.clear()
-            state.update(before)
-            if pending_before is None:
-                pending.unlink(missing_ok=True)
-            else:
-                pending.write_bytes(pending_before)
-            raise
         return public()
 
     def enrich_query(query):

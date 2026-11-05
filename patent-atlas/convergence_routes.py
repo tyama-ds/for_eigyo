@@ -159,20 +159,17 @@ def record_result(state, body, *, automatic=False):
 
 
 def register_convergence_routes(app, context):
+    ws = context["ws"]
     state, lock = context["STATE"], context["LOCK"]
 
     def atomic(action):
         @wraps(action)
         def wrapped(*args, **kwargs):
             with lock:
-                context["idle"]()
-                before = copy.deepcopy(state)
                 try:
-                    action(*args, **kwargs)
-                    context["save"]()
+                    with ws.transaction(save=context["save"]):
+                        action(*args, **kwargs)
                 except Exception as error:
-                    state.clear()
-                    state.update(before)
                     if not isinstance(error, (ValueError, HTTPException)):
                         raise ValueError("収束記録の保存に失敗しました。変更前の状態を保持しています。") from None
                     raise

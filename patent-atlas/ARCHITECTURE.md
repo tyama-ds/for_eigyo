@@ -1,10 +1,10 @@
-# Patent Atlas 設計の正本（Phase 3a）
+# Patent Atlas 設計の正本（Phase 3b）
 
 - 棚卸し日: 2026-11-05
-- 対象: `tyama-ds/for_eigyo` の `patent-atlas/`、Phase 1完了時点 `87e87e8` の棚卸しをPhase 3aの実装に合わせて更新
+- 対象: `tyama-ds/for_eigyo` の `patent-atlas/`、Phase 1完了時点 `87e87e8` の棚卸しをPhase 3bの実装に合わせて更新
 - 状態: **現状と目標を区別する。6項目の目標とPhase 3での扱いは利用者が確定済み。**
 - 6項目の判断者: 利用者（本会話）　確定日: 2026-11-05
-- Phase 3aは共通ヘルパーの統合のみ。3b（Workspace）と3c（注入・依存の整理）は未実施。設定、保存データ、CSS、既存文書の配置を変更しない。
+- Phase 3a（共通ヘルパー）と3b（Workspace）を実装済み。3c（注入・依存の整理）は未着手。設定値、保存形式・保存データ、CSS、既存文書の配置を変更しない。
 
 ## 1. 現状
 
@@ -16,11 +16,11 @@ FastAPIを起点とするローカル単一ユーザーアプリで、HTML/CSS/J
 
 | 置き場所 | 内容・境界 | 根拠 |
 |---|---|---|
-| Pythonの `STATE` | 特許、検索式、分類、各モードの計画・履歴を共有する可変dict | [app.py](app.py): `STATE`, `public_state` |
-| Pythonの `SETTINGS` | LLM、プロキシ、OPS、モデル、分類配置など。`STATE`のキーではない | `app.py`: `DEFAULT_SETTINGS`, `settings` |
-| Pythonの `JOB` / `STOP` / `LOCK` | 現在の共通ジョブ、停止イベント、再入可能ロック。`begin_job` がデーモンスレッドを起動する | `app.py`: `begin_job`, `progress`, `idle` |
-| `workspace.json` | `{"state": STATE, "settings": 非秘密設定}`。保存先は `PATENT_ATLAS_DATA`、未指定時はアプリ配下の `data/` | `app.py`: 起動時ロード、`save` |
-| `/api/state` の返り値 | 保存STATEのコピーを加工し、`settings`, `job`, `convergence`, `classification_catalog` などを加えた表示用データ | `app.py:public_state` |
+| Pythonの `STATE` | `ws.state` と同一の可変dictを指す互換名。特許、検索式、分類、各モードの計画・履歴を保持 | [workspace.py](workspace.py): `Workspace`、[app.py](app.py): `ws`, `STATE` |
+| Pythonの `SETTINGS` | `ws.settings` と同一dictを指す互換名。LLM、プロキシ、OPS、モデル、分類配置など。`STATE`のキーではない | `app.py`: `DEFAULT_SETTINGS`, `settings`、`workspace.py` |
+| Pythonの `JOB` / `STOP` / `LOCK` | `JOB` / `LOCK` は `ws.job` / `ws.lock` の互換参照。STOPは従来どおり停止イベント。`begin_job` がデーモンスレッドを起動 | `workspace.py`: `idle` / `transaction`、`app.py`: `begin_job`, `progress` |
+| `workspace.json` | `{"state": STATE, "settings": 非秘密設定}`。保存先は従来と同じ `PATENT_ATLAS_DATA`、未指定時は `data/`。DATAは `ws.data_dir` の互換参照 | `workspace.py`: `load`, `to_dict`, `save`。`app.py:save` は委譲 |
+| `/api/state` の返り値 | 従来と同じ表示用データ。ロック下で分類/収束等を投影し、秘密設定の有無・ジョブ進捗を加えてコピーを返す | `workspace.py:public_state`、`app.py:_public_workspace` / `public_state` |
 | ブラウザー内 `state` | 上記API応答。PythonのSTATEと同じキー集合・オブジェクトではない | [static/app.js](static/app.js): `init`, `refreshJob` |
 | UI下書き・表示状態 | `classDraft`, `learningDraft`, `discoveryDraft`, `researchDraft`, `inventionPlanDraft`, `atlasProjection` など。編集だけではサーバーへ保存されない | 各 `static/*-ui.js`, `research-workbench.js`, `invention-workbench.js`, `projection-ui.js` |
 | ブラウザー保存 | 調査・発明の下書きは `sessionStorage`。出力形式・分類言語・動作表示などの設定は `localStorage`。全UI下書きが永続化されるわけではない | [static/research-draft-store.js](static/research-draft-store.js)、`static/app.js`, `classification-ui.js`, `atlas-motion.js` |
@@ -29,7 +29,7 @@ FastAPIを起点とするローカル単一ユーザーアプリで、HTML/CSS/J
 
 ### 1.2 STATEの既知トップレベルキー17個と書き込み元
 
-`app.py` の初期 `STATE = dict(...)` は13キー。ルート登録で `orchestration` と `research_workbench` が加わり、取込・記録・デモ操作などで `search_result` と `convergence_tracking` が加わる。したがって、通常処理で扱う既知キーは17個だが、新規起動直後から17個すべてが存在するとは限らない。ロード時の `STATE.update(saved["state"])` は未知キーを除去しないので、厳密な17キーのスキーマ検証もない。
+`app.py` がWorkspaceへ渡す初期 `state=dict(...)` は13キー。ルート登録で `orchestration` と `research_workbench` が加わり、取込・記録・デモ操作などで `search_result` と `convergence_tracking` が加わる。したがって、通常処理で扱う既知キーは17個だが、新規起動直後から17個すべてが存在するとは限らない。`Workspace.load()` の `state.update(...)` は未知キーを除去しないので、厳密な17キーのスキーマ検証もない。
 
 表の列は `.py` を省略したモジュール名。**直**はモジュール内の代入・リスト操作・参照先dictの変更、**間**は共有サービスを呼び出した結果の変更、**—**は通常処理での書き込みなし。全STATEのロード、トランザクションの復元、一時プレビューの復元は全キーに触れ得るため、この表の通常の書き込みとは分ける。
 
@@ -92,10 +92,10 @@ register_research_routes(app, globals())
 
 | モジュール | `context` から取り出す名前 |
 |---|---|
-| [discovery_routes.py](discovery_routes.py) | `DATA`, `LOCK`, `SETTINGS`, `STATE`, `STOP`, `begin_job`, `checked_text`, `complete`, `explorer`, `idle`, `progress`, `public_state`, `save`, `set_classification_view` |
-| [orchestration_routes.py](orchestration_routes.py) | `DATA`, `JOB`, `LOCK`, `SETTINGS`, `STATE`, `STOP`, `begin_job`, `classification_feedback`, `explorer`, `idle`, `make_query`, `map_patents`, `normalize_selection`, `progress`, `public_state`, `run_llm_assessment`, `run_model_training`, `save`, `set_classification_view` |
-| [convergence_routes.py](convergence_routes.py) | `LOCK`, `STATE`, `idle`, `public_state`, `save` |
-| [research_routes.py](research_routes.py) | `DATA`, `LOCK`, `SETTINGS`, `STATE`, `candidate_list`, `classification_overview`, `idle`, `map_patents`, `public_state`, `save` |
+| [discovery_routes.py](discovery_routes.py) | `DATA`, `LOCK`, `SETTINGS`, `STATE`, `STOP`, `begin_job`, `checked_text`, `complete`, `explorer`, `idle`, `progress`, `public_state`, `save`, `set_classification_view`, `ws` |
+| [orchestration_routes.py](orchestration_routes.py) | `DATA`, `JOB`, `LOCK`, `SETTINGS`, `STATE`, `STOP`, `begin_job`, `classification_feedback`, `explorer`, `idle`, `make_query`, `map_patents`, `normalize_selection`, `progress`, `public_state`, `run_llm_assessment`, `run_model_training`, `save`, `set_classification_view`, `ws` |
+| [convergence_routes.py](convergence_routes.py) | `LOCK`, `STATE`, `public_state`, `save`, `ws` |
+| [research_routes.py](research_routes.py) | `LOCK`, `SETTINGS`, `STATE`, `candidate_list`, `classification_overview`, `idle`, `map_patents`, `public_state`, `save`, `ws` |
 | [invention_routes.py](invention_routes.py) | `LOCK`, `SETTINGS`, `STATE`, `idle`。`app.py`から直接登録されず、調査ルートが同じ `context` を渡す |
 
 発明ルートにはさらに `services` として `workbench`, `source_patents`, `check_revision`, `commit`, `fingerprint`, `checked_brief`, `merge_target_references`, `enrich_query`, `save_query` が渡される。これらは `research_routes.py` 内の関数である。
@@ -175,23 +175,35 @@ register_research_routes(app, globals())
 
 `tests/test_common.py` で全角IDの取込、キーワードの引用/上限、用途別の厳密性、原文引用、ラベル/保留、ハッシュ、LLM形検証・スキーマを検証する。検証はPython 502件実行（501件成功・既存の任意Transformer 1件スキップ）、JavaScript 304件成功。既存APIテストは変更しない。削除した関数を直接呼んでいた `test_discovery_engine.py` と `test_query_library.py` だけは、ケースと主要assertを残して現行の辞書検索・JSON取込契約へ移した。
 
-### 1.7 永続化・復元と現状の境界
+### 1.7 Workspace・永続化・復元（Phase 3b）
 
-通常のアプリ処理で `workspace.json` を書く実装は現在も `app.py:save` に集まっている。ただし、シリアライズ元はグローバルなdictであり、`Workspace` や `to_dict()` はまだ存在しない。各ルート/サービスが状態を直接変え、保存・失敗時の復元を別々に管理している。
+`workspace.py:Workspace` が既存構造の `state`, `settings`, `job`、`RLock`、`data_dir` を所有する。`app.py` の `STATE/SETTINGS/JOB/LOCK/DATA` は同一オブジェクトへの互換参照であり、別の正本ではない。`save/idle/public_state` も薄い委譲として残す。既存の `globals()` 登録方式、ルート間import、登録時の初期化はPhase 3cまで変更しない。
 
-- `save` は一時ファイル `workspace.tmp` へJSONを書き、`replace` する。復元対象・タイミングは呼び出し側の責務。
-- Phase 1後の探索ラボ `/plan`, `/analyze`, `/import`, `/adopt` は変更対象を復元し、計画アーカイブは保存成功後に書く。アーカイブだけの書き出しに失敗した場合は、計画保存済みと区別して通知する。
-- 統括の `atomic_request` / `commit`、調査の `commit`、収束の `atomic` などはそれぞれスナップショットを持つ。**統括の `sync_lab` のアーカイブは依然としてその操作内で先に書く**ため、探索ラボの上記4ルートと同じ順序へ全経路が統一されたわけではない。
-- LLM判定の `publish` は初期化・状態遷移、10バッチごと、完了/停止/エラー時に保存し、同じ状態の進捗通知だけでは保存しない。復元用コピーは保存間隔内に変更した行を保持する。現在4件/バッチ。未保存分の喪失可能性と保存失敗時の取り消しを表示する。
-- `JOB` はメモリ内のみ。再起動で同じスレッドが復活するわけではない。`training`、`discovery`、`orchestration` の保存済み状態から中断・再開を扱う。
-- `api_key`, `proxy`, `ops_key`, `ops_secret` は標準の `save` が設定から除外する。通常の再起動では引き継がない。API応答も値ではなく設定有無を返す。
-- `data/models/` の学習成果物、分類翻訳キャッシュ、探索計画のアーカイブは `workspace.json` 以外の保存物。将来の「唯一の書き手」は、これらすべてのファイルI/Oを `to_dict` へ押し込むという意味ではない。
+| メソッド | 現在の契約 |
+|---|---|
+| `load(after_load=...)` | 既存のstate/settingsを同じdictへマージし、未知フィールドを保持。ファイル欠落・JSON不正の扱いも従来どおり。ロード・中断復旧だけではディスクへ書かない。`app.py:_recover_workspace` が従来の配置方式/タイムアウト検証と探索・LLM中断復旧を行う |
+| `to_dict()` / `save()` | `to_dict()` をシリアライズ元とし、`save()` がロック下で従来と同じUTF-8 JSONを `workspace.tmp` へ書き `replace`。全特許の追加コピーを避けるため `to_dict()` は短命な読取用ビューで、ロック下で消費する。形式・秘密項目除外・非有限値拒否は維持 |
+| `snapshot(keys=None, include_settings=False, include_job=False)` | 既定はstate全体、keys指定時はそのキーだけをdeepcopyする。存在しないキーと値Noneを区別。settings/jobの取得は明示指定した場合だけ |
+| `restore(snapshot)` | 単回使用の復元画像を消費し、共有ルートdictを再代入せずclear/updateで復元する。部分復元では対象外のキーを維持し、元々無い対象キーは削除する |
+| `transaction(...)` | lock取得→idle確認→snapshot→処理→成功時save、例外時restore。実行中ジョブの内部commitは `check_idle=False`。統括の外側ガードは `persist=False, include_job=True` で内部保存を二重実行しない。saveの既存呼び出し口を指定できるため、保存失敗の注入テストも維持 |
+| `public_state(project=...)` | 同一lock下で表示用加工・秘密項目の有無・最新jobをまとめ、独立したdeepcopyを返す。アプリ固有の分類・収束等の投影は `_public_workspace` へ分離。応答と内部dictの参照は共有しない |
 
-ルート同士のimportに加え、`research_strategy.py:plan_research` と `invention_strategy.py:plan_invention` は `llm.complete` を呼ぶ。分類処理には辞書・キャッシュの読込もある。「engine名のファイルはすべて純粋関数」という状態にはなっていない。
+共通transactionへの置換先は、`app.py:candidates` / `add_rejected_broader_candidate` / `query` / `upload`、`discovery_routes.py:atomic_workspace`、`convergence_routes.py:atomic`、`research_routes.py:commit`、`orchestration_routes.py:atomic_request` / `commit`。統括の `preview_query` は成功時も戻す必要があるため、`snapshot`→`finally: restore` を使う。
+
+- 一時ファイルの復元は、従来それを行っていた検索式・調査commitだけが `restore_pending=True` を指定する。ほかの経路の失敗時ファイル動作を一律に変えない。
+- 探索ラボの4ルートは共通transactionが成功した後に計画アーカイブを書く。アーカイブだけが失敗した場合の通知も維持する。**統括の `sync_lab` のアーカイブは依然として操作内で先に書く**。この別のI/O契約はPhase 3bで変更していない。
+- LLM判定の10バッチごとの保存、終了/停止時の保存、更新行だけの復元ジャーナルは維持する。モデル学習の行を同じ参照へ戻す処理も残す。これらを全STATEのtransactionへ置き換えて、未保存バッチや行の扱いを変えない。
+- `JOB` はメモリ内のみ。再起動で同じスレッドが復活するわけではない。保存済みtraining/discovery/orchestrationから中断・再開を扱う。`api_key`, `proxy`, `ops_key`, `ops_secret` は保存から除外し、APIは値ではなく設定有無を返す。設定値の変更・秘密情報の移行はしない。
+- `data/models/`、分類翻訳キャッシュ、探索計画のアーカイブは別の保存物。`to_dict()` はそれらのファイルI/Oを所有しない。
+- 公開状態のキャッシュは未実装。既存ルートやジョブがネストしたdictを直接変更する間は、saveだけで無効化すると未保存の進捗・判定を取りこぼす。Phase 3bでは最新応答の契約を維持し、変更通知を含むキャッシュ設計は後続作業に残す。統括の全体snapshotを変更キー単位へ絞る最適化も未実施（部分snapshotの機構自体は実装済み）。
+
+`tests/test_workspace.py` で、既存形式の保存と再読込、秘密設定の境界、参照の保持、部分/全体復元、一時ファイル、保存回数、ジョブ排他・RLock、未保存の変更の公開、既存中断復旧を隔離データで検証する。Phase 3bでは回帰19件を追加し、Python 521件（520成功・既存任意1スキップ）、JavaScript 304件成功。既存APIテストもその他の既存テストも変更していない。
+
+ルート同士のimportに加え、`research_strategy.py:plan_research` と `invention_strategy.py:plan_invention` は `llm.complete` を呼ぶ。分類処理には辞書・キャッシュの読込もある。「engine名のファイルはすべて純粋関数」という状態にはまだなっていない。
 
 ## 2. 目標モデル（確定方針と詳細設計の下書き）
 
-ここからは現状の説明ではなく、今回指定された方向を整理した案である。第3節の6方針は確定している。クラス構成、保存スキーマ変更、移行手順の詳細は未実装であり、将来のモード統廃合をPhase 3で先取りしない。
+ここからは現状の説明ではなく、今回指定された方向を整理した案である。第3節の6方針は確定している。Workspaceによる既存dictの所有・保存はPhase 3bで実装した。ほかのエンティティのクラス化、保存スキーマ変更、移行手順は未実装であり、将来のモード統廃合をPhase 3で先取りしない。
 
 ### 2.1 エンティティ案
 
@@ -255,7 +267,7 @@ engines（純粋な計算・検証） ← workspace（状態・永続化・工�
 
 要求する原則は、**`workspace.json` は `Workspace.to_dict()` を唯一の書き出し元とする**こと。各routeが独自にJSONを組み立てたり、共有dictを任意に保存したりする構造を避ける。
 
-責務を明確にするための下書きとして、`to_dict()` は保存形式への変換、workspace層の保存処理はその結果の一時ファイルへの書き込み・置換を担う構成を提案する。`to_dict()` 自体にファイルI/Oまで持たせる意味で「唯一の書き手」とするかは、実装前に人が確定する。
+Phase 3bでは `to_dict()` を保存形式のシリアライズ元、`Workspace.save()` を一時ファイルへの書き込み・置換の唯一の実装とした。`app.py:save` は互換の委譲。`to_dict()` 自体はファイルI/Oを行わず、保存内容・秘密設定の除外は従来と同じである。
 
 - 古いWorkspaceのロード/移行は非破壊とし、既存の特許・判定・式・根拠を消さない。保存スキーマの版管理と未知フィールドの扱いを決める。
 - 保存失敗時に戻す範囲、アーカイブ等の別ファイルとの整合、LLMの保存間隔をworkspace層の契約にする。
@@ -281,7 +293,7 @@ engines（純粋な計算・検証） ← workspace（状態・永続化・工�
 - 3つの特許集合の所有関係・参照の保存方針: ____________________
 - Judgmentの正本（Patent内/独立履歴）とkeepの用途別規則: ____________________
 - Planの共通部分と用途別部分、LLM/辞書/OPS等のI/O境界: ____________________
-- `to_dict()` と実ファイル保存の責務、秘密設定の保存範囲: ____________________
+- `to_dict()` と実ファイル保存の責務、秘密設定の保存範囲: Phase 3bの現行契約は1.7・2.4。保存スキーマを将来変更する場合の移行方針は別途検討。
 - 目標モデルの承認範囲・後続フェーズの対象: ____________________
 
 ## 4. 既存Markdownの整理案（移動・統合は未実施）
@@ -295,4 +307,4 @@ engines（純粋な計算・検証） ← workspace（状態・永続化・工�
 | [README.md](README.md) | 起動・依存・主要導線への入口として残し、承認済み設計と `docs/` へ案内する |
 | `ARCHITECTURE.md`（本書） | 現状の棚卸し、承認した設計、未決事項を区別して維持する。過去の監査結果を現行仕様として上書き転記しない |
 
-統合時には日付不明の記録を推定日で確定せず、過去記録内のACTIVE等を現在の運用状態と混同しない。移動後の相対リンクも更新対象となる。**Phase 2では本書のみを追加した。Phase 3aでも上表の文書の移動・統合・削除は行わない。**
+統合時には日付不明の記録を推定日で確定せず、過去記録内のACTIVE等を現在の運用状態と混同しない。移動後の相対リンクも更新対象となる。**Phase 2では本書のみを追加した。Phase 3a・3bでも上表の文書の移動・統合・削除は行わない。**
