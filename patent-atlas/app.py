@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from analysis_engine import demo_rows, map_patents, parse_csv, refinement_terms, train
 from catalog import keywords, suggest
 from llm import complete, validate_timeout
-import llm_judgment
+import llm_judgment  # noqa: F401  テスト互換のため
 from query_formats import formats as query_formats, export_query
 from refinement_classifications import classification_feedback
 import classification_explorer as explorer
@@ -27,13 +27,8 @@ import import_service
 import job_runner
 import judgment_service
 import query_service
-from candidate_service import (
-    display_candidate_proposal,
-    display_discovery,
-    display_labels,
-    llm_candidate_rows,
-    rejected_candidate_guidance,
-)
+from candidate_service import display_candidate_proposal, display_discovery, display_labels
+from candidate_service import llm_candidate_rows, rejected_candidate_guidance  # noqa: F401  テスト互換のため
 from common import checked_text
 from judgment_service import LLM_CHECKPOINT_BATCHES
 from discovery_routes import register_discovery_routes
@@ -82,10 +77,10 @@ ws = Workspace(
     secret_settings=SECRET_SETTINGS,
 )
 ws.load(after_load=_recover_workspace, initialize_workflows=True)
-# Compatibility references for callers; routes receive ws and explicit services.
-STATE, SETTINGS, LOCK, JOB, DATA = ws.state, ws.settings, ws.lock, ws.job, ws.data_dir
-classification_translations.configure_cache(DATA)
-STOP = ws.stop
+classification_translations.configure_cache(ws.data_dir)
+# テスト互換のため: tests/ はこれらの名前で Workspace の同じ辞書・ロック・イベントを参照する。
+# アプリ内のコードは ws を直接使い、これらの別名には依存しない。
+STATE, SETTINGS, LOCK, JOB, DATA, STOP = ws.state, ws.settings, ws.lock, ws.job, ws.data_dir, ws.stop
 app = FastAPI(title="Patent Atlas", docs_url="/api/docs")
 
 
@@ -123,11 +118,7 @@ async def value_error(request, error):
 
 
 def save():
-    return ws.save()
-
-
-def idle():
-    return ws.idle()
+    return ws.save()  # テスト互換のため: tests/ は module.save を差し替えて保存失敗を再現する
 
 
 def _public_workspace(state):
