@@ -157,6 +157,33 @@ test('switching tabs retains the keyword, manual seed and classification-search 
   assert.equal(s.context.state.keywords, 'original', 'tab changes must not silently save a draft');
 });
 
+test('background job completion captures Step 00 drafts before repainting', async () => {
+  for (const status of ['done', 'cancelled', 'error']) {
+    const fresh = { ...snapshot(), job: { id: 'job-1', kind: 'discovery', status, error: '保存失敗' } };
+    const s = setup(async () => fresh);
+    s.context.state.job = { id: 'job-1', kind: 'discovery', status: 'running' };
+    s.context.shownJob = null;
+    s.context.updateChrome = () => {};
+    s.dom['#keywords'].value = '未保存の技術要素';
+    s.dom['#seed-ipc'].value = 'B60L50/60';
+    s.dom['#class-search'].value = '編集中の分類';
+    vm.runInContext(
+      appSource.slice(
+        appSource.indexOf('function syncRunningLlmJudgments('),
+        appSource.indexOf('function download(')
+      ),
+      s.context
+    );
+    await s.context.refreshJob();
+    assert.equal(s.context.rendered, 1);
+    assert.equal(s.read('classDraft.keywords'), '未保存の技術要素');
+    assert.equal(s.dom['#keywords'].value, '未保存の技術要素');
+    assert.equal(s.dom['#seed-ipc'].value, 'B60L50/60');
+    assert.equal(s.dom['#class-search'].value, '編集中の分類');
+    assert.equal(s.context.state.keywords, 'original', 'the draft is not written to the workspace');
+  }
+});
+
 test('clicking the active tab keeps the current DOM and draft without repainting', () => {
   const s = setup();
   s.dom['#keywords'].value = 'work in progress';

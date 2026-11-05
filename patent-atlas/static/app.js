@@ -647,6 +647,7 @@ async function refreshJob() {
     } else if (previous === 'running' || (shownJob !== state.job.id && state.job.id)) {
       shownJob = state.job.id;
       if (typeof captureLearningDraft === 'function') captureLearningDraft();
+      if (activeTab === 'explore' && step === 0) captureClassDraft();
       state = fresh;
       updateChrome();
       if (activeTab === 'explore' && step === 2) {
