@@ -12,7 +12,7 @@ const cssAudit = process.env.CSS_AUDIT ? require('./css-visual-audit.cjs') : nul
 (async () => {
   const root = path.resolve(__dirname, '..');
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'patent-atlas-phase4-browser-'));
-  const output = path.resolve(process.env.PHASE4_SCREENSHOTS || path.join(root, 'docs/screenshots/phase4'));
+  const output = path.resolve(process.env.PHASE4_SCREENSHOTS || path.join(root, 'docs/screenshots/browser'));
   fs.mkdirSync(output, { recursive: true });
   const socket = net.createServer();
   socket.listen(0, '127.0.0.1');
