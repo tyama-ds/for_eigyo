@@ -28,7 +28,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 
 BASE = Path(__file__).resolve().parent
 APPS_FILE = BASE / "apps.json"
@@ -276,15 +276,17 @@ def _progress_version(cwd: Path) -> tuple[str | None, Path | None]:
 def git_last_updated(directory: Path) -> str | None:
     """そのフォルダを最後に変更したコミットの日付（YYYY-MM-DD）。git が無ければ None。"""
     try:
+        # text=True にしない: 日本語版 Windows では cp932 で読まれ、git が UTF-8 で出す日本語の
+        # パス入りメッセージ（dubious ownership など）で UnicodeDecodeError になるため、バイト列で受ける
         out = subprocess.run(
             ["git", "-C", str(directory), "log", "-1", "--format=%cd",
              "--date=short", "--", "."],
-            capture_output=True, text=True, timeout=4,
+            capture_output=True, timeout=4,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError, ValueError):
         return None
-    date = out.stdout.strip()
+    date = out.stdout.decode("utf-8", "replace").strip()
     return date if out.returncode == 0 and re.match(r"^\d{4}-\d{2}-\d{2}$", date) else None
 
 
@@ -328,7 +330,12 @@ def app_version(app: dict, fresh: bool = False) -> dict:
         hit = _version_cache.get(key)
         if hit and not fresh and now - hit[0] < VERSION_TTL:
             return hit[1]
-    info = detect_version(app)
+    try:
+        info = detect_version(app)
+    except Exception as e:  # 1つのアプリの読み取り失敗で一覧全体（/api/apps）を止めない
+        print(f"[App Portal] {app.get('id')}: バージョン情報を読めませんでした: "
+              f"{type(e).__name__}: {e}", file=sys.stderr)
+        info = {"version": None, "source": None, "updated": None}
     with _version_lock:
         _version_cache[key] = (now, info)
     return info

@@ -81,6 +81,10 @@
   .drop-hint{grid-column:1/-1; display:grid; place-items:center; min-height:110px; color:#5f6a8c; font-size:13px}
   .card ~ .drop-hint{display:none}
   #hidden-note{margin-top:22px; text-align:center; font-size:12.5px; color:#7f8bb0}
+  .loaderr{margin:0 0 22px; padding:14px 18px; border-radius:14px; font-size:13px; line-height:1.75;
+    color:#ffd1d9; background:rgba(251,113,133,.10); border:1px solid rgba(251,113,133,.45)}
+  .loaderr b{color:#ffe3e8}
+  .loaderr code{background:rgba(10,14,26,.5); padding:1px 6px; border-radius:5px}
 
   /* ---------- cards ---------- */
   .grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(min(320px,100%),1fr)); gap:22px}
@@ -287,6 +291,7 @@
     </span>
   </div>
 
+  <div class="loaderr" id="load-error" role="alert" hidden></div>
   <div id="board"></div>
   <div id="hidden-note"></div>
 
@@ -1239,9 +1244,28 @@ function setupPreview(card, frames) {
   });
 }
 
+/* 一覧を読めないときは黙って真っ白にせず、理由と対処を出す（4秒ごとの再試行で直れば自動で消える） */
+const loadError = document.getElementById("load-error");
+function showLoadError(reason) {
+  loadError.innerHTML = `<b>アプリ一覧を読み込めませんでした</b>（${esc(reason)}）。4秒ごとに再試行しています。<br>
+    ポータルを起動した黒いウィンドウに表示されているエラーを確認してください。
+    ウィンドウが閉じている場合は <code>start_portal.bat</code> で起動し直してください。`;
+  loadError.hidden = false;
+}
+
 async function refresh(force = false, fresh = false) {
+  let data;
   try {
-    const data = await (await fetch("/api/apps" + (fresh ? "?fresh=1" : ""))).json();
+    const r = await fetch("/api/apps" + (fresh ? "?fresh=1" : ""));
+    if (!r.ok) throw new Error(`サーバーの応答 ${r.status}`);
+    data = await r.json();
+    if (!Array.isArray(data.apps)) throw new Error("応答の形式が不正");
+  } catch (e) {
+    showLoadError(e instanceof TypeError ? "ポータルのサーバーから応答がありません" : e.message);
+    return;
+  }
+  loadError.hidden = true;
+  try {
     if (data.portal && data.portal.version) portalVer.textContent = "v" + data.portal.version;
     if (editMode || drag) return;               // 編集中は手元の配置を優先して描き直さない
     const snap = JSON.stringify([data.apps, data.layout]);
@@ -1251,7 +1275,11 @@ async function refresh(force = false, fresh = false) {
     layout = data.layout || {groups: [], hidden: []};
     render();
     if (vmodal.classList.contains("show")) renderVersions();
-  } catch {}
+  } catch (e) {
+    console.error(e);
+    lastSnap = null;   // 次の更新で描き直しを再試行する
+    showLoadError("画面の表示に失敗: " + e.message);
+  }
 }
 setInterval(() => { if (!ovShown && !editMode) refresh(); }, 4000);
 refresh();
