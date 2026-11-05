@@ -9,6 +9,10 @@ python rag-orchestrator/server.py            # http://127.0.0.1:8750
 python rag-orchestrator/server.py --port 9500 --open
 ```
 
+**Windows では** `rag-orchestrator\start.bat` を**ダブルクリック**するだけでよい（Python を探して起動し、ブラウザを開く。
+すでに起動していれば開くだけ。オプションはそのまま渡る: `start.bat --port 9500`）。
+デスクトップから使うときは、bat をコピーせずショートカットを作る。
+
 - **標準ライブラリのみ**（pip install 不要）。127.0.0.1 にのみ bind し外部公開しない
 - LLM は**ローカルの OpenAI 互換エンドポイント**（Ollama / LM Studio / vLLM / llama.cpp server）
 - BM25 エンジンは **LLM 未設定でも抜粋モードで動作**する（動作確認用）

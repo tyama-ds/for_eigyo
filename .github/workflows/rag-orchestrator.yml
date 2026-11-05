@@ -23,3 +23,82 @@ jobs:
         run: python -m compileall -q ragcore server.py tests
       - name: Unit + API tests
         run: python -m unittest discover -s tests -v
+
+  start-bat:
+    # 「Download ZIP」で届くバイト列のままの start.bat を本物の cmd.exe で実行して server.py まで届くか、
+    # 実物を start.bat で2回起動したとき2回目が二重に待ち受けずに終わるか（Windows の SO_REUSEADDR）を確かめる
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run start.bat as delivered by "Download ZIP"
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          py -3 --version
+          # リポジトリに保存されたバイト列（= ZIP の中身）。PowerShell のパイプは文字列に変えるので cmd のリダイレクトで書き出す
+          cmd /c "git -c core.autocrlf=false cat-file blob HEAD:rag-orchestrator/start.bat > zip_start.bat"
+          $bytes = [System.IO.File]::ReadAllBytes("zip_start.bat")
+          $stub = "import sys; print('SERVER REACHED args=' + repr(sys.argv[1:]))"
+          Set-Content -Path "answer_n.txt" -Value "N" -Encoding ascii
+          $failed = 0
+          $cases = @(
+            # 1件目は 日本語と括弧を含むフォルダ・日本語のコードページ
+            @{ dir = "bat probe 日本語 (x86)"; cp = 932; stdin = "answer_n.txt" },
+            @{ dir = "bat probe 日本語 (x86)"; cp = 437; stdin = "nul" },
+            @{ dir = "bat_probe"; cp = 932; stdin = "nul" },
+            @{ dir = "bat_probe"; cp = 437; stdin = "nul" }
+          )
+          foreach ($c in $cases) {
+            $d = Join-Path $PWD $c.dir
+            New-Item -ItemType Directory -Force $d | Out-Null
+            [System.IO.File]::WriteAllBytes((Join-Path $d "start.bat"), $bytes)
+            Set-Content -Path (Join-Path $d "server.py") -Value $stub -Encoding utf8
+            $bat = Join-Path $d "start.bat"
+            $in = if ($c.stdin -eq "nul") { "nul" } else { "`"" + (Join-Path $PWD $c.stdin) + "`"" }
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            $out = cmd /d /c "chcp $($c.cp) >nul & call `"$bat`" --probe < $in" 2>&1 | Out-String
+            $ok = $out -match "SERVER REACHED args=\['--open', '--probe'\]"
+            Write-Host ("===== folder='{0}' codepage={1} stdin={2} -> {3} ({4:N1}s)" -f $c.dir, $c.cp, $c.stdin, $(if ($ok) { "OK" } else { "FAILED" }), $sw.Elapsed.TotalSeconds)
+            Write-Host $out
+            if (-not $ok) { $failed++ }
+          }
+          if ($failed) { Write-Error "start.bat did not reach server.py in $failed case(s)"; exit 1 }
+
+      - name: Start the real app twice with start.bat
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          $bat = Join-Path $PWD "rag-orchestrator\start.bat"
+          $log1 = Join-Path $env:RUNNER_TEMP "first.txt"
+          $log2 = Join-Path $env:RUNNER_TEMP "second.txt"
+          $args1 = "/d /c chcp 932 >nul & call `"$bat`" < nul > `"$log1`" 2>&1"
+          $args2 = "/d /c chcp 932 >nul & call `"$bat`" < nul > `"$log2`" 2>&1"
+          $first = Start-Process cmd.exe -ArgumentList $args1 -WindowStyle Hidden -PassThru
+          $ready = $false
+          foreach ($i in 1..60) {
+            try {
+              $h = Invoke-RestMethod "http://127.0.0.1:8750/api/health" -TimeoutSec 5 -NoProxy
+              if ($h.app -eq "rag-orchestrator") { $ready = $true; break }
+            } catch { Start-Sleep -Milliseconds 500 }
+          }
+          $failed = 0
+          if (-not $ready) { Write-Host "the first start did not answer on 8750"; $failed++ }
+          else {
+            $second = Start-Process cmd.exe -ArgumentList $args2 -WindowStyle Hidden -PassThru
+            if (-not $second.WaitForExit(30000)) {
+              Write-Host "the second start.bat kept running (listening twice on 8750?)"; $failed++
+              $second.Kill($true)
+            } elseif ($second.ExitCode -ne 0) {
+              Write-Host "the second start.bat exited with $($second.ExitCode)"; $failed++
+            }
+            $h = Invoke-RestMethod "http://127.0.0.1:8750/api/health" -TimeoutSec 5 -NoProxy
+            if ($h.app -ne "rag-orchestrator") { Write-Host "the first app stopped answering"; $failed++ }
+          }
+          Write-Host "----- first start"; Get-Content $log1
+          Write-Host "----- second start"; if (Test-Path $log2) { Get-Content $log2 }
+          if (-not $first.HasExited) { $first.Kill($true) }
+          if ($failed) { Write-Error "start.bat check failed in $failed case(s)"; exit 1 }

@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import threading
+import urllib.request
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -309,14 +311,60 @@ class Handler(BaseHTTPRequestHandler):
         sys.stderr.write("rag-orchestrator: " + fmt % args + "\n")
 
 
+class Server(ThreadingHTTPServer):
+    # Windows の SO_REUSEADDR は、他のプロセスが待ち受け中のポートにも重ねて待ち受けることを許す。
+    # start.bat を2回ダブルクリックすると2つ目も起動したように見え、要求が古い方に届くため、Windows では付けない
+    allow_reuse_address = os.name != "nt"
+    daemon_threads = True
+
+
+def running_app(url: str, timeout: float = 2.0) -> str | None:
+    """url で待ち受けている相手のアプリ名（/api/health の app）。応答が無い・別物なら None。"""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))   # 127.0.0.1 をプロキシに送らない
+    try:
+        with opener.open(url + "/api/health", timeout=timeout) as r:
+            app = json.loads(r.read().decode("utf-8")).get("app")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return str(app) if app else None
+
+
+def explain_busy_port(url: str, port: int, error: OSError, *, open_browser: bool) -> int:
+    """待ち受けに失敗したとき: RAG Orchestrator がもう動いていればそれを開いて 0、それ以外は理由を表示して 1。"""
+    app = running_app(url)
+    if app == "rag-orchestrator":
+        print(f"RAG Orchestrator はすでに起動しています: {url}")
+        if open_browser:
+            webbrowser.open(url)
+        return 0
+    print(f"[エラー] ポート {port} で待ち受けられません（{error}）")
+    if app:
+        print(f"  別のアプリ（{app}）が使っています。")
+    print(f"  別の番号で起動するには --port を付けてください（例: --port {port + 1}）")
+    return 1
+
+
+def _safe_stdio() -> None:
+    # 出力をファイルやパイプに送ると、英語版 Windows では日本語を書けずに落ちるため、書けない文字は置き換える
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def main() -> None:
+    _safe_stdio()
     parser = argparse.ArgumentParser(description="RAG Orchestrator server")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--open", action="store_true", help="起動後にブラウザを開く")
     args = parser.parse_args()
 
-    server = ThreadingHTTPServer((HOST, args.port), Handler)
     url = f"http://{HOST}:{args.port}"
+    try:
+        server = Server((HOST, args.port), Handler)
+    except OSError as e:
+        sys.exit(explain_busy_port(url, args.port, e, open_browser=args.open))
     print(f"RAG Orchestrator: {url}  (Ctrl+C で終了)")
     if args.open:
         threading.Timer(0.6, webbrowser.open, args=(url,)).start()

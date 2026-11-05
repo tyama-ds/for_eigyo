@@ -10,6 +10,15 @@ python doc-vault/server.py           # http://127.0.0.1:8760
 python doc-vault/server.py --open    # 起動後にブラウザを開く
 ```
 
+**Windows では** `doc-vault\start.bat` を**ダブルクリック**するだけでよい。
+
+- Python（`py -3`、無ければ `python`）を探して起動し、ブラウザを開く。すでに起動していれば開くだけ（二重には起動しない）
+- 初回に pypdf が入っていなければ、`requirements.txt`（pypdf と anthropic）を入れるかを聞く（60 秒答えなければ入れずに起動）。
+  社内ネットワークで pip がつながらないときは `py -3 -m pip install --proxy http://プロキシ:8080 -r doc-vault\requirements.txt`
+- オプションはそのまま渡る（例: `start.bat --port 8761`、`start.bat --data-dir D:\docvault-data`）
+- デスクトップから使うときは、bat をコピーせずショートカットを作る。App Portal（`launcher\start_portal.bat`）のカードからも起動できる
+- 使用中のポートで起動しようとすると、別のアプリが使っている旨と `--port` の例を表示して止まる
+
 起動したら「文書」タブで **サンプルを読み込む**（公開資料2件・社外秘資料2件）→「設定」タブで LLM を登録 →
 「相談」タブで質問、の順で試すのが早い。LLM 未設定でも全文検索と、回答の代わりの関連箇所の抜粋は動く。
 
