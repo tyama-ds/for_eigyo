@@ -1249,6 +1249,9 @@ def assessment_options(body, *, allow_empty=False):
     )
 
 
+LLM_CHECKPOINT_BATCHES = 10
+
+
 def run_llm_assessment(body, progress_callback=None, *, _prepared=None):
     """Synchronous shared judgment service; the caller owns JOB and STOP."""
     report_progress = progress_callback or progress
@@ -1263,18 +1266,29 @@ def run_llm_assessment(body, progress_callback=None, *, _prepared=None):
             return dict(
                 skipped=True, status="completed", completed_count=0, total_count=0, judged_count=0, deferred_count=0
             )
+        checkpoint_training = copy.deepcopy(STATE["training"])
+        checkpoint_orchestration = copy.deepcopy(STATE.get("orchestration"))
+        checkpoint_progress = {key: JOB[key] for key in ("progress", "message")}
     initialized = False
+    pending_rows = {}
+    pending_batches = 0
+    saved_metadata = None
+    checkpoint_failed = False
+
+    def remember(row):
+        # Keep one undo snapshot per changed row since the last durable checkpoint.
+        if id(row) not in pending_rows:
+            pending_rows[id(row)] = (row, copy.deepcopy(row))
 
     def publish(updates, metadata):
-        nonlocal initialized
+        nonlocal initialized, pending_batches, saved_metadata, checkpoint_failed
+        nonlocal checkpoint_training, checkpoint_orchestration, checkpoint_progress
         with LOCK:
-            previous_rows = [(row, copy.deepcopy(row)) for row in STATE["patents"]]
-            previous_training = copy.deepcopy(STATE["training"])
-            previous_orchestration = copy.deepcopy(STATE.get("orchestration"))
-            previous_progress = {key: JOB[key] for key in ("progress", "message")}
-            previous_initialized = initialized
+            previous_status = (STATE.get("training") or {}).get("status")
+            first_publish = not initialized
             temp_path = DATA / "workspace.tmp"
-            previous_temp = temp_path.read_bytes() if temp_path.exists() else None
+            attempted_save = False
+            previous_temp = None
             try:
                 if not initialized:
                     # An error-only report after failed initialization must
@@ -1296,10 +1310,11 @@ def run_llm_assessment(body, progress_callback=None, *, _prepared=None):
                                 and row.get("score_source") == "llm"
                             ):
                                 continue
+                            remember(row)
                             row["score"] = None
                             row["score_source"] = None
                     initialized = True
-                current = {row["id"]: row for row in STATE["patents"]}
+                current = {row["id"]: row for row in STATE["patents"]} if updates else {}
                 if updates and STOP.is_set():
                     previous = STATE.get("training") or {}
                     for key in (
@@ -1328,27 +1343,73 @@ def run_llm_assessment(body, progress_callback=None, *, _prepared=None):
                         else:
                             metadata["deferred_count"] -= 1
                         continue
+                    remember(row)
                     row.update({key: value for key, value in update.items() if key != "id"})
+                if checkpoint_failed:
+                    # llm_judgment may have accepted several in-memory batches.
+                    # A failed checkpoint rolls ALL of those counts back too.
+                    for key in ("completed_count", "judged_count", "deferred_count", "protected_count", "progress"):
+                        metadata[key] = (saved_metadata or {}).get(key, 0)
+                    metadata["label_counts"] = copy.deepcopy(
+                        (saved_metadata or {}).get("label_counts", {"keep": 0, "exclude": 0})
+                    )
+                    metadata["message"] = (
+                        f"{metadata['stage']} {metadata['completed_count']}/{metadata['total_count']}。"
+                        "保存に失敗したため、最後の保存以降の未保存判定は取り消しました。"
+                    )
+                pending_batches += bool(updates)
+                terminal = metadata["status"] in ("completed", "cancelled", "error")
+                should_save = (
+                    first_publish
+                    or terminal
+                    or metadata["status"] != previous_status
+                    or pending_batches >= LLM_CHECKPOINT_BATCHES
+                )
+                metadata["saved_count"] = (
+                    metadata["completed_count"] if should_save else (saved_metadata or {}).get("completed_count", 0)
+                )
+                if not terminal:
+                    metadata["message"] += (
+                        f"（保存済み {metadata['saved_count']}件。保存失敗・アプリ終了時は、"
+                        "最後の保存以降の判定が失われます。）"
+                    )
                 metadata.update(
                     job_id=JOB["id"], provider=settings_snapshot["provider"], model=settings_snapshot.get("model", "")
                 )
                 STATE["training"] = metadata
                 report_progress(metadata["progress"], metadata["message"])
-                save()
+                if should_save:
+                    previous_temp = temp_path.read_bytes() if temp_path.exists() else None
+                    attempted_save = True
+                    save()
+                    checkpoint_training = copy.deepcopy(metadata)
+                    checkpoint_orchestration = copy.deepcopy(STATE.get("orchestration"))
+                    checkpoint_progress = {key: JOB[key] for key in ("progress", "message")}
+                    saved_metadata = copy.deepcopy(metadata)
+                    pending_rows.clear()
+                    pending_batches = 0
+                    checkpoint_failed = False
             except Exception:
-                for row, snapshot in previous_rows:
+                for row, snapshot in pending_rows.values():
+                    if row.get("label_source") == "human" and snapshot.get("label_source") != "human":
+                        continue
                     row.clear()
                     row.update(snapshot)
-                STATE["training"] = previous_training
-                if isinstance(previous_orchestration, dict) and isinstance(STATE.get("orchestration"), dict):
+                pending_rows.clear()
+                pending_batches = 0
+                checkpoint_failed = True
+                STATE["training"] = copy.deepcopy(checkpoint_training)
+                if isinstance(checkpoint_orchestration, dict) and isinstance(STATE.get("orchestration"), dict):
                     STATE["orchestration"].clear()
-                    STATE["orchestration"].update(previous_orchestration)
-                elif previous_orchestration is not None:
-                    STATE["orchestration"] = previous_orchestration
-                JOB.update(previous_progress)
-                initialized = previous_initialized
+                    STATE["orchestration"].update(copy.deepcopy(checkpoint_orchestration))
+                elif checkpoint_orchestration is not None:
+                    STATE["orchestration"] = copy.deepcopy(checkpoint_orchestration)
+                JOB.update(checkpoint_progress)
+                initialized = saved_metadata is not None
                 try:
-                    if previous_temp is None:
+                    if not attempted_save:
+                        pass
+                    elif previous_temp is None:
                         temp_path.unlink(missing_ok=True)
                     else:
                         temp_path.write_bytes(previous_temp)

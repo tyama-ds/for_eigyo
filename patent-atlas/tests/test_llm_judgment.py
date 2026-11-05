@@ -516,7 +516,8 @@ class JudgmentRouteTests(unittest.TestCase):
                 return result
             training = module.STATE["training"]
             self.assertEqual((training["completed_count"], training["judged_count"]), (0, 0))
-            self.assertEqual(training["message"], "判定形式を再確認中 0/4")
+            self.assertTrue(training["message"].startswith("判定形式を再確認中 0/4"))
+            self.assertIn("最後の保存以降", training["message"])
             self.assertEqual(module.JOB["message"], training["message"])
             self.assertTrue(all(row["label"] is None for row in module.STATE["patents"][2:]))
             saved = json.loads((module.DATA / "workspace.json").read_text(encoding="utf-8"))
@@ -624,7 +625,8 @@ class JudgmentRouteTests(unittest.TestCase):
                 self.assertEqual(self.client.post("/api/train", json={"mode": "llm"}).status_code, 200)
                 self.assertTrue(in_retry.wait(5))
                 state = self.client.get("/api/state").json()
-                self.assertEqual(state["training"]["message"], "判定形式を再確認中 0/8")
+                self.assertTrue(state["training"]["message"].startswith("判定形式を再確認中 0/8"))
+                self.assertIn("最後の保存以降", state["training"]["message"])
                 self.assertEqual(state["training"]["completed_count"], 0)
                 self.assertEqual(self.client.post("/api/job/stop").status_code, 200)
             finally:
@@ -704,7 +706,10 @@ class JudgmentRouteTests(unittest.TestCase):
                         )
                     original_save()
 
-                with patch.object(module, "save", side_effect=fail_batch_save):
+                with (
+                    patch.object(module, "LLM_CHECKPOINT_BATCHES", 1),
+                    patch.object(module, "save", side_effect=fail_batch_save),
+                ):
                     with patch.object(
                         module, "complete", side_effect=lambda settings, system, payload, **kwargs: answer(payload)
                     ) as complete:
@@ -731,6 +736,95 @@ class JudgmentRouteTests(unittest.TestCase):
                 self.assertEqual(saved["state"]["training"]["completed_count"], retained_count)
                 self.assertEqual(saved["state"]["patents"], module.STATE["patents"])
                 self.assertFalse(temp_path.exists())
+
+    def checkpoint_rows(self, count):
+        template = copy.deepcopy(module.STATE["patents"][-1])
+        module.STATE["patents"] = [dict(copy.deepcopy(template), id=f"SYNTHETIC-{index}") for index in range(count)]
+        module.save()
+
+    def test_progress_emits_do_not_save_and_ten_batches_checkpoint_before_completion(self):
+        self.checkpoint_rows(44)
+        calls_at_request = []
+
+        def respond(settings, system, payload, **kwargs):
+            calls_at_request.append(save.call_count)
+            return answer(payload)
+
+        with (
+            patch.object(module, "save", wraps=module.save) as save,
+            patch.object(module, "complete", side_effect=respond),
+        ):
+            result = module.run_llm_assessment({})
+        self.assertEqual(calls_at_request, [1] * 10 + [2])
+        self.assertEqual(save.call_count, 3)  # Initial state, ten batches, final partial batch.
+        self.assertEqual((result["status"], result["saved_count"]), ("completed", 44))
+        disk = json.loads((module.DATA / "workspace.json").read_text(encoding="utf-8"))["state"]
+        self.assertEqual(disk["training"]["completed_count"], 44)
+        self.assertEqual(disk["patents"], module.STATE["patents"])
+
+    def test_only_changed_rows_are_copied_for_publish_undo(self):
+        rows = module.STATE["patents"]
+        prepared = module.assessment_options({}), copy.deepcopy(rows), copy.deepcopy(module.SETTINGS)
+        with (
+            patch.object(module.copy, "deepcopy", wraps=copy.deepcopy) as copied,
+            patch.object(module, "complete", side_effect=lambda settings, system, payload, **kwargs: answer(payload)),
+        ):
+            module.run_llm_assessment({}, _prepared=prepared)
+        for index, row in enumerate(rows):
+            copies = sum(call.args[0] is row for call in copied.call_args_list)
+            # Initial score reset, then only the rows actually receiving judgments.
+            self.assertEqual(copies, 1 if index < 2 else 2)
+
+    def test_failed_checkpoint_discards_all_unsaved_batches_and_retains_saved_count(self):
+        self.checkpoint_rows(84)
+        real_save = module.save
+        failed = False
+
+        def save_checkpoint():
+            nonlocal failed
+            if not failed and module.STATE["training"]["completed_count"] == 80:
+                failed = True
+                raise OSError("disk full")
+            real_save()
+
+        with (
+            patch.object(module, "save", side_effect=save_checkpoint),
+            patch.object(
+                module, "complete", side_effect=lambda settings, system, payload, **kwargs: answer(payload)
+            ) as complete,
+        ):
+            with self.assertRaisesRegex(ValueError, "保存"):
+                module.run_llm_assessment({})
+        self.assertEqual(complete.call_count, 20)
+        training = module.STATE["training"]
+        self.assertEqual((training["status"], training["completed_count"], training["saved_count"]), ("error", 40, 40))
+        self.assertIn("最後の保存以降の未保存判定は取り消しました", training["message"])
+        self.assertTrue(all(row["label"] == "keep" for row in module.STATE["patents"][:40]))
+        self.assertTrue(all(row["label"] is None for row in module.STATE["patents"][40:]))
+        saved = json.loads((module.DATA / "workspace.json").read_text(encoding="utf-8"))["state"]
+        self.assertEqual(saved["training"]["completed_count"], 40)
+        self.assertEqual(saved["patents"], module.STATE["patents"])
+
+    def test_stop_flushes_accepted_batches_but_not_the_inflight_response(self):
+        calls = 0
+
+        def respond(settings, system, payload, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                module.STOP.set()
+            return answer(payload)
+
+        with (
+            patch.object(module, "save", wraps=module.save) as save,
+            patch.object(module, "complete", side_effect=respond),
+        ):
+            result = module.run_llm_assessment({})
+        self.assertEqual(save.call_count, 2)
+        self.assertEqual((result["status"], result["completed_count"], result["saved_count"]), ("cancelled", 4, 4))
+        saved = json.loads((module.DATA / "workspace.json").read_text(encoding="utf-8"))["state"]
+        self.assertEqual(saved["training"]["status"], "cancelled")
+        self.assertEqual(saved["patents"], module.STATE["patents"])
 
     def test_stop_during_response_discards_pending_batch_and_keeps_saved_work(self):
         in_second, release = threading.Event(), threading.Event()

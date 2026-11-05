@@ -498,3 +498,27 @@ test('responses for another job or an in-flight job superseded locally cannot ov
     assert.equal(s.context.state.training.completed_count, 4);
   }
 });
+
+test('a terminal checkpoint failure replaces unsaved judgments even when the count decreases', async () => {
+  const s = pollingSetup();
+  s.row.label = 'keep';
+  s.dom['#training-results'] = { innerHTML: '' };
+  s.context.renderPatentRows = () => {};
+  s.context.updatePicked = () => {};
+  const fresh = s.response(0);
+  fresh.job.status = 'error';
+  fresh.job.error = '判定結果を保存できませんでした。';
+  fresh.training.status = 'error';
+  fresh.training.message = '最後の保存以降の未保存判定は取り消しました。';
+  fresh.job.message = fresh.training.message;
+  fresh.patents[0].label = null;
+  const request = s.context.refreshJob();
+  s.pending.resolve(fresh);
+  await request;
+  assert.equal(s.context.state, fresh);
+  assert.equal(s.context.state.training.completed_count, 0);
+  assert.equal(s.context.state.patents[0].label, null);
+  assert.equal(s.calls.keep, 0);
+  assert.match(s.dom['#learning-progress-message'].textContent, /未保存判定は取り消しました/);
+  assert.deepEqual(s.notices.at(-1), [fresh.job.error, true]);
+});

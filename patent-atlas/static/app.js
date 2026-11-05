@@ -603,6 +603,7 @@ async function refreshJob() {
     )
       return;
     if (
+      fresh.job?.status === 'running' &&
       fresh.training?.job_id === state.training?.job_id &&
       fresh.training?.job_id === fresh.job?.id &&
       Number(fresh.training.completed_count) < Number(state.training?.completed_count)

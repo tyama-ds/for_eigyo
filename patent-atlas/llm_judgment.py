@@ -307,7 +307,8 @@ def run(rows, options, request, publish, cancelled):
     """Publish each fully validated batch; retain prior batches on stop or error.
 
     request(system, payload) returns the complete JSON object from llm.complete.
-    publish(updates, metadata) must atomically protect current human labels and save.
+    publish(updates, metadata) protects human labels and owns durable checkpoints,
+    including rollback of accepted but unsaved batches on persistence failure.
     """
     by_id = {row["id"]: row for row in rows}
     targets = [by_id[patent_id] for patent_id in options["target_ids"]]
@@ -365,7 +366,8 @@ def run(rows, options, request, publish, cancelled):
         try:
             committed = publish(list(updates), copy.deepcopy(metadata))
         except Exception:
-            # Counts are staged until the workspace has persisted the entire batch.
+            # The publisher owns checkpoint rollback; retain its last accepted
+            # report here until it returns corrected counts in the error report.
             metadata.clear()
             metadata.update(copy.deepcopy(committed_metadata))
             raise
