@@ -88,9 +88,7 @@
   font-size: 19px;
   margin: var(--space-1) 0;
 }
-#research-workbench .research-heading .eyebrow {
-  display: none;
-}
+
 .research-resume {
   display: flex;
   align-items: center;
@@ -144,9 +142,7 @@
 #invention-workbench .invention-heading h2 {
   font-size: 20px;
 }
-#invention-workbench .invention-heading .eyebrow {
-  display: none;
-}
+
 #invention-input-area .invention-source-grid {
   display: flex;
   flex-direction: column;
@@ -369,27 +365,16 @@
     backdrop-filter: none;
   }
 }
-/* Phase 4: two primary views, one persistent workflow, stage-specific panels. */
+/* Phase 4: two primary views,
+one persistent workflow,
+stage-specific panels. */
 .research-panel {
   display: none;
 }
 .research-panel.active {
   display: block;
 }
-.workspace-heading.is-compact {
-  min-height: 48px;
-  padding: var(--space-2) var(--space-5);
-  margin-bottom: 10px;
-}
-.workspace-heading.is-compact .atlas-heading-art,
-.workspace-heading.is-compact .eyebrow,
-.workspace-heading.is-compact .atlas-heading-note {
-  display: none;
-}
-.workspace-heading.is-compact h1 {
-  font-size: 20px;
-  margin: 0;
-}
+
 #research-flow-header {
   position: sticky;
   top: 0;

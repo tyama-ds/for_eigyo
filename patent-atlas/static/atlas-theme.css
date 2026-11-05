@@ -1,4 +1,6 @@
-/* Patent Atlas tokens: ivory paper, indigo ink, copper detail. Every colour in the app comes from here. */
+/* Patent Atlas tokens: ivory paper,
+indigo ink,
+copper detail. Every colour in the app comes from here. */
 :root {
   color-scheme: light;
   --bg: #f5f2ec;
@@ -56,42 +58,4 @@
 .brand .atlas-mark-axis {
   stroke: var(--bg-raised);
   stroke-width: 1.15;
-}
-.workspace-heading::before {
-  content: '';
-  position: absolute;
-  top: 25px;
-  bottom: 25px;
-  left: 0;
-  width: 3px;
-  background: linear-gradient(var(--copper), var(--line-strong));
-  border-radius: 0 3px 3px 0;
-}
-.atlas-heading-art {
-  position: absolute;
-  width: 460px;
-  height: 190px;
-  right: 0;
-  top: -5px;
-  pointer-events: none;
-  color: var(--text-muted);
-  opacity: 0.33;
-  z-index: -1;
-}
-.atlas-art-nodes {
-  fill: var(--copper);
-}
-@media (max-width: 950px) {
-  .atlas-heading-art {
-    width: 350px;
-    right: -35px;
-    opacity: 0.25;
-  }
-}
-@media (max-width: 620px) {
-  .atlas-heading-art {
-    right: -90px;
-    width: 300px;
-    opacity: 0.18;
-  }
 }

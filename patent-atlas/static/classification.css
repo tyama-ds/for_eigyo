@@ -211,11 +211,7 @@
   font-size: 14px;
   margin: 5px 0 10px;
 }
-.class-proposal-heading .eyebrow {
-  font-size: 9px;
-  letter-spacing: 0.12em;
-  color: var(--accent);
-}
+
 .class-proposal-context {
   font-size: 11px;
   line-height: 1.7;
@@ -525,11 +521,7 @@
   gap: var(--space-2);
   flex-wrap: wrap;
 }
-.class-focus .eyebrow {
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  color: var(--accent);
-}
+
 .class-focus b {
   font-family: ui-monospace, Consolas, monospace;
   font-size: 15px;

@@ -1,7 +1,8 @@
 #discovery-content {
   min-width: 0;
 }
-/* Exploration lab: one paper surface, then a separate working chart. */
+/* Exploration lab: one paper surface,
+then a separate working chart. */
 .discovery-start {
   display: grid;
   grid-template-columns: minmax(280px, 0.85fr) minmax(300px, 1fr);
@@ -13,10 +14,7 @@
     radial-gradient(ellipse at 5% 0, var(--surface-hover), transparent 62%),
     linear-gradient(120deg, var(--bg), var(--surface));
 }
-.discovery-intro .eyebrow {
-  font-size: 11px;
-  color: var(--copper);
-}
+
 .discovery-intro h2 {
   font-size: 28px;
   font-weight: 450;
@@ -779,10 +777,6 @@
     align-items: flex-start;
     flex-wrap: wrap;
   }
-  .discovery-plan-panel .eyebrow,
-  .discovery-analysis .eyebrow {
-    font-size: 10px;
-  }
 }
 .discovery-candidate-title {
   display: -webkit-box;
@@ -814,11 +808,7 @@
   justify-content: space-between;
   gap: var(--space-4);
 }
-.discovery-compare-heading .eyebrow {
-  font-size: 10px;
-  letter-spacing: 0.16em;
-  color: var(--copper);
-}
+
 .discovery-compare-heading h3 {
   font-size: 21px;
   font-weight: 500;
@@ -1363,9 +1353,7 @@
   .discovery-compare-heading h3 {
     font-size: 18px;
   }
-  .discovery-compare-heading .eyebrow {
-    font-size: 8px;
-  }
+
   .discovery-compare-heading p {
     font-size: 11px;
   }

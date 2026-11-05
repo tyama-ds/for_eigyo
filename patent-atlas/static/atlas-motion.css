@@ -1,4 +1,5 @@
-/* Navigation effects are triggered by navigation, never by background polling. */
+/* Navigation effects are triggered by navigation,
+never by background polling. */
 html[data-atlas-motion] .view,
 html[data-atlas-motion] #step-content {
   animation: none;
@@ -23,7 +24,8 @@ html[data-atlas-motion='static'] *::after {
   transition: none !important;
   scroll-behavior: auto !important;
 }
-/* The OS preference always takes precedence, including the explicit dynamic mode. */
+/* The OS preference always takes precedence,
+including the explicit dynamic mode. */
 @media (prefers-reduced-motion: reduce) {
   html,
   *,

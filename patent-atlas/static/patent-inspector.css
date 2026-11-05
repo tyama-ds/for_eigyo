@@ -36,12 +36,7 @@ tr[data-patent-id]:hover {
   gap: var(--space-3);
   margin-bottom: 9px;
 }
-.patent-preview-eyebrow {
-  color: var(--copper);
-  font-size: 9px;
-  letter-spacing: 0.16em;
-  font-weight: 650;
-}
+
 .patent-preview-decision {
   border: 1px solid var(--line);
   border-radius: var(--radius-l);

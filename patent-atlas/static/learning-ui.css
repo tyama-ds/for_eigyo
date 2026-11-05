@@ -50,9 +50,7 @@
   align-items: center;
   gap: var(--space-3);
 }
-.learning-progress-heading .eyebrow {
-  font-size: 10px;
-}
+
 .learning-progress-heading strong {
   font-size: 25px;
   font-variant-numeric: tabular-nums;

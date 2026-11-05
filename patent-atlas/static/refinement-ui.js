@@ -13,6 +13,7 @@ import {
   setState,
   toast,
   busy,
+  debounce,
 } from './core.js';
 import { setStep } from './app.js';
 import { appState } from './ui-session.js';
@@ -150,8 +151,10 @@ function refinementControlsHtml(snapshot, c) {
     <p class="muted">必要 ${c.keep} 件・不要 ${c.exclude} 件と学習後の関連度から、特徴語・IPCを次の式に反映します。</p>
     <div class="notice">追加語は検索範囲を狭めます。除外語は既知の必要特許に出現しない語を候補にします。
     IPCは必要・不要の両方の支持を比較し、分類のNOT条件は作りません。</div>
+    <div id="refinement-score" class="refinement-score"></div>
     <h3 style="margin-top:24px">必要な技術の特徴語</h3>
     <div id="include-terms" class="term-options"><p class="caption">候補を読み込んでいます…</p></div>
+    <div id="refinement-or-groups"></div>
     <h3>不要な技術の除外候補</h3><div id="exclude-terms" class="term-options exclude"></div>
     <section class="refinement-ipc"><h3>判定済み特許のIPC候補</h3>
     <div id="refinement-ipc-options"><p class="caption">公報の分類と判定を照合しています…</p></div></section>
@@ -165,21 +168,114 @@ function refinementLayoutHtml(snapshot, q, c) {
     <div class="button-row" style="margin-top:20px">
     <button class="button primary" id="next-csv">次のCSVを読み込む →</button></div></div></div>${historyHtml()}`;
 }
-function refinementTermHtml(kind, t, checked) {
-  return html`<label class="check"><input type="checkbox" name="${kind}-term" value="${esc(t)}"
-    ${checked ? 'checked' : ''}>${esc(t)}</label>`;
+/* Retrospective score of the latest query over the labelled rows (a proxy, never real recall). */
+function refinementCounts(score) {
+  return (
+    `必要 ${Number(score.keep_hit)} / ${Number(score.keep_total)} を捕捉 · ` +
+    `不要 ${Number(score.exclude_hit)} / ${Number(score.exclude_total)} が混入 · ` +
+    `未判定 ${Number(score.unlabeled_hit)} 件`
+  );
+}
+function refinementScoreHtml(score) {
+  if (!score || score.error)
+    return '<p class="caption">採点できる検索式がありません。初案を作成すると、判定済み特許で再計算します。</p>';
+  return html`<h3>現在の式の採点</h3>
+    <div class="refinement-score-row">
+    <div class="stat keep"><strong>${Number(score.keep_hit)} / ${Number(score.keep_total)}</strong>
+    <small>必要特許を捕捉</small></div>
+    <div class="stat exclude"><strong>${Number(score.exclude_hit)} / ${Number(score.exclude_total)}</strong>
+    <small>不要特許が混入</small></div>
+    <div class="stat"><strong>${Number(score.unlabeled_hit)}</strong><small>未判定の一致</small></div></div>
+    <p id="refinement-projected" class="caption" role="status">語を選ぶと、この条件での見込み件数を表示します。</p>
+    <p class="caption">${esc(score.note || '')}</p>`;
+}
+function refinementTermEvidenceHtml(info) {
+  const ipc = (info.path || []).find((p) => p.type === 'ipc'),
+    patents = (info.path || []).find((p) => p.type === 'patents'),
+    p = info.projected;
+  const more =
+    patents && patents.total > patents.ids.length ? ` ほか${patents.total - patents.ids.length}件` : '';
+  return html`<details class="refinement-term-evidence"><summary>根拠</summary><p class="caption">
+    ${
+      ipc
+        ? html`必要特許の主なIPC主グループ：${esc(ipc.value)}
+      （${Number(ipc.keep_count)} / ${Number(ipc.keep_with_term)} 件）<br>`
+        : ''
+    }
+    ${patents ? html`例：${patents.ids.map(esc).join('、')}${more}` : ''}
+    ${p ? html`<br>この語を使うと ${refinementCounts(p)}` : ''}</p></details>`;
+}
+function refinementTermHtml(kind, t, checked, info) {
+  const stats = info
+    ? html`<small class="refinement-term-stats">必要 ${Number(info.keep_hit)}/${Number(info.keep_total)} ·
+      不要 ${Number(info.exclude_hit)}/${Number(info.exclude_total)}</small>`
+    : '';
+  return html`<div class="refinement-term"><label class="check"><input type="checkbox" name="${kind}-term"
+    value="${esc(t)}" ${checked ? 'checked' : ''}>${esc(t)}${stats}</label>
+    ${info ? refinementTermEvidenceHtml(info) : ''}</div>`;
+}
+function refinementOrGroupHtml(group, index) {
+  return html`<div class="refinement-or-group"><span>${group.terms.map(esc).join(' <b>OR</b> ')}</span>
+    <small>必要特許 ${Number(group.shared_keep)} 件に共起</small>
+    <button type="button" class="button small" id="refinement-or-group-${index}">この組を追加語に選ぶ</button></div>`;
+}
+function refinementOrGroupsHtml(groups) {
+  if (!groups?.length) return '';
+  return html`<details class="refinement-or-groups" open><summary>代替表現の候補 · ${groups.length} 組</summary>
+    <p class="caption">同じ必要特許に共起する語の組です。同じ探索軸の言い換えなら両方を追加語に選ぶとORでまとまります。
+    同義語の確定ではありません。</p>${groups.map(refinementOrGroupHtml)}</details>`;
+}
+function graphInfo(result, kind) {
+  return new Map((result.graph?.[kind] || []).map((item) => [item.term, item]));
 }
 function paintRefinementTerms(result) {
   for (const [kind, empty] of [
     ['include', '必要・不要の両方を判定すると候補が現れます。'],
     ['exclude', '現在、除外候補はありません。'],
   ]) {
+    const info = graphInfo(result, kind);
     replaceHtml(
       $('#' + kind + '-terms'),
-      result[kind].map((t) => refinementTermHtml(kind, t, result['active_' + kind]?.includes(t))).join('') ||
-        html`<p class="caption">${empty}</p>`
+      result[kind]
+        .map((t) => refinementTermHtml(kind, t, result['active_' + kind]?.includes(t), info.get(t)))
+        .join('') || html`<p class="caption">${empty}</p>`
     );
   }
+  replaceHtml($('#refinement-score'), refinementScoreHtml(result.score));
+  replaceHtml($('#refinement-or-groups'), refinementOrGroupsHtml(result.graph?.or_groups));
+}
+function chosenTerms() {
+  return {
+    include: $$('[name="include-term"]:checked').map((el) => el.value),
+    exclude: $$('[name="exclude-term"]:checked').map((el) => el.value),
+  };
+}
+function paintProjection(serial, result) {
+  const el = $('#refinement-projected');
+  if (!el || !refinementActive(serial) || !result?.projected || result.projected.error) return;
+  const d = result.delta || {},
+    sign = (n) => (n > 0 ? `+${n}` : String(n));
+  el.textContent =
+    `この条件なら ${refinementCounts(result.projected)}` +
+    `（必要 ${sign(Number(d.keep_hit || 0))} · 不要 ${sign(Number(d.exclude_hit || 0))}）`;
+}
+function bindTermChanges(serial) {
+  const update = debounce(() => {
+    if (!refinementActive(serial) || !appState.refinement?.score || appState.refinement.score.error) return;
+    api('/refinement/score', chosenTerms())
+      .then((result) => paintProjection(serial, result))
+      .catch(() => {});
+  }, 250);
+  for (const name of ['include-term', 'exclude-term'])
+    $$(`[name="${name}"]`).forEach((el) =>
+      listen(el, 'change', () => update(), undefined, 'refinement-ui.js:2')
+    );
+  (appState.refinement?.graph?.or_groups || []).forEach((group, index) =>
+    on(`#refinement-or-group-${index}`, 'click', () => {
+      for (const el of $$('[name="include-term"]')) if (group.terms.includes(el.value)) el.checked = true;
+      update();
+    })
+  );
 }
 function refinementActive(serial) {
   return (
@@ -224,6 +320,7 @@ function loadRefinement(serial) {
       appState.refinement = result;
       refinementUiState.refinementClassPicked = new Set(refinementInitialKeys(result.classifications || {}));
       paintRefinementTerms(result);
+      bindTermChanges(serial);
       paintRefinementIpc();
       refinementUiState.refinementLoaded = true;
       $('#refine-query').disabled = getState().job.status === 'running';

@@ -405,7 +405,6 @@
   padding: 22px;
 }
 .research-invention-brief .research-brief > h2,
-.research-invention-brief .research-brief > .eyebrow,
 .research-invention-brief .research-targets,
 .research-invention-brief #research-error {
   grid-column: 1/-1;
@@ -419,9 +418,7 @@
   font-size: 18px;
   margin: 0;
 }
-.research-invention-brief .research-brief > .eyebrow {
-  display: none;
-}
+
 .research-invention-brief .research-brief > label {
   margin-top: 6px;
 }

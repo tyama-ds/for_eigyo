@@ -49,9 +49,9 @@ function mapCanvasPanelHtml(snapshot) {
     viewBox="0 0 1000 580"
     role="group" aria-label="特許類似度マップ"><g id="map-clusters"></g><g id="map-points"></g>
     <path id="map-lasso" class="lasso-path"/></svg></div>
-    <div class="canvas-footer"><div class="legend"><span><i style="background:var(--green)"></i>必要</span>
-    <span><i style="background:var(--pink)"></i>不要</span>
-    <span><i style="background:var(--blue)"></i>未判定は群別色</span></div>
+    <div class="canvas-footer"><div class="legend"><span><i style="background:var(--keep)"></i>必要</span>
+    <span><i style="background:var(--exclude)"></i>不要</span>
+    <span><i style="background:var(--accent)"></i>未判定は群別色</span></div>
     <span>2D配置：TF-IDF / SVD · 軸に物理的な意味はありません</span></div></div>`;
 }
 function mapSidePanelHtml(snapshot, c) {
