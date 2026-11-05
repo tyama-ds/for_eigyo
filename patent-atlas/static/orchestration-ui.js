@@ -10,10 +10,9 @@ const orchestrationStages = [
   ['waiting_csv', '次のCSV待ち'],
 ];
 function orchestrationDefaults() {
-  const options = state.orchestration?.options || {},
-    training = state.training || {};
+  const options = state.orchestration?.options || {};
   return {
-    criteria: options.criteria || training.criteria || state.keywords || '',
+    criteria: options.criteria ?? '',
     judge: options.judge ?? true,
     learning: options.learning || 'none',
     include_agent: options.include_agent ?? false,
@@ -194,7 +193,7 @@ function renderOrchestration() {
     orchestrationDraft = orchestrationDraft || orchestrationDefaults();
     const d = orchestrationDraft;
     host.innerHTML = `<div class="orchestration-hero panel"><div><span class="eyebrow">ORCHESTRATE YOUR RESEARCH</span><h2>判断をつなぎ、<br>探索をひとつ先へ。</h2><p class="muted">分類探索・特許判定・学習・検索式の更新を、同じ特許群と判断でつなぎます。</p></div><div class="orchestration-hero-status"><span id="orchestration-cycle" class="eyebrow">CYCLE 01</span><b id="orchestration-status">開始前</b><span class="caption">必要なところで、人が確認できます。</span></div></div>
-  <ol class="orchestration-timeline" id="orchestration-timeline" aria-label="統括ワークフローの工程"></ol>
+  <details class="orchestration-process-detail"><summary>自動実行の内訳</summary><ol class="orchestration-timeline" id="orchestration-timeline" aria-label="自動処理の進捗"></ol></details>
   <div class="orchestration-layout"><div class="panel orchestration-config"><span class="eyebrow">WORKFLOW SETTINGS</span><h3>このサイクルの進め方</h3><p id="orchestration-keywords" class="caption"></p><label>必要・不要の判定基準<textarea id="orchestration-criteria" rows="4" maxlength="5000" placeholder="対象技術と、除外したい範囲を記載">${esc(d.criteria)}</textarea></label>
   <label class="check"><input id="orchestration-judge" type="checkbox" ${d.judge ? 'checked' : ''}>LLMで未判定の特許を判定する</label><p id="orchestration-llm-note" class="caption"></p><div class="form-row"><label>今回の判定上限<input id="orchestration-limit" type="number" min="1" max="5000" step="1" value="${esc(d.max_items)}"></label><label>採用する信頼度<input id="orchestration-threshold" type="number" min="0.5" max="1" step="0.05" value="${esc(d.threshold)}"></label></div><p class="caption">信頼度はLLMの自己評価です。低信頼度の判定は保留にし、人の確定判定を優先します。</p>
   <label>判定後の学習<select id="orchestration-learning"><option value="none" ${d.learning === 'none' ? 'selected' : ''}>学習せず、判定を検索式へ反映</option><option value="lightweight" ${d.learning === 'lightweight' ? 'selected' : ''}>軽量学習 · TF-IDF</option><option value="transformer" ${d.learning === 'transformer' ? 'selected' : ''}>Transformer本体を微調整</option></select></label><label class="check"><input id="orchestration-include-agent" type="checkbox" ${d.include_agent ? 'checked' : ''}>学習にAIの採用済み判定を含める</label><p class="caption">軽量学習は必要・不要が各2件、Transformerは各4件から実行します。</p><label class="check orchestration-review-switch"><input id="orchestration-review" type="checkbox" ${d.review ? 'checked' : ''}>分類・検索式の更新前に確認を挟む</label><button class="button primary wide" id="orchestration-start">1サイクルを開始 →</button><p class="caption" id="orchestration-start-note"></p></div>

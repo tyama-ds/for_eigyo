@@ -294,46 +294,39 @@ function researchToolsHtml() {
   ];
   return `<div class="research-tools">${tools.map(([tab, s, title, description]) => `<button class="panel research-tool" data-open-tab="${tab}" data-open-step="${s}"><span>↗</span><h3>${title}</h3><p>${description}</p></button>`).join('')}</div>`;
 }
-function renderResearchWorkbench() {
+function researchBriefHtml(brief, mode, concepts = false) {
+  return `<div class="research-layout research-invention-brief"><div class="panel research-brief"><span class="eyebrow">${mode === 'target' ? 'SEED PATENTS' : 'DISCOVER SEEDS'}</span><h2>${mode === 'target' ? '根拠のある特許から。' : '技術の話から始める。'}</h2>${mode === 'discover' ? '<div class="notice">おすすめは併用方式。広いKWで実在特許を探し、仮のIPCも比較します。最初から分類で絞りすぎず、見つけた特許をターゲットにして深めます。</div>' : ''}<label>今回の検索目的 <span class="required">必須</span><input id="research-purpose" maxlength="300" value="${esc(brief.purpose)}" list="research-purpose-options" placeholder="例：周辺技術の把握、先行技術調査"><datalist id="research-purpose-options"><option value="技術動向・周辺技術の把握"><option value="新規性・進歩性の検討に向けた先行技術調査"><option value="競合の技術領域を把握する"><option value="特定の構成・機能に関連する特許を集める"></datalist></label><label>調べたい技術・解決したいこと<textarea id="research-goal" rows="4" maxlength="5000" placeholder="発明の構成・働き・解決したい課題を説明してください。短い説明から始められます。">${esc(brief.goal)}</textarea></label><details class="research-optional research-extra-input" ${brief.keywords || brief.user_aspects.length ? 'open' : ''}><summary>キーワード・観点を補足（任意）</summary><label>手掛かりのキーワード<input id="research-keywords" maxlength="2000" value="${esc(brief.keywords)}" placeholder='例：全固体電池 界面抵抗'></label><p class="caption">語句は空白区切り。英語の句は二重引用符で囲みます。</p><button class="button subtle" id="research-aspects-open">想定している観点を入力 ${brief.user_aspects.length ? '· ' + brief.user_aspects.length + ' 件' : '（任意）'} ↗</button></details>
+ <details class="research-targets" ${mode === 'target' ? 'open' : ''}><summary>ターゲット特許を指定 · ${brief.target_ids.length} 件</summary><p class="caption">名称・要約と、取り込んだIPC / FI / Fターム / CPCを参照します。最大20件。FIのIPC部・Fタームの対応候補は根拠を区別します。</p><div class="button-row"><button class="button small" id="research-upload">CSVを追加</button><button class="button small" id="research-target-add">特許情報を入力</button></div><input id="research-csv-file" type="file" accept=".csv,.tsv" hidden><input id="research-target-filter" type="search" placeholder="番号・名称で候補を絞る" aria-label="ターゲット候補を検索"><div id="research-target-options">${researchTargetOptions()}</div>${mode === 'discover' ? '<button class="button small" id="research-promote">選んだ特許から作る →</button>' : ''}</details>
+ ${concepts ? `<div class="research-plan-actions"><button class="button primary" id="research-plan-llm">LLMで観点・広げ方を起案 ↗</button><button class="button" id="research-plan-local">入力をそのまま整理</button><p class="caption">LLMには目的・観点と、選択した特許の名称・要約・分類を送ります。保存済みの接続設定を使います。「入力を整理」は通信しません。</p></div>` : ''}<div id="research-error" role="alert"></div></div></div>`;
+}
+function renderResearchWorkbench(stage) {
   const host = $('#research-workbench');
   if (!host) return;
+  stage = typeof prepareResearchFlow === 'function' ? prepareResearchFlow(stage) : stage || 'input';
   const wb = state.research_workbench || {},
     brief = researchBrief(),
     mode = brief.entry_mode;
-  host.innerHTML = `<div class="research-heading"><div><span class="eyebrow">RESEARCH DESK</span><h2>今回の調査は、どこから始めますか。</h2></div><span class="pill">${state.patents.length} 件の特許 / ${state.queries.length} 件の検索式</span></div><nav class="research-entries" aria-label="調査の開始方法">${researchEntries.map(([id, n, title, description]) => `<button class="research-entry ${mode === id ? 'active' : ''}" data-research-mode="${id}" aria-pressed="${mode === id}"><small>${n}</small><b>${title}</b><span>${description}</span></button>`).join('')}</nav>
- <div class="research-journey"><span>目的・観点</span><b>→</b><span>検索式</span><b>→</b><span>検索・CSV</span><b>→</b><span>マップ・要否</span><b>→</b><span>改善・採用</span></div>
- ${
-   mode === 'tools'
-     ? researchToolsHtml()
-     : mode === 'examples'
-       ? queryLibraryHtml(wb)
-       : `<div class="research-layout"><div class="panel research-brief"><span class="eyebrow">${mode === 'target' ? 'SEED PATENTS' : 'DISCOVER SEEDS'}</span><h2>${mode === 'target' ? '根拠のある特許から。' : '技術の話から始める。'}</h2>${mode === 'discover' ? '<div class="notice">おすすめは併用方式。広いKWで実在特許を探し、仮のIPCも比較します。最初から分類で絞りすぎず、見つけた特許をターゲットにして深めます。</div>' : ''}<label>今回の検索目的 <span class="required">必須</span><input id="research-purpose" maxlength="300" value="${esc(brief.purpose)}" list="research-purpose-options" placeholder="例：周辺技術の把握、先行技術調査"><datalist id="research-purpose-options"><option value="技術動向・周辺技術の把握"><option value="新規性・進歩性の検討に向けた先行技術調査"><option value="競合の技術領域を把握する"><option value="特定の構成・機能に関連する特許を集める"></datalist></label><label>調べたい技術・解決したいこと<textarea id="research-goal" rows="4" maxlength="5000" placeholder="構成、働き、課題、対象範囲など、分かる範囲で説明してください。">${esc(brief.goal)}</textarea></label><label>手掛かりのキーワード<input id="research-keywords" maxlength="2000" value="${esc(brief.keywords)}" placeholder='例：全固体電池 界面抵抗'></label><p class="caption">語句は空白区切り。英語の句は二重引用符で囲みます。</p><button class="button subtle" id="research-aspects-open">想定している観点を入力 ${brief.user_aspects.length ? '· ' + brief.user_aspects.length + ' 件' : '（任意）'} ↗</button>
- <details class="research-targets" ${mode === 'target' ? 'open' : ''}><summary>ターゲット特許を指定 · ${brief.target_ids.length} 件</summary><p class="caption">名称・要約と、取り込んだIPC / FI / Fターム / CPCを参照します。最大20件。FIのIPC部・Fタームの対応候補は根拠を区別します。</p><div class="button-row"><button class="button small" id="research-upload">CSVを追加</button><button class="button small" id="research-target-add">特許情報を入力</button></div><input id="research-csv-file" type="file" accept=".csv,.tsv" hidden><input id="research-target-filter" type="search" placeholder="番号・名称で候補を絞る" aria-label="ターゲット候補を検索"><div id="research-target-options">${researchTargetOptions()}</div>${mode === 'discover' ? '<button class="button small" id="research-promote">選んだ特許から作る →</button>' : ''}</details>
- <div class="research-plan-actions"><button class="button primary" id="research-plan-llm">LLMで観点・広げ方を起案 ↗</button><button class="button" id="research-plan-local">入力をそのまま整理</button><p class="caption">LLMには目的・観点と、選択した特許の名称・要約・分類を送ります。保存済みの接続設定を使います。「入力を整理」は通信しません。</p></div><div id="research-error" role="alert"></div></div><div class="panel research-plan"><div id="research-stale-plan" class="notice" role="status" ${wb.plan && researchBriefChanged() ? '' : 'hidden'}>表示している内容は前回の案です。入力条件が変わったため、観点をもう一度起案してからプレビュー・採用してください。</div>${researchPlanHtml(wb.plan)}</div></div>`
- }`;
-  if (mode !== 'examples' && mode !== 'tools' && typeof inventionWorkbenchHtml === 'function') {
-    const legacy = $('.research-plan', host),
-      layout = $('.research-layout', host);
-    if (legacy) {
-      const details = document.createElement('details');
-      details.className = 'research-legacy-plan';
-      details.innerHTML = '<summary>キーワード・分類から直接組み立てる（従来の観点案）</summary>';
-      host.append(details);
-      details.append(legacy);
-    }
-    if (layout) {
-      layout.classList.add('research-invention-brief');
-      layout.insertAdjacentHTML('afterend', inventionWorkbenchHtml());
-    }
-    const actions = $('.research-plan-actions', host);
-    if (actions) {
-      const details = document.createElement('details');
-      details.className = 'research-direct-actions';
-      details.innerHTML = '<summary>キーワードから直接、観点案を作る</summary>';
-      actions.replaceWith(details);
-      details.append(actions);
-    }
-  }
+  const editor = typeof researchFlowEditor === 'undefined' ? 'invention' : researchFlowEditor;
+  const method = typeof researchFlowInputMethod === 'undefined' ? 'manual' : researchFlowInputMethod;
+  const modes = `<fieldset class="research-modes"><legend>調査の開始方法</legend>${researchEntries.map(([id, n, title, description]) => `<label title="${esc(description)}"><input type="radio" name="research-mode" data-research-mode="${id}" value="${id}" ${mode === id ? 'checked' : ''}><span>${title}</span></label>`).join('')}</fieldset>`;
+  const resume =
+    state.queries.length || state.patents.length
+      ? `<aside class="research-resume"><div><b>保存した調査から再開</b><span>${state.queries.length} 件の検索式 · ${state.patents.length} 件の特許</span></div><div class="button-row">${state.queries.length ? '<button type="button" class="button small" data-research-resume="query">保存済みの式を開く</button>' : ''}${state.patents.length ? '<button type="button" class="button small" data-research-resume="review">取り込み済み特許を確認</button>' : ''}</div></aside>`
+      : '';
+  let content;
+  const showLibrary = mode === 'examples' && (stage === 'input' || editor === 'library');
+  if (showLibrary) content = queryLibraryHtml(wb);
+  else if (stage === 'input' && mode === 'tools') content = researchToolsHtml();
+  else if (stage === 'elements' && editor === 'concepts')
+    content =
+      researchBriefHtml(brief, mode, true) +
+      `<div class="panel research-plan"><div id="research-stale-plan" class="notice" role="status" ${wb.plan && researchBriefChanged() ? '' : 'hidden'}>表示している内容は前回の案です。入力条件が変わったため、観点をもう一度起案してからプレビュー・採用してください。</div>${researchPlanHtml(wb.plan)}</div>`;
+  else
+    content =
+      (stage === 'input' ? researchBriefHtml(brief, mode) : '') +
+      (typeof inventionWorkbenchHtml === 'function' ? inventionWorkbenchHtml(stage, method) : '');
+  host.innerHTML = `${stage === 'input' ? '<div class="research-heading"><h2>今回の調査は、どこから始めますか。</h2></div>' + modes + resume : ''}${content}`;
+  if (host.dataset) host.dataset.flowStage = stage;
   $$('.research-brief input,.research-brief textarea').forEach((el) => {
     if (el.id === 'research-target-filter') return;
     el.addEventListener('input', () => {
@@ -346,6 +339,9 @@ function renderResearchWorkbench() {
     el.addEventListener('click', () => {
       captureResearchDraft();
       researchDraft.entry_mode = el.dataset.researchMode;
+      if (typeof researchFlowEditor !== 'undefined')
+        researchFlowEditor = researchDraft.entry_mode === 'examples' ? 'library' : 'invention';
+      if (typeof researchFlowStage !== 'undefined') researchFlowStage = 'input';
       invalidateResearchPreview();
       if (typeof researchDraftScheduleSave === 'function') researchDraftScheduleSave();
       renderResearchWorkbench();
@@ -353,17 +349,23 @@ function renderResearchWorkbench() {
   );
   $$('[data-open-tab]').forEach((el) =>
     el.addEventListener('click', () => {
-      setTab(el.dataset.openTab);
-      if (el.dataset.openTab === 'explore') setStep(Number(el.dataset.openStep));
+      if (typeof researchOpenTool === 'function')
+        researchOpenTool(el.dataset.openTab, el.dataset.openStep, el.dataset.openEditor);
+      else {
+        setTab(el.dataset.openTab);
+        if (el.dataset.openTab === 'explore') setStep(Number(el.dataset.openStep));
+      }
     })
   );
-  if (mode === 'examples') {
+  if (showLibrary) {
     bindQueryLibrary();
-    if (typeof renderResearchFlowHeader === 'function') renderResearchFlowHeader();
+    if (typeof mountResearchGuidance === 'function') mountResearchGuidance();
+    else if (typeof renderResearchFlowHeader === 'function') renderResearchFlowHeader();
     return;
   }
-  if (mode === 'tools') {
-    if (typeof renderResearchFlowHeader === 'function') renderResearchFlowHeader();
+  if (mode === 'tools' && stage === 'input') {
+    if (typeof mountResearchGuidance === 'function') mountResearchGuidance();
+    else if (typeof renderResearchFlowHeader === 'function') renderResearchFlowHeader();
     return;
   }
   on('#research-aspects-open', 'click', () => {
@@ -590,15 +592,9 @@ async function requestResearchPlan(useLlm) {
     researchPlanDraft = null;
     if (typeof researchDraftRebase === 'function') researchDraftRebase();
     if (typeof researchDraftScheduleSave === 'function') researchDraftScheduleSave();
-    if (activeTab === 'workbench') renderResearchWorkbench();
+    if (!edited && typeof researchFlowEditor !== 'undefined') researchFlowEditor = 'concepts';
+    if (activeTab === 'workbench') renderResearchWorkbench(edited ? 'input' : 'elements');
     updateChrome();
-    if (!edited && activeTab === 'workbench') {
-      const details = $('.research-legacy-plan');
-      if (details) {
-        details.open = true;
-        details.scrollIntoView?.({ block: 'start', behavior: 'auto' });
-      }
-    }
     if (edited) toast('起案中の入力変更は保持しています。新しい条件で観点を再作成してください。');
   } catch (error) {
     failure = error;

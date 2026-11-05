@@ -35,7 +35,7 @@ function projectionStill() {
   );
 }
 function projectionControlsHtml() {
-  return `<div class="projection-controls"><label>配置を比較<select id="projection-method" aria-label="特許の配置方式"><option value="pca">PCA · 全体の傾向</option><option value="tsne">t-SNE · 局所の近さ</option><option value="umap">UMAP · 近傍のつながり</option></select></label><div class="button-row"><button class="button small" id="projection-pin">選択を追跡に固定</button><button class="button small" id="projection-pan">✥ 移動</button><button class="button small" id="projection-zoom-in" aria-label="マップを拡大">＋</button><button class="button small" id="projection-zoom-out" aria-label="マップを縮小">−</button><button class="button small" id="projection-reset">全体表示</button></div></div><p id="projection-status" class="caption projection-status" role="status">配置を準備しています…</p><div class="projection-pins" id="projection-pins" aria-label="追跡する特許"></div>`;
+  return `<details class="panel-help"><summary role="button" aria-label="特許マップのヘルプ">?</summary><div><p id="projection-method-note"></p></div></details><div class="projection-controls"><label>配置を比較<select id="projection-method" aria-label="特許の配置方式"><option value="pca">PCA · 全体の傾向</option><option value="tsne">t-SNE · 局所の近さ</option><option value="umap">UMAP · 近傍のつながり</option></select></label><div class="button-row"><button class="button small" id="projection-pin">選択を追跡に固定</button><button class="button small" id="projection-pan">✥ 移動</button><button class="button small" id="projection-zoom-in" aria-label="マップを拡大">＋</button><button class="button small" id="projection-zoom-out" aria-label="マップを縮小">−</button><button class="button small" id="projection-reset">全体表示</button></div></div><p id="projection-status" class="caption projection-status" role="status">配置を準備しています…</p><div class="projection-pins" id="projection-pins" aria-label="追跡する特許"></div>`;
 }
 function projectionEvaluationHtml(e) {
   if (!e) return '<p class="caption">人の判定と確認候補を集計しています…</p>';
@@ -55,11 +55,11 @@ function projectionAdoptionHtml() {
   const query = state.queries?.at(-1),
     records = state.research_workbench?.adoptions || [];
   if (!query)
-    return '<h3>検索式の採用</h3><p class="caption">初案または次の検索式を作成すると、確認結果と採用理由を記録できます。</p>';
+    return '<h3>検索式の採用</h3><details class="panel-help"><summary role="button" aria-label="検索式の採用のヘルプ">?</summary><div><p>上の指標は現在の特許データに対する確認結果です。実検索母集団の再現率ではありません。</p></div></details><p class="caption">初案または次の検索式を作成すると、確認結果と採用理由を記録できます。</p>';
   const observed = state.search_result?.query_id,
     linked = observed === query.id,
     busy = state.job?.status === 'running';
-  return `<div class="panel-heading"><div><span class="eyebrow">DECISION RECORD</span><h3>検索式 v${Number(query.version || state.queries.length)} の採用</h3></div></div><p class="caption">上の指標は現在の特許データに対する確認結果です。実検索母集団の再現率ではありません。採用は調査の完了・収束とは別に記録します。</p>${!linked ? `<p class="projection-adoption-notice">${observed ? '現在のCSVは別の検索式の結果として記録されています。' : '現在のCSVとこの検索式の対応は未確認です。'}この式の検索性能を実測した結果としては扱いません。</p><label class="check"><input id="projection-adopt-unlinked" type="checkbox">現在のCSVは参考資料として扱い、採用理由を記録する</label>` : ''}<label>採用理由<textarea id="projection-adopt-note" rows="2" maxlength="2000" placeholder="例：必要例の回収と境界候補の確認を行い、この目的には十分と判断した"></textarea></label><div class="button-row"><button id="projection-adopt" class="button primary" data-query-id="${esc(query.id)}" ${busy ? 'disabled' : ''}>この検索式の採用を記録</button><span class="caption">現在のS/N・確認候補・データとの対応を保存</span></div>${
+  return `<div class="panel-heading"><div><span class="eyebrow">DECISION RECORD</span><h3>検索式 v${Number(query.version || state.queries.length)} の採用</h3></div><details class="panel-help"><summary role="button" aria-label="検索式の採用のヘルプ">?</summary><div><p>上の指標は現在の特許データに対する確認結果です。実検索母集団の再現率ではありません。</p></div></details></div><p class="caption">採用は調査の完了・収束とは別に記録します。</p>${!linked ? `<p class="projection-adoption-notice">${observed ? '現在のCSVは別の検索式の結果として記録されています。' : '現在のCSVとこの検索式の対応は未確認です。'}この式の検索性能を実測した結果としては扱いません。</p><label class="check"><input id="projection-adopt-unlinked" type="checkbox">現在のCSVは参考資料として扱い、採用理由を記録する</label>` : ''}<label>採用理由<textarea id="projection-adopt-note" rows="2" maxlength="2000" placeholder="例：必要例の回収と境界候補の確認を行い、この目的には十分と判断した"></textarea></label><div class="button-row"><button id="projection-adopt" class="button primary" data-query-id="${esc(query.id)}" ${busy ? 'disabled' : ''}>この検索式の採用を記録</button><span class="caption">現在のS/N・確認候補・データとの対応を保存</span></div>${
     records.length
       ? `<details class="projection-adoption-history"><summary>採用の記録 ${records.length} 件</summary>${records
           .slice(-5)
@@ -331,7 +331,9 @@ async function projectionRequest(method) {
       detailRow = state.patents.find((row) => row.id === detailId);
     if (detailRow) showPatent(detailRow);
     $('#projection-status').textContent =
-      `${data.metadata.algorithm || method.toUpperCase()} · ${data.metadata.representation || ''}。${data.metadata.note || ''}`;
+      `${data.metadata.algorithm || method.toUpperCase()} · ${data.metadata.representation || ''}。`;
+    const note = $('#projection-method-note');
+    if (note) note.textContent = data.metadata.note || '';
     const footer = $('.map-panel .canvas-footer>span');
     if (footer) footer.textContent = '2D配置の尺度は方式ごとに異なります · 移動線は同じ公報の位置を結びます';
   } catch (error) {
@@ -481,7 +483,9 @@ function mountProjectionWorkbench() {
   if (atlasProjection.data) {
     projectionDraw(atlasProjection.data, false);
     $('#projection-status').textContent =
-      `${atlasProjection.data.metadata.algorithm || atlasProjection.method.toUpperCase()} · ${atlasProjection.data.metadata.representation}。${atlasProjection.data.metadata.note}`;
+      `${atlasProjection.data.metadata.algorithm || atlasProjection.method.toUpperCase()} · ${atlasProjection.data.metadata.representation}。`;
+    const note = $('#projection-method-note');
+    if (note) note.textContent = atlasProjection.data.metadata.note || '';
     projectionFetchEvaluation();
   } else {
     const prior = {

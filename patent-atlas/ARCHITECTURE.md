@@ -1,10 +1,10 @@
-# Patent Atlas 設計の正本（Phase 3c）
+# Patent Atlas 設計の正本（Phase 4）
 
-- 棚卸し日: 2026-11-05
-- 対象: `tyama-ds/for_eigyo` の `patent-atlas/`、Phase 1完了時点 `87e87e8` の棚卸しをPhase 3cの実装に合わせて更新
+- 棚卸し日: 2026-11-05、画面更新: 2026-11-06
+- 対象: `tyama-ds/for_eigyo` の `patent-atlas/`、Phase 1完了時点 `87e87e8` の棚卸しをPhase 4の画面とPhase 3cのバックエンドに合わせて更新
 - 状態: **現状と目標を区別する。6項目の目標とPhase 3での扱いは利用者が確定済み。**
 - 6項目の判断者: 利用者（本会話）　確定日: 2026-11-05
-- Phase 3a（共通ヘルパー）、3b（Workspace）、3c（明示的なサービス注入・依存の整理・公開状態キャッシュ・統括の部分復元）を実装済み。APIの入出力、設定値、保存形式・保存データ、CSS、既存文書の配置を変更しない。
+- Phase 3a（共通ヘルパー）、3b（Workspace）、3c（明示的なサービス注入・依存の整理・公開状態キャッシュ・統括の部分復元）を実装済み。APIの入出力、設定値、保存形式・保存データ、既存文書の配置を維持。Phase 4では画面と導線に必要なCSSのみ変更し、テーマ層の廃止は行わない。
 
 ## 1. 現状
 
@@ -117,26 +117,32 @@ register_research_routes(app, ws, research_services)
 
 「読む」は画面の主要な業務データ、「書く」は画面からAPI操作をした結果としてサーバーで変わるSTATEを示す。ページ表示だけでそのすべてを書き込む意味ではない。共通ヘッダーの件数表示、`/api/state` の全体再取得、下書き変数への代入は別扱いとする。
 
-トップのタブは「調査ナビ」「調査ワークスペース」「表示・接続設定」。判断エージェント・探索ラボ・統括の画面も存在し、調査ナビの「個別の機能を使う」から開ける（`researchToolsHtml`）。すべてがトップに並んだ独立タブという配置ではない。
+トップのタブは「調査」「設定」の2つで、それぞれ1つの `.view` に対応する。唯一の `nav` は両タブの外側にあり、調査条件 → 要素・観点 → 検索式・CSV → 結果・判定 → 次の式へ、の5段階を常時表示する。利用条件を満たさない段階はdisabledとtitleで理由を示す。00〜03ステッパー、パンくず、4入口カードは廃止した。
+
+「調査条件」内の4モード（ターゲットから／探す／過去の式から／個別機能）はラジオ選択。発明要素の編集が主導線で、従来の観点編集は「要素・観点」の「観点から作る」に残す。`renderResearchWorkbench(stage)` と `inventionWorkbenchHtml(stage, method)` が入力・編集を直接描き分け、描画後にdetailsで包む・見出しを書き換える操作は行わない。選択方法・原文・要素・式例などの下書きは既存の捕捉・保存経路を使う。
+
+探索ラボは「要素・観点」、判断エージェントは「結果・判定」、統括・収束は「次の式へ」の機能として開く。旧 `activeTab` 値と `setStep(0..3)` は内部遷移の互換名として残るが、画面上の独立した隠しタブではない。これらの処理・保存状態の統合は今回行わず、第3節の目標モデルは後続実装として維持する。
+
+特許0件・検索式0件のときだけ大きいヒーローを表示し、それ以外は1行ヘッダー。説明の注意書きは同じ文言で各パネルの「?」にまとめ、操作時のエラー・根拠・確認必須事項はその場に残す。統括の判断基準は未保存なら空欄、保存済み基準は保持する。
 
 | 画面 | 主に読むSTATE | 操作により書くSTATE | 主なUI / API |
 |---|---|---|---|
-| 調査ナビ① ターゲットから作る | `research_workbench`, `patents`, `keywords`, `candidates`, `selected`, `queries` | 起案は `research_workbench`。式適用は `keywords`, `queries`, `candidates`, `selected`, `classification_view`, `research_workbench`。ターゲット追加は `patents`, `clusters`, `training` も変更 | `research-workbench.js`, `invention-workbench.js`; `/research/plan`, `/research/invention/{plan,preview,apply}`, `/research/apply`, `/research/targets/add` |
-| 調査ナビ② ターゲットを探す | ①と同じ | ①と同じ。起点の発見後に①へ進む。画面上の入口切替だけではSTATEを保存しない | 同じUI・計画API。外部サイトで検索しCSVを戻す導線。専用の常時Web検索はない |
-| 調査ナビ③ 過去の式から作る | `research_workbench.library`, `queries` | 取込は `research_workbench`。適用は `queries`, `candidates`, `selected`, `classification_view`, `research_workbench`。`keywords` はこの適用処理では変更しない | `query-library-ui.js`; `/research/library/{import,suggest,adapt,apply}` |
-| 調査ナビ④ 個別の機能を使う | `research_workbench`、共通件数用の `patents`, `queries` | 遷移自体ではなし。遷移先の操作に従う | `researchToolsHtml`, `setTab`, `setStep` |
-| Step 00 技術の輪郭 | `keywords`, `candidates`, `selected`, `classification_view`, `candidate_proposal`, `patents` | `keywords`, `candidates`, `selected`, `classification_view`, `candidate_proposal`。初案作成で `queries`、条件により `research_workbench.active_query_id` | `classification-ui.js`; `/candidates`, `/selection`, `/classification`, `/classifications/{browse,seeds}`, `/keywords`, `/query` |
-| Step 01 検索の初案 | `queries`, `patents`, `demo`, `import_info` | CSV取込で `patents`, `clusters`, `training`, `import_info`, `demo`, `search_result`。DB形式の出力は保存式を変更しない | `app.js:renderQuery`, `query-output.js`; `/query/export`, `/upload` |
-| Step 02 特許の地図 | `patents`, `clusters`, `training`, `queries`, `research_workbench`, `search_result` | 要否・学習で `patents`, `training`。検索式の採用記録は `research_workbench.adoptions` | `learning-ui.js`, `projection-ui.js`, `patent-inspector.js`; `/labels`, `/train`, `/map/{project,evaluation}`, `/research/adopt` |
-| Step 03 次の検索へ | `patents`, `training`, `candidates`, `selected`, `keywords`, `queries` | 改善式保存で `queries`, `candidates`, `selected`, `research_workbench.active_query_id` | `refinement-ui.js`; `/refinement`, `/query` |
-| 判断エージェント | `keywords`, `candidates`, `selected`, `patents`, `queries`, `training`, `agent_log`, `research_workbench` | `candidates`, `selected`, `queries`, `patents`, `training`, `agent_log`、条件により `research_workbench.active_query_id` | `app.js:renderAgent`; `/agent`。分類選択→式作成→共通LLM判定→任意学習→改善式の1サイクル |
-| 探索ラボ | `discovery`, `keywords`, `candidates`, `patents`, `demo` | 主に `discovery`。手動探索へ候補を渡す操作は `candidates`, `selected`, `classification_view` | `discovery-ui.js`; `/discovery/{plan,analyze,import,run,adopt,export}`。ここへの取込だけでは主集合の `patents` は置き換えない |
-| 統括・収束 | `orchestration`, `discovery`, `patents`, `keywords`, `candidates`, `selected`, `training`, `queries`, `search_result`, `convergence_tracking`（表示時は `convergence`） | `orchestration`, `discovery`, `patents`, `clusters`, `candidates`, `selected`, `classification_view`, `training`, `queries`, `research_workbench`, `convergence_tracking` | `orchestration-ui.js`, `convergence-ui.js`; `/orchestration/*`, `/convergence/{record,review,complete}` |
-| 表示・接続設定 | STATEの業務キーは直接の設定対象ではない。API応答の `settings` を読む | STATEの業務キーは変更せず `SETTINGS` を変更。静止/動的表示などはブラウザー側にも保存 | `app.js:fillSettings/saveSettings`, `atlas-motion.js`; `/settings`, `/settings/test` |
+| 調査条件① ターゲットから作る | `research_workbench`, `patents`, `keywords`, `candidates`, `selected`, `queries` | 起案は `research_workbench`。式適用は `keywords`, `queries`, `candidates`, `selected`, `classification_view`, `research_workbench`。ターゲット追加は `patents`, `clusters`, `training` も変更 | `research-workbench.js`, `invention-workbench.js`; `/research/plan`, `/research/invention/{plan,preview,apply}`, `/research/apply`, `/research/targets/add` |
+| 調査条件② ターゲットを探す | ①と同じ | ①と同じ。起点の発見後に①へ進む。画面上の入口切替だけではSTATEを保存しない | 同じUI・計画API。外部サイトで検索しCSVを戻す導線。専用の常時Web検索はない |
+| 調査条件③ 過去の式から作る | `research_workbench.library`, `queries` | 取込は `research_workbench`。適用は `queries`, `candidates`, `selected`, `classification_view`, `research_workbench`。`keywords` はこの適用処理では変更しない | `query-library-ui.js`; `/research/library/{import,suggest,adapt,apply}` |
+| 調査条件④ 個別の機能を使う | `research_workbench`、共通件数用の `patents`, `queries` | 遷移自体ではなし。遷移先の操作に従う | `researchToolsHtml`, `setTab`, `setStep` |
+| 要素・観点：分類コンステレーション（内部step=0） | `keywords`, `candidates`, `selected`, `classification_view`, `candidate_proposal`, `patents` | `keywords`, `candidates`, `selected`, `classification_view`, `candidate_proposal`。初案作成で `queries`、条件により `research_workbench.active_query_id` | `classification-ui.js`; `/candidates`, `/selection`, `/classification`, `/classifications/{browse,seeds}`, `/keywords`, `/query` |
+| 検索式・CSV（内部step=1） | `queries`, `patents`, `demo`, `import_info` | CSV取込で `patents`, `clusters`, `training`, `import_info`, `demo`, `search_result`。DB形式の出力は保存式を変更しない | `app.js:renderQuery`, `query-output.js`; `/query/export`, `/upload` |
+| 結果・判定：特許の地図（内部step=2） | `patents`, `clusters`, `training`, `queries`, `research_workbench`, `search_result` | 要否・学習で `patents`, `training`。検索式の採用記録は `research_workbench.adoptions` | `learning-ui.js`, `projection-ui.js`, `patent-inspector.js`; `/labels`, `/train`, `/map/{project,evaluation}`, `/research/adopt` |
+| 次の式へ：検索式の改善（内部step=3） | `patents`, `training`, `candidates`, `selected`, `keywords`, `queries` | 改善式保存で `queries`, `candidates`, `selected`, `research_workbench.active_query_id` | `refinement-ui.js`; `/refinement`, `/query` |
+| 結果・判定：判断エージェント | `keywords`, `candidates`, `selected`, `patents`, `queries`, `training`, `agent_log`, `research_workbench` | `candidates`, `selected`, `queries`, `patents`, `training`, `agent_log`、条件により `research_workbench.active_query_id` | `app.js:renderAgent`; `/agent`。分類選択→式作成→共通LLM判定→任意学習→改善式の1サイクル |
+| 要素・観点：探索ラボ | `discovery`, `keywords`, `candidates`, `patents`, `demo` | 主に `discovery`。手動探索へ候補を渡す操作は `candidates`, `selected`, `classification_view` | `discovery-ui.js`; `/discovery/{plan,analyze,import,run,adopt,export}`。ここへの取込だけでは主集合の `patents` は置き換えない |
+| 次の式へ：統括・収束 | `orchestration`, `discovery`, `patents`, `keywords`, `candidates`, `selected`, `training`, `queries`, `search_result`, `convergence_tracking`（表示時は `convergence`） | `orchestration`, `discovery`, `patents`, `clusters`, `candidates`, `selected`, `classification_view`, `training`, `queries`, `research_workbench`, `convergence_tracking` | `orchestration-ui.js`, `convergence-ui.js`; `/orchestration/*`, `/convergence/{record,review,complete}` |
+| 設定 | STATEの業務キーは直接の設定対象ではない。API応答の `settings` を読む | STATEの業務キーは変更せず `SETTINGS` を変更。静止/動的表示などはブラウザー側にも保存 | `app.js:fillSettings/saveSettings`, `atlas-motion.js`; `/settings`, `/settings/test` |
 
 補足:
 
-- 調査ナビ①②のCSV追加は共通 `/upload` を使うため、Step 01と同じSTATE更新が加わる。
+- 調査条件①②のCSV追加は共通 `/upload` を使うため、「検索式・CSV」と同じSTATE更新が加わる。
 - PCA/t-SNE/UMAPの `/map/project` はコピーから投影を返し、サーバーSTATEに配置方式や投影結果を保存しない。UIの `atlasProjection`、サーバーの最大3件のキャッシュ、`map_patents` が主集合へ付ける標準座標を区別する。
 - 分類の日本語取得 `/classifications/translations` はキャッシュと表示用返り値を更新する。UIで `candidates` / `discovery` の表示名を反映するが、サーバーの保存STATEを直接書き換えるAPIではない。
 - 各画面は `settings` / `job` も参照するが、それらは1.2のSTATEキーには含まれない。LLM・学習・ラボ・エージェント・統括は共通 `JOB` を使い、同時開始は `idle()` で制限する。
@@ -310,7 +316,7 @@ Phase 3bでは `to_dict()` を保存形式のシリアライズ元、`Workspace.
 |---|---|---|
 | 探索ラボ | 中核ループへ統合し、`state['discovery']['patents']` の独立コピーを廃止。ワークスペースの特許集合を参照する | 独立機能・独立集合を維持 |
 | 統括 | 中核ループの自動実行モードへ再設計し、独自サイクル状態を中核ループの段階に対応づける | 現行工程を維持 |
-| 判断エージェント | 統括に統合し専用タブを廃止。統括の「1サイクル・確認なし」モードにする | 両入口を維持 |
+| 結果・判定：判断エージェント | 統括に統合し専用タブを廃止。統括の「1サイクル・確認なし」モードにする | 両入口を維持 |
 | EPO OPS連携 | 維持。秘密設定をディスクに保存しないため、再起動時に再入力が必要な任意機能 | 現行の連携・秘密設定非保存を維持 |
 | CSS | ダークテーマ（`style.css`のテーマ層）を廃止。現在の表示は`atlas-theme.css`の上書きによる明色。共通レイアウトの全削除とは区別する | CSSは変更しない。テーマ層の整理はPhase 5で実施 |
 | 日次自動改善 | 設計確定まで停止継続。再開時は回帰テストと不具合修正に限定 | 停止継続。Phase 3を再開指示とみなさない |

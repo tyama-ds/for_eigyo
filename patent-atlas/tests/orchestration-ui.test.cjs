@@ -105,10 +105,12 @@ function setup() {
   return { context, dom, selectors, requests, handlers, read: (code) => vm.runInContext(code, context) };
 }
 
-test('defaults use saved workflow and judgment criteria, with review enabled', () => {
+test('defaults start empty without inheriting keywords or judgment criteria and retain saved workflow criteria', () => {
   const s = setup();
   s.context.state.training = { criteria: '保存済みの基準' };
-  assert.equal(s.context.orchestrationDefaults().criteria, '保存済みの基準');
+  assert.equal(s.context.orchestrationDefaults().criteria, '');
+  s.context.state.keywords = '入力済みキーワード';
+  assert.equal(s.context.orchestrationDefaults().criteria, '');
   assert.equal(s.context.orchestrationDefaults().review, true);
   s.context.state.orchestration.options = {
     criteria: '統括基準',

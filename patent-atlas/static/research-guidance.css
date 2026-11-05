@@ -22,18 +22,6 @@ main > .workspace-heading {
   margin-bottom: 16px;
   scroll-margin-top: 80px;
 }
-.research-workspace-shortcuts {
-  margin: 0 0 18px;
-}
-.research-workspace-shortcuts > summary {
-  font-size: 12px;
-  color: var(--muted);
-  cursor: pointer;
-  padding: 9px 0;
-}
-.research-workspace-shortcuts[open] > .stepper {
-  margin-top: 12px;
-}
 .research-flow-nav {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -108,8 +96,9 @@ main > .workspace-heading {
   color: var(--muted);
   line-height: 1.5;
 }
-#research-workbench .research-journey {
-  display: none;
+.research-flow-save > .caption {
+  margin: 0;
+  line-height: 1.5;
 }
 #research-workbench .research-heading {
   margin: 8px 0 14px;
@@ -120,24 +109,6 @@ main > .workspace-heading {
 }
 #research-workbench .research-heading .eyebrow {
   display: none;
-}
-#research-workbench .research-entries {
-  gap: 8px;
-  margin-bottom: 18px;
-}
-#research-workbench .research-entry {
-  padding: 13px 16px;
-}
-#research-workbench .research-entry small {
-  display: none;
-}
-#research-workbench .research-entry b {
-  font-size: 14px;
-  margin-bottom: 3px;
-}
-#research-workbench .research-entry span {
-  font-size: 11px;
-  line-height: 1.55;
 }
 .research-resume {
   display: flex;
@@ -204,13 +175,6 @@ main > .workspace-heading {
   margin: 0;
   padding-top: 12px;
 }
-.research-direct-actions {
-  margin: 0;
-}
-.research-direct-actions > summary {
-  font-size: 11px;
-  padding: 8px 0;
-}
 #invention-workbench {
   margin-top: 18px;
   padding: 22px;
@@ -237,14 +201,6 @@ main > .workspace-heading {
 }
 #invention-input-area .button-row {
   margin: 16px 0 8px;
-}
-.research-data-details {
-  border: 0;
-  padding: 8px 0;
-}
-.research-data-details > summary {
-  font-weight: 400;
-  font-size: 11px;
 }
 .research-input-method {
   display: inline-flex;
@@ -278,16 +234,10 @@ main > .workspace-heading {
 #invention-review-area > .invention-plan-heading {
   margin-top: 20px;
 }
-#research-workbench[data-flow-stage='elements'] .invention-plan-heading {
-  display: none;
-}
 #research-workbench[data-flow-stage='elements'] .invention-plan-heading + p {
   font-size: 12px;
   margin: 12px 0;
   color: var(--muted);
-}
-#research-workbench[data-flow-stage='elements'] .invention-plan-heading + p + p {
-  display: none;
 }
 #research-condition-summary {
   display: inline-block;
@@ -351,10 +301,6 @@ main > .workspace-heading {
 #invention-query-preview:focus .invention-preview {
   border-color: var(--cyan);
 }
-.research-legacy-plan {
-  margin-top: 14px;
-  font-size: 12px;
-}
 .research-target-provenance {
   font-size: 11px;
   line-height: 1.7;
@@ -367,8 +313,7 @@ main > .workspace-heading {
   display: none;
 }
 #research-progress {
-  position: sticky;
-  top: 72px;
+  position: relative;
   z-index: 8;
   margin-bottom: 14px;
 }
@@ -466,12 +411,165 @@ main > .workspace-heading {
   #invention-review-area .invention-bottom p {
     max-width: 100%;
   }
-  #research-progress {
-    top: 62px;
-  }
 }
 @media (prefers-reduced-motion: reduce) {
   .research-progress-card {
     backdrop-filter: none;
+  }
+}
+
+/* Phase 4: two primary views, one persistent workflow, stage-specific panels. */
+.research-panel {
+  display: none;
+}
+.research-panel.active {
+  display: block;
+}
+.workspace-heading.is-compact {
+  min-height: 48px;
+  padding: 8px 20px;
+  margin-bottom: 10px;
+}
+.workspace-heading.is-compact .atlas-heading-art,
+.workspace-heading.is-compact .eyebrow,
+.workspace-heading.is-compact .atlas-heading-note {
+  display: none;
+}
+.workspace-heading.is-compact h1 {
+  font-size: 20px;
+  margin: 0;
+}
+#research-flow-header {
+  position: sticky;
+  top: 0;
+  z-index: 12;
+  background: var(--bg, #f6f3ec);
+  padding: 5px 0 8px;
+}
+.research-stage-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 9px;
+}
+.research-stage-tools:empty {
+  display: none;
+}
+.research-stage-tools [aria-pressed='true'] {
+  background: #eee9f8;
+  border-color: #bdb0d5;
+  color: #54417e;
+}
+.research-modes {
+  border: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 0 0 20px;
+}
+.research-modes legend {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+.research-modes label {
+  margin: 0;
+  cursor: pointer;
+  position: relative;
+}
+.research-modes input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+}
+.research-modes span {
+  display: block;
+  font-size: 13px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 10px 16px;
+  background: #fffdf9;
+}
+.research-modes input:checked + span {
+  color: #54417e;
+  border-color: #bdb0d5;
+  background: #eee9f8;
+}
+.research-modes input:focus-visible + span {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
+.panel {
+  position: relative;
+}
+.panel-help {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  z-index: 5;
+  font-size: 12px;
+}
+.panel-help > summary {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: #fffdf9;
+  cursor: pointer;
+  list-style: none;
+  color: var(--muted);
+}
+.panel-help > summary::-webkit-details-marker {
+  display: none;
+}
+.panel-help > summary:focus-visible {
+  outline: 2px solid var(--cyan);
+}
+.panel-help > div {
+  position: absolute;
+  top: 34px;
+  right: 0;
+  width: min(380px, 80vw);
+  max-height: 60vh;
+  overflow: auto;
+  background: #fffdf9;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: 0 10px 30px #34274426;
+  line-height: 1.8;
+}
+.panel-help[open] {
+  z-index: 20;
+}
+.panel-help p {
+  margin: 0 0 10px;
+}
+.panel-help p:last-child {
+  margin-bottom: 0;
+}
+.invention-heading > .pill {
+  margin-right: 28px;
+}
+.panel:has(.panel-help) > .panel-heading,
+.panel:has(.panel-help) > .canvas-header,
+.panel:has(.panel-help) > .convergence-heading {
+  padding-right: 64px;
+}
+.panel-help .discovery-architecture-grid {
+  display: block;
+}
+.orchestration-process-detail {
+  margin: 12px 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+@media (max-width: 850px) {
+  .research-modes {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
   }
 }

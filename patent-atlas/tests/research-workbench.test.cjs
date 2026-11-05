@@ -121,11 +121,14 @@ function classification(origins) {
   };
 }
 
-test('four starts are explicit, with seed discovery leading into seed-based work', () => {
+test('four input modes use one radio group, with seed discovery leading into seed-based work', () => {
   const s = setup(),
     c = s.context;
   c.renderResearchWorkbench();
   let html = s.dom['#research-workbench'].innerHTML;
+  assert.match(html, /<fieldset class="research-modes">/);
+  assert.equal((html.match(/type="radio" name="research-mode"/g) || []).length, 4);
+  assert.doesNotMatch(html, /research-entries|research-entry|research-journey/);
   for (const mode of ['target', 'discover', 'examples', 'tools'])
     assert.match(html, new RegExp(`data-research-mode="${mode}"`));
   assert.match(html, /今回の検索目的/);
@@ -424,7 +427,8 @@ test('previous plan is visibly marked after an entry change while original input
   c.state.research_workbench.plan = p;
   c.researchBrief().entry_mode = 'discover';
   c.researchBrief().target_ids = [];
-  c.renderResearchWorkbench();
+  c.researchFlowEditor = 'concepts';
+  c.renderResearchWorkbench('elements');
   const html = s.dom['#research-workbench'].innerHTML;
   const notice = html.match(/<div id="research-stale-plan"[^>]*>/)[0];
   assert.doesNotMatch(notice, /hidden/);
@@ -434,7 +438,8 @@ test('previous plan is visibly marked after an entry change while original input
   assert.throws(() => c.researchPlanPayload(), /もう一度起案/);
   c.researchBrief().entry_mode = 'target';
   c.researchBrief().target_ids = ['JP-seed'];
-  c.renderResearchWorkbench();
+  c.researchFlowEditor = 'concepts';
+  c.renderResearchWorkbench('elements');
   assert.match(
     s.dom['#research-workbench'].innerHTML.match(/<div id="research-stale-plan"[^>]*>/)[0],
     /hidden/
@@ -717,7 +722,7 @@ test('all entry views refresh the flow header and the guided view mounts after r
   c.renderResearchWorkbench();
   c.researchBrief().entry_mode = 'tools';
   c.renderResearchWorkbench();
-  assert.deepEqual(events, ['mount', 'header', 'header']);
+  assert.deepEqual(events, ['mount', 'mount', 'mount']);
 });
 
 test('legacy planning uses shared progress, captures edits before rebasing, and releases failure state', async () => {

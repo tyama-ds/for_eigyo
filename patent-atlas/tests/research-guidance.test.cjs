@@ -111,8 +111,9 @@ test('five stages reflect actual data prerequisites and highlight only the visib
   );
   for (const mode of ['examples', 'tools'])
     assert.equal(
-      c.researchFlowActions(populated, 'input', 'workbench', 0, mode).some((row) => row.active),
-      false
+      c.researchFlowActions(populated, 'input', 'workbench', 0, mode).find((row) => row.id === 'input')
+        .active,
+      true
     );
   for (const plan of [null, {}, { elements: [] }]) {
     populated.research_workbench.invention.plan = plan;
@@ -193,51 +194,38 @@ test('unconfigured LLM and an unknown method receive actionable guidance before 
   );
 });
 
-test('returning to guided work preserves the current mode or uses the saved plan before inferring a new one', () => {
+test('mode selection remains stable when navigating the shared stages', () => {
   const c = setup().context;
-  assert.equal(
-    c.researchFlowEntryMode(
-      { entry_mode: 'discover', target_ids: ['seed'] },
-      { brief: { entry_mode: 'target' } }
-    ),
-    'discover'
-  );
-  assert.equal(c.researchFlowEntryMode({ entry_mode: 'target', target_ids: [] }, null), 'target');
-  assert.equal(
-    c.researchFlowEntryMode(
-      { entry_mode: 'examples', target_ids: ['seed'] },
-      { brief: { entry_mode: 'discover' } }
-    ),
-    'discover'
-  );
-  assert.equal(
-    c.researchFlowEntryMode({ entry_mode: 'tools', target_ids: [] }, { brief: { entry_mode: 'target' } }),
-    'target'
-  );
-  assert.equal(c.researchFlowEntryMode({ entry_mode: 'tools', target_ids: ['seed'] }, null), 'target');
-  assert.equal(c.researchFlowEntryMode({ entry_mode: 'examples', target_ids: [] }, null), 'discover');
+  for (const entry_mode of ['target', 'discover', 'examples', 'tools'])
+    assert.equal(
+      c.researchFlowEntryMode({ entry_mode, target_ids: ['seed'] }, { brief: { entry_mode: 'target' } }),
+      entry_mode
+    );
+  assert.equal(c.researchFlowEntryMode({}, { brief: { entry_mode: 'discover' } }), 'discover');
+  assert.equal(c.researchFlowEntryMode({ target_ids: ['seed'] }, null), 'target');
+  assert.equal(c.researchFlowEntryMode({}, null), 'discover');
 });
 
-test('navigation from examples or tools actually rerenders the guided form and saves the changed mode', () => {
+test('navigation from examples or tools keeps the mode and edits while rendering the chosen stage', () => {
   for (const mode of ['examples', 'tools']) {
-    const s = setup({ mode, targets: ['seed'], planMode: 'target' }),
+    const s = setup({ mode, targets: ['seed'] }),
       c = s.context;
     const original = structuredClone(s.brief);
     c.researchFlowNavigate('elements');
-    assert.equal(s.brief.entry_mode, 'target');
+    assert.equal(s.brief.entry_mode, mode);
     assert.equal(s.read('researchFlowStage'), 'elements');
     assert.equal(s.calls.filter(([name]) => name === 'render').length, 1);
     assert.deepEqual(
       s.calls.find(([name]) => name === 'flush'),
-      ['flush', 'target']
+      ['flush', mode]
     );
-    assert.deepEqual(s.brief, { ...original, entry_mode: 'target' });
-    assert.deepEqual(s.calls.at(-1), ['stage', 'elements']);
+    assert.deepEqual(s.brief, original);
+    assert.deepEqual(s.calls.at(-1), ['render']);
   }
 });
 
 test('disabled and unknown navigation leave drafts and workspace untouched, while CSV remains reachable', () => {
-  const s = setup({ mode: 'tools', hasPlan: false }),
+  const s = setup({ mode: 'target', hasPlan: false }),
     c = s.context;
   s.state.patents = [];
   s.state.queries = [];
@@ -271,46 +259,14 @@ test('validation reveals the matching input method and focuses the missing field
   assert.equal(JSON.stringify({ brief: s.brief, input }), original);
 });
 
-test('optional details keep the same field node and are not nested or reopened on a second wrap', () => {
-  const s = setup(),
-    c = s.context;
-  let created = 0;
-  function node() {
-    const value = { children: [], parentElement: null, className: '', open: false };
-    value.classList = { contains: (name) => value.className.split(/\s+/).includes(name) };
-    value.append = (child) => {
-      if (child.parentElement)
-        child.parentElement.children.splice(child.parentElement.children.indexOf(child), 1);
-      value.children.push(child);
-      child.parentElement = value;
-    };
-    value.replaceWith = (replacement) => {
-      const parent = value.parentElement,
-        index = parent.children.indexOf(value);
-      parent.children[index] = replacement;
-      replacement.parentElement = parent;
-      value.parentElement = null;
-    };
-    return value;
-  }
-  c.document = {
-    createElement: () => {
-      created++;
-      return node();
-    },
-  };
-  const parent = node(),
-    field = node();
-  field.value = '編集途中の語句';
-  parent.append(field);
-  const first = c.researchWrapDetail(field, '原文を追加', true);
-  assert.equal(first.children.at(-1), field);
-  assert.equal(field.value, '編集途中の語句');
-  first.open = false;
-  const second = c.researchWrapDetail(field, '原文を追加', true);
-  assert.equal(second, first);
-  assert.equal(created, 2);
-  assert.equal(second.open, false);
-  assert.equal(parent.children.length, 1);
-  assert.equal(parent.children[0].children.at(-1), field);
+test('stage markup is created directly and render does not wrap or relocate existing nodes', () => {
+  assert.doesNotMatch(source, /createElement|insertAdjacentHTML|replaceWith|\.hidden\s*=/);
+  const workbench = fs.readFileSync('static/research-workbench.js', 'utf8');
+  assert.doesNotMatch(workbench, /research-legacy-plan|research-direct-actions|insertAdjacentHTML/);
+  const invention = fs.readFileSync('static/invention-workbench.js', 'utf8');
+  assert.match(invention, /function inventionWorkbenchHtml\(stage/);
+  assert.match(invention, /stage !== 'elements' \? inputHtml/);
+  assert.match(invention, /stage !== 'input' \? reviewHtml/);
+  assert.match(invention, /class="research-element-detail"/);
+  assert.match(workbench, /class="research-optional research-extra-input"/);
 });

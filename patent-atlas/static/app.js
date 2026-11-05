@@ -98,8 +98,15 @@ function setTab(tab) {
   if (activeTab === 'orchestration' && typeof captureOrchestrationDraft === 'function')
     captureOrchestrationDraft();
   activeTab = tab;
-  $$('.tab').forEach((el) => el.classList.toggle('active', el.dataset.tab === tab));
-  $$('.view').forEach((el) => el.classList.toggle('active', el.id === tab + '-tab'));
+  const primary = tab === 'settings' ? 'settings' : 'workbench';
+  $$('.tab').forEach((el) => {
+    el.classList.toggle('active', el.dataset.tab === primary);
+    el.setAttribute?.('aria-selected', String(el.dataset.tab === primary));
+  });
+  $$('.view').forEach((el) => el.classList.toggle('active', el.id === primary + '-tab'));
+  $$('.research-panel').forEach((el) =>
+    el.classList.toggle('active', el.id === (tab === 'workbench' ? 'research-workbench' : tab + '-tab'))
+  );
   if (tab === 'workbench') renderResearchWorkbench();
   if (tab === 'explore') renderStep();
   if (tab === 'agent') renderAgent();
@@ -123,8 +130,6 @@ function setStep(value) {
   step = value;
   picked.clear();
   renderStep();
-  const shortcuts = $('#research-workspace-shortcuts');
-  if (shortcuts) shortcuts.open = value === 0;
   if (previous !== value && activeTab === 'explore')
     globalThis.PatentAtlasMotion?.enter($('#step-content'), { direction: value - previous, kind: 'step' });
   const still =
@@ -206,7 +211,6 @@ function renderStep() {
   if (typeof captureLearningDraft === 'function') captureLearningDraft();
   globalThis.hidePatentRowPreview?.();
   cancelAnimationFrame(animation);
-  $$('.step').forEach((el) => el.classList.toggle('active', Number(el.dataset.step) === step));
   const root = $('#step-content');
   globalThis.PatentAtlasMotion?.cancel(root);
   [renderClassifications, renderQuery, renderMap, renderRefinement][step]();
@@ -532,7 +536,7 @@ function trainingHtml() {
   const t = state.training;
   if (!t) return '<p class="training-description">学習・判定を実行すると、結果をここに表示します。</p>';
   if (t.mode === 'llm')
-    return `<p class="training-description"><b>LLMによる要否判定</b> · 処理 ${Number(t.completed_count || 0)} / ${Number(t.total_count || 0)} 件 · 判定採用 ${Number(t.judged_count || 0)} 件 · 保留 ${Number(t.deferred_count || 0)} 件</p><p class="caption">${esc(t.evaluation_note || 'モデルの重みを学習した結果ではありません。関連度・信頼度はLLMの自己評価で、独立評価は行っていません。')}</p>`;
+    return `<p class="training-description"><b>LLMによる要否判定</b> · 処理 ${Number(t.completed_count || 0)} / ${Number(t.total_count || 0)} 件 · 判定採用 ${Number(t.judged_count || 0)} 件 · 保留 ${Number(t.deferred_count || 0)} 件</p><details class="panel-help"><summary role="button" aria-label="学習・判定結果のヘルプ">?</summary><div><p class="caption">${esc(t.evaluation_note || 'モデルの重みを学習した結果ではありません。関連度・信頼度はLLMの自己評価で、独立評価は行っていません。')}</p></div></details>`;
   return `<p class="training-description">${esc(t.method)} · 学習 ${t.train_count} 件${t.includes_agent_labels ? ' · AI判断を含む' : ''}</p>${
     t.metrics
       ? `<div class="learning-results">${[
@@ -546,7 +550,7 @@ function trainingHtml() {
           )
           .join('')}<div class="metric"><small>独立評価</small><strong>${t.metrics.n} 件</strong></div></div>`
       : ''
-  }<p class="caption">${esc(t.evaluation_note)} 同一ファミリーIDの公報は学習・評価間で分けません。IDがない場合は同文書単位で分割します。</p>`;
+  }<details class="panel-help"><summary role="button" aria-label="学習・判定結果のヘルプ">?</summary><div><p class="caption">${esc(t.evaluation_note)} 同一ファミリーIDの公報は学習・評価間で分けません。IDがない場合は同文書単位で分割します。</p></div></details>`;
 }
 function renderRefinement() {
   renderRefinementWorkspace();
@@ -703,7 +707,6 @@ async function init() {
     }, 120);
   });
   $$('.tab').forEach((el) => el.addEventListener('click', () => setTab(el.dataset.tab)));
-  $$('.step').forEach((el) => el.addEventListener('click', () => setStep(Number(el.dataset.step))));
   on('#demo-button', 'click', async (e) =>
     busy(e.currentTarget, '準備中…', async () => {
       state = await api('/demo', {});
