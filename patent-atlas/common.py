@@ -156,3 +156,9 @@ def json_schema(properties, *, required=None, additional_properties=False):
         properties=copy.deepcopy(properties),
         required=list(properties) if required is None else list(required),
     )
+
+
+def checked_text(value, limit=3000):
+    if not isinstance(value, str) or len(value) > limit:
+        raise ValueError(f"入力は{limit}文字以内の文字列にしてください。")
+    return value.strip()

@@ -7,12 +7,18 @@ its replaceable LLM seam.
 
 import copy
 import re
+import time
 import unicodedata
+import uuid
+
+from fastapi import HTTPException
 
 import classification_explorer as explorer
 import classification_revision_notes
+from common import checked_text
 from discovery_services import public_discovery
 from llm import complete as default_complete
+from query_service import classification_key, set_classification_view
 
 
 def llm_classification_text(kind, code):
@@ -329,3 +335,122 @@ def candidate_list(
             decomposition_method="llm" if use_llm else "input_phrases",
         )
     return result
+
+
+def checked_candidate_request(body):
+    text = checked_text(body.get("keywords", ""))
+    if not text:
+        raise ValueError("調べたい技術のキーワードを入力してください。")
+    use_llm = body.get("use_llm", False)
+    if not isinstance(use_llm, bool):
+        raise ValueError("LLM利用の指定は true / false で指定してください。")
+    return text, use_llm
+
+
+def new_proposal(text, use_llm, notices):
+    return dict(
+        id=uuid.uuid4().hex,
+        created_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+        keywords=text,
+        llm_used=use_llm,
+        returned_count=0,
+        accepted_count=0,
+        new_count=0,
+        existing_count=0,
+        rejected_count=0,
+        duplicate_count=0,
+        items=[],
+        rejected=[],
+        notices=notices,
+    )
+
+
+def build_candidate_proposal(text, use_llm, previous_candidates, connection, *, candidate_list):
+    """Run outside the lock; returns (proposal, view rows, candidate pool, note) to commit."""
+    notices = []
+    proposal = new_proposal(text, use_llm, notices)
+    items = candidate_list(text, use_llm, notices=notices, proposal=proposal, connection=connection)
+    old_keys = {classification_key(row) for row in previous_candidates}
+    for row in proposal["items"]:
+        row["is_new"] = classification_key(row) not in old_keys
+        row["status"] = "new" if row["is_new"] else "existing"
+    proposal["new_count"] = sum(row["is_new"] for row in proposal["items"])
+    proposal["existing_count"] = len(proposal["items"]) - proposal["new_count"]
+    pool = explorer.merge_candidates(previous_candidates, items)
+    rows = explorer.merge_candidates(explorer.overview(items, text), [c for c in pool if c.get("origins")])
+    # Show the exact model proposals alongside broad groups, including repeated
+    # codes. Users can inspect and select what the model actually suggested.
+    rows = explorer.merge_candidates(rows, proposal["items"])
+    pool = explorer.merge_candidates(pool, rows)
+    note = "材料・製造・界面などの観点から推薦しています。コードの存在と主題への適合性は別です。下位へ進んで定義を確認してください。"
+    if use_llm:
+        note += f" LLM提案{proposal['returned_count']}件のうち、候補に{proposal['accepted_count']}件を反映（新規{proposal['new_count']}件・既存{proposal['existing_count']}件）。提案コードを上位分類と一緒に表示しています。"
+    if notices:
+        note += " " + " ".join(notices)
+    return proposal, rows, pool, note
+
+
+def apply_candidate_proposal(ws, text, selected, proposal, rows, pool, note):
+    ws.state.update(
+        keywords=text,
+        candidates=pool,
+        selected=selected,
+        classification_view=dict(
+            keys=[classification_key(c) for c in rows],
+            direction="overview",
+            note=note,
+            total=len(rows),
+            next_offset=None,
+            trail=[],
+        ),
+    )
+    ws.state["candidate_proposal"] = proposal
+
+
+def reviewed_broader_candidate(ws, body):
+    """Resolve a rejected LLM code to its verified broader IPC; never select it."""
+    proposal = ws.state.get("candidate_proposal") or {}
+    if (
+        body.get("proposal_id") != proposal.get("id")
+        or not proposal.get("llm_used")
+        or proposal.get("keywords") != ws.state["keywords"]
+    ):
+        raise HTTPException(409, "候補の生成結果またはテーマが変わりました。最新の候補を確認してください。")
+    index = body.get("rejected_index")
+    if type(index) is not int:
+        raise ValueError("確認する除外候補を指定してください。")
+    rejected = next(
+        (item for position, item in enumerate(proposal.get("rejected", []), 1) if item.get("index", position) == index),
+        None,
+    )
+    if rejected is None:
+        raise ValueError("この生成結果に指定された除外候補はありません。")
+    item = rejected_candidate_guidance(rejected).get("broader_candidate")
+    if not item or not item.get("verified") or not item.get("selectable"):
+        raise ValueError("この候補から確認できる上位IPCはありません。分類指定から確認してください。")
+    return proposal, rejected, item
+
+
+def add_broader_candidate(ws, proposal, rejected, item):
+    old = next((row for row in ws.state["candidates"] if classification_key(row) == item["key"]), None)
+    row = copy.deepcopy(old or item)
+    origin = dict(
+        type="reviewed_broader",
+        label="除外候補から利用者が確認した上位IPC",
+        from_code=rejected["code"],
+        proposal_id=proposal["id"],
+    )
+    row.setdefault("origins", [])
+    if origin not in row["origins"]:
+        row["origins"].append(origin)
+    set_classification_view(
+        ws,
+        [row],
+        direction="seed",
+        focus=row,
+        total=1,
+        next_offset=None,
+        trail=[],
+        note=f"{rejected['code']} を置換せず、確認済みの広い探索起点 {item['code']} を候補に追加しました。検索式に使うには選択してください。",
+    )
+    rejected["broader_added"] = True

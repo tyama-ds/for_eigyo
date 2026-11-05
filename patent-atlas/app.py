@@ -1,29 +1,29 @@
-"""Patent Atlas — single-user, local Python application."""
+"""Patent Atlas — single-user, local Python application.
+
+This module composes the Workspace and services, registers routes and keeps
+each handler thin. Domain logic lives in the *_service modules.
+"""
 
 import copy
-import csv
-import io
 import json
 import os
-import time
-import uuid
 from pathlib import Path
-from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from analysis_engine import ALIASES, demo_rows, map_patents, parse_csv, refinement_terms, train
-from catalog import CATALOG, keywords, suggest
+from analysis_engine import demo_rows, map_patents, parse_csv, refinement_terms, train
+from catalog import keywords, suggest
 from llm import complete, validate_timeout
-from prompt_templates import SELECTION_SYSTEM
 import llm_judgment
 from query_formats import formats as query_formats, export_query
 from refinement_classifications import classification_feedback
 import classification_explorer as explorer
 import classification_translations
+import agent_service
 import candidate_service
+import import_service
 import job_runner
 import judgment_service
 import query_service
@@ -32,40 +32,23 @@ from candidate_service import (
     display_discovery,
     display_labels,
     llm_candidate_rows,
-    llm_classification_text,
-    normalize_llm_classification,
     rejected_candidate_guidance,
 )
+from common import checked_text
 from judgment_service import LLM_CHECKPOINT_BATCHES
 from discovery_routes import register_discovery_routes
 from discovery_services import new_discovery
 from orchestration_routes import register_orchestration_routes
 from convergence_routes import register_convergence_routes
-from convergence_services import display_convergence, display_search_result, new_observation
-from workspace_import import merge_patents
+from convergence_services import display_convergence, display_search_result
 from workspace import Workspace
+from workspace_defaults import DEFAULT_SETTINGS, SECRET_SETTINGS, checked_settings, new_job, new_state
 from research_routes import register_research_routes
 from research_services import ResearchServices
 from invention_routes import register_invention_routes
 from services import Services
 
 ROOT = Path(__file__).parent
-DEFAULT_SETTINGS = dict(
-    provider="offline",
-    base_url="http://localhost:11434/v1",
-    model="qwen3:8b",
-    api_key="",
-    proxy="",
-    ca_bundle="",
-    bypass_local=True,
-    transformer_model="",
-    allow_model_download=False,
-    classification_layout="semantic",
-    ops_key="",
-    ops_secret="",
-    llm_timeout=120,
-)
-SECRET_SETTINGS = ("api_key", "proxy", "ops_key", "ops_secret")
 
 
 def _recover_workspace(workspace):
@@ -93,34 +76,9 @@ def _recover_workspace(workspace):
 
 ws = Workspace(
     Path(os.environ.get("PATENT_ATLAS_DATA", str(ROOT / "data"))),
-    state=dict(
-        keywords="",
-        candidates=[],
-        selected=[],
-        patents=[],
-        clusters=[],
-        queries=[],
-        training=None,
-        agent_log=[],
-        demo=False,
-        import_info=None,
-        classification_view=None,
-        candidate_proposal=None,
-        discovery=None,
-    ),
+    state=new_state(),
     settings=DEFAULT_SETTINGS.copy(),
-    job=dict(
-        id=None,
-        status="idle",
-        progress=0,
-        message="",
-        error=None,
-        kind=None,
-        mode=None,
-        started_at=None,
-        completed_at=None,
-        stop_requested=False,
-    ),
+    job=new_job(),
     secret_settings=SECRET_SETTINGS,
 )
 ws.load(after_load=_recover_workspace, initialize_workflows=True)
@@ -158,6 +116,12 @@ async def value_error(request, error):
     return JSONResponse({"detail": str(error)}, status_code=400)
 
 
+# --- Service seams -----------------------------------------------------------
+# These module-level names are the replaceable seams (tests patch save, complete,
+# candidate_list, make_query, train, refinement_terms, ...). Each delegates to a
+# *_service function with the Workspace and the current seam values.
+
+
 def save():
     return ws.save()
 
@@ -166,13 +130,12 @@ def idle():
     return ws.idle()
 
 
-
 def _public_workspace(state):
     return {
         **{key: value for key, value in state.items() if key != "convergence_tracking"},
         "convergence": display_convergence(state),
         "search_result": display_search_result(state),
-        "selected": normalize_selection(state["selected"]),
+        "selected": query_service.normalize_selection(ws, state["selected"], state["candidates"]),
         "candidate_proposal": display_candidate_proposal(state.get("candidate_proposal")),
         "discovery": display_discovery(state["discovery"]),
         "candidates": [
@@ -266,10 +229,7 @@ def run_model_training(mode, include_agent=False, progress_callback=None):
     )
 
 
-def checked_text(value, limit=3000):
-    if not isinstance(value, str) or len(value) > limit:
-        raise ValueError(f"入力は{limit}文字以内の文字列にしてください。")
-    return value.strip()
+# --- Routes ------------------------------------------------------------------
 
 
 @app.get("/api/state")
@@ -287,13 +247,8 @@ def output_formats():
 
 @app.post("/api/query/export")
 def output_query(body: dict):
-    with LOCK:
-        query_id = body.get("query_id")
-        item = (
-            next((q for q in STATE["queries"] if q["id"] == query_id), None)
-            if query_id
-            else (STATE["queries"][-1] if STATE["queries"] else None)
-        )
+    with ws.lock:
+        item = query_service.find_query(ws, body.get("query_id"))
         if item is None:
             raise HTTPException(404, "出力する検索式が見つかりません。まず初案を作成してください。")
         snapshot = copy.deepcopy(item)
@@ -311,192 +266,58 @@ def output_query(body: dict):
 @app.post("/api/candidates")
 def candidates(body: dict):
     watched_fields = ("keywords", "candidates", "selected", "classification_view", "candidate_proposal")
-    with LOCK:
-        idle()
-        text = checked_text(body.get("keywords", ""))
-        if not text:
-            raise ValueError("調べたい技術のキーワードを入力してください。")
-        use_llm = body.get("use_llm", False)
-        if not isinstance(use_llm, bool):
-            raise ValueError("LLM利用の指定は true / false で指定してください。")
-        before = {name: copy.deepcopy(STATE.get(name)) for name in watched_fields}
-        selected = normalize_selection(STATE["selected"])
-        connection = copy.deepcopy(SETTINGS)
+    with ws.lock:
+        ws.idle()
+        text, use_llm = candidate_service.checked_candidate_request(body)
+        before = ws.snapshot(watched_fields, include_settings=True)
+        selected = normalize_selection(ws.state["selected"])
     # Slow model requests must not prevent state/progress reads or other UI
     # interactions. Commit only if the classification workspace is unchanged.
-    notices = []
-    proposal = dict(
-        id=uuid.uuid4().hex,
-        created_at=time.strftime("%Y-%m-%d %H:%M:%S"),
-        keywords=text,
-        llm_used=use_llm,
-        returned_count=0,
-        accepted_count=0,
-        new_count=0,
-        existing_count=0,
-        rejected_count=0,
-        duplicate_count=0,
-        items=[],
-        rejected=[],
-        notices=notices,
+    proposal, rows, pool, note = candidate_service.build_candidate_proposal(
+        text, use_llm, before.state["candidates"], before.settings, candidate_list=candidate_list
     )
-    items = candidate_list(text, use_llm, notices=notices, proposal=proposal, connection=connection)
-    old_keys = {classification_key(row) for row in before["candidates"]}
-    for row in proposal["items"]:
-        row["is_new"] = classification_key(row) not in old_keys
-        row["status"] = "new" if row["is_new"] else "existing"
-    proposal["new_count"] = sum(row["is_new"] for row in proposal["items"])
-    proposal["existing_count"] = len(proposal["items"]) - proposal["new_count"]
-    pool = explorer.merge_candidates(before["candidates"], items)
-    rows = explorer.merge_candidates(explorer.overview(items, text), [c for c in pool if c.get("origins")])
-    # Show the exact model proposals alongside broad groups, including repeated
-    # codes. Users can inspect and select what the model actually suggested.
-    rows = explorer.merge_candidates(rows, proposal["items"])
-    pool = explorer.merge_candidates(pool, rows)
-    note = "材料・製造・界面などの観点から推薦しています。コードの存在と主題への適合性は別です。下位へ進んで定義を確認してください。"
-    if use_llm:
-        note += f" LLM提案{proposal['returned_count']}件のうち、候補に{proposal['accepted_count']}件を反映（新規{proposal['new_count']}件・既存{proposal['existing_count']}件）。提案コードを上位分類と一緒に表示しています。"
-    if notices:
-        note += " " + " ".join(notices)
-    with LOCK:
-        idle()
-        if any(STATE.get(name) != before[name] for name in watched_fields) or (use_llm and SETTINGS != connection):
+    with ws.lock:
+        ws.idle()
+        changed = any(ws.state.get(name) != before.state.get(name) for name in watched_fields)
+        if changed or (use_llm and ws.settings != before.settings):
             raise HTTPException(
                 409,
                 "候補の生成中に分類・選択・キーワードまたはLLM設定が変更されました。現在の操作を保持しました。内容を確認して再実行してください。",
             )
         with ws.transaction(watched_fields, save=save):
-            STATE.update(
-                keywords=text,
-                candidates=pool,
-                selected=selected,
-                classification_view=dict(
-                    keys=[classification_key(c) for c in rows],
-                    direction="overview",
-                    note=note,
-                    total=len(rows),
-                    next_offset=None,
-                    trail=[],
-                ),
-            )
-            STATE["candidate_proposal"] = proposal
+            candidate_service.apply_candidate_proposal(ws, text, selected, proposal, rows, pool, note)
     return public_state()
 
 
 @app.post("/api/selection")
 def selection(body: dict):
-    with LOCK:
-        idle()
-        selected = body.get("selected", [])
-        STATE["selected"] = normalize_selection(selected)
-        save()
+    with ws.transaction(("selected",), save=save):
+        ws.state["selected"] = normalize_selection(body.get("selected", []))
     return public_state()
 
 
 @app.post("/api/candidates/broader")
 def add_rejected_broader_candidate(body: dict):
     """Explicitly add a verified broader scope, without selecting it for a query."""
-    with LOCK:
-        idle()
-        proposal = STATE.get("candidate_proposal") or {}
-        if (
-            body.get("proposal_id") != proposal.get("id")
-            or not proposal.get("llm_used")
-            or proposal.get("keywords") != STATE["keywords"]
-        ):
-            raise HTTPException(409, "候補の生成結果またはテーマが変わりました。最新の候補を確認してください。")
-        index = body.get("rejected_index")
-        if type(index) is not int:
-            raise ValueError("確認する除外候補を指定してください。")
-        rejected = next(
-            (
-                item
-                for position, item in enumerate(proposal.get("rejected", []), 1)
-                if item.get("index", position) == index
-            ),
-            None,
-        )
-        if rejected is None:
-            raise ValueError("この生成結果に指定された除外候補はありません。")
-        item = rejected_candidate_guidance(rejected).get("broader_candidate")
-        if not item or not item.get("verified") or not item.get("selectable"):
-            raise ValueError("この候補から確認できる上位IPCはありません。分類指定から確認してください。")
+    with ws.lock:
+        ws.idle()
+        proposal, rejected, item = candidate_service.reviewed_broader_candidate(ws, body)
         with ws.transaction(("candidates", "selected", "classification_view", "candidate_proposal"), save=save):
-            old = next((row for row in STATE["candidates"] if classification_key(row) == item["key"]), None)
-            row = copy.deepcopy(old or item)
-            origin = dict(
-                type="reviewed_broader",
-                label="除外候補から利用者が確認した上位IPC",
-                from_code=rejected["code"],
-                proposal_id=proposal["id"],
-            )
-            row.setdefault("origins", [])
-            if origin not in row["origins"]:
-                row["origins"].append(origin)
-            set_classification_view(
-                [row],
-                direction="seed",
-                focus=row,
-                total=1,
-                next_offset=None,
-                trail=[],
-                note=f"{rejected['code']} を置換せず、確認済みの広い探索起点 {item['code']} を候補に追加しました。検索式に使うには選択してください。",
-            )
-            rejected["broader_added"] = True
+            candidate_service.add_broader_candidate(ws, proposal, rejected, item)
     return public_state()
 
 
 @app.post("/api/classification")
 def add_classification(body: dict):
-    with LOCK:
-        idle()
-        kind = body.get("kind")
-        code = explorer.normalize(kind, checked_text(body.get("code", ""), 32))
-        STATE["selected"] = normalize_selection(STATE["selected"])
-        item = explorer.enrich(
-            dict(
-                code=code,
-                kind=kind,
-                title=checked_text(body.get("title", code), 120),
-                origins=[{"type": "manual", "label": "利用者の推薦"}],
-                reason="利用者が推薦した分類",
-            )
-        )
-        set_classification_view(
-            [item], direction="seed", note="推薦した分類を起点に探索できます。", total=1, next_offset=None, trail=[]
-        )
-        save()
+    with ws.transaction(("candidates", "selected", "classification_view"), save=save):
+        query_service.add_manual_classification(ws, body)
     return public_state()
 
 
 @app.post("/api/classifications/browse")
 def browse_classifications(body: dict):
-    with LOCK:
-        idle()
-        direction = body.get("direction", "children")
-        if direction == "overview":
-            classification_overview(candidate_list(STATE["keywords"], False) if STATE["keywords"].strip() else None)
-        elif direction == "seeds":
-            items = [c for c in STATE["candidates"] if c.get("origins")]
-            set_classification_view(
-                items,
-                direction="seed",
-                note="利用者の推薦・ターゲット由来の分類です。",
-                total=len(items),
-                next_offset=None,
-                trail=[],
-            )
-        else:
-            view = explorer.browse(
-                kind=body.get("kind", "IPC"),
-                code=body.get("code"),
-                direction=direction,
-                text=body.get("text", ""),
-                offset=body.get("offset", 0),
-            )
-            items = view.pop("items")
-            set_classification_view(items, **view)
-        save()
+    with ws.transaction(("candidates", "selected", "classification_view"), save=save):
+        query_service.browse_view(ws, body, candidate_list=candidate_list)
     return public_state()
 
 
@@ -504,50 +325,31 @@ def browse_classifications(body: dict):
 def classification_translations_update(body: dict):
     # Public classification codes only; network requests do not hold the workspace
     # lock or replace concurrent manual selections, query history, or lab plans.
-    with LOCK:
-        settings = copy.deepcopy(SETTINGS)
-    return classification_translations.fetch_translations(body.get("codes"), settings, cache_dir=DATA)
+    with ws.lock:
+        settings = copy.deepcopy(ws.settings)
+    return classification_translations.fetch_translations(body.get("codes"), settings, cache_dir=ws.data_dir)
 
 
 @app.post("/api/classifications/seeds")
 def classification_seeds(body: dict):
-    with LOCK:
-        idle()
-        select = body.get("select", False)
-        if not isinstance(select, bool):
-            raise ValueError("分類の選択指定を確認してください。")
-        items = explorer.seed_items(body, STATE["patents"])
-        set_classification_view(
-            items,
-            direction="seed",
-            note="推薦した分類を表示しています。分類の出典と、どの特許から来たかを確認できます。",
-            total=len(items),
-            next_offset=None,
-            trail=[],
-        )
-        if select:
-            STATE["selected"] = list(
-                dict.fromkeys(STATE["selected"] + [classification_key(c) for c in items if c["selectable"]])
-            )
-        save()
+    with ws.transaction(("candidates", "selected", "classification_view"), save=save):
+        query_service.seed_view(ws, body)
     return public_state()
 
 
 @app.post("/api/keywords")
 def update_keywords(body: dict):
-    with LOCK:
-        idle()
+    with ws.transaction(("keywords",), save=save):
         text = checked_text(body.get("keywords", ""))
         keywords(text)
-        STATE["keywords"] = text
-        save()
+        ws.state["keywords"] = text
     return public_state()
 
 
 @app.post("/api/query")
 def query(body: dict):
-    with LOCK:
-        idle()
+    with ws.lock:
+        ws.idle()
         refine = body.get("refine", False)
         if not isinstance(refine, bool):
             raise ValueError("改善案の指定は true / false にしてください。")
@@ -563,95 +365,40 @@ def query(body: dict):
 
 @app.get("/api/refinement")
 def refinement():
-    with LOCK:
-        result = refinement_terms(STATE["patents"])
-        previous = previous_query_for_context(ignore_classifications=True)
-        for kind in ("include", "exclude"):
-            result[kind] = list(dict.fromkeys(result[kind] + previous.get(kind + "_terms", [])))
-        result["active_include"] = previous.get("include_terms", [])
-        result["active_exclude"] = previous.get("exclude_terms", [])
-        result["classifications"] = classification_feedback(STATE["patents"], normalize_selection(STATE["selected"]))
-        return result
+    with ws.lock:
+        return query_service.refinement_options(ws, refinement_terms=refinement_terms)
 
 
 @app.post("/api/upload")
 async def upload(request: Request):
-    # Stream with a hard cap so an absent/incorrect Content-Length cannot bypass it.
-    raw = bytearray()
-    async for chunk in request.stream():
-        raw.extend(chunk)
-        if len(raw) > 20 * 1024 * 1024:
-            raise ValueError("CSVは20MB以下にしてください。")
-    mapping = json.loads(request.query_params.get("mapping", "{}"))
-    if not isinstance(mapping, dict):
-        raise ValueError("列の割り当てを確認してください。")
-    merge_mode = request.query_params.get("merge", "false")
-    if merge_mode not in ("true", "false"):
-        raise ValueError("追加・置換の指定を確認してください。")
-    with LOCK:
-        idle()
-        parsed = parse_csv(bytes(raw), mapping)
+    raw, mapping = await import_service.read_csv_request(request)
+    merge_mode = import_service.checked_merge_mode(request)
+    with ws.lock:
+        ws.idle()
+        parsed = parse_csv(raw, mapping)
         if parsed["needs_mapping"]:
             return parsed
-        rows = parsed.pop("rows")
-        observation = new_observation(rows, STATE)
-        if merge_mode == "true":
-            rows, report = merge_patents(STATE["patents"], rows)
-            parsed.update(import_mode="merge", merge=report)
-        else:
-            parsed["import_mode"] = "replace"
-        clusters = map_patents(rows, STATE["keywords"])
-        training_metadata = copy.deepcopy(STATE["training"]) if merge_mode == "true" else None
-        if training_metadata and report["added"]:
-            training_metadata.update(dataset_changed=True, added_since_training=report["added"])
-        with ws.transaction(save=save):
-            STATE.update(
-                patents=rows,
-                clusters=clusters,
-                demo=False,
-                training=training_metadata,
-                import_info=parsed,
-                search_result=observation,
-            )
+        import_service.import_patents(ws, parsed, merge_mode, map_patents=map_patents, save=save)
     return public_state()
 
 
 @app.post("/api/classifications/enrich-import")
 async def enrich_classification_import(request: Request):
     """Fill FI for matching existing rows without reimporting or retraining."""
-    from analysis_engine import backfill_fi
-
-    raw = bytearray()
-    async for chunk in request.stream():
-        raw.extend(chunk)
-        if len(raw) > 20 * 1024 * 1024:
-            raise ValueError("CSVは20MB以下にしてください。")
-    mapping = json.loads(request.query_params.get("mapping", "{}"))
-    if not isinstance(mapping, dict):
-        raise ValueError("列の割り当てを確認してください。")
-    parsed = parse_csv(bytes(raw), mapping)
-    if parsed["needs_mapping"] or not parsed["mapping"].get("fi"):
-        raise ValueError("公報番号・発明の名称・FIを含むCSVを指定してください。")
-    with LOCK:
-        idle()
-        rows, report = backfill_fi(STATE["patents"], parsed["rows"])
-        if report["conflicts"]:
-            raise ValueError(
-                "公報番号と内容の不一致、または既存FIとの不一致があるため補完を中止しました。既存判定は変更していません。"
-            )
-        with ws.transaction(("patents", "import_info"), save=save):
-            STATE["patents"] = rows
-            STATE["import_info"] = {**(STATE.get("import_info") or {}), "fi_enrichment": report}
+    raw, mapping = await import_service.read_csv_request(request)
+    parsed = import_service.parsed_fi_import(raw, mapping)
+    with ws.lock:
+        ws.idle()
+        import_service.enrich_fi(ws, parsed, save=save)
     return public_state()
 
 
 @app.post("/api/demo")
 def demo():
-    with LOCK:
-        idle()
-        words = "全固体電池 固体電解質 界面抵抗"
-        rows = demo_rows()
-        STATE.update(
+    words = "全固体電池 固体電解質 界面抵抗"
+    rows = demo_rows()
+    with ws.transaction(save=save):
+        ws.state.update(
             keywords=words,
             candidates=[explorer.enrich(c) for c in suggest(words)],
             selected=["H01M10/0562", "5H029AJ06"],
@@ -668,32 +415,13 @@ def demo():
         )
         make_query()
         classification_overview()
-        save()
     return public_state()
 
 
 @app.post("/api/labels")
 def labels(body: dict):
-    with LOCK:
-        idle()
-        ids = body.get("ids", [])
-        label = body.get("label")
-        if label not in ("keep", "exclude", None) or not isinstance(ids, list):
-            raise ValueError("判定を確認してください。")
-        if not set(ids) <= {r["id"] for r in STATE["patents"]}:
-            raise ValueError("存在しない特許IDです。")
-        for row in STATE["patents"]:
-            if row["id"] in ids:
-                row.update(
-                    label=label,
-                    label_source="human" if label else None,
-                    label_reason="利用者による判断" if label else "",
-                )
-                row["score"] = None
-        STATE["training"] = None
-        for row in STATE["patents"]:
-            row["score"] = None
-        save()
+    with ws.transaction(("patents", "training"), save=save):
+        query_service.apply_labels(ws, body.get("ids", []), body.get("label"))
     return public_state()
 
 
@@ -702,11 +430,11 @@ def training(body: dict):
     mode = body.get("mode", "lightweight")
     if mode not in ("lightweight", "transformer", "llm"):
         raise ValueError("学習モードを確認してください。")
-    with LOCK:
-        idle()
+    with ws.lock:
+        ws.idle()
         if mode == "llm":
             options = assessment_options(body)
-            prepared = options, copy.deepcopy(STATE["patents"]), copy.deepcopy(SETTINGS)
+            prepared = options, copy.deepcopy(ws.state["patents"]), copy.deepcopy(ws.settings)
             action = lambda: run_llm_assessment(body, _prepared=prepared)
         else:
             action = lambda: run_model_training(mode, bool(body.get("include_agent")))
@@ -720,50 +448,14 @@ def stop():
 
 @app.post("/api/settings")
 def settings(body: dict):
-    with LOCK:
-        idle()
-        proposed = SETTINGS.copy()
-        for k in DEFAULT_SETTINGS:
-            if k not in body:
-                continue
-            if k in SECRET_SETTINGS and not body[k]:
-                continue
-            if k == "llm_timeout":
-                proposed[k] = validate_timeout(body[k])
-            elif isinstance(DEFAULT_SETTINGS[k], bool):
-                if not isinstance(body[k], bool):
-                    raise ValueError("設定値の形式を確認してください。")
-                proposed[k] = body[k]
-            else:
-                proposed[k] = checked_text(body[k], 2000)
-        old_url, new_url = urlparse(SETTINGS["base_url"]), urlparse(proposed["base_url"])
-        if (old_url.scheme, old_url.netloc) != (new_url.scheme, new_url.netloc) and not body.get("api_key"):
-            proposed["api_key"] = ""
-        if body.get("clear_secrets"):
-            proposed.update(api_key="", proxy="")
-        if body.get("clear_ops"):
-            proposed.update(ops_key="", ops_secret="")
-        if proposed["provider"] not in ("offline", "openai", "local"):
-            raise ValueError("接続種別を確認してください。")
-        if proposed["classification_layout"] not in ("semantic", "grid"):
-            raise ValueError("分類の配置方式は「意味の近さ」または「整列」を選んでください。")
-        if (
-            new_url.scheme not in ("http", "https")
-            or not new_url.hostname
-            or new_url.username
-            or new_url.password
-            or new_url.query
-            or new_url.fragment
-        ):
-            raise ValueError("API URLは認証情報やクエリを含まない http(s):// のURLにしてください。")
-        SETTINGS.update(proposed)
-        save()
+    with ws.transaction((), include_settings=True, save=save):
+        ws.settings.update(checked_settings(ws.settings, body))
     return public_state()
 
 
 @app.post("/api/settings/test")
 def test_connection():
-    result = complete(SETTINGS, '接続テストです。{"ok":true} と返してください。', {"test": True})
+    result = complete(ws.settings, '接続テストです。{"ok":true} と返してください。', {"test": True})
     if result.get("ok") is not True:
         raise ValueError("APIに接続しましたがJSON応答を検証できませんでした。")
     return {"ok": True, "message": "接続とJSON応答を確認しました。"}
@@ -771,105 +463,15 @@ def test_connection():
 
 @app.post("/api/agent")
 def agent(body: dict):
-    criteria = checked_text(body.get("criteria", ""), 5000)
-    if not criteria or not STATE["keywords"]:
-        raise ValueError("先に探索キーワードと判断基準を入力してください。")
-    if SETTINGS["provider"] == "offline":
-        raise ValueError("判断エージェントにはLLMが必要です。設定タブから接続してください。")
-    max_items = body.get("max_items", 100)
-    threshold = body.get("threshold", 0.8)
-    if body.get("mode", "lightweight") not in ("lightweight", "transformer") or not isinstance(
-        body.get("train", False), bool
-    ):
-        raise ValueError("学習方式・学習実行の指定を確認してください。")
-    with LOCK:
-        idle()
-        llm_judgment.prepare(
-            dict(criteria=criteria, max_items=max_items, threshold=threshold, fresh_only=True),
-            STATE["patents"],
-            STATE["keywords"],
-            SETTINGS["provider"],
-            allow_empty=True,
-        )
-
-    def log(message):
-        with LOCK:
-            STATE["agent_log"].append(dict(time=time.strftime("%H:%M:%S"), message=message))
-            STATE["agent_log"] = STATE["agent_log"][-100:]
-            save()
-
-    def action():
-        log("開始。人の確定ラベルを保護し、1サイクルで停止します。")
-        if not STATE["candidates"]:
-            items = candidate_list(STATE["keywords"], True)
-            with LOCK:
-                STATE["candidates"] = items
-        progress(10, "判断基準から分類候補を選んでいます")
-        result = complete(
-            SETTINGS,
-            SELECTION_SYSTEM,
-            {
-                "keywords": STATE["keywords"],
-                "criteria": criteria,
-                "candidates": [{**c, "key": classification_key(c)} for c in STATE["candidates"]],
-            },
-        )
-        chosen = result.get("selected")
-        chosen = normalize_selection(chosen)
-        if STOP.is_set():
-            return
-        with LOCK:
-            STATE["selected"] = chosen
-            make_query(bool(STATE["queries"]), preserve_conditions=True)
-        log("分類を選択し初案を作成: " + str(result.get("reason", ""))[:500])
-        result = run_llm_assessment(
-            dict(criteria=criteria, max_items=max_items, threshold=threshold, fresh_only=True),
-            lambda value, message: progress(20 + int(0.55 * value), message),
-        )
-        if STOP.is_set():
-            return
-        log(
-            f"特許判定: {result.get('completed_count', 0)}件を処理、採用{result.get('judged_count', 0)}件・保留{result.get('deferred_count', 0)}件。既存の判定は保持しました。"
-        )
-        if body.get("train"):
-            run_model_training(
-                body.get("mode", "lightweight"), True, lambda value, message: progress(75 + int(0.15 * value), message)
-            )
-            if STOP.is_set():
-                return
-            log("学習完了。エージェント判断を含むため独立評価は表示しません。")
-        if STATE["patents"]:
-            with LOCK:
-                terms = refinement_terms(STATE["patents"])
-                addition = terms["include"][:2]
-                kept = [r for r in STATE["patents"] if r.get("label") == "keep"]
-                covered = kept and all(
-                    any(w.casefold() in (r["title"] + " " + r.get("abstract", "")).casefold() for w in addition)
-                    for r in kept
-                )
-                # Do not introduce a mandatory vocabulary clause that drops known positives.
-                previous_include = previous_query_for_context().get("include_terms", [])
-                current_keys = normalize_selection(STATE["selected"])
-                feedback = classification_feedback(STATE["patents"], current_keys)
-                next_keys = list(dict.fromkeys(current_keys + feedback["recommended_keys"]))
-                make_query(
-                    True,
-                    None if previous_include else addition if covered else None,
-                    None,
-                    classification_keys=next_keys,
-                )
-            log(
-                "判定済み公報から必要側の支持が多いIPCを追加し、次の検索式を提案しました。既存分類は保持し、分類のNOTは作りません。"
-            )
-        log("次のCSVを待っています。外部の特許検索・ダウンロードは接続されていません。")
-
+    criteria = agent_service.checked_agent_request(ws, body)
+    action = lambda: agent_service.run_agent(ws, services, body, criteria, refinement_terms=refinement_terms)
     return begin_job(action, kind="agent", mode=body.get("mode", "lightweight") if body.get("train") else None)
 
 
 @app.get("/api/export")
 def export():
-    with LOCK:
-        data = json.dumps(STATE, ensure_ascii=False, indent=2)
+    with ws.lock:
+        data = json.dumps(ws.state, ensure_ascii=False, indent=2)
     return Response(
         data,
         media_type="application/json",
@@ -879,34 +481,10 @@ def export():
 
 @app.get("/api/export/labels")
 def export_labels():
-    fields = [
-        "id",
-        "title",
-        "abstract",
-        "applicant",
-        "ipc",
-        "fi",
-        "fterm",
-        "cpc",
-        "year",
-        "label",
-        "label_source",
-        "label_reason",
-        "score",
-    ]
-    stream = io.StringIO()
-    writer = csv.DictWriter(stream, fieldnames=fields, extrasaction="ignore")
-    writer.writeheader()
-    with LOCK:
-        for r in STATE["patents"]:
-            writer.writerow(
-                {
-                    k: "'" + v if isinstance(v, str) and v.lstrip().startswith(("=", "+", "-", "@")) else v
-                    for k, v in r.items()
-                }
-            )
+    with ws.lock:
+        data = import_service.labels_csv(ws.state["patents"])
     return Response(
-        stream.getvalue().encode("utf-8-sig"),
+        data,
         media_type="text/csv",
         headers={"Content-Disposition": 'attachment; filename="patent-labels.csv"'},
     )
@@ -917,13 +495,9 @@ def index():
     return FileResponse(ROOT / "static" / "index.html")
 
 
-if STATE["candidates"]:
-    STATE["candidates"] = [explorer.enrich(c) for c in STATE["candidates"]]
-    STATE["selected"] = normalize_selection(STATE["selected"])
-    if (STATE.get("classification_view") or {}).get("focus"):
-        STATE["classification_view"]["focus"] = explorer.enrich(STATE["classification_view"]["focus"])
-    if not STATE.get("classification_view"):
-        classification_overview()
+# --- Composition ---------------------------------------------------------------
+
+query_service.refresh_candidates(ws)
 
 # Explicit closures preserve the existing replaceable service seams without passing globals().
 services = Services(

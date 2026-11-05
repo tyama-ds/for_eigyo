@@ -12,6 +12,7 @@ import uuid
 import classification_explorer as explorer
 from analysis_engine import refinement_terms as default_refinement_terms
 from catalog import keywords
+from common import checked_text
 from query_formats import Node, describe_tree, group, terms_of, tree_data, tree_from_data
 from refinement_classifications import classification_feedback, feedback_origin
 from research_services import refined_tree
@@ -250,3 +251,122 @@ def make_query(
     if isinstance(ws.state.get("research_workbench"), dict):
         ws.state["research_workbench"]["active_query_id"] = item["id"]
     return item
+
+
+def find_query(ws, query_id=None):
+    queries = ws.state["queries"]
+    if query_id:
+        return next((q for q in queries if q["id"] == query_id), None)
+    return queries[-1] if queries else None
+
+
+def add_manual_classification(ws, body):
+    kind = body.get("kind")
+    code = explorer.normalize(kind, checked_text(body.get("code", ""), 32))
+    ws.state["selected"] = normalize_selection(ws, ws.state["selected"])
+    item = explorer.enrich(
+        dict(
+            code=code,
+            kind=kind,
+            title=checked_text(body.get("title", code), 120),
+            origins=[{"type": "manual", "label": "利用者の推薦"}],
+            reason="利用者が推薦した分類",
+        )
+    )
+    set_classification_view(
+        ws, [item], direction="seed", note="推薦した分類を起点に探索できます。", total=1, next_offset=None, trail=[]
+    )
+
+
+def browse_view(ws, body, *, candidate_list):
+    """Update the classification view: overview, origin seeds, or a dictionary browse."""
+    direction = body.get("direction", "children")
+    if direction == "overview":
+        classification_overview(
+            ws, candidate_list(ws.state["keywords"], False) if ws.state["keywords"].strip() else None
+        )
+    elif direction == "seeds":
+        items = [c for c in ws.state["candidates"] if c.get("origins")]
+        set_classification_view(
+            ws,
+            items,
+            direction="seed",
+            note="利用者の推薦・ターゲット由来の分類です。",
+            total=len(items),
+            next_offset=None,
+            trail=[],
+        )
+    else:
+        view = explorer.browse(
+            kind=body.get("kind", "IPC"),
+            code=body.get("code"),
+            direction=direction,
+            text=body.get("text", ""),
+            offset=body.get("offset", 0),
+        )
+        items = view.pop("items")
+        set_classification_view(ws, items, **view)
+
+
+def seed_view(ws, body):
+    select = body.get("select", False)
+    if not isinstance(select, bool):
+        raise ValueError("分類の選択指定を確認してください。")
+    items = explorer.seed_items(body, ws.state["patents"])
+    set_classification_view(
+        ws,
+        items,
+        direction="seed",
+        note="推薦した分類を表示しています。分類の出典と、どの特許から来たかを確認できます。",
+        total=len(items),
+        next_offset=None,
+        trail=[],
+    )
+    if select:
+        ws.state["selected"] = list(
+            dict.fromkeys(ws.state["selected"] + [classification_key(c) for c in items if c["selectable"]])
+        )
+
+
+def refinement_options(ws, *, refinement_terms=default_refinement_terms):
+    result = refinement_terms(ws.state["patents"])
+    previous = previous_query_for_context(ws, ignore_classifications=True)
+    for kind in ("include", "exclude"):
+        result[kind] = list(dict.fromkeys(result[kind] + previous.get(kind + "_terms", [])))
+    result["active_include"] = previous.get("include_terms", [])
+    result["active_exclude"] = previous.get("exclude_terms", [])
+    result["classifications"] = classification_feedback(
+        ws.state["patents"], normalize_selection(ws, ws.state["selected"])
+    )
+    return result
+
+
+def apply_labels(ws, ids, label):
+    """Human labels reset every score so stale model output is not shown next to them."""
+    if label not in ("keep", "exclude", None) or not isinstance(ids, list):
+        raise ValueError("判定を確認してください。")
+    if not set(ids) <= {r["id"] for r in ws.state["patents"]}:
+        raise ValueError("存在しない特許IDです。")
+    for row in ws.state["patents"]:
+        if row["id"] in ids:
+            row.update(
+                label=label,
+                label_source="human" if label else None,
+                label_reason="利用者による判断" if label else "",
+            )
+            row["score"] = None
+    ws.state["training"] = None
+    for row in ws.state["patents"]:
+        row["score"] = None
+
+
+def refresh_candidates(ws):
+    """Re-enrich saved candidates with the current dictionaries at startup."""
+    if not ws.state["candidates"]:
+        return
+    ws.state["candidates"] = [explorer.enrich(c) for c in ws.state["candidates"]]
+    ws.state["selected"] = normalize_selection(ws, ws.state["selected"])
+    if (ws.state.get("classification_view") or {}).get("focus"):
+        ws.state["classification_view"]["focus"] = explorer.enrich(ws.state["classification_view"]["focus"])
+    if not ws.state.get("classification_view"):
+        classification_overview(ws)
