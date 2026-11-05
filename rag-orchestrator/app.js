@@ -82,18 +82,17 @@ document.querySelectorAll(".tab").forEach((btn) => {
 // ---------------------------------------------------------------- settings
 
 const CFG_FIELDS = ["base_url", "model", "embed_model", "embed_base_url",
-  "decision_judge", "decision_beam", "decision_budget", "jev_endpoint", "jev_model", "jev_proxy_url",
+  "decision_judge", "decision_beam", "decision_budget",
   "context_window", "request_timeout", "max_tokens", "proxy_url"];
 
 async function loadConfig() {
   const cfg = await api("/api/config");
   for (const f of CFG_FIELDS) { const el = $(`#s-${f}`); if (el) el.value = cfg[f] ?? ""; }
   $("#s-use_proxy").checked = !!cfg.use_proxy;
-  $("#s-jev_use_proxy").checked = cfg.jev_use_proxy !== false;
   $("#s-api_key").placeholder = cfg.has_key
     ? "（設定済み。変更する場合のみ入力）" : "（未設定。不要なサーバでは空のまま）";
   $("#s-embed_api_key").placeholder = cfg.has_embed_key ? "（設定済み）" : "（空なら API Key を流用）";
-  $("#s-jev_api_key").placeholder = cfg.has_jev_key ? "（設定済み。変更する場合のみ入力）" : "（未設定）";
+  fillJudgeApi(cfg);
   $("#q-beam").placeholder = `設定の値（${cfg.decision_beam ?? 4}）`;
   updateConnBadge(cfg);
 }
@@ -106,18 +105,66 @@ function updateConnBadge(cfg) {
 }
 
 $("#s-save").addEventListener("click", async () => {
-  const body = { use_proxy: $("#s-use_proxy").checked, jev_use_proxy: $("#s-jev_use_proxy").checked };
+  await saveConfig();
+  $("#s-msg").textContent = "✅ 保存しました";
+});
+
+// 判定 API（Decisions API）: 接続先ごとの入力欄。API キーは空なら変更しない
+const JUDGE_PROVIDERS = ["openai", "azure", "openrouter"];
+function showJudgeProvider() {
+  for (const el of document.querySelectorAll(".judge-prov")) el.hidden = el.dataset.prov !== $("#da-provider").value;
+}
+function fillJudgeApi(cfg) {
+  const da = cfg.decision_api;
+  $("#da-provider").value = da.provider;
+  $("#da-timeout").value = da.timeout;
+  for (const prov of JUDGE_PROVIDERS) {
+    const sub = da[prov] || {};
+    for (const k of ["endpoint", "model", "proxy_url", "api_version"]) {
+      const el = $(`#da-${prov}-${k}`);
+      if (el) el.value = sub[k] || "";
+    }
+    $(`#da-${prov}-use_proxy`).checked = !!sub.use_proxy;
+    $(`#da-${prov}-api_key`).value = "";
+    $(`#da-${prov}-api_key`).placeholder = sub.has_api_key ? "（設定済み。変更する場合のみ入力）" : "（未設定）";
+  }
+  showJudgeProvider();
+  $("#judge-box").open = cfg.decision_judge === "api";
+}
+function judgeApiBody() {
+  const out = { provider: $("#da-provider").value, timeout: Number($("#da-timeout").value) || 60 };
+  for (const prov of JUDGE_PROVIDERS) {
+    const sub = { use_proxy: $(`#da-${prov}-use_proxy`).checked };
+    for (const k of ["endpoint", "model", "proxy_url", "api_version"]) {
+      const el = $(`#da-${prov}-${k}`);
+      if (el) sub[k] = el.value;
+    }
+    if ($(`#da-${prov}-api_key`).value) sub.api_key = $(`#da-${prov}-api_key`).value;
+    out[prov] = sub;
+  }
+  return out;
+}
+$("#da-provider").addEventListener("change", showJudgeProvider);
+$("#da-test").addEventListener("click", async () => {
+  const out = $("#da-test-result");
+  out.textContent = "保存して判定中…";
+  await saveConfig();
+  const r = await api("/api/config/test", { judge_api: true });
+  out.textContent = `${r.ok ? "✅" : "❌"} ${r.message || r.error || ""}${r.url ? `（送り先: ${r.url}）` : ""}`;
+});
+
+async function saveConfig() {
+  const body = { use_proxy: $("#s-use_proxy").checked, decision_api: judgeApiBody() };
   for (const f of CFG_FIELDS) body[f] = $(`#s-${f}`).value;
   if ($("#s-api_key").value) body.api_key = $("#s-api_key").value;
   if ($("#s-embed_api_key").value) body.embed_api_key = $("#s-embed_api_key").value;
-  if ($("#s-jev_api_key").value) body.jev_api_key = $("#s-jev_api_key").value;
   const cfg = await api("/api/config", body);
-  $("#s-api_key").value = ""; $("#s-embed_api_key").value = ""; $("#s-jev_api_key").value = "";
-  $("#s-jev_api_key").placeholder = cfg.has_jev_key ? "（設定済み）" : "（未設定）";
-  $("#s-msg").textContent = "✅ 保存しました";
+  $("#s-api_key").value = ""; $("#s-embed_api_key").value = "";
+  fillJudgeApi(cfg);
   updateConnBadge(cfg);
   refreshEngines();
-});
+  return cfg;
+}
 
 $("#s-test").addEventListener("click", async () => {
   $("#s-msg").textContent = "接続テスト中…";
@@ -126,6 +173,20 @@ $("#s-test").addEventListener("click", async () => {
   const emb = r.embed.ok ? `✅ 埋め込み: ${esc(r.embed.message)}` : `❌ 埋め込み: ${esc(r.embed.message)}`;
   $("#s-msg").innerHTML = `${chat}<br>${emb}`;
 });
+
+// DecisionRAG の結果: 判定モデルの表示名と判定 API の使用量
+function judgeLabel(stats) {
+  if (stats.judge_api) return stats.judge_api;
+  return { llm: "LLM", jev: "Jev" }[stats.judge] || stats.judge || "";
+}
+function apiUsage(stats) {
+  const parts = [];
+  if (stats.api_cost_usd) parts.push(`$${stats.api_cost_usd}`);
+  if (stats.jev_cost_usd) parts.push(`$${stats.jev_cost_usd}`);
+  if (stats.api_input_tokens) parts.push(`入力 ${Number(stats.api_input_tokens).toLocaleString()} トークン`);
+  if (stats.api_refusals) parts.push(`判定を断られた候補 ${stats.api_refusals} 件`);
+  return parts.length ? " ・ 判定 API: " + esc(parts.join("・")) : "";
+}
 
 // ---------------------------------------------------------------- engines
 
@@ -351,7 +412,7 @@ function renderQueryJob(job) {
         ${thinkHtml(e.result.think)}
         <div class="answer">${renderText(e.result.answer || "")}</div>
         ${eid === "decision" && e.result.stats && e.result.stats.route
-          ? `<div class="engine-stats">階層の経路（経路スコア）: ${esc(e.result.stats.route)} ・ ビーム幅 ${esc(e.result.stats.beam)} ・ 判定 ${esc(e.result.stats.calls)} 回${e.result.stats.trimmed ? `（上限で ${esc(e.result.stats.trimmed)} 件未判定）` : ""}（${esc(e.result.stats.judge)}${e.result.stats.soft ? "・確率" : ""}${e.result.stats.choice ? "・選択式で並べ替え" : ""}）${e.result.stats.note ? " ・ " + esc(e.result.stats.note) : ""}</div>` : ""}
+          ? `<div class="engine-stats">階層の経路（経路スコア）: ${esc(e.result.stats.route)} ・ ビーム幅 ${esc(e.result.stats.beam)} ・ 判定 ${esc(e.result.stats.calls)} 回${e.result.stats.trimmed ? `（上限で ${esc(e.result.stats.trimmed)} 件未判定）` : ""}（${esc(judgeLabel(e.result.stats))}${e.result.stats.soft ? "・確率" : ""}${e.result.stats.choice ? "・選択式で並べ替え" : ""}）${apiUsage(e.result.stats)}${e.result.stats.note ? " ・ " + esc(e.result.stats.note) : ""}</div>` : ""}
         ${cites ? `<div class="citations">${cites}</div>` : ""}
       </div>`);
     } else {

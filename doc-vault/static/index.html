@@ -207,21 +207,55 @@
           <div><label class="field-label">判定モデル</label>
             <select id="r-decision_judge">
               <option value="llm">LLM（ローカル / クラウドの設定を使う）</option>
-              <option value="jev">Jev（論文で使われた判定モデル・公開文書のみ）</option>
+              <option value="api">判定 API（Jev・OpenAI・Azure OpenAI の Decisions API）</option>
             </select></div>
           <div><label class="field-label">ビーム幅（各段で残す枝の数）</label><input type="number" id="r-decision_beam" min="1" max="10"></div>
           <div><label class="field-label">判定回数の上限</label><input type="number" id="r-decision_budget" min="2" max="30"></div>
         </div>
-        <details class="adv" id="jev-box"><summary>Jev（TypeSafe）の接続 — OpenRouter Decisions API</summary>
-          <p class="hint">Jev は外部サービスのため、<b>公開文書の候補だけ</b>を判定させます。社外秘を含む段はローカル LLM で判定します。
-            Jev は英語が最も得意で、日本語は 1.14 で改善されたとされています。</p>
-          <label class="field-label">エンドポイント</label><input type="text" id="j-endpoint">
-          <div class="two">
-            <div><label class="field-label">OpenRouter の API キー</label><input type="password" id="j-api_key" autocomplete="off"></div>
-            <div><label class="field-label">モデル</label><input type="text" id="j-model" placeholder="typesafe/jev-1.14"></div>
+        <details class="adv" id="judge-box"><summary>判定 API の接続 — Decisions API（Jev / OpenAI / Azure OpenAI）</summary>
+          <p class="hint">判定 API はテキストを生成せず、「この候補は質問に関連するか」を確率で答える判定専用のモデルです。
+            外部サービスのため<b>公開文書の候補だけ</b>を判定させ、社外秘を含む段はローカル LLM で判定します
+            （Azure OpenAI で「社外秘の候補も送ってよい」を ON にしたときを除く）。日本語の文書での精度は未確認です。</p>
+          <div class="row gap">
+            <div><label class="field-label">接続先</label>
+              <select id="da-provider">
+                <option value="openai">OpenAI（gpt-6-luna）</option>
+                <option value="azure">Azure OpenAI（デプロイ名を指定）</option>
+                <option value="openrouter">Jev（OpenRouter・論文で使われた判定モデル）</option>
+              </select></div>
+            <div><label class="field-label">タイムアウト（秒）</label><input type="number" id="da-timeout" min="5" max="600"></div>
           </div>
-          <label class="check"><input type="checkbox" id="j-use_proxy"> プロキシを使う（空なら環境変数 HTTPS_PROXY）</label>
-          <label class="field-label">Proxy URL</label><input type="text" id="j-proxy_url">
+          <div class="judge-prov" data-prov="openai" hidden>
+            <label class="field-label">エンドポイント</label><input type="text" id="da-openai-endpoint" placeholder="https://api.openai.com/v1/decisions">
+            <div class="two">
+              <div><label class="field-label">OpenAI の API キー</label><input type="password" id="da-openai-api_key" autocomplete="off"></div>
+              <div><label class="field-label">モデル</label><input type="text" id="da-openai-model" placeholder="gpt-6-luna"></div>
+            </div>
+            <label class="check"><input type="checkbox" id="da-openai-use_proxy"> プロキシを使う（URL が空なら環境変数、無ければ Windows のプロキシ設定）</label>
+            <label class="field-label">Proxy URL</label><input type="text" id="da-openai-proxy_url">
+          </div>
+          <div class="judge-prov" data-prov="azure" hidden>
+            <label class="field-label">エンドポイント</label><input type="text" id="da-azure-endpoint" placeholder="https://<リソース名>.openai.azure.com">
+            <div class="two">
+              <div><label class="field-label">Azure OpenAI の API キー</label><input type="password" id="da-azure-api_key" autocomplete="off"></div>
+              <div><label class="field-label">デプロイ名</label><input type="text" id="da-azure-model" placeholder="Decisions 用のデプロイ名"></div>
+            </div>
+            <label class="field-label">API バージョン（空なら v1 API: …/openai/v1/decisions）</label><input type="text" id="da-azure-api_version" placeholder="空欄で可">
+            <label class="check"><input type="checkbox" id="da-azure-allow_internal"> 社外秘の候補も送ってよい（社内で社外秘の扱いが認められた自社の Azure のときだけ。ローカル LLM と同じ扱いになります）</label>
+            <label class="check"><input type="checkbox" id="da-azure-use_proxy"> プロキシを使う（URL が空なら環境変数、無ければ Windows のプロキシ設定）</label>
+            <label class="field-label">Proxy URL</label><input type="text" id="da-azure-proxy_url">
+          </div>
+          <div class="judge-prov" data-prov="openrouter" hidden>
+            <label class="field-label">エンドポイント</label><input type="text" id="da-openrouter-endpoint" placeholder="https://openrouter.ai/api/alpha/decisions">
+            <div class="two">
+              <div><label class="field-label">OpenRouter の API キー</label><input type="password" id="da-openrouter-api_key" autocomplete="off"></div>
+              <div><label class="field-label">モデル</label><input type="text" id="da-openrouter-model" placeholder="typesafe/jev-1.14"></div>
+            </div>
+            <label class="check"><input type="checkbox" id="da-openrouter-use_proxy"> プロキシを使う（URL が空なら環境変数、無ければ Windows のプロキシ設定）</label>
+            <label class="field-label">Proxy URL</label><input type="text" id="da-openrouter-proxy_url">
+          </div>
+          <div class="row gap"><button class="btn" id="da-test" type="button">接続テスト（保存してから架空の候補 2 件で判定）</button>
+            <span class="hint" id="da-test-result"></span></div>
         </details>
         <div class="row gap">
           <div><label class="field-label">回答に使う資料数</label><input type="number" id="r-top_k" min="3" max="30"></div>

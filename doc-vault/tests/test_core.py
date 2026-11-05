@@ -425,41 +425,196 @@ class TestDecisionRAG(unittest.TestCase):
         self.assertEqual(db.create_chat(strategy="decision")["strategy"], "decision")
 
 
-class TestJev(unittest.TestCase):
-    def test_request_shapes_and_parsing(self):
-        from docvault import jev
-        body = jev.build_binary_request("typesafe/jev-1.14", "質問", ["候補A", "候補B", "候補C"])
+class TestDecisionAPI(unittest.TestCase):
+    """判定 API（Jev / OpenAI / Azure OpenAI の Decisions API）の要求・応答・送り先・送信ポリシー。
+
+    OpenAI / Azure の形は公式 Python SDK（openai 3.46 の DecisionCreateParams / Decision）に合わせている。
+    """
+
+    def setUp(self):
+        from docvault import decision_api
+        self.da = decision_api
+
+    def eff(self, provider, **sub):
+        return self.da.effective({"decision_api": {"provider": provider, provider: sub}})
+
+    def test_openrouter_request_shapes_and_parsing(self):
+        da = self.da
+        body = da.build_binary_request("openrouter", "typesafe/jev-1.14", "質問", ["候補A", "候補B", "候補C"])
         self.assertEqual(set(body["questions"]), {"c1", "c2", "c3"})
         self.assertIn("1. 候補A\n2. 候補B", body["state"]["candidates"])     # 共有の文脈
         q = body["questions"]["c2"]
         self.assertEqual(q["type"], "noul")
         self.assertEqual(set(q["criteria"]), {"true", "false"})
         self.assertIn("candidate 2", q["instructions"])
-        ch = jev.build_choice_request("m", "質問", ["x", "y"])
+        ch = da.build_choice_request("openrouter", "m", "質問", ["x", "y"])
         self.assertEqual(set(ch["questions"]["most_relevant"]["criteria"]), {"c1", "c2"})
-        self.assertEqual(jev.parse_binary({"answers": {"c1": {"type": "noul", "noul": 0.9},
-                                                       "c2": {"type": "noul", "noul": 1.4}}}, 2),
-                         {1: 0.9, 2: 1.0})
+        self.assertEqual(da.parse_binary("openrouter", {"answers": {"c1": {"type": "noul", "noul": 0.9},
+                                                                    "c2": {"type": "noul", "noul": 1.4}}}, 2),
+                         ({1: 0.9, 2: 1.0}, 0))
         with self.assertRaises(LLMError):
-            jev.parse_binary({"answers": {"c1": {"noul": 0.5}}}, 2)
-        self.assertEqual(jev.parse_choice({"answers": {"most_relevant": {
+            da.parse_binary("openrouter", {"answers": {"c1": {"noul": 0.5}}}, 2)
+        self.assertEqual(da.parse_choice("openrouter", {"answers": {"most_relevant": {
             "choice": "c2", "probabilities": {"c1": 0.2, "c2": 0.8}}}}, 2), {1: 0.2, 2: 0.8})
 
-    def test_policy_and_split(self):
-        from docvault import jev
-        client = jev.JevClient({"endpoint": "http://127.0.0.1:9/x", "api_key": "k",
-                                "model": "m", "use_proxy": False, "timeout": 1})
-        with self.assertRaises(PolicyError):
-            client.post({}, sensitivity="internal")
-        sent = []
+    def test_openai_request_shapes(self):
+        da = self.da
+        for provider in ("openai", "azure"):
+            body = da.build_binary_request(provider, "gpt-6-luna", "質問", ["候補A", "候補B", "候補C"])
+            self.assertEqual(set(body), {"model", "input", "questions"})
+            self.assertIn("Query:\n質問", body["input"])
+            self.assertIn("1. 候補A\n2. 候補B\n3. 候補C", body["input"])    # 候補一覧を共有の入力に
+            self.assertEqual([q["name"] for q in body["questions"]], ["c1", "c2", "c3"])
+            self.assertEqual({q["type"] for q in body["questions"]}, {"predicate"})
+            self.assertIn("Candidate 2", body["questions"][1]["instructions"])
+            ch = da.build_choice_request(provider, "gpt-6-luna", "質問", ["x" * 900, "y"])["questions"][0]
+            self.assertEqual(ch["type"], "choice")
+            self.assertEqual([c["value"] for c in ch["choices"]], ["c1", "c2"])
+            self.assertEqual(len(ch["choices"][0]["description"]), 600)
 
-        def fake_post(body, *, sensitivity):
-            sent.append(body)
-            return {"answers": {name: {"type": "noul", "noul": 0.5} for name in body["questions"]}}
-        client.post = fake_post
-        out = client.binary("q", [f"d{i}" for i in range(120)], sensitivity="public")
-        self.assertEqual([len(b["questions"]) for b in sent], [50, 50, 20])
-        self.assertEqual(len(out), 120)
+    def test_openai_answer_parsing(self):
+        da = self.da
+        resp = {"answers": [{"type": "predicate", "name": "c2", "probability": 0.25},   # 順不同でも名前で
+                            {"type": "predicate", "name": "c1", "probability": 1.3},
+                            {"type": "refusal", "name": "c3"}],
+                "usage": {"input_tokens": 10}}
+        self.assertEqual(da.parse_binary("openai", resp, 3), ({1: 1.0, 2: 0.25, 3: 0.0}, 1))
+        unnamed = {"answers": [{"type": "predicate", "probability": 0.4}, {"type": "predicate", "probability": 0.6}]}
+        self.assertEqual(da.parse_binary("openai", unnamed, 2)[0], {1: 0.4, 2: 0.6})
+        with self.assertRaises(LLMError):                       # 全部断られたら判定に使えない
+            da.parse_binary("openai", {"answers": [{"type": "refusal", "name": "c1"}]}, 1)
+        with self.assertRaises(LLMError):
+            da.parse_binary("openai", {"answers": [{"type": "predicate", "name": "c1"}]}, 1)
+        with self.assertRaises(LLMError):
+            da.parse_binary("openai", {"error": "x"}, 1)
+        choice = {"answers": [{"type": "choice", "name": "most_relevant", "choice": "c2", "confidence": 0.7,
+                               "probabilities": [{"value": "c1", "probability": 0.3},
+                                                 {"value": "c2", "probability": 0.7}]}]}
+        self.assertEqual(da.parse_choice("azure", choice, 2), {1: 0.3, 2: 0.7})
+        only_choice = {"answers": [{"type": "choice", "name": "most_relevant", "choice": "c2",
+                                    "probabilities": []}]}
+        self.assertEqual(da.parse_choice("openai", only_choice, 2), {1: 0.0, 2: 1.0})
+        with self.assertRaises(LLMError):
+            da.parse_choice("openai", {"answers": [{"type": "refusal", "name": "most_relevant"}]}, 2)
+
+    def test_urls_and_headers(self):
+        da = self.da
+        e = self.eff("openai", api_key="sk")
+        self.assertEqual(da.request_url(e), "https://api.openai.com/v1/decisions")
+        self.assertEqual(e["model"], "gpt-6-luna")
+        self.assertEqual(da.request_headers(e)["Authorization"], "Bearer sk")
+        self.assertEqual(da.request_url(self.eff("openrouter")), "https://openrouter.ai/api/alpha/decisions")
+        # Azure: リソースの URL から組み立てる（公式 SDK の AzureOpenAI / v1 API と同じ送り先）
+        cases = {
+            ("https://res.openai.azure.com", ""): "https://res.openai.azure.com/openai/v1/decisions",
+            ("https://res.openai.azure.com/", ""): "https://res.openai.azure.com/openai/v1/decisions",
+            ("https://res.openai.azure.com/openai/v1/", ""): "https://res.openai.azure.com/openai/v1/decisions",
+            ("https://res.openai.azure.com", "2026-10-01-preview"):
+                "https://res.openai.azure.com/openai/decisions?api-version=2026-10-01-preview",
+            ("https://gw.example.com/x/decisions", ""): "https://gw.example.com/x/decisions",
+            ("https://gw.example.com/x/decisions?a=1", "v"): "https://gw.example.com/x/decisions?a=1&api-version=v",
+        }
+        for (endpoint, ver), url in cases.items():
+            e = self.eff("azure", endpoint=endpoint, api_version=ver, api_key="az", model="luna")
+            self.assertEqual(da.request_url(e), url, (endpoint, ver))
+        h = da.request_headers(e)
+        self.assertEqual(h["api-key"], "az")
+        self.assertNotIn("Authorization", h)
+
+    def test_ready_and_missing(self):
+        da = self.da
+        self.assertFalse(da.ready({"decision_api": {"provider": "openai", "openai": {}}}))
+        self.assertTrue(da.ready({"decision_api": {"provider": "openai", "openai": {"api_key": "k"}}}))
+        az = {"decision_api": {"provider": "azure", "azure": {"api_key": "k"}}}
+        self.assertFalse(da.ready(az))                          # Azure はエンドポイントとデプロイ名が要る
+        self.assertEqual(da.missing(az), "エンドポイント・デプロイ名")
+
+    def test_policy_and_split(self):
+        da = self.da
+        for provider in ("openrouter", "openai", "azure"):
+            client = da.DecisionAPIClient(self.eff(provider, endpoint="http://127.0.0.1:9/x", api_key="k",
+                                                   model="m", use_proxy=False))
+            with self.assertRaises(PolicyError):
+                client.post({}, sensitivity="internal")
+            sent = []
+
+            def fake_post(body, *, sensitivity, provider=provider):
+                sent.append(body)
+                if provider == "openrouter":
+                    return {"answers": {n: {"type": "noul", "noul": 0.5} for n in body["questions"]}}
+                return {"answers": [{"type": "predicate", "name": q["name"], "probability": 0.5}
+                                    for q in body["questions"]]}
+            client.post = fake_post
+            out = client.binary("q", [f"d{i}" for i in range(120)], sensitivity="public")
+            self.assertEqual([len(b["questions"]) for b in sent], [50, 50, 20])
+            self.assertEqual(len(out), 120)
+            self.assertEqual(client.choice("q", ["only"], sensitivity="public"), {1: 1.0})   # 1件なら聞かない
+            self.assertEqual(len(sent), 3)
+
+    def test_azure_allow_internal(self):
+        da = self.da
+        off = da.DecisionAPIClient(self.eff("azure", endpoint="https://r", api_key="k", model="m"))
+        on = da.DecisionAPIClient(self.eff("azure", endpoint="https://r", api_key="k", model="m",
+                                           allow_internal=True))
+        self.assertFalse(off.trusted)
+        self.assertTrue(on.trusted)
+        self.assertTrue(on.allows("internal"))
+        # OpenAI / OpenRouter は設定に allow_internal があっても社外秘を送らない
+        oa = da.DecisionAPIClient(self.eff("openai", api_key="k", allow_internal=True))
+        self.assertFalse(oa.trusted)
+        self.assertFalse(oa.allows("internal"))
+
+    def test_pick_judge(self):
+        from docvault import decision
+        da = self.da
+
+        class Ctx:
+            def __init__(self, mode, touched):
+                self.mode, self.touched = mode, touched
+
+            def profile(self, purpose, sensitivity):
+                return None                                    # LLM は未設定
+        oa = da.DecisionAPIClient(self.eff("openai", api_key="k"))
+        az = da.DecisionAPIClient(self.eff("azure", endpoint="https://r", api_key="k", model="m",
+                                           allow_internal=True))
+        self.assertEqual(decision.pick_judge(Ctx("auto", False), "public", oa).name, "openai")
+        self.assertIsNone(decision.pick_judge(Ctx("auto", False), "internal", oa))
+        self.assertIsNone(decision.pick_judge(Ctx("local", False), "public", oa))   # ローカルのみの相談
+        self.assertIsNone(decision.pick_judge(Ctx("auto", True), "public", oa))     # 社外秘に触れた相談
+        j = decision.pick_judge(Ctx("local", True), "internal", az)
+        self.assertEqual((j.name, j.sensitivity), ("azure", "internal"))
+
+    def test_config_migrates_old_jev_block(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            saved = config.CONFIG_FILE
+            config.CONFIG_FILE = Path(tmp) / "c.json"
+            try:
+                config.CONFIG_FILE.write_text(json.dumps({
+                    "jev": {"endpoint": "https://openrouter.ai/api/alpha/decisions", "api_key": "or-old",
+                            "model": "typesafe/jev-1.13", "timeout": 30, "use_proxy": False},
+                    "rag": {"decision_judge": "jev"}}), encoding="utf-8")
+                cfg = config.load_config()
+                self.assertEqual(cfg["rag"]["decision_judge"], "api")
+                self.assertEqual(cfg["decision_api"]["provider"], "openrouter")
+                self.assertEqual(cfg["decision_api"]["timeout"], 30.0)
+                sub = cfg["decision_api"]["openrouter"]
+                self.assertEqual((sub["api_key"], sub["model"], sub["use_proxy"]), ("or-old", "typesafe/jev-1.13", False))
+                cfg = config.save_config({"rag": {"decision_judge": "jev"},     # 古い値も受け付ける
+                                          "decision_api": {"provider": "azure", "azure": {
+                                              "endpoint": " https://r ", "api_key": "az", "model": "luna",
+                                              "allow_internal": True}, "openai": {"allow_internal": True}}})
+                self.assertEqual(cfg["rag"]["decision_judge"], "api")
+                self.assertEqual(cfg["decision_api"]["azure"]["endpoint"], "https://r")
+                self.assertTrue(cfg["decision_api"]["azure"]["allow_internal"])
+                self.assertNotIn("allow_internal", cfg["decision_api"]["openai"])
+                saved_json = json.loads(config.CONFIG_FILE.read_text(encoding="utf-8"))
+                self.assertNotIn("jev", saved_json)                 # 保存し直すと古いブロックは消える
+                pub = config.public_config(cfg)
+                self.assertTrue(pub["decision_api"]["azure"]["has_api_key"])
+                self.assertNotIn("api_key", pub["decision_api"]["azure"])
+                self.assertNotIn("api_key", pub["decision_api"]["openrouter"])
+            finally:
+                config.CONFIG_FILE = saved
 
     def test_llm_choice_probs(self):
         from docvault.decision import choice_probs

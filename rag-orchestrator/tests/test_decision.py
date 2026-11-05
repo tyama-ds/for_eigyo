@@ -3,11 +3,13 @@
 - 階層の構築（文書 → 節 → 段落、文書が多いときの文書群への分割）
 - logprobs からの確率化（採点の数字・選択式の記号、思考ブロックは無視）
 - ナビゲーション（検索器を使わずに目的の段落へ着く・判定回数の上限）
-- 判定モデル Jev（OpenRouter Decisions API）の要求形式と、キー未設定時の LLM へのフォールバック
+- 判定 API（Jev / OpenAI / Azure OpenAI の Decisions API）の要求形式・送り先・回答拒否・古い設定の移行と、
+  未設定時の LLM へのフォールバック。doc-vault の同じモジュールと中身がそろっていること
 - API 経由の構築と質問
 """
 from __future__ import annotations
 
+import ast
 import json
 import sys
 import tempfile
@@ -24,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import mock_llm  # noqa: E402
 from mock_llm import FakeLLMClient, start_mock_llm  # noqa: E402
-from ragcore import jev  # noqa: E402
+from ragcore import decision_api as da  # noqa: E402
 from ragcore.engines.base import EngineContext  # noqa: E402
 from ragcore.engines.decision import (DecisionRAGEngine, LLMJudge, build_tree,  # noqa: E402
                                       choice_probs, navigate, soft_scores)
@@ -124,11 +126,12 @@ class TestEngine(unittest.TestCase):
         self.assertEqual(res["calls"], 1)
         self.assertEqual(calls, [len(self.index["tree"]["root"]["children"])])  # 1段目を1回で判定
 
-    def test_jev_missing_key_falls_back_to_llm(self):
-        ctx = EngineContext(llm=FakeLLMClient(), cfg=dict(CFG, decision_judge="jev"))
+    def test_judge_api_missing_key_falls_back_to_llm(self):
+        ctx = EngineContext(llm=FakeLLMClient(), cfg=dict(CFG, decision_judge="api"))
         r = self.engine.query(self.index, "SkyEdge S-2 はどんな製品？", "auto", ctx)
         self.assertEqual(r["stats"]["judge"], "llm")
-        self.assertIn("Jev", r["stats"]["note"])
+        self.assertIn("OpenAI", r["stats"]["note"])
+        self.assertIn("API キー", r["stats"]["note"])
 
 
 class TestBeamSearch(unittest.TestCase):
@@ -199,7 +202,14 @@ class TestBeamSearch(unittest.TestCase):
         self.assertEqual(res["path"][0]["trimmed"], 10)
 
 
-class TestJev(unittest.TestCase):
+def api_cfg(provider, **sub):
+    return dict(CFG, use_proxy=False, decision_judge="api",
+                decision_api={"provider": provider, provider: {"use_proxy": False, **sub}})
+
+
+class TestJudgeAPI(unittest.TestCase):
+    """判定 API（Jev / OpenAI / Azure OpenAI）。形と送り先の細かい検査は doc-vault の同じモジュールのテストにある。"""
+
     @classmethod
     def setUpClass(cls):
         cls.server, cls.base = start_mock_llm()
@@ -208,41 +218,89 @@ class TestJev(unittest.TestCase):
     def tearDownClass(cls):
         cls.server.shutdown()
 
-    def test_request_shape(self):
-        body = jev.build_binary_request("typesafe/jev-1.14", "質問", ["A", "B"])
+    def test_request_shapes(self):
+        body = da.build_binary_request("openrouter", "typesafe/jev-1.14", "質問", ["A", "B"])
         self.assertEqual(body["questions"]["c2"]["type"], "noul")
         self.assertEqual(set(body["questions"]["c1"]["criteria"]), {"true", "false"})
         self.assertIn("2. B", body["state"]["candidates"])
         with self.assertRaises(LLMError):
-            jev.parse_binary({"answers": {}}, 1)
+            da.parse_binary("openrouter", {"answers": {}}, 1)
+        body = da.build_binary_request("openai", "gpt-6-luna", "質問", ["A", "B"])
+        self.assertEqual([(q["type"], q["name"]) for q in body["questions"]], [("predicate", "c1"), ("predicate", "c2")])
+        self.assertIn("2. B", body["input"])
+        self.assertEqual(da.parse_binary("azure", {"answers": [{"type": "predicate", "name": "c1", "probability": 0.8},
+                                                               {"type": "refusal", "name": "c2"}]}, 2),
+                         ({1: 0.8, 2: 0.0}, 1))
 
-    def test_jev_proxy_is_separate_from_llm(self):
+    def test_urls(self):
+        e = da.effective(api_cfg("azure", endpoint="https://res.openai.azure.com", model="d", api_key="k"))
+        self.assertEqual(da.request_url(e), "https://res.openai.azure.com/openai/v1/decisions")
+        self.assertEqual(da.request_headers(e)["api-key"], "k")
+        e = da.effective(api_cfg("openai", api_key="k"))
+        self.assertEqual((da.request_url(e), e["model"]), ("https://api.openai.com/v1/decisions", "gpt-6-luna"))
+
+    def test_proxy_is_separate_from_llm(self):
         import urllib.request
 
         def proxies(client):
             # 空の ProxyHandler（直結）は対象のプロトコルが無いので opener に登録されない
             return next((h.proxies for h in client._opener().handlers
                          if isinstance(h, urllib.request.ProxyHandler)), {})
-        cfg = dict(CFG, use_proxy=False, jev_endpoint="https://x", jev_api_key="k", jev_model="m")
-        self.assertEqual(proxies(jev.JevClient(dict(cfg, jev_proxy_url="http://p:8080"))),
+        e = da.effective(api_cfg("openai", api_key="k", use_proxy=True, proxy_url="http://p:8080"))
+        self.assertEqual(proxies(da.DecisionAPIClient(e)),
                          {"http": "http://p:8080", "https": "http://p:8080"})   # LLM は直結のまま
-        self.assertEqual(proxies(jev.JevClient(dict(cfg, jev_use_proxy=False))), {})
+        e = da.effective(api_cfg("openai", api_key="k"))
+        self.assertEqual(proxies(da.DecisionAPIClient(e)), {})
 
-    def test_engine_with_jev(self):
-        cfg = dict(CFG, decision_judge="jev", jev_endpoint=self.base + "/decisions",
-                   jev_api_key="or-test", jev_model="typesafe/jev-1.14", use_proxy=False,
-                   jev_use_proxy=False)
-        ctx = EngineContext(llm=FakeLLMClient(), cfg=cfg)
+    def test_engine_with_each_provider(self):
+        base = self.base.rsplit("/v1", 1)[0]
+        cases = [("openrouter", {"endpoint": self.base + "/decisions"}, "typesafe/jev-1.14", "Jev（OpenRouter）"),
+                 ("openai", {"endpoint": self.base + "/decisions"}, "gpt-6-luna", "OpenAI"),
+                 ("azure", {"endpoint": base, "model": "luna-deploy"}, "luna-deploy", "Azure OpenAI")]
         engine = DecisionRAGEngine()
-        index = engine.ingest(sample_corpus(), ctx)
-        before = len(mock_llm.REQUESTS)
-        r = engine.query(index, "SkyEdge S-2 はどんな製品？", "auto", ctx)
-        self.assertEqual(r["stats"]["judge"], "jev")
-        self.assertGreater(r["stats"]["jev_cost_usd"], 0)
-        self.assertEqual(r["citations"][0]["title"], "SkyEdge シリーズ 製品資料")
-        reqs = [x for x in mock_llm.REQUESTS[before:] if x["path"].endswith("/decisions")]
-        self.assertTrue(reqs)
-        self.assertTrue(all(x["body"]["model"] == "typesafe/jev-1.14" for x in reqs))
+        index = engine.ingest(sample_corpus(), EngineContext(llm=FakeLLMClient(), cfg=CFG))
+        for provider, sub, model, label in cases:
+            with self.subTest(provider=provider):
+                ctx = EngineContext(llm=FakeLLMClient(), cfg=api_cfg(provider, api_key=f"{provider}-key", **sub))
+                before = len(mock_llm.REQUESTS)
+                r = engine.query(index, "SkyEdge S-2 はどんな製品？", "auto", ctx)
+                self.assertEqual(r["stats"]["judge"], provider)
+                self.assertEqual(r["stats"]["judge_api"], label)
+                if provider == "openrouter":
+                    self.assertGreater(r["stats"]["api_cost_usd"], 0)
+                else:
+                    self.assertGreater(r["stats"]["api_input_tokens"], 0)
+                self.assertEqual(r["citations"][0]["title"], "SkyEdge シリーズ 製品資料")
+                reqs = [x for x in mock_llm.REQUESTS[before:] if x["path"].split("?")[0].endswith("/decisions")]
+                self.assertTrue(reqs)
+                self.assertTrue(all(x["body"]["model"] == model for x in reqs))
+                if provider == "azure":
+                    self.assertTrue(all(x["path"] == "/openai/v1/decisions" and x["api_key"] == "azure-key"
+                                        for x in reqs))
+                else:
+                    self.assertTrue(all(x["auth"] == f"Bearer {provider}-key" for x in reqs))
+
+    def test_same_as_doc_vault(self):
+        """doc-vault の decision_api.py と、要求・応答・送り先の部分が同じであること（片方だけ直さない）。"""
+        def defs(path):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            out = {}
+            for node in tree.body:
+                if isinstance(node, ast.FunctionDef):
+                    out[node.name] = ast.dump(node)
+                elif isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name):
+                    out[node.targets[0].id] = ast.dump(node)
+                elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                    out[node.target.id] = ast.dump(node)
+            return out
+        ours = defs(APP_DIR / "ragcore" / "decision_api.py")
+        theirs = defs(APP_DIR.parent / "doc-vault" / "docvault" / "decision_api.py")
+        shared = ["PROVIDERS", "MAX_PER_REQUEST", "MAX_CHOICE", "BINARY_INSTRUCTIONS", "BINARY_TRUE",
+                  "BINARY_FALSE", "PREDICATE", "CHOICE_INSTRUCTIONS", "ready", "missing", "request_url",
+                  "request_headers", "_state", "_input_text", "build_binary_request", "build_choice_request",
+                  "_cand_no", "_answer_list", "parse_binary", "parse_choice"]
+        for name in shared:
+            self.assertEqual(ours[name], theirs[name], f"{name} が doc-vault と違う")
 
 
 class TestDecisionAPI(unittest.TestCase):
@@ -291,15 +349,25 @@ class TestDecisionAPI(unittest.TestCase):
 
     def test_flow(self):
         cfg = self.api("/api/config", {"base_url": self.mock_base, "model": "mock",
-                                       "decision_beam": 3, "decision_judge": "jev",
-                                       "jev_api_key": "secret"})
+                                       "decision_beam": 3, "decision_judge": "jev",      # 古い値も受け付ける
+                                       "decision_api": {"provider": "azure", "azure": {"api_key": "secret"}}})
         self.assertEqual(cfg["decision_beam"], 3)
-        self.assertTrue(cfg["jev_use_proxy"])                       # Jev は既定でプロキシ経由
-        cfg = self.api("/api/config", {"jev_use_proxy": False, "jev_proxy_url": "http://p:8080"})
-        self.assertFalse(cfg["jev_use_proxy"])
-        self.assertEqual(cfg["jev_proxy_url"], "http://p:8080")
-        self.assertTrue(cfg["has_jev_key"])
-        self.assertNotIn("jev_api_key", cfg)
+        self.assertEqual(cfg["decision_judge"], "api")
+        self.assertTrue(cfg["decision_api"]["azure"]["use_proxy"])   # 判定 API は既定でプロキシ経由
+        self.assertTrue(cfg["decision_api"]["azure"]["has_api_key"])
+        self.assertNotIn("api_key", cfg["decision_api"]["azure"])    # 秘密は返さない
+        self.assertFalse(cfg["decision_api"]["openai"]["has_api_key"])
+        test = self.api("/api/config/test", {"judge_api": True})     # エンドポイントとデプロイ名が未設定
+        self.assertFalse(test["ok"])
+        self.assertIn("エンドポイント", test["message"])
+        cfg = self.api("/api/config", {"decision_api": {"azure": {
+            "endpoint": self.mock_base.rsplit("/v1", 1)[0], "model": "luna-deploy", "use_proxy": False,
+            "proxy_url": "http://p:8080"}}})
+        self.assertFalse(cfg["decision_api"]["azure"]["use_proxy"])
+        self.assertEqual(cfg["decision_api"]["azure"]["proxy_url"], "http://p:8080")
+        test = self.api("/api/config/test", {"judge_api": True})
+        self.assertTrue(test["ok"], test)
+        self.assertIn("Azure OpenAI（luna-deploy）", test["message"])
         self.api("/api/config", {"decision_judge": "llm"})
         self.api("/api/corpus/sample", {})
         eng = next(e for e in self.api("/api/engines")["engines"] if e["id"] == "decision")

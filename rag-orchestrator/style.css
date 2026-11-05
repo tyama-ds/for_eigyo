@@ -196,3 +196,8 @@ input.inline-input { width: 260px; margin: 0; }
   main { padding: 12px; }
   .result-grid { grid-template-columns: 1fr; }
 }
+
+/* 判定 API の接続（設定の折りたたみ） */
+details.adv { margin: 10px 0; border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; }
+details.adv > summary { cursor: pointer; user-select: none; font-size: 13px; font-weight: 600; }
+details.adv[open] > summary { margin-bottom: 6px; }

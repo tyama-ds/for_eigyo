@@ -31,7 +31,7 @@ from .llm import LLMError, strip_think
 from .textutil import unpack_vec
 
 MAX_CHILDREN = 24          # 1ノードの子の上限（超えたら中間ノードに分ける）
-BATCH = 30                 # 1回の判定に並べる候補数の上限（LLM。Jev は 50）
+BATCH = 30                 # 1回の判定に並べる候補数の上限（LLM。判定 API は 50）
 MAX_CHOICE = 20            # 最後の選択式の並べ替えに出す段落数（論文の m）
 SECTION_CHUNKS = 6         # 見出しが無い文書（PDF 等）の節あたりのチャンク数
 DIRECT_CHUNKS = 8          # これ以下のチャンク数の文書は節を作らず段落を直接並べる
@@ -407,22 +407,26 @@ class LLMJudge:
         return {batch[i]["id"]: p for i, p in probs.items()}
 
 
-class JevJudge:
-    """論文で使われた判定モデル Jev（OpenRouter Decisions API）。公開文書の候補だけを送る。"""
+class APIJudge:
+    """判定 API（Jev / OpenAI / Azure OpenAI の Decisions API）。確率で答える判定専用モデル。
 
-    name = "jev"
+    外部サービスなので公開文書の候補だけを送る（Azure で社外秘を許可したときは社外秘も）。
+    """
+
     batch = 50
     soft = True
 
-    def __init__(self, client):
+    def __init__(self, client, sensitivity: str):
         self.client = client
+        self.sensitivity = sensitivity
+        self.name = client.provider            # openrouter / openai / azure
 
     def binary(self, question: str, batch: list[dict]) -> dict[str, float]:
-        probs = self.client.binary(question, _cand_lines(batch), sensitivity="public")
+        probs = self.client.binary(question, _cand_lines(batch), sensitivity=self.sensitivity)
         return {n["id"]: probs.get(i, 0.0) for i, n in enumerate(batch, 1)}
 
     def choice(self, question: str, batch: list[dict]) -> dict[str, float]:
-        probs = self.client.choice(question, _cand_lines(batch), sensitivity="public")
+        probs = self.client.choice(question, _cand_lines(batch), sensitivity=self.sensitivity)
         return {batch[i - 1]["id"]: p for i, p in probs.items() if i <= len(batch)}
 
 
@@ -450,11 +454,15 @@ def choice_probs(logprobs: list, n: int) -> dict[int, float]:
     return {}
 
 
-def pick_judge(ctx, sensitivity: str, jev_client):
-    """候補の区分とモードに応じて判定モデルを選ぶ。Jev は公開文書の候補だけ。"""
-    if (jev_client is not None and sensitivity == "public" and ctx.mode != "local"
-            and not ctx.touched):
-        return JevJudge(jev_client)
+def pick_judge(ctx, sensitivity: str, api_client):
+    """候補の区分とモードに応じて判定モデルを選ぶ。
+
+    判定 API は外部サービスなので、公開文書の候補だけ・ローカルのみのモードや社外秘に触れた相談
+    では使わない。Azure で「社外秘も送ってよい」を ON にしたときは、ローカル LLM と同じ扱いで使う。
+    """
+    if api_client is not None and api_client.allows(sensitivity) and (
+            api_client.trusted or (ctx.mode != "local" and not ctx.touched)):
+        return APIJudge(api_client, sensitivity)
     prof = ctx.profile("helper", sensitivity)
     return LLMJudge(ctx.llm, prof, sensitivity) if prof else None
 
@@ -468,7 +476,7 @@ def _path_score(logsum: float, n: int) -> float:
 
 def navigate(ctx, question: str, allowed: set[str], *, k: int = 8, beam: int = 4,
              budget: int = 8, floor: float = 0.1, use_choice: bool = True,
-             jev_client=None) -> dict:
+             api_client=None) -> dict:
     """階層を上からたどり、関連する段落（チャンク）を探す（論文の Algorithm 1 をビームサーチで）。
 
     - 経路スコア: 根からの経路上の確率の幾何平均。親の確信度も子の順位に効く
@@ -480,7 +488,7 @@ def navigate(ctx, question: str, allowed: set[str], *, k: int = 8, beam: int = 4
     - 段落は経路スコア順。最後に上位を選択式で比べて並べ替える（論文の multiple-choice 段）
 
     返り値: {"hits": [(chunk_id, score)], "path": [...], "calls": n, "soft": bool, "beam": beam,
-             "judges": [...], "jev_cost": USD, "choice": bool, "error": str | None}
+             "judges": [...], "api": {...} | None, "choice": bool, "error": str | None}
     """
     tree = get_tree()
     beam = max(1, int(beam))
@@ -500,7 +508,7 @@ def navigate(ctx, question: str, allowed: set[str], *, k: int = 8, beam: int = 4
                   for nid in expand]
         sens = "internal" if ctx.touched or any(
             tree[c]["sens"] != "public" for _, kids in groups for c in kids) else "public"
-        judge = pick_judge(ctx, sens, jev_client)
+        judge = pick_judge(ctx, sens, api_client)
         if judge is None:
             error = ("判定に使える LLM がありません（社外秘を含む候補はローカル LLM で判定します）"
                      if sens == "internal" else "判定に使える LLM がありません")
@@ -581,7 +589,7 @@ def navigate(ctx, question: str, allowed: set[str], *, k: int = 8, beam: int = 4
         short = hits[:MAX_CHOICE]
         sens = "internal" if any(sens_of.get(c) != "public" for c, _ in short) or ctx.touched \
             else "public"
-        judge = pick_judge(ctx, sens, jev_client)
+        judge = pick_judge(ctx, sens, api_client)
         if judge is not None:
             try:
                 probs = judge.choice(question, [tree[f"c:{cid}"] for cid, _ in short])
@@ -596,7 +604,9 @@ def navigate(ctx, question: str, allowed: set[str], *, k: int = 8, beam: int = 4
                              "kept": [], "passages": 0, "trimmed": 0, "backtracked": 0})
     return {"hits": hits, "path": path, "calls": calls, "soft": soft_used, "error": error,
             "choice": choice_used, "judges": sorted(judges_used), "beam": beam,
-            "jev_cost": round(jev_client.cost, 6) if jev_client else 0.0}
+            "api": ({"label": api_client.label, "calls": api_client.calls,
+                     "cost": round(api_client.cost, 6), "input_tokens": api_client.input_tokens,
+                     "refusals": api_client.refusals} if api_client else None)}
 
 
 def tree_stats() -> dict:
