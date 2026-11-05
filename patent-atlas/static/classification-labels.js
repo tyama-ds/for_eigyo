@@ -81,7 +81,11 @@ function fallback(item, language) {
 }
 function tooltip(item) {
   const names = bilingual(item);
-  return `${item.kind || ''} ${item.code || ''}\n日本語: ${names.ja || '未収録'}\nEnglish: ${names.en || 'Not available'}`;
+  return [
+    `${item.kind || ''} ${item.code || ''}`,
+    `日本語: ${names.ja || '未収録'}`,
+    `English: ${names.en || 'Not available'}`,
+  ].join('\n');
 }
 function group(label, language = 'ja') {
   if (language !== 'en') return label;

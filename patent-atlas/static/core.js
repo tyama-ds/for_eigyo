@@ -26,6 +26,28 @@ const esc = (value) =>
     /[&<>"']/g,
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]
   );
+// Tagged template for HTML fragments. Values: arrays are concatenated, null/undefined vanish,
+// everything else is inserted as-is (NOT escaped; callers apply esc() to untrusted text).
+// Static parts may be wrapped: a line break plus the indentation after it is removed, except
+// right after an attribute's closing quote, where it becomes one space (so attributes can be
+// split across lines). Chunks with an escape sequence (a backslash in the raw text) are kept as is.
+function foldHtml(raw) {
+  return raw.replace(/(["']?)\n[ \t]*(>?)/g, (_, quote, close) =>
+    quote && !close ? quote + ' ' : quote + close
+  );
+}
+function html(strings, ...values) {
+  let out = '';
+  for (let i = 0; i < strings.length; i++) {
+    const raw = strings.raw[i];
+    out += raw.includes('\\') ? strings[i] : foldHtml(raw);
+    if (i < values.length) {
+      const value = values[i];
+      out += Array.isArray(value) ? value.join('') : value == null ? '' : value;
+    }
+  }
+  return out;
+}
 function safeUrl(value) {
   return typeof value === 'string' && /^https?:\/\//i.test(value) ? value : '';
 }
@@ -93,7 +115,7 @@ function download(name, text) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-export { getState, setState, patchRows, $, $$, esc, safeUrl, run, toast, api, on, busy, download };
+export { getState, setState, patchRows, $, $$, esc, html, safeUrl, run, toast, api, on, busy, download };
 // DOM state belongs to a mounted host, not to the response which caused a repaint.
 const renderedHtml = new WeakMap();
 const pendingRestores = new WeakMap();

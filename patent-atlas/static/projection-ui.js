@@ -4,6 +4,7 @@ import {
   replaceHtml,
   listen,
   esc,
+  html,
   getState,
   on,
   $,
@@ -54,10 +55,68 @@ function projectionStill() {
   );
 }
 function projectionControlsHtml() {
-  return `<details class="panel-help"><summary role="button" aria-label="特許マップのヘルプ">?</summary><div><p id="projection-method-note"></p></div></details><div class="projection-controls"><label>配置を比較<select id="projection-method" aria-label="特許の配置方式"><option value="pca">PCA · 全体の傾向</option><option value="tsne">t-SNE · 局所の近さ</option><option value="umap">UMAP · 近傍のつながり</option></select></label><div class="button-row"><button class="button small" id="projection-pin">選択を追跡に固定</button><button class="button small" id="projection-pan">✥ 移動</button><button class="button small" id="projection-zoom-in" aria-label="マップを拡大">＋</button><button class="button small" id="projection-zoom-out" aria-label="マップを縮小">−</button><button class="button small" id="projection-reset">全体表示</button></div></div><p id="projection-status" class="caption projection-status" role="status">配置を準備しています…</p><div class="projection-pins" id="projection-pins" aria-label="追跡する特許"></div>`;
+  return html`<details class="panel-help"><summary role="button" aria-label="特許マップのヘルプ">?</summary>
+    <div><p id="projection-method-note"></p></div></details>
+    <div class="projection-controls"><label>配置を比較<select id="projection-method" aria-label="特許の配置方式">
+    <option value="pca">PCA · 全体の傾向</option><option value="tsne">t-SNE · 局所の近さ</option>
+    <option value="umap">UMAP · 近傍のつながり</option></select></label>
+    <div class="button-row"><button class="button small" id="projection-pin">選択を追跡に固定</button>
+    <button class="button small" id="projection-pan">✥ 移動</button>
+    <button class="button small" id="projection-zoom-in" aria-label="マップを拡大">＋</button>
+    <button class="button small" id="projection-zoom-out" aria-label="マップを縮小">−</button>
+    <button class="button small" id="projection-reset">全体表示</button></div></div>
+    <p id="projection-status" class="caption projection-status" role="status">配置を準備しています…</p>
+    <div class="projection-pins" id="projection-pins" aria-label="追跡する特許"></div>`;
+}
+function projectionEvaluationHeadingHtml(e) {
+  const toggle = e
+    ? html`<label class="check"><input id="projection-boundary" type="checkbox"
+        ${atlasProjection.boundary ? 'checked' : ''}>確認候補を強調</label>`
+    : '';
+  return html`<div class="panel-heading"><div><h3>検索式の採用</h3></div>${toggle}</div>`;
+}
+function projectionMetricsHtml(e, sn, percent) {
+  return html`<div class="projection-metrics"><div><small>人が確認したS/N</small><strong>${esc(sn)}</strong></div>
+    <div><small>確認済み部分の必要率</small><strong>${esc(percent)}</strong></div>
+    <div><small>人の確定判定</small><strong>${Number(e.human_reviewed)} 件</strong>
+    <span>必要 ${Number(e.human_keep)} / 不要 ${Number(e.human_exclude)}</span></div>
+    <div><small>AI判定 / 未判定</small>
+    <strong>${Number(e.machine_keep) + Number(e.machine_exclude)} / ${Number(e.unreviewed_count)}</strong>
+    <span>保留 ${Number(e.hold_count)} 件</span></div></div>`;
+}
+function projectionScopeNoteHtml(e) {
+  const unknown = e.unknown_source_count
+    ? '判定元が不明な旧判定 ' + Number(e.unknown_source_count) + ' 件はS/N・AI件数に含めていません。 '
+    : '';
+  const noExcludes = e.sn_status === 'no_excludes' ? ' 不要例が0件のためS/Nの数値は算出していません。' : '';
+  return html`<p class="caption">${unknown}${esc(e.scope_note)}${noExcludes}</p>`;
+}
+function projectionCandidateHtml(c) {
+  const neighbors = c.keep_neighbor
+    ? html`<small>必要例 ${esc(c.keep_neighbor)} / 不要例 ${esc(c.exclude_neighbor)}</small>`
+    : '';
+  return html`<button class="projection-candidate" data-projection-focus="${esc(c.id)}"><b>${esc(c.id)}</b>
+    <span>${esc(c.reason)}</span>${neighbors}</button>`;
+}
+function projectionBoundaryHtml(e) {
+  const candidates = (e.boundary_candidates || []).map(projectionCandidateHtml).join('');
+  const empty =
+    '<p class="caption">現在の条件に当たる候補はありません。必要・不要の人の判定例が揃うと近傍の比較も行います。</p>';
+  return html`<details class="projection-boundary-details" ${atlasProjection.boundary ? 'open' : ''}>
+    <summary>境界・保留の確認候補 ${Number(e.boundary_candidate_count || 0)} 件</summary>
+    <p class="caption">${esc(e.boundary_note)} モデル関連度0.5付近・LLM保留は別の理由として表示します。最大100件。</p>
+    <div class="projection-candidates">${candidates || empty}</div></details>`;
+}
+function projectionTargetNoteHtml(e) {
+  if (!e.target_count) return '';
+  const missing = e.missing_target_ids?.length ? ' · 未回収 ' + e.missing_target_ids.map(esc).join('、') : '';
+  const found = `${Number(e.target_found)} / ${Number(e.target_count)} 件`;
+  return html`<p class="caption">現在の特許群にあるターゲット：${found}${missing}
+    （登録した種特許を含む場合があります。実際の検索による回収はCSVの履歴で確認）</p>`;
 }
 function projectionEvaluationHtml(e) {
-  if (!e) return '<p class="caption">人の判定と確認候補を集計しています…</p>';
+  if (!e)
+    return html`${projectionEvaluationHeadingHtml(null)}<p class="caption">人の判定と確認候補を集計しています…</p>`;
   const percent = e.signal_ratio == null ? '—' : (e.signal_ratio * 100).toFixed(1) + '%';
   const sn =
     e.signal_noise_ratio == null
@@ -65,31 +124,63 @@ function projectionEvaluationHtml(e) {
         ? '不要0件'
         : '未評価'
       : e.signal_noise_ratio.toFixed(2) + ' : 1';
-  return `<div class="panel-heading"><div><span class="eyebrow">REVIEW EVIDENCE</span><h3>検索式の採用を判断する</h3></div><label class="check"><input id="projection-boundary" type="checkbox" ${atlasProjection.boundary ? 'checked' : ''}>確認候補を強調</label></div><div class="projection-metrics"><div><small>人が確認したS/N</small><strong>${esc(sn)}</strong></div><div><small>確認済み部分の必要率</small><strong>${esc(percent)}</strong></div><div><small>人の確定判定</small><strong>${Number(e.human_reviewed)} 件</strong><span>必要 ${Number(e.human_keep)} / 不要 ${Number(e.human_exclude)}</span></div><div><small>AI判定 / 未判定</small><strong>${Number(e.machine_keep) + Number(e.machine_exclude)} / ${Number(e.unreviewed_count)}</strong><span>保留 ${Number(e.hold_count)} 件</span></div></div><p class="caption">${e.unknown_source_count ? '判定元が不明な旧判定 ' + Number(e.unknown_source_count) + ' 件はS/N・AI件数に含めていません。 ' : ''}${esc(e.scope_note)}${e.sn_status === 'no_excludes' ? ' 不要例が0件のためS/Nの数値は算出していません。' : ''}</p><details class="projection-boundary-details" ${atlasProjection.boundary ? 'open' : ''}><summary>境界・保留の確認候補 ${Number(e.boundary_candidate_count || 0)} 件</summary><p class="caption">${esc(e.boundary_note)} モデル関連度0.5付近・LLM保留は別の理由として表示します。最大100件。</p><div class="projection-candidates">${(e.boundary_candidates || []).map((c) => `<button class="projection-candidate" data-projection-focus="${esc(c.id)}"><b>${esc(c.id)}</b><span>${esc(c.reason)}</span>${c.keep_neighbor ? `<small>必要例 ${esc(c.keep_neighbor)} / 不要例 ${esc(c.exclude_neighbor)}</small>` : ''}</button>`).join('') || '<p class="caption">現在の条件に当たる候補はありません。必要・不要の人の判定例が揃うと近傍の比較も行います。</p>'}</div></details>${e.target_count ? `<p class="caption">現在の特許群にあるターゲット：${Number(e.target_found)} / ${Number(e.target_count)} 件${e.missing_target_ids?.length ? ' · 未回収 ' + e.missing_target_ids.map(esc).join('、') : ''}（登録した種特許を含む場合があります。実際の検索による回収はCSVの履歴で確認）</p>` : ''}<p class="caption">検索式の採用・終了は、確認候補とターゲットの回収状況、収束履歴を合わせて判断してください。</p>`;
+  return html`${projectionEvaluationHeadingHtml(e)}${projectionMetricsHtml(e, sn, percent)}
+    ${projectionScopeNoteHtml(e)}${projectionBoundaryHtml(e)}${projectionTargetNoteHtml(e)}
+    <p class="caption">検索式の採用・終了は、確認候補とターゲットの回収状況、収束履歴を合わせて判断してください。</p>`;
 }
 function projectionTooltipHtml(row) {
-  return `<b>${esc(row.id)} · ${esc(row.title)}</b><p>${esc(row.abstract || '要約がありません。')}</p><small>IPC ${esc(row.ipc || '未取込')}${row.fi ? ' / FI ' + esc(row.fi) : ''}${row.cpc ? ' / CPC ' + esc(row.cpc) : ''}</small>${row.label_reason ? `<p>${esc(row.label_source === 'human' ? '人の判断' : 'AIの判断')}：${esc(row.label_reason)}</p>` : ''}<small>クリックで選択 · ダブルクリックで追跡</small>`;
+  const reason = row.label_reason
+    ? html`<p>${esc(row.label_source === 'human' ? '人の判断' : 'AIの判断')}：${esc(row.label_reason)}</p>`
+    : '';
+  return html`<b>${esc(row.id)} · ${esc(row.title)}</b><p>${esc(row.abstract || '要約がありません。')}</p>
+    <small>IPC ${esc(row.ipc || '未取込')}${row.fi ? ' / FI ' + esc(row.fi) : ''}
+    ${row.cpc ? ' / CPC ' + esc(row.cpc) : ''}</small>
+    ${reason}<small>クリックで選択 · ダブルクリックで追跡</small>`;
+}
+function projectionAdoptionHelpHtml() {
+  return html`<details class="panel-help"><summary role="button" aria-label="検索式の採用のヘルプ">?</summary>
+    <div><p>上の指標は現在の特許データに対する確認結果です。実検索母集団の再現率ではありません。</p></div></details>`;
+}
+function projectionAdoptionRecordHtml(r) {
+  const e = r.evaluation || {};
+  const counts =
+    `人の確認 ${Number(e.human_reviewed || 0)} 件 · ` +
+    `必要 ${Number(e.human_keep || 0)} / 不要 ${Number(e.human_exclude || 0)}`;
+  return html`<p><b>${esc(r.created_at)}</b> ${esc(r.note)}<br><small>${counts}</small></p>`;
+}
+function projectionAdoptionHistoryHtml(records) {
+  if (!records.length) return '';
+  return html`<details class="projection-adoption-history"><summary>採用の記録 ${records.length} 件</summary>
+    ${records.slice(-5).reverse().map(projectionAdoptionRecordHtml)}</details>`;
+}
+function projectionUnlinkedNoticeHtml(observed) {
+  const note = observed
+    ? '現在のCSVは別の検索式の結果として記録されています。'
+    : '現在のCSVとこの検索式の対応は未確認です。';
+  return html`<p class="projection-adoption-notice">${note}この式の検索性能を実測した結果としては扱いません。</p>
+    <label class="check"><input id="projection-adopt-unlinked" type="checkbox">
+    現在のCSVは参考資料として扱い、採用理由を記録する</label>`;
 }
 function projectionAdoptionHtml() {
   const query = getState().queries?.at(-1),
     records = getState().research_workbench?.adoptions || [];
   if (!query)
-    return '<h3>検索式の採用</h3><details class="panel-help"><summary role="button" aria-label="検索式の採用のヘルプ">?</summary><div><p>上の指標は現在の特許データに対する確認結果です。実検索母集団の再現率ではありません。</p></div></details><p class="caption">初案または次の検索式を作成すると、確認結果と採用理由を記録できます。</p>';
+    return html`<div class="panel-heading"><div><h4>採用の記録</h4></div>${projectionAdoptionHelpHtml()}</div>
+      <p class="caption">初案または次の検索式を作成すると、確認結果と採用理由を記録できます。</p>`;
   const observed = getState().search_result?.query_id,
     linked = observed === query.id,
     busy = getState().job?.status === 'running';
-  return `<div class="panel-heading"><div><span class="eyebrow">DECISION RECORD</span><h3>検索式 v${Number(query.version || getState().queries.length)} の採用</h3></div><details class="panel-help"><summary role="button" aria-label="検索式の採用のヘルプ">?</summary><div><p>上の指標は現在の特許データに対する確認結果です。実検索母集団の再現率ではありません。</p></div></details></div><p class="caption">採用は調査の完了・収束とは別に記録します。</p>${!linked ? `<p class="projection-adoption-notice">${observed ? '現在のCSVは別の検索式の結果として記録されています。' : '現在のCSVとこの検索式の対応は未確認です。'}この式の検索性能を実測した結果としては扱いません。</p><label class="check"><input id="projection-adopt-unlinked" type="checkbox">現在のCSVは参考資料として扱い、採用理由を記録する</label>` : ''}<label>採用理由<textarea id="projection-adopt-note" rows="2" maxlength="2000" placeholder="例：必要例の回収と境界候補の確認を行い、この目的には十分と判断した"></textarea></label><div class="button-row"><button id="projection-adopt" class="button primary" data-query-id="${esc(query.id)}" ${busy ? 'disabled' : ''}>この検索式の採用を記録</button><span class="caption">現在のS/N・確認候補・データとの対応を保存</span></div>${
-    records.length
-      ? `<details class="projection-adoption-history"><summary>採用の記録 ${records.length} 件</summary>${records
-          .slice(-5)
-          .reverse()
-          .map(
-            (r) =>
-              `<p><b>${esc(r.created_at)}</b> ${esc(r.note)}<br><small>人の確認 ${Number(r.evaluation?.human_reviewed || 0)} 件 · 必要 ${Number(r.evaluation?.human_keep || 0)} / 不要 ${Number(r.evaluation?.human_exclude || 0)}</small></p>`
-          )
-          .join('')}</details>`
-      : ''
-  }`;
+  const version = Number(query.version || getState().queries.length);
+  return html`<div class="panel-heading"><div><h4>検索式 v${version} の採用</h4></div>
+    ${projectionAdoptionHelpHtml()}</div><p class="caption">採用は調査の完了・収束とは別に記録します。</p>
+    ${!linked ? projectionUnlinkedNoticeHtml(observed) : ''}
+    <label>採用理由<textarea id="projection-adopt-note" rows="2" maxlength="2000"
+    placeholder="例：必要例の回収と境界候補の確認を行い、この目的には十分と判断した"></textarea></label>
+    <div class="button-row">
+    <button id="projection-adopt" class="button primary" data-query-id="${esc(query.id)}"
+    ${busy ? 'disabled' : ''}>この検索式の採用を記録</button>
+    <span class="caption">現在のS/N・確認候補・データとの対応を保存</span></div>
+    ${projectionAdoptionHistoryHtml(records)}`;
 }
 function projectionBindAdoption() {
   on('#projection-adopt', 'click', async (e) => {
@@ -162,12 +253,7 @@ function projectionRenderPins() {
   for (const id of atlasProjection.pins) if (!ids.has(id)) atlasProjection.pins.delete(id);
   replaceHtml(
     host,
-    [...atlasProjection.pins]
-      .map(
-        (id, i) =>
-          `<span class="projection-pin" style="--pin-color:${projectionPinColor(id)}"><button data-pin-focus="${esc(id)}" title="この特許を中心に表示">${i + 1}. ${esc(id)}</button><button data-pin-remove="${esc(id)}" aria-label="${esc(id)}の追跡を解除">×</button></span>`
-      )
-      .join('') ||
+    [...atlasProjection.pins].map(projectionPinHtml).join('') ||
       '<span class="caption">追跡する特許を選び「選択を追跡に固定」。方式を切り替えても同じ公報を色・番号・移動線で追えます。</span>'
   );
   $$('[data-pin-focus]', host).forEach((n) =>
@@ -248,23 +334,14 @@ function projectionDraw(data, animate = true) {
       .map((p) => {
         const row = byId.get(p.id);
         if (!row) return '';
-        const start = old.get(p.id) || next.get(p.id);
-        return `<circle class="point ${esc(row.label || '')} ${appState.picked.has(p.id) ? 'selected' : ''}" data-id="${esc(p.id)}" cx="${start.x}" cy="${start.y}" r="${getState().patents.length > 700 ? 3.5 : 5.5}" style="${!row.label ? 'fill:' + colors[(row.cluster || 0) % colors.length] : ''}" role="button" tabindex="0" aria-pressed="${appState.picked.has(p.id)}" aria-label="${esc(p.id + ' ' + row.title)}"/>`;
+        return projectionPointHtml(p, row, old.get(p.id) || next.get(p.id));
       })
       .join('') + '<g id="projection-pin-labels" aria-hidden="true"></g>'
   );
   const tracked = [...new Set([...atlasProjection.pins, ...appState.picked])];
   replaceHtml(
     $('#projection-trails'),
-    tracked
-      .map((id) => {
-        const a = old.get(id),
-          b = next.get(id);
-        return a && b
-          ? `<path d="M${a.x} ${a.y} L${b.x} ${b.y}" stroke="${projectionPinColor(id)}"/><circle cx="${a.x}" cy="${a.y}" r="4" stroke="${projectionPinColor(id)}"/>`
-          : '';
-      })
-      .join('')
+    tracked.map((id) => projectionTrailHtml(id, old.get(id), next.get(id))).join('')
   );
   const nodes = $$('#map-points .point');
   nodes.forEach((node) => {
@@ -349,7 +426,7 @@ function projectionDraw(data, animate = true) {
   updatePicked();
 }
 function projectionRenderEvaluation() {
-  const panel = $('#projection-evaluation');
+  const panel = $('#projection-evaluation-body');
   if (!panel) return;
   replaceHtml(panel, projectionEvaluationHtml(atlasProjection.evaluation));
   on('#projection-boundary', 'change', (e) => {
@@ -433,8 +510,12 @@ async function projectionFetchEvaluation() {
     atlasProjection.evaluation = result.evaluation || result;
     projectionRenderEvaluation();
   } catch (error) {
-    if ($('#projection-evaluation') === host)
-      replaceHtml(host, `<p class="caption">評価を更新できませんでした。${esc(error.message)}</p>`);
+    const body = $('#projection-evaluation-body');
+    if ($('#projection-evaluation') === host && body)
+      replaceHtml(
+        body,
+        `${projectionEvaluationHeadingHtml(null)}<p class="caption">評価を更新できませんでした。${esc(error.message)}</p>`
+      );
   }
 }
 function updateProjectionAssessment() {
@@ -540,11 +621,9 @@ function mountProjectionWorkbench() {
   $('.map-panel .canvas-header').insertAdjacentHTML('afterend', projectionControlsHtml());
   $('.map-layout').insertAdjacentHTML(
     'afterend',
-    '<div class="panel projection-evaluation" id="projection-evaluation" aria-label="検索式の採用判断"></div>'
-  );
-  $('#projection-evaluation').insertAdjacentHTML(
-    'afterend',
-    '<div class="panel projection-adoption" id="projection-adoption"></div>'
+    html`<div class="panel projection-evaluation" id="projection-evaluation" aria-label="検索式の採用">
+      <div id="projection-evaluation-body"></div>
+      <div class="projection-adoption" id="projection-adoption"></div></div>`
   );
   replaceHtml($('#projection-adoption'), projectionAdoptionHtml());
   projectionBindAdoption();
@@ -565,8 +644,9 @@ function mountProjectionWorkbench() {
   projectionRenderEvaluation();
   if (atlasProjection.data) {
     projectionDraw(atlasProjection.data, false);
+    const metadata = atlasProjection.data.metadata;
     $('#projection-status').textContent =
-      `${atlasProjection.data.metadata.algorithm || atlasProjection.method.toUpperCase()} · ${atlasProjection.data.metadata.representation}。`;
+      `${metadata.algorithm || atlasProjection.method.toUpperCase()} · ${metadata.representation}。`;
     const note = $('#projection-method-note');
     if (note) note.textContent = atlasProjection.data.metadata.note || '';
     projectionFetchEvaluation();
@@ -592,6 +672,24 @@ function projectionTrackPatent(id) {
   $('#map-svg')?.scrollIntoView({ behavior: projectionStill() ? 'instant' : 'smooth', block: 'center' });
 }
 
+function projectionPinHtml(id, i) {
+  return html`<span class="projection-pin" style="--pin-color:${projectionPinColor(id)}">
+    <button data-pin-focus="${esc(id)}" title="この特許を中心に表示">${i + 1}. ${esc(id)}</button>
+    <button data-pin-remove="${esc(id)}" aria-label="${esc(id)}の追跡を解除">×</button></span>`;
+}
+function projectionPointHtml(p, row, start) {
+  const picked = appState.picked.has(p.id);
+  return html`<circle class="point ${esc(row.label || '')} ${picked ? 'selected' : ''}" data-id="${esc(p.id)}"
+    cx="${start.x}" cy="${start.y}" r="${getState().patents.length > 700 ? 3.5 : 5.5}"
+    style="${!row.label ? 'fill:' + colors[(row.cluster || 0) % colors.length] : ''}" role="button"
+    tabindex="0"
+    aria-pressed="${picked}" aria-label="${esc(p.id + ' ' + row.title)}"/>`;
+}
+function projectionTrailHtml(id, a, b) {
+  if (!a || !b) return '';
+  return html`<path d="M${a.x} ${a.y} L${b.x} ${b.y}" stroke="${projectionPinColor(id)}"/>
+    <circle cx="${a.x}" cy="${a.y}" r="4" stroke="${projectionPinColor(id)}"/>`;
+}
 export {
   atlasProjection,
   projectionDatasetKey,

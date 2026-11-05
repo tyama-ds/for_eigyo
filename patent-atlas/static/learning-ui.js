@@ -1,4 +1,4 @@
-import { $, esc, getState, $$, api, toast, on } from './core.js';
+import { $, esc, html, getState, $$, api, toast, on } from './core.js';
 import { refreshJob } from './job-ui.js';
 
 export const learningUiState = {
@@ -27,12 +27,56 @@ function captureLearningDraft() {
     filter: $('#label-filter')?.value || 'all',
   };
 }
+function learningModeOptionHtml(d, value, label) {
+  return html`<option value="${value}" ${d.mode === value ? 'selected' : ''}>${label}</option>`;
+}
+function learningRowHtml(d) {
+  return html`<div class="learning-row"><label class="learning-mode-label">学習・判定方式
+    <select id="training-mode" aria-label="学習方式">${learningModeOptionHtml(d, 'lightweight', '軽量学習 · TF-IDF')}
+    ${learningModeOptionHtml(d, 'transformer', 'Transformer本体を微調整')}
+    ${learningModeOptionHtml(d, 'llm', 'LLMにおまかせ')}</select></label>
+    <button class="button primary" id="train-button">学習する ↗</button>
+    <label class="check" id="include-agent-control"><input id="include-agent" type="checkbox"
+    ${d.include_agent ? 'checked' : ''}>エージェントの判定を含める</label>
+    <a class="button subtle small" href="/api/export/labels" download>判定をCSVで保存 ↓</a></div>`;
+}
+function llmTrainingOptionsHtml(d) {
+  return html`<div id="llm-training-options" class="llm-training-options" hidden>
+    <label>判定基準（空欄なら採用した式の目的・観点、未設定なら探索キーワード）
+    <textarea id="llm-training-criteria" rows="2" maxlength="5000"
+    placeholder="例：製造工程や界面の改善を含み、充電設備だけの特許は除く">${esc(d.criteria)}</textarea></label>
+    <p id="llm-training-used-criteria" class="caption" hidden></p>
+    <div class="llm-training-limits"><label>今回判定する上限
+    <input id="llm-training-limit" type="number" min="1" max="5000" step="1"
+    value="${esc(d.max_items)}"></label>
+    <label>判定を採用する信頼度
+    <input id="llm-training-threshold" type="number" min="0.5" max="1" step="0.05"
+    value="${esc(d.threshold)}">
+    </label></div>
+    <p class="caption">設定したLLMへタイトル・要約・IPCと判定例を渡します。採用した式があれば目的・観点も参照し、
+    入力した判定基準を優先します。人の確定判定を優先し、低信頼の回答は保留。LLMの重みは学習しません。</p></div>`;
+}
+function learningProgressHtml() {
+  return html`<div id="learning-progress" class="learning-progress" hidden>
+    <div class="learning-progress-heading"><div><b id="learning-progress-status"></b></div>
+    <strong id="learning-progress-percent">0%</strong></div>
+    <progress id="map-training-progress" max="100" value="0" aria-label="学習・判定の進捗"></progress>
+    <p id="learning-progress-message" role="status"></p>
+    <div class="learning-progress-bottom"><small id="learning-progress-count"></small>
+    <button id="map-training-stop" class="button small subtle" hidden>停止する</button></div>
+    <p id="learning-progress-error" class="learning-error" hidden></p>
+    <small class="caption">割合は処理工程の目安です。LLMの応答待ち・モデル読込中は進捗が止まる場合があります。</small></div>`;
+}
 function learningControlsHtml() {
   const d = learningUiState.learningDraft;
-  return `<div class="learning-row"><label class="learning-mode-label">学習・判定方式<select id="training-mode" aria-label="学習方式"><option value="lightweight" ${d.mode === 'lightweight' ? 'selected' : ''}>軽量学習 · TF-IDF</option><option value="transformer" ${d.mode === 'transformer' ? 'selected' : ''}>Transformer本体を微調整</option><option value="llm" ${d.mode === 'llm' ? 'selected' : ''}>LLMにおまかせ</option></select></label><button class="button primary" id="train-button">学習する ↗</button><label class="check" id="include-agent-control"><input id="include-agent" type="checkbox" ${d.include_agent ? 'checked' : ''}>エージェントの判定を含める</label><a class="button subtle small" href="/api/export/labels" download>判定をCSVで保存 ↓</a></div>
- <div id="llm-training-options" class="llm-training-options" hidden><label>判定基準（空欄なら採用した式の目的・観点、未設定なら探索キーワード）<textarea id="llm-training-criteria" rows="2" maxlength="5000" placeholder="例：製造工程や界面の改善を含み、充電設備だけの特許は除く">${esc(d.criteria)}</textarea></label><p id="llm-training-used-criteria" class="caption" hidden></p><div class="llm-training-limits"><label>今回判定する上限<input id="llm-training-limit" type="number" min="1" max="5000" step="1" value="${esc(d.max_items)}"></label><label>判定を採用する信頼度<input id="llm-training-threshold" type="number" min="0.5" max="1" step="0.05" value="${esc(d.threshold)}"></label></div><p class="caption">設定したLLMへタイトル・要約・IPCと判定例を渡します。採用した式があれば目的・観点も参照し、入力した判定基準を優先します。人の確定判定を優先し、低信頼の回答は保留。LLMの重みは学習しません。</p></div>
- <p id="learning-mode-note" class="caption learning-mode-note"></p>
- <div id="learning-progress" class="learning-progress" hidden><div class="learning-progress-heading"><div><span class="eyebrow">PROGRESS</span><b id="learning-progress-status"></b></div><strong id="learning-progress-percent">0%</strong></div><progress id="map-training-progress" max="100" value="0" aria-label="学習・判定の進捗"></progress><p id="learning-progress-message" role="status"></p><div class="learning-progress-bottom"><small id="learning-progress-count"></small><button id="map-training-stop" class="button small subtle" hidden>停止する</button></div><p id="learning-progress-error" class="learning-error" hidden></p><small class="caption">割合は処理工程の目安です。LLMの応答待ち・モデル読込中は進捗が止まる場合があります。</small></div>`;
+  return html`${learningRowHtml(d)}${llmTrainingOptionsHtml(d)}
+    <p id="learning-mode-note" class="caption learning-mode-note"></p>${learningProgressHtml()}`;
+}
+function learningProgressCount(stored) {
+  return (
+    `${Number(stored.completed_count || 0)} / ${Number(stored.total_count || 0)} 件を処理 · ` +
+    `判定採用 ${Number(stored.judged_count || 0)} 件 · 保留 ${Number(stored.deferred_count || 0)} 件`
+  );
 }
 function learningProgressState(job, training) {
   const relevant = job?.kind === 'training' || job?.kind === 'agent';
@@ -51,10 +95,7 @@ function learningProgressState(job, training) {
           : Math.max(0, Math.min(99, Number(stored?.progress) || 0)),
     message: relevant ? job.message : stored?.message || '保存済みのLLM判定結果',
     error: relevant ? job.error : stored?.error || '',
-    count:
-      stored && (!relevant || job.mode === 'llm')
-        ? `${Number(stored.completed_count || 0)} / ${Number(stored.total_count || 0)} 件を処理 · 判定採用 ${Number(stored.judged_count || 0)} 件 · 保留 ${Number(stored.deferred_count || 0)} 件`
-        : '',
+    count: stored && (!relevant || job.mode === 'llm') ? learningProgressCount(stored) : '',
   };
 }
 function renderLearningProgress() {
@@ -137,7 +178,8 @@ function renderLearningMode() {
   $('#learning-mode-note').textContent = llm
     ? getState().settings.provider === 'offline'
       ? 'LLMが未接続です。「表示・接続設定」でLocal LLMまたはAPIを設定してください。'
-      : `接続先：${getState().settings.provider === 'local' ? 'Local LLM' : 'LLM API'} · ${getState().settings.model || 'モデル未設定'}。未判定の特許から順に判定します。`
+      : `接続先：${getState().settings.provider === 'local' ? 'Local LLM' : 'LLM API'} · ` +
+        `${getState().settings.model || 'モデル未設定'}。未判定の特許から順に判定します。`
     : '軽量学習は必要・不要が各2件、Transformerは各4件から。関連度を計算し、次の式の特徴語・IPC候補に反映します。';
   renderLearningProgress();
 }
