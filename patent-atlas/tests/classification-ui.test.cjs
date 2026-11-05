@@ -184,6 +184,28 @@ test('background job completion captures Step 00 drafts before repainting', asyn
   }
 });
 
+test('classification detail links allow only HTTP or HTTPS sources and escape attributes', () => {
+  const s = setup();
+  s.dom['#class-detail'] = { innerHTML: '', classList: { add() {} } };
+  vm.runInContext(
+    appSource.slice(appSource.indexOf('function safeUrl('), appSource.indexOf('const keyOf =')) +
+      explorerSource.slice(
+        explorerSource.indexOf('function classDetail('),
+        explorerSource.indexOf('function drawClassNodes(')
+      ),
+    s.context
+  );
+  for (const source of ['javascript:alert(1)', 'data:text/html,test', '//example.test', '', null]) {
+    s.context.classDetail({ ...candidate(A), source });
+    assert.doesNotMatch(s.dom['#class-detail'].innerHTML, /\bhref\s*=/);
+  }
+  s.context.classDetail({ ...candidate(A), source: 'https://example.test/?q="分類"&x=1' });
+  assert.match(
+    s.dom['#class-detail'].innerHTML,
+    /href="https:\/\/example.test\/\?q=&quot;分類&quot;&amp;x=1"/
+  );
+});
+
 test('clicking the active tab keeps the current DOM and draft without repainting', () => {
   const s = setup();
   s.dom['#keywords'].value = 'work in progress';

@@ -6,6 +6,9 @@ const esc = (value) =>
     /[&<>"']/g,
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]
   );
+function safeUrl(value) {
+  return typeof value === 'string' && /^https?:\/\//i.test(value) ? value : '';
+}
 const keyOf = (c) => c.key || c.kind + ':' + c.code;
 const colors = ['#7462a3', '#ae7959', '#678a82', '#a07299', '#9c9158', '#6a7b9f'];
 let state,

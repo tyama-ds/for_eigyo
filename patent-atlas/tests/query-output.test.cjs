@@ -3,6 +3,105 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const source = fs.readFileSync('static/query-output.js', 'utf8');
+const appSource = fs.readFileSync('static/app.js', 'utf8');
+const urlHelpers = appSource.slice(appSource.indexOf('const esc ='), appSource.indexOf('const keyOf ='));
+
+test('shared URL validation accepts only HTTP and HTTPS strings', () => {
+  const c = vm.createContext({});
+  vm.runInContext(urlHelpers, c);
+  for (const value of [
+    'javascript:alert(1)',
+    'JavaScript:alert(1)',
+    'java\nscript:alert(1)',
+    'data:text/html,test',
+    'file:///tmp/test',
+    '//example.test',
+    '/relative',
+    '',
+    null,
+    undefined,
+    42,
+    { toString: () => 'https://example.test' },
+  ])
+    assert.equal(c.safeUrl(value), '', String(value));
+  for (const value of ['http://localhost:8765/', 'https://example.test/', 'HTTPS://example.test/'])
+    assert.equal(c.safeUrl(value), value);
+});
+
+test('query output omits unsafe source and service links and retains safe links', async () => {
+  const nodes = {};
+  const node = (selector) =>
+    (nodes[selector] ||= {
+      dataset: { queryId: 'q1' },
+      value: '',
+      checked: false,
+      href: 'https://previous.test',
+      setAttribute(name, value) {
+        this[name] = value;
+      },
+      removeAttribute(name) {
+        delete this[name];
+      },
+    });
+  const result = {
+    can_copy: true,
+    expression: '電池/TX',
+    problems: [],
+    warnings: [],
+    instructions: '',
+    text_scope: '',
+    classification_note: '',
+    verification: '',
+    verified_at: '',
+    sources: [],
+    url: '',
+  };
+  const c = vm.createContext({
+    $: node,
+    $$: () => [],
+    exportRequest: 0,
+    outputEdits: new Map(),
+    api: async () => result,
+  });
+  vm.runInContext(urlHelpers + '\n' + source, c);
+  for (const url of [
+    'javascript:alert(1)',
+    'data:text/html,test',
+    'https://example.test/?q="分類"&x=1',
+    'http://localhost:8765/',
+    'javascript:alert(2)',
+  ]) {
+    result.url = url;
+    result.sources = [{ url, title: '<img src=x onerror="alert(1)">' }];
+    await c.requestOutput({ id: 'q1' });
+    const html = node('#output-meta').innerHTML;
+    assert.equal(node('#expression').textContent, '電池/TX');
+    assert.doesNotMatch(html, /<img/);
+    assert.match(html, /&lt;img/);
+    if (url.startsWith('http')) {
+      assert.equal(node('#open-search-service').href, url);
+      assert.match(html, /<a href="https?:\/\//);
+      if (url.includes('分類')) assert.match(html, /&quot;分類&quot;&amp;x=1/);
+    } else {
+      assert.doesNotMatch(html, /\bhref\s*=/);
+      assert.equal(Object.hasOwn(node('#open-search-service'), 'href'), false);
+    }
+  }
+});
+
+test('query history and format identifiers cannot break out of HTML attributes', () => {
+  const id = 'x" onclick="alert(1)';
+  const query = { id, type: '初案', version: 1, expression: '', created_at: '' };
+  const c = vm.createContext({
+    state: { queries: [query] },
+    formatCatalog: [{ id, name: '形式' }],
+    outputFormat: id,
+    outputEdits: new Map(),
+  });
+  vm.runInContext(urlHelpers + '\n' + source, c);
+  assert.match(c.historyHtml(), /data-id="x&quot; onclick=&quot;alert\(1\)"/);
+  assert.match(c.queryCard(query), /option value="x&quot; onclick=&quot;alert\(1\)"/);
+});
 
 test('a delayed edit from a previous history card preserves the current export', async () => {
   const current = { query_id: 'new', can_copy: true, expression: 'battery/TX' };

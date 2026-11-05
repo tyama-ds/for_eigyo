@@ -720,6 +720,7 @@ function classDetail(c) {
   };
   const facets = (c.facets || []).map((id) => facetNames[id]).filter(Boolean);
   const matches = c.matched_classifications || [];
+  const source = safeUrl(c.source);
   $('#class-detail').classList.add('visible');
   $('#class-detail').innerHTML =
     `<b>${esc(c.kind)} ${esc(c.code)} · ${esc(classTitle(c))}</b> <span class="pill">${c.verified ? 'コード・定義を辞書で確認済み' : '存在・定義は未確認'}</span>${c.evidence_status === 'derived_candidate' ? '<span class="pill">対応づけによるIPC候補 · 付与IPCとは別</span>' : ''}${c.evidence_status === 'hypothesis' ? '<span class="pill">探索仮説・適合性は確認待ち</span>' : ''}${classNamesHtml(c)}${facets.length ? `<p class="class-facet-tags">${facets.map((label) => `<span>${esc(label)}</span>`).join('')}</p>` : ''}<p>${esc(c.reason || '公式分類の階層を確認できます。')}</p>${classProposalReasonHtml(c)}${c.parent ? `<span class="caption">公式の上位分類：${esc(c.parent)}</span>` : ''}${
@@ -734,7 +735,7 @@ function classDetail(c) {
               ''
             )}${matches.length > 12 ? '<p class="caption">代表の12件を表示しています。</p>' : ''}</details>`
         : ''
-    }${(c.origins || c.classification_origins || []).map((o) => `<p class="caption">${o.type === 'patent' ? 'ターゲット特許' : o.type === 'discovery' ? '探索ラボ' : o.type === 'fi_to_ipc' ? 'FIから得たIPC候補' : o.type === 'fterm_theme_to_ipc' ? 'Fタームのテーマ範囲から得たIPC候補' : '利用者の推薦'}：${esc(o.patent_id || '')} ${esc(o.label)}${o.raw ? `<br>入力原文：${esc(o.raw)}` : ''}${o.warning ? `<br>${esc(o.warning)}` : ''}</p>`).join('')}<a href="${esc(c.source)}" target="_blank" rel="noopener noreferrer">公式分類表を確認 ↗</a>`;
+    }${(c.origins || c.classification_origins || []).map((o) => `<p class="caption">${o.type === 'patent' ? 'ターゲット特許' : o.type === 'discovery' ? '探索ラボ' : o.type === 'fi_to_ipc' ? 'FIから得たIPC候補' : o.type === 'fterm_theme_to_ipc' ? 'Fタームのテーマ範囲から得たIPC候補' : '利用者の推薦'}：${esc(o.patent_id || '')} ${esc(o.label)}${o.raw ? `<br>入力原文：${esc(o.raw)}` : ''}${o.warning ? `<br>${esc(o.warning)}` : ''}</p>`).join('')}${source ? `<a href="${esc(source)}" target="_blank" rel="noopener noreferrer">公式分類表を確認 ↗</a>` : ''}`;
 }
 function drawClassNodes() {
   hideClassTooltip();

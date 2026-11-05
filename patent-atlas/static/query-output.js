@@ -8,7 +8,7 @@ function queryCard(q) {
     ],
     edits = outputEdits.get(q.id) || {};
   return `<div id="query-output" data-query-id="${esc(q.id)}"><div class="panel-heading"><h3>検索式 <span class="pill">v${q.version} · ${esc(q.type)}</span></h3><button class="button small" id="copy-query" disabled>この形式をコピー ⧉</button></div>
- <label class="output-target-label">出力する検索サービス<select id="output-format">${formatCatalog.map((f) => `<option value="${f.id}" ${outputFormat === f.id ? 'selected' : ''}>${esc(f.name)}</option>`).join('')}</select></label>
+ <label class="output-target-label">出力する検索サービス<select id="output-format">${formatCatalog.map((f) => `<option value="${esc(f.id)}" ${outputFormat === f.id ? 'selected' : ''}>${esc(f.name)}</option>`).join('')}</select></label>
  <div class="output-options"><label>分類範囲<select id="output-descendants"><option value="code">DB標準のコード指定</option><option value="descendants">下位分類も明示する</option></select></label><label>検索する本文の言語<select id="output-language"><option value="auto">語句から自動判定</option><option value="en">英語</option><option value="ja">日本語</option></select></label></div>
  <div id="output-feedback" aria-live="polite"></div><pre class="expression" id="expression">変換しています…</pre><div id="output-instructions" class="notice"></div>
  <details class="output-term-editor"><summary>出力用の語句を編集・英語に置き換える</summary><p class="caption">各行は元の1語句に対応します。空白を含む入力も1つのフレーズとして出力します。元の検索式は変更しません。</p><div class="output-term-grid">${terms.map((t, i) => `<label><span>${esc(t)}</span><input class="output-term" data-term="${esc(t)}" value="${esc(edits[t] ?? t)}" aria-label="出力用語句 ${esc(t)}" maxlength="500"></label>`).join('')}</div><button class="button small" id="reset-output-terms" type="button">元の語句に戻す</button></details>
@@ -56,8 +56,17 @@ async function requestOutput(q) {
         : '');
     $('#output-instructions').textContent = result.instructions;
     $('#output-meta').innerHTML =
-      `<div class="query-field-row"><span>対象フィールド</span><b>${esc(result.text_scope)}</b></div><p class="caption">${esc(result.classification_note)}</p><p class="caption">${esc(result.verification)} · 照合日 ${esc(result.verified_at)}</p><div class="output-sources">${result.sources.map((s) => `<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">${esc(s.title)} ↗</a>`).join('')}</div>`;
-    $('#open-search-service').href = result.url;
+      `<div class="query-field-row"><span>対象フィールド</span><b>${esc(result.text_scope)}</b></div><p class="caption">${esc(result.classification_note)}</p><p class="caption">${esc(result.verification)} · 照合日 ${esc(result.verified_at)}</p><div class="output-sources">${result.sources
+        .map((s) => {
+          const url = safeUrl(s.url);
+          return url
+            ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(s.title)} ↗</a>`
+            : `<span>${esc(s.title)}</span>`;
+        })
+        .join('')}</div>`;
+    const url = safeUrl(result.url);
+    if (url) $('#open-search-service').href = url;
+    else $('#open-search-service').removeAttribute('href');
     $('#open-search-service').textContent = '検索サービスを開く ↗';
     $('#copy-query').disabled = !result.can_copy;
     $('#download-query').disabled = !result.can_copy;
@@ -121,7 +130,7 @@ function historyHtml() {
         .reverse()
         .map(
           (q) =>
-            `<div class="history-item"><span class="pill">v${q.version}</span><span>${esc(q.type)}</span><small>${esc(q.created_at)}</small><button class="button subtle history-view" data-id="${q.id}">形式を選んで出力</button></div>`
+            `<div class="history-item"><span class="pill">v${q.version}</span><span>${esc(q.type)}</span><small>${esc(q.created_at)}</small><button class="button subtle history-view" data-id="${esc(q.id)}">形式を選んで出力</button></div>`
         )
         .join('')}</div>`
     : '';
