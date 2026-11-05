@@ -155,7 +155,7 @@ test('four input modes use one radio group, with seed discovery leading into see
   for (const mode of ['target', 'discover', 'examples', 'tools'])
     assert.match(html, new RegExp(`data-research-mode="${mode}"`));
   assert.match(html, /今回の検索目的/);
-  assert.match(html, /SEED PATENTS/);
+  assert.match(html, /調査の目的と技術/);
   c.researchBrief().entry_mode = 'discover';
   c.renderResearchWorkbench();
   html = s.dom['#research-workbench'].innerHTML;

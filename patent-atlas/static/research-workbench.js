@@ -268,10 +268,10 @@ function researchTargetOptions() {
 }
 function researchPlanHtml(plan) {
   if (!plan)
-    return '<div class="research-plan-empty"><span>◎</span><h3>目的から、検索の観点へ。</h3><p>条件を整理すると、観点・語句・根拠となる分類をここで比較できます。</p></div>';
+    return '<div class="research-plan-empty"><span>◎</span><h3>観点はまだありません</h3><p>条件を整理すると、観点・語句・根拠となる分類をここで比較できます。</p></div>';
   const draft = researchPlanState(plan),
     selected = new Set(draft.classification_keys);
-  return `<div class="panel-heading"><div><span class="eyebrow">CONCEPTS → QUERY</span><h2>観点を組み立てる</h2></div><span class="pill">${plan.method === 'llm' ? 'LLMによる案' : '入力の整理'}</span></div><p class="muted">${esc(plan.summary)}</p><p class="caption">採用する観点にチェック。代替表現・近い技術は同じ条件にまとめてOR（和集合）、併せて満たす別の観点はAND（積集合）にします。一般語・専門語だけで区別せず、意味に合わせて調整してください。除外は明示的に選んだ観点だけです。</p>
+  return `<div class="panel-heading"><div><h2>観点を組み立てる</h2></div><span class="pill">${plan.method === 'llm' ? 'LLMによる案' : '入力の整理'}</span></div><p class="muted">${esc(plan.summary)}</p><p class="caption">採用する観点にチェック。代替表現・近い技術は同じ条件にまとめてOR（和集合）、併せて満たす別の観点はAND（積集合）にします。一般語・専門語だけで区別せず、意味に合わせて調整してください。除外は明示的に選んだ観点だけです。</p>
  <div id="research-logic" class="research-logic" aria-live="polite">${researchLogicHtml(plan, draft)}</div>
  <div id="research-concepts">${plan.concepts
    .map((c) => {
@@ -347,7 +347,7 @@ function researchToolsHtml() {
   return `<div class="research-tools">${tools.map(([tab, s, title, description]) => `<button class="panel research-tool" data-open-tab="${tab}" data-open-step="${s}"><span>↗</span><h3>${title}</h3><p>${description}</p></button>`).join('')}</div>`;
 }
 function researchBriefHtml(brief, mode, concepts = false) {
-  return `<div class="research-layout research-invention-brief"><div class="panel research-brief"><span class="eyebrow">${mode === 'target' ? 'SEED PATENTS' : 'DISCOVER SEEDS'}</span><h2>${mode === 'target' ? '根拠のある特許から。' : '技術の話から始める。'}</h2>${mode === 'discover' ? '<div class="notice">おすすめは併用方式。広いKWで実在特許を探し、仮のIPCも比較します。最初から分類で絞りすぎず、見つけた特許をターゲットにして深めます。</div>' : ''}<label>今回の検索目的 <span class="required">必須</span><input id="research-purpose" maxlength="300" value="${esc(brief.purpose)}" list="research-purpose-options" placeholder="例：周辺技術の把握、先行技術調査"><datalist id="research-purpose-options"><option value="技術動向・周辺技術の把握"><option value="新規性・進歩性の検討に向けた先行技術調査"><option value="競合の技術領域を把握する"><option value="特定の構成・機能に関連する特許を集める"></datalist></label><label>調べたい技術・解決したいこと<textarea id="research-goal" rows="4" maxlength="5000" placeholder="発明の構成・働き・解決したい課題を説明してください。短い説明から始められます。">${esc(brief.goal)}</textarea></label><details class="research-optional research-extra-input" ${brief.keywords || brief.user_aspects.length ? 'open' : ''}><summary>キーワード・観点を補足（任意）</summary><label>手掛かりのキーワード<input id="research-keywords" maxlength="2000" value="${esc(brief.keywords)}" placeholder='例：全固体電池 界面抵抗'></label><p class="caption">語句は空白区切り。英語の句は二重引用符で囲みます。</p><button class="button subtle" id="research-aspects-open">想定している観点を入力 ${brief.user_aspects.length ? '· ' + brief.user_aspects.length + ' 件' : '（任意）'} ↗</button></details>
+  return `<div class="research-layout research-invention-brief"><div class="panel research-brief"><h2>調査の目的と技術</h2>${mode === 'discover' ? '<div class="notice">おすすめは併用方式。広いKWで実在特許を探し、仮のIPCも比較します。最初から分類で絞りすぎず、見つけた特許をターゲットにして深めます。</div>' : ''}<label>今回の検索目的 <span class="required">必須</span><input id="research-purpose" maxlength="300" value="${esc(brief.purpose)}" list="research-purpose-options" placeholder="例：周辺技術の把握、先行技術調査"><datalist id="research-purpose-options"><option value="技術動向・周辺技術の把握"><option value="新規性・進歩性の検討に向けた先行技術調査"><option value="競合の技術領域を把握する"><option value="特定の構成・機能に関連する特許を集める"></datalist></label><label>調べたい技術・解決したいこと<textarea id="research-goal" rows="4" maxlength="5000" placeholder="発明の構成・働き・解決したい課題を説明してください。短い説明から始められます。">${esc(brief.goal)}</textarea></label><details class="research-optional research-extra-input" ${brief.keywords || brief.user_aspects.length ? 'open' : ''}><summary>キーワード・観点を補足（任意）</summary><label>手掛かりのキーワード<input id="research-keywords" maxlength="2000" value="${esc(brief.keywords)}" placeholder='例：全固体電池 界面抵抗'></label><p class="caption">語句は空白区切り。英語の句は二重引用符で囲みます。</p><button class="button subtle" id="research-aspects-open">想定している観点を入力 ${brief.user_aspects.length ? '· ' + brief.user_aspects.length + ' 件' : '（任意）'} ↗</button></details>
  <details class="research-targets" ${mode === 'target' ? 'open' : ''}><summary>ターゲット特許を指定 · ${brief.target_ids.length} 件</summary><p class="caption">名称・要約と、取り込んだIPC / FI / Fターム / CPCを参照します。最大20件。FIのIPC部・Fタームの対応候補は根拠を区別します。</p><div class="button-row"><button class="button small" id="research-upload">CSVを追加</button><button class="button small" id="research-target-add">特許情報を入力</button></div><input id="research-csv-file" type="file" accept=".csv,.tsv" hidden><input id="research-target-filter" type="search" placeholder="番号・名称で候補を絞る" aria-label="ターゲット候補を検索"><div id="research-target-options">${researchTargetOptions()}</div>${mode === 'discover' ? '<button class="button small" id="research-promote">選んだ特許から作る →</button>' : ''}</details>
  ${concepts ? `<div class="research-plan-actions"><button class="button primary" id="research-plan-llm">LLMで観点・広げ方を起案 ↗</button><button class="button" id="research-plan-local">入力をそのまま整理</button><p class="caption">LLMには目的・観点と、選択した特許の名称・要約・分類を送ります。保存済みの接続設定を使います。「入力を整理」は通信しません。</p></div>` : ''}<div id="research-error" role="alert"></div></div></div>`;
 }
@@ -377,7 +377,7 @@ function renderResearchWorkbench(stage, host = $('#research-workbench'), snapsho
       (stage === 'input' ? researchBriefHtml(brief, mode) : '') + inventionWorkbenchHtml(stage, method);
   replaceHtml(
     host,
-    `${stage === 'input' ? '<div class="research-heading"><h2>今回の調査は、どこから始めますか。</h2></div>' + modes + resume : ''}${content}`
+    `${stage === 'input' ? '<div class="research-heading"><h2>調査条件</h2></div>' + modes + resume : ''}${content}`
   );
   if (host.dataset) host.dataset.flowStage = stage;
   $$('.research-brief input,.research-brief textarea').forEach((el) => {

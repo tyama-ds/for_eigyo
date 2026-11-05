@@ -12,7 +12,7 @@ function renderAgent(host = $('#agent-tab'), snapshot = getState()) {
             (l) => `<div class="log-entry"><time>${esc(l.time)}</time><span>${esc(l.message)}</span></div>`
           )
           .join('')
-      : '<div class="empty-state"><div class="empty-state-icon">◎</div><h3>基準を決めたら、探索を開始。</h3><p>判定理由と進捗がここに残ります。</p></div>'
+      : '<div class="empty-state"><div class="empty-state-icon">◎</div><h3>判断の記録はまだありません</h3><p>判定理由と進捗がここに残ります。</p></div>'
   );
   $('#agent-log').scrollTop = $('#agent-log').scrollHeight;
 }

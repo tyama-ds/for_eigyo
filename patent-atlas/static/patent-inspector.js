@@ -37,7 +37,7 @@ function previewHtml(patent = {}) {
       ? '関連度と確信度はいずれもLLMの自己評価です。関連性の保証ではありません。'
       : '関連度は学習モデルのスコア、確信度はAIの自己評価です。';
   const field = (name, value) => `<div><dt>${name}</dt><dd>${escapeHtml(value)}</dd></div>`;
-  return `<div class="patent-preview-heading"><span class="patent-preview-eyebrow">PATENT PREVIEW</span><span class="patent-preview-decision ${tone}">${decision}</span></div>
+  return `<div class="patent-preview-heading"><span class="patent-preview-decision ${tone}">${decision}</span></div>
       <h3 class="patent-preview-title">${escapeHtml(text(patent.title, '名称未収録'))}</h3>
       <dl class="patent-preview-meta">${field('公報番号 / ID', text(patent.id))}${field('出願人', text(patent.applicant))}${field('公開年', text(patent.year))}</dl>
       <section class="patent-preview-abstract"><h4>要約</h4><p>${escapeHtml(text(patent.abstract))}</p><small>取り込まれた要約を表示しています。</small></section>
