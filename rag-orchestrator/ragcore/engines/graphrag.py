@@ -265,6 +265,17 @@ class GraphRAGEngine(Engine):
                 "JSONが出力される前に切れている → 設定タブの Max Tokens を4096以上に、"
                 "(2) モデルがJSON形式の出力を守れていない → 別モデル/温度0を確認。"
                 "設定タブの「接続テスト」も再確認してください")
+        # 関係の端点がエンティティ一覧に無い場合（ローカルLLMで頻発）は、関係を捨てずに
+        # 端点をエンティティとして補う（本家 GraphRAG と同じ扱い）。捨てるとグラフが
+        # 孤立ノードだらけになり、コミュニティも local 検索も機能しなくなる
+        inferred = []
+        for rel in raw_relations:
+            for side in ("source", "target"):
+                if _norm_key(rel[side]) not in entities:
+                    inferred.append({"name": rel[side], "type": "その他",
+                                     "description": "", "chunk": rel["chunk"]})
+        if inferred:
+            entities = self._merge_entities(raw_entities + inferred)
         entity_keys = set(entities)
         relations, edge_weights = self._merge_relations(raw_relations, entity_keys)
         for rel in relations:
@@ -359,6 +370,7 @@ class GraphRAGEngine(Engine):
                 "chunks": len(chunks),
                 "entities": len(entity_list),
                 "relations": len(relations),
+                "inferred_entities": len({_norm_key(e["name"]) for e in inferred}),
                 "communities": len(communities),
                 "summarized_communities": len(targets),
                 "extract_parse_failures": parse_failures,

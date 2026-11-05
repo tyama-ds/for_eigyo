@@ -134,6 +134,16 @@ class TestAPIFlow(unittest.TestCase):
         self.assertGreater(len(data["edges"]), 0)
         names = {n["name"] for n in data["nodes"]}
         self.assertIn("青嶺製作所", names)
+        # 出典文書・総数が付く（GUI の詳細パネル・ヒント表示用）
+        self.assertTrue(any(n["docs"] for n in data["nodes"]))
+        self.assertGreaterEqual(data["total_nodes"], len(data["nodes"]))
+        # limit で次数上位に絞れる（下限 20）
+        small = self.api("/api/graph?engine=graphrag&limit=1")
+        self.assertLessEqual(len(small["nodes"]), 20)
+        self.assertEqual(self.api("/api/graph?engine=graphrag&limit=abc")["nodes"], data["nodes"])
+        # 静的ファイル（グラフビューア）が配信される
+        with _opener.open(self.base + "/graphview.js", timeout=10) as res:
+            self.assertIn(b"GraphView", res.read())
         # 未構築エンジンはエラー
         self.assertIn("error", self.api("/api/graph?engine=hybrid"))
 

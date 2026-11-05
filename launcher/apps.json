@@ -152,6 +152,21 @@
       "wait_port": 8750
     },
     {
+      "id": "doc-vault",
+      "name": "Doc Vault",
+      "description": "文書管理 × RAG 相談。PDF/Word/PowerPoint/Excel を取り込むとグラフ・要約・埋め込みで索引化し、質問の種類に応じて検索方式を自動選択して出典付きで回答。社外秘はローカルLLM、公開資料はクラウドLLMで処理",
+      "icon": "docs",
+      "cwd": "../doc-vault",
+      "command": [
+        "{python}",
+        "server.py",
+        "--port",
+        "8760"
+      ],
+      "url": "http://127.0.0.1:8760",
+      "wait_port": 8760
+    },
+    {
       "id": "fermiscope",
       "name": "FermiScope",
       "description": "証拠に基づくフェルミ推定。問いを分解→Web検索で各パラメータの出典を収集・採点→敵対的検証→モンテカルロで弱気/基準/強気と感度分析。数値はローカルPythonで決定論計算。HTML/PDF/Word/Excel/PowerPointを取得し、出典・仮定・監査ログつきで表示",
