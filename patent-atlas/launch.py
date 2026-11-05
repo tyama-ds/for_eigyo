@@ -47,7 +47,9 @@ def launch():
             with socket.socket() as probe:
                 probe.settimeout(2)
                 if probe.connect_ex(("127.0.0.1", 8810)) == 0:
-                    raise RuntimeError("ポート8810を別のアプリが使用しているか、起動処理中です。少し待ってから開き直してください。")
+                    raise RuntimeError(
+                        "ポート8810を別のアプリが使用しているか、起動処理中です。少し待ってから開き直してください。"
+                    )
             python = ROOT / ".venv" / "Scripts" / "python.exe"
             if not python.is_file():
                 raise RuntimeError("Python環境が見つかりません。アプリのフォルダーで start.ps1 を実行してください。")

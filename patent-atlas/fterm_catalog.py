@@ -4,6 +4,7 @@ Only the bundled theme is supported. Parent links were extracted from the
 official table's order and dot indentation, never from numerical prefixes.
 Theme/aspect nodes are navigation containers, not selectable search terms.
 """
+
 from copy import deepcopy
 from functools import lru_cache
 import json
@@ -13,7 +14,7 @@ import unicodedata
 
 
 _RESOURCE = Path(__file__).resolve().parent / "resources" / "fterm_5h029.json"
-_THEMES_RESOURCE = Path(__file__).resolve().parent / 'resources' / 'fterm' / 'themes_2026_06.json'
+_THEMES_RESOURCE = Path(__file__).resolve().parent / "resources" / "fterm" / "themes_2026_06.json"
 
 
 def _normalize(code):
@@ -80,8 +81,8 @@ def metadata():
 
 @lru_cache(maxsize=1)
 def _themes():
-    data = json.loads(_THEMES_RESOURCE.read_text(encoding='utf-8'))
-    return data['metadata'], {row['code']: row for row in data['themes']}
+    data = json.loads(_THEMES_RESOURCE.read_text(encoding="utf-8"))
+    return data["metadata"], {row["code"]: row for row in data["themes"]}
 
 
 def theme_mapping(code):
@@ -93,7 +94,9 @@ def theme_mapping(code):
     row = themes.get(normalized[:5])
     if row is None:
         return None
-    return dict(deepcopy(row), source=meta['source'], source_version=meta['version'], source_sha256=meta['source_sha256'])
+    return dict(
+        deepcopy(row), source=meta["source"], source_version=meta["version"], source_sha256=meta["source_sha256"]
+    )
 
 
 def theme_metadata():

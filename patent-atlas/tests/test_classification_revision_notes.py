@@ -1,4 +1,5 @@
 """Historical IPC notes must not guess validity or mutate future lookups."""
+
 import unittest
 
 import classification_catalog
@@ -24,8 +25,19 @@ class ClassificationRevisionNotesTests(unittest.TestCase):
                 self.assertEqual(revision_notes.lookup(value)["code"], "G05D1/02")
 
     def test_unlisted_and_incomplete_codes_are_not_inferred(self):
-        for value in (None, "", "G05D", "G05D1", "G05D1/2", "G05D1/020", "G05D1/00",
-                      "G05D1/43", "B60L33/00", "G05D1/02, G05D1/00", "IPC:G05D1/02"):
+        for value in (
+            None,
+            "",
+            "G05D",
+            "G05D1",
+            "G05D1/2",
+            "G05D1/020",
+            "G05D1/00",
+            "G05D1/43",
+            "B60L33/00",
+            "G05D1/02, G05D1/00",
+            "IPC:G05D1/02",
+        ):
             with self.subTest(value=value):
                 self.assertIsNone(revision_notes.lookup(value))
 
