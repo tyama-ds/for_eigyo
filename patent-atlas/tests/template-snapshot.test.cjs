@@ -505,7 +505,9 @@ test('agent log, convergence and query library', async () => {
   s.document.body.append(host);
   s.m['convergence-ui'].render(host, state);
   check('convergence-default', host.innerHTML);
-  check('convergence-review', s.m['convergence-ui'].convergenceReviewHtml(state));
+  const held = { ...state.patents[4], agent_confidence: 0.62, llm_decision: 'keep', publication_number: 'JP-HOLD' };
+  check('convergence-review', s.m['convergence-ui'].convergenceReviewHtml(held, 3));
+  check('convergence-review-empty', s.m['convergence-ui'].convergenceReviewHtml(null, 0));
   check('query-library', s.m['query-library-ui'].queryLibraryHtml(state.research_workbench));
   check('query-library-tree', s.m['query-library-ui'].queryLibraryTreeHtml(libraryEntry().query.boolean_tree));
 });
