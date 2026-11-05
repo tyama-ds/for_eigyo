@@ -362,7 +362,8 @@ test('changed server state refreshes on conflict without silently resubmitting',
 });
 test('styles preserve hidden controls and users motion settings', () => {
   const css = fs.readFileSync('static/convergence-ui.css', 'utf8');
-  assert.match(css, /#convergence-content\s+\[hidden\]\s*\{\s*display:\s*none\s*!important/);
+  const shared = fs.readFileSync('static/style.css', 'utf8');
+  assert.match(shared, /\[hidden\]\s*\{\s*display:\s*none\s*!important/);
   assert.match(css, /prefers-reduced-motion:\s*reduce/);
   assert.match(css, /data-atlas-motion=(?:static|'static'|"static")/);
 });

@@ -587,7 +587,7 @@ function discoveryResultsHtml(discovery) {
     analysis = discovery.analysis,
     items = discoveryItems(discovery);
   if (!plan && !analysis)
-    return '<div class="panel discovery-empty"><span class="empty-orbit">◎</span><h3>製品の周辺にある技術も、探索の入口に。</h3><p>まず探索計画を作り、CSVで検証してください。分類候補は根拠のあるものと探索仮説を分けて表示します。</p></div>';
+    return '<div class="panel empty-state" data-empty="discovery"><span class="empty-state-icon">◎</span><h3>製品の周辺にある技術も、探索の入口に。</h3><p>まず探索計画を作り、CSVで検証してください。分類候補は根拠のあるものと探索仮説を分けて表示します。</p></div>';
   const recommendations = analysis?.recommendations || [],
     hypotheses = items.filter((item) => !discoveryHasEvidence(item));
   const nextQueries = analysis?.next_queries || [],

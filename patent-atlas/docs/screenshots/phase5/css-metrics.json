@@ -1,0 +1,18 @@
+{
+  "before": {
+    "files": 15,
+    "lines": 8921,
+    "bytes": 171809,
+    "roots": 2,
+    "important": 40,
+    "hidden": 13
+  },
+  "after": {
+    "files": 15,
+    "lines": 9949,
+    "bytes": 215954,
+    "roots": 1,
+    "important": 7,
+    "hidden": 1
+  }
+}

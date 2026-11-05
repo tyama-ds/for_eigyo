@@ -7,46 +7,38 @@
   align-items: end;
 }
 .learning-row #include-agent-control {
-  margin: 0 0 12px;
+  margin: 0 0 var(--space-3);
 }
 .learning-mode-note {
-  margin: 16px 0 0;
+  margin: var(--space-4) 0 0;
 }
 .llm-training-options {
   margin-top: 18px;
-  padding: 20px;
-  border: 1px solid #d8d1e3;
+  padding: var(--space-5);
+  border: 1px solid var(--palette-d8d1e3);
   border-radius: 15px;
-  background: #f6f3fa;
-}
-.llm-training-options[hidden],
-.learning-progress[hidden],
-#include-agent-control[hidden] {
-  display: none;
-}
-.learning-progress [hidden] {
-  display: none !important;
+  background: var(--palette-f6f3fa);
 }
 .llm-training-options label {
   margin: 0;
 }
 .llm-training-options textarea {
-  background: #fffdfa;
+  background: var(--surface);
 }
 .llm-training-options p {
-  margin: 12px 0 0;
+  margin: var(--space-3) 0 0;
 }
 .llm-training-limits {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 18px;
-  margin-top: 12px;
+  margin-top: var(--space-3);
 }
 .learning-progress {
-  margin-top: 20px;
-  padding: 20px;
-  background: linear-gradient(130deg, #f2eff8, #f7f3ea);
-  border: 1px solid #d8cfe2;
+  margin-top: var(--space-5);
+  padding: var(--space-5);
+  background: linear-gradient(130deg, var(--palette-f2eff8), var(--palette-f7f3ea));
+  border: 1px solid var(--palette-d8cfe2);
   border-radius: 15px;
 }
 .learning-progress-heading,
@@ -59,7 +51,7 @@
 .learning-progress-heading > div {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-3);
 }
 .learning-progress-heading .eyebrow {
   font-size: 10px;
@@ -74,29 +66,29 @@
   display: block;
   width: 100%;
   height: 10px;
-  margin: 15px 0 12px;
+  margin: 15px 0 var(--space-3);
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-s);
   overflow: hidden;
-  background: #e2dcea;
+  background: var(--palette-e2dcea);
   accent-color: var(--cyan);
 }
 .learning-progress progress::-webkit-progress-bar {
-  background: #e2dcea;
+  background: var(--palette-e2dcea);
 }
 .learning-progress progress::-webkit-progress-value {
-  background: linear-gradient(90deg, #7770b8, #5550a0);
-  border-radius: 8px;
+  background: linear-gradient(90deg, var(--palette-7770b8), var(--palette-5550a0));
+  border-radius: var(--radius-s);
   transition: width 0.3s;
 }
 .learning-progress[data-status='done'] progress::-webkit-progress-value {
-  background: #557e67;
+  background: var(--palette-557e67);
 }
 .learning-progress[data-status='error'] progress::-webkit-progress-value {
-  background: #ad5365;
+  background: var(--pink);
 }
 .learning-progress p {
-  margin: 0 0 8px;
+  margin: 0 0 var(--space-2);
   font-size: 13px;
 }
 .learning-progress-bottom {
@@ -104,13 +96,13 @@
   color: var(--muted);
 }
 .learning-error {
-  color: #913c51;
+  color: var(--palette-913c51);
   white-space: pre-wrap;
 }
 .refinement-ipc {
-  margin: 24px 0;
+  margin: var(--space-6) 0;
   border-top: 1px solid var(--line);
-  padding-top: 20px;
+  padding-top: var(--space-5);
 }
 .refinement-ipc-options {
   display: grid;
@@ -122,13 +114,13 @@
 }
 .refinement-ipc-card {
   padding: 13px;
-  background: #f8f5ef;
+  background: var(--palette-f8f5ef);
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: var(--radius-m);
 }
 .refinement-ipc-card.recommended {
-  border-color: #ada6cf;
-  background: #f3f0f9;
+  border-color: var(--palette-ada6cf);
+  background: var(--palette-f3f0f9);
 }
 .refinement-ipc-card .check {
   align-items: flex-start;
@@ -150,12 +142,12 @@
   display: flex;
   flex-wrap: wrap;
   gap: 5px 14px;
-  padding: 9px 0 0 24px;
+  padding: 9px 0 0 var(--space-6);
   font-size: 12px;
   color: var(--muted);
 }
 .refinement-ipc-card details {
-  margin: 8px 0 0 24px;
+  margin: var(--space-2) 0 0 var(--space-6);
   font-size: 12px;
 }
 .refinement-ipc-card summary {
@@ -169,8 +161,8 @@
 }
 .refinement-ipc-change {
   font-size: 12px;
-  padding: 10px 12px;
-  background: #efeaf6;
+  padding: 10px var(--space-3);
+  background: var(--palette-efeaf6);
   border-radius: 9px;
   line-height: 1.8;
 }
@@ -182,9 +174,7 @@
   .llm-training-limits {
     grid-template-columns: 1fr;
   }
-  .learning-progress-heading > div {
-    display: block;
-  }
+  .learning-progress-heading > div,
   .learning-progress-heading b {
     display: block;
   }

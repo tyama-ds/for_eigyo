@@ -1,13 +1,13 @@
 /* Keep the current task in view; advanced controls remain available on demand. */
 main > .workspace-heading {
   min-height: 100px;
-  padding-top: 12px;
-  padding-bottom: 12px;
+  padding-top: var(--space-3);
+  padding-bottom: var(--space-3);
   margin-bottom: 14px;
 }
 .workspace-heading h1 {
   font-size: clamp(24px, 2.4vw, 36px);
-  margin: 8px 0;
+  margin: var(--space-2) 0;
   letter-spacing: -0.03em;
 }
 .workspace-heading .atlas-heading-note {
@@ -19,7 +19,7 @@ main > .workspace-heading {
   opacity: 0.45;
 }
 #research-flow-header {
-  margin-bottom: 16px;
+  margin-bottom: var(--space-4);
   scroll-margin-top: 80px;
 }
 .research-flow-nav {
@@ -28,17 +28,17 @@ main > .workspace-heading {
   gap: 5px;
   padding: 6px;
   border: 1px solid var(--line);
-  border-radius: 16px;
-  background: #fffdf9;
+  border-radius: var(--radius-card);
+  background: var(--surface-paper);
 }
 .research-flow-nav button {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 12px 10px;
+  padding: var(--space-3) 10px;
   border: 0;
   border-radius: 11px;
-  background: transparent;
+  background: var(--transparent);
   text-align: left;
   cursor: pointer;
   color: var(--muted);
@@ -68,20 +68,20 @@ main > .workspace-heading {
   margin-top: 3px;
 }
 .research-flow-nav button[aria-current='step'] {
-  color: #54417e;
-  background: #eee9f8;
+  color: var(--text-selected);
+  background: var(--surface-selected);
 }
 .research-flow-nav button[aria-current='step'] > span {
-  color: white;
-  background: #7662a4;
-  border-color: #7662a4;
+  color: var(--white);
+  background: var(--palette-7662a4);
+  border-color: var(--palette-7662a4);
 }
 .research-flow-nav button:disabled {
   opacity: 0.5;
   cursor: default;
 }
 .research-flow-nav button:not(:disabled):hover {
-  background: #f4f0fa;
+  background: var(--palette-f4f0fa);
 }
 .research-flow-nav button:focus-visible {
   outline: 2px solid var(--cyan);
@@ -101,11 +101,11 @@ main > .workspace-heading {
   line-height: 1.5;
 }
 #research-workbench .research-heading {
-  margin: 8px 0 14px;
+  margin: var(--space-2) 0 14px;
 }
 #research-workbench .research-heading h2 {
   font-size: 19px;
-  margin: 4px 0;
+  margin: var(--space-1) 0;
 }
 #research-workbench .research-heading .eyebrow {
   display: none;
@@ -114,11 +114,11 @@ main > .workspace-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  background: #f0eee8;
-  border: 1px solid #e0dbcf;
-  border-radius: 12px;
-  padding: 12px 16px;
+  gap: var(--space-3);
+  background: var(--palette-f0eee8);
+  border: 1px solid var(--palette-e0dbcf);
+  border-radius: var(--radius-m);
+  padding: var(--space-3) var(--space-4);
   margin: 0 0 14px;
 }
 .research-resume b {
@@ -129,10 +129,10 @@ main > .workspace-heading {
   font-size: 11px;
   color: var(--muted);
   display: block;
-  margin-top: 4px;
+  margin-top: var(--space-1);
 }
 .research-optional {
-  padding: 12px 0;
+  padding: var(--space-3) 0;
   border-top: 1px solid var(--line);
   min-width: 0;
 }
@@ -144,14 +144,14 @@ main > .workspace-heading {
   line-height: 1.7;
 }
 .research-optional[open] > summary {
-  margin-bottom: 12px;
+  margin-bottom: var(--space-3);
   color: var(--ink);
 }
 .research-extra-input {
   grid-column: 1/-1;
 }
-.research-extra-input > label {
-  margin: 8px 0 !important;
+#research-workbench .research-extra-input > label {
+  margin: var(--space-2) 0;
 }
 .research-extra-input > label input {
   max-width: 700px;
@@ -159,7 +159,7 @@ main > .workspace-heading {
 .research-invention-brief .research-brief {
   grid-template-columns: minmax(230px, 0.65fr) minmax(0, 1.35fr);
   padding: 22px;
-  gap: 12px 24px;
+  gap: var(--space-3) var(--space-6);
 }
 .research-invention-brief .research-brief > h2 {
   font-size: 18px;
@@ -173,7 +173,7 @@ main > .workspace-heading {
 }
 .research-invention-brief .research-targets {
   margin: 0;
-  padding-top: 12px;
+  padding-top: var(--space-3);
 }
 #invention-workbench {
   margin-top: 18px;
@@ -188,8 +188,8 @@ main > .workspace-heading {
 #invention-input-area .invention-source-grid {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  margin-top: 12px;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
 }
 #invention-input-area .invention-source-grid > label {
   max-width: 900px;
@@ -200,65 +200,65 @@ main > .workspace-heading {
   width: 100%;
 }
 #invention-input-area .button-row {
-  margin: 16px 0 8px;
+  margin: var(--space-4) 0 var(--space-2);
 }
 .research-input-method {
   display: inline-flex;
-  gap: 4px;
+  gap: var(--space-1);
   flex-wrap: wrap;
-  background: #f0ece5;
-  padding: 4px;
-  border-radius: 10px;
+  background: var(--palette-f0ece5);
+  padding: var(--space-1);
+  border-radius: var(--radius-control);
 }
 .research-input-method button {
   border: 0;
-  background: transparent;
-  padding: 10px 16px;
+  background: var(--transparent);
+  padding: 10px var(--space-4);
   font-size: 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-s);
   color: var(--muted);
   cursor: pointer;
 }
 .research-input-method button[aria-pressed='true'] {
-  background: #fffdf9;
+  background: var(--surface-paper);
   color: var(--ink);
-  box-shadow: 0 2px 7px #32284612;
+  box-shadow: 0 2px 7px var(--palette-32284612);
 }
 #research-llm-unavailable {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-3);
   flex-wrap: wrap;
   font-size: 12px;
 }
 #invention-review-area > .invention-plan-heading {
-  margin-top: 20px;
+  margin-top: var(--space-5);
 }
 #research-workbench[data-flow-stage='elements'] .invention-plan-heading + p {
   font-size: 12px;
-  margin: 12px 0;
+  margin: var(--space-3) 0;
   color: var(--muted);
 }
 #research-condition-summary {
   display: inline-block;
-  margin: 8px 0 8px 12px;
+  margin: var(--space-2) 0 var(--space-2) var(--space-3);
 }
 #invention-review-area .invention-strategy {
   margin: 14px 0;
-  padding: 12px 16px;
+  padding: var(--space-3) var(--space-4);
 }
 .research-element-detail {
   border-top: 1px solid var(--line);
   margin-top: 14px;
-  padding-top: 12px;
+  padding-top: var(--space-3);
 }
 .research-element-detail > summary {
   cursor: pointer;
   font-size: 12px;
-  color: #675385;
+  color: var(--palette-675385);
 }
 .research-element-detail[open] > summary {
-  margin-bottom: 16px;
+  margin-bottom: var(--space-4);
 }
 .research-element-detail > p {
   font-size: 12px;
@@ -271,23 +271,21 @@ main > .workspace-heading {
 #invention-elements .invention-element {
   padding: 18px;
 }
-#invention-elements .invention-evidence {
-  margin-top: 12px;
-}
+#invention-elements .invention-evidence,
 #invention-elements .invention-perspective {
-  margin-top: 12px;
+  margin-top: var(--space-3);
 }
 #invention-review-area .invention-bottom {
   position: sticky;
   bottom: 12px;
   z-index: 4;
-  background: #fffdf8f5;
+  background: var(--palette-fffdf8f5);
   backdrop-filter: blur(10px);
-  border: 1px solid #cfc5dc;
-  border-radius: 12px;
-  padding: 12px 16px;
-  box-shadow: 0 5px 20px #40335114;
-  margin-top: 20px;
+  border: 1px solid var(--palette-cfc5dc);
+  border-radius: var(--radius-m);
+  padding: var(--space-3) var(--space-4);
+  box-shadow: 0 5px 20px var(--palette-40335114);
+  margin-top: var(--space-5);
 }
 #invention-review-area .invention-bottom p {
   max-width: 65%;
@@ -304,10 +302,10 @@ main > .workspace-heading {
 .research-target-provenance {
   font-size: 11px;
   line-height: 1.7;
-  color: #7a6749;
-  background: #f8f1df;
-  border-radius: 8px;
-  padding: 9px 12px;
+  color: var(--palette-7a6749);
+  background: var(--palette-f8f1df);
+  border-radius: var(--radius-s);
+  padding: 9px var(--space-3);
 }
 #research-progress:empty {
   display: none;
@@ -318,19 +316,19 @@ main > .workspace-heading {
   margin-bottom: 14px;
 }
 .research-progress-card {
-  border: 1px solid #cfc5dc;
-  background: #f8f5fffa;
+  border: 1px solid var(--palette-cfc5dc);
+  background: var(--palette-f8f5fffa);
   backdrop-filter: blur(10px);
   border-radius: 13px;
   padding: 14px 18px;
   font-size: 12px;
-  box-shadow: 0 6px 20px #3427440b;
+  box-shadow: 0 6px 20px var(--palette-3427440b);
 }
 .research-progress-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--space-3);
 }
 .research-progress-phase {
   font-weight: 600;
@@ -347,29 +345,29 @@ main > .workspace-heading {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 6px 16px;
+  gap: 6px var(--space-4);
   flex-wrap: wrap;
 }
 .research-progress-indeterminate {
   width: 100%;
   height: 5px;
-  accent-color: #7662a4;
-  margin: 8px 0;
+  accent-color: var(--palette-7662a4);
+  margin: var(--space-2) 0;
 }
 .research-progress-card.is-error {
-  border-color: #dbb9bc;
-  background: #fff6f5;
+  border-color: var(--palette-dbb9bc);
+  background: var(--palette-fff6f5);
 }
 .research-progress-error {
-  color: #9a354e;
+  color: var(--palette-9a354e);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 .research-progress-card.is-complete {
   padding-top: 10px;
   padding-bottom: 10px;
-  background: #f1f7f0;
-  border-color: #ccd8c9;
+  background: var(--palette-f1f7f0);
+  border-color: var(--palette-ccd8c9);
 }
 .research-progress-card.is-complete .research-progress-retained {
   display: none;
@@ -385,9 +383,7 @@ main > .workspace-heading {
   .research-flow-nav button > span {
     margin-bottom: 5px;
   }
-  .research-flow-nav small {
-    display: none;
-  }
+  .research-flow-nav small,
   .research-flow-save > span:last-child {
     display: none;
   }
@@ -427,7 +423,7 @@ main > .workspace-heading {
 }
 .workspace-heading.is-compact {
   min-height: 48px;
-  padding: 8px 20px;
+  padding: var(--space-2) var(--space-5);
   margin-bottom: 10px;
 }
 .workspace-heading.is-compact .atlas-heading-art,
@@ -443,8 +439,8 @@ main > .workspace-heading {
   position: sticky;
   top: 0;
   z-index: 12;
-  background: var(--bg, #f6f3ec);
-  padding: 5px 0 8px;
+  background: var(--bg, var(--palette-f6f3ec));
+  padding: 5px 0 var(--space-2);
 }
 .research-stage-tools {
   display: flex;
@@ -456,9 +452,9 @@ main > .workspace-heading {
   display: none;
 }
 .research-stage-tools [aria-pressed='true'] {
-  background: #eee9f8;
-  border-color: #bdb0d5;
-  color: #54417e;
+  background: var(--surface-selected);
+  border-color: var(--palette-bdb0d5);
+  color: var(--text-selected);
 }
 .research-modes {
   border: 0;
@@ -466,12 +462,12 @@ main > .workspace-heading {
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
-  margin: 0 0 20px;
+  margin: 0 0 var(--space-5);
 }
 .research-modes legend {
   font-size: 12px;
   color: var(--muted);
-  margin-bottom: 8px;
+  margin-bottom: var(--space-2);
 }
 .research-modes label {
   margin: 0;
@@ -488,13 +484,13 @@ main > .workspace-heading {
   font-size: 13px;
   border: 1px solid var(--line);
   border-radius: 9px;
-  padding: 10px 16px;
-  background: #fffdf9;
+  padding: 10px var(--space-4);
+  background: var(--surface-paper);
 }
 .research-modes input:checked + span {
-  color: #54417e;
-  border-color: #bdb0d5;
-  background: #eee9f8;
+  color: var(--text-selected);
+  border-color: var(--palette-bdb0d5);
+  background: var(--surface-selected);
 }
 .research-modes input:focus-visible + span {
   outline: 2px solid var(--cyan);
@@ -517,7 +513,7 @@ main > .workspace-heading {
   height: 26px;
   border-radius: 50%;
   border: 1px solid var(--line);
-  background: #fffdf9;
+  background: var(--surface-paper);
   cursor: pointer;
   list-style: none;
   color: var(--muted);
@@ -535,11 +531,11 @@ main > .workspace-heading {
   width: min(380px, 80vw);
   max-height: 60vh;
   overflow: auto;
-  background: #fffdf9;
+  background: var(--surface-paper);
   border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 16px;
-  box-shadow: 0 10px 30px #34274426;
+  border-radius: var(--radius-m);
+  padding: var(--space-4);
+  box-shadow: 0 10px 30px var(--palette-34274426);
   line-height: 1.8;
 }
 .panel-help[open] {
@@ -563,7 +559,7 @@ main > .workspace-heading {
   display: block;
 }
 .orchestration-process-detail {
-  margin: 12px 0;
+  margin: var(--space-3) 0;
   font-size: 12px;
   color: var(--muted);
 }

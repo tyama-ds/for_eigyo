@@ -107,7 +107,7 @@ function convergenceSeries(records, key, x, y) {
 }
 function convergenceChart(records, counts = false) {
   if (!records.length)
-    return '<div class="convergence-empty"><span>01 — 02 — 03</span><strong>検索を重ねると、変化が見えてきます。</strong><p>検索結果を記録すると、実測値だけをプロットします。最初の1回は比較の基準です。</p></div>';
+    return '<div class="empty-state" data-empty="convergence"><span>01 — 02 — 03</span><strong>検索を重ねると、変化が見えてきます。</strong><p>検索結果を記録すると、実測値だけをプロットします。最初の1回は比較の基準です。</p></div>';
   const width = 800,
     height = counts ? 220 : 290,
     left = 64,

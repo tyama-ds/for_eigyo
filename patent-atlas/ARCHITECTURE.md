@@ -1,16 +1,18 @@
-# Patent Atlas 設計の正本（Phase 4）
+# Patent Atlas 設計の正本（Phase 5）
 
 - 棚卸し日: 2026-11-05、画面更新: 2026-11-06
 - 対象: `tyama-ds/for_eigyo` の `patent-atlas/`、Phase 1完了時点 `87e87e8` の棚卸しをPhase 4の画面とPhase 3cのバックエンドに合わせて更新
 - 状態: **現状と目標を区別する。6項目の目標とPhase 3での扱いは利用者が確定済み。**
 - 6項目の判断者: 利用者（本会話）　確定日: 2026-11-05
-- Phase 3a（共通ヘルパー）、3b（Workspace）、3c（明示的なサービス注入・依存の整理・公開状態キャッシュ・統括の部分復元）を実装済み。APIの入出力、設定値、保存形式・保存データ、既存文書の配置を維持。Phase 4では画面と導線に必要なCSSのみ変更し、テーマ層の廃止は行わない。
+- Phase 3a（共通ヘルパー）、3b（Workspace）、3c（明示的なサービス注入・依存の整理・公開状態キャッシュ・統括の部分復元）を実装済み。APIの入出力、設定値、保存形式・保存データ、既存文書の配置を維持。Phase 4で導線を一本化し、Phase 5で表示を維持してCSSを共通化した。
 
 ## 1. 現状
 
 この節はソースの静的な読取結果である。ユーザーの `data/workspace.json`、認証情報、実行中のブラウザー状態は棚卸し対象にしていない。実データのキーや件数を推定した一覧ではない。
 
 ### 1.1 実行構造と状態の置き場所
+
+CSSのトークンは `static/atlas-theme.css` の単一 `:root` が正本で、明色のみを定義する。`style.css` はリセット・配置・共通部品（button/pill/caption/notice/empty-state）と共通の非表示規則を持つ。色の宣言はトークンを参照し、画面固有の配置は各機能CSSに残す。動作停止とOSのreduced-motionは `atlas-motion.css` を正本とする。空状態は `.empty-state` に統一し、`data-empty` の変数で従来のホストごとの寸法・色を保つ。詳細と比較画像は [Phase 5検証記録](docs/PHASE5_REVIEW.md) を参照。
 
 FastAPIを起点とするローカル単一ユーザーアプリで、HTML/CSS/JavaScriptを同じサーバーから配信する。UIの各スクリプトはES Modulesではなく、共有の `state`、関数、下書き変数を参照する。`static/app.js:api` が `/api` を付けてHTTP呼び出しを行う。
 

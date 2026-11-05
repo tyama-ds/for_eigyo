@@ -279,8 +279,8 @@ test('progress polls preserve checkpoint search input and hidden filter results'
   assert.equal(s.dom['#orchestration-checkpoint'].innerHTML, 'filtered review with selections');
 });
 test('workflow hidden state wins over button and candidate display declarations', () => {
-  const css = fs.readFileSync('static/orchestration-ui.css', 'utf8');
-  assert.match(css, /#orchestration-content\s+\[hidden\]\s*\{\s*display\s*:\s*none\s*!important/);
+  const css = fs.readFileSync('static/style.css', 'utf8');
+  assert.match(css, /\[hidden\]\s*\{\s*display\s*:\s*none\s*!important/);
 });
 test('query review sends an intentional empty selection and only checked terms', () => {
   const s = setup();
