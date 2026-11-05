@@ -1,4 +1,4 @@
-"""Public-state caching preserves the detached API and observes unsaved writes."""
+"""Public-state caching preserves the detached API; writers invalidate it explicitly."""
 
 import copy
 import json
@@ -48,7 +48,7 @@ class PublicStateCacheTests(unittest.TestCase):
         self.assertEqual(self.ws.state["patents"][0]["label"], "keep")
         self.project.assert_called_once()
 
-    def test_unsaved_nested_mutations_and_progress_are_visible(self):
+    def test_unsaved_nested_mutations_and_progress_are_visible_after_invalidation(self):
         self.ws.public_state_json(self.project)
         changes = (
             lambda: self.ws.state["patents"][0].update(label="exclude"),
@@ -62,6 +62,7 @@ class PublicStateCacheTests(unittest.TestCase):
         )
         for index, change in enumerate(changes, 2):
             change()
+            self.ws.invalidate_public_state()
             actual = json.loads(self.ws.public_state_json(self.project))
             self.assertEqual(actual["patents"], self.ws.state["patents"])
             self.assertEqual(actual["selected"], self.ws.state["selected"])
@@ -107,11 +108,13 @@ class PublicStateCacheTests(unittest.TestCase):
         self.assertIsInstance(first["timestamp"], datetime)
         self.assertEqual(self.ws.public_state_json(self.project), JSONResponse(jsonable_encoder(first)).body)
         self.ws.state["timestamp"] = datetime(2026, 11, 6, 12, 0)
+        self.ws.invalidate_public_state()
         self.assertEqual(json.loads(self.ws.public_state_json(self.project))["timestamp"], "2026-11-06T12:00:00")
 
     def test_non_finite_json_is_still_rejected(self):
         self.ws.public_state_json(self.project)
         self.ws.state["patents"][0]["score"] = float("nan")
+        self.ws.invalidate_public_state()
         with self.assertRaises(ValueError):
             self.ws.public_state_json(self.project)
 

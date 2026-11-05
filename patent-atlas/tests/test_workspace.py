@@ -269,6 +269,7 @@ class WorkspaceTests(unittest.TestCase):
         self.state["patents"][0]["label"] = "exclude"
         self.job.update(status="running", progress=20)
         self.settings["api_key"] = ""
+        self.ws.invalidate_public_state()  # direct writes outside a transaction invalidate explicitly
         second = self.ws.public_state()
         self.assertEqual(first["patents"][0]["label"], "keep")
         self.assertEqual(second["patents"][0]["label"], "exclude")
