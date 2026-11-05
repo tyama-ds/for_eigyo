@@ -106,6 +106,7 @@ CREATE TABLE IF NOT EXISTS chats (
   owner TEXT NOT NULL DEFAULT 'local',
   mode TEXT NOT NULL DEFAULT 'auto',
   strategy TEXT NOT NULL DEFAULT 'auto',
+  decision_beam INTEGER NOT NULL DEFAULT 0,
   scope TEXT NOT NULL DEFAULT '{}',
   touched_internal INTEGER NOT NULL DEFAULT 0,
   created_at REAL NOT NULL,
@@ -166,7 +167,9 @@ def _migrate(c: sqlite3.Connection) -> None:
     cols = {r[1] for r in c.execute("PRAGMA table_info(chats)")}
     if "strategy" not in cols:
         c.execute("ALTER TABLE chats ADD COLUMN strategy TEXT NOT NULL DEFAULT 'auto'")
-        c.commit()
+    if "decision_beam" not in cols:      # 0 = 設定の値に従う
+        c.execute("ALTER TABLE chats ADD COLUMN decision_beam INTEGER NOT NULL DEFAULT 0")
+    c.commit()
 
 
 def close() -> None:

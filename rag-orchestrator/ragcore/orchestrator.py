@@ -71,6 +71,7 @@ class Job:
             return {
                 "id": self.id, "type": self.type, "status": self.status,
                 "question": self.question, "mode": self.mode,
+                "options": dict(getattr(self, "options", {}) or {}),
                 "created_at": self.created_at, "finished_at": self.finished_at,
                 "engines": {k: dict(v) for k, v in self.engines.items()},
                 "synthesis": dict(self.synthesis),
@@ -166,14 +167,17 @@ class Orchestrator:
                 entry["elapsed"] = round(time.time() - start, 2)
 
     # ------------------------------------------------------------ query
-    def start_query(self, engine_ids: list[str], question: str, mode: str) -> Job:
+    def start_query(self, engine_ids: list[str], question: str, mode: str,
+                    options: dict | None = None) -> Job:
         job = Job("query", engine_ids, question=question, mode=mode)
+        job.options = dict(options or {})          # 例: {"decision_beam": 2}（設定を質問単位で上書き）
         self._register(job)
         threading.Thread(target=self._run_query, args=(job,), daemon=True).start()
         return job
 
     def _run_query(self, job: Job) -> None:
         cfg = load_config()
+        cfg.update(getattr(job, "options", {}) or {})
         threads = []
         for eid in job.engines:
             t = threading.Thread(target=self._query_one, args=(job, eid, cfg),

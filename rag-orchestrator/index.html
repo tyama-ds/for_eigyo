@@ -40,6 +40,9 @@
             <option value="global">global（コーパス全体への質問）</option>
             <option value="local">local（特定の事柄への質問）</option>
           </select>
+          <label class="field-label">DecisionRAG のビーム幅</label>
+          <input type="number" id="q-beam" min="1" max="10" placeholder="設定の値"
+            title="各段で残す枝の数。空なら設定タブの値（既定 4）">
         </div>
         <div class="grow">
           <label class="field-label">実行するエンジン</label>
@@ -189,7 +192,7 @@
           </select>
         </div>
         <div>
-          <label class="field-label">各段で残す枝の数</label>
+          <label class="field-label">ビーム幅（各段で残す枝の数）</label>
           <input type="number" id="s-decision_beam" min="1" max="10">
         </div>
         <div>

@@ -329,43 +329,91 @@ def _kmeans(vecs: list, k: int, iters: int = 15) -> list[int]:
 
 # ---------------------------------------------------------------- ナビゲーション
 
+def _path_score(logsum: float, n: int) -> float:
+    """経路スコア = 経路上の確率の幾何平均（深い経路ほど不利になる積を避ける）。"""
+    return math.exp(logsum / n) if n else 0.0
+
+
 def navigate(tree: dict[str, dict], question: str, judge, *, k: int = 12, beam: int = 4,
-             budget: int = 8, keep_threshold: float = 0.3, floor: float = 0.1,
-             use_choice: bool = True, progress=lambda f, m: None) -> dict:
-    """階層を上からたどり、関連する段落（チャンク番号）を確率つきで返す（論文の Algorithm 1）。"""
-    frontier = ["root"]
+             budget: int = 8, floor: float = 0.1, use_choice: bool = True,
+             progress=lambda f, m: None) -> dict:
+    """階層を上からたどり、関連する段落（チャンク番号）を返す（論文の Algorithm 1 をビームサーチで）。
+
+    - 経路スコア: 根からの経路上の確率の幾何平均。親の確信度も子の順位に効く
+    - ビーム: 判定済みでまだ展開していない枝（前の段の次点も含む）から、経路スコアの上位
+      beam 本を展開する。展開した先が振るわなければ前の段の次点へ戻る（バックトラック）
+    - 自分の確率が floor 未満の枝は展開しない。上位 k 件の段落より経路スコアが低い枝しか
+      残っていなければ打ち切る
+    - 判定回数の上限 budget に収まらない段は、経路スコアの高い親の子から判定する（黙って捨てない）
+    - 段落は経路スコア順。最後に上位を選択式で比べて並べ替える（論文の multiple-choice 段）
+    """
+    beam = max(1, int(beam))
+    state: dict[str, tuple[float, int]] = {"root": (0.0, 0)}   # node -> (log 確率の和, 深さ)
+    pool: dict[str, float] = {}                                # 判定済み・未展開の枝 -> 経路スコア
+    own: dict[str, float] = {}
     found: dict[int, float] = {}
     path: list[dict] = []
-    calls, depth = 0, 0
-    while frontier and calls < budget:
-        cands = [cid for nid in frontier for cid in tree[nid]["children"]]
+    calls, step = 0, 0
+    expand = ["root"]
+    while expand and calls < budget:
+        capacity = (budget - calls) * judge.batch
+        cands: list[tuple[str, str]] = []
+        trimmed = 0
+        for nid in expand:                         # 経路スコアの高い親から、判定回数に収まる分だけ
+            kids = tree[nid]["children"]
+            room = capacity - len(cands)
+            if room <= 0:
+                trimmed += len(kids)
+                continue
+            if len(kids) > room and cands:
+                trimmed += len(kids)               # 途中で切れる親は丸ごと次回以降へ回す
+                pool[nid] = _path_score(*state[nid])
+                continue
+            cands.extend((c, nid) for c in kids[:room])
+            trimmed += max(0, len(kids) - room)
         if not cands:
             break
-        progress(min(0.6, 0.1 + 0.12 * depth), f"段 {depth + 1}: 候補 {len(cands)} 件を判定")
+        progress(min(0.6, 0.1 + 0.1 * step), f"{step + 1}回目: 候補 {len(cands)} 件を判定")
         scores: dict[str, float] = {}
         for i in range(0, len(cands), judge.batch):
-            if calls >= budget:
-                break
-            part = cands[i:i + judge.batch]
+            part = [c for c, _ in cands[i:i + judge.batch]]
             probs = judge.binary(question, [f"（{KIND_LABEL[tree[c]['kind']]}）{tree[c]['desc']}"
                                             for c in part])
             calls += 1
             for j, c in enumerate(part, 1):
                 scores[c] = probs.get(j, 0.0)
-        for c in cands:
-            if tree[c]["kind"] == "chunk" and c in scores:
+        for c, parent in cands:
+            p = min(1.0, max(1e-4, scores.get(c, 0.0)))
+            logsum, depth = state[parent]
+            state[c] = (logsum + math.log(p), depth + 1)
+            ps = _path_score(*state[c])
+            own[c] = scores.get(c, 0.0)
+            if tree[c]["kind"] == "chunk":
                 idx = tree[c]["chunk"]
-                found[idx] = max(found.get(idx, 0.0), scores[c])
-        inner = sorted((c for c in cands if tree[c]["kind"] != "chunk" and c in scores),
-                       key=lambda c: -scores[c])
-        keep = [c for c in inner if scores[c] >= keep_threshold][:beam]
-        if not keep and inner and (scores[inner[0]] > 0 or depth == 0):
-            keep = inner[:max(1, beam // 2)]       # 確信が無くても順位で上位の探索を続ける
-        path.append({"level": depth, "candidates": len(cands),
-                     "kept": [{"title": tree[c]["title"][:40], "score": round(scores[c], 2)}
-                              for c in keep]})
-        frontier = keep
-        depth += 1
+                found[idx] = max(found.get(idx, -1.0), ps)
+            else:
+                pool[c] = ps
+        # 次に展開する枝: 判定済み・未展開の全候補（前の段の次点を含む）から経路スコアの上位
+        kth = sorted(found.values(), reverse=True)[k - 1] if len(found) >= k else -1.0
+        current_depth = max(state[c][1] for c, _ in cands)
+        expand, backtracked = [], 0
+        for c in sorted(pool, key=lambda x: (-pool[x], x)):
+            if len(expand) >= beam:
+                break
+            if pool[c] <= kth:
+                break                               # 見つかった上位 k 件を上回れない
+            if own.get(c, 1.0) < floor and step > 0:
+                continue                            # 確率が低すぎる枝は展開しない
+            expand.append(c)
+            if state[c][1] < current_depth:
+                backtracked += 1
+        for c in expand:
+            pool.pop(c, None)
+        path.append({"level": step, "candidates": len(cands), "trimmed": trimmed,
+                     "backtracked": backtracked,
+                     "kept": [{"title": tree[c]["title"][:40], "score": round(own[c], 2),
+                               "path": round(_path_score(*state[c]), 2)} for c in expand]})
+        step += 1
     ranked = [(i, s) for i, s in sorted(found.items(), key=lambda t: (-t[1], t[0])) if s >= floor]
     hits = ranked[:k]
     choice_used = False
@@ -381,7 +429,7 @@ def navigate(tree: dict[str, dict], question: str, judge, *, k: int = 12, beam: 
                 hits = [short[j] for j in order] + hits[len(short):]
         except LLMError:
             pass
-    return {"hits": hits, "path": path, "calls": calls, "choice": choice_used,
+    return {"hits": hits, "path": path, "calls": calls, "choice": choice_used, "beam": beam,
             "soft": getattr(judge, "soft", False)}
 
 
@@ -462,10 +510,13 @@ class DecisionRAGEngine(Engine):
         else:
             answer, think = "階層をたどっても関連する段落が見つかりませんでした。", ""
         citations = [chunk_citation(index["chunks"][i], s) for i, s in res["hits"][:TOP_K]]
-        route = " → ".join("・".join(f"{x['title']}({x['score']})" for x in lv["kept"][:2])
+        route = " → ".join("・".join(f"{x['title']}({x['path']})" for x in lv["kept"][:2])
+                           + ("［戻り］" if lv["backtracked"] else "")
                            for lv in res["path"] if lv["kept"])
-        stats = {"judge": judge.name, "calls": res["calls"], "levels": len(res["path"]),
-                 "soft": res["soft"], "choice": res["choice"], "route": route[:300] or "（段落のみ）"}
+        stats = {"judge": judge.name, "beam": res["beam"], "calls": res["calls"],
+                 "steps": len(res["path"]), "soft": res["soft"], "choice": res["choice"],
+                 "trimmed": sum(lv["trimmed"] for lv in res["path"]),
+                 "route": route[:300] or "（段落のみ）"}
         if judge.name == "jev":
             stats["jev_cost_usd"] = round(judge.client.cost, 6)
         if note:

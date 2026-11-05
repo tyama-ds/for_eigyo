@@ -251,26 +251,28 @@ def retrieve(ctx: Ctx, plan: dict, allowed: set[str], doc_sens: dict[str, str]) 
             else:
                 ctx.warnings.append("DecisionRAG の判定モデルに Jev が選ばれていますが、API キーが未設定です"
                                     "（LLM で判定します）")
-        res = decision.navigate(ctx, q, allowed, k=k * 2,
-                                beam=int(ctx.cfg["rag"]["decision_beam"]),
+        beam = int(ctx.chat.get("decision_beam") or 0) or int(ctx.cfg["rag"]["decision_beam"])
+        res = decision.navigate(ctx, q, allowed, k=k * 2, beam=beam,
                                 budget=int(ctx.cfg["rag"]["decision_budget"]),
                                 use_choice=bool(ctx.cfg["rag"].get("decision_choice", True)),
                                 jev_client=jev_client)
         ev["decision"] = {"path": res["path"], "calls": res["calls"], "soft": res["soft"],
+                          "beam": res["beam"],
                           "hits": len(res["hits"]), "error": res["error"],
                           "choice": res["choice"], "judges": res["judges"],
                           "jev_cost": res["jev_cost"]}
         if res["error"]:
             ctx.warnings.append(f"DecisionRAG: {res['error']}")
-        route_txt = " → ".join("・".join(f"{x['title']}({x['score']})" for x in lv["kept"][:2])
-                               for lv in res["path"] if lv["kept"])
+        route_txt = " → ".join("・".join(f"{x['title']}({x['path']})" for x in lv["kept"][:2])
+                               for lv in res["path"] if lv.get("kept"))
         judge_txt = "・".join({"llm": "LLM", "jev": "Jev"}[j] for j in res["judges"]) or "なし"
-        ctx.step("DecisionRAG", f"判定 {res['calls']} 回（{judge_txt}{'・確率' if res['soft'] else ''}"
+        ctx.step("DecisionRAG", f"ビーム幅 {res['beam']}・判定 {res['calls']} 回（{judge_txt}{'・確率' if res['soft'] else ''}"
                  f"{'・選択式で並べ替え' if res['choice'] else ''}）・段落 {len(res['hits'])} 件"
                  + (f": {route_txt}" if route_txt else ""))
         dec_rank = [cid for cid, _ in res["hits"]]
         if dec_rank:
-            ev["via"].append(f"DecisionRAG（階層 {len(res['path'])} 段・判定 {res['calls']} 回）")
+            ev["via"].append(f"DecisionRAG（ビーム幅 {res['beam']}・展開 {len(res['path'])} 回・"
+                             f"判定 {res['calls']} 回）")
     if strategy == "decision":
         if dec_rank:
             # 論文どおり第1段の検索器を使わない

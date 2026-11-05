@@ -49,6 +49,9 @@
                 <option value="classic">従来型（全文＋埋め込み＋グラフ）</option>
               </select>
             </label>
+            <label class="mini" id="chat-beam-box" title="DecisionRAG で各段に残す枝の数（ビーム幅）。空なら設定の値">幅
+              <input type="number" id="chat-beam" class="inline-input beam-input" min="1" max="10" placeholder="既定">
+            </label>
             <label class="mini">範囲
               <select id="chat-folder" class="inline-select" title="検索する文書の範囲"></select>
             </label>
@@ -206,7 +209,7 @@
               <option value="llm">LLM（ローカル / クラウドの設定を使う）</option>
               <option value="jev">Jev（論文で使われた判定モデル・公開文書のみ）</option>
             </select></div>
-          <div><label class="field-label">各段で残す枝の数</label><input type="number" id="r-decision_beam" min="1" max="10"></div>
+          <div><label class="field-label">ビーム幅（各段で残す枝の数）</label><input type="number" id="r-decision_beam" min="1" max="10"></div>
           <div><label class="field-label">判定回数の上限</label><input type="number" id="r-decision_budget" min="2" max="30"></div>
         </div>
         <details class="adv" id="jev-box"><summary>Jev（TypeSafe）の接続 — OpenRouter Decisions API</summary>

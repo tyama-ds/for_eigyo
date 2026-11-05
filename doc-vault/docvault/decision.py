@@ -461,51 +461,71 @@ def pick_judge(ctx, sensitivity: str, jev_client):
 
 # ---------------------------------------------------------------- ナビゲーション
 
+def _path_score(logsum: float, n: int) -> float:
+    """経路スコア = 経路上の確率の幾何平均（深い経路ほど不利になる積を避ける）。"""
+    return math.exp(logsum / n) if n else 0.0
+
+
 def navigate(ctx, question: str, allowed: set[str], *, k: int = 8, beam: int = 4,
-             budget: int = 8, keep_threshold: float = 0.3, floor: float = 0.1,
-             use_choice: bool = True, jev_client=None) -> dict:
-    """階層を上からたどり、関連する段落（チャンク）を探す（論文の Algorithm 1）。
+             budget: int = 8, floor: float = 0.1, use_choice: bool = True,
+             jev_client=None) -> dict:
+    """階層を上からたどり、関連する段落（チャンク）を探す（論文の Algorithm 1 をビームサーチで）。
 
-    - 各段: 残った枝の子をすべて同じ文脈に並べ、二値判定（関連する確率）を一度に求める
-    - 残す枝: 確率が keep_threshold 以上を上位 beam 本まで。どれも満たさなければ
-      floor 以上の最上位を残す（枝刈りは取り消せないので再現率寄りにする）
-    - 段落は出てきた段で採点し、最後は閾値で切らずに確率順で上位 k を返す
-    - use_choice: 上位の段落を選択式でもう一度比べて並べ替える（論文の multiple-choice 段）
+    - 経路スコア: 根からの経路上の確率の幾何平均。親の確信度も子の順位に効く
+    - ビーム: 判定済みでまだ展開していない枝（前の段の次点も含む）から、経路スコアの上位
+      beam 本を展開する。展開した先が振るわなければ、前の段の次点へ自動で戻る（バックトラック）
+    - 自分の確率が floor 未満の枝は展開しない。上位 k 件の段落より経路スコアが低い枝しか
+      残っていなければ打ち切る
+    - 判定回数の上限 budget に収まらない段は、経路スコアの高い親の子から判定する（黙って捨てない）
+    - 段落は経路スコア順。最後に上位を選択式で比べて並べ替える（論文の multiple-choice 段）
 
-    返り値: {"hits": [(chunk_id, score)], "path": [...], "calls": n, "soft": bool,
-             "judges": [...], "jev_cost": USD, "error": str | None}
+    返り値: {"hits": [(chunk_id, score)], "path": [...], "calls": n, "soft": bool, "beam": beam,
+             "judges": [...], "jev_cost": USD, "choice": bool, "error": str | None}
     """
     tree = get_tree()
-    frontier = ["root"]
+    beam = max(1, int(beam))
+    state: dict[str, tuple[float, int]] = {"root": (0.0, 0)}   # node -> (log 確率の和, 深さ)
+    pool: dict[str, float] = {}                                # 判定済み・未展開の枝 -> 経路スコア
+    own: dict[str, float] = {}
     found: dict[str, float] = {}
     sens_of: dict[str, str] = {}
     path: list[dict] = []
-    calls, soft_used, depth = 0, False, 0
+    calls, soft_used, step = 0, False, 0
     judges_used: set[str] = set()
     error = None
-    while frontier and calls < budget:
-        cands = []
-        for nid in frontier:
-            for cid in tree[nid]["children"]:
-                node = tree[cid]
-                if node["docs"] & allowed:
-                    cands.append(node)
-        if not cands:
-            break
-        scores: dict[str, float] = {}
-        # 同じ段の候補は1つの文脈で比べる（確率の尺度をそろえるため、区分で分けない）。
-        # 社外秘を1件でも含めばローカル LLM、すべて公開なら Jev / クラウドも使える
-        sens = "internal" if any(n["sens"] != "public" for n in cands) or ctx.touched else "public"
+    expand = ["root"]
+    while expand and calls < budget:
+        # 展開する枝の子を集める（経路スコアの高い親から。判定回数に収まる分だけ）
+        groups = [(nid, [c for c in tree[nid]["children"] if tree[c]["docs"] & allowed])
+                  for nid in expand]
+        sens = "internal" if ctx.touched or any(
+            tree[c]["sens"] != "public" for _, kids in groups for c in kids) else "public"
         judge = pick_judge(ctx, sens, jev_client)
         if judge is None:
             error = ("判定に使える LLM がありません（社外秘を含む候補はローカル LLM で判定します）"
                      if sens == "internal" else "判定に使える LLM がありません")
             break
-        for i in range(0, len(cands), judge.batch):
-            if calls >= budget:
-                break
+        capacity = (budget - calls) * judge.batch
+        cands: list[tuple[str, str]] = []
+        trimmed = 0
+        for nid, kids in groups:
+            room = capacity - len(cands)
+            if room <= 0:
+                trimmed += len(kids)
+                continue
+            if len(kids) > room and cands:
+                trimmed += len(kids)               # 途中で切れる親は丸ごと次回以降へ回す
+                pool[nid] = _path_score(*state[nid]) if nid != "root" else 0.0
+                continue
+            cands.extend((c, nid) for c in kids[:room])
+            trimmed += max(0, len(kids) - room)
+        if not cands:
+            break
+        scores: dict[str, float] = {}
+        nodes = [tree[c] for c, _ in cands]
+        for i in range(0, len(nodes), judge.batch):
             try:
-                scores.update(judge.binary(question, cands[i:i + judge.batch]))
+                scores.update(judge.binary(question, nodes[i:i + judge.batch]))
             except LLMError as e:
                 error = f"判定に失敗: {e}"
                 break
@@ -514,24 +534,45 @@ def navigate(ctx, question: str, allowed: set[str], *, k: int = 8, beam: int = 4
             soft_used = soft_used or judge.soft
         if error:
             break
-        for n in cands:
-            if n["kind"] == "chunk" and n["id"] in scores:
-                found[n["chunk_id"]] = max(found.get(n["chunk_id"], 0.0), scores[n["id"]])
-                sens_of[n["chunk_id"]] = n["sens"]
-        inner = sorted((n for n in cands if n["kind"] != "chunk" and n["id"] in scores),
-                       key=lambda n: -scores[n["id"]])
-        keep = [n for n in inner if scores[n["id"]] >= keep_threshold][:beam]
-        if not keep and inner and (scores[inner[0]["id"]] > 0 or depth == 0):
-            # 確信の持てる枝が無い。上の段ほど説明が粗く、低い確率でも外れとは限らないので、
-            # 閾値で切らずに順位で上位の数本の探索を続ける（判定回数の上限 budget で費用は抑える）
-            keep = inner[:max(1, beam // 2)]
-        path.append({"level": depth, "candidates": len(cands),
-                     "kept": [{"kind": n["kind"], "title": n["title"][:40],
-                               "score": round(scores[n["id"]], 2)} for n in keep],
-                     "passages": sum(1 for n in cands if n["kind"] == "chunk")})
-        frontier = [n["id"] for n in keep]
-        depth += 1
-    # 段落は閾値で切らず確率順（固い閾値は正解を黙って落とすため）。ただし floor 未満は捨てる
+        for c, parent in cands:
+            if c not in scores:
+                continue
+            p = min(1.0, max(1e-4, scores[c]))
+            logsum, depth = state[parent]
+            state[c] = (logsum + math.log(p), depth + 1)
+            ps = _path_score(*state[c])
+            own[c] = scores[c]
+            node = tree[c]
+            if node["kind"] == "chunk":
+                if ps > found.get(node["chunk_id"], -1.0):
+                    found[node["chunk_id"]] = ps
+                    sens_of[node["chunk_id"]] = node["sens"]
+            else:
+                pool[c] = ps
+        # 次に展開する枝: 判定済み・未展開の全候補（前の段の次点を含む）から経路スコアの上位
+        kth = sorted(found.values(), reverse=True)[k - 1] if len(found) >= k else -1.0
+        expand = []
+        backtracked = 0
+        current_depth = max((state[c][1] for c, _ in cands), default=0)
+        for c in sorted(pool, key=lambda x: (-pool[x], x)):
+            if len(expand) >= beam:
+                break
+            if pool[c] <= kth:
+                break                               # 見つかった上位 k 件を上回れない
+            if own.get(c, 1.0) < floor and step > 0:
+                continue                            # 確率が低すぎる枝は展開しない
+            expand.append(c)
+            if state[c][1] < current_depth:
+                backtracked += 1
+        for c in expand:
+            pool.pop(c, None)
+        path.append({"level": step, "candidates": len(cands), "trimmed": trimmed,
+                     "backtracked": backtracked,
+                     "kept": [{"kind": tree[c]["kind"], "title": tree[c]["title"][:40],
+                               "score": round(own[c], 2), "path": round(pool_score, 2)}
+                              for c, pool_score in ((c, _path_score(*state[c])) for c in expand)],
+                     "passages": sum(1 for c, _ in cands if tree[c]["kind"] == "chunk")})
+        step += 1
     ranked = [(cid, s) for cid, s in sorted(found.items(), key=lambda t: (-t[1], t[0]))
               if s >= floor]
     hits = ranked[:k]
@@ -542,9 +583,8 @@ def navigate(ctx, question: str, allowed: set[str], *, k: int = 8, beam: int = 4
             else "public"
         judge = pick_judge(ctx, sens, jev_client)
         if judge is not None:
-            nodes = [tree[f"c:{cid}"] for cid, _ in short]
             try:
-                probs = judge.choice(question, nodes)
+                probs = judge.choice(question, [tree[f"c:{cid}"] for cid, _ in short])
                 calls += 1
                 judges_used.add(judge.name)
                 if probs:
@@ -552,10 +592,10 @@ def navigate(ctx, question: str, allowed: set[str], *, k: int = 8, beam: int = 4
                     order = sorted(short, key=lambda t: (-probs.get(f"c:{t[0]}", 0.0), -t[1]))
                     hits = order + hits[len(short):]
             except LLMError as e:
-                path.append({"level": depth, "choice_error": str(e)[:120], "candidates": 0,
-                             "kept": [], "passages": 0})
+                path.append({"level": step, "choice_error": str(e)[:120], "candidates": 0,
+                             "kept": [], "passages": 0, "trimmed": 0, "backtracked": 0})
     return {"hits": hits, "path": path, "calls": calls, "soft": soft_used, "error": error,
-            "choice": choice_used, "judges": sorted(judges_used),
+            "choice": choice_used, "judges": sorted(judges_used), "beam": beam,
             "jev_cost": round(jev_client.cost, 6) if jev_client else 0.0}
 
 

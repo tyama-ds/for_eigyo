@@ -293,7 +293,14 @@ class Handler(BaseHTTPRequestHandler):
             elif not question:
                 self._send_json({"error": "質問が空です"}, 400)
             else:
-                job = ORCH.start_query(engine_ids, question, mode)
+                options = {}
+                beam = body.get("beam")
+                if beam not in (None, "") and not isinstance(beam, bool):
+                    try:
+                        options["decision_beam"] = max(1, min(10, int(beam)))
+                    except (TypeError, ValueError):
+                        pass
+                job = ORCH.start_query(engine_ids, question, mode, options)
                 self._send_json({"job_id": job.id})
         else:
             self.send_error(404)

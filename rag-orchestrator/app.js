@@ -93,6 +93,7 @@ async function loadConfig() {
     ? "（設定済み。変更する場合のみ入力）" : "（未設定。不要なサーバでは空のまま）";
   $("#s-embed_api_key").placeholder = cfg.has_embed_key ? "（設定済み）" : "（空なら API Key を流用）";
   $("#s-jev_api_key").placeholder = cfg.has_jev_key ? "（設定済み。変更する場合のみ入力）" : "（未設定）";
+  $("#q-beam").placeholder = `設定の値（${cfg.decision_beam ?? 4}）`;
   updateConnBadge(cfg);
 }
 
@@ -235,8 +236,9 @@ $("#q-run").addEventListener("click", async () => {
   if (!question) { $("#q-hint").textContent = "質問を入力してください"; return; }
   if (!ids.length) { $("#q-hint").textContent = "エンジンを選択してください（インデックス構築が必要）"; return; }
   $("#q-hint").textContent = "";
-  const r = await api("/api/query",
-    { question, engines: ids, mode: $("#q-mode").value });
+  const body = { question, engines: ids, mode: $("#q-mode").value };
+  if ($("#q-beam").value.trim()) body.beam = Number($("#q-beam").value);
+  const r = await api("/api/query", body);
   if (r.error) { $("#q-hint").textContent = r.error; return; }
   state.queryJob = r.job_id;
   pollJobs();
@@ -348,7 +350,7 @@ function renderQueryJob(job) {
         ${thinkHtml(e.result.think)}
         <div class="answer">${renderText(e.result.answer || "")}</div>
         ${eid === "decision" && e.result.stats && e.result.stats.route
-          ? `<div class="engine-stats">階層の経路: ${esc(e.result.stats.route)} ・ 判定 ${esc(e.result.stats.calls)} 回（${esc(e.result.stats.judge)}${e.result.stats.soft ? "・確率" : ""}${e.result.stats.choice ? "・選択式で並べ替え" : ""}）${e.result.stats.note ? " ・ " + esc(e.result.stats.note) : ""}</div>` : ""}
+          ? `<div class="engine-stats">階層の経路（経路スコア）: ${esc(e.result.stats.route)} ・ ビーム幅 ${esc(e.result.stats.beam)} ・ 判定 ${esc(e.result.stats.calls)} 回${e.result.stats.trimmed ? `（上限で ${esc(e.result.stats.trimmed)} 件未判定）` : ""}（${esc(e.result.stats.judge)}${e.result.stats.soft ? "・確率" : ""}${e.result.stats.choice ? "・選択式で並べ替え" : ""}）${e.result.stats.note ? " ・ " + esc(e.result.stats.note) : ""}</div>` : ""}
         ${cites ? `<div class="citations">${cites}</div>` : ""}
       </div>`);
     } else {

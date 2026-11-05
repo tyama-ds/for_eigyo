@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 import tempfile
 import types
@@ -420,6 +421,7 @@ class TestDecisionRAG(unittest.TestCase):
         c.close()
         db.set_data_dir(path)
         self.assertEqual(db.get_chat("old")["strategy"], "auto")       # 古い DB に列を追加
+        self.assertEqual(db.get_chat("old")["decision_beam"], 0)
         self.assertEqual(db.create_chat(strategy="decision")["strategy"], "decision")
 
 
@@ -469,3 +471,81 @@ class TestJev(unittest.TestCase):
         self.assertGreater(probs[1], probs[0])
         self.assertAlmostEqual(sum(probs.values()), 1.0)
         self.assertNotIn(25, probs)
+
+
+class TestBeamSearch(unittest.TestCase):
+    """DecisionRAG のビームサーチ: 経路スコア・ビーム幅・バックトラック・判定回数の上限。"""
+
+    def setUp(self):
+        from docvault import decision
+        self.decision = decision
+        self.saved = decision.get_tree
+
+    def tearDown(self):
+        self.decision.get_tree = self.saved
+
+    def make(self, spec):
+        """spec: {id: (kind, digit, [children])}。説明文は id そのもの。"""
+        tree = {}
+        for nid, (kind, _, kids) in spec.items():
+            tree[nid] = {"id": nid, "kind": kind, "title": nid, "desc": nid, "children": kids,
+                         "docs": {"d"}, "sens": "internal"}
+            if kind == "chunk":
+                tree[nid]["chunk_id"] = nid
+        tree["root"] = {"id": "root", "kind": "group", "title": "root", "desc": "",
+                        "children": [n for n in spec if not any(n in v[2] for v in spec.values())],
+                        "docs": {"d"}, "sens": "internal"}
+        digits = {nid: d for nid, (_, d, _) in spec.items()}
+        self.decision.get_tree = lambda: tree
+        test = self
+
+        class FakeLLM:
+            calls = []
+
+            def chat_logprobs(self, profile, prompt, **kw):
+                lines = re.findall(r"^\[(\d+)\] （.+?）(.*)$", prompt, re.MULTILINE)
+                test.assertTrue(lines)
+                self.calls.append([d for _, d in lines])
+                return "\n".join(f"{i}={digits[d]}" for i, d in lines), None
+
+        class Ctx:
+            touched, mode = False, "local"
+            llm = FakeLLM()
+
+            def profile(self, kind, sens):
+                return "local"
+        return Ctx()
+
+    def test_path_score_beats_own_probability(self):
+        # A(0.89)>B(0.33)。B の子 b1 は単独では a1/a2 より高いが、経路スコアでは下回る
+        ctx = self.make({"A": ("group", 8, ["a1", "a2"]), "B": ("group", 3, ["b1"]),
+                         "a1": ("doc", 6, ["ca1"]), "a2": ("doc", 5, ["ca2"]),
+                         "b1": ("doc", 7, ["cb1"]),
+                         "ca1": ("chunk", 9, []), "ca2": ("chunk", 9, []), "cb1": ("chunk", 9, [])})
+        res = self.decision.navigate(ctx, "q", {"d"}, k=2, beam=2, use_choice=False)
+        self.assertEqual([c for c, _ in res["hits"]], ["ca1", "ca2"])   # 経路スコア順
+        self.assertEqual(res["calls"], 3)       # 上位2件より良くなり得ない b1 は展開しない
+        self.assertEqual([x["title"] for x in res["path"][1]["kept"]], ["a1", "a2"])
+        self.assertTrue(all(len(lv["kept"]) <= 2 for lv in res["path"]))
+        # k を増やすと、見送った B の枝へ戻って段落を探す
+        res = self.decision.navigate(ctx, "q", {"d"}, k=8, beam=2, use_choice=False)
+        self.assertEqual([c for c, _ in res["hits"]], ["ca1", "ca2", "cb1"])
+
+    def test_backtracks_to_runner_up(self):
+        # ビーム幅1。A を選んだが配下が外れ（確率 0.0x）→ 前の段の次点 B に戻る
+        ctx = self.make({"A": ("group", 8, ["a1"]), "B": ("group", 5, ["b1"]),
+                         "a1": ("doc", 0, ["ca1"]), "b1": ("doc", 8, ["cb1"]),
+                         "ca1": ("chunk", 9, []), "cb1": ("chunk", 9, [])})
+        res = self.decision.navigate(ctx, "q", {"d"}, k=2, beam=1, use_choice=False)
+        self.assertEqual(res["hits"][0][0], "cb1")
+        self.assertNotIn("ca1", [c for c, _ in res["hits"]])
+        self.assertEqual(sum(lv["backtracked"] for lv in res["path"]), 1)
+        self.assertTrue(all(len(lv["kept"]) <= 1 for lv in res["path"]))
+
+    def test_budget_trims_visibly(self):
+        spec = {f"x{i}": ("chunk", 5, []) for i in range(70)}
+        ctx = self.make(spec)
+        res = self.decision.navigate(ctx, "q", {"d"}, k=5, beam=4, budget=2, use_choice=False)
+        self.assertEqual(res["calls"], 2)
+        self.assertEqual(res["path"][0]["candidates"], 60)          # 30件×2回まで
+        self.assertEqual(res["path"][0]["trimmed"], 10)             # 判定できなかった分を記録

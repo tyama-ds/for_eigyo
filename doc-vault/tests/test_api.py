@@ -208,6 +208,24 @@ class TestAPIFlow(unittest.TestCase):
         self.assertNotIn("DecisionRAG", " ".join(meta["via"]))
         self.assertIsNone(meta["decision"])
 
+    def test_05c_beam_width_per_chat(self):
+        # 相談ごとにビーム幅を指定できる（0 / 空なら設定の値＝既定 4）
+        chat = self.api("/api/chats", {"mode": "local", "strategy": "decision",
+                                       "decision_beam": 1})["chat"]
+        self.assertEqual(chat["decision_beam"], 1)
+        meta = self.ask(chat["id"], "熱処理炉の温度センサーはいつ交換した？")[-1]["message"]["meta"]
+        self.assertEqual(meta["decision"]["beam"], 1)
+        self.assertTrue(all(len(lv["kept"]) <= 1 for lv in meta["decision"]["path"]))
+        self.assertTrue(any("ビーム幅 1" in s["detail"] for s in meta["steps"]))
+        chat = self.api(f"/api/chats/{chat['id']}/update", {"decision_beam": 0})["chat"]
+        self.assertEqual(chat["decision_beam"], 0)
+        meta = self.ask(chat["id"], "熱処理炉の温度センサーはいつ交換した？")[-1]["message"]["meta"]
+        self.assertEqual(meta["decision"]["beam"], 4)
+        chat = self.api(f"/api/chats/{chat['id']}/update", {"decision_beam": 99})["chat"]
+        self.assertEqual(chat["decision_beam"], 10)                  # 上限で丸める
+        chat = self.api(f"/api/chats/{chat['id']}/update", {"decision_beam": "x"})["chat"]
+        self.assertEqual(chat["decision_beam"], 10)                  # 不正な値は無視
+
     def test_06_chat_cloud_mode_excludes_internal(self):
         chat = self.api("/api/chats", {"mode": "cloud"})["chat"]
         events = self.ask(chat["id"], "SkyEdge S-2 の給電方式は？")

@@ -131,6 +131,74 @@ class TestEngine(unittest.TestCase):
         self.assertIn("Jev", r["stats"]["note"])
 
 
+class TestBeamSearch(unittest.TestCase):
+    """ビームサーチ: 経路スコア・ビーム幅・バックトラック・判定回数の上限。"""
+
+    @staticmethod
+    def make(spec):
+        """spec: {id: (kind, digit, [children])}。説明文は id。"""
+        tree = {}
+        for i, (nid, (kind, _, kids)) in enumerate(spec.items()):
+            tree[nid] = {"kind": kind, "title": nid, "desc": nid, "children": kids}
+            if kind == "chunk":
+                tree[nid]["chunk"] = i
+        tree["root"] = {"kind": "group", "title": "root", "desc": "",
+                        "children": [n for n in spec if not any(n in v[2] for v in spec.values())]}
+        digits = {nid: d for nid, (_, d, _) in spec.items()}
+
+        class Judge:
+            name, batch, soft = "fake", 30, False
+
+            def __init__(self):
+                self.calls = []
+
+            def binary(self, question, descs):
+                names = [d.split("）", 1)[1] for d in descs]
+                self.calls.append(names)
+                return {i: digits[n] / 9 for i, n in enumerate(names, 1)}
+
+            def choice(self, question, descs):
+                return {}
+        return tree, Judge()
+
+    def hit_names(self, tree, res):
+        by_idx = {v["chunk"]: k for k, v in tree.items() if v["kind"] == "chunk"}
+        return [by_idx[i] for i, _ in res["hits"]]
+
+    def test_path_score_beats_own_probability(self):
+        tree, judge = self.make({"A": ("group", 8, ["a1", "a2"]), "B": ("group", 3, ["b1"]),
+                                 "a1": ("doc", 6, ["ca1"]), "a2": ("doc", 5, ["ca2"]),
+                                 "b1": ("doc", 7, ["cb1"]), "ca1": ("chunk", 9, []),
+                                 "ca2": ("chunk", 9, []), "cb1": ("chunk", 9, [])})
+        res = navigate(tree, "q", judge, k=2, beam=2, use_choice=False)
+        self.assertEqual(self.hit_names(tree, res), ["ca1", "ca2"])
+        self.assertEqual(res["calls"], 3)
+        self.assertEqual([x["title"] for x in res["path"][1]["kept"]], ["a1", "a2"])
+        tree, judge = self.make({"A": ("group", 8, ["a1", "a2"]), "B": ("group", 3, ["b1"]),
+                                 "a1": ("doc", 6, ["ca1"]), "a2": ("doc", 5, ["ca2"]),
+                                 "b1": ("doc", 7, ["cb1"]), "ca1": ("chunk", 9, []),
+                                 "ca2": ("chunk", 9, []), "cb1": ("chunk", 9, [])})
+        res = navigate(tree, "q", judge, k=8, beam=2, use_choice=False)
+        self.assertEqual(self.hit_names(tree, res), ["ca1", "ca2", "cb1"])
+
+    def test_backtracks_and_respects_beam(self):
+        tree, judge = self.make({"A": ("group", 8, ["a1"]), "B": ("group", 5, ["b1"]),
+                                 "a1": ("doc", 0, ["ca1"]), "b1": ("doc", 8, ["cb1"]),
+                                 "ca1": ("chunk", 9, []), "cb1": ("chunk", 9, [])})
+        res = navigate(tree, "q", judge, k=2, beam=1, use_choice=False)
+        self.assertEqual(self.hit_names(tree, res)[0], "cb1")
+        self.assertEqual(sum(lv["backtracked"] for lv in res["path"]), 1)
+        self.assertTrue(all(len(lv["kept"]) <= 1 for lv in res["path"]))
+        self.assertEqual(res["beam"], 1)
+
+    def test_budget_trims_visibly(self):
+        tree, judge = self.make({f"x{i}": ("chunk", 5, []) for i in range(70)})
+        res = navigate(tree, "q", judge, k=5, budget=2, use_choice=False)
+        self.assertEqual(res["calls"], 2)
+        self.assertEqual(res["path"][0]["candidates"], 60)
+        self.assertEqual(res["path"][0]["trimmed"], 10)
+
+
 class TestJev(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -226,6 +294,12 @@ class TestDecisionAPI(unittest.TestCase):
                                                 "question": "SkyEdge S-2 はどんな製品？"})["job_id"])
         res = job["engines"]["decision"]["result"]
         self.assertEqual(res["mode"], "decision(llm)")
+        self.assertEqual(res["stats"]["beam"], 3)                    # 設定の値
+        # 質問ごとにビーム幅を指定できる
+        job = self.wait(self.api("/api/query", {"engines": ["decision"], "beam": 1,
+                                                "question": "SkyEdge S-2 はどんな製品？"})["job_id"])
+        self.assertEqual(job["options"], {"decision_beam": 1})
+        self.assertEqual(job["engines"]["decision"]["result"]["stats"]["beam"], 1)
         self.assertTrue(res["stats"]["soft"])
         decide = [x["body"] for x in mock_llm.REQUESTS[before:]
                   if "[TASK:decide]" in json.dumps(x["body"], ensure_ascii=False)]

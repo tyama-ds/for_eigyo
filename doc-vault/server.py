@@ -415,8 +415,12 @@ class Handler(BaseHTTPRequestHandler):
                 else config.load_config()["policy"]["chat_mode"]
             scope = body.get("scope") if isinstance(body.get("scope"), dict) else {}
             strategy = body.get("strategy") if body.get("strategy") in STRATEGIES else "auto"
-            self._json({"chat": db.create_chat(str(body.get("title") or ""), mode,
-                                               _clean_scope(scope), strategy)})
+            chat = db.create_chat(str(body.get("title") or ""), mode, _clean_scope(scope), strategy)
+            beam = _beam(body.get("decision_beam"))
+            if beam:
+                db.update_chat(chat["id"], decision_beam=beam)
+                chat = db.get_chat(chat["id"])
+            self._json({"chat": chat})
         elif len(parts) == 4 and parts[:2] == ["api", "chats"]:
             chat_id, action = parts[2], parts[3]
             chat = db.get_chat(chat_id)
@@ -434,6 +438,9 @@ class Handler(BaseHTTPRequestHandler):
                     fields["mode"] = body["mode"]
                 if body.get("strategy") in STRATEGIES:
                     fields["strategy"] = body["strategy"]
+                beam = _beam(body.get("decision_beam"))
+                if beam is not None:
+                    fields["decision_beam"] = beam
                 if isinstance(body.get("scope"), dict):
                     fields["scope"] = _clean_scope(body["scope"])
                 if isinstance(body.get("title"), str) and body["title"].strip():
@@ -490,6 +497,16 @@ class Handler(BaseHTTPRequestHandler):
         if os.environ.get("DOCVAULT_QUIET"):
             return
         sys.stderr.write("doc-vault: " + fmt % args + "\n")
+
+
+def _beam(value) -> int | None:
+    """DecisionRAG のビーム幅（各段で残す枝の数）。0 は「設定の値に従う」。不正なら None。"""
+    if value is None or value == "" or isinstance(value, bool):
+        return None
+    try:
+        return max(0, min(10, int(value)))
+    except (TypeError, ValueError):
+        return None
 
 
 def _clean_scope(scope: dict) -> dict:

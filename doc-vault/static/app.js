@@ -173,6 +173,10 @@ function refreshChatHead() {
   $("#chat-title").value = c ? c.title : "";
   $("#chat-mode").value = c ? c.mode : ((state.config && state.config.policy.chat_mode) || "auto");
   $("#chat-strategy").value = c ? (c.strategy || "auto") : "auto";
+  $("#chat-beam").value = c && c.decision_beam ? c.decision_beam : "";
+  const defBeam = state.config && state.config.rag ? state.config.rag.decision_beam : 4;
+  $("#chat-beam").placeholder = `既定 ${defBeam}`;
+  $("#chat-beam-box").classList.toggle("hidden", $("#chat-strategy").value === "classic");
   $("#chat-folder").value = c ? (c.scope.folder || "") : "";
   const ids = c ? (c.scope.doc_ids || []) : [];
   $("#chat-scope-docs").innerHTML = ids.map((id) => {
@@ -193,6 +197,10 @@ async function updateChat(fields) {
 
 $("#chat-mode").addEventListener("change", () => updateChat({ mode: $("#chat-mode").value }));
 $("#chat-strategy").addEventListener("change", () => updateChat({ strategy: $("#chat-strategy").value }));
+$("#chat-beam").addEventListener("change", () => {
+  const v = $("#chat-beam").value.trim();
+  updateChat({ decision_beam: v ? Math.max(1, Math.min(10, Number(v) || 0)) : 0 });
+});
 $("#chat-folder").addEventListener("change", () =>
   updateChat({ scope: { ...(state.chat ? state.chat.scope : {}), folder: $("#chat-folder").value } }));
 $("#chat-title").addEventListener("change", () => updateChat({ title: $("#chat-title").value }));
@@ -262,9 +270,11 @@ function messageHtml(m, idx) {
   for (const s of meta.steps || []) trace.push(`${esc(s.t)}秒 ${esc(s.name)}: ${esc(s.detail)}`);
   if (meta.decision && meta.decision.path) {
     const lv = meta.decision.path.filter((p) => p.candidates).map((p) =>
-      `段${p.level + 1}: 候補 ${p.candidates} 件 → ` + (p.kept.length
-        ? p.kept.map((k) => `${esc(k.title)}（${k.score}）`).join("、") : "段落のみ"));
-    if (lv.length) trace.push(`DecisionRAG の経路: ${lv.join(" ／ ")}`);
+      `${p.level + 1}回目: 候補 ${p.candidates} 件${p.trimmed ? `（判定回数の上限で ${p.trimmed} 件は未判定）` : ""} → `
+      + (p.kept.length ? p.kept.map((k) => `${esc(k.title)}（確率 ${k.score}・経路 ${k.path ?? k.score}）`).join("、")
+        : "展開なし")
+      + (p.backtracked ? `　※前の段の次点へ ${p.backtracked} 本戻った` : ""));
+    if (lv.length) trace.push(`DecisionRAG（ビーム幅 ${meta.decision.beam ?? "-"}）の経路: ${lv.join(" ／ ")}`);
     if (meta.decision.jev_cost) trace.push(`Jev の費用: $${meta.decision.jev_cost}`);
   }
   if (meta.llm) trace.push(`LLM 呼び出し: ローカル ${meta.llm.calls.local} 回 / クラウド ${meta.llm.calls.cloud} 回`);
