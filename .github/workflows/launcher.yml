@@ -1,0 +1,61 @@
+name: launcher tests
+
+on:
+  push:
+    paths: ["launcher/**", ".github/workflows/launcher.yml"]
+  pull_request:
+    paths: ["launcher/**", ".github/workflows/launcher.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: App Portal unit tests
+        run: python -m unittest discover -s launcher -p "test*.py" -v
+
+  start-portal-bat:
+    # 「Download ZIP」で届くバイト列のままの start_portal.bat を、本物の cmd.exe で実行して
+    # launcher.py まで届くかを確かめる（LF だと日本語版 Windows で chcp の行を読み違えて即終了した）
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run start_portal.bat as delivered by "Download ZIP"
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          # リポジトリに保存されたバイト列（= ZIP の中身）。PowerShell のパイプは文字列に変えるので cmd のリダイレクトで書き出す
+          cmd /c "git -c core.autocrlf=false cat-file blob HEAD:launcher/start_portal.bat > zip_start_portal.bat"
+          $bytes = [System.IO.File]::ReadAllBytes("zip_start_portal.bat")
+          $stub = "import sys; print('LAUNCHER REACHED args=' + repr(sys.argv[1:]))"
+          $failed = 0
+          foreach ($dirName in "bat_probe", "bat probe 日本語フォルダ") {
+            $d = Join-Path $PWD $dirName
+            New-Item -ItemType Directory -Force $d | Out-Null
+            [System.IO.File]::WriteAllBytes((Join-Path $d "start_portal.bat"), $bytes)
+            Set-Content -Path (Join-Path $d "launcher.py") -Value $stub -Encoding utf8
+            foreach ($cp in 932, 437) {
+              $bat = Join-Path $d "start_portal.bat"
+              $out = cmd /d /c "chcp $cp >nul & call `"$bat`" --probe < nul" 2>&1 | Out-String
+              $ok = $out -match "LAUNCHER REACHED args=\['--open', '--probe'\]"
+              Write-Host ("===== folder='{0}' codepage={1} -> {2}" -f $dirName, $cp, $(if ($ok) { "OK" } else { "FAILED" }))
+              Write-Host $out
+              if (-not $ok) { $failed++ }
+            }
+          }
+          if ($failed) { Write-Error "start_portal.bat did not reach launcher.py in $failed case(s)"; exit 1 }

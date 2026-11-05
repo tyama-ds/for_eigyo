@@ -28,7 +28,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-__version__ = "1.1.1"
+__version__ = "1.1.2"
 
 BASE = Path(__file__).resolve().parent
 APPS_FILE = BASE / "apps.json"
