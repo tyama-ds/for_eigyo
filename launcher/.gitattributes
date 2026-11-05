@@ -1,0 +1,4 @@
+# start_portal.bat は CRLF のまま保存・配布する（-text: git に改行を変換させない）。
+# LF だと日本語版 Windows の cmd.exe が「chcp 65001」の行を読み違えて即終了するため。
+# GitHub の「Download ZIP」もリポジトリのバイト列そのままなので、ここで CRLF にしておく必要がある。
+*.bat -text

@@ -7,11 +7,11 @@
   "phase": "新規アプリの登録ごとに更新",
   "progress": 92,
   "started": "2026-07-07",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "ports": [
     8770
   ],
-  "ci": false,
+  "ci": true,
   "portal": false,
   "stack": [
     "Python 標準ライブラリ"
@@ -39,19 +39,24 @@
     },
     {
       "title": "CI ワークフロー",
-      "state": "todo"
+      "state": "done",
+      "date": "2026-11-05"
     }
   ],
   "next": [
     "新しいアプリを作ったら apps.json に登録",
-    "ポータル統合テストの CI 化（現在は research-atlas の CI で launcher/test*.py を実行）",
-    "バージョンを持たないアプリ（ニュースポータル・Kaleido Agents・Patent Atlas）に __version__ を置く"
+    "バージョンを持たないアプリ（ニュースポータル・Kaleido Agents・Patent Atlas）に __version__ を置く",
+    "他プロジェクトの start.bat（mycel・copilot-bridge）も LF＋日本語のため、ZIP で取ると同じ理由で起動しない可能性がある。CRLF 化を各プロジェクトで検討"
   ],
   "risks": [
     "各アプリの起動方法（venv の有無）が異なり、初回セットアップが必要なものがある",
     "最終更新日は git の履歴から取るため、git の無い PC やフォルダのコピーでは表示されない"
   ],
   "log": [
+    {
+      "date": "2026-11-05",
+      "summary": "「Download ZIP」で取った start_portal.bat が即終了する不具合を修正（LF 改行を日本語版 cmd.exe が読み違え、chcp 65001 の行が壊れていた）。bat を CRLF に固定（.gitattributes で -text）し、ZIP と同じバイト列を本物の cmd.exe で実行する CI（launcher.yml）を追加（v1.1.2）"
+    },
     {
       "date": "2026-11-05",
       "summary": "日本語版 Windows でアプリ一覧が表示されなくなる不具合を修正（git の出力を cp932 で読みエラー → 一覧の応答が失敗）。git の出力を UTF-8 で読み、1アプリの読み取り失敗で一覧を止めず、読み込めないときは画面に理由を表示（v1.1.1）",
