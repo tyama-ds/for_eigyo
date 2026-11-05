@@ -1,7 +1,7 @@
 /* Search-service output UI. Shares the application state; exports do not mutate a saved query. */
 function queryCard(q) {
   if (!q)
-    return '<div class="empty-state"><div class="empty-orbit">⌘</div><h3>分類を選んで初案をつくりましょう。</h3><button class="button primary" id="back-class">Step 00へ →</button></div>';
+    return '<div class="empty-state"><div class="empty-state-icon">⌘</div><h3>分類を選んで初案をつくりましょう。</h3><button class="button primary" id="back-class">Step 00へ →</button></div>';
   if (!formatCatalog.some((f) => f.id === outputFormat)) outputFormat = 'jplatpat';
   const terms = q.term_catalog || [
       ...new Set([...(q.keywords || []), ...(q.include_terms || []), ...(q.exclude_terms || [])]),

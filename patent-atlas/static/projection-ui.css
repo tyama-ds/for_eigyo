@@ -21,7 +21,7 @@
 }
 .projection-status {
   padding: 0 22px;
-  margin: 12px 0 8px;
+  margin: var(--space-3) 0 var(--space-2);
   min-height: 34px;
 }
 .projection-pins {
@@ -29,20 +29,20 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  padding: 0 22px 12px;
+  padding: 0 22px var(--space-3);
 }
 .projection-pin {
   display: inline-flex;
   align-items: center;
   border: 1px solid var(--pin-color);
-  border-radius: 20px;
-  background: color-mix(in srgb, var(--pin-color) 10%, transparent);
+  border-radius: var(--radius-l);
+  background: color-mix(in srgb, var(--pin-color) 10%, var(--transparent));
 }
 .projection-pin button {
   border: 0;
   background: none;
   color: var(--text);
-  padding: 5px 8px;
+  padding: 5px var(--space-2);
   font: inherit;
   font-size: 11px;
   cursor: pointer;
@@ -61,11 +61,11 @@
   width: min(335px, calc(100% - 20px));
   max-height: 280px;
   overflow: hidden;
-  padding: 14px 16px;
-  background: var(--panel, #17191f);
-  border: 1px solid var(--line, #62606a);
-  box-shadow: 0 14px 48px #0005;
-  border-radius: 12px;
+  padding: 14px var(--space-4);
+  background: var(--panel, var(--palette-17191f));
+  border: 1px solid var(--line, var(--palette-62606a));
+  box-shadow: 0 14px 48px var(--palette-00000055);
+  border-radius: var(--radius-m);
   font-size: 12px;
   line-height: 1.7;
   backdrop-filter: blur(18px);
@@ -75,7 +75,7 @@
   line-height: 1.6;
 }
 .projection-tooltip p {
-  margin: 8px 0;
+  margin: var(--space-2) 0;
   display: -webkit-box;
   -webkit-line-clamp: 5;
   -webkit-box-orient: vertical;
@@ -93,12 +93,12 @@
   stroke-width: 3px;
 }
 #map-points .point.projection-boundary-point {
-  stroke: #f8cd65;
+  stroke: var(--palette-f8cd65);
   stroke-width: 3px;
   stroke-dasharray: 2 2;
 }
 #map-points .point.projection-focus {
-  stroke: #fff;
+  stroke: var(--white);
   stroke-width: 5px;
 }
 #projection-pin-labels {
@@ -106,7 +106,7 @@
   font-weight: 800;
   font-size: 13px;
   paint-order: stroke;
-  stroke: var(--panel, #17191f);
+  stroke: var(--panel, var(--palette-17191f));
   stroke-width: 3px;
 }
 #projection-trails {
@@ -124,11 +124,9 @@
   stroke-width: 1.5px;
   vector-effect: non-scaling-stroke;
 }
-.projection-evaluation {
-  margin-top: 20px;
-}
+.projection-evaluation,
 .projection-adoption {
-  margin-top: 20px;
+  margin-top: var(--space-5);
 }
 .projection-adoption textarea {
   min-height: 74px;
@@ -137,7 +135,7 @@
 .projection-adoption-notice {
   border-left: 3px solid var(--amber);
   padding: 10px 14px;
-  background: #e2a34e0a;
+  background: var(--palette-e2a34e0a);
   font-size: 12px;
   line-height: 1.8;
 }
@@ -146,7 +144,7 @@
   font-size: 12px;
 }
 .projection-adoption-history p {
-  padding: 12px 0;
+  padding: var(--space-3) 0;
   border-bottom: 1px solid var(--line);
 }
 .projection-adoption-history small {
@@ -155,11 +153,11 @@
 .projection-metrics {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
+  gap: var(--space-3);
 }
 .projection-metrics > div {
   border-left: 2px solid var(--line);
-  padding: 6px 16px;
+  padding: 6px var(--space-4);
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -176,7 +174,7 @@
 }
 .projection-boundary-details {
   border-top: 1px solid var(--line);
-  padding-top: 16px;
+  padding-top: var(--space-4);
 }
 .projection-boundary-details summary {
   cursor: pointer;
@@ -187,25 +185,25 @@
   grid-template-columns: repeat(3, minmax(0, 1fr));
   max-height: 280px;
   overflow: auto;
-  gap: 8px;
-  margin-top: 12px;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
 }
 .projection-candidate {
   border: 1px solid var(--line);
-  background: transparent;
-  border-radius: 10px;
-  padding: 12px;
+  background: var(--transparent);
+  border-radius: var(--radius-control);
+  padding: var(--space-3);
   text-align: left;
   color: var(--text);
   cursor: pointer;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
   font: inherit;
 }
 .projection-candidate:hover {
-  border-color: #e2a34e;
-  background: #e2a34e0a;
+  border-color: var(--palette-e2a34e);
+  background: var(--palette-e2a34e0a);
 }
 .projection-candidate b {
   font-size: 12px;

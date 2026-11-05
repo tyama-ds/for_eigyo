@@ -1,15 +1,12 @@
 #convergence-content {
   display: grid;
-  gap: 20px;
-  margin-top: 24px;
-  --convergence-new: #458779;
-  --convergence-topic: #7460a7;
-  --convergence-hits: #b47752;
-  --convergence-uploaded: #65877c;
-  --convergence-total: #a37c52;
-}
-#convergence-content [hidden] {
-  display: none !important;
+  gap: var(--space-5);
+  margin-top: var(--space-6);
+  --convergence-new: var(--palette-458779);
+  --convergence-topic: var(--palette-7460a7);
+  --convergence-hits: var(--palette-b47752);
+  --convergence-uploaded: var(--palette-65877c);
+  --convergence-total: var(--palette-a37c52);
 }
 .convergence-panel,
 .convergence-review-panel {
@@ -17,7 +14,8 @@
   min-width: 0;
 }
 .convergence-panel {
-  background: radial-gradient(ellipse at 0 0, #eee8fa88, transparent 48%), #fffcf6;
+  background:
+    radial-gradient(ellipse at 0 0, var(--palette-eee8fa88), var(--transparent) 48%), var(--palette-fffcf6);
 }
 .convergence-heading {
   display: flex;
@@ -36,25 +34,25 @@
 }
 .convergence-status {
   flex: none;
-  border: 1px solid #d5c9e5;
+  border: 1px solid var(--palette-d5c9e5);
   border-radius: 30px;
-  background: #f0e9f8;
-  padding: 8px 13px;
+  background: var(--palette-f0e9f8);
+  padding: var(--space-2) 13px;
   font-size: 11px;
-  color: #65527f;
+  color: var(--palette-65527f);
   white-space: nowrap;
 }
 .convergence-status[data-status='stable'],
 .convergence-status[data-status='completed'] {
-  background: #e8f0e9;
-  border-color: #c0d7c8;
-  color: #3d735d;
+  background: var(--palette-e8f0e9);
+  border-color: var(--palette-c0d7c8);
+  color: var(--palette-3d735d);
 }
 .convergence-summary {
   font-size: 13px;
   font-weight: 550;
   letter-spacing: 0.025em;
-  color: #6b598b;
+  color: var(--palette-6b598b);
   margin: 18px 0 10px;
 }
 .convergence-chart-scroll {
@@ -67,25 +65,25 @@
   overflow: visible;
 }
 .convergence-chart text {
-  fill: #8b7b89;
+  fill: var(--palette-8b7b89);
   font:
     11px ui-monospace,
     monospace;
 }
 .convergence-gridline {
-  stroke: #e5dfd5;
+  stroke: var(--palette-e5dfd5);
   stroke-dasharray: 3 5;
   stroke-width: 1;
 }
 .convergence-guide {
-  stroke: #8e9c77;
+  stroke: var(--palette-8e9c77);
   stroke-dasharray: 5 4;
   stroke-width: 1;
 }
 .convergence-chart .convergence-guide-label {
   font-family: inherit;
   font-size: 10px;
-  fill: #778263;
+  fill: var(--palette-778263);
 }
 .convergence-line {
   fill: none;
@@ -118,13 +116,13 @@
 }
 .convergence-point circle {
   fill: currentColor;
-  stroke: #fffaf3;
+  stroke: var(--palette-fffaf3);
   stroke-width: 2;
   transition: r 0.18s;
 }
 .convergence-point .convergence-hit-area {
-  fill: transparent;
-  stroke: transparent;
+  fill: var(--transparent);
+  stroke: var(--transparent);
   pointer-events: all;
 }
 .convergence-point:hover circle:not(.convergence-hit-area),
@@ -132,17 +130,17 @@
   r: 7;
   stroke: currentColor;
   stroke-width: 2;
-  fill: #fffcf6;
+  fill: var(--palette-fffcf6);
 }
 .convergence-legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px 22px;
-  margin: 12px 0 16px;
+  gap: var(--space-3) 22px;
+  margin: var(--space-3) 0 var(--space-4);
 }
 .convergence-legend > span {
   font-size: 11px;
-  color: #716679;
+  color: var(--palette-716679);
   display: flex;
   align-items: center;
   gap: 7px;
@@ -152,67 +150,37 @@
   width: 18px;
   height: 3px;
   background: currentColor;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
 }
 .convergence-legend i.convergence-hits,
 .convergence-legend i.convergence-total {
-  background: repeating-linear-gradient(90deg, currentColor 0 5px, transparent 5px 8px);
+  background: repeating-linear-gradient(90deg, currentColor 0 5px, var(--transparent) 5px 8px);
 }
 .convergence-method {
   font-size: 11px;
-  color: #807281;
+  color: var(--palette-807281);
   line-height: 1.9;
   max-width: 870px;
   padding: 11px 14px;
-  border-left: 2px solid #b6a5c5;
-  background: #f6f1f7;
-  border-radius: 0 8px 8px 0;
-}
-.convergence-empty {
-  padding: 40px 24px;
-  text-align: center;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 14px;
-  border: 1px dashed #d8cddb;
-  border-radius: 16px;
-  background: linear-gradient(130deg, #fbf8f3, #f6f0fa);
-  margin: 25px 0;
-}
-.convergence-empty > span {
-  font:
-    23px ui-monospace,
-    monospace;
-  color: #ae9cc5;
-  letter-spacing: 0.14em;
-}
-.convergence-empty strong {
-  font-size: 15px;
-  font-weight: 500;
-}
-.convergence-empty p {
-  font-size: 12px;
-  color: #827284;
-  max-width: 550px;
-  line-height: 1.8;
-  margin: 0;
+  border-left: 2px solid var(--palette-b6a5c5);
+  background: var(--palette-f6f1f7);
+  border-radius: 0 var(--radius-s) var(--radius-s) 0;
 }
 .convergence-count-details {
-  margin: 20px 0;
+  margin: var(--space-5) 0;
 }
 .convergence-count-details > summary {
   cursor: pointer;
   font-size: 12px;
-  color: #695784;
-  padding: 12px 0;
+  color: var(--palette-695784);
+  padding: var(--space-3) 0;
 }
 .convergence-table-scroll {
   overflow: auto;
   max-height: 360px;
-  border: 1px solid #e2d8df;
-  border-radius: 12px;
-  margin-top: 16px;
+  border: 1px solid var(--palette-e2d8df);
+  border-radius: var(--radius-m);
+  margin-top: var(--space-4);
 }
 .convergence-table {
   width: 100%;
@@ -222,22 +190,22 @@
   min-width: 680px;
 }
 .convergence-table caption {
-  padding: 12px 14px;
+  padding: var(--space-3) 14px;
   text-align: left;
-  color: #847784;
-  background: #f7f2f6;
+  color: var(--palette-847784);
+  background: var(--palette-f7f2f6);
 }
 .convergence-table th,
 .convergence-table td {
   padding: 11px 13px;
   vertical-align: top;
-  border-bottom: 1px solid #e8e0e3;
+  border-bottom: 1px solid var(--palette-e8e0e3);
   line-height: 1.6;
 }
 .convergence-table thead th {
   font-weight: 500;
-  background: #f0e9f3;
-  color: #706079;
+  background: var(--palette-f0e9f3);
+  color: var(--palette-706079);
   white-space: nowrap;
 }
 .convergence-table tbody th {
@@ -246,14 +214,14 @@
 }
 .convergence-table small {
   display: block;
-  color: #998995;
+  color: var(--palette-998995);
   font-size: 10px;
   margin-top: 3px;
 }
 .convergence-table details summary {
   font-size: 10px;
   cursor: pointer;
-  color: #806a9b;
+  color: var(--palette-806a9b);
   white-space: nowrap;
 }
 .convergence-table pre {
@@ -267,9 +235,9 @@
   overflow: auto;
 }
 .convergence-record {
-  border-top: 1px solid #e1d6dd;
+  border-top: 1px solid var(--palette-e1d6dd);
   padding-top: 25px;
-  margin-top: 24px;
+  margin-top: var(--space-6);
 }
 .convergence-record h4 {
   font-size: 15px;
@@ -280,7 +248,7 @@
   display: grid;
   grid-template-columns: 1.35fr 1fr;
   gap: 18px;
-  margin-top: 16px;
+  margin-top: var(--space-4);
 }
 .convergence-record-fields label {
   font-size: 11px;
@@ -296,7 +264,7 @@
   font:
     10px/1.8 ui-monospace,
     monospace;
-  color: #8b7a90;
+  color: var(--palette-8b7a90);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   max-height: 92px;
@@ -306,19 +274,19 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 24px;
+  gap: var(--space-6);
   margin-top: 22px;
   padding: 18px;
-  background: #f1ede9;
-  border-radius: 12px;
+  background: var(--palette-f1ede9);
+  border-radius: var(--radius-m);
 }
 .convergence-complete b {
   font-size: 12px;
-  color: #65556f;
+  color: var(--palette-65556f);
 }
 .convergence-complete ul {
   font-size: 11px;
-  color: #847181;
+  color: var(--palette-847181);
   padding-left: 18px;
   line-height: 1.8;
   margin-bottom: 0;
@@ -327,22 +295,22 @@
   flex: none;
 }
 .convergence-error {
-  background: #fff0f0;
-  border: 1px solid #d9abb6;
-  border-radius: 10px;
-  color: #98465c;
-  padding: 12px;
+  background: var(--palette-fff0f0);
+  border: 1px solid var(--palette-d9abb6);
+  border-radius: var(--radius-control);
+  color: var(--palette-98465c);
+  padding: var(--space-3);
   font-size: 12px;
   overflow-wrap: anywhere;
 }
 .convergence-review-panel {
-  background: #fcfaf5;
+  background: var(--palette-fcfaf5);
 }
 .convergence-review-card {
   margin-top: 17px;
-  border: 1px solid #dfd3df;
-  border-radius: 14px;
-  background: #fffcfa;
+  border: 1px solid var(--palette-dfd3df);
+  border-radius: var(--radius-soft);
+  background: var(--palette-fffcfa);
   padding: 22px;
 }
 .convergence-review-meta {
@@ -352,20 +320,20 @@
   gap: 10px;
   align-items: center;
   font-size: 11px;
-  color: #97818c;
+  color: var(--palette-97818c);
 }
 .convergence-review-card h4 {
   font-size: 18px;
   font-weight: 550;
   line-height: 1.7;
-  margin: 18px 0 8px;
+  margin: 18px 0 var(--space-2);
   overflow-wrap: anywhere;
 }
 .convergence-patent-id {
   font:
     11px/1.8 ui-monospace,
     monospace;
-  color: #8b7991;
+  color: var(--palette-8b7991);
   overflow-wrap: anywhere;
 }
 .convergence-abstract {
@@ -374,18 +342,18 @@
   white-space: pre-wrap;
   max-height: 230px;
   overflow: auto;
-  padding-right: 8px;
+  padding-right: var(--space-2);
   overflow-wrap: anywhere;
 }
 .convergence-reason {
-  background: #f3eef6;
+  background: var(--palette-f3eef6);
   border-radius: 9px;
-  padding: 13px 16px;
+  padding: 13px var(--space-4);
   margin: 18px 0;
 }
 .convergence-reason b {
   font-size: 11px;
-  color: #7a608e;
+  color: var(--palette-7a608e);
 }
 .convergence-reason p {
   font-size: 12px;
@@ -401,8 +369,8 @@
 .convergence-review-empty > span {
   display: block;
   font-size: 20px;
-  color: #6f9277;
-  margin-bottom: 12px;
+  color: var(--palette-6f9277);
+  margin-bottom: var(--space-3);
 }
 .convergence-review-empty b {
   font-size: 13px;
@@ -410,7 +378,7 @@
 }
 .convergence-review-empty p {
   font-size: 11px;
-  color: #978592;
+  color: var(--palette-978592);
   line-height: 1.8;
 }
 .convergence-review-panel .caption,
@@ -421,11 +389,11 @@
 @media (max-width: 760px) {
   .convergence-panel,
   .convergence-review-panel {
-    padding: 20px;
+    padding: var(--space-5);
   }
   .convergence-heading {
     flex-direction: column;
-    gap: 8px;
+    gap: var(--space-2);
   }
   .convergence-heading h3 {
     font-size: 21px;
@@ -437,13 +405,13 @@
   .convergence-complete {
     align-items: flex-start;
     flex-direction: column;
-    gap: 16px;
+    gap: var(--space-4);
   }
   .convergence-review-card {
-    padding: 16px;
+    padding: var(--space-4);
   }
   .convergence-legend {
-    gap: 10px 16px;
+    gap: 10px var(--space-4);
   }
 }
 @media (prefers-reduced-motion: reduce) {

@@ -217,7 +217,9 @@ test('busy guard prevents duplicate requests', async () => {
   assert.equal(s.requests.length, 0);
 });
 test('styles preserve hidden alerts and honor reduced motion/static setting', () => {
-  const css = fs.readFileSync('static/query-library-ui.css', 'utf8');
+  const css = ['style.css', 'atlas-motion.css']
+    .map((file) => fs.readFileSync('static/' + file, 'utf8'))
+    .join('\n');
   assert.match(css, /\[hidden\]\s*\{\s*display:\s*none\s*!important/);
   assert.match(css, /prefers-reduced-motion:\s*reduce/);
   assert.match(css, /data-atlas-motion=(?:static|'static'|"static")/);

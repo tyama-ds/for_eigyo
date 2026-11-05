@@ -1,6 +1,6 @@
 .invention-workbench {
   padding: 28px;
-  margin-top: 24px;
+  margin-top: var(--space-6);
   min-width: 0;
 }
 .invention-heading,
@@ -9,7 +9,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: var(--space-4);
 }
 .invention-heading {
   align-items: flex-start;
@@ -25,23 +25,23 @@
 .invention-source-grid {
   display: grid;
   grid-template-columns: 1.2fr 1fr;
-  gap: 20px;
-  margin: 20px 0;
+  gap: var(--space-5);
+  margin: var(--space-5) 0;
 }
 .invention-source-grid > label {
   margin: 0;
 }
 .invention-source-grid textarea {
-  background: #fffdfa;
-  margin-top: 8px;
+  background: var(--surface);
+  margin-top: var(--space-2);
   font-size: 13px;
 }
 .invention-data-note {
   max-width: 1050px;
-  margin: 12px 0 20px;
+  margin: var(--space-3) 0 var(--space-5);
 }
 .invention-plan-heading {
-  padding-top: 24px;
+  padding-top: var(--space-6);
   border-top: 1px solid var(--line);
   margin-top: 22px;
 }
@@ -52,12 +52,12 @@
 .invention-strategy {
   display: flex;
   align-items: center;
-  gap: 24px;
-  padding: 17px 20px;
-  background: #f1edf7;
-  border: 1px solid #d4cbe1;
-  border-radius: 12px;
-  margin: 20px 0;
+  gap: var(--space-6);
+  padding: 17px var(--space-5);
+  background: var(--palette-f1edf7);
+  border: 1px solid var(--palette-d4cbe1);
+  border-radius: var(--radius-m);
+  margin: var(--space-5) 0;
 }
 .invention-strategy > label {
   margin: 0;
@@ -76,13 +76,13 @@
 .invention-element {
   border: 1px solid var(--line);
   border-radius: 15px;
-  padding: 20px;
-  background: #fcfaf6;
+  padding: var(--space-5);
+  background: var(--palette-fcfaf6);
   min-width: 0;
 }
 .invention-element.selected {
-  border-color: #b4a3cd;
-  box-shadow: inset 0 3px #a08abc;
+  border-color: var(--palette-b4a3cd);
+  box-shadow: inset 0 3px var(--palette-a08abc);
 }
 .invention-element-heading > .check {
   margin: 0;
@@ -92,7 +92,7 @@
 }
 .invention-element-heading .check span {
   display: grid;
-  gap: 4px;
+  gap: var(--space-1);
   min-width: 0;
 }
 .invention-element-heading small {
@@ -114,7 +114,7 @@
   overflow-wrap: anywhere;
 }
 .invention-relation {
-  border-left: 2px solid #cdc0dc;
+  border-left: 2px solid var(--palette-cdc0dc);
   padding-left: 10px;
   color: var(--muted);
 }
@@ -138,9 +138,9 @@
 }
 .invention-evidence blockquote {
   margin: 10px 0;
-  padding: 9px 12px;
-  border-left: 2px solid #d9c9a7;
-  background: #f5f0e7;
+  padding: 9px var(--space-3);
+  border-left: 2px solid var(--palette-d9c9a7);
+  background: var(--palette-f5f0e7);
   border-radius: 0 7px 7px 0;
   font-size: 12px;
   line-height: 1.8;
@@ -158,27 +158,27 @@
 }
 .invention-hypothesis {
   font-size: 11px;
-  background: #f0eaf6;
-  border-radius: 8px;
+  background: var(--palette-f0eaf6);
+  border-radius: var(--radius-s);
   padding: 10px;
   line-height: 1.8;
-  color: #756086;
+  color: var(--palette-756086);
 }
-.invention-perspective-join {
+.invention-element .invention-perspective-join {
   font-size: 11px;
-  margin: 15px 0 !important;
+  margin: 15px 0;
 }
 .invention-perspective-join select {
   font-size: 12px;
 }
 .invention-perspectives {
   display: grid;
-  gap: 12px;
+  gap: var(--space-3);
 }
 .invention-perspective {
-  border: 1px solid #e2dbcf;
-  border-radius: 10px;
-  background: #fffefa;
+  border: 1px solid var(--palette-e2dbcf);
+  border-radius: var(--radius-control);
+  background: var(--surface-input);
   padding: 15px;
   min-width: 0;
 }
@@ -199,41 +199,41 @@
 }
 .invention-perspective label {
   font-size: 11px;
-  margin-top: 12px;
+  margin-top: var(--space-3);
 }
 .invention-perspective textarea,
 .invention-perspective select {
   font-size: 12px;
-  background: #fffdfa;
+  background: var(--surface);
 }
 .invention-perspective .caption {
   font-size: 11px;
-  margin-bottom: 12px;
+  margin-bottom: var(--space-3);
 }
 .invention-classifications {
-  margin-top: 12px;
+  margin-top: var(--space-3);
 }
 .invention-class-options {
   max-height: 190px;
   overflow: auto;
 }
-.invention-class-option {
-  display: flex !important;
+.invention-perspective .invention-class-option {
+  display: flex;
   align-items: flex-start;
   gap: 9px;
-  margin: 0 !important;
-  padding: 9px 4px;
-  border-bottom: 1px solid #e9e3d8;
+  margin: 0;
+  padding: 9px var(--space-1);
+  border-bottom: 1px solid var(--palette-e9e3d8);
   cursor: pointer;
 }
-.invention-class-option input {
+.invention-perspective .invention-class-option input {
   flex-shrink: 0;
-  width: auto !important;
-  margin-top: 4px !important;
+  width: auto;
+  margin-top: var(--space-1);
 }
 .invention-class-option span {
   display: grid;
-  gap: 4px;
+  gap: var(--space-1);
   min-width: 0;
 }
 .invention-class-option b {
@@ -262,10 +262,10 @@
 }
 .invention-scope-options {
   margin-top: 22px;
-  padding: 16px 19px;
+  padding: var(--space-4) 19px;
   border: 1px solid var(--line);
-  border-radius: 12px;
-  background: #fbf8f2;
+  border-radius: var(--radius-m);
+  background: var(--palette-fbf8f2);
 }
 .invention-scope-options .check {
   font-size: 12px;
@@ -273,7 +273,7 @@
   line-height: 1.7;
 }
 .invention-questions {
-  margin: 20px 0;
+  margin: var(--space-5) 0;
 }
 .invention-questions li,
 .invention-warnings li {
@@ -284,8 +284,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 20px;
-  margin-top: 20px;
+  gap: var(--space-5);
+  margin-top: var(--space-5);
 }
 .invention-bottom > p {
   max-width: 700px;
@@ -307,21 +307,8 @@
 }
 .invention-error {
   font-size: 12px;
-  color: #9a354e;
+  color: var(--palette-9a354e);
   line-height: 1.8;
-}
-.invention-empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 18px;
-  padding: 24px 10px;
-  border-top: 1px solid var(--line);
-  font-size: 12px;
-  color: var(--muted);
-}
-.invention-empty b {
-  color: #bcadcc;
 }
 .invention-workbench button:disabled {
   opacity: 0.5;
@@ -345,7 +332,7 @@
 }
 @media (max-width: 760px) {
   .invention-workbench {
-    padding: 20px;
+    padding: var(--space-5);
   }
   .invention-source-grid,
   .invention-elements {
@@ -364,15 +351,10 @@
     margin-top: 10px;
   }
   .invention-element {
-    padding: 16px;
+    padding: var(--space-4);
   }
   .invention-element-heading > .button {
     margin-left: 0;
-  }
-  .invention-empty {
-    gap: 9px;
-    flex-wrap: wrap;
-    font-size: 11px;
   }
   .invention-bottom > .button {
     width: 100%;

@@ -379,7 +379,7 @@ function counts() {
 function renderMap() {
   if (!state.patents.length) {
     $('#step-content').innerHTML =
-      '<div class="panel empty-state"><div class="empty-orbit">◎</div><h2>まだ、特許の地図はありません。</h2><p>Step 01からCSVを読み込むか、サンプルを試してください。</p><button id="to-import" class="button primary">CSVを読み込む →</button></div>';
+      '<div class="panel empty-state"><div class="empty-state-icon">◎</div><h2>まだ、特許の地図はありません。</h2><p>Step 01からCSVを読み込むか、サンプルを試してください。</p><button id="to-import" class="button primary">CSVを読み込む →</button></div>';
     on('#to-import', 'click', () => setStep(1));
     return;
   }
@@ -561,7 +561,7 @@ function renderAgent() {
     ? state.agent_log
         .map((l) => `<div class="log-entry"><time>${esc(l.time)}</time><span>${esc(l.message)}</span></div>`)
         .join('')
-    : '<div class="empty-state"><div class="empty-orbit">◎</div><h3>基準を決めたら、探索を開始。</h3><p>判定理由と進捗がここに残ります。</p></div>';
+    : '<div class="empty-state"><div class="empty-state-icon">◎</div><h3>基準を決めたら、探索を開始。</h3><p>判定理由と進捗がここに残ります。</p></div>';
   $('#agent-log').scrollTop = $('#agent-log').scrollHeight;
 }
 function syncRunningLlmJudgments(fresh) {

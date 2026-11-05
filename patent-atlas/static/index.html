@@ -6,38 +6,38 @@
   <meta name="description" content="分類を選び、特許をマッピングし、判断から検索式を育てるローカル特許探索ワークスペース。">
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/style.css">
-  <link rel="stylesheet" href="/static/classification.css?v=20260914-rejected-broader">
-  <link rel="stylesheet" href="/static/discovery.css?v=20260914-llm-feedback">
+  <link rel="stylesheet" href="/static/classification.css">
+  <link rel="stylesheet" href="/static/discovery.css">
   <link rel="stylesheet" href="/static/atlas-theme.css">
   <link rel="stylesheet" href="/static/atlas-maps.css">
   <link rel="stylesheet" href="/static/atlas-motion.css">
-  <link rel="stylesheet" href="/static/learning-ui.css?v=20260912-learning">
-  <link rel="stylesheet" href="/static/patent-inspector.css?v=20260912-learning">
-  <link rel="stylesheet" href="/static/orchestration-ui.css?v=20260915-workflow-review-filter">
-  <link rel="stylesheet" href="/static/convergence-ui.css?v=20260914-convergence">
-  <script src="/static/query-output.js?v=20260912-learning" defer></script>
+  <link rel="stylesheet" href="/static/learning-ui.css">
+  <link rel="stylesheet" href="/static/patent-inspector.css">
+  <link rel="stylesheet" href="/static/orchestration-ui.css">
+  <link rel="stylesheet" href="/static/convergence-ui.css">
+  <script src="/static/query-output.js" defer></script>
   <script src="/static/classification-layout.js" defer></script>
   <script src="/static/classification-labels.js" defer></script>
-  <script src="/static/classification-ui.js?v=20261102-element-dictionary" defer></script>
-  <script src="/static/discovery-ui.js?v=20261106-phase4" defer></script>
-  <script src="/static/learning-ui.js?v=20260914-running-mode" defer></script>
-  <script src="/static/refinement-ui.js?v=20260912-learning" defer></script>
-  <script src="/static/patent-inspector.js?v=20260915-classification-bridge" defer></script>
-  <script src="/static/convergence-ui.js?v=20261106-phase4" defer></script>
-  <script src="/static/orchestration-ui.js?v=20261106-phase4" defer></script>
-  <link rel="stylesheet" href="/static/research-workbench.css?v=20260918">
-  <link rel="stylesheet" href="/static/invention-workbench.css?v=20260918-elements">
-  <link rel="stylesheet" href="/static/query-library-ui.css?v=20260918">
-  <link rel="stylesheet" href="/static/projection-ui.css?v=20260918">
-  <link rel="stylesheet" href="/static/research-guidance.css?v=20261106-phase4">
-  <script src="/static/query-library-ui.js?v=20261102-usability" defer></script>
-  <script src="/static/research-workbench.js?v=20261106-phase4" defer></script>
-  <script src="/static/invention-workbench.js?v=20261106-phase4" defer></script>
-  <script src="/static/projection-ui.js?v=20261106-phase4" defer></script>
-  <script src="/static/research-draft-store.js?v=20261102-usability" defer></script>
-  <script src="/static/research-progress.js?v=20261102-usability" defer></script>
-  <script src="/static/research-guidance.js?v=20261106-phase4" defer></script>
-  <script src="/static/app.js?v=20261106-phase4" defer></script>
+  <script src="/static/classification-ui.js" defer></script>
+  <script src="/static/discovery-ui.js" defer></script>
+  <script src="/static/learning-ui.js" defer></script>
+  <script src="/static/refinement-ui.js" defer></script>
+  <script src="/static/patent-inspector.js" defer></script>
+  <script src="/static/convergence-ui.js" defer></script>
+  <script src="/static/orchestration-ui.js" defer></script>
+  <link rel="stylesheet" href="/static/research-workbench.css">
+  <link rel="stylesheet" href="/static/invention-workbench.css">
+  <link rel="stylesheet" href="/static/query-library-ui.css">
+  <link rel="stylesheet" href="/static/projection-ui.css">
+  <link rel="stylesheet" href="/static/research-guidance.css">
+  <script src="/static/query-library-ui.js" defer></script>
+  <script src="/static/research-workbench.js" defer></script>
+  <script src="/static/invention-workbench.js" defer></script>
+  <script src="/static/projection-ui.js" defer></script>
+  <script src="/static/research-draft-store.js" defer></script>
+  <script src="/static/research-progress.js" defer></script>
+  <script src="/static/research-guidance.js" defer></script>
+  <script src="/static/app.js" defer></script>
   <script src="/static/atlas-motion.js" defer></script>
 </head>
 <body>
@@ -71,7 +71,7 @@
 
    </div>
    <div class="agent-right"><div class="panel agent-flow"><div class="panel-heading"><h3>判断のループ</h3><span id="agent-count" class="pill">CSV未読込</span></div><div class="notice">検索サイトから取得したCSVを、「検索式・CSV」から渡してください。1サイクルの最後は次のCSV待ちで停止します。</div></div>
-   <div class="panel log-panel"><div class="panel-heading"><h3>判断の記録</h3><button class="button small" id="view-agent-map">特許マップへ ↗</button></div><div id="agent-log" class="agent-log"><div class="empty-state"><div class="empty-orbit">◎</div><h3>基準を決めたら、探索を開始。</h3><p>判定理由と進捗がここに残ります。</p></div></div></div></div>
+   <div class="panel log-panel"><div class="panel-heading"><h3>判断の記録</h3><button class="button small" id="view-agent-map">特許マップへ ↗</button></div><div id="agent-log" class="agent-log"><div class="empty-state"><div class="empty-state-icon">◎</div><h3>基準を決めたら、探索を開始。</h3><p>判定理由と進捗がここに残ります。</p></div></div></div></div>
   </div></section>
   <section id="discovery-tab" class="research-panel" aria-label="要素・観点：探索ラボ"><div id="discovery-content"></div></section>
   <section id="orchestration-tab" class="research-panel" aria-label="次の式へ：統括"><div id="orchestration-content"></div></section>

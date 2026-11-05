@@ -1,7 +1,7 @@
 /* Navigation effects are triggered by navigation, never by background polling. */
 html[data-atlas-motion] .view,
 html[data-atlas-motion] #step-content {
-  animation: none !important;
+  animation: none;
 }
 
 html[data-atlas-motion='dynamic'] :is(.button, .icon-button, .tab, .step) {

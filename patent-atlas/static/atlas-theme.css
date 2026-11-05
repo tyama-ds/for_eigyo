@@ -1,13 +1,12 @@
-/* Patent Atlas: warm paper, indigo ink and copper cartographic details. */
 :root {
   color-scheme: light;
   --bg: #f5f2ec;
   --surface: #fffdfa;
   --surface-soft: #edeae3;
-  --panel: #fffdfa;
+  --panel: var(--surface);
   --panel-soft: #f4f1eb;
   --ink: #282742;
-  --text: #282742;
+  --text: var(--ink);
   --muted: #716f7f;
   --line: #dcd6cd;
   --cyan: #5754a7;
@@ -16,23 +15,1665 @@
   --pink: #ad5365;
   --green: #487763;
   --radius: 19px;
+  /* Exact compatibility palette: keep existing shades; use semantic tokens above for new surfaces. */
+  --palette-00000044: #00000044;
+  --palette-00000055: #00000055;
+  --palette-09121e: #09121e;
+  --palette-09131e: #09131e;
+  --palette-091520ad: #091520ad;
+  --palette-0b1420: #0b1420;
+  --palette-0b1622: #0b1622;
+  --palette-0c1623: #0c1623;
+  --palette-0c1825: #0c1825;
+  --palette-0c1a29: #0c1a29;
+  --palette-0d1723: #0d1723;
+  --palette-0d1927: #0d1927;
+  --palette-0d1b28: #0d1b28;
+  --palette-0e1d2b: #0e1d2b;
+  --palette-101827: #101827;
+  --palette-101a2999: #101a2999;
+  --palette-10202c: #10202c;
+  --palette-111c2be6: #111c2be6;
+  --palette-111d2a: #111d2a;
+  --palette-112333: #112333;
+  --palette-11262aed: #11262aed;
+  --palette-142237: #142237;
+  --palette-151b26: #151b26;
+  --palette-152431: #152431;
+  --palette-152a38: #152a38;
+  --palette-152b345f: #152b345f;
+  --palette-152d36: #152d36;
+  --palette-153332b3: #153332b3;
+  --palette-15353b44: #15353b44;
+  --palette-162b35: #162b35;
+  --palette-17191f: #17191f;
+  --palette-172c33: #172c33;
+  --palette-17372f: #17372f;
+  --palette-174e4566: #174e4566;
+  --palette-181c28: #181c28;
+  --palette-18253666: #18253666;
+  --palette-18332fb3: #18332fb3;
+  --palette-183c4566: #183c4566;
+  --palette-193c443d: #193c443d;
+  --palette-1b2d3b6e: #1b2d3b6e;
+  --palette-1b343c55: #1b343c55;
+  --palette-1f4a4938: #1f4a4938;
+  --palette-203144: #203144;
+  --palette-213647: #213647;
+  --palette-213d6266: #213d6266;
+  --palette-213f3a77: #213f3a77;
+  --palette-214b3e: #214b3e;
+  --palette-23435b88: #23435b88;
+  --palette-23463c80: #23463c80;
+  --palette-244e433f: #244e433f;
+  --palette-25334855: #25334855;
+  --palette-254339: #254339;
+  --palette-26234277: #26234277;
+  --palette-26344799: #26344799;
+  --palette-26394c: #26394c;
+  --palette-274940: #274940;
+  --palette-2827420c: #2827420c;
+  --palette-2827420d: #2827420d;
+  --palette-28274212: #28274212;
+  --palette-286962b3: #286962b3;
+  --palette-293f50: #293f50;
+  --palette-2a3c4d77: #2a3c4d77;
+  --palette-2a3c4f: #2a3c4f;
+  --palette-2a3e50: #2a3e50;
+  --palette-2a59514d: #2a59514d;
+  --palette-2b4252: #2b4252;
+  --palette-2c2444: #2c2444;
+  --palette-2c4252: #2c4252;
+  --palette-2e4658: #2e4658;
+  --palette-2e5d47: #2e5d47;
+  --palette-2f4a58: #2f4a58;
+  --palette-30485888: #30485888;
+  --palette-314355: #314355;
+  --palette-314b5e: #314b5e;
+  --palette-32284612: #32284612;
+  --palette-3246597a: #3246597a;
+  --palette-334b5b: #334b5b;
+  --palette-334c5c: #334c5c;
+  --palette-3427440b: #3427440b;
+  --palette-34274426: #34274426;
+  --palette-34314d: #34314d;
+  --palette-344359: #344359;
+  --palette-34495b: #34495b;
+  --palette-344b5c88: #344b5c88;
+  --palette-344f5d88: #344f5d88;
+  --palette-35264f: #35264f;
+  --palette-35304b: #35304b;
+  --palette-35314d: #35314d;
+  --palette-365061: #365061;
+  --palette-37766bd6: #37766bd6;
+  --palette-38304726: #38304726;
+  --palette-38515f: #38515f;
+  --palette-3b5c6b: #3b5c6b;
+  --palette-3c6956: #3c6956;
+  --palette-3c818409: #3c818409;
+  --palette-3d2d5759: #3d2d5759;
+  --palette-3d32294d: #3d32294d;
+  --palette-3d455f: #3d455f;
+  --palette-3d6870: #3d6870;
+  --palette-3d6f57: #3d6f57;
+  --palette-3d735d: #3d735d;
+  --palette-3f315909: #3f315909;
+  --palette-3f315929: #3f315929;
+  --palette-40335114: #40335114;
+  --palette-42315514: #42315514;
+  --palette-42385912: #42385912;
+  --palette-43596c: #43596c;
+  --palette-44354b55: #44354b55;
+  --palette-45647466: #45647466;
+  --palette-458779: #458779;
+  --palette-484584: #484584;
+  --palette-48776310: #48776310;
+  --palette-493f70: #493f70;
+  --palette-497560: #497560;
+  --palette-4a817357: #4a817357;
+  --palette-4b4182: #4b4182;
+  --palette-4c375407: #4c375407;
+  --palette-4c422703: #4c422703;
+  --palette-4d435b05: #4d435b05;
+  --palette-4d87970a: #4d87970a;
+  --palette-4e4b95: #4e4b95;
+  --palette-4e6f59: #4e6f59;
+  --palette-4e7564: #4e7564;
+  --palette-4f786866: #4f786866;
+  --palette-514167: #514167;
+  --palette-514481: #514481;
+  --palette-5145951b: #5145951b;
+  --palette-514760: #514760;
+  --palette-51476f: #51476f;
+  --palette-514965: #514965;
+  --palette-52438a: #52438a;
+  --palette-544181: #544181;
+  --palette-55453103: #55453103;
+  --palette-55453104: #55453104;
+  --palette-554b94: #554b94;
+  --palette-554d71: #554d71;
+  --palette-5550a0: #5550a0;
+  --palette-557160: #557160;
+  --palette-557e67: #557e67;
+  --palette-564780: #564780;
+  --palette-564868: #564868;
+  --palette-5754a704: #5754a704;
+  --palette-5754a707: #5754a707;
+  --palette-5754a714: #5754a714;
+  --palette-5754a718: #5754a718;
+  --palette-5754a71f: #5754a71f;
+  --palette-5754a725: #5754a725;
+  --palette-58443140: #58443140;
+  --palette-59839333: #59839333;
+  --palette-5a5377: #5a5377;
+  --palette-5c4b7d: #5c4b7d;
+  --palette-5c949b48: #5c949b48;
+  --palette-5d5279: #5d5279;
+  --palette-5e526f: #5e526f;
+  --palette-5e5572: #5e5572;
+  --palette-5e566b: #5e566b;
+  --palette-5f5682: #5f5682;
+  --palette-5fc3b688: #5fc3b688;
+  --palette-60528d: #60528d;
+  --palette-605777: #605777;
+  --palette-615076: #615076;
+  --palette-6257a3: #6257a3;
+  --palette-6257a326: #6257a326;
+  --palette-625986: #625986;
+  --palette-625bb3: #625bb3;
+  --palette-625d6c: #625d6c;
+  --palette-62606a: #62606a;
+  --palette-644c2b55: #644c2b55;
+  --palette-645071: #645071;
+  --palette-64524005: #64524005;
+  --palette-645b71: #645b71;
+  --palette-645e70: #645e70;
+  --palette-65527f: #65527f;
+  --palette-6553722e: #6553722e;
+  --palette-65556f: #65556f;
+  --palette-655c80: #655c80;
+  --palette-655d70: #655d70;
+  --palette-65877c: #65877c;
+  --palette-66549f: #66549f;
+  --palette-665670: #665670;
+  --palette-665a79: #665a79;
+  --palette-665c72: #665c72;
+  --palette-665e73: #665e73;
+  --palette-675385: #675385;
+  --palette-6953a918: #6953a918;
+  --palette-695784: #695784;
+  --palette-698a9f: #698a9f;
+  --palette-6a5cad12: #6a5cad12;
+  --palette-6a5f76: #6a5f76;
+  --palette-6a8c88: #6a8c88;
+  --palette-6a9dac40: #6a9dac40;
+  --palette-6b598b: #6b598b;
+  --palette-6baba650: #6baba650;
+  --palette-6c5e81: #6c5e81;
+  --palette-6c6376: #6c6376;
+  --palette-6d4c8e08: #6d4c8e08;
+  --palette-6d6478: #6d6478;
+  --palette-6e598c: #6e598c;
+  --palette-6e6a7b: #6e6a7b;
+  --palette-6f9277: #6f9277;
+  --palette-6f979f: #6f979f;
+  --palette-70583913: #70583913;
+  --palette-706079: #706079;
+  --palette-706080: #706080;
+  --palette-70627f: #70627f;
+  --palette-70628c: #70628c;
+  --palette-7067bf: #7067bf;
+  --palette-70bca1: #70bca1;
+  --palette-716079: #716079;
+  --palette-7160910b: #7160910b;
+  --palette-716182: #716182;
+  --palette-716287: #716287;
+  --palette-716679: #716679;
+  --palette-71c9b33b: #71c9b33b;
+  --palette-726977: #726977;
+  --palette-72ebce30: #72ebce30;
+  --palette-736b79: #736b79;
+  --palette-73717b: #73717b;
+  --palette-73cdb6: #73cdb6;
+  --palette-7460a7: #7460a7;
+  --palette-756086: #756086;
+  --palette-75624e: #75624e;
+  --palette-756779: #756779;
+  --palette-75687f: #75687f;
+  --palette-756980: #756980;
+  --palette-7662a4: #7662a4;
+  --palette-76647c: #76647c;
+  --palette-766486: #766486;
+  --palette-769fad30: #769fad30;
+  --palette-77624f: #77624f;
+  --palette-776285: #776285;
+  --palette-776484: #776484;
+  --palette-77688212: #77688212;
+  --palette-776a83: #776a83;
+  --palette-7770b8: #7770b8;
+  --palette-77717d: #77717d;
+  --palette-778263: #778263;
+  --palette-779aac: #779aac;
+  --palette-78334d: #78334d;
+  --palette-7861a2: #7861a2;
+  --palette-786781: #786781;
+  --palette-78688705: #78688705;
+  --palette-78939f: #78939f;
+  --palette-7896a6: #7896a6;
+  --palette-7897b2: #7897b2;
+  --palette-78998922: #78998922;
+  --palette-78998933: #78998933;
+  --palette-789bdf: #789bdf;
+  --palette-789bdf0b: #789bdf0b;
+  --palette-789bdf80: #789bdf80;
+  --palette-7959ae: #7959ae;
+  --palette-796087: #796087;
+  --palette-796981: #796981;
+  --palette-796c81: #796c81;
+  --palette-797489: #797489;
+  --palette-7a608e: #7a608e;
+  --palette-7a6749: #7a6749;
+  --palette-7b62a947: #7b62a947;
+  --palette-7b9a7f: #7b9a7f;
+  --palette-7c65800a: #7c65800a;
+  --palette-7c7281: #7c7281;
+  --palette-7e37352a: #7e37352a;
+  --palette-7e99a8: #7e99a8;
+  --palette-7ee7c519: #7ee7c519;
+  --palette-80613db3: #80613db3;
+  --palette-806342: #806342;
+  --palette-806887: #806887;
+  --palette-806a9b: #806a9b;
+  --palette-807281: #807281;
+  --palette-809eaf: #809eaf;
+  --palette-80a6bc: #80a6bc;
+  --palette-81708e: #81708e;
+  --palette-817488: #817488;
+  --palette-819bae: #819bae;
+  --palette-81a8d7: #81a8d7;
+  --palette-81b6b0: #81b6b0;
+  --palette-82715e: #82715e;
+  --palette-82719d20: #82719d20;
+  --palette-82719d33: #82719d33;
+  --palette-82719d66: #82719d66;
+  --palette-827284: #827284;
+  --palette-827786: #827786;
+  --palette-82acaf: #82acaf;
+  --palette-839bb0: #839bb0;
+  --palette-83b9b0: #83b9b0;
+  --palette-83bbae9c: #83bbae9c;
+  --palette-847181: #847181;
+  --palette-84776c: #84776c;
+  --palette-847784: #847784;
+  --palette-84a7ae: #84a7ae;
+  --palette-85654f: #85654f;
+  --palette-866244: #866244;
+  --palette-86778b: #86778b;
+  --palette-8694b6: #8694b6;
+  --palette-8780bd: #8780bd;
+  --palette-89efd706: #89efd706;
+  --palette-89efd707: #89efd707;
+  --palette-89efd708: #89efd708;
+  --palette-89efd70c: #89efd70c;
+  --palette-89efd712: #89efd712;
+  --palette-89efd726: #89efd726;
+  --palette-89efd72d: #89efd72d;
+  --palette-89efd739: #89efd739;
+  --palette-89efd74d: #89efd74d;
+  --palette-89efd754: #89efd754;
+  --palette-89efd7a6: #89efd7a6;
+  --palette-8a6245: #8a6245;
+  --palette-8a7c7a: #8a7c7a;
+  --palette-8b715e: #8b715e;
+  --palette-8b7991: #8b7991;
+  --palette-8b7a90: #8b7a90;
+  --palette-8b7b89: #8b7b89;
+  --palette-8b8090: #8b8090;
+  --palette-8b8490: #8b8490;
+  --palette-8c5232: #8c5232;
+  --palette-8c769f: #8c769f;
+  --palette-8c7ca0: #8c7ca0;
+  --palette-8ca9ad55: #8ca9ad55;
+  --palette-8cb9ff27: #8cb9ff27;
+  --palette-8d634c: #8d634c;
+  --palette-8d7fac: #8d7fac;
+  --palette-8d82b6: #8d82b6;
+  --palette-8daeb14d: #8daeb14d;
+  --palette-8e86943b: #8e86943b;
+  --palette-8e9c77: #8e9c77;
+  --palette-8ea9b7: #8ea9b7;
+  --palette-8eafc1: #8eafc1;
+  --palette-8fa8bb: #8fa8bb;
+  --palette-8facba: #8facba;
+  --palette-913c51: #913c51;
+  --palette-916141: #916141;
+  --palette-916846: #916846;
+  --palette-9180bd: #9180bd;
+  --palette-918999: #918999;
+  --palette-91adbd: #91adbd;
+  --palette-92445a: #92445a;
+  --palette-9280b6: #9280b6;
+  --palette-928795: #928795;
+  --palette-92aebc: #92aebc;
+  --palette-92c9be: #92c9be;
+  --palette-934b60: #934b60;
+  --palette-935c38: #935c38;
+  --palette-93869a40: #93869a40;
+  --palette-93a6b7: #93a6b7;
+  --palette-93b1be: #93b1be;
+  --palette-944459: #944459;
+  --palette-9582b1: #9582b1;
+  --palette-95b5c0: #95b5c0;
+  --palette-9690bc: #9690bc;
+  --palette-96b0bb: #96b0bb;
+  --palette-96c7bb: #96c7bb;
+  --palette-97818c: #97818c;
+  --palette-978592: #978592;
+  --palette-98465c: #98465c;
+  --palette-984c5e: #984c5e;
+  --palette-985b6b: #985b6b;
+  --palette-988593: #988593;
+  --palette-9890c5: #9890c5;
+  --palette-998995: #998995;
+  --palette-9989ac: #9989ac;
+  --palette-9a354e: #9a354e;
+  --palette-9a83b9: #9a83b9;
+  --palette-9a8b9d: #9a8b9d;
+  --palette-9bb4a3: #9bb4a3;
+  --palette-9bc2bb: #9bc2bb;
+  --palette-9c8baa: #9c8baa;
+  --palette-9e8dc0: #9e8dc0;
+  --palette-a08abc: #a08abc;
+  --palette-a198aa: #a198aa;
+  --palette-a28bb733: #a28bb733;
+  --palette-a2b9c8: #a2b9c8;
+  --palette-a2efd8: #a2efd8;
+  --palette-a37c52: #a37c52;
+  --palette-a3b8c7: #a3b8c7;
+  --palette-a4beca: #a4beca;
+  --palette-a597ba: #a597ba;
+  --palette-a59cad77: #a59cad77;
+  --palette-a5babb: #a5babb;
+  --palette-a5bbc8: #a5bbc8;
+  --palette-a66a47: #a66a47;
+  --palette-a7654220: #a7654220;
+  --palette-a76b42: #a76b42;
+  --palette-a795b8: #a795b8;
+  --palette-a9c1cd: #a9c1cd;
+  --palette-aa9bac: #aa9bac;
+  --palette-aaa0bc88: #aaa0bc88;
+  --palette-aaa0c8: #aaa0c8;
+  --palette-ac9680: #ac9680;
+  --palette-ac9cb977: #ac9cb977;
+  --palette-acc1d7: #acc1d7;
+  --palette-ada6cf: #ada6cf;
+  --palette-ae9cc5: #ae9cc5;
+  --palette-afa6bd77: #afa6bd77;
+  --palette-afced1: #afced1;
+  --palette-afd4ca: #afd4ca;
+  --palette-affce0: #affce0;
+  --palette-b0bace: #b0bace;
+  --palette-b1a0cc: #b1a0cc;
+  --palette-b28b59: #b28b59;
+  --palette-b2c9b9: #b2c9b9;
+  --palette-b2d2c9: #b2d2c9;
+  --palette-b2d9ce: #b2d9ce;
+  --palette-b36e6e66: #b36e6e66;
+  --palette-b3a5bb77: #b3a5bb77;
+  --palette-b47752: #b47752;
+  --palette-b4a3cd: #b4a3cd;
+  --palette-b4c9d8: #b4c9d8;
+  --palette-b4d1d4: #b4d1d4;
+  --palette-b5a8b7: #b5a8b7;
+  --palette-b5a99c66: #b5a99c66;
+  --palette-b6a5c5: #b6a5c5;
+  --palette-b6a8d4: #b6a8d4;
+  --palette-b78a62: #b78a62;
+  --palette-b7aacb: #b7aacb;
+  --palette-b7cfe0: #b7cfe0;
+  --palette-b7d5db: #b7d5db;
+  --palette-b88968: #b88968;
+  --palette-b8acc7: #b8acc7;
+  --palette-b8adc1: #b8adc1;
+  --palette-b8c8d5: #b8c8d5;
+  --palette-b8cbd8: #b8cbd8;
+  --palette-b8cdd9: #b8cdd9;
+  --palette-b9c9d5: #b9c9d5;
+  --palette-b9c9d7: #b9c9d7;
+  --palette-b9efdd: #b9efdd;
+  --palette-bacdbb: #bacdbb;
+  --palette-bad6d4: #bad6d4;
+  --palette-bba7c4: #bba7c4;
+  --palette-bbcad7: #bbcad7;
+  --palette-bbcdd7: #bbcdd7;
+  --palette-bcd5de: #bcd5de;
+  --palette-bce8d9: #bce8d9;
+  --palette-bdb0d5: #bdb0d5;
+  --palette-bdb1cd: #bdb1cd;
+  --palette-bdb2d0: #bdb2d0;
+  --palette-bdffe8: #bdffe8;
+  --palette-bfb2d1: #bfb2d1;
+  --palette-bfd2e1: #bfd2e1;
+  --palette-c0afd8: #c0afd8;
+  --palette-c0d7c8: #c0d7c8;
+  --palette-c1d5c7: #c1d5c7;
+  --palette-c3b2a5: #c3b2a5;
+  --palette-c3b8ae: #c3b8ae;
+  --palette-c4996777: #c4996777;
+  --palette-c49a724f: #c49a724f;
+  --palette-c4a991: #c4a991;
+  --palette-c5d5e1: #c5d5e1;
+  --palette-c5dbdf: #c5dbdf;
+  --palette-c5e2e5: #c5e2e5;
+  --palette-c6bfdd: #c6bfdd;
+  --palette-c7b4c4: #c7b4c4;
+  --palette-c88c7355: #c88c7355;
+  --palette-c8b8d9: #c8b8d9;
+  --palette-c8bddc: #c8bddc;
+  --palette-c8bfce: #c8bfce;
+  --palette-c8d9e7: #c8d9e7;
+  --palette-c8eade: #c8eade;
+  --palette-c98d5230: #c98d5230;
+  --palette-c9b8dd: #c9b8dd;
+  --palette-cbbfd8: #cbbfd8;
+  --palette-cbc3d8: #cbc3d8;
+  --palette-ccc2bc: #ccc2bc;
+  --palette-ccd8c9: #ccd8c9;
+  --palette-cdbce0: #cdbce0;
+  --palette-cdc0dc: #cdc0dc;
+  --palette-cdc3df: #cdc3df;
+  --palette-cdc4df: #cdc4df;
+  --palette-cfb9a0: #cfb9a0;
+  --palette-cfc2e3: #cfc2e3;
+  --palette-cfc4e0: #cfc4e0;
+  --palette-cfc5dc: #cfc5dc;
+  --palette-cfc6dc: #cfc6dc;
+  --palette-cfeee0: #cfeee0;
+  --palette-d0bea7: #d0bea7;
+  --palette-d0bedf: #d0bedf;
+  --palette-d0e1e6: #d0e1e6;
+  --palette-d0e5e7: #d0e5e7;
+  --palette-d1e7e6: #d1e7e6;
+  --palette-d2f4e8: #d2f4e8;
+  --palette-d3c0ad: #d3c0ad;
+  --palette-d3c5dc: #d3c5dc;
+  --palette-d3cce4: #d3cce4;
+  --palette-d3f7ed: #d3f7ed;
+  --palette-d4cbe1: #d4cbe1;
+  --palette-d4cbe2: #d4cbe2;
+  --palette-d4cde3: #d4cde3;
+  --palette-d4e2ee: #d4e2ee;
+  --palette-d5c9e5: #d5c9e5;
+  --palette-d5cce4: #d5cce4;
+  --palette-d5ebe7: #d5ebe7;
+  --palette-d5ece7: #d5ece7;
+  --palette-d6a567: #d6a567;
+  --palette-d6c6e5: #d6c6e5;
+  --palette-d6cce7: #d6cce7;
+  --palette-d6cfc5: #d6cfc5;
+  --palette-d6d0c7: #d6d0c7;
+  --palette-d6f3e9: #d6f3e9;
+  --palette-d7b8bf: #d7b8bf;
+  --palette-d7c9de: #d7c9de;
+  --palette-d7cce6: #d7cce6;
+  --palette-d7cedf: #d7cedf;
+  --palette-d7cfdb: #d7cfdb;
+  --palette-d7cfe4: #d7cfe4;
+  --palette-d8cbe7: #d8cbe7;
+  --palette-d8cdda: #d8cdda;
+  --palette-d8cddb: #d8cddb;
+  --palette-d8cfdf: #d8cfdf;
+  --palette-d8cfe1: #d8cfe1;
+  --palette-d8cfe2: #d8cfe2;
+  --palette-d8d0e0: #d8d0e0;
+  --palette-d8d1e3: #d8d1e3;
+  --palette-d8d1e4: #d8d1e4;
+  --palette-d9abb6: #d9abb6;
+  --palette-d9adb8: #d9adb8;
+  --palette-d9c9a7: #d9c9a7;
+  --palette-d9cfe3: #d9cfe3;
+  --palette-d9d0c4: #d9d0c4;
+  --palette-d9d1c3: #d9d1c3;
+  --palette-d9d1e7: #d9d1e7;
+  --palette-d9d2c7: #d9d2c7;
+  --palette-d9e5eb: #d9e5eb;
+  --palette-dad3c9: #dad3c9;
+  --palette-dae6eb: #dae6eb;
+  --palette-dbb9bc: #dbb9bc;
+  --palette-dbcfbe: #dbcfbe;
+  --palette-dcd1e1: #dcd1e1;
+  --palette-dcd1e6: #dcd1e6;
+  --palette-dcd3e9: #dcd3e9;
+  --palette-dcd5cb: #dcd5cb;
+  --palette-dcd7ed90: #dcd7ed90;
+  --palette-ddc4cc: #ddc4cc;
+  --palette-ddc6a7: #ddc6a7;
+  --palette-ddd0e5: #ddd0e5;
+  --palette-ddd1e5: #ddd1e5;
+  --palette-ddd2e0: #ddd2e0;
+  --palette-ddd3e3: #ddd3e3;
+  --palette-ddd4e5: #ddd4e5;
+  --palette-ddd6cc: #ddd6cc;
+  --palette-ddd6e688: #ddd6e688;
+  --palette-ddd9ee77: #ddd9ee77;
+  --palette-ded3e6: #ded3e6;
+  --palette-ded4e8: #ded4e8;
+  --palette-ded5dd: #ded5dd;
+  --palette-ded5e5: #ded5e5;
+  --palette-ded7ed: #ded7ed;
+  --palette-ded8cf: #ded8cf;
+  --palette-ded8e9: #ded8e9;
+  --palette-ded9f1: #ded9f1;
+  --palette-dfad85: #dfad85;
+  --palette-dfbdc1: #dfbdc1;
+  --palette-dfbfca: #dfbfca;
+  --palette-dfd3df: #dfd3df;
+  --palette-dfd4cd: #dfd4cd;
+  --palette-dfd5c8: #dfd5c8;
+  --palette-dfd5e3: #dfd5e3;
+  --palette-e0bdc5: #e0bdc5;
+  --palette-e0d5c9: #e0d5c9;
+  --palette-e0d6d0: #e0d6d0;
+  --palette-e0d7df: #e0d7df;
+  --palette-e0d7e6: #e0d7e6;
+  --palette-e0d8ce: #e0d8ce;
+  --palette-e0daee: #e0daee;
+  --palette-e0dbcf: #e0dbcf;
+  --palette-e1d6dd: #e1d6dd;
+  --palette-e1d9cf: #e1d9cf;
+  --palette-e1d9d0: #e1d9d0;
+  --palette-e2a34e: #e2a34e;
+  --palette-e2a34e0a: #e2a34e0a;
+  --palette-e2d4c6: #e2d4c6;
+  --palette-e2d8cb: #e2d8cb;
+  --palette-e2d8df: #e2d8df;
+  --palette-e2dbcf: #e2dbcf;
+  --palette-e2dcea: #e2dcea;
+  --palette-e4dcd1: #e4dcd1;
+  --palette-e4dce8: #e4dce8;
+  --palette-e4ece2: #e4ece2;
+  --palette-e5b67e07: #e5b67e07;
+  --palette-e5b67e44: #e5b67e44;
+  --palette-e5b67e7a: #e5b67e7a;
+  --palette-e5dfd5: #e5dfd5;
+  --palette-e5dff1: #e5dff1;
+  --palette-e5dff470: #e5dff470;
+  --palette-e6ded5: #e6ded5;
+  --palette-e6def3: #e6def3;
+  --palette-e6e0ef: #e6e0ef;
+  --palette-e6eaf3: #e6eaf3;
+  --palette-e7d9c4: #e7d9c4;
+  --palette-e7e0d4: #e7e0d4;
+  --palette-e8b0a3: #e8b0a3;
+  --palette-e8e0e3: #e8e0e3;
+  --palette-e8e3ef: #e8e3ef;
+  --palette-e8f0e9: #e8f0e9;
+  --palette-e9e3d8: #e9e3d8;
+  --palette-e9e3ee: #e9e3ee;
+  --palette-e9e4dc: #e9e4dc;
+  --palette-eadcc355: #eadcc355;
+  --palette-eae4ed: #eae4ed;
+  --palette-eae4f3: #eae4f3;
+  --palette-eae5f6: #eae5f6;
+  --palette-eae6f3: #eae6f3;
+  --palette-eae7f2: #eae7f2;
+  --palette-ec91ad09: #ec91ad09;
+  --palette-ec91ad44: #ec91ad44;
+  --palette-ece6de: #ece6de;
+  --palette-ece7f6: #ece7f6;
+  --palette-ece9f2: #ece9f2;
+  --palette-ede6f3: #ede6f3;
+  --palette-ede8e2: #ede8e2;
+  --palette-ede9f7: #ede9f7;
+  --palette-edf3eb: #edf3eb;
+  --palette-eee7f5: #eee7f5;
+  --palette-eee7f7: #eee7f7;
+  --palette-eee7f8: #eee7f8;
+  --palette-eee8f3: #eee8f3;
+  --palette-eee8f5: #eee8f5;
+  --palette-eee8fa88: #eee8fa88;
+  --palette-eee9df: #eee9df;
+  --palette-eee9f2: #eee9f2;
+  --palette-eeeae2: #eeeae2;
+  --palette-eeebe5: #eeebe5;
+  --palette-eeebf5: #eeebf5;
+  --palette-eeebf6: #eeebf6;
+  --palette-eeebf7: #eeebf7;
+  --palette-eef4ed: #eef4ed;
+  --palette-eef4ee: #eef4ee;
+  --palette-efe8f3: #efe8f3;
+  --palette-efeaf6: #efeaf6;
+  --palette-efebe5: #efebe5;
+  --palette-efebf2: #efebf2;
+  --palette-efebf8: #efebf8;
+  --palette-efedf7: #efedf7;
+  --palette-f0d8b8: #f0d8b8;
+  --palette-f0e2cf: #f0e2cf;
+  --palette-f0e9f3: #f0e9f3;
+  --palette-f0e9f8: #f0e9f8;
+  --palette-f0eaf5: #f0eaf5;
+  --palette-f0eaf6: #f0eaf6;
+  --palette-f0eaf7: #f0eaf7;
+  --palette-f0eafa: #f0eafa;
+  --palette-f0ebf5: #f0ebf5;
+  --palette-f0ece5: #f0ece5;
+  --palette-f0ecf4: #f0ecf4;
+  --palette-f0ede7: #f0ede7;
+  --palette-f0eee8: #f0eee8;
+  --palette-f1ebf3: #f1ebf3;
+  --palette-f1ede9: #f1ede9;
+  --palette-f1edf5: #f1edf5;
+  --palette-f1edf7: #f1edf7;
+  --palette-f1edf8: #f1edf8;
+  --palette-f1eef8: #f1eef8;
+  --palette-f1eff6: #f1eff6;
+  --palette-f1eff7: #f1eff7;
+  --palette-f1f7f0: #f1f7f0;
+  --palette-f2e5d9: #f2e5d9;
+  --palette-f2eadd: #f2eadd;
+  --palette-f2ede6: #f2ede6;
+  --palette-f2eee8: #f2eee8;
+  --palette-f2eef7: #f2eef7;
+  --palette-f2eef8: #f2eef8;
+  --palette-f2efea: #f2efea;
+  --palette-f2eff8: #f2eff8;
+  --palette-f2f3ed: #f2f3ed;
+  --palette-f3edf6: #f3edf6;
+  --palette-f3edf8: #f3edf8;
+  --palette-f3eee8: #f3eee8;
+  --palette-f3eef6: #f3eef6;
+  --palette-f3eff5: #f3eff5;
+  --palette-f3eff8: #f3eff8;
+  --palette-f3f0e9: #f3f0e9;
+  --palette-f3f0f9: #f3f0f9;
+  --palette-f4efe7: #f4efe7;
+  --palette-f4effb: #f4effb;
+  --palette-f4f0e9: #f4f0e9;
+  --palette-f4f0fa: #f4f0fa;
+  --palette-f4f1f7: #f4f1f7;
+  --palette-f4f1f8: #f4f1f8;
+  --palette-f5e7eb: #f5e7eb;
+  --palette-f5efe5: #f5efe5;
+  --palette-f5f0e7: #f5f0e7;
+  --palette-f5f0e9: #f5f0e9;
+  --palette-f5f0f8: #f5f0f8;
+  --palette-f5f0fc: #f5f0fc;
+  --palette-f5f0fd: #f5f0fd;
+  --palette-f5f1ea: #f5f1ea;
+  --palette-f5f2eb: #f5f2eb;
+  --palette-f5f2fa: #f5f2fa;
+  --palette-f6f0fa: #f6f0fa;
+  --palette-f6f1e9: #f6f1e9;
+  --palette-f6f1f7: #f6f1f7;
+  --palette-f6f1f8: #f6f1f8;
+  --palette-f6f2ea: #f6f2ea;
+  --palette-f6f3ec: #f6f3ec;
+  --palette-f6f3ee: #f6f3ee;
+  --palette-f6f3fa: #f6f3fa;
+  --palette-f7f2f6: #f7f2f6;
+  --palette-f7f2fb: #f7f2fb;
+  --palette-f7f3ea: #f7f3ea;
+  --palette-f7f3ed: #f7f3ed;
+  --palette-f7f3f8: #f7f3f8;
+  --palette-f7f4ec: #f7f4ec;
+  --palette-f7f4ee: #f7f4ee;
+  --palette-f8cd65: #f8cd65;
+  --palette-f8f1df: #f8f1df;
+  --palette-f8f2e8: #f8f2e8;
+  --palette-f8f5ee: #f8f5ee;
+  --palette-f8f5ef: #f8f5ef;
+  --palette-f8f5fccf: #f8f5fccf;
+  --palette-f8f5fdf5: #f8f5fdf5;
+  --palette-f8f5fffa: #f8f5fffa;
+  --palette-f8f6f2: #f8f6f2;
+  --palette-f9f6f0: #f9f6f0;
+  --palette-faedf0: #faedf0;
+  --palette-faf0e5: #faf0e5;
+  --palette-faf0ef: #faf0ef;
+  --palette-faf0f1: #faf0f1;
+  --palette-faf7f1: #faf7f1;
+  --palette-faf7f2: #faf7f2;
+  --palette-faf7fd: #faf7fd;
+  --palette-faf8f3: #faf8f3;
+  --palette-faf8fc: #faf8fc;
+  --palette-faf8fd: #faf8fd;
+  --palette-fbf0f1: #fbf0f1;
+  --palette-fbf1e4: #fbf1e4;
+  --palette-fbf8f2: #fbf8f2;
+  --palette-fbf8f3: #fbf8f3;
+  --palette-fbf9f4: #fbf9f4;
+  --palette-fcfaf4e6: #fcfaf4e6;
+  --palette-fcfaf5: #fcfaf5;
+  --palette-fcfaf6: #fcfaf6;
+  --palette-fcfaf7: #fcfaf7;
+  --palette-fcfaff: #fcfaff;
+  --palette-fff0f0: #fff0f0;
+  --palette-fff0f1: #fff0f1;
+  --palette-fff3f4: #fff3f4;
+  --palette-fff6f5: #fff6f5;
+  --palette-fffaf0: #fffaf0;
+  --palette-fffaf3: #fffaf3;
+  --palette-fffcf5: #fffcf5;
+  --palette-fffcf6: #fffcf6;
+  --palette-fffcfa: #fffcfa;
+  --palette-fffdf4da: #fffdf4da;
+  --palette-fffdf8: #fffdf8;
+  --palette-fffdf8c9: #fffdf8c9;
+  --palette-fffdf8f5: #fffdf8f5;
+  --palette-fffdfa88: #fffdfa88;
+  --palette-fffdfa90: #fffdfa90;
+  --palette-fffdfaf7: #fffdfaf7;
+  --palette-fffdfb: #fffdfb;
+  --palette-fffdfbcc: #fffdfbcc;
+  --palette-fffefb: #fffefb;
+  --palette-ffffff08: #ffffff08;
+  --palette-ffffff22: #ffffff22;
+  --surface-input: #fffefa;
+  --surface-paper: #fffdf9;
+  --surface-selected: #eee9f8;
+  --text-selected: #54417e;
+  --transparent: transparent;
+  --white: #ffffff;
+  /* Spacing and corner scales; border widths, typography and media breakpoints remain explicit. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --radius-xs: 4px;
+  --radius-s: 8px;
+  --radius-control: 10px;
+  --radius-m: 12px;
+  --radius-soft: 14px;
+  --radius-card: 16px;
+  --radius-l: 20px;
+  --radius-round: 999px;
 }
 body {
-  background:
-    radial-gradient(ellipse at 95% 0, #ddd9ee77, transparent 40%),
-    radial-gradient(ellipse at 0 65%, #eadcc355, transparent 40%), var(--bg);
+  color: var(--text);
 }
-::selection {
-  background: #ded9f1;
-  color: #282742;
+button,
+a,
+input,
+textarea,
+select {
+  -webkit-tap-highlight-color: var(--transparent);
+}
+a,
+button {
+  color: inherit;
+}
+button:focus-visible,
+a:focus-visible {
+  outline-color: var(--cyan);
 }
 .topbar {
-  background: #fcfaf4e6;
-  border-color: #dcd6cd;
+  border-bottom-color: var(--palette-26344799);
+}
+.brand svg {
+  fill: none;
+  stroke: var(--cyan);
+}
+.brand svg circle {
+  stroke: none;
+}
+.tab {
+  background: var(--transparent);
+}
+.muted {
+  color: var(--muted);
+}
+.step {
+  background: var(--transparent);
+}
+.source-note a {
+  color: var(--cyan);
+}
+.canvas-header p {
+  color: var(--muted);
+}
+.node .node-circle {
+  fill: var(--palette-183c4566);
+  stroke: var(--palette-5fc3b688);
+}
+.node.fterm .node-circle {
+  fill: var(--palette-58443140);
+  stroke: var(--palette-c4996777);
+}
+.node.selected .node-circle {
+  fill: var(--palette-286962b3);
+  stroke: var(--cyan);
+  filter: drop-shadow(0 0 13px var(--palette-72ebce30));
+}
+.node.fterm.selected .node-circle {
+  fill: var(--palette-80613db3);
+  stroke: var(--amber);
+}
+.node:hover .node-circle,
+.node:focus .node-circle {
+  stroke: var(--white);
+}
+.node .node-code {
+  fill: var(--palette-d3f7ed);
+}
+.node .node-title {
+  fill: var(--palette-b9c9d5);
+}
+.node.fterm .node-code {
+  fill: var(--palette-f0d8b8);
+}
+.node .node-kind {
+  fill: var(--palette-8ea9b7);
+}
+.node .selection-mark {
+  fill: var(--cyan);
+}
+.canvas-empty p {
+  color: var(--muted);
+}
+.canvas-footer {
+  border-top-color: var(--palette-26344799);
+}
+.legend i {
+  background: var(--cyan);
+}
+.legend i.amber {
+  background: var(--amber);
+}
+.selected-count b {
+  color: var(--cyan);
+}
+.detail-strip {
+  border-top-color: var(--line);
+}
+.detail-strip a {
+  color: var(--cyan);
+}
+.list-toggle {
+  color: var(--muted);
+}
+.class-list button.active {
+  border-color: var(--cyan);
+}
+.dropzone .upload-symbol {
+  color: var(--cyan);
+}
+.dropzone p {
+  color: var(--muted);
+}
+.history-item {
+  border-bottom-color: var(--line);
+}
+.history-item small,
+.stat small {
+  color: var(--muted);
+}
+.stat.exclude strong {
+  color: var(--pink);
+}
+.detail-block {
+  border-top-color: var(--line);
+  color: var(--muted);
+}
+.map-detail-empty,
+.learning-row p,
+.metric small {
+  color: var(--muted);
+}
+.metric strong {
+  color: var(--cyan);
+}
+td,
+th,
+.log-entry {
+  border-bottom-color: var(--line);
+}
+.job-banner progress {
+  accent-color: var(--cyan);
+}
+.demo-badge {
+  color: var(--amber);
+}
+.select-ring {
+  fill: none;
+}
+.query-field-row {
+  border-bottom-color: var(--line);
+}
+.query-field-row span {
+  color: var(--muted);
+}
+.upload-status {
+  color: var(--cyan);
+}
+.training-description {
+  color: var(--muted);
+}
+.output-sources {
+  color: var(--cyan);
+}
+.display-settings {
+  background:
+    radial-gradient(ellipse at top left, var(--palette-23463c80), var(--transparent) 65%), var(--panel);
+}
+.class-layout-note {
+  color: var(--muted);
+}
+.class-scope-note {
+  border-left-color: var(--palette-789bdf80);
+  background: var(--palette-789bdf0b);
+  color: var(--palette-acc1d7);
+}
+.class-region rect {
+  fill: var(--palette-4d87970a);
+  stroke: var(--palette-769fad30);
+}
+.class-region text {
+  fill: var(--palette-b4d1d4);
+}
+.class-region-count {
+  fill: var(--palette-78939f);
+}
+.class-neighbor {
+  stroke: var(--palette-8ca9ad55);
+}
+#class-layout-settings {
+  border-color: var(--palette-4f786866);
+  color: var(--palette-bce8d9);
+}
+.class-language-control {
+  color: var(--muted);
+}
+.class-language-control select {
+  color: var(--palette-d5ebe7);
+  background: var(--palette-172c33);
+}
+.class-bilingual dt {
+  color: var(--palette-92c9be);
+}
+.class-bilingual dt small {
+  color: var(--palette-7e99a8);
+}
+.class-bilingual dd {
+  color: var(--palette-d9e5eb);
+}
+.class-translation-note {
+  color: var(--muted);
+}
+.class-translation-network {
+  color: var(--palette-7896a6);
+}
+.class-parent-caption {
+  border-left-color: var(--palette-6baba650);
+  color: var(--palette-93b1be);
+}
+.class-proposal-feedback {
+  border-color: var(--line);
+  background: var(--panel-soft);
+  color: var(--text);
+}
+.class-proposal-heading .eyebrow {
+  color: var(--cyan);
+}
+.class-proposal-context {
+  color: var(--muted);
+}
+.class-proposal-metrics span {
+  background: var(--panel);
+  color: var(--muted);
+}
+.class-proposal-metrics b {
+  color: var(--text);
+}
+.class-proposal-item {
+  border-top-color: var(--line);
+}
+.class-proposal-code strong {
+  color: var(--text);
+}
+.class-proposal-code span {
+  border-color: var(--line);
+  color: var(--muted);
+}
+.class-proposal-code .is-new {
+  background: var(--panel);
+  color: var(--cyan);
+  border-color: var(--cyan);
+}
+.class-proposal-reason {
+  color: var(--text);
+}
+.class-proposal-reason b {
+  color: var(--cyan);
+}
+.class-proposal-rejected,
+.class-proposal-notices {
+  color: var(--muted);
+}
+.class-proposal-error {
+  border-color: var(--pink);
+  background: var(--panel);
+  color: var(--pink);
+}
+.class-rejected-item {
+  border-top-color: var(--line);
+}
+.class-revision-note {
+  border-left-color: var(--line);
+}
+.class-revision-label {
+  color: var(--text);
+}
+.class-revision-sources a {
+  color: var(--cyan);
+}
+.class-broader-proposal {
+  border-color: var(--line);
+  background: var(--panel);
+  color: var(--text);
+}
+.class-broader-label,
+.class-broader-added {
+  color: var(--cyan);
+}
+.class-llm-reason {
+  color: var(--text);
+  border-left-color: var(--cyan);
+}
+.class-llm-reason > b {
+  color: var(--cyan);
+}
+.class-llm-reason small {
+  color: var(--muted);
+}
+.class-proposal-rejected > summary {
+  background: var(--panel-soft);
+}
+.source-tabs {
+  border-color: var(--line);
+  background: var(--palette-09121e);
+}
+.source-tabs button {
+  background: var(--transparent);
+  color: var(--muted);
+}
+.source-tabs button.active {
+  background: var(--palette-254339);
+  color: var(--palette-bdffe8);
+}
+.seed-panel details,
+.class-trail {
+  color: var(--muted);
+}
+.trail-item {
+  background: var(--palette-203144);
+  color: var(--palette-bcd5de);
+}
+.class-focus {
+  border-color: var(--palette-71c9b33b);
+  background: linear-gradient(110deg, var(--palette-213f3a77), var(--palette-18253666));
+}
+.class-focus .focus-title {
+  color: var(--palette-c8d9e7);
+}
+.class-focus small,
+.browse-note {
+  color: var(--muted);
+}
+.remove-class {
+  color: var(--text);
+  background: var(--palette-213647);
+  border-color: var(--palette-3b5c6b);
+}
+.node.navigation-node .node-circle {
+  fill: var(--palette-25334855);
+  stroke: var(--palette-7897b2);
+}
+.node.cpc .node-circle {
+  fill: var(--palette-213d6266);
+  stroke: var(--palette-789bdf);
+}
+.legend i.blue {
+  background: var(--blue);
+}
+.class-facet-tags span {
+  color: var(--palette-b7d5db);
+  border-color: var(--palette-6a9dac40);
+}
+.class-match-details {
+  color: var(--palette-b8cbd8);
+}
+.target-patent-list {
+  border-top-color: var(--line);
+}
+.target-row {
+  border-bottom-color: var(--line);
+}
+.target-row input {
+  accent-color: var(--cyan);
+}
+.target-row small {
+  color: var(--muted);
+}
+.discovery-start {
+  background:
+    radial-gradient(ellipse at 12% 0, var(--palette-2a59514d), var(--transparent) 60%),
+    linear-gradient(130deg, var(--palette-152431), var(--palette-101827));
+}
+.discovery-intro .eyebrow {
+  color: var(--palette-9bc2bb);
+}
+.discovery-flow {
+  color: var(--palette-afd4ca);
+}
+.discovery-flow span {
+  border-color: var(--palette-89efd726);
+  background: var(--palette-89efd707);
+}
+.discovery-flow b {
+  color: var(--palette-6a8c88);
+}
+.discovery-form textarea {
+  background: var(--palette-091520ad);
+}
+.discovery-section-title .pill {
+  color: var(--cyan);
+  border-color: var(--palette-89efd739);
+}
+.discovery-step-number {
+  color: var(--cyan);
+  border-color: var(--palette-89efd74d);
+  background: var(--palette-89efd70c);
+}
+.discovery-upload {
+  border-color: var(--palette-43596c);
+  background: var(--palette-0c1623);
+}
+.discovery-upload label {
+  color: var(--palette-bfd2e1);
+}
+.discovery-upload input::file-selector-button {
+  background: var(--palette-26394c);
+  color: var(--palette-d4e2ee);
+}
+.discovery-remote small,
+.discovery-summary-arrow {
+  color: var(--muted);
+}
+.discovery-status {
+  border-color: var(--palette-89efd72d);
+  background: var(--palette-89efd708);
+}
+.discovery-status > span {
+  background: var(--cyan);
+}
+.discovery-status p {
+  color: var(--muted);
+}
+.discovery-status.error {
+  border-color: var(--palette-ec91ad44);
+  background: var(--palette-ec91ad09);
+}
+.discovery-status.error > span {
+  background: var(--pink);
+}
+.discovery-pulse {
+  box-shadow: 0 0 0 5px var(--palette-89efd712);
+}
+.discovery-facet {
+  border-color: var(--palette-344b5c88);
+  background: linear-gradient(140deg, var(--palette-15353b44), var(--palette-142237));
+}
+.discovery-facet:nth-child(3n + 2) {
+  background: linear-gradient(140deg, var(--palette-26234277), var(--palette-142237));
+}
+.discovery-facet:nth-child(3n) {
+  background: linear-gradient(140deg, var(--palette-3d32294d), var(--palette-142237));
+}
+.discovery-facet-number {
+  color: var(--palette-82acaf);
+}
+.discovery-facet p {
+  color: var(--palette-b9c9d7);
+}
+.discovery-facet small {
+  color: var(--palette-839bb0);
+}
+.discovery-warnings {
+  border-left-color: var(--palette-e5b67e7a);
+  background: var(--palette-e5b67e07);
+}
+.discovery-warnings p {
+  color: var(--palette-d0bea7);
+}
+.discovery-query-details {
+  border-top-color: var(--line);
+}
+.discovery-query-details summary > span,
+.discovery-history > summary > span {
+  color: var(--muted);
+}
+.discovery-query b {
+  color: var(--palette-c5dbdf);
+}
+.discovery-query span {
+  color: var(--muted);
+}
+.discovery-query pre {
+  border-color: var(--palette-2a3c4f);
+  background: var(--palette-09131e);
+  color: var(--palette-b2d9ce);
+}
+.discovery-metrics > div {
+  background: var(--palette-10202c);
+  border-color: var(--palette-3246597a);
+}
+.discovery-metrics strong {
+  color: var(--palette-c8eade);
+}
+.discovery-metrics small {
+  color: var(--muted);
+}
+.discovery-new-terms > b {
+  color: var(--palette-c5d5e1);
+}
+.discovery-tags span {
+  color: var(--palette-a9c1cd);
+  border-color: var(--palette-334b5b);
+  background: var(--palette-1b2d3b6e);
+}
+.discovery-candidate {
+  border-color: var(--palette-34495b);
+  background: linear-gradient(140deg, var(--palette-152b345f), var(--palette-111c2be6));
+}
+.discovery-candidate.hypothesis {
+  background: var(--palette-101a2999);
+}
+.discovery-candidate.chosen {
+  border-color: var(--palette-89efd7a6);
+  background: var(--palette-153332b3);
+}
+.discovery-candidate-label > input {
+  accent-color: var(--cyan);
+}
+.discovery-source {
+  color: var(--palette-96c7bb);
+}
+.hypothesis .discovery-source {
+  color: var(--palette-b0bace);
+}
+.discovery-source.synthetic {
+  color: var(--amber);
+}
+.discovery-candidate-label b {
+  color: var(--palette-d5ece7);
+}
+.discovery-candidate-title {
+  color: var(--palette-bbcad7);
+}
+.discovery-reason {
+  color: var(--muted);
+}
+.discovery-evidence-count {
+  color: var(--palette-92aebc);
+}
+.discovery-evidence-count b {
+  color: var(--palette-bad6d4);
+}
+.discovery-evidence {
+  border-top-color: var(--palette-30485888);
+}
+.discovery-evidence summary {
+  color: var(--palette-b4c9d8);
+}
+.discovery-evidence summary > span {
+  color: var(--palette-81b6b0);
+}
+.discovery-evidence li {
+  border-bottom-color: var(--palette-2a3c4d77);
+}
+.discovery-evidence li > b {
+  color: var(--blue);
+}
+.discovery-evidence li > span {
+  color: var(--palette-b8c8d5);
+}
+.discovery-evidence li > small {
+  color: var(--palette-819bae);
+}
+.discovery-evidence em {
+  color: var(--amber);
+  border-color: var(--palette-e5b67e44);
+}
+.discovery-adoption {
+  background: var(--palette-11262aed);
+  border-color: var(--palette-89efd754);
+  box-shadow: 0 8px 24px var(--palette-00000044);
+}
+.discovery-adoption strong {
+  color: var(--cyan);
+}
+.discovery-adoption span {
+  color: var(--palette-b2d2c9);
+}
+.discovery-adoption p {
+  color: var(--palette-a5babb);
+}
+.discovery-history td,
+.discovery-history th {
+  border-bottom-color: var(--line);
+}
+.discovery-history th {
+  color: var(--muted);
+}
+.discovery-log {
+  border-top-color: var(--line);
+}
+.discovery-log li {
+  color: var(--palette-a3b8c7);
+}
+.discovery-log time {
+  color: var(--palette-698a9f);
+}
+.discovery-architecture {
+  color: var(--muted);
+}
+.discovery-architecture h3 {
+  color: var(--palette-bbcdd7);
+}
+.discovery-architecture > .caption {
+  border-top-color: var(--line);
+}
+@keyframes discovery-pulse {
+  50% {
+    box-shadow: 0 0 0 8px var(--palette-89efd706);
+  }
+}
+.discovery-definition-parent {
+  border-top-color: var(--palette-344f5d88);
+  color: var(--palette-8eafc1);
+}
+.discovery-compare-panel {
+  background:
+    radial-gradient(ellipse at 15% 0, var(--palette-1f4a4938), var(--transparent) 65%), var(--palette-111d2a);
+}
+.discovery-compare-heading .eyebrow {
+  color: var(--palette-83b9b0);
+}
+.discovery-compare-heading p {
+  color: var(--palette-96b0bb);
+}
+.discovery-view-tabs {
+  background: var(--palette-0b1420);
+  border-color: var(--palette-314355);
+}
+.discovery-view-tabs button {
+  background: var(--transparent);
+  color: var(--palette-8fa8bb);
+}
+.discovery-view-tabs button.active {
+  color: var(--palette-d2f4e8);
+  background: var(--palette-274940);
+}
+.discovery-source-filters button {
+  color: var(--palette-a5bbc8);
+  border-color: var(--palette-2e4658);
+  background: var(--palette-0c1825);
+}
+.discovery-source-filters button.active {
+  border-color: var(--palette-83bbae9c);
+  background: var(--palette-17372f);
+  color: var(--palette-d6f3e9);
+}
+.discovery-source-filters b {
+  color: var(--palette-dae6eb);
+  background: var(--palette-ffffff08);
+}
+.discovery-source-filters i {
+  background: var(--palette-93a6b7);
+}
+.discovery-source-filters i.patent {
+  background: var(--cyan);
+}
+.discovery-source-filters i.hypothesis {
+  background: var(--blue);
+}
+.discovery-source-filters i.synthetic {
+  background: var(--amber);
+}
+.discovery-compare-filters {
+  background: var(--palette-0d1723);
+  border-color: var(--palette-2a3e50);
+}
+.discovery-compare-status {
+  color: var(--palette-8facba);
+}
+.discovery-map-side {
+  border-color: var(--palette-334c5c);
+  background: var(--palette-0b1622);
+}
+.discovery-map-tools {
+  background: var(--palette-112333);
+  border-bottom-color: var(--palette-2c4252);
+}
+.discovery-map-tools > span {
+  color: var(--palette-95b5c0);
+}
+.discovery-map-tools .button.active {
+  background: var(--palette-214b3e);
+  color: var(--palette-b9efdd);
+  border-color: var(--palette-70bca1);
+}
+.discovery-map-tools select {
+  background: var(--palette-0d1b28);
+}
+.discovery-map-viewport {
+  background:
+    radial-gradient(ellipse at 35% 30%, var(--palette-193c443d), var(--transparent) 75%),
+    radial-gradient(var(--palette-59839333) 0.65px, var(--transparent) 0.65px);
+  background-size:
+    auto,
+    20px 20px;
+}
+.discovery-map-caption {
+  border-top-color: var(--palette-2b4252);
+  color: var(--palette-809eaf);
+  background: var(--palette-0e1d2b);
+}
+.discovery-star circle {
+  fill: var(--palette-23435b88);
+  stroke: var(--palette-81a8d7);
+}
+.discovery-star.patent circle {
+  fill: var(--palette-174e4566);
+  stroke: var(--palette-73cdb6);
+}
+.discovery-star.synthetic circle {
+  fill: var(--palette-644c2b55);
+  stroke: var(--palette-d6a567);
+}
+.discovery-star.chosen circle {
+  fill: var(--palette-37766bd6);
+  stroke: var(--palette-affce0);
+}
+.discovery-star:hover circle,
+.discovery-star:focus-visible circle {
+  stroke: var(--white);
+}
+.discovery-star-kind {
+  fill: var(--palette-b7cfe0);
+}
+.discovery-star-mark {
+  fill: var(--palette-cfeee0);
+}
+.discovery-star-code {
+  fill: var(--palette-d0e5e7);
+}
+.discovery-star-title {
+  fill: var(--palette-a4beca);
+}
+.discovery-star-regions rect {
+  fill: var(--palette-3c818409);
+  stroke: var(--palette-5c949b48);
+}
+.discovery-star-regions text {
+  fill: var(--palette-afced1);
+}
+.discovery-star-regions tspan {
+  fill: var(--palette-6f979f);
+}
+.discovery-star-links line {
+  stroke: var(--palette-8daeb14d);
+}
+.discovery-lasso-path {
+  fill: var(--palette-7ee7c519);
+  stroke: var(--palette-a2efd8);
+}
+.discovery-filter-empty {
+  color: var(--palette-a2b9c8);
+}
+.discovery-inspector {
+  background: linear-gradient(155deg, var(--palette-1b343c55), var(--palette-0d1927));
+  border-color: var(--palette-38515f);
+}
+.discovery-inspector-heading {
+  border-bottom-color: var(--palette-2f4a58);
+  background: var(--palette-162b35);
+}
+.discovery-inspector-heading > span {
+  color: var(--palette-84a7ae);
+}
+.discovery-inspector-heading h4 {
+  color: var(--palette-d1e7e6);
+}
+.discovery-inspector .discovery-candidate {
+  background: var(--transparent);
+  box-shadow: none;
+}
+.discovery-inspector .discovery-candidate-title {
+  color: var(--palette-d0e1e6);
+}
+.discovery-inspector .discovery-evidence-count {
+  border-color: var(--palette-45647466);
+  background: var(--palette-152d36);
+}
+.discovery-definition {
+  border-color: var(--palette-314b5e);
+  background: var(--palette-0c1a29);
+}
+.discovery-definition-language {
+  color: var(--palette-80a6bc);
+}
+.discovery-definition p {
+  color: var(--palette-b8cdd9);
+}
+.discovery-definition small {
+  color: var(--palette-779aac);
+}
+.discovery-comparison-table th {
+  color: var(--palette-91adbd);
+  background: var(--palette-152a38);
+  border-bottom-color: var(--palette-365061);
+}
+.discovery-comparison-table td {
+  border-bottom-color: var(--palette-293f50);
+  color: var(--palette-a4beca);
+}
+.discovery-comparison-table tr.chosen td {
+  background: var(--palette-244e433f);
+}
+.discovery-comparison-table input {
+  accent-color: var(--cyan);
+}
+.discovery-list-focus {
+  background: var(--transparent);
+  color: inherit;
+}
+.discovery-list-focus b {
+  color: var(--palette-c5e2e5);
+}
+.discovery-list-source {
+  color: var(--blue);
+}
+.discovery-list-source.patent {
+  color: var(--cyan);
+}
+.discovery-list-source.synthetic {
+  color: var(--amber);
+}
+.discovery-compare-panel .discovery-adoption {
+  box-shadow: none;
+  background: var(--palette-18332fb3);
+  border-color: var(--palette-4a817357);
+}
+.discovery-llm-report {
+  border-left-color: var(--cyan);
+}
+.discovery-llm-targets article {
+  border-color: var(--line);
+  background: var(--surface-soft);
+}
+.discovery-llm-targets article > b {
+  color: var(--ink);
+}
+.discovery-llm-targets article > small {
+  color: var(--muted);
+}
+.discovery-llm-tags span {
+  background: var(--surface);
+  border-color: var(--line);
+  color: var(--ink);
+}
+.discovery-llm-facet strong {
+  color: var(--cyan);
+}
+.discovery-plan-request {
+  border-color: var(--line);
+  background: var(--surface);
+}
+.discovery-plan-request.error {
+  border-color: var(--pink);
+  color: var(--pink);
+}
+.discovery-plan-request.pending {
+  border-color: var(--cyan);
+  color: var(--cyan);
+}
+.discovery-source-filters i.derived {
+  background: var(--palette-a76b42);
+}
+.discovery-star.derived circle {
+  fill: var(--palette-c98d5230);
+  stroke: var(--palette-a76b42);
+}
+.discovery-list-source.derived {
+  color: var(--palette-935c38);
+}
+.discovery-origin {
+  border-top-color: var(--palette-d9d0c4);
+  color: var(--muted);
+}
+.discovery-origin summary {
+  color: var(--palette-916846);
+}
+/* Patent Atlas: warm paper, indigo ink and copper cartographic details. */
+body {
+  background:
+    radial-gradient(ellipse at 95% 0, var(--palette-ddd9ee77), var(--transparent) 40%),
+    radial-gradient(ellipse at 0 65%, var(--palette-eadcc355), var(--transparent) 40%), var(--bg);
+}
+::selection {
+  background: var(--palette-ded9f1);
+  color: var(--ink);
+}
+.topbar {
+  background: var(--palette-fcfaf4e6);
+  border-color: var(--line);
   backdrop-filter: blur(20px);
 }
 .brand {
-  color: #34314d;
+  color: var(--palette-34314d);
   letter-spacing: 0.13em;
   font-size: 15px;
 }
@@ -47,46 +1688,46 @@ body {
 }
 .brand .atlas-mark-orbit,
 .brand .atlas-mark-axis {
-  stroke: #fffaf0;
+  stroke: var(--palette-fffaf0);
   stroke-width: 1.15;
 }
 .brand svg circle {
-  fill: #dfad85;
+  fill: var(--palette-dfad85);
 }
 .version {
-  color: #797489;
-  background: #efebe5;
-  border-color: #ddd6cc;
+  color: var(--palette-797489);
+  background: var(--palette-efebe5);
+  border-color: var(--palette-ddd6cc);
   border-radius: 6px;
   font-size: 10px;
 }
 .tabs {
-  background: #eeebe5;
-  border-color: #ded8cf;
+  background: var(--palette-eeebe5);
+  border-color: var(--palette-ded8cf);
   padding: 5px;
-  border-radius: 14px;
+  border-radius: var(--radius-soft);
 }
 .tab {
-  color: #6e6a7b;
+  color: var(--palette-6e6a7b);
   font-size: 13px;
 }
 .tab:hover {
   color: var(--ink);
-  background: #fffdfa88;
+  background: var(--palette-fffdfa88);
 }
 .tab.active {
-  background: #fffdfa;
+  background: var(--surface);
   color: var(--cyan);
   box-shadow:
-    0 2px 6px #42385912,
-    0 0 0 1px #ddd6e688;
+    0 2px 6px var(--palette-42385912),
+    0 0 0 1px var(--palette-ddd6e688);
 }
 .status-dot {
   background: var(--green);
-  box-shadow: 0 0 0 4px #48776310;
+  box-shadow: 0 0 0 4px var(--palette-48776310);
 }
 .connection {
-  color: #73717b;
+  color: var(--palette-73717b);
   font-size: 11px;
 }
 main {
@@ -98,10 +1739,15 @@ main {
   overflow: hidden;
   min-height: 170px;
   padding: 28px 30px;
-  border: 1px solid #d9d2c7;
+  border: 1px solid var(--palette-d9d2c7);
   border-radius: 22px;
-  background: linear-gradient(115deg, #fffdf8 0%, #f6f1e9 58%, #eae7f2 100%);
-  box-shadow: 0 4px 20px #64524005;
+  background: linear-gradient(
+    115deg,
+    var(--palette-fffdf8) 0%,
+    var(--palette-f6f1e9) 58%,
+    var(--palette-eae7f2) 100%
+  );
+  box-shadow: 0 4px 20px var(--palette-64524005);
   align-items: flex-end;
   margin-bottom: 25px;
 }
@@ -112,7 +1758,7 @@ main {
   bottom: 25px;
   left: 0;
   width: 3px;
-  background: linear-gradient(var(--amber), #cfb9a0);
+  background: linear-gradient(var(--amber), var(--palette-cfb9a0));
   border-radius: 0 3px 3px 0;
 }
 .atlas-heading-copy {
@@ -120,20 +1766,20 @@ main {
   min-width: 0;
 }
 .workspace-heading .eyebrow {
-  color: #8d634c;
+  color: var(--palette-8d634c);
   font-size: 10px;
   letter-spacing: 0.17em;
 }
 .workspace-heading h1 {
-  color: #35304b;
+  color: var(--palette-35304b);
   font-size: 32px;
   font-weight: 550;
   letter-spacing: 0.025em;
   line-height: 1.4;
-  margin-top: 12px;
+  margin-top: var(--space-3);
 }
 .atlas-heading-note {
-  color: #77717d;
+  color: var(--palette-77717d);
   font-size: 12px;
   margin: 10px 0 0;
   letter-spacing: 0.055em;
@@ -145,27 +1791,29 @@ main {
   right: 0;
   top: -5px;
   pointer-events: none;
-  color: #8c7ca0;
+  color: var(--palette-8c7ca0);
   opacity: 0.33;
   z-index: -1;
 }
 .atlas-art-nodes {
-  fill: #a66a47;
+  fill: var(--palette-a66a47);
 }
 .heading-actions {
   z-index: 1;
   align-items: center;
   flex-wrap: wrap;
   justify-content: flex-end;
-  gap: 8px;
+  gap: var(--space-2);
   max-width: 470px;
 }
 .heading-actions .button {
-  background: #fffdf8c9;
   font-size: 11px;
   padding: 9px 11px;
-  border-color: #d9d2c7;
   backdrop-filter: blur(5px);
+}
+:where(.heading-actions) .button {
+  background: var(--palette-fffdf8c9);
+  border-color: var(--palette-d9d2c7);
 }
 .atlas-motion-control {
   margin: 0;
@@ -174,144 +1822,93 @@ main {
   margin: 0;
   width: 115px;
   font-size: 11px;
-  padding: 8px 9px;
+  padding: var(--space-2) 9px;
   line-height: 1.5;
-  border-color: #cfc6dc;
-  background: #f8f5fccf;
-  color: #5a5377;
+  border-color: var(--palette-cfc6dc);
+  background: var(--palette-f8f5fccf);
+  color: var(--palette-5a5377);
 }
 .eyebrow {
-  color: #8b715e;
+  color: var(--palette-8b715e);
   font-size: 11px;
   letter-spacing: 0.15em;
 }
 .panel {
-  background: linear-gradient(140deg, #fffefb, #fbf9f4);
+  background: linear-gradient(140deg, var(--palette-fffefb), var(--palette-fbf9f4));
   border-color: var(--line);
   box-shadow:
-    0 3px 12px #55453104,
-    0 1px 2px #55453103;
+    0 3px 12px var(--palette-55453104),
+    0 1px 2px var(--palette-55453103);
 }
 .panel h2 {
-  color: #35314d;
+  color: var(--palette-35314d);
 }
 .panel-heading {
   border-color: var(--line);
 }
-.button {
-  color: #514965;
-  background: #efebf2;
-  border-color: #d7cedf;
-  box-shadow: 0 1px 1px #4c375407;
-}
-.button:hover {
-  background: #e6e0ef;
-  border-color: #bfb2d1;
-}
-.button.primary {
-  color: #fffdfb;
-  background: linear-gradient(125deg, #625bb3, #4e4b95);
-  border-color: #5754a7;
-  box-shadow:
-    0 4px 10px #5145951b,
-    inset 0 1px #ffffff22;
-}
-.button.primary:hover {
-  color: #fff;
-  background: linear-gradient(125deg, #7067bf, #5550a0);
-}
-.button.subtle {
-  background: #f8f5ef;
-  border-color: #dad3c9;
-  color: #665c72;
-}
-.button.subtle:hover {
-  background: #ece6de;
-  border-color: #c3b8ae;
-}
-.button.positive {
-  color: #3c6956;
-  border-color: #b2c9b9;
-  background: #eef4ee;
-}
-.button.danger {
-  color: #944459;
-  border-color: #d7b8bf;
-  background: #faf0f1;
-}
-.button:disabled {
-  cursor: not-allowed;
-  opacity: 0.48;
-  transform: none;
-}
 .icon-button {
-  background: #f4f0e9;
-  border-color: #d6cfc5;
-  color: #6d6478;
+  background: var(--palette-f4f0e9);
+  border-color: var(--palette-d6cfc5);
+  color: var(--palette-6d6478);
 }
 .icon-button:hover {
-  background: #eae4ed;
+  background: var(--palette-eae4ed);
 }
 .icon-button.active {
-  color: #554b94;
-  background: #eae5f6;
-  border-color: #b6a8d4;
-}
-.pill {
-  color: #756779;
-  background: #f6f2ea;
-  border-color: #dfd5c8;
+  color: var(--palette-554b94);
+  background: var(--palette-eae5f6);
+  border-color: var(--palette-b6a8d4);
 }
 input:not([type='checkbox']),
 textarea,
 select {
-  color: #35314d;
-  background: #fffefa;
-  border-color: #d6d0c7;
-  box-shadow: inset 0 1px 2px #4c422703;
+  color: var(--palette-35314d);
+  background: var(--surface-input);
+  border-color: var(--palette-d6d0c7);
+  box-shadow: inset 0 1px 2px var(--palette-4c422703);
 }
 input::placeholder,
 textarea::placeholder {
-  color: #918999;
+  color: var(--palette-918999);
 }
 input:focus,
 textarea:focus,
 select:focus {
-  border-color: #9890c5;
-  box-shadow: 0 0 0 3px #6a5cad12;
+  border-color: var(--palette-9890c5);
+  box-shadow: 0 0 0 3px var(--palette-6a5cad12);
 }
 label {
-  color: #5e566b;
+  color: var(--palette-5e566b);
 }
 .check {
-  color: #736b79;
+  color: var(--palette-736b79);
 }
 .check input {
   accent-color: var(--cyan);
 }
 .stepper {
-  background: #eeeae2;
-  border-color: #ddd6cc;
+  background: var(--palette-eeeae2);
+  border-color: var(--palette-ddd6cc);
   gap: 5px;
   padding: 7px;
   border-radius: 17px;
 }
 .step {
-  color: #7c7281;
+  color: var(--palette-7c7281);
   border-radius: 11px;
 }
 .step.active {
-  color: #493f70;
-  background: linear-gradient(120deg, #fffdfa, #f5f0fd);
+  color: var(--palette-493f70);
+  background: linear-gradient(120deg, var(--surface), var(--palette-f5f0fd));
   box-shadow:
-    0 1px 5px #77688212,
-    inset 0 0 0 1px #d7cce6;
+    0 1px 5px var(--palette-77688212),
+    inset 0 0 0 1px var(--palette-d7cce6);
 }
 .step-number {
-  border-color: #ccc2bc;
-  color: #8a7c7a;
-  background: #f7f3ed;
-  border-radius: 10px;
+  border-color: var(--palette-ccc2bc);
+  color: var(--palette-8a7c7a);
+  background: var(--palette-f7f3ed);
+  border-radius: var(--radius-control);
   font:
     12px ui-monospace,
     SFMono-Regular,
@@ -319,250 +1916,251 @@ label {
     monospace;
 }
 .step.active .step-number {
-  color: #fff;
-  background: #6257a3;
-  border-color: #6257a3;
-  box-shadow: 0 2px 5px #6257a326;
+  color: var(--white);
+  background: var(--palette-6257a3);
+  border-color: var(--palette-6257a3);
+  box-shadow: 0 2px 5px var(--palette-6257a326);
 }
 .step small {
-  color: #8b8090;
+  color: var(--palette-8b8090);
   font-size: 11px;
 }
 .step-arrow {
-  color: #b5a8b7;
+  color: var(--palette-b5a8b7);
 }
 .conversation-avatar {
-  color: #66549f;
-  background: #ede6f3;
-  border-color: #d8cbe7;
+  color: var(--palette-66549f);
+  background: var(--palette-ede6f3);
+  border-color: var(--palette-d8cbe7);
 }
 .hint-card {
-  background: #f5efe5;
-  border-color: #e7d9c4;
+  background: var(--palette-f5efe5);
+  border-color: var(--palette-e7d9c4);
 }
 .hint-card h3 {
-  color: #8a6245;
+  color: var(--palette-8a6245);
 }
 .hint-card p {
-  color: #84776c;
+  color: var(--palette-84776c);
 }
 .canvas-panel {
-  background: #fcfaf5;
+  background: var(--palette-fcfaf5);
 }
 .canvas-wrap {
-  background-image: radial-gradient(#b5a99c66 0.65px, transparent 0.65px);
+  background-image: radial-gradient(var(--palette-b5a99c66) 0.65px, var(--transparent) 0.65px);
   background-size: 23px 23px;
 }
 .canvas-footer {
-  background: #f8f5ee;
-  border-color: #e1d9cf;
-  color: #827786;
+  background: var(--palette-f8f5ee);
+  border-color: var(--palette-e1d9cf);
+  color: var(--palette-827786);
 }
-.empty-orbit {
-  color: #a795b8;
+.empty-state-icon {
+  color: var(--palette-a795b8);
 }
 .canvas-empty h3 {
-  color: #776484;
+  color: var(--palette-776484);
 }
 .float-hint {
-  color: #817488;
-  background: #fffdf4da;
-  border: 1px solid #e0d6d0;
-  border-radius: 20px;
-  padding: 5px 12px;
+  color: var(--palette-817488);
+  background: var(--palette-fffdf4da);
+  border: 1px solid var(--palette-e0d6d0);
+  border-radius: var(--radius-l);
+  padding: 5px var(--space-3);
   font-size: 10px;
 }
 .selection-bar {
-  background: #f0ecf4;
-  border-color: #d8cfe1;
-  box-shadow: 0 2px 9px #7c65800a;
+  background: var(--palette-f0ecf4);
+  border-color: var(--palette-d8cfe1);
+  box-shadow: 0 2px 9px var(--palette-7c65800a);
 }
 .selected-count {
-  color: #776a83;
+  color: var(--palette-776a83);
 }
 .chip {
-  color: #60528d;
-  border-color: #cfc2e3;
-  background: #fcfaff;
+  color: var(--palette-60528d);
+  border-color: var(--palette-cfc2e3);
+  background: var(--palette-fcfaff);
 }
 .detail-strip {
-  background: #f7f3ed;
-  border-color: #e0d5c9;
+  background: var(--palette-f7f3ed);
+  border-color: var(--palette-e0d5c9);
 }
 .class-list button {
-  color: #564868;
-  background: #fffdfa;
-  border-color: #d9cfe3;
+  color: var(--palette-564868);
+  background: var(--surface);
+  border-color: var(--palette-d9cfe3);
 }
 .class-list button.active {
-  background: #eee7f7;
+  background: var(--palette-eee7f7);
 }
 .expression {
-  background: #f1eef8;
-  color: #514481;
-  border-color: #d6cce7;
-  box-shadow: inset 3px 0 #c0afd8;
-}
-.notice {
-  background: #f3f0f9;
-  color: #716287;
-  border-color: #dcd3e9;
+  background: var(--palette-f1eef8);
+  color: var(--palette-514481);
+  border-color: var(--palette-d6cce7);
+  box-shadow: inset 3px 0 var(--palette-c0afd8);
 }
 .dropzone {
-  background: repeating-linear-gradient(-45deg, #f7f3ed, #f7f3ed 6px, #faf7f2 6px, #faf7f2 12px);
-  border-color: #c3b2a5;
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--palette-f7f3ed),
+    var(--palette-f7f3ed) 6px,
+    var(--palette-faf7f2) 6px,
+    var(--palette-faf7f2) 12px
+  );
+  border-color: var(--palette-c3b2a5);
 }
 .dropzone:hover,
 .dropzone.dragover {
-  background: #eee7f5;
-  border-color: #9a83b9;
+  background: var(--palette-eee7f5);
+  border-color: var(--palette-9a83b9);
 }
 .schema span {
-  color: #82715e;
-  background: #f2eadd;
+  color: var(--palette-82715e);
+  background: var(--palette-f2eadd);
 }
 .stat {
-  background: #f5f1ea;
-  border-color: #e2d8cb;
+  background: var(--palette-f5f1ea);
+  border-color: var(--palette-e2d8cb);
 }
 .stat.keep strong {
-  color: #497560;
+  color: var(--palette-497560);
 }
 .detail-id {
-  color: #7861a2;
+  color: var(--palette-7861a2);
 }
 .detail-text {
-  color: #6c6376;
+  color: var(--palette-6c6376);
 }
 .detail-block b {
-  color: #514760;
+  color: var(--palette-514760);
 }
 .point {
-  stroke: #564780;
-  fill: #9280b6;
+  stroke: var(--palette-564780);
+  fill: var(--palette-9280b6);
 }
 .point:hover,
 .point:focus {
-  stroke: #35264f;
+  stroke: var(--palette-35264f);
 }
 .point.keep {
-  fill: #487763;
-  stroke: #2e5d47;
+  fill: var(--green);
+  stroke: var(--palette-2e5d47);
 }
 .point.exclude {
-  fill: #ad5365;
-  stroke: #78334d;
+  fill: var(--pink);
+  stroke: var(--palette-78334d);
 }
 .point.selected {
-  stroke: #2c2444;
-  filter: drop-shadow(0 0 4px #7b62a947);
+  stroke: var(--palette-2c2444);
+  filter: drop-shadow(0 0 4px var(--palette-7b62a947));
 }
 .cluster-label {
-  fill: #8c769f;
+  fill: var(--palette-8c769f);
 }
 .metric {
-  background: #f5f0f8;
-  border-color: #ded3e6;
+  background: var(--palette-f5f0f8);
+  border-color: var(--palette-ded3e6);
 }
 th {
-  background: #f2ede6;
-  color: #86778b;
+  background: var(--palette-f2ede6);
+  color: var(--palette-86778b);
 }
 td,
 th {
-  border-color: #e4dcd1;
+  border-color: var(--palette-e4dcd1);
 }
 tbody tr:hover {
-  background: #f6f1f8;
+  background: var(--palette-f6f1f8);
 }
 .flow span {
-  background: #f3edf8;
-  color: #6e598c;
-  border-color: #d6c6e5;
+  background: var(--palette-f3edf8);
+  color: var(--palette-6e598c);
+  border-color: var(--palette-d6c6e5);
 }
 .flow b {
-  color: #bba7c4;
+  color: var(--palette-bba7c4);
 }
 .log-entry time {
-  color: #9c8baa;
+  color: var(--palette-9c8baa);
 }
 .command {
-  background: #f4efe7;
-  color: #85654f;
-  border-color: #e2d4c6;
+  background: var(--palette-f4efe7);
+  color: var(--palette-85654f);
+  border-color: var(--palette-e2d4c6);
 }
 .term-options label {
-  background: #eef4ed;
-  color: #4e6f59;
-  border-color: #bacdbb;
+  background: var(--palette-eef4ed);
+  color: var(--palette-4e6f59);
+  border-color: var(--palette-bacdbb);
 }
 .term-options.exclude label {
-  background: #fbf0f1;
-  color: #985b6b;
-  border-color: #ddc4cc;
+  background: var(--palette-fbf0f1);
+  color: var(--palette-985b6b);
+  border-color: var(--palette-ddc4cc);
 }
 .job-banner {
-  color: #615076;
-  background: #f0eaf7;
-  border-color: #c9b8dd;
+  color: var(--palette-615076);
+  background: var(--palette-f0eaf7);
+  border-color: var(--palette-c9b8dd);
 }
 .spinner {
-  border-color: #d0bedf;
+  border-color: var(--palette-d0bedf);
   border-top-color: var(--cyan);
 }
 .toast {
-  background: #fffdf9;
-  color: #514167;
-  border-color: #cdbce0;
-  box-shadow: 0 12px 44px #6553722e;
+  background: var(--surface-paper);
+  color: var(--palette-514167);
+  border-color: var(--palette-cdbce0);
+  box-shadow: 0 12px 44px var(--palette-6553722e);
 }
 .toast.error {
-  color: #92445a;
-  background: #fff3f4;
-  border-color: #d9adb8;
+  color: var(--palette-92445a);
+  background: var(--palette-fff3f4);
+  border-color: var(--palette-d9adb8);
 }
 footer {
-  color: #9a8b9d;
+  color: var(--palette-9a8b9d);
 }
 footer a {
-  color: #776285;
+  color: var(--palette-776285);
 }
 .footer-divider {
-  color: #c7b4c4;
+  color: var(--palette-c7b4c4);
 }
 dialog {
-  background: #fffdfa;
-  border-color: #d7c9de;
+  background: var(--surface);
+  border-color: var(--palette-d7c9de);
   color: var(--ink);
-  box-shadow: 0 30px 100px #3d2d5759;
+  box-shadow: 0 30px 100px var(--palette-3d2d5759);
 }
 dialog::backdrop {
-  background: #44354b55;
+  background: var(--palette-44354b55);
   backdrop-filter: blur(8px);
 }
 .lasso-path {
-  fill: #6953a918;
-  stroke: #7959ae;
+  fill: var(--palette-6953a918);
+  stroke: var(--palette-7959ae);
 }
 .select-ring {
-  stroke: #a28bb733;
+  stroke: var(--palette-a28bb733);
 }
 .output-problems {
-  color: #916141;
-  background: #fbf1e4;
-  border-color: #ddc6a7;
+  color: var(--palette-916141);
+  background: var(--palette-fbf1e4);
+  border-color: var(--palette-ddc6a7);
 }
 .output-warnings {
-  color: #81708e;
+  color: var(--palette-81708e);
 }
 .output-term-editor,
 .source-expression {
-  background: #fcfaf6;
-  border-color: #dfd4cd;
+  background: var(--palette-fcfaf6);
+  border-color: var(--palette-dfd4cd);
 }
 @media (max-width: 1200px) {
   .workspace-heading {
-    padding: 24px;
+    padding: var(--space-6);
     min-height: 178px;
   }
   .workspace-heading h1 {
@@ -573,7 +2171,7 @@ dialog::backdrop {
   }
   .heading-actions .button {
     font-size: 11px;
-    padding: 8px 10px;
+    padding: var(--space-2) 10px;
   }
 }
 @media (max-width: 950px) {

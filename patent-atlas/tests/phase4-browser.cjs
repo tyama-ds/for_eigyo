@@ -7,6 +7,7 @@ const path = require('node:path');
 const net = require('node:net');
 const { spawn } = require('node:child_process');
 const { once } = require('node:events');
+const cssAudit = process.env.CSS_AUDIT ? require('./css-visual-audit.cjs') : null;
 
 (async () => {
   const root = path.resolve(__dirname, '..');
@@ -49,9 +50,10 @@ const { once } = require('node:events');
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, reducedMotion: 'reduce' });
     const errors = [];
     page.on('pageerror', (e) => errors.push(e.message));
-    await page.route('**/*', (route) =>
-      new URL(route.request().url()).origin === origin ? route.continue() : route.abort()
-    );
+    await page.route('**/*', (route) => {
+      if (new URL(route.request().url()).origin !== origin) return route.abort();
+      return cssAudit ? cssAudit.route(route) : route.continue();
+    });
     async function check(stage) {
       assert.equal(await page.locator('nav').count(), 1);
       assert.equal(await page.locator('[data-flow-action]:visible').count(), 5);
@@ -71,7 +73,8 @@ const { once } = require('node:events');
         () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
       );
       await check(stage);
-      await page.screenshot({ path: path.join(output, name + '.png') });
+      if (cssAudit) await cssAudit.capture(page, output, name);
+      else await page.screenshot({ path: path.join(output, name + '.png') });
     }
     async function stage(id) {
       await page.locator(`[data-flow-action="${id}"]`).click();
@@ -99,6 +102,7 @@ const { once } = require('node:events');
         await page.locator('[data-research-mode]:checked').getAttribute('data-research-mode'),
         mode
       );
+      if (cssAudit && ['examples', 'tools'].includes(mode)) await shot('mode-' + mode, 'input');
     }
     await page.locator('#research-purpose').fill('先行技術調査（架空データによる画面確認）');
     await page
@@ -155,7 +159,8 @@ const { once } = require('node:events');
     assert.doesNotMatch(await page.locator('#projection-status').textContent(), /証明ではなく/);
     assert.match(await page.locator('#projection-method-note').textContent(), /証明ではなく/);
     await page.locator('#map-svg').scrollIntoViewIfNeeded();
-    await page.screenshot({ path: path.join(output, '11-map-detail.png') });
+    if (cssAudit) await cssAudit.capture(page, output, '11-map-detail');
+    else await page.screenshot({ path: path.join(output, '11-map-detail.png') });
     await page.locator('#patent-rows tr').first().scrollIntoViewIfNeeded();
     await page.evaluate(
       () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
@@ -186,6 +191,17 @@ const { once } = require('node:events');
     await stage('input');
     assert.equal(await page.locator('#invention-manual-elements').inputValue(), elements);
     assert.deepEqual(errors, []);
+    if (cssAudit) {
+      await stage('elements');
+      await tool('explore');
+      await page.locator('#class-roots').click();
+      await page.waitForFunction(() => document.querySelectorAll('#class-svg .node').length > 0);
+      await shot('12-classifications', 'elements');
+      await page.locator('#class-svg').scrollIntoViewIfNeeded();
+      await cssAudit.capture(page, output, '13-classification-map');
+      assert.deepEqual(errors, []);
+      await cssAudit.probes(browser, origin, output);
+    }
     console.log(
       JSON.stringify({
         result: 'PASS',
