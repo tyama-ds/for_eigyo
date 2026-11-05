@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 import test_app as integration
+from query_library import adapt_example, parse_example
 from discovery_routes import new_discovery
 from orchestration_engine import new_orchestration
 
@@ -132,6 +133,19 @@ class ConvergenceRoutesTests(unittest.TestCase):
         self.assertEqual(observation["scope"], "csv")
         self.post("record", {"observation_id": observation["id"], "total_hits": 2, "query_id": self.query["id"]})
         self.assertEqual(len(self.records()), 1)
+
+    def test_library_query_uses_theme_context_for_observation_and_record(self):
+        query = adapt_example(parse_example("[電極/TX+界面/TX]"))
+        query.update(id="library-query", keyword_context=module.STATE["keywords"])
+        self.assertNotEqual(query["keywords"], module.keywords(module.STATE["keywords"]))
+        module.STATE["queries"].append(query)
+        observation = self.upload(["JP2024000001A"])
+        self.assertEqual(observation["query_id"], query["id"])
+        self.post("record", {"query_id": query["id"], "total_hits": 1})
+        self.assertEqual(self.records()[0]["query_id"], query["id"])
+        # Matching positive terms must not admit a structured query from another theme.
+        query.update(keyword_context="別テーマ", keywords=module.keywords(module.STATE["keywords"]))
+        self.assert_rejected_unchanged("record", {"query_id": query["id"]})
 
     def test_record_is_idempotent_but_a_new_identical_csv_creates_a_new_observation(self):
         incoming = ["JP2024000001A", "JP2024000002A"]

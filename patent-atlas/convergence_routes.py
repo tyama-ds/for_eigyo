@@ -15,17 +15,21 @@ from llm_judgment import is_assessed
 from workspace_import import publication_key
 
 
+def query_matches_theme(query, theme):
+    if not query:
+        return False
+    if query.get("boolean_tree"):
+        return query.get("keyword_context") == theme
+    return query.get("keywords") == keywords(theme)
+
+
 def new_observation(rows, state, *, scope="csv"):
     keys = list(dict.fromkeys(publication_key(row) for row in rows))
     latest = next(
         (
             query
             for query in reversed(state.get("queries", []))
-            if (
-                query.get("keyword_context") == state.get("keywords", "")
-                if query.get("boolean_tree")
-                else query.get("keywords") == keywords(state.get("keywords", ""))
-            )
+            if query_matches_theme(query, state.get("keywords", ""))
         ),
         None,
     )
@@ -135,7 +139,7 @@ def record_result(state, body, *, automatic=False):
     if query_id is not None and not isinstance(query_id, str):
         raise ValueError("実際に使った検索式を選択してください。")
     query = next((row for row in state.get("queries", []) if row["id"] == query_id), None)
-    if query_id is not None and (not query or query.get("keywords") != keywords(theme)):
+    if query_id is not None and not query_matches_theme(query, theme):
         raise ValueError("現在のテーマで保存された検索式を選択してください。")
     previous = [row for row in records if row["id"] != observation["id"]]
     if old and old is not records[-1]:
