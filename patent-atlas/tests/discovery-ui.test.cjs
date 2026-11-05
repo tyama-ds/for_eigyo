@@ -89,6 +89,67 @@ function setup() {
   return context;
 }
 
+test('redrawing the map binds lasso once and uses the latest candidates, positions and path', () => {
+  const c = setup(),
+    listeners = new Map(),
+    paths = [];
+  let registrations = 0;
+  const svg = {
+    dataset: {},
+    style: {},
+    setAttribute() {},
+    set innerHTML(value) {
+      const path = {
+        d: '',
+        setAttribute(name, value) {
+          this[name] = value;
+        },
+      };
+      paths.push(path);
+      c.nodes['#discovery-lasso-path'] = path;
+    },
+    addEventListener(name, listener) {
+      registrations++;
+      listeners.set(name, listener);
+    },
+    createSVGPoint() {
+      return {
+        matrixTransform() {
+          return { x: this.x, y: this.y };
+        },
+      };
+    },
+    getScreenCTM: () => ({ inverse() {} }),
+    hasPointerCapture: () => false,
+    setPointerCapture() {},
+  };
+  c.nodes['#discovery-class-map'] = svg;
+  c.nodes['#discovery-map-viewport'] = { clientWidth: 800 };
+  let positions = [[200, 200]];
+  c.PatentClassLayout = { compute: () => ({ width: 900, height: 400, positions }) };
+  c.setTimeout = (fn) => fn();
+  c.updateDiscoveryPickedDisplay = () => {};
+  c.renderDiscoveryMap();
+  assert.equal(registrations, 4);
+  const next = { ...candidate, code: 'B60L50/60' };
+  c.state.discovery.plan.candidate_hypotheses = [next];
+  positions = [[20, 20]];
+  c.renderDiscoveryMap();
+  assert.equal(registrations, 4);
+  assert.equal(paths.length, 2);
+  vm.runInContext('discoveryLassoMode = true', c);
+  const emit = (name, x, y) => listeners.get(name)({ pointerId: 1, button: 0, clientX: x, clientY: y });
+  emit('pointerdown', 0, 0);
+  emit('pointermove', 40, 0);
+  emit('pointermove', 40, 40);
+  emit('pointermove', 0, 40);
+  assert.equal(paths[0].d, '');
+  assert.match(paths[1].d, /^M0,0/);
+  emit('pointerup', 0, 0);
+  assert.equal(paths[1].d, '');
+  assert.deepEqual(Array.from(vm.runInContext('discoveryPicked', c)), ['IPC:B60L50/60']);
+});
+
 test('metadata supersedes a matching hypothesis without changing source selections', () => {
   const c = setup();
   c.state.discovery.analysis = {

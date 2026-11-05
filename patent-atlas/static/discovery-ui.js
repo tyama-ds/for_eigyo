@@ -3,6 +3,7 @@ let discoveryDraft = null,
   discoveryRequestPending = false,
   discoveryVisibleCount = 24;
 const discoveryPicked = new Set();
+const discoveryLassoTargets = new WeakMap();
 let discoveryResultsSignature = '',
   discoveryHistorySignature = '';
 let discoveryPlanRequestState = null;
@@ -405,7 +406,9 @@ function applyDiscoveryLasso(keys) {
   updateDiscoveryPickedDisplay();
 }
 function bindDiscoveryLasso(svg, items, positions) {
-  const path = $('#discovery-lasso-path', svg);
+  discoveryLassoTargets.set(svg, { items, positions, path: $('#discovery-lasso-path', svg) });
+  if (svg.dataset.lassoBound) return;
+  svg.dataset.lassoBound = '1';
   let polygon = [],
     pointer = null,
     dragged = false;
@@ -429,6 +432,7 @@ function bindDiscoveryLasso(svg, items, positions) {
     dragged = true;
     if (!svg.hasPointerCapture(pointer)) svg.setPointerCapture(pointer);
     polygon.push(point);
+    const { path } = discoveryLassoTargets.get(svg);
     path.setAttribute('d', 'M' + polygon.map((point) => `${point.x},${point.y}`).join(' L') + ' Z');
   });
   const finish = (event, cancelled = false) => {
@@ -436,6 +440,7 @@ function bindDiscoveryLasso(svg, items, positions) {
     if (svg.hasPointerCapture(pointer)) svg.releasePointerCapture(pointer);
     pointer = null;
     delete svg.dataset.drawing;
+    const { items, positions, path } = discoveryLassoTargets.get(svg);
     path.setAttribute('d', '');
     if (dragged && !cancelled && polygon.length > 3) {
       svg.dataset.dragged = '1';
