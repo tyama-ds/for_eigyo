@@ -46,7 +46,7 @@ from workspace_defaults import DEFAULT_SETTINGS, SECRET_SETTINGS, checked_settin
 from research_routes import register_research_routes
 from research_services import ResearchServices
 from invention_routes import register_invention_routes
-from services import Services
+from services import workspace_services
 
 ROOT = Path(__file__).parent
 
@@ -139,7 +139,8 @@ def _public_workspace(state):
         "candidate_proposal": display_candidate_proposal(state.get("candidate_proposal")),
         "discovery": display_discovery(state["discovery"]),
         "candidates": [
-            {**display_labels(c, selection=True), "key": classification_key(c)} for c in state["candidates"]
+            {**display_labels(c, selection=True), "key": query_service.classification_key(c)}
+            for c in state["candidates"]
         ],
         "classification_catalog": {
             "ipc": explorer.ipc_catalog.metadata(),
@@ -151,26 +152,6 @@ def _public_workspace(state):
 
 def public_state():
     return ws.public_state(_public_workspace, cache_token=classification_translations.cache_token)
-
-
-def classification_key(candidate):
-    return query_service.classification_key(candidate)
-
-
-def normalize_selection(values, candidates=None):
-    return query_service.normalize_selection(ws, values, candidates)
-
-
-def set_classification_view(items, **metadata):
-    return query_service.set_classification_view(ws, items, **metadata)
-
-
-def classification_overview(items=None):
-    return query_service.classification_overview(ws, items)
-
-
-def previous_query_for_context(ignore_classifications=False):
-    return query_service.previous_query_for_context(ws, ignore_classifications)
 
 
 def make_query(refine=False, include=None, exclude=None, preserve_conditions=False, classification_keys=None):
@@ -270,7 +251,7 @@ def candidates(body: dict):
         ws.idle()
         text, use_llm = candidate_service.checked_candidate_request(body)
         before = ws.snapshot(watched_fields, include_settings=True)
-        selected = normalize_selection(ws.state["selected"])
+        selected = query_service.normalize_selection(ws, ws.state["selected"])
     # Slow model requests must not prevent state/progress reads or other UI
     # interactions. Commit only if the classification workspace is unchanged.
     proposal, rows, pool, note = candidate_service.build_candidate_proposal(
@@ -292,7 +273,7 @@ def candidates(body: dict):
 @app.post("/api/selection")
 def selection(body: dict):
     with ws.transaction(("selected",), save=save):
-        ws.state["selected"] = normalize_selection(body.get("selected", []))
+        ws.state["selected"] = query_service.normalize_selection(ws, body.get("selected", []))
     return public_state()
 
 
@@ -414,7 +395,7 @@ def demo():
             convergence_tracking=None,
         )
         make_query()
-        classification_overview()
+        query_service.classification_overview(ws)
     return public_state()
 
 
@@ -500,21 +481,19 @@ def index():
 query_service.refresh_candidates(ws)
 
 # Explicit closures preserve the existing replaceable service seams without passing globals().
-services = Services(
+services = workspace_services(
+    ws,
     save=lambda *args, **kwargs: save(*args, **kwargs),
     public_state=lambda *args, **kwargs: public_state(*args, **kwargs),
     checked_text=lambda *args, **kwargs: checked_text(*args, **kwargs),
     complete=lambda *args, **kwargs: complete(*args, **kwargs),
     progress=lambda *args, **kwargs: progress(*args, **kwargs),
     begin_job=lambda *args, **kwargs: begin_job(*args, **kwargs),
-    set_classification_view=lambda *args, **kwargs: set_classification_view(*args, **kwargs),
     make_query=lambda *args, **kwargs: make_query(*args, **kwargs),
     map_patents=lambda *args, **kwargs: map_patents(*args, **kwargs),
-    normalize_selection=lambda *args, **kwargs: normalize_selection(*args, **kwargs),
     classification_feedback=lambda *args, **kwargs: classification_feedback(*args, **kwargs),
     run_llm_assessment=lambda *args, **kwargs: run_llm_assessment(*args, **kwargs),
     run_model_training=lambda *args, **kwargs: run_model_training(*args, **kwargs),
-    classification_overview=lambda *args, **kwargs: classification_overview(*args, **kwargs),
     candidate_list=lambda *args, **kwargs: candidate_list(*args, **kwargs),
 )
 research_services = ResearchServices(ws, services)
