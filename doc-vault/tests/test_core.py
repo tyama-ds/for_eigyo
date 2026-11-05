@@ -549,3 +549,62 @@ class TestBeamSearch(unittest.TestCase):
         self.assertEqual(res["calls"], 2)
         self.assertEqual(res["path"][0]["candidates"], 60)          # 30件×2回まで
         self.assertEqual(res["path"][0]["trimmed"], 10)             # 判定できなかった分を記録
+
+
+class TestProxyRouting(unittest.TestCase):
+    """Claude SDK の HTTP クライアントをプロキシ設定どおりに作る（SDK は環境変数のプロキシを常に組み込むため）。
+
+    実 SDK（anthropic 2.5）と記録用プロキシでの通信確認は手元で実施済み。ここでは CI 用に偽の SDK で
+    組み立て方だけを確認する。
+    """
+
+    def setUp(self):
+        import urllib.request
+        from docvault import llm as llm_mod
+        self.llm_mod = llm_mod
+        self.saved_getproxies = urllib.request.getproxies
+        self.saved_modules = {k: sys.modules.get(k) for k in ("httpx2",)}
+        self.calls = []
+        test = self
+
+        class FakeTransport:
+            def __init__(self, **kw):
+                self.kw = kw
+
+        fake_hx = types.ModuleType("httpx2")
+        fake_hx.HTTPTransport = FakeTransport
+        sys.modules["httpx2"] = fake_hx
+        self.fake_anthropic = types.SimpleNamespace(
+            DefaultHttpxClient=lambda **kw: test.calls.append(kw) or kw)
+
+    def tearDown(self):
+        import urllib.request
+        urllib.request.getproxies = self.saved_getproxies
+        for k, v in self.saved_modules.items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v
+
+    def build(self, **p):
+        return self.llm_mod.anthropic_http_client(self.fake_anthropic, p)
+
+    def test_off_overrides_environment_proxies(self):
+        import ssl
+        kw = self.build(use_proxy=False)
+        self.assertEqual(kw["mounts"], {"http://": None, "https://": None, "all://": None})
+        self.assertIsInstance(kw["verify"], ssl.SSLContext)     # OS の証明書ストアも信頼
+
+    def test_explicit_proxy(self):
+        kw = self.build(use_proxy=True, proxy_url="http://proxy.example:8080")
+        self.assertEqual(set(kw["mounts"]), {"http://", "https://", "all://"})
+        self.assertTrue(all(t.kw["proxy"] == "http://proxy.example:8080" for t in kw["mounts"].values()))
+
+    def test_system_proxy_when_blank(self):
+        import urllib.request
+        urllib.request.getproxies = lambda: {"https": "http://winproxy:3128"}   # Windows の設定を再現
+        kw = self.build(use_proxy=True, proxy_url="")
+        self.assertTrue(all(t.kw["proxy"] == "http://winproxy:3128" for t in kw["mounts"].values()))
+        urllib.request.getproxies = lambda: {}
+        kw = self.build(use_proxy=True, proxy_url="")
+        self.assertNotIn("mounts", kw)                            # 何も無ければ SDK の既定

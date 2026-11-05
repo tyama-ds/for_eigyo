@@ -216,9 +216,22 @@ class TestJev(unittest.TestCase):
         with self.assertRaises(LLMError):
             jev.parse_binary({"answers": {}}, 1)
 
+    def test_jev_proxy_is_separate_from_llm(self):
+        import urllib.request
+
+        def proxies(client):
+            # 空の ProxyHandler（直結）は対象のプロトコルが無いので opener に登録されない
+            return next((h.proxies for h in client._opener().handlers
+                         if isinstance(h, urllib.request.ProxyHandler)), {})
+        cfg = dict(CFG, use_proxy=False, jev_endpoint="https://x", jev_api_key="k", jev_model="m")
+        self.assertEqual(proxies(jev.JevClient(dict(cfg, jev_proxy_url="http://p:8080"))),
+                         {"http": "http://p:8080", "https": "http://p:8080"})   # LLM は直結のまま
+        self.assertEqual(proxies(jev.JevClient(dict(cfg, jev_use_proxy=False))), {})
+
     def test_engine_with_jev(self):
         cfg = dict(CFG, decision_judge="jev", jev_endpoint=self.base + "/decisions",
-                   jev_api_key="or-test", jev_model="typesafe/jev-1.14", use_proxy=False)
+                   jev_api_key="or-test", jev_model="typesafe/jev-1.14", use_proxy=False,
+                   jev_use_proxy=False)
         ctx = EngineContext(llm=FakeLLMClient(), cfg=cfg)
         engine = DecisionRAGEngine()
         index = engine.ingest(sample_corpus(), ctx)
@@ -281,6 +294,10 @@ class TestDecisionAPI(unittest.TestCase):
                                        "decision_beam": 3, "decision_judge": "jev",
                                        "jev_api_key": "secret"})
         self.assertEqual(cfg["decision_beam"], 3)
+        self.assertTrue(cfg["jev_use_proxy"])                       # Jev は既定でプロキシ経由
+        cfg = self.api("/api/config", {"jev_use_proxy": False, "jev_proxy_url": "http://p:8080"})
+        self.assertFalse(cfg["jev_use_proxy"])
+        self.assertEqual(cfg["jev_proxy_url"], "http://p:8080")
         self.assertTrue(cfg["has_jev_key"])
         self.assertNotIn("jev_api_key", cfg)
         self.api("/api/config", {"decision_judge": "llm"})

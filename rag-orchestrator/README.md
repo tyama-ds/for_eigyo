@@ -211,7 +211,8 @@ query:   global … コミュニティ要約への map-reduce（「全体とし�
 | Base URL / API Key / Model | チャット用。例 `http://127.0.0.1:11434/v1` + `qwen3:14b` |
 | Embed Model | 埋め込みモデル。空なら Model を流用。例 `nomic-embed-text` |
 | Embed Base URL / API Key | 埋め込みが別サーバの場合のみ。空なら Base URL / API Key を流用 |
-| プロキシ | OFF なら環境変数も無視して直結。ON で URL 空なら HTTP(S)_PROXY を使用 |
+| プロキシ | OFF なら環境変数も無視して直結。ON で URL 空なら HTTP(S)_PROXY（Windows で未設定ならシステムのプロキシ設定）を使用 |
+| Jev のプロキシ | Jev（DecisionRAG の判定モデル・外部サービス）用に**別に**設定する（既定 ON・URL 空なら環境変数）。ローカル LLM は直結、Jev だけプロキシ経由、という使い方ができる |
 
 推論モデル（Qwen3 / DeepSeek-R1 系）の思考（`<think>…</think>` や `reasoning_content`）は
 回答から分離し、UI では「推論過程」として折りたたみ表示する（デフォルト非表示・▶で展開）。

@@ -39,6 +39,9 @@ DEFAULT_CONFIG: dict = {
     "jev_endpoint": "https://openrouter.ai/api/alpha/decisions",
     "jev_api_key": "",
     "jev_model": "typesafe/jev-1.14",
+    # Jev は外部サービスなので、ローカル LLM（直結）とは別にプロキシを設定する
+    "jev_use_proxy": True,     # 空の jev_proxy_url なら環境変数（Windows はシステム設定）のプロキシ
+    "jev_proxy_url": "",
 }
 
 _lock = threading.Lock()
@@ -63,7 +66,7 @@ def save_config(new_cfg: dict) -> dict:
     """UI から受けた部分更新を検証してマージ・保存する。"""
     cfg = load_config()
     for key in ("base_url", "model", "embed_model", "embed_base_url", "proxy_url",
-                "jev_endpoint", "jev_model"):
+                "jev_endpoint", "jev_model", "jev_proxy_url"):
         if key in new_cfg and isinstance(new_cfg[key], str):
             cfg[key] = new_cfg[key].strip()
     # api_key は空文字なら「変更なし」扱い（UI に平文を返さないため）
@@ -77,6 +80,8 @@ def save_config(new_cfg: dict) -> dict:
             cfg[key] = ""
     if "use_proxy" in new_cfg:
         cfg["use_proxy"] = bool(new_cfg["use_proxy"])
+    if "jev_use_proxy" in new_cfg:
+        cfg["jev_use_proxy"] = bool(new_cfg["jev_use_proxy"])
     for key, lo, hi in (("context_window", 512, 1_000_000),
                         ("request_timeout", 5.0, 3600.0),
                         ("max_tokens", 64, 32768), ("decision_beam", 1, 10),

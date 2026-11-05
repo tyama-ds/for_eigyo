@@ -212,8 +212,11 @@
           <input type="text" id="s-jev_model" placeholder="typesafe/jev-1.14">
         </div>
       </div>
+      <label class="check"><input type="checkbox" id="s-jev_use_proxy"> Jev はプロキシ経由で接続する（上の LLM のプロキシ設定とは別）</label>
+      <label class="field-label">Jev 用の Proxy URL（空なら環境変数 HTTPS_PROXY、Windows はシステムのプロキシ設定）</label>
+      <input type="text" id="s-jev_proxy_url" placeholder="http://proxy.example:8080">
       <p class="hint">Jev を選ぶと、コーパスの本文（各段の候補の説明文）が外部サービスへ送られます。
-        Jev は英語が最も得意で、日本語は 1.14 で改善されたとされています。プロキシは上の設定を使います。</p>
+        Jev は英語が最も得意で、日本語は 1.14 で改善されたとされています。</p>
 
       <div class="row gap top-space">
         <button class="btn primary" id="s-save">保存</button>

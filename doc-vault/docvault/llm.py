@@ -381,10 +381,7 @@ class LLM:
             client_kwargs["api_key"] = p["api_key"]       # 空なら環境変数 / ant auth を使う
         if p.get("base_url"):
             client_kwargs["base_url"] = p["base_url"]
-        if not p.get("use_proxy"):
-            client_kwargs["http_client"] = anthropic.DefaultHttpxClient(trust_env=False)
-        elif p.get("proxy_url"):
-            client_kwargs["http_client"] = anthropic.DefaultHttpxClient(proxy=p["proxy_url"])
+        client_kwargs["http_client"] = anthropic_http_client(anthropic, p)
         client = anthropic.Anthropic(**client_kwargs)
 
         model = p["model"]
@@ -424,6 +421,58 @@ class LLM:
             raise LLMError(f"Claude API に接続できません（プロキシ設定を確認）: {e}") from e
         if getattr(final, "stop_reason", "") == "refusal":
             raise LLMError("Claude がこの依頼への回答を辞退しました（安全上の理由）")
+
+
+_PROXY_KEYS = ("http://", "https://", "all://")
+
+
+def system_proxy() -> str:
+    """環境変数（HTTPS_PROXY / HTTP_PROXY）、無ければ Windows のシステム設定のプロキシ。"""
+    proxies = urllib.request.getproxies()       # Windows では環境変数が無ければレジストリを読む
+    return proxies.get("https") or proxies.get("http") or ""
+
+
+def trust_context():
+    """OS の証明書ストア＋certifi を信頼する SSL コンテキスト。
+
+    社内プロキシが SSL を検査して社内 CA で再署名する環境では、certifi だけを使う
+    httpx（Claude SDK）が証明書エラーになる。OS のストア（Windows は証明書ストア）も信頼する。
+    """
+    import ssl
+    ctx = ssl.create_default_context()
+    try:
+        import certifi
+        ctx.load_verify_locations(certifi.where())
+    except (ImportError, OSError):
+        pass
+    return ctx
+
+
+def anthropic_http_client(anthropic, p: dict):
+    """Claude SDK の HTTP クライアントをプロキシ設定どおりに作る。
+
+    SDK の DefaultHttpxClient は環境変数のプロキシを常に組み込む（trust_env=False でも外れない）
+    ため、http:// https:// all:// の経路を明示的に上書きする。
+      - use_proxy=False        : 環境変数があっても直結
+      - use_proxy + proxy_url  : 指定のプロキシ
+      - use_proxy + 空         : 環境変数、無ければ Windows のシステム設定のプロキシ
+    NO_PROXY に書かれたホストは SDK の既定どおり直結のまま。
+    """
+    ctx = trust_context()
+    if not p.get("use_proxy"):
+        return anthropic.DefaultHttpxClient(verify=ctx, mounts={k: None for k in _PROXY_KEYS})
+    url = p.get("proxy_url") or system_proxy()
+    if not url:
+        return anthropic.DefaultHttpxClient(verify=ctx)
+    try:
+        import httpx2 as hx                     # anthropic 1.x 以降
+    except ImportError:
+        try:
+            import httpx as hx                  # 旧 SDK（0.x）
+        except ImportError:                     # pragma: no cover - SDK が入っていれば必ずある
+            return anthropic.DefaultHttpxClient(verify=ctx, proxy=url)
+    return anthropic.DefaultHttpxClient(
+        verify=ctx, mounts={k: hx.HTTPTransport(proxy=url, verify=ctx) for k in _PROXY_KEYS})
 
 
 def _as_messages(prompt) -> list[dict]:

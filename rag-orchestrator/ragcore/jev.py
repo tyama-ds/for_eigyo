@@ -98,13 +98,15 @@ class JevClient:
         self.cost = 0.0
 
     def _opener(self):
+        """Jev 専用のプロキシ設定（jev_use_proxy / jev_proxy_url）で開く。LLM の設定とは独立。"""
         cfg = self.cfg
-        if not cfg.get("use_proxy"):
-            handler = urllib.request.ProxyHandler({})
-        elif cfg.get("proxy_url"):
-            handler = urllib.request.ProxyHandler({"http": cfg["proxy_url"], "https": cfg["proxy_url"]})
+        if not cfg.get("jev_use_proxy", True):
+            handler = urllib.request.ProxyHandler({})            # 直結（環境変数も無視）
+        elif cfg.get("jev_proxy_url"):
+            handler = urllib.request.ProxyHandler({"http": cfg["jev_proxy_url"],
+                                                   "https": cfg["jev_proxy_url"]})
         else:
-            handler = urllib.request.ProxyHandler()
+            handler = urllib.request.ProxyHandler()               # 環境変数 / Windows のシステム設定
         return urllib.request.build_opener(handler)
 
     def post(self, body: dict) -> dict:

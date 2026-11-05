@@ -82,13 +82,14 @@ document.querySelectorAll(".tab").forEach((btn) => {
 // ---------------------------------------------------------------- settings
 
 const CFG_FIELDS = ["base_url", "model", "embed_model", "embed_base_url",
-  "decision_judge", "decision_beam", "decision_budget", "jev_endpoint", "jev_model",
+  "decision_judge", "decision_beam", "decision_budget", "jev_endpoint", "jev_model", "jev_proxy_url",
   "context_window", "request_timeout", "max_tokens", "proxy_url"];
 
 async function loadConfig() {
   const cfg = await api("/api/config");
   for (const f of CFG_FIELDS) { const el = $(`#s-${f}`); if (el) el.value = cfg[f] ?? ""; }
   $("#s-use_proxy").checked = !!cfg.use_proxy;
+  $("#s-jev_use_proxy").checked = cfg.jev_use_proxy !== false;
   $("#s-api_key").placeholder = cfg.has_key
     ? "（設定済み。変更する場合のみ入力）" : "（未設定。不要なサーバでは空のまま）";
   $("#s-embed_api_key").placeholder = cfg.has_embed_key ? "（設定済み）" : "（空なら API Key を流用）";
@@ -105,7 +106,7 @@ function updateConnBadge(cfg) {
 }
 
 $("#s-save").addEventListener("click", async () => {
-  const body = { use_proxy: $("#s-use_proxy").checked };
+  const body = { use_proxy: $("#s-use_proxy").checked, jev_use_proxy: $("#s-jev_use_proxy").checked };
   for (const f of CFG_FIELDS) body[f] = $(`#s-${f}`).value;
   if ($("#s-api_key").value) body.api_key = $("#s-api_key").value;
   if ($("#s-embed_api_key").value) body.embed_api_key = $("#s-embed_api_key").value;
