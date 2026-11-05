@@ -7,6 +7,7 @@ import json
 import os
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -283,6 +284,38 @@ class HttpApiTests(SandboxMixin, unittest.TestCase):
         status, fresh = self.request("/api/apps?fresh=1")
         self.assertEqual(status, 200)
         self.assertEqual(len(fresh["apps"]), 2)
+
+    def test_ping_reports_portal_version(self):
+        self.assertEqual(self.request("/api/ping"), (200, {"ok": True, "version": portal.__version__}))
+
+    def test_unexpected_error_returns_500_with_reason_instead_of_dropping_connection(self):
+        with patch.object(portal, "load_apps", side_effect=RuntimeError("boom")):
+            status, body = self.request("/api/apps")
+        self.assertEqual(status, 500)
+        self.assertEqual(body, {"ok": False, "error": "RuntimeError: boom"})
+
+    def test_api_responses_are_not_cached(self):
+        with self.opener.open(self.base + "/api/apps", timeout=10) as res:
+            self.assertEqual(res.headers.get("Cache-Control"), "no-store")
+        with self.opener.open(self.base + "/", timeout=10) as res:
+            self.assertEqual(res.headers.get("Cache-Control"), "no-store")
+
+    def test_app_states_are_checked_in_parallel(self):
+        # Windows では止まっているポートの確認が 1 件 0.4 秒かかる。15 件を順番に調べると約 6 秒だった
+        write(portal.APPS_FILE, json.dumps({"apps": [
+            {"id": f"a{i}", "name": f"A{i}", "url": f"http://127.0.0.1:{9100 + i}"} for i in range(12)]}))
+
+        def slow_state(app):
+            time.sleep(0.4)
+            return "stopped"
+
+        with patch.object(portal, "app_state", side_effect=slow_state):
+            started = time.monotonic()
+            status, data = self.request("/api/apps")
+            elapsed = time.monotonic() - started
+        self.assertEqual((status, len(data["apps"])), (200, 12))
+        self.assertLess(elapsed, 2.0, f"12 件で {elapsed:.1f} 秒（順番なら約 4.8 秒）")
+        self.assertEqual([a["id"] for a in data["apps"]], [f"a{i}" for i in range(12)])  # 並びは apps.json のまま
 
     def test_one_app_failing_version_detection_does_not_break_the_list(self):
         real_detect = portal.detect_version
