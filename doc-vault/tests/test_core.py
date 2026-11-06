@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import tempfile
@@ -212,11 +213,54 @@ class TestConfig(unittest.TestCase):
     def test_profile_choice_by_sensitivity(self):
         cfg = config._merge(config.DEFAULT_CONFIG, {})
         cfg["profiles"]["local"]["model"] = ""            # ローカル未設定
+        cfg["profiles"]["cloud"]["api_key"] = "sk-ant-test"
         self.assertIsNone(config.ingest_profile_for(cfg, "internal"))   # 社外秘はクラウドに回さない
         self.assertEqual(config.ingest_profile_for(cfg, "public"), "cloud")
         cfg["profiles"]["local"]["model"] = "m"
         cfg["policy"]["public_ingest_profile"] = "local"
         self.assertEqual(config.ingest_profile_for(cfg, "public"), "local")
+
+
+class TestUnconfiguredClaude(unittest.TestCase):
+    """初期設定のクラウド側（Claude・キーなし）を「設定済み」と判定しない。
+
+    以前はモデル名だけで設定済みとしていたため、ローカル LLM だけを設定した利用者の公開文書の
+    取り込み（グラフ・要約）と、公開資料だけの質問の回答が、キーの無い Claude に回って失敗していた。
+    """
+
+    def setUp(self):
+        from unittest import mock
+        self.tmp = tempfile.TemporaryDirectory()
+        env = {k: v for k, v in os.environ.items() if not k.startswith("ANTHROPIC_")}
+        env["ANTHROPIC_CONFIG_DIR"] = self.tmp.name          # 認証プロファイルの無い置き場
+        self.patcher = mock.patch.dict(os.environ, env, clear=True)
+        self.patcher.start()
+
+    def tearDown(self):
+        self.patcher.stop()
+        self.tmp.cleanup()
+
+    def test_default_claude_without_key_is_not_ready(self):
+        cfg = config._merge(config.DEFAULT_CONFIG, {})
+        cfg["profiles"]["local"].update(base_url="http://127.0.0.1:11434/v1", model="qwen3:14b")
+        self.assertEqual(cfg["profiles"]["cloud"]["provider"], "anthropic")
+        self.assertFalse(config.chat_ready(cfg, "cloud"))
+        self.assertEqual(config.ingest_profile_for(cfg, "public"), "local")   # 公開文書もローカルで処理
+        self.assertEqual(rag.Ctx({"mode": "auto"}, cfg).profile("answer", "public"), "local")
+        self.assertFalse(config.public_config(cfg)["profiles"]["cloud"]["chat_ready"])
+
+    def test_claude_credentials_from_key_env_or_profile(self):
+        cfg = config._merge(config.DEFAULT_CONFIG, {})
+        cfg["profiles"]["cloud"]["api_key"] = "sk-ant-x"
+        self.assertTrue(config.chat_ready(cfg, "cloud"))
+        cfg["profiles"]["cloud"]["api_key"] = ""
+        for key in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_PROFILE"):
+            os.environ[key] = "x"
+            self.assertTrue(config.chat_ready(cfg, "cloud"), key)
+            del os.environ[key]
+        Path(self.tmp.name, "configs").mkdir()
+        Path(self.tmp.name, "configs", "default.json").write_text("{}", encoding="utf-8")
+        self.assertTrue(config.chat_ready(cfg, "cloud"))          # 認証プロファイル（ant auth）
 
 
 class TestRouteAndProfiles(unittest.TestCase):
@@ -231,7 +275,7 @@ class TestRouteAndProfiles(unittest.TestCase):
     def test_ctx_profile_rules(self):
         cfg = config._merge(config.DEFAULT_CONFIG, {})
         cfg["profiles"]["local"].update(model="m")
-        cfg["profiles"]["cloud"].update(model="c")
+        cfg["profiles"]["cloud"].update(model="c", api_key="sk-ant-test")
         ctx = rag.Ctx({"mode": "auto"}, cfg)
         self.assertEqual(ctx.profile("answer", "internal"), "local")
         self.assertEqual(ctx.profile("answer", "public"), "cloud")

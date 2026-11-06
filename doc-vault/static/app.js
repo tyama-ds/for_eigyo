@@ -118,9 +118,13 @@ async function pollStatus() {
     return `<span title="${esc(p.provider)} / ${esc(p.model || "未設定")}${p.embed ? "・埋め込みあり" : ""}">`
       + `<span class="dot ${cls}"></span>${label}${p.chat ? "" : "（未設定）"}</span>`;
   };
-  const busy = (st.indexer.current ? 1 : 0) + st.indexer.pending.length;
+  const busy = st.indexer.busy ?? ((st.indexer.current ? 1 : 0) + st.indexer.pending.length);
+  const lw = st.indexer.later_waiting || {};
+  const busyTitle = busy ? `抽出待ち ${st.indexer.extract_waiting ?? 0} 件・順番待ち: 埋め込み ${lw.embed ?? 0} / `
+    + `要約 ${lw.summary ?? 0} / グラフ抽出 ${lw.graph ?? 0}（抽出が済んだ文書は検索・相談に使えます）` : "";
   $("#conn-status").innerHTML = prof("local", "ローカル") + prof("cloud", "クラウド")
-    + `<span><span class="dot ${busy ? "busy" : "ok"}"></span>${busy ? `取り込み中 ${busy} 件` : `文書 ${st.docs} 件`}</span>`;
+    + `<span title="${esc(busyTitle)}"><span class="dot ${busy ? "busy" : "ok"}"></span>`
+    + `${busy ? `取り込み中 ${busy} 件` : `文書 ${st.docs} 件`}</span>`;
   if (busy && !$("#tab-docs").classList.contains("hidden")) loadDocs(true);
   if (state._wasBusy && !busy) { loadDocs(true); renderExamples(); }
   state._wasBusy = !!busy;
