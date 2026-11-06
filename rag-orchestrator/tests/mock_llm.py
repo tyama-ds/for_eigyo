@@ -267,6 +267,17 @@ class FakeLLMClient:
             return text, "（テスト用の思考過程）"
         return text
 
+    def chat_json(self, prompt, *, system="", max_tokens=None, temperature=0.0, on_progress=None):
+        from ragcore.textutil import extract_json, salvage_json
+        text = self.chat(prompt, system=system, max_tokens=max_tokens, temperature=temperature)
+        data = extract_json(text)
+        salvaged = data is None and salvage_json(text) is not None
+        if data is None:
+            data = salvage_json(text)
+        return data, {"finish": "stop", "content_chars": len(text), "think_chars": 0, "seconds": 0.0,
+                      "salvaged": salvaged, "max_tokens": max_tokens,
+                      "reason": "" if data is not None else "JSON ではない文章が返りました"}
+
     def chat_logprobs(self, prompt, *, system="", max_tokens=None):
         self.stats["chat_calls"] += 1
         text = mock_chat_response(prompt)

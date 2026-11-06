@@ -29,7 +29,7 @@ from .config import embed_profile_for, embed_space, ingest_profile_for, load_con
 from .extract import ExtractError, extract
 from .llm import LLM, LLMError
 from .retrieval import INDEX, index_text
-from .textutil import as_str_list, build_chunks, extract_json, pack_vec
+from .textutil import as_str_list, build_chunks, pack_vec
 
 ALL_STAGES = ("extract", "embed", "graph", "summary")
 LATER_STAGES = ("embed", "summary", "graph")        # 後処理ワーカーで進める順
@@ -323,24 +323,34 @@ class Indexer:
         targets = _sample(chunks, int(cfg["rag"]["max_graph_chunks"]))
         if len(targets) < len(chunks):
             warnings.append(f"グラフ抽出は {len(chunks)} チャンク中 {len(targets)} 件に限定（設定の上限）")
-        failures = 0
+        failures = salvaged = 0
+        reasons: dict[str, int] = {}
         for i, ch in enumerate(targets):
             if self._stale(doc_id, gen) or not db.get_doc(doc_id):
                 return                                   # 抽出し直し・削除された
-            progress(i / len(targets), f"グラフ抽出 {i + 1}/{len(targets)}")
+            label = f"グラフ抽出 {i + 1}/{len(targets)}"
+            progress(i / len(targets), label)
+
+            def note(size, sec, frac=i / len(targets), label=label):   # 受信中（止まっていないことが分かる）
+                progress(frac, f"{label}（受信 {size:,} 字・{sec:.0f} 秒）")
             try:
-                data = graph.extract_chunk(llm, prof, sens, doc["title"], ch)
+                data, info = graph.extract_chunk(llm, prof, sens, doc["title"], ch, on_progress=note)
             except LLMError as e:
                 warnings.append(f"グラフ抽出を中断: {e}")
                 break
+            salvaged += int(info["salvaged"])
             if data is None:
                 failures += 1
+                reasons[info["reason"]] = reasons.get(info["reason"], 0) + 1
                 continue
             graph.save_extraction(doc_id, ch["id"], data)
             if i % 10 == 9:
                 db.bump_revision()                       # 途中までの関係もグラフ・検索に出す
         if failures:
-            warnings.append(f"グラフ抽出: {failures} チャンクで JSON を解析できませんでした")
+            why = "／".join(f"{r}（{n}件）" for r, n in sorted(reasons.items(), key=lambda kv: -kv[1])[:3])
+            warnings.append(f"グラフ抽出: {failures} チャンクで JSON を取り出せませんでした（理由: {why}）")
+        if salvaged:
+            warnings.append(f"グラフ抽出: {salvaged} チャンクは出力が途中で切れたため、書けた分までを使いました")
         self._set_stage_warnings(doc_id, "graph", warnings, {"graph": prof})
 
 
@@ -386,13 +396,14 @@ def summarize_doc(llm, prof: str, sens: str, title: str, chunks: list[dict],
                             purpose="ingest")
             partials.append(f"（{loc}）{text.strip()}")
         body, part = "\n\n".join(partials), "部分要約の一覧"
-    text = llm.chat(prof, SUMMARY_PROMPT.format(title=title, part=part, text=body[:14000]),
-                    sensitivity=sens, system=SUMMARY_SYSTEM, max_tokens=2048, purpose="ingest")
-    data = extract_json(text)
+    data, info = llm.chat_json(prof, SUMMARY_PROMPT.format(title=title, part=part, text=body[:14000]),
+                               sensitivity=sens, system=SUMMARY_SYSTEM, max_tokens=2048, purpose="ingest")
     if isinstance(data, dict) and str(data.get("summary", "")).strip():
         return (str(data["summary"]).strip()[:2000],
                 as_str_list(data.get("keywords"), limit=10, maxlen=40))
-    return text.strip()[:2000], []
+    if info.get("text", "").strip() and info["finish"] != "repetition":
+        return info["text"].strip()[:2000], []         # JSON でなくても要約の文章なら使う
+    raise LLMError(info["reason"] or "要約を作れませんでした")
 
 
 INDEXER = Indexer()

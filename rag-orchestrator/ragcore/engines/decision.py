@@ -34,7 +34,6 @@ from collections import Counter
 
 from .. import decision_api
 from ..llm import LLMError, strip_think
-from ..textutil import extract_json
 from .base import Engine, EngineContext, build_chunks, chunk_citation, generate_answer
 
 TOP_K = 6
@@ -458,10 +457,13 @@ class DecisionRAGEngine(Engine):
         docs = [d for d in corpus if d.get("text")]
         for n, doc in enumerate(docs):
             ctx.progress(0.05 + 0.7 * n / max(1, len(docs)), f"文書の説明文 {n + 1}/{len(docs)}")
-            text = ctx.llm.chat(SUMMARY_PROMPT.format(title=doc.get("title") or doc["id"],
-                                                      text=doc["text"][:6000]),
-                                system=DECIDE_SYSTEM, max_tokens=max(int(ctx.cfg.get("max_tokens") or 0), 2048))
-            data = extract_json(text)
+            # JSON が閉じたら打ち切り・Qwen3 系は思考を止める（説明文に長い思考は要らない）
+            data, info = ctx.llm.chat_json(SUMMARY_PROMPT.format(title=doc.get("title") or doc["id"],
+                                                                 text=doc["text"][:6000]),
+                                           system=DECIDE_SYSTEM,
+                                           max_tokens=max(int(ctx.cfg.get("max_tokens") or 0), 2048))
+            if not isinstance(data, dict) and info.get("reason"):
+                ctx.log(f"文書の説明文（{doc.get('title') or doc['id']}）: {info['reason']}")
             if isinstance(data, dict) and str(data.get("summary", "")).strip():
                 kws = data.get("keywords")
                 summaries[doc["id"]] = {
