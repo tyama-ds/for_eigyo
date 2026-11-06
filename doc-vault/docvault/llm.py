@@ -36,6 +36,27 @@ class PolicyError(LLMError):
     """データ区分ポリシー違反（社外秘データをクラウドへ送ろうとした）。"""
 
 
+def no_think_model(model: str) -> bool:
+    """思考を /no_think で止められるモデル（Qwen3 の思考切り替え型）か。"""
+    return "qwen3" in (model or "").lower().replace("-", "").replace("_", "")
+
+
+def json_failure_reason(info: dict, text: str) -> str:
+    """JSON を取り出せなかった理由（画面・警告に出す）。"""
+    limit = info.get("max_tokens")
+    if info["finish"] == "repetition":
+        where = "思考" if info["think_chars"] > info["content_chars"] else "出力"
+        return f"{where}が同じ内容の繰り返しに入ったため打ち切りました"
+    if info["finish"] == "length":
+        if info["think_chars"] and info["content_chars"] < 20:
+            return (f"思考だけで出力の上限（{limit} トークン）に達し、JSON が出る前に切れました"
+                    "（推論モデル。Max Tokens を増やすか、思考の短いモデルにしてください）")
+        return f"出力の上限（{limit} トークン）で切れ、JSON を復元できませんでした"
+    if not text.strip():
+        return "応答が空でした"
+    return f"JSON ではない文章が返りました（冒頭: {text.strip()[:40]}）"
+
+
 def strip_think(text: str) -> str:
     """推論モデルの <think>…</think>（閉じタグだけ・未閉じも）を除去する。"""
     if not text:
@@ -188,6 +209,117 @@ class LLM:
         self._count(profile, sum(len(m["content"]) for m in messages) + len(system),
                     "".join(produced), started)
 
+    def chat_json(self, profile: str, prompt: str, *, sensitivity: str, system: str = "",
+                  max_tokens: int | None = None, purpose: str = "ingest",
+                  temperature: float | None = None, on_progress=None):
+        """JSON を書かせる呼び出し。(解析結果 or None, 情報) を返す（rag-orchestrator の chat_json と同じ考え方）。
+
+        ローカル LLM は JSON を書き終えても説明を続けたり、同じ行を繰り返したり、考え続けたりして、
+        出力の上限まで止まらないことがある。そこで OpenAI 互換・Azure では:
+          - ストリーミングで受け取り、JSON が閉じたら・同じ内容の繰り返しに入ったら打ち切る
+          - Qwen3 系には /no_think を付けて思考を止める
+          - 上限で切れた JSON からは、書けた要素までを取り出す
+        Claude（公式 SDK）は JSON を閉じて止まるので、通常の呼び出しのまま。
+        """
+        from .textutil import extract_json, find_repetition, json_end, salvage_json
+
+        self.guard(profile, sensitivity)
+        if not self.ready(profile):
+            raise LLMError(f"{_label(profile)} LLM が未設定です（設定タブで接続先とモデルを登録してください）")
+        p = self._prof(profile)
+        model = p.get("model") or ""
+        if purpose == "ingest" and p.get("ingest_model") and p["provider"] != "azure":
+            model = p["ingest_model"]
+        if no_think_model(model) and "/no_think" not in prompt:
+            prompt = prompt + "\n\n/no_think"
+        started = time.time()
+        limit = int(max_tokens or p.get("max_tokens") or 4096)
+        finish, reasoning = "stop", ""
+        if p["provider"] == "anthropic":
+            text = self.chat(profile, prompt, sensitivity=sensitivity, system=system,
+                             max_tokens=max_tokens, purpose=purpose)
+            think_chars = 0
+        else:
+            messages = _as_messages(prompt)
+            url, headers, payload = self._payload(p, messages, system, max_tokens, purpose)
+            if temperature is not None:
+                payload["temperature"] = temperature
+            payload["stream"] = True
+            content = ""
+            try:
+                res = self._request(p, url, payload, headers)
+            except urllib.error.HTTPError as e:
+                err = _http_error(e)
+                if "stream" not in str(err).lower():
+                    raise err from e
+                payload.pop("stream", None)                  # ストリーム非対応 → 一括
+                res = None
+                data = self._post_adaptive(p, url, payload, headers)
+                ch = (data.get("choices") or [{}])[0]
+                msg = ch.get("message") or {}
+                content = msg.get("content") or ""
+                reasoning = str(msg.get("reasoning_content") or msg.get("reasoning") or "")
+                finish = ch.get("finish_reason") or "stop"
+            except (urllib.error.URLError, socket.timeout, OSError) as e:
+                raise LLMError(f"LLM に接続できません: {e}") from e
+            if res is not None:
+                with res:
+                    ctype = res.headers.get("Content-Type", "")
+                    if "event-stream" not in ctype and "ndjson" not in ctype:
+                        data = json.loads(res.read().decode("utf-8", errors="replace") or "{}")
+                        ch = (data.get("choices") or [{}])[0]
+                        msg = ch.get("message") or {}
+                        content = msg.get("content") or ""
+                        reasoning = str(msg.get("reasoning_content") or msg.get("reasoning") or "")
+                        finish = ch.get("finish_reason") or "stop"
+                    else:
+                        checked, last_note = 0, 0.0
+                        for raw in res:
+                            line = raw.decode("utf-8", errors="replace").strip()
+                            if not line.startswith("data:"):
+                                continue
+                            body = line[5:].strip()
+                            if body == "[DONE]":
+                                break
+                            try:
+                                ch = (json.loads(body).get("choices") or [{}])[0]
+                            except ValueError:
+                                continue
+                            delta = ch.get("delta") or {}
+                            content += delta.get("content") or ""
+                            reasoning += str(delta.get("reasoning_content") or delta.get("reasoning") or "")
+                            if ch.get("finish_reason"):
+                                finish = ch["finish_reason"]
+                            size = len(content) + len(reasoning)
+                            if size - checked >= 64:              # 64 字ごとに打ち切りを判定
+                                checked = size
+                                visible = strip_think(content)
+                                if json_end(visible) is not None:
+                                    finish = "json_complete"
+                                    break
+                                if find_repetition(visible) or find_repetition(reasoning) \
+                                        or find_repetition(content[:len(content) - len(visible)] if visible
+                                                           else content):
+                                    finish = "repetition"
+                                    break
+                            if on_progress and time.time() - last_note >= 1.0:
+                                last_note = time.time()
+                                on_progress(size, time.time() - started)
+            text = strip_think(content)
+            think_chars = len(reasoning) + max(0, len(content) - len(text))   # 思考欄＋本文中の <think>
+            self._count(profile, len(prompt) + len(system), text, started)
+        data = extract_json(text)
+        salvaged = False
+        if data is None:
+            data = salvage_json(text)
+            salvaged = data is not None
+        info = {"finish": finish or "stop", "content_chars": len(text), "think_chars": think_chars,
+                "seconds": round(time.time() - started, 1), "salvaged": salvaged, "max_tokens": limit,
+                "reason": "", "text": text[:4000]}
+        if data is None:
+            info["reason"] = json_failure_reason(info, text)
+        return data, info
+
     def chat_logprobs(self, profile: str, prompt: str | list[dict], *, sensitivity: str,
                       system: str = "", max_tokens: int | None = None,
                       purpose: str = "router") -> tuple[str, list | None]:
@@ -307,6 +439,10 @@ class LLM:
                    "temperature": 0.0 if purpose != "answer" else 0.2}
         if purpose == "ingest" and p.get("ingest_model") and p["provider"] != "azure":
             payload["model"] = p["ingest_model"]
+        if purpose == "ingest" and no_think_model(payload.get("model") or p.get("model") or ""):
+            last = msgs[-1]
+            if last.get("role") == "user" and "/no_think" not in str(last.get("content", "")):
+                msgs[-1] = {**last, "content": f"{last['content']}\n\n/no_think"}
         return url, headers, payload
 
     def _openai_chat(self, p, messages, system, max_tokens, purpose) -> str:

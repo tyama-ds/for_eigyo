@@ -92,7 +92,7 @@ def api_config_test(body: dict) -> dict:
 
 def doc_public(d: dict) -> dict:
     out = {k: v for k, v in d.items() if k not in ("sha256",)}
-    out["flags"] = {k: v for k, v in (d.get("flags") or {}).items() if k != "extract_warnings"}
+    out["flags"] = {k: v for k, v in (d.get("flags") or {}).items() if not k.endswith("_warnings")}
     return out
 
 

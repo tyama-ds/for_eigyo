@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import threading
 from pathlib import Path
 
@@ -255,12 +256,38 @@ def public_config(cfg: dict) -> dict:
     return out
 
 
+def anthropic_credentials(p: dict) -> bool:
+    """Claude の認証情報があるか（公式 SDK が探す順: 設定の API キー → 環境変数 → 認証プロファイル）。
+
+    初期設定のクラウド側は「Claude・claude-opus-5-5」なので、モデル名だけで設定済みと判定すると、
+    キーを入れていないのに公開文書の取り込みや回答が Claude に回って失敗していた。
+    """
+    if (p.get("api_key") or "").strip():
+        return True
+    env = os.environ
+    if any(env.get(k) for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_PROFILE")):
+        return True
+    if env.get("ANTHROPIC_FEDERATION_RULE_ID") and env.get("ANTHROPIC_ORGANIZATION_ID") and (
+            env.get("ANTHROPIC_IDENTITY_TOKEN") or env.get("ANTHROPIC_IDENTITY_TOKEN_FILE")):
+        return True
+    if env.get("ANTHROPIC_CONFIG_DIR"):
+        cfg_dir = Path(env["ANTHROPIC_CONFIG_DIR"])
+    elif os.name == "nt" and env.get("APPDATA"):
+        cfg_dir = Path(env["APPDATA"]) / "Anthropic"
+    else:
+        cfg_dir = Path.home() / ".config" / "anthropic"
+    try:
+        return (cfg_dir / "active_config").is_file() or (cfg_dir / "configs" / "default.json").is_file()
+    except OSError:
+        return False
+
+
 def chat_ready(cfg: dict, profile: str) -> bool:
     p = cfg["profiles"].get(profile) or {}
     if not p.get("model"):
         return False
     if p.get("provider") == "anthropic":
-        return True                     # base_url 省略可（API キーは環境変数でも可）
+        return anthropic_credentials(p)  # base_url は省略可。キーは環境変数・認証プロファイルでも可
     return bool(p.get("base_url"))
 
 

@@ -22,7 +22,7 @@ import unicodedata
 from collections import Counter, defaultdict
 
 from . import db
-from .textutil import BM25Index, as_str_list, extract_json, parse_score
+from .textutil import BM25Index, as_str_list, parse_score
 
 ENTITY_TYPES = "組織 / 人物 / 製品 / 技術 / 設備 / 工程 / 材料 / 規格・法令 / 場所 / 日付・イベント / 指標 / 文書 / 概念"
 
@@ -43,6 +43,8 @@ EXTRACT_PROMPT = """[TASK:graph_extract]
 - relations の source / target は entities の name と一致させる
 - strength は関係の強さ（1〜10 の整数）
 - 本文に無いことは書かない
+- エンティティは重要なものから最大 15 件、関係は最大 20 件。description は 60 字以内
+- 同じエンティティ・関係を繰り返し書かない。JSON を閉じたら、それ以上何も書かない
 
 # テキスト
 {text}
@@ -81,20 +83,35 @@ def norm_key(name: str) -> str:
 
 # ---------------------------------------------------------------- 抽出（取り込み時）
 
-def extract_chunk(llm, profile: str, sensitivity: str, title: str, chunk: dict) -> dict | None:
-    """1チャンクからエンティティ・関係・キーワードを抽出する。解析失敗時は1回だけ再要求。"""
+def extract_chunk(llm, profile: str, sensitivity: str, title: str, chunk: dict,
+                  on_progress=None) -> tuple[dict | None, dict]:
+    """1チャンクからエンティティ・関係・キーワードを抽出する。(結果 or None, 情報) を返す。
+
+    打ち切り・思考の抑制・切れた JSON の復元は llm.chat_json 側。取り出せなかったら、理由に応じて
+    1回だけやり直す（以前は温度 0 の同じ呼び出しを繰り返し、上限で切れる出力に時間が倍かかっていた）:
+      - 文章が返った → 「JSON のみ」を念押しして再出力
+      - 同じ内容の繰り返しに入った → 温度を上げてもう一度
+      - 思考・出力が上限で切れた → やり直さない
+    """
     prompt = EXTRACT_PROMPT.format(title=title[:80], locator=chunk.get("locator") or "",
                                    text=chunk["text"][:3500], types=ENTITY_TYPES)
-    for attempt in range(2):
-        text = llm.chat(profile, prompt if attempt == 0 else prompt
-                        + "\n\n【再出力】前回の出力は JSON として解析できませんでした。"
-                          "指示した JSON のみを出力してください。",
-                        sensitivity=sensitivity, system=EXTRACT_SYSTEM,
-                        max_tokens=4096, purpose="ingest")
-        data = extract_json(text)
-        if isinstance(data, dict):
-            return _clean_extraction(data)
-    return None
+    data, info = llm.chat_json(profile, prompt, sensitivity=sensitivity, system=EXTRACT_SYSTEM,
+                               max_tokens=4096, purpose="ingest", on_progress=on_progress)
+    if not isinstance(data, dict) and info["finish"] != "length":
+        first = info
+        if info["finish"] == "repetition":
+            again_prompt, temperature = prompt, 0.5
+        else:
+            again_prompt = (prompt + "\n\n【再出力】前回の出力は JSON として解析できませんでした。"
+                            "指示した JSON のみを出力してください。")
+            temperature = None
+        data, info = llm.chat_json(profile, again_prompt, sensitivity=sensitivity, system=EXTRACT_SYSTEM,
+                                   max_tokens=4096, purpose="ingest", temperature=temperature,
+                                   on_progress=on_progress)
+        info["seconds"] = round(info["seconds"] + first["seconds"], 1)
+        if not isinstance(data, dict):
+            info["reason"] = f"{first['reason']} → やり直しも失敗: {info['reason']}"
+    return (_clean_extraction(data) if isinstance(data, dict) else None), info
 
 
 def _clean_extraction(data: dict) -> dict:
@@ -373,10 +390,9 @@ def summarize_community(llm, profile: str, graph: KnowledgeGraph, com: dict) -> 
     title = "・".join(graph.entities[m]["name"] for m in com["members"][:3])[:80]
     summary = ""
     if llm is not None and profile:
-        text = llm.chat(profile, COMMUNITY_PROMPT.format(entities=ent_lines, relations=rel_lines),
-                        sensitivity=com["sensitivity"], system=EXTRACT_SYSTEM,
-                        max_tokens=2048, purpose="ingest")
-        data = extract_json(text)
+        data, _ = llm.chat_json(profile, COMMUNITY_PROMPT.format(entities=ent_lines, relations=rel_lines),
+                                sensitivity=com["sensitivity"], system=EXTRACT_SYSTEM,
+                                max_tokens=2048, purpose="ingest")
         if isinstance(data, dict):
             title = str(data.get("title") or title).strip()[:80]
             summary = str(data.get("summary") or "").strip()[:1500]

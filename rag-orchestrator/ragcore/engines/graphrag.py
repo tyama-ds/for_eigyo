@@ -52,6 +52,8 @@ EXTRACT_PROMPT = """[TASK:graph_extract]
 - name は本文中の表記をそのまま使う
 - relations の source / target は entities の name のいずれかと一致させる
 - strength は関係の強さ（1〜10 の整数）
+- エンティティは重要なものから最大 15 件、関係は最大 20 件。description は 60 字以内
+- 同じエンティティ・関係を繰り返し書かない。JSON を閉じたら、それ以上何も書かない
 
 # テキスト
 {text}
@@ -193,22 +195,32 @@ class GraphRAGEngine(Engine):
         """JSON 出力系呼び出しの max_tokens（設定値と下限の大きい方）。"""
         return max(int(ctx.cfg.get("max_tokens") or 0), JSON_MIN_TOKENS)
 
-    def _chat_json(self, ctx: EngineContext, prompt: str):
-        """JSON を期待して chat し、解析失敗なら1回だけ再出力を求める。
+    def _chat_json(self, ctx: EngineContext, prompt: str, note=None):
+        """JSON を書かせる。打ち切り・思考の抑制・切れた JSON の復元は LLM クライアント（chat_json）側。
 
-        戻り値は (解析結果 or None, 再試行したか)。
+        取り出せなかったら、理由に応じて1回だけやり直す（同じ条件で繰り返しても同じ結果になるため）:
+          - 文章が返った → 「JSON のみ」を念押しして再出力
+          - 同じ内容の繰り返しに入った → 温度を上げてもう一度（温度 0 は毎回同じ所で繰り返す）
+          - 思考・出力が上限で切れた → やり直さない（以前はここで同じ呼び出しを繰り返し、時間が倍かかっていた）
+        戻り値は (解析結果 or None, 再試行したか, 情報)。
         """
         tokens = self._json_tokens(ctx)
-        text = ctx.llm.chat(prompt, system=EXTRACT_SYSTEM, temperature=0.0,
-                            max_tokens=tokens)
-        data = extract_json(text)
-        if data is not None:
-            return data, False
-        retry_prompt = (prompt + "\n\n【再出力】前回の出力は JSON として解析できませんでした。"
-                        "指示した JSON のみを、説明文・コードフェンスなしで出力してください。")
-        text = ctx.llm.chat(retry_prompt, system=EXTRACT_SYSTEM, temperature=0.0,
-                            max_tokens=tokens)
-        return extract_json(text), True
+        data, info = ctx.llm.chat_json(prompt, system=EXTRACT_SYSTEM, temperature=0.0,
+                                       max_tokens=tokens, on_progress=note)
+        if data is not None or info["finish"] == "length":
+            return data, False, info
+        if info["finish"] == "repetition":
+            retry_prompt, temperature = prompt, 0.5
+        else:
+            retry_prompt = (prompt + "\n\n【再出力】前回の出力は JSON として解析できませんでした。"
+                            "指示した JSON のみを、説明文・コードフェンスなしで出力してください。")
+            temperature = 0.0
+        data, again = ctx.llm.chat_json(retry_prompt, system=EXTRACT_SYSTEM, temperature=temperature,
+                                        max_tokens=tokens, on_progress=note)
+        again["seconds"] = round(again["seconds"] + info["seconds"], 1)
+        if data is None:
+            again["reason"] = f"{info['reason']} → やり直しも失敗: {again['reason']}"
+        return data, True, again
 
     # ------------------------------------------------------------ ingest
     def ingest(self, corpus: list[dict], ctx: EngineContext) -> dict:
@@ -221,14 +233,24 @@ class GraphRAGEngine(Engine):
         raw_relations: list[dict] = []
         parse_failures = 0
         retries = 0
+        salvaged = 0
+        reasons: Counter = Counter()
         for i, chunk in enumerate(chunks):
-            ctx.progress(0.05 + 0.55 * i / len(chunks),
-                         f"エンティティ抽出 {i + 1}/{len(chunks)}")
-            data, retried = self._chat_json(ctx, EXTRACT_PROMPT.format(text=chunk["text"]))
+            frac = 0.05 + 0.55 * i / len(chunks)
+            label = f"エンティティ抽出 {i + 1}/{len(chunks)}"
+            ctx.progress(frac, label)
+
+            def note(size, sec, frac=frac, label=label):     # 受信の様子（止まっていないことが分かる）
+                ctx.progress(frac, f"{label}（受信 {size:,} 字・{sec:.0f} 秒）")
+            data, retried, info = self._chat_json(ctx, EXTRACT_PROMPT.format(text=chunk["text"]), note)
             retries += int(retried)
+            salvaged += int(info["salvaged"])
+            if info["salvaged"]:
+                ctx.log(f"chunk {chunk['id']}: 出力が途中で切れたため、書けた分までを使いました（{info['finish']}）")
             if not isinstance(data, dict):
                 parse_failures += 1
-                ctx.log(f"抽出JSONの解析に失敗（chunk {chunk['id']}、再試行込み）")
+                reasons[info["reason"]] += 1
+                ctx.log(f"抽出JSONの解析に失敗（chunk {chunk['id']}・{info['seconds']} 秒）: {info['reason']}")
                 continue
             for ent in data.get("entities") or []:
                 if isinstance(ent, str):              # スキーマ違反（文字列配列）も受ける
@@ -258,13 +280,12 @@ class GraphRAGEngine(Engine):
         entities = self._merge_entities(raw_entities)
         if not entities:
             # 沈黙して空インデックスを作らず、原因のヒント付きでエラーにする
+            why = "／".join(f"{r}（{n}件）" for r, n in reasons.most_common(3))
             raise ValueError(
                 f"エンティティが1件も抽出できませんでした"
-                f"（{len(chunks)}チャンク中 {parse_failures}件で抽出JSONの解析に失敗）。"
-                "典型的な原因: (1) 推論モデル（Qwen3等）が思考でトークンを使い切り"
-                "JSONが出力される前に切れている → 設定タブの Max Tokens を4096以上に、"
-                "(2) モデルがJSON形式の出力を守れていない → 別モデル/温度0を確認。"
-                "設定タブの「接続テスト」も再確認してください")
+                f"（{len(chunks)}チャンク中 {parse_failures}件で抽出JSONの解析に失敗。理由: {why or '不明'}）。"
+                "思考で上限に達する場合は Max Tokens を増やすか思考の短いモデルに、"
+                "文章や繰り返しになる場合は JSON 出力の得意なモデル（Qwen2.5 / Qwen3 の Instruct 等）を試してください")
         # 関係の端点がエンティティ一覧に無い場合（ローカルLLMで頻発）は、関係を捨てずに
         # 端点をエンティティとして補う（本家 GraphRAG と同じ扱い）。捨てるとグラフが
         # 孤立ノードだらけになり、コミュニティも local 検索も機能しなくなる
@@ -309,7 +330,7 @@ class GraphRAGEngine(Engine):
                 f"{r['description']}（強さ{r['strength']}）"
                 for r in relations
                 if r["source"] in member_set and r["target"] in member_set)[:4000]
-            data, _ = self._chat_json(
+            data, _, _ = self._chat_json(
                 ctx, COMMUNITY_PROMPT.format(entities=ent_lines[:4000],
                                              relations=rel_lines or "（なし）"))
             if isinstance(data, dict):
@@ -347,9 +368,11 @@ class GraphRAGEngine(Engine):
         # 品質警告（構築は成功しても、検索品質が下がる状態を UI に見せる）
         warnings: list[str] = []
         if parse_failures:
+            why = "／".join(f"{r}（{n}件）" for r, n in reasons.most_common(3))
             warnings.append(
-                f"{len(chunks)}チャンク中 {parse_failures}件で抽出JSONの解析に失敗"
-                "（再試行込み）。Max Tokens とモデルのJSON出力品質を確認してください")
+                f"{len(chunks)}チャンク中 {parse_failures}件で抽出JSONの解析に失敗（再試行込み）。理由: {why}")
+        if salvaged:
+            warnings.append(f"{len(chunks)}チャンク中 {salvaged}件は出力が途中で切れたため、書けた分までを使いました")
         if not relations:
             warnings.append(
                 "関係が1件も抽出できませんでした。グラフが分断され、"
@@ -375,6 +398,7 @@ class GraphRAGEngine(Engine):
                 "summarized_communities": len(targets),
                 "extract_parse_failures": parse_failures,
                 "extract_retries": retries,
+                "extract_salvaged": salvaged,
                 "has_embeddings": entity_vecs is not None,
             },
         }
