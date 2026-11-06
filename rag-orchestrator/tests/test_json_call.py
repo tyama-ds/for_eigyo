@@ -99,7 +99,7 @@ class FakeLLM(BaseHTTPRequestHandler):
                     self.wfile.write(f"data: {json.dumps({'choices': [{'delta': delta}]}, ensure_ascii=False)}\n\n"
                                      .encode())
                     self.wfile.flush()
-        except (BrokenPipeError, ConnectionResetError):
+        except ConnectionError:            # 切断（Linux は BrokenPipe・Reset、Windows は Aborted）
             call["closed_early"] = used
             return
         call["tokens"] = used
@@ -107,7 +107,7 @@ class FakeLLM(BaseHTTPRequestHandler):
             try:
                 self.wfile.write(f"data: {json.dumps({'choices': [{'delta': {}, 'finish_reason': finish}]})}\n\n"
                                  .encode() + b"data: [DONE]\n\n")
-            except (BrokenPipeError, ConnectionResetError):
+            except ConnectionError:            # 切断（Linux は BrokenPipe・Reset、Windows は Aborted）
                 pass
             return
         msg = {"role": "assistant", "content": content, **({"reasoning_content": reasoning} if reasoning else {})}

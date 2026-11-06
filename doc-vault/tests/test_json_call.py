@@ -85,7 +85,7 @@ class FakeLLM(BaseHTTPRequestHandler):
                 self.wfile.flush()
             self.wfile.write(f"data: {json.dumps({'choices': [{'delta': {}, 'finish_reason': finish}]})}\n\n"
                              .encode() + b"data: [DONE]\n\n")
-        except (BrokenPipeError, ConnectionResetError):
+        except ConnectionError:            # 切断（Linux は BrokenPipe・Reset、Windows は Aborted）
             call["closed_early"] = used
             return
         call["tokens"] = used
