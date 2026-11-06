@@ -84,6 +84,14 @@
     color:#ffd1d9; background:rgba(251,113,133,.10); border:1px solid rgba(251,113,133,.45)}
   .loaderr b{color:#ffe3e8}
   .loaderr code{background:rgba(10,14,26,.5); padding:1px 6px; border-radius:5px}
+  .loaderr pre{margin:8px 0; padding:8px 10px; background:rgba(10,14,26,.5); border-radius:8px;
+    white-space:pre-wrap; word-break:break-all; font-size:12px; line-height:1.6}
+  .loaderr.warn{color:#ffe2b0; background:rgba(251,191,36,.08); border-color:rgba(251,191,36,.45)}
+  .loaderr.warn b{color:#fff1d6}
+  .loaderr ul{margin:4px 0 8px; padding-left:20px}
+  .loaderr button{margin-top:4px; font:inherit; font-size:12.5px; color:#1a1405; background:#fbbf24;
+    border:0; border-radius:8px; padding:6px 12px; cursor:pointer}
+  .loaderr button:disabled{opacity:.6; cursor:default}
 
   /* ---------- cards ---------- */
   .grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(min(320px,100%),1fr)); gap:22px}
@@ -290,6 +298,7 @@
   </div>
 
   <div class="loaderr" id="load-error" role="alert" hidden></div>
+  <div class="loaderr warn" id="apps-note" role="status" hidden></div>
   <div id="board"></div>
   <div id="hidden-note"></div>
 
@@ -1266,6 +1275,13 @@ async function diagnoseLoadFailure(err) {
        <code>launcher\\start_portal.bat</code> をダブルクリックし、自動で開くタブ（<code>http://127.0.0.1:8770</code>）を使ってください。`);
     return;
   }
+  if (err && err.kind === "apps_file") {
+    showLoadError("アプリの登録ファイル（apps.json）に書式の誤りがあります",
+      `<pre>${esc(err.serverError)}</pre>
+       <code>launcher\\apps.json</code> をメモ帳で開いて上の行を直して保存するか、「Download ZIP」で取り直した apps.json に置き換えてください。
+       保存すれば自動で表示されます。`);
+    return;
+  }
   if (err && err.serverError) {
     showLoadError("アプリ一覧の作成中にエラーが起きました",
       `内容: <code>${esc(err.serverError)}</code><br>
@@ -1297,6 +1313,34 @@ async function diagnoseLoadFailure(err) {
   }
 }
 
+/* apps.json の軽い書式の誤りは補って表示し、その内容で直すボタンを出す */
+const appsNote = document.getElementById("apps-note");
+let appsNoteKey = "";
+function showAppsNote(fixes) {
+  const key = fixes.join("\n");
+  if (key === appsNoteKey) return;            // 4秒ごとの更新でボタンを作り直さない
+  appsNoteKey = key;
+  appsNote.hidden = !fixes.length;
+  if (!fixes.length) { appsNote.innerHTML = ""; return; }
+  appsNote.innerHTML = `<b>apps.json（アプリの登録ファイル）に書式の誤りがあったため、補って表示しています</b>
+    <ul>${fixes.map(f => `<li>${esc(f)}</li>`).join("")}</ul>
+    <button type="button" id="apps-repair">この内容で apps.json を直す</button>
+    <span style="margin-left:8px">元のファイルは apps.json.bak として残します。</span>`;
+  document.getElementById("apps-repair").onclick = async (ev) => {
+    ev.target.disabled = true;
+    try {
+      const r = await fetch("/api/apps/repair", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"});
+      const b = await r.json().catch(() => ({}));
+      if (!r.ok || !b.ok) throw new Error(b.error || `HTTP ${r.status}`);
+      toast("apps.json を直しました（元は apps.json.bak）");
+      refresh(true);
+    } catch (e) {
+      ev.target.disabled = false;
+      toast("apps.json を直せませんでした: " + e.message, true);
+    }
+  };
+}
+
 async function refresh(force = false, fresh = false) {
   if (refreshing) return;          // 前の問い合わせがまだ終わっていなければ重ねない
   refreshing = true;
@@ -1313,6 +1357,7 @@ async function refreshOnce(force, fresh) {
     if (!r.ok || !body || !Array.isArray(body.apps)) {
       const e = new Error(`HTTP ${r.status}`);
       e.serverError = (body && body.error) || (r.ok ? "応答の形式が不正です" : `サーバーの応答 HTTP ${r.status}`);
+      e.kind = body && body.kind;
       throw e;
     }
     data = body;
@@ -1321,6 +1366,7 @@ async function refreshOnce(force, fresh) {
     return;
   }
   loadError.hidden = true;
+  showAppsNote((data.apps_file && data.apps_file.fixes) || []);
   try {
     if (data.portal && data.portal.version) portalVer.textContent = "v" + data.portal.version;
     if (editMode || drag) return;               // 編集中は手元の配置を優先して描き直さない

@@ -32,7 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-__version__ = "1.1.4"
+__version__ = "1.1.5"
 
 BASE = Path(__file__).resolve().parent
 APPS_FILE = BASE / "apps.json"
@@ -51,16 +51,122 @@ _procs: dict[str, dict] = {}  # app_id -> {proc, log(deque), started(float)}
 
 # ---------------------------------------------------------------- apps.json
 
-def load_apps() -> list[dict]:
+class AppsFileError(ValueError):
+    """apps.json を読めない（書式の誤りを補っても読めない・形が違う）。"""
+
+
+# json のエラー文 → 手で直す人向けの説明
+_JSON_HINTS = [
+    ("Expecting ',' delimiter", "「,」（カンマ）が抜けています。多くは前の行の末尾です"),
+    ("Expecting property name enclosed in double quotes",
+     "「}」の直前に余分な「,」があるか、項目名が \"\" で囲まれていません"),
+    ("Expecting ':' delimiter", "項目名の後ろの「:」が抜けています"),
+    ("Expecting value", "値が抜けているか、「]」「}」の直前に余分な「,」があります"),
+    ("Invalid \\", "Windows のパスの「\\」は「\\\\」か「/」で書きます"),
+    ("Invalid control character", "文字列の途中で改行しています"),
+    ("Unterminated string", "「\"」が閉じていません"),
+    ("Extra data", "最後の「}」の後ろに余分な文字があります"),
+]
+
+_apps_file_fixes: list[str] = []
+
+
+def _prev_nonspace(text: str, pos: int) -> int:
+    i = pos - 1
+    while i >= 0 and text[i] in " \t\r\n":
+        i -= 1
+    return i
+
+
+def parse_json_leniently(text: str) -> tuple[object, list[str]]:
+    """手で編集した JSON によくある誤り（行末の「,」の抜け・余分な「,」・Windows パスの「\\」）を補って読む。
+    (データ, 補った内容) を返す。補えない誤りは最初のエラーをそのまま投げる。"""
+    fixes: list[str] = []
+    first: json.JSONDecodeError | None = None
+    for _ in range(200):
+        try:
+            return json.loads(text), list(dict.fromkeys(fixes))  # 同じ行の同じ補いは1つにまとめる
+        except json.JSONDecodeError as e:
+            first = first or e
+            pos, prev = e.pos, _prev_nonspace(text, e.pos)
+            line = text.count("\n", 0, max(prev, 0)) + 1
+            if (e.msg == "Expecting ',' delimiter" and prev >= 0
+                    and "\n" in text[prev:pos] and text[pos:pos + 1] in ('{', '[', '"')):
+                text = text[:prev + 1] + "," + text[prev + 1:]
+                fixes.append(f"{line} 行目の末尾に抜けていた「,」を補いました")
+            elif (e.msg in ("Expecting property name enclosed in double quotes", "Expecting value")
+                    and prev >= 0 and text[prev] == "," and text[pos:pos + 1] in ("}", "]")):
+                text = text[:prev] + text[prev + 1:]
+                fixes.append(f"{line} 行目の末尾の余分な「,」を除きました")
+            elif e.msg.startswith("Invalid \\") and "\\" in text[max(0, pos - 1):pos + 1]:
+                bs = pos if text[pos:pos + 1] == "\\" else pos - 1
+                text = text[:bs] + "\\\\" + text[bs + 1:]
+                fixes.append(f"{text.count(chr(10), 0, bs) + 1} 行目の「\\」を「\\\\」（パスの区切り）として読みました")
+            else:
+                raise first
+    raise first
+
+
+def describe_json_error(name: str, text: str, e: json.JSONDecodeError) -> str:
+    hint = next((h for key, h in _JSON_HINTS if e.msg.startswith(key)), e.msg)
+    lines = text.splitlines()
+    shown = range(max(1, e.lineno - 2), min(len(lines), e.lineno) + 1)
+    snippet = "\n".join(f"{n:>5} | {lines[n - 1]}" for n in shown)
+    return f"{name} の {e.lineno} 行目 {e.colno} 文字目に書式の誤りがあります（{hint}）\n{snippet}"
+
+
+def read_apps_file() -> tuple[dict, list[str]]:
+    """apps.json を読む。手で編集したときの軽い誤りは補い、補った内容も返す。"""
+    raw = APPS_FILE.read_bytes()
+    fixes: list[str] = []
     try:
-        data = json.loads(APPS_FILE.read_text(encoding="utf-8"))
+        text = raw.decode("utf-8-sig")  # メモ帳が付ける BOM も受け付ける
+    except UnicodeDecodeError:
+        text = raw.decode("cp932", errors="replace")
+        fixes.append("文字コードが UTF-8 ではないため Shift_JIS として読みました")
+    try:
+        data, more = parse_json_leniently(text)
+    except json.JSONDecodeError as e:
+        raise AppsFileError(describe_json_error(APPS_FILE.name, text, e)) from None
+    if not isinstance(data, dict) or not isinstance(data.get("apps"), list):
+        raise AppsFileError(f'{APPS_FILE.name} の形が違います（{{"apps": [ ... ]}} の形にしてください）')
+    return data, fixes + more
+
+
+def apps_file_fixes() -> list[str]:
+    return list(_apps_file_fixes)
+
+
+def load_apps() -> list[dict]:
+    global _apps_file_fixes
+    try:
+        data, fixes = read_apps_file()
     except FileNotFoundError:
+        _apps_file_fixes = []
         return []
-    apps = data.get("apps", [])
+    if fixes and fixes != _apps_file_fixes:
+        print(f"[App Portal] {APPS_FILE.name} に書式の誤りがあったため補って読みました: " + " / ".join(fixes),
+              file=sys.stderr, flush=True)
+    _apps_file_fixes = fixes
+    apps = [a for a in data["apps"] if isinstance(a, dict)]
     for app in apps:
         app.setdefault("icon", "terminal")
         app.setdefault("description", "")
     return apps
+
+
+def repair_apps_file() -> list[str]:
+    """補った内容で apps.json を書き直す（元のファイルは apps.json.bak に残す）。補った内容を返す。"""
+    raw = APPS_FILE.read_bytes()
+    data, fixes = read_apps_file()
+    if not fixes:
+        return []
+    APPS_FILE.with_name(APPS_FILE.name + ".bak").write_bytes(raw)
+    tmp = APPS_FILE.with_name(APPS_FILE.name + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp, APPS_FILE)
+    load_apps()
+    return fixes
 
 
 def save_apps(apps: list[dict]) -> None:
@@ -593,10 +699,17 @@ class Handler(BaseHTTPRequestHandler):
             return
         if u.path == "/api/apps":
             fresh = (parse_qs(u.query).get("fresh") or [""])[0] == "1"
+            try:
+                apps = apps_payload(fresh=fresh)
+            except AppsFileError as e:
+                print(f"[App Portal] {e}", file=sys.stderr, flush=True)
+                self._json({"ok": False, "kind": "apps_file", "error": str(e)}, 500)
+                return
             self._json({
-                "apps": apps_payload(fresh=fresh),
+                "apps": apps,
                 "layout": load_layout(),
                 "portal": {"version": __version__},
+                "apps_file": {"fixes": apps_file_fixes()},
             })
             return
         if u.path == "/api/layout":
@@ -649,6 +762,19 @@ class Handler(BaseHTTPRequestHandler):
             result = launch_app(app) if u.path == "/api/launch" else stop_app(app)
             code = 200 if result.get("ok") else 400
             self._json(result, code)
+            return
+
+        if u.path == "/api/apps/repair":  # 補って読んだ apps.json を、その内容で書き直す
+            ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            if ctype != "application/json":
+                self._json({"ok": False, "error": "Content-Type は application/json"}, 415)
+                return
+            try:
+                fixes = repair_apps_file()
+            except (AppsFileError, OSError) as e:
+                self._json({"ok": False, "error": str(e)}, 400)
+                return
+            self._json({"ok": True, "fixes": fixes, "backup": APPS_FILE.name + ".bak" if fixes else None})
             return
 
         if u.path == "/api/shutdown":  # 新しく起動したポータルへの引き継ぎ
