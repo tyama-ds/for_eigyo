@@ -361,3 +361,102 @@ def as_str_list(value, *, limit: int = 20, maxlen: int = 80) -> list[str]:
         if len(out) >= limit:
             break
     return out
+
+
+# ---------------------------------------------------------------- 生成の打ち切り・途中で切れた JSON
+# GraphRAG のエンティティ抽出など、JSON を書かせる呼び出しで使う（rag-orchestrator と doc-vault で同じ内容）。
+# ローカル LLM は、JSON を書き終えても説明を続けたり、同じ行を繰り返したり、考え続けたりして
+# 出力の上限まで止まらないことがある。上限で切れた JSON は丸ごと捨てていたため、時間だけかかって失敗していた。
+
+def json_end(text: str) -> int | None:
+    """最初の JSON オブジェクト/配列が閉じた位置（閉じ括弧の次）。まだ閉じていなければ None。"""
+    start = next((i for i, ch in enumerate(text) if ch in "[{"), None)
+    if start is None:
+        return None
+    depth, in_str, esc = 0, False, False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "[{":
+            depth += 1
+        elif ch in "]}":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+    return None
+
+
+def salvage_json(text: str):
+    """途中で切れた JSON から、最後まで書けた要素までを取り出して括弧を閉じる。取り出せなければ None。
+
+    例: {"entities": [{"name": "A"}, {"name": "B"}, {"name": "C  → {"entities": [{"name": "A"}, {"name": "B"}]}
+    """
+    if not text:
+        return None
+    text = re.sub(r"```(?:json)?", "", text)
+    start = next((i for i, ch in enumerate(text) if ch in "[{"), None)
+    if start is None:
+        return None
+    stack: list[str] = []
+    in_str = esc = False
+    cut: tuple[int, list[str]] | None = None      # 完結した値の直後の位置と、そのとき開いている括弧
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "[{":
+            stack.append(ch)
+        elif ch in "]}":
+            if stack:
+                stack.pop()
+            if not stack:
+                break                               # 閉じている JSON は extract_json に任せる
+            cut = (i + 1, list(stack))
+        elif ch == "," and stack:
+            cut = (i, list(stack))
+    if cut is None:
+        return None
+    pos, opened = cut
+    body = text[start:pos].rstrip().rstrip(",")
+    candidate = body + "".join("]" if c == "[" else "}" for c in reversed(opened))
+    for attempt in (candidate, re.sub(r",\s*([\]}])", r"\1", candidate)):
+        try:
+            return json.loads(attempt)
+        except ValueError:
+            continue
+    return None
+
+
+def find_repetition(text: str, *, min_unit: int = 8, max_unit: int = 400, min_total: int = 240) -> bool:
+    """末尾が同じ文字列の繰り返し（合計 min_total 字以上・3 回以上）になっているか。
+
+    温度 0 の小さいモデルが同じ関係・同じ思考を延々と書き続ける状態を見つけて、上限を待たずに止めるため。
+    """
+    n = len(text)
+    for unit in range(min_unit, min(max_unit, n // 3) + 1):
+        times = max(3, -(-min_total // unit))
+        if times * unit > n:
+            continue
+        tail = text[n - unit:]
+        if not tail.strip():
+            continue
+        if all(text[n - (k + 1) * unit:n - k * unit] == tail for k in range(1, times)):
+            return True
+    return False
