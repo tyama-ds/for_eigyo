@@ -61,6 +61,137 @@ function queryTermEditorHtml(terms, edits) {
     >検索サービスを開く ↗</a>
     <button class="button subtle" id="download-query" disabled>検索条件を保存 ↓</button></div>`;
 }
+/* 技術動向調査報告書の資料編にならった表（調査条件・集合番号つき検索式）。 */
+const REPORT_DEFAULTS = {
+  period_from: '',
+  period_to: '',
+  basis: 'priority',
+  regions: 'JP, US, EP, CN, KR, WO',
+  search_date: '',
+  unit: 'family',
+  database: '',
+  local_hits: true,
+};
+function reportOptions() {
+  try {
+    return { ...REPORT_DEFAULTS, ...JSON.parse(localStorage.getItem('patent-report-options') || '{}') };
+  } catch {
+    return { ...REPORT_DEFAULTS };
+  }
+}
+function reportSelectHtml(id, label, choices, current) {
+  const options = choices.map(
+    ([value, text]) => html`<option value="${value}" ${current === value ? 'selected' : ''}>${text}</option>`
+  );
+  return html`<label>${label}<select id="${id}">${options}</select></label>`;
+}
+function queryReportHtml() {
+  const o = reportOptions();
+  return html`<details class="output-report" id="output-report"><summary>技術動向調査の報告書形式（調査条件・検索式表）</summary>
+    <p class="caption">特許庁の特許出願技術動向調査報告書の資料編と同じ構成で、調査条件の表と集合番号つきの検索式表を作ります。
+    検索式の構文は上で選んだ検索サービスに従います。ヒット件数は検索実行後に記入する欄です。</p>
+    <div class="report-options">
+    <label>対象期間（開始年）<input id="report-period-from" type="number" min="1900" max="2100"
+      value="${esc(o.period_from)}" placeholder="2013"></label>
+    <label>対象期間（終了年）<input id="report-period-to" type="number" min="1900" max="2100"
+      value="${esc(o.period_to)}" placeholder="2022"></label>
+    ${reportSelectHtml(
+      'report-basis',
+      '期間の基準',
+      [
+        ['priority', '優先権主張年'],
+        ['application', '出願年'],
+        ['publication', '公開年'],
+      ],
+      o.basis
+    )}
+    <label>対象国・地域<input id="report-regions" value="${esc(o.regions)}"
+      placeholder="JP, US, EP, CN, KR, WO"></label>
+    <label>検索日<input id="report-search-date" type="date" value="${esc(o.search_date)}"></label>
+    ${reportSelectHtml(
+      'report-unit',
+      '集計単位',
+      [
+        ['family', 'パテントファミリー単位'],
+        ['publication', '公報単位'],
+      ],
+      o.unit
+    )}
+    <label>データベース名（任意）<input id="report-database" value="${esc(o.database)}"
+      placeholder="Derwent Innovation（DWPI 付きコレクション）"></label>
+    <label class="check"><input id="report-local-hits" type="checkbox" ${o.local_hits ? 'checked' : ''}>
+      取り込み済みCSVでの該当数を参考列に出す</label></div>
+    <div class="button-row"><button class="button" id="make-report" type="button">表を作成</button>
+    <button class="button small" id="copy-report" type="button" disabled>Markdown をコピー ⧉</button>
+    <button class="button small subtle" id="download-report" type="button" disabled>TSV を保存 ↓</button></div>
+    <div id="report-feedback" aria-live="polite"></div>
+    <pre class="expression report-preview" id="report-preview">「表を作成」で、現在の検索式から表を作ります。</pre></details>`;
+}
+function reportRequestBody(q) {
+  const o = {
+    period_from: $('#report-period-from')?.value || '',
+    period_to: $('#report-period-to')?.value || '',
+    basis: $('#report-basis')?.value || 'priority',
+    regions: $('#report-regions')?.value || '',
+    search_date: $('#report-search-date')?.value || '',
+    unit: $('#report-unit')?.value || 'family',
+    database: $('#report-database')?.value || '',
+    local_hits: $('#report-local-hits')?.checked ?? true,
+  };
+  try {
+    localStorage.setItem('patent-report-options', JSON.stringify(o));
+  } catch {
+    /* per-viewer convenience only */
+  }
+  const { local_hits, ...options } = o;
+  return {
+    query_id: q.id,
+    format: $('#output-format').value,
+    options,
+    local_hits,
+    replacements: Object.fromEntries($$('.output-term').map((el) => [el.dataset.term, el.value])),
+    omit_unsupported: $('#omit-unsupported').checked,
+    allow_unverified: $('#allow-unverified').checked,
+    descendants: $('#output-descendants').value === 'descendants',
+    language: $('#output-language').value,
+  };
+}
+async function requestReport(q) {
+  const feedback = $('#report-feedback'),
+    preview = $('#report-preview');
+  if (!preview) return;
+  $('#copy-report').disabled = true;
+  $('#download-report').disabled = true;
+  try {
+    const result = await api('/query/report', reportRequestBody(q));
+    if ($('#query-output')?.dataset.queryId !== q.id) return;
+    appState.currentReport = result;
+    preview.textContent = result.markdown;
+    const problems = result.problems.length
+      ? html`<div class="output-problems"><b>最終式の出力を保留しています</b>
+          <ul>${result.problems.map((p) => html`<li>${esc(p)}</li>`)}</ul></div>`
+      : '';
+    replaceHtml(feedback, problems);
+    $('#copy-report').disabled = false;
+    $('#download-report').disabled = false;
+  } catch (error) {
+    replaceHtml(feedback, html`<div class="output-problems">${esc(error.message)}</div>`);
+  }
+}
+function bindReport(q) {
+  on('#make-report', 'click', () => requestReport(q));
+  on('#copy-report', 'click', async () => {
+    const r = appState.currentReport;
+    if (!r || r.query_id !== q.id) throw new Error('先に表を作成してください。');
+    await navigator.clipboard.writeText(r.markdown);
+    toast('報告書形式の表（Markdown）をコピーしました。');
+  });
+  on('#download-report', 'click', () => {
+    const r = appState.currentReport;
+    if (!r || r.query_id !== q.id) throw new Error('先に表を作成してください。');
+    download(`patent-query-v${q.version}-report-${r.syntax}.tsv`, r.tsv);
+  });
+}
 function querySourceHtml(q) {
   const logic = q.boolean_tree
     ? '観点内OR・観点間AND、または取り込み式の論理構造を保持しています。'
@@ -92,6 +223,7 @@ function queryCard(q) {
     <button class="button small" id="copy-query" disabled>この形式をコピー ⧉</button></div>
     ${queryOutputControlsHtml()}
     ${queryTermEditorHtml(terms, edits)}
+    ${queryReportHtml()}
     ${classificationChangesHtml(q.classification_changes)}${querySourceHtml(q)}</div>`;
 }
 function outputPending() {
@@ -144,6 +276,7 @@ function bindQuery(q) {
   on('#back-class', 'click', () => setStep(0));
   if (!q) return;
   requestOutput(q);
+  bindReport(q);
   on('#output-format', 'change', async () => {
     appState.outputFormat = $('#output-format').value;
     localStorage.setItem('patent-output-format', appState.outputFormat);
