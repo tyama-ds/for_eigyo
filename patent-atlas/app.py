@@ -27,6 +27,7 @@ import import_service
 import job_runner
 import judgment_service
 import query_service
+import report_format
 from candidate_service import display_candidate_proposal, display_discovery, display_labels
 from candidate_service import llm_candidate_rows, rejected_candidate_guidance  # noqa: F401  テスト互換のため
 from common import checked_text
@@ -333,6 +334,28 @@ def query(body: dict):
             )
             result = public_state()
     return result
+
+
+@app.post("/api/query/report")
+def output_report(body: dict):
+    """技術動向調査報告書の資料編にならった調査条件表と集合番号つき検索式表を返す。"""
+    with ws.lock:
+        item = query_service.find_query(ws, body.get("query_id"))
+        if item is None:
+            raise HTTPException(404, "出力する検索式が見つかりません。まず初案を作成してください。")
+        snapshot = copy.deepcopy(item)
+        rows = copy.deepcopy(ws.state["patents"]) if body.get("local_hits", True) else None
+    return report_format.build_report(
+        snapshot,
+        body.get("format", "derwent_innovation"),
+        options=body.get("options"),
+        rows=rows,
+        replacements=body.get("replacements"),
+        omit_unsupported=body.get("omit_unsupported", False),
+        allow_unverified=body.get("allow_unverified", False),
+        descendants=body.get("descendants", False),
+        language=body.get("language", "auto"),
+    )
 
 
 @app.get("/api/refinement")

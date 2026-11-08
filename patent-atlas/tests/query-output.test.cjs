@@ -191,3 +191,81 @@ test('query cards include actual classification-change evidence through the shar
   assert.ok(!initial.includes('classification-feedback-history'));
   assert.ok(!initial.includes('判定・学習から反映したIPCと根拠'));
 });
+
+test('report tables use the selected export options and the report preview holds the markdown', async () => {
+  const nodes = {};
+  const node = (selector) =>
+    (nodes[selector] ||= {
+      dataset: { queryId: 'q1' },
+      value:
+        selector === '#output-format'
+          ? 'derwent_innovation'
+          : selector === '#report-period-from'
+            ? '2013'
+            : '',
+      checked: selector === '#report-local-hits',
+      disabled: true,
+      textContent: '',
+      innerHTML: '',
+      events: new Map(),
+      addEventListener(name, fn) {
+        this.events.set(name, fn);
+      },
+      setAttribute(name, value) {
+        this[name] = value;
+      },
+      removeAttribute(name) {
+        delete this[name];
+      },
+    });
+  const requests = [];
+  const c = {
+    $: node,
+    $$: () => [],
+    on: (selector, event, fn) => node(selector).addEventListener(event, fn),
+    exportRequest: 0,
+    outputEdits: new Map(),
+    api: async (path, body) => {
+      requests.push({ path, body });
+      return path === '/query/report'
+        ? {
+            query_id: 'q1',
+            syntax: 'derwent_innovation',
+            markdown: '### 調査条件\n| 項目 |',
+            tsv: 'a\tb',
+            problems: ['保留 <x>'],
+            warnings: [],
+          }
+        : {
+            can_copy: true,
+            expression: '',
+            problems: [],
+            warnings: [],
+            instructions: '',
+            text_scope: '',
+            classification_note: '',
+            verification: '',
+            verified_at: '',
+            sources: [],
+            url: '',
+          };
+    },
+    setStep() {},
+  };
+  await loadModule(c, 'core.js', ['safeUrl']);
+  await loadModule(c, 'query-output.js', ['queryCard', 'bindQuery']);
+  const card = c.queryCard({ id: 'q1', version: 1, type: '初案', expression: 'x', keywords: ['電池'] });
+  assert.match(card, /id="output-report"/);
+  assert.match(card, /id="report-period-from"/);
+  assert.match(card, /id="make-report"/);
+  c.bindQuery({ id: 'q1', version: 1 });
+  await node('#make-report').events.get('click')();
+  const request = requests.find((r) => r.path === '/query/report');
+  assert.equal(request.body.format, 'derwent_innovation');
+  assert.equal(request.body.options.period_from, '2013');
+  assert.equal(request.body.options.basis, 'priority');
+  assert.equal(request.body.local_hits, true);
+  assert.equal(node('#report-preview').textContent, '### 調査条件\n| 項目 |');
+  assert.match(node('#report-feedback').innerHTML, /保留 &lt;x&gt;/);
+  assert.equal(node('#copy-report').disabled, false);
+});
