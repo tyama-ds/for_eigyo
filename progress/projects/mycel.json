@@ -188,5 +188,20 @@
       "ref": "#50"
     }
   ],
-  "updated": "2026-10-19"
+  "updated": "2026-10-19",
+  "images": [
+    {
+      "file": "images/mycel/2026-11-09-split-mode.jpg",
+      "kind": "change",
+      "caption": "右上に「分割」モード（左で編集・右に即時表示）を追加",
+      "date": "2026-11-09",
+      "ref": "#80"
+    },
+    {
+      "file": "images/mycel/2026-11-09-main.jpg",
+      "kind": "gui",
+      "caption": "ノートの閲覧（リンク・プロパティ・右パネル）",
+      "date": "2026-11-09"
+    }
+  ]
 }

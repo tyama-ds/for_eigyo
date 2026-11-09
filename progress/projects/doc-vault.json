@@ -139,5 +139,13 @@
       "date": "2026-11-05",
       "summary": "初版: 文書管理・RAG 相談（ルーター/Hybrid/グラフPPR/要約/CRAG）・ローカルとクラウドの使い分け・グラフ表示・App Portal 登録"
     }
+  ],
+  "images": [
+    {
+      "file": "images/doc-vault/2026-11-09-main.jpg",
+      "kind": "gui",
+      "caption": "相談タブ（取り込んだ文書に質問）",
+      "date": "2026-11-09"
+    }
   ]
 }

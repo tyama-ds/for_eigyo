@@ -9,10 +9,12 @@
 対象リポジトリは progress/sources.json に書く。各リポジトリの progress/projects/<slug>.json を
 読み込み、for_eigyo の progress/dashboard.html に1枚のダッシュボードとして書き出す。
 dashboard.html はそのままブラウザで開け、claude.ai の Artifact としても公開できる。
+進捗ファイルの images に登録した画面イメージ（progress/images/ 以下）も dashboard.html に埋め込む。
 """
 from __future__ import annotations
 
 import argparse
+import base64
 import datetime as dt
 import json
 import re
@@ -37,6 +39,10 @@ REQUIRED = ["slug", "name", "path", "summary", "status", "phase", "progress",
             "started", "updated", "milestones", "next", "risks", "log"]
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 STALE_DAYS = 30
+IMAGE_KINDS = {"gui": "画面イメージ", "change": "修正箇所"}
+IMAGE_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
+MAX_IMAGE_KB = 400
+SHOW_IMAGES = {"gui": 3, "change": 6}  # ダッシュボードに載せる枚数（新しい順）
 
 
 def load_sources(overrides: dict[str, str]) -> list[dict]:
@@ -115,6 +121,47 @@ def validate(p: dict, source: str) -> list[str]:
     return errs
 
 
+def check_images(p: dict, source: str, root: Path) -> list[str]:
+    errs = []
+    images = p.get("images", [])
+    if not isinstance(images, list):
+        return [f"{source}: images は配列"]
+    for i in images:
+        f = str(i.get("file", ""))
+        where = f"{source}: images の {f or '（file なし）'}"
+        if i.get("kind") not in IMAGE_KINDS:
+            errs.append(f"{where}: kind は gui（画面イメージ）か change（修正箇所）")
+        if not i.get("caption"):
+            errs.append(f"{where}: caption が必要")
+        if not DATE_RE.match(str(i.get("date", ""))):
+            errs.append(f"{where}: date は YYYY-MM-DD")
+        path = (root / "progress" / f).resolve()
+        if not f or Path(f).is_absolute() or (root / "progress") not in path.parents:
+            errs.append(f"{where}: file は progress/ からの相対パス（例: images/{p.get('slug')}/2026-11-09-main.jpg）")
+        elif path.suffix.lower() not in IMAGE_TYPES:
+            errs.append(f"{where}: 画像は {', '.join(IMAGE_TYPES)} のいずれか")
+        elif not path.is_file():
+            errs.append(f"{where}: ファイルがありません")
+        elif path.stat().st_size > MAX_IMAGE_KB * 1024:
+            errs.append(f"{where}: {path.stat().st_size // 1024} KB は大きすぎます（{MAX_IMAGE_KB} KB まで。"
+                        "JPEG の品質や画面サイズを下げてください）")
+    return errs
+
+
+def embed_images(p: dict, root: Path) -> list[dict]:
+    """新しい順に kind ごとの上限枚数まで、data URI にして返す。"""
+    out, count = [], {k: 0 for k in IMAGE_KINDS}
+    for i in sorted(p.get("images", []), key=lambda i: i["date"], reverse=True):
+        if count[i["kind"]] >= SHOW_IMAGES[i["kind"]]:
+            continue
+        count[i["kind"]] += 1
+        path = root / "progress" / i["file"]
+        mime = IMAGE_TYPES[path.suffix.lower()]
+        out.append({"kind": i["kind"], "caption": i["caption"], "date": i["date"], "ref": i.get("ref", ""),
+                    "src": f"data:{mime};base64," + base64.b64encode(path.read_bytes()).decode("ascii")})
+    return out
+
+
 def load_repo(source: dict, check: bool, today: str) -> tuple[list[dict], list[str]]:
     repo = source["repo"]
     projects_dir = source["root"] / "progress" / "projects"
@@ -141,9 +188,12 @@ def load_repo(source: dict, check: bool, today: str) -> tuple[list[dict], list[s
             errors.append(f"{name}: JSON として読めません ({exc})")
             continue
         errs = validate(p, name)
+        if not errs:
+            errs = check_images(p, name, source["root"])
         errors.extend(errs)
         if not errs:
             p["repo"] = repo
+            p["images"] = embed_images(p, source["root"])
             p["log"] = sorted(p["log"], key=lambda e: e["date"], reverse=True)
             projects.append(p)
     return projects, errors
@@ -177,7 +227,7 @@ def render(sources: list[dict], projects: list[dict]) -> str:
     as_of = max((p["updated"] for p in projects), default="")
     repos = [{"repo": s["repo"], "github": s.get("github", "")} for s in sources
              if any(p["repo"] == s["repo"] for p in projects)]
-    data = json.dumps({"asOf": as_of, "staleDays": STALE_DAYS, "statuses": STATUSES,
+    data = json.dumps({"asOf": as_of, "staleDays": STALE_DAYS, "statuses": STATUSES, "imageKinds": IMAGE_KINDS,
                        "repos": repos, "projects": projects}, ensure_ascii=False, separators=(",", ":"))
     data = data.replace("</", "<\\/")
     return TEMPLATE.read_text(encoding="utf-8").replace("__DATA__", data)
