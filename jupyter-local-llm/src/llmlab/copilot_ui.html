@@ -65,6 +65,9 @@
   .btn.warn{background:linear-gradient(92deg,#fab219,#e66767)}
   .btn.sm{padding:6px 12px;font-size:.8rem}
   .row{display:flex;gap:8px;align-items:center}
+  /* 横の説明文が長くてもボタンの文字を縦に折り返さない（説明文の側を折り返す） */
+  .row > .btn{flex:none;white-space:nowrap}
+  .row > .hint{min-width:0;overflow-wrap:anywhere}
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
   .hint{font-size:.74rem;color:var(--ink-mute)}
   code.k{background:#0d1119;border:1px solid var(--line);border-radius:6px;padding:1px 6px;font-size:.78rem}
@@ -232,6 +235,16 @@
       </div>
     </div>
 
+    <!-- リサーチツールの選択（selenium の半自動ステップ） -->
+    <div class="bridge" id="navBox">
+      <div style="font-weight:800;color:var(--warn)">🧭 リサーチツールの選択 — あなたの操作が必要です</div>
+      <div class="promptbox" id="navMsg" style="white-space:pre-wrap"></div>
+      <div class="row" style="margin-top:8px">
+        <button class="btn" id="btnNavReady">準備完了</button>
+        <button class="btn ghost sm" id="btnNavAbort">中止</button>
+      </div>
+    </div>
+
     <!-- 目次エディタ -->
     <div class="panel" id="outlinePanel" style="display:none">
       <h2>目次（章立て）— 編集できます</h2>
@@ -348,6 +361,14 @@ $("segMode").addEventListener("click",e=>{
 const CONN_OPTS={
   demo:[], bridge:[],
   selenium:[
+    {k:"agent_select",label:"リサーチツールの選び方",type:"select",choices:[
+      ["assist","自動で開いてから確認（推奨）"],
+      ["manual","自分で選ぶ"],
+      ["auto","自動のみ（確認なし）"]]},
+    {k:"session_mode",label:"章の進め方",type:"select",choices:[
+      ["same_chat","同じチャットで続ける（推奨）"],
+      ["per_chapter","章ごとに開き直す"]]},
+    {k:"researcher_url",label:"リサーチツールの URL（任意。開いた状態のアドレスバーをコピー）",ph:"https://m365.cloud.microsoft/chat/..."},
     {k:"driver_path",label:"msedgedriver の場所（スクリプトと同じ既定値）",ph:"C:\\Driver\\edgedriver_win32\\msedgedriver.exe"},
     {k:"total_timeout_sec",label:"生成待ち上限秒（空=無制限・スクリプト準拠）",type:"number",ph:"3600"},
   ],
@@ -362,13 +383,14 @@ function renderConnOpts(){
   const kind=$("connector").value, opts=CONN_OPTS[kind]||[], box=$("connOpts"); box.innerHTML="";
   if(kind==="bridge"){ box.innerHTML=`<div class="hint" style="margin-top:8px">各章のプロンプトを画面に表示 → 人が M365 Copilot に貼り、回答を貼り戻す方式。自動化不可の環境でも確実。</div>`; return; }
   if(kind==="demo"){ box.innerHTML=`<div class="hint" style="margin-top:8px">モック。指示が濃くなるほど回答も濃くなり、擬似GEPA の改善が見えます。</div>`; return; }
-  if(kind==="selenium"){ box.insertAdjacentHTML("beforeend",`<div class="hint" style="margin-top:8px"><b>ユーザースクリプト原文</b>（src/llmlab/m365_user_script.py）を章ごとに実行します（Edge）。セレクタ/XPathを変えたい時はそのファイルを直接編集。<b>失敗時はブラウザを開いたまま</b>にするので、どの画面で止まったか確認できます。擬似GEPA予算は 0〜1 推奨。</div>`); }
+  if(kind==="selenium"){ box.insertAdjacentHTML("beforeend",`<div class="hint" style="margin-top:8px">ユーザースクリプト（src/llmlab/m365_user_script.py）で Edge を操作します。<b>リサーチツールを選ぶ所だけ、この画面に出る案内であなたが確認/選択</b>し「準備完了」を押すと、残り（送信→長さ選択→go ahead→完了待ち→コピー）は自動です。同じチャットで章を続けるので、確認は最初の1回だけ。<b>失敗時はブラウザを開いたまま</b>にします。擬似GEPA予算は 0〜1 推奨。</div>`); }
   opts.forEach(o=>{
     const id="opt_"+o.k, ph=esc(o.ph||"");
     if(o.type==="check"){
       box.insertAdjacentHTML("beforeend",`<label class="f"><input type="checkbox" id="${id}" style="width:auto;margin-right:6px">${o.label}</label>`);
     }else if(o.type==="select"){
-      box.insertAdjacentHTML("beforeend",`<label class="f">${o.label}</label><select id="${id}">${(o.choices||[]).map(c=>`<option value="${c}">${c}</option>`).join("")}</select>`);
+      // choices は "値" または ["値","表示名"]
+      box.insertAdjacentHTML("beforeend",`<label class="f">${o.label}</label><select id="${id}">${(o.choices||[]).map(c=>{const [v,t]=Array.isArray(c)?c:[c,c];return `<option value="${esc(v)}">${esc(t)}</option>`;}).join("")}</select>`);
     }else if(o.type==="json"){
       box.insertAdjacentHTML("beforeend",`<label class="f">${o.label}</label><textarea id="${id}" style="min-height:56px;font-size:.8rem" placeholder="${ph}"></textarea>`);
     }else{
@@ -462,7 +484,7 @@ $("btnRun").onclick=async()=>{
   if(!p.request){toast("調査依頼を入力してください");return;}
   // reset UI
   $("lineage").innerHTML=""; $("finalChapters").innerHTML=""; $("reportPanel").style.display="none";
-  $("gepaMeta").textContent="実行中…"; curveReset(); resetFlow(); hideBridge();
+  $("gepaMeta").textContent="実行中…"; curveReset(); resetFlow(); hideBridge(); hideNav();
   setStatus("running","実行中"); startTimer();
   $("btnRun").disabled=true; $("btnOutline").disabled=true; $("btnCancel").style.display="inline-block";
   const r=await api("/api/run",p);
@@ -478,7 +500,7 @@ function attachRun(id){
   es.onerror=()=>{ /* 完了時に done で閉じる */ };
 }
 function finishRun(){
-  if(es){es.close();es=null;} currentRun=null; stopTimer();
+  if(es){es.close();es=null;} currentRun=null; stopTimer(); hideNav();
   $("btnRun").disabled=false; $("btnOutline").disabled=false; $("btnCancel").style.display="none";
 }
 
@@ -490,6 +512,7 @@ function handleEvent(e){
     case "stage": setStage(e.stage,e); break;
     case "outline": renderOutline({title:e.title,chapters:e.chapters}); break;
     case "log": $("stMeta").textContent=e.text; break;
+    case "progress": if(e.text) $("stText").textContent=e.text; break;
     case "gepa_candidate": upsertCand(e); break;
     case "gepa_select": markSelect(e); break;
     case "gepa_pareto": markPareto(e); break;
@@ -549,7 +572,8 @@ function onChapter(e){
     <div class="hd"><span class="chip tool">第${e.idx+1}章</span><b>${esc(e.title)}</b>
       ${sc}<span class="hint">${esc(e.connector)}</span>${e.ok?"":'<span class="chip bad">失敗</span>'}</div>
     <pre>${esc(e.preview||"")}</pre>${cites}</div>`;
-  if($("finalChapters").querySelector(".hint")) $("finalChapters").innerHTML="";
+  const ph=$("finalChapters").querySelector(":scope > .hint");  // 「実行すると…」の案内だけ消す
+  if(ph) ph.remove();
   $("finalChapters").insertAdjacentHTML("beforeend",html);
 }
 
@@ -562,8 +586,23 @@ function onFinal(e){
   refreshRuns();
 }
 
+/* ================= リサーチツールの選択（selenium） ================= */
+function showNav(e){
+  setStatus("waiting","リサーチツールの選択待ち");
+  $("navMsg").textContent=e.prompt||"";
+  $("navBox").classList.add("show");
+  $("navBox").scrollIntoView({behavior:"smooth",block:"center"});
+  toast("Edge でリサーチツールを開いて「準備完了」を押してください");
+}
+function hideNav(){ $("navBox").classList.remove("show"); }
+$("btnNavReady").onclick=async()=>{ hideNav(); setStatus("running","実行中");
+  await api("/api/bridge/respond",{run_id:currentRun,decision:"submit",text:"ready"}); };
+$("btnNavAbort").onclick=async()=>{ hideNav(); setStatus("running","中止しています");
+  await api("/api/bridge/respond",{run_id:currentRun,decision:"skip",text:""}); };
+
 /* ================= ブリッジ ================= */
 function showBridge(e){
+  if(e.meta&&e.meta.kind==="navigate"){ showNav(e); return; }
   setStatus("waiting","貼り付け待ち");
   $("bridge").classList.add("show");
   $("bridgeMeta").textContent=`章: ${e.meta&&e.meta.chapter?e.meta.chapter:""}`;
