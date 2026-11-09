@@ -1589,8 +1589,33 @@ function graphView() {
   return gview;
 }
 
+const GRAPH_VIEW_TEXT = {
+  entities: { subtitle: "取り込み時に文書から抽出したエンティティと関係", unit: "エンティティ", search: "エンティティを検索（Enter で移動）" },
+  folders: { subtitle: "フォルダを丸（大きさ＝エンティティの数）、共通のエンティティを線（太さ＝共通の度合い）にした全体図", unit: "フォルダ", search: "フォルダを検索（Enter で移動）" },
+  docs: { subtitle: "文書を丸（大きさ＝エンティティの数・色＝フォルダ）、共通のエンティティを線にした全体図", unit: "文書", search: "文書を検索（Enter で移動）" },
+};
+const COLOR_NAME = { community: "コミュニティ", type: "種別", folder: "フォルダ" };
+
+function graphViewMode() { return state.graphView || "entities"; }
+
+function syncGraphControls() {
+  const view = graphViewMode();
+  $$("#g-view [data-view]").forEach((b) => {
+    b.classList.toggle("on", b.dataset.view === view);
+    b.setAttribute("aria-checked", b.dataset.view === view ? "true" : "false");
+  });
+  $("#g-subtitle").textContent = GRAPH_VIEW_TEXT[view].subtitle;
+  $("#g-search").placeholder = GRAPH_VIEW_TEXT[view].search;
+  $("#g-doc").classList.toggle("hidden", view !== "entities");
+  const color = $("#g-color");
+  if (view !== "entities") { color.value = "folder"; color.disabled = true; } else { color.disabled = false; }
+  $("#g-isolated").closest("label").classList.toggle("hidden", view !== "entities");
+}
+
 async function loadGraph() {
   if (!state.docs.length) await loadDocs(true);
+  const view = graphViewMode();
+  syncGraphControls();
   const fsel = $("#g-folder");
   const fcur = fsel.value;
   fsel.innerHTML = '<option value="">すべてのフォルダ</option>' + state.folders.filter((f) => f.path)
@@ -1607,7 +1632,9 @@ async function loadGraph() {
   const gv = graphView();
   gv.resize();
   $("#g-hint").textContent = "読み込み中…";
-  const data = await api(`/api/graph?limit=${$("#g-limit").value}&doc=${encodeURIComponent(sel.value)}&folder=${encodeURIComponent(folder)}`);
+  const qs = new URLSearchParams({ limit: $("#g-limit").value, folder, view, depth: $("#g-depth").value,
+    doc: view === "entities" ? sel.value : "" });
+  const data = await api(`/api/graph?${qs}`);
   renderGraphDetail(null);
   if (data.error) {
     $("#g-hint").textContent = data.error;
@@ -1619,7 +1646,8 @@ async function loadGraph() {
   }
   gdata = data;
   gv.emptyMessage = "";
-  gv.setShowIsolated($("#g-isolated").checked);
+  gv.setColorMode(view === "entities" ? $("#g-color").value : "folder");
+  gv.setShowIsolated(view !== "entities" || $("#g-isolated").checked);
   gv.setData(data);
   updateGraphHint(); renderLegend();
 }
@@ -1627,30 +1655,95 @@ async function loadGraph() {
 function updateGraphHint() {
   if (!gdata) return;
   const st = graphView().stats();
-  let note = `エンティティ ${gdata.total_nodes} / 関係 ${gdata.total_edges} ・ 表示 ${st.shown} ノード`;
-  if (gdata.truncated) note += "（関係の多い順に上限まで）";
-  if (st.isolated && !$("#g-isolated").checked) note += ` ・ 孤立ノード ${st.isolated} 件は非表示`;
-  $("#g-hint").textContent = note + "。ホイールで拡大縮小、背景ドラッグで移動、クリックで詳細。";
+  const view = graphViewMode();
+  let note;
+  if (view === "entities") {
+    note = `エンティティ ${gdata.total_nodes} / 関係 ${gdata.total_edges} ・ 表示 ${st.shown} ノード`;
+    if (gdata.truncated) note += "（関係の多い順に上限まで）";
+    if (st.isolated && !$("#g-isolated").checked) note += ` ・ 孤立ノード ${st.isolated} 件は非表示`;
+    if ($("#g-color").value === "folder") note += " ・ 点線の輪は複数のフォルダに出てくるエンティティ";
+    note += "。ホイールで拡大縮小、背景ドラッグで移動、クリックで詳細。";
+  } else {
+    const unit = GRAPH_VIEW_TEXT[view].unit;
+    note = `${unit} ${gdata.total_nodes} ・ 共通のエンティティでつながる組 ${gdata.total_edges}（各${unit}の強い順に 8 本まで表示）`
+      + `${gdata.truncated ? `・エンティティの多い順に ${st.shown} 件` : ""}。`
+      + (view === "folders" ? "丸をクリックすると共通のエンティティ、「中を見る」でそのフォルダのエンティティのグラフへ。"
+        : "丸をクリックすると共通のエンティティ、「この文書のグラフ」でその文書のエンティティへ。");
+  }
+  $("#g-hint").textContent = note;
 }
 
 function renderLegend() {
   const items = graphView().legend();
-  const byType = $("#g-color").value === "type";
-  $("#g-legend").innerHTML = `<div class="muted">凡例（${byType ? "種別" : "コミュニティ"}）</div>`
+  const mode = graphViewMode() === "entities" ? $("#g-color").value : "folder";
+  $("#g-legend").innerHTML = `<div class="muted">凡例（${COLOR_NAME[mode] || mode}・クリックで強調）</div>`
     + items.map((it) => `<div class="legend-row" data-key="${esc(it.key)}">
       <span class="sw" style="background:${it.color}"></span>${esc(it.label.slice(0, 30))}<span class="cnt">${it.count}</span></div>`).join("");
-  if (!byType) $$("#g-legend [data-key]").forEach((el) =>
-    el.addEventListener("click", () => graphView().highlightCommunity(el.dataset.key)));
+  $$("#g-legend [data-key]").forEach((el) => el.addEventListener("click", () => {
+    if (mode === "community") graphView().highlightCommunity(el.dataset.key);
+    else graphView().highlightKey(el.dataset.key);
+  }));
+}
+
+function drillInto(view, folder, docId) {
+  state.graphView = view;
+  if (folder !== undefined) {
+    const fsel = $("#g-folder");
+    if (![...fsel.options].some((o) => o.value === folder)) {
+      fsel.insertAdjacentHTML("beforeend", `<option value="${esc(folder)}">📁 ${esc(folder)}</option>`);
+    }
+    fsel.value = folder;
+  }
+  loadGraph().then(() => { if (docId) { $("#g-doc").value = docId; loadGraph(); } });
 }
 
 function renderGraphDetail(node) {
   const box = $("#g-detail");
-  if (!node) { box.innerHTML = '<p class="hint">ノードをクリックすると、説明・関係・出典文書が表示されます。</p>'; return; }
+  if (!node) {
+    box.innerHTML = graphViewMode() === "entities"
+      ? '<p class="hint">ノードをクリックすると、説明・関係・出典文書が表示されます。</p>'
+      : `<p class="hint">${GRAPH_VIEW_TEXT[graphViewMode()].unit}をクリックすると、主なエンティティ・中の文書・つながる${GRAPH_VIEW_TEXT[graphViewMode()].unit}（共通のエンティティ）が表示されます。</p>`;
+    return;
+  }
   const rels = graphView().neighbors(node.id);
   const docs = (node.doc_ids || []).map((id, i) =>
     `<li><a href="#" data-doc="${esc(id)}">${esc((node.docs || [])[i] || id)}</a></li>`).join("");
+  if (node.kind === "folder" || node.kind === "doc") {
+    const isFolder = node.kind === "folder";
+    const unit = isFolder ? "フォルダ" : "文書";
+    box.innerHTML = `<div class="detail-title">${isFolder ? "📁" : "📄"} ${esc(node.name)}</div>
+      <div class="muted">${isFolder ? `文書 ${node.doc_count} 件 ・ ` : `📁 ${esc(node.folder || "")} ・ `}エンティティ ${node.size} ・ つながる${unit} ${rels.length}</div>
+      ${(node.entities || []).length ? `<div class="muted top-space">主なエンティティ</div><div class="ent-chips">${node.entities.map((e) => `<span class="chip">${esc(e)}</span>`).join("")}</div>` : ""}
+      ${isFolder && docs ? `<div class="muted top-space">文書${node.doc_count > 8 ? `（${node.doc_count} 件中 8 件）` : ""}</div><ul>${docs}</ul>` : ""}
+      <div class="row wrap gap-s top-space">
+        ${isFolder ? `<button class="btn small primary" id="g-into">中を見る（エンティティのグラフ）</button>
+          <button class="btn small" id="g-sub">中のフォルダの全体図</button>`
+          : `<button class="btn small primary" id="g-into">この文書のグラフ</button><button class="btn small" id="g-open">文書を開く</button>`}
+        <button class="btn small" id="g-ask">ここに質問</button>
+      </div>
+      <div class="muted top-space">つながる${unit}（共通のエンティティの多い順）</div>
+      ${rels.slice(0, 40).map((r) => `<div class="detail-rel" data-id="${esc(r.node.id)}">↔ <b>${esc(r.node.name)}</b>
+        <span class="muted">共通 ${r.edge.shared ?? ""} 件</span><br><span class="muted">${esc((r.edge.description || "").slice(0, 160))}</span></div>`).join("")
+        || `<p class="hint">共通のエンティティでつながる${unit}はありません。</p>`}`;
+    $$("[data-id]", box).forEach((el) => el.addEventListener("click", () => graphView().focus(el.dataset.id)));
+    $$("[data-doc]", box).forEach((el) => el.addEventListener("click", (ev) => { ev.preventDefault(); openDoc(el.dataset.doc); }));
+    $("#g-into").addEventListener("click", () => (isFolder ? drillInto("entities", node.key) : drillInto("entities", undefined, node.key)));
+    if (isFolder) {
+      $("#g-sub").addEventListener("click", () => { $("#g-depth").value = "1"; drillInto("folders", node.key); });
+    } else {
+      $("#g-open").addEventListener("click", () => openDoc(node.key));
+    }
+    $("#g-ask").addEventListener("click", async () => {
+      showTab("chat");
+      await newChat(isFolder ? { folders: [node.key] } : { doc_ids: [node.key] });
+      $("#q").focus();
+    });
+    return;
+  }
+  const folders = (node.folders || []).length ? `<div class="muted">📁 ${esc(node.folders.slice(0, 4).join("・"))}${node.folders.length > 4 ? ` ほか ${node.folders.length - 4}` : ""}</div>` : "";
   box.innerHTML = `<div class="detail-title">${esc(node.name)}</div>
     <div class="muted">${esc(node.type || "")}${node.community ? " ・ " + esc(node.community) : ""} ・ 関係 ${rels.length}</div>
+    ${folders}
     <p>${esc(node.description || "（説明なし）")}</p>
     ${docs ? `<div class="muted">出典文書</div><ul>${docs}</ul>` : ""}
     <button class="btn small" id="g-ask">このエンティティについて質問</button>
@@ -1668,14 +1761,20 @@ function renderGraphDetail(node) {
   });
 }
 
+$$("#g-view [data-view]").forEach((b) => b.addEventListener("click", () => {
+  if (graphViewMode() === b.dataset.view) return;
+  state.graphView = b.dataset.view;
+  loadGraph();
+}));
 $("#g-reload").addEventListener("click", loadGraph);
 $("#g-folder").addEventListener("change", () => { $("#g-doc").value = ""; loadGraph(); });
 $("#g-doc").addEventListener("change", loadGraph);
+$("#g-depth").addEventListener("change", loadGraph);
 $("#g-limit").addEventListener("change", loadGraph);
 $("#g-isolated").addEventListener("change", () => {
   graphView().setShowIsolated($("#g-isolated").checked); updateGraphHint(); renderLegend();
 });
-$("#g-color").addEventListener("change", () => { graphView().setColorMode($("#g-color").value); renderLegend(); });
+$("#g-color").addEventListener("change", () => { graphView().setColorMode($("#g-color").value); updateGraphHint(); renderLegend(); });
 $("#g-fit").addEventListener("click", () => graphView().fit());
 $("#g-zoom-in").addEventListener("click", () => graphView().zoomBy(1.3));
 $("#g-zoom-out").addEventListener("click", () => graphView().zoomBy(1 / 1.3));

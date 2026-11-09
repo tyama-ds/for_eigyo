@@ -333,7 +333,29 @@ def api_graph(qs: dict) -> dict:
         else:
             hint = "まだグラフがありません。文書を取り込むと、エンティティと関係が抽出されます"
         return {"error": hint, "nodes": [], "edges": [], "communities": []}
-    return g.to_payload(limit=limit)
+    view = (qs.get("view") or ["entities"])[0]
+    try:
+        depth = max(0, min(int((qs.get("depth") or ["0"])[0]), 5))
+    except ValueError:
+        depth = 0
+    by_id = {d["id"]: d for d in docs}
+    # 文書 → フォルダのまとまり（絞り込み中のフォルダから depth 階層下まで。0 はそのまま）
+    group_of = {d: graph.folder_group(by_id[d]["folder"], folder, depth) for d in allowed if d in by_id}
+    if view == "folders":
+        parent_of = {grp: graph.folder_group(grp, folder, 1) if grp != folder else folder
+                     for grp in set(group_of.values())}
+        color_of = {grp: graph.folder_label(parent) for grp, parent in parent_of.items()}
+        out = graph.group_payload(g, group_of, kind="folder", parent_of=parent_of, color_of=color_of, limit=limit)
+    elif view == "docs":
+        out = graph.group_payload(g, {d: d for d in group_of}, kind="doc",
+                                  names={d: by_id[d]["title"] for d in group_of},
+                                  color_of={d: graph.folder_label(grp) for d, grp in group_of.items()},
+                                  parent_of=group_of, limit=limit)
+    else:
+        out = g.to_payload(limit=limit, group_of=group_of)
+        out["view"] = "entities"
+    out.update(base_folder=folder, depth=depth)
+    return out
 
 
 # ---------------------------------------------------------------- HTTP

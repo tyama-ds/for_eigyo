@@ -383,6 +383,82 @@ class TestFeatures(unittest.TestCase):
                               "?api-version=2024-06-01")
         self.assertEqual(headers, {"api-key": "k"})
 
+    # ------------------------------------------------------------ グラフ: フォルダで色分け・フォルダ/文書の全体図
+    def test_50_graph_views_by_folder(self):
+        ent = self.api("/api/graph?view=entities&limit=300")
+        self.assertEqual(ent["view"], "entities")
+        self.assertTrue(all("folder" in n and n["folders"] for n in ent["nodes"]))
+        folders = self.api("/api/graph?view=folders")
+        self.assertEqual(folders["view"], "folders")
+        self.assertTrue(folders["nodes"])
+        node = folders["nodes"][0]
+        self.assertEqual(node["kind"], "folder")
+        self.assertEqual(node["id"], "g:" + node["key"])
+        self.assertTrue(node["size"] > 0 and node["doc_count"] > 0)
+        for e in folders["edges"]:
+            self.assertTrue(e["shared"] >= 1 and 1 <= e["strength"] <= 10)
+            self.assertIn("共通のエンティティ", e["description"])
+        docs = self.api("/api/graph?view=docs")
+        self.assertEqual({n["kind"] for n in docs["nodes"]}, {"doc"})
+        titles = {d["title"] for d in self.api("/api/docs")["docs"]}
+        self.assertTrue({n["name"] for n in docs["nodes"]} <= titles)
+
+
+class TestGraphGroups(unittest.TestCase):
+    """フォルダのまとめ方と、共通のエンティティでつなぐ全体図（ありふれたエンティティは軽く数える）。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        db.set_data_dir(Path(self.tmp.name))
+        for doc_id, folder in (("d1", "A"), ("d2", "A/x"), ("d3", "B"), ("d4", "B")):
+            db.write("INSERT INTO documents(id,title,filename,ext,sha256,folder,sensitivity,created_at,updated_at)"
+                     " VALUES(?,?,?,?,?,?,?,0,0)", (doc_id, f"文書{doc_id}", f"{doc_id}.md", ".md", doc_id, folder,
+                                                   "internal"))
+        ents = {"d1": ["共通社", "Y製品"], "d2": ["共通社", "Z設備"], "d3": ["共通社", "Y製品", "Z設備"],
+                "d4": ["共通社"]}
+        for doc_id, names in ents.items():
+            graph.save_extraction(doc_id, f"{doc_id}#0", graph._clean_extraction(
+                {"entities": [{"name": n} for n in names], "relations": []}))
+        self.g = graph.KnowledgeGraph(None, {d: "internal" for d in ents})
+        self.folder_of = {"d1": "A", "d2": "A/x", "d3": "B", "d4": "B"}
+
+    def tearDown(self):
+        db.close()
+        self.tmp.cleanup()
+
+    def test_folder_group(self):
+        self.assertEqual(graph.folder_group("社内/品質/2026", "", 0), "社内/品質/2026")
+        self.assertEqual(graph.folder_group("社内/品質/2026", "", 1), "社内")
+        self.assertEqual(graph.folder_group("社内/品質/2026", "社内", 1), "社内/品質")
+        self.assertEqual(graph.folder_group("社内", "社内", 1), "社内")
+        self.assertEqual(graph.folder_group("", "", 2), "")
+
+    def test_folder_overview_weights_rare_shared_entities(self):
+        out = graph.group_payload(self.g, self.folder_of, kind="folder")
+        keys = {n["key"] for n in out["nodes"]}
+        self.assertEqual(keys, {"A", "A/x", "B"})
+        edges = {tuple(sorted((e["source"], e["target"]))): e for e in out["edges"]}
+        ab, axb, a_ax = edges[("g:A", "g:B")], edges[("g:A/x", "g:B")], edges[("g:A", "g:A/x")]
+        self.assertEqual((ab["shared"], axb["shared"], a_ax["shared"]), (2, 2, 1))
+        # 3 フォルダすべてに出る「共通社」だけでつながる A–A/x は、固有の語も共有する組より弱い
+        self.assertLess(a_ax["strength"], ab["strength"])
+        self.assertIn("Y製品", ab["description"])
+        by_key = {n["key"]: n for n in out["nodes"]}
+        self.assertEqual(by_key["B"]["doc_count"], 2)
+        self.assertEqual(by_key["B"]["size"], 3)
+
+    def test_depth_merges_subfolders_and_entity_colors(self):
+        merged = {d: graph.folder_group(f, "", 1) for d, f in self.folder_of.items()}
+        out = graph.group_payload(self.g, merged, kind="folder")
+        self.assertEqual({n["key"] for n in out["nodes"]}, {"A", "B"})
+        payload = self.g.to_payload(group_of=self.folder_of)
+        common = next(n for n in payload["nodes"] if n["name"] == "共通社")
+        self.assertEqual(common["folder"], "B")                       # 出てくる文書が最も多いフォルダ
+        self.assertEqual(set(common["folders"]), {"A", "A/x", "B"})   # 複数のフォルダ → 画面で輪
+        docs = graph.group_payload(self.g, {d: d for d in self.folder_of}, kind="doc",
+                                   color_of={d: f for d, f in self.folder_of.items()})
+        self.assertEqual({n["folder"] for n in docs["nodes"]}, {"A", "A/x", "B"})
+
 
 class TestTerms(unittest.TestCase):
     def test_extract_terms(self):

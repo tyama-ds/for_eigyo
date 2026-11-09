@@ -213,6 +213,11 @@ details.adv summary { cursor: pointer; color: var(--muted); font-size: 12px; mar
 
 /* ---------------- graph（graphview.js） ---------------- */
 .graph-toolbar { margin: 8px 0 4px; align-items: center; }
+.seg-btns { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.seg-btns .seg { background: var(--bg2); color: var(--muted); border: 0; padding: 5px 12px; font-size: 13px; cursor: pointer; }
+.seg-btns .seg + .seg { border-left: 1px solid var(--border); }
+.seg-btns .seg.on { background: var(--accent); color: #0b1220; font-weight: 600; }
+.ent-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
 .graph-toolbar .check { display: inline-flex; gap: 4px; align-items: center; margin: 0; }
 .graph-wrap { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 12px; }
 .graph-canvas-box { min-width: 0; background: var(--bg2); border: 1px solid var(--border);

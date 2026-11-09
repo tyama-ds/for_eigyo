@@ -6,16 +6,19 @@
  *   - コミュニティごとに初期配置してから力学レイアウト（収束後に自動 fit）
  *   - ラベルは「次数上位 + ズームで大きく見えるノード + 選択/ホバー/検索ヒット」だけ描く
  *   - クリックで選択 → 隣接ノードを強調・他を減光、onSelect で詳細表示
- *   - 孤立ノード（関係なし）の表示切替、色分け（コミュニティ / 種別）
+ *   - 孤立ノード（関係なし）の表示切替、色分け（コミュニティ / 種別 / 任意の属性。例: フォルダ）
+ *     属性 X で色分けしたとき、ノードに X + "s"（例: folders）の配列が2件以上あれば外側に輪を描く
+ *     （複数のフォルダにまたがるエンティティが分かる）
  *   - HiDPI（devicePixelRatio）対応、コンテナ幅への追従
  *
  * 使い方:
  *   const gv = new GraphView(canvas, { tooltip, onSelect: (node|null) => {} });
  *   gv.setData({ nodes, edges, communities });
  *   gv.fit(); gv.zoomBy(1.2); gv.focus(id); gv.search("文字列"); gv.setColorMode("type");
- *   gv.setShowIsolated(true); gv.highlightCommunity(cid);
+ *   gv.setShowIsolated(true); gv.highlightCommunity(cid); gv.setColorMode("folder"); gv.highlightKey(key);
  *
- * nodes: [{id, name, type, degree, community, description, docs?}]
+ * nodes: [{id, name, type, degree, community, description, docs?, size?（大きさ。省略時は関係の数）,
+ *          folder?, folders?（色分けの属性の例）}]
  * edges: [{source, target, strength(1-10), description}]
  */
 "use strict";
@@ -87,22 +90,42 @@
     }
 
     setColorMode(mode) {
-      this.colorMode = mode === "type" ? "type" : "community";
+      this.colorMode = mode || "community";       // community / type / 任意の属性名（例: folder）
+      this.highlightCom = null;
       this._assignColors();
       this.draw();
     }
 
-    legend() {
-      /* 現在の色分けの凡例 [{label, color, count}]（多い順・上位12件） */
+    _groupKey(n, mode = this.colorMode) {
+      if (mode === "community") return n.community || "-";
+      if (mode === "type") return n.type || "その他";
+      return n[mode] || "（なし）";
+    }
+
+    _multiKeys(n) {
+      /* 色分けの属性 X に対して、ノードの X+"s"（例: folders）が2件以上あればその一覧 */
+      if (this.colorMode === "community" || this.colorMode === "type") return null;
+      const list = n[this.colorMode + "s"];
+      return Array.isArray(list) && list.length > 1 ? list : null;
+    }
+
+    _groupCounts() {
+      /* 色分けのグループごとのノード数。複数のグループに属するノード（例: 複数のフォルダに出てくる
+         エンティティ）は、属するすべてのグループに数える */
       const counts = new Map();
       for (const n of this.nodes) {
-        const key = this.colorMode === "type" ? (n.type || "その他") : (n.community || "-");
-        counts.set(key, (counts.get(key) || 0) + 1);
+        for (const key of this._multiKeys(n) || [this._groupKey(n)]) counts.set(key, (counts.get(key) || 0) + 1);
       }
+      return counts;
+    }
+
+    legend() {
+      /* 現在の色分けの凡例 [{label, color, count}]（多い順・上位12件） */
+      const counts = this._groupCounts();
       const titleOf = new Map(this.all.communities.map((c) => [c.id, c.title]));
       return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([k, c]) => ({
         key: k,
-        label: this.colorMode === "type" ? k : `${k}${titleOf.get(k) ? " " + titleOf.get(k) : ""}`,
+        label: this.colorMode === "community" ? `${k}${titleOf.get(k) ? " " + titleOf.get(k) : ""}` : k,
         color: this._colorFor(k), count: c,
       }));
     }
@@ -136,7 +159,8 @@
         return {
           ...n, x: old ? old.x : 0, y: old ? old.y : 0, vx: 0, vy: 0, fixed: false,
           deg: this._degree(n.id),
-          r: 4 + Math.min(14, Math.sqrt(this._degree(n.id) + (n.degree || 0)) * 2.2),
+          r: n.size ? 5 + Math.min(20, Math.sqrt(n.size) * 1.8)
+            : 4 + Math.min(14, Math.sqrt(this._degree(n.id) + (n.degree || 0)) * 2.2),
         };
       });
       this.byId = new Map(this.nodes.map((n) => [n.id, n]));
@@ -160,17 +184,15 @@
     _assignColors() {
       this._colorOf = new Map();
       // 大きいグループから順に色を割り当てる（上位が見分けやすい色になる）
-      const counts = new Map();
-      for (const n of this.nodes) {
-        const key = this.colorMode === "type" ? (n.type || "その他") : (n.community || "-");
-        counts.set(key, (counts.get(key) || 0) + 1);
-      }
+      const counts = this._groupCounts();
       [...counts.entries()].sort((a, b) => b[1] - a[1]).forEach(([k], i) => {
         this._colorOf.set(k, i < PALETTE.length ? PALETTE[i] : hashColor(k));
       });
       for (const n of this.nodes) {
-        const key = this.colorMode === "type" ? (n.type || "その他") : (n.community || "-");
-        n.color = this._colorOf.get(key) || GREY;
+        n.color = this._colorOf.get(this._groupKey(n)) || GREY;
+        const multi = this._multiKeys(n);
+        const other = multi ? multi.find((k) => this._colorOf.get(k) !== n.color) : null;
+        n.ring = multi ? (other ? this._colorOf.get(other) : "#ffffff") : null;
       }
     }
 
@@ -346,7 +368,7 @@
     }
 
     _publicNode(n) {
-      const { x, y, vx, vy, fixed, r, color, ...rest } = n;
+      const { x, y, vx, vy, fixed, r, color, ring, ...rest } = n;
       return rest;
     }
 
@@ -373,9 +395,20 @@
     }
 
     highlightCommunity(cid) {
+      this.highlightMode = "community";
+      this._highlight(cid);
+    }
+
+    highlightKey(key) {
+      /* 今の色分けのグループ（例: フォルダ）を強調する */
+      this.highlightMode = this.colorMode;
+      this._highlight(key);
+    }
+
+    _highlight(cid) {
       this.highlightCom = this.highlightCom === cid ? null : cid;
       if (this.highlightCom) {
-        const members = this.nodes.filter((n) => n.community === cid);
+        const members = this.nodes.filter((n) => this._groupKey(n, this.highlightMode) === cid);
         if (members.length) {
           this._userMoved = true;
           let sx = 0, sy = 0;
@@ -401,8 +434,9 @@
       const sel = this.selected;
       const focusSet = sel ? new Set([sel.id, ...(this.adj.get(sel.id) || [])]) : null;
       const comSet = this.highlightCom;
+      const inCom = (n) => this._groupKey(n, this.highlightMode || "community") === comSet;
       const dimmed = (n) => (focusSet && !focusSet.has(n.id))
-        || (comSet && n.community !== comSet)
+        || (comSet && !inCom(n))
         || (this.matches.size && !this.matches.has(n.id) && !(focusSet && focusSet.has(n.id)));
 
       ctx.setTransform(dpr * v.k, 0, 0, dpr * v.k, dpr * v.x, dpr * v.y);
@@ -421,6 +455,13 @@
         ctx.globalAlpha = dim ? 0.15 : 1;
         ctx.fillStyle = n.color;
         ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2); ctx.fill();
+        if (n.ring) {                                 // 複数のグループ（フォルダ）にまたがる
+          ctx.save();
+          ctx.strokeStyle = n.ring; ctx.lineWidth = 2.4 / v.k;
+          ctx.setLineDash([3 / v.k, 2 / v.k]);
+          ctx.beginPath(); ctx.arc(n.x, n.y, n.r + 3 / v.k, 0, Math.PI * 2); ctx.stroke();
+          ctx.restore();
+        }
         if (n === sel || n === this.hover || this.matches.has(n.id)) {
           ctx.strokeStyle = this.matches.has(n.id) && n !== sel ? "#facc15" : "#ffffff";
           ctx.lineWidth = 2.2 / v.k; ctx.stroke();
@@ -434,7 +475,7 @@
       const drawn = [];
       const want = (n) => n === sel || n === this.hover || this.matches.has(n.id)
         || (focusSet && focusSet.has(n.id))
-        || (comSet && n.community === comSet && n.r * v.k > 5)
+        || (comSet && inCom(n) && n.r * v.k > 5)
         || (!focusSet && !comSet && !this.matches.size
             && (this.topLabel.has(n.id) || n.r * v.k > 9 || v.k > 2.2));
       const order = [...this.nodes].sort((a, b) =>
@@ -544,7 +585,7 @@
       tip.style.left = `${x}px`;
       tip.style.top = `${ev.clientY + 14}px`;
       tip.innerHTML = `<b>${esc(n.name)}</b>（${esc(n.type || "")}）`
-        + `<span class="muted"> 関係 ${n.deg}${n.community ? " / " + esc(n.community) : ""}</span>`
+        + `<span class="muted"> ${esc(n.degLabel || "関係")} ${n.deg}${n.community ? " / " + esc(n.community) : ""}</span>`
         + (n.description ? `<br>${esc(String(n.description).slice(0, 240))}` : "")
         + `<br><span class="muted">クリックで詳細</span>`;
     }

@@ -144,9 +144,19 @@
   <section class="panel hidden" id="tab-graph">
     <div class="card">
       <div class="row space-between wrap gap">
-        <h2>ナレッジグラフ <span class="muted">取り込み時に文書から抽出したエンティティと関係</span></h2>
+        <h2>ナレッジグラフ <span class="muted" id="g-subtitle">取り込み時に文書から抽出したエンティティと関係</span></h2>
         <div class="row wrap gap-s">
+          <div class="seg-btns" id="g-view" role="radiogroup" aria-label="表示の単位">
+            <button class="seg on" data-view="entities" title="エンティティ（組織・製品・設備…）と関係">エンティティ</button>
+            <button class="seg" data-view="folders" title="フォルダを丸、共通のエンティティを線にした全体図">フォルダ</button>
+            <button class="seg" data-view="docs" title="文書を丸、共通のエンティティを線にした全体図">文書</button>
+          </div>
           <select id="g-folder" class="inline-select" title="対象フォルダ（配下を含む）"></select>
+          <select id="g-depth" class="inline-select" title="フォルダをどの階層でまとめるか（選んだフォルダから数えて）">
+            <option value="0">フォルダ: そのまま</option>
+            <option value="1">フォルダ: 1 階層目でまとめる</option>
+            <option value="2">フォルダ: 2 階層目でまとめる</option>
+          </select>
           <select id="g-doc" class="inline-select" title="対象文書"></select>
           <select id="g-limit" class="inline-select" title="表示する最大ノード数（関係の多い順）">
             <option value="150">上位150</option>
@@ -162,6 +172,7 @@
         <select id="g-color" class="inline-select">
           <option value="community">色: コミュニティ</option>
           <option value="type">色: 種別</option>
+          <option value="folder">色: フォルダ</option>
         </select>
         <span class="spacer"></span>
         <button class="btn small" id="g-zoom-in" title="拡大">＋</button>

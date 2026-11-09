@@ -363,8 +363,12 @@ class KnowledgeGraph:
             for (a, b), r in self.relations.items() if a in mset and b in mset)[:3500]
         return ent_lines[:4000], rel_lines or "（なし）"
 
-    def to_payload(self, *, limit: int = 300) -> dict:
-        """GUI のグラフ表示用（graphview.js の形式）。"""
+    def to_payload(self, *, limit: int = 300, group_of: dict[str, str] | None = None) -> dict:
+        """GUI のグラフ表示用（graphview.js の形式）。
+
+        group_of（文書 → フォルダ）を渡すと、各エンティティに folder（出てくる文書が最も多いフォルダ）と
+        folders（出てくるフォルダの一覧。2件以上なら画面で輪を描く）を付ける（フォルダで色分けする用）。
+        """
         coms = self.communities()
         com_of = {m: c["id"] for c in coms for m in c["members"]}
         deg = {k: len(self.adj.get(k, {})) for k in self.entities}
@@ -377,6 +381,12 @@ class KnowledgeGraph:
                   "docs": [titles.get(d, d) for d in sorted(self.entities[k]["docs"])][:8],
                   "doc_ids": sorted(self.entities[k]["docs"])[:8]}
                  for k in keep]
+        if group_of is not None:
+            for node in nodes:
+                counts = Counter(group_of.get(d, "") for d in self.entities[node["id"]]["docs"])
+                ranked = sorted(counts, key=lambda g: (-counts[g], g))
+                node["folder"] = folder_label(ranked[0]) if ranked else folder_label("")
+                node["folders"] = [folder_label(g) for g in ranked]
         edges = [{"source": a, "target": b, "strength": r["strength"],
                   "description": r["description"][:200]}
                  for (a, b), r in self.relations.items() if a in kset and b in kset]
@@ -394,6 +404,119 @@ class KnowledgeGraph:
         return {"nodes": nodes, "edges": edges, "communities": communities,
                 "total_nodes": len(self.entities), "total_edges": len(self.relations),
                 "truncated": len(self.entities) > limit}
+
+
+def folder_label(path: str) -> str:
+    return path or "（フォルダなし）"
+
+
+def folder_group(folder: str, base: str = "", depth: int = 0) -> str:
+    """文書のフォルダを、表示するまとまりにする。base（絞り込み中のフォルダ）から depth 階層下までで切る。
+
+    depth=0 はフォルダそのまま。例: folder="社内/品質/2026", base="社内", depth=1 → "社内/品質"
+    """
+    folder = (folder or "").strip("/")
+    if depth <= 0:
+        return folder
+    base = (base or "").strip("/")
+    if base and not (folder == base or folder.startswith(base + "/")):
+        return folder
+    rest = folder[len(base):].strip("/") if base else folder
+    parts = [x for x in rest.split("/") if x][:depth]
+    return "/".join([base] + parts if base else parts) if parts else base
+
+
+def group_payload(g: KnowledgeGraph, group_of: dict[str, str], *, kind: str, names: dict[str, str] | None = None,
+                  color_of: dict[str, str] | None = None, parent_of: dict[str, str] | None = None,
+                  limit: int = 300, max_edges_per_node: int = 8) -> dict:
+    """フォルダ（または文書）を丸、共通のエンティティを線にした全体図（graphview.js の形式）。
+
+    group_of: 文書 → まとまり（フォルダのパス、または文書 ID）。color_of: まとまり → 色分けの名前
+    （フォルダの全体図は1つ上の階層、文書の全体図は文書のフォルダ）。線の強さは共通のエンティティの
+    IDF の和（多くのまとまりに出てくるありふれたエンティティほど軽く数える）。線は各丸の強い順に
+    max_edges_per_node 本まで（毛玉にならないように）。
+    """
+    names = names or {}
+    color_of = color_of or {}
+    parent_of = parent_of or {}
+    members: dict[str, set[str]] = defaultdict(set)      # まとまり → エンティティ
+    docs_of: dict[str, set[str]] = defaultdict(set)
+    for doc_id, grp in group_of.items():
+        docs_of[grp].add(doc_id)
+    for key, ent in g.entities.items():
+        for d in ent["docs"]:
+            if d in group_of:
+                members[group_of[d]].add(key)
+    groups = sorted(docs_of, key=lambda x: (-len(members.get(x, ())), x))
+    truncated = len(groups) > limit
+    groups = groups[:limit]
+    gset = set(groups)
+    df: Counter = Counter()
+    for grp in groups:
+        for key in members.get(grp, ()):
+            df[key] += 1
+    n_groups = max(1, len(groups))
+    idf = {key: math.log(1 + n_groups / c) for key, c in df.items()}
+    inverted: dict[str, list[str]] = defaultdict(list)
+    for grp in groups:
+        for key in members.get(grp, ()):
+            inverted[key].append(grp)
+    cap = max(20, n_groups // 2)                          # ほぼ全部に出る語は線の計算から外す（速さのため）
+    pair_score: dict[tuple[str, str], float] = defaultdict(float)
+    pair_shared: dict[tuple[str, str], list[str]] = defaultdict(list)
+    for key, grps in inverted.items():
+        if len(grps) < 2 or len(grps) > cap:
+            continue
+        grps = sorted(grps)
+        for i, a in enumerate(grps):
+            for b in grps[i + 1:]:
+                pair_score[(a, b)] += idf[key]
+                pair_shared[(a, b)].append(key)
+    best: dict[str, list[tuple[float, tuple[str, str]]]] = defaultdict(list)
+    for pair, score in pair_score.items():
+        best[pair[0]].append((score, pair))
+        best[pair[1]].append((score, pair))
+    keep_pairs: set[tuple[str, str]] = set()
+    for grp, lst in best.items():
+        for _, pair in sorted(lst, key=lambda t: (-t[0], t[1]))[:max_edges_per_node]:
+            keep_pairs.add(pair)
+    top = max((pair_score[p] for p in keep_pairs), default=1.0) or 1.0
+    titles = {d["id"]: d["title"] for d in db.list_docs()}
+    deg = Counter()
+    edges = []
+    for a, b in sorted(keep_pairs, key=lambda p: -pair_score[p]):
+        shared = sorted(pair_shared[(a, b)], key=lambda k: (-idf[k], k))
+        deg[a] += 1
+        deg[b] += 1
+        edges.append({"source": f"g:{a}", "target": f"g:{b}",
+                      "strength": max(1, min(10, round(1 + 9 * pair_score[(a, b)] / top))),
+                      "shared": len(shared),
+                      "description": f"共通のエンティティ {len(shared)} 件: "
+                                     + "・".join(g.entities[k]["name"] for k in shared[:8])
+                                     + ("…" if len(shared) > 8 else "")})
+    unit = "フォルダ" if kind == "folder" else "文書"
+    nodes = []
+    for grp in groups:
+        ents = members.get(grp, set())
+        # そのまとまりで目立つエンティティ: そこでの出現が多く、ほかのまとまりに少ないもの
+        local = Counter()
+        for key in ents:
+            local[key] = sum(1 for d in g.entities[key]["docs"] if group_of.get(d) == grp)
+        main = sorted(ents, key=lambda k: (-(local[k] * idf.get(k, 0)), k))[:8]
+        doc_ids = sorted(docs_of[grp], key=lambda d: titles.get(d, d))
+        label = names.get(grp) or (folder_label(grp) if kind == "folder" else titles.get(grp, grp))
+        nodes.append({
+            "id": f"g:{grp}", "key": grp, "kind": kind, "name": label, "type": unit,
+            "size": len(ents), "degree": deg[grp], "degLabel": f"つながる{unit}",
+            "community": parent_of.get(grp, ""), "folder": color_of.get(grp) or folder_label(grp),
+            "description": (f"文書 {len(doc_ids)} 件・エンティティ {len(ents)} 件。"
+                            + ("主なエンティティ: " + "・".join(g.entities[k]["name"] for k in main) if main
+                               else "グラフのある文書がありません")),
+            "entities": [g.entities[k]["name"] for k in main],
+            "docs": [titles.get(d, d) for d in doc_ids][:8], "doc_ids": doc_ids[:8], "doc_count": len(doc_ids),
+        })
+    return {"view": "folders" if kind == "folder" else "docs", "nodes": nodes, "edges": edges, "communities": [],
+            "total_nodes": len(docs_of), "total_edges": len(pair_score), "truncated": truncated}
 
 
 def label_propagation(nodes: list[str], adj: dict[str, dict[str, float]],
