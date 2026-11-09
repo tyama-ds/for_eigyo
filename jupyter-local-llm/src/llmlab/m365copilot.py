@@ -10,10 +10,10 @@ Microsoft 365 Copilot の「Researcher（リサーチ）」エージェントに
                「比較」「最新」等を含むほど濃い回答を返すので、擬似GEPAの改善曲線を体験できる。
 - ``bridge`` : 人手ブリッジ。各章の完成プロンプトを UI に表示 → 人が M365 Copilot に貼り付け、
                返ってきた回答を貼り戻す。自動化/API が塞がれた社内環境でも確実に動く既定手段。
-- ``selenium`` : **ユーザースクリプト原文の実行**。同梱の ``m365_user_script.py``
-               （実運用で動作確認済みのスクリプトそのもの）を章ごとに 1 回呼ぶだけ。
-               セレクタ変更はそのファイルを直接編集。設定は ``driver_path`` と
-               ``total_timeout_sec`` のみ。失敗時はブラウザを開いたままにする（目視確認用）。
+- ``selenium`` : 同梱の ``m365_user_script.py``（実運用で動作確認済みのスクリプト）で
+               リサーチツールを操作。壊れやすい「リサーチツールを選ぶ」1 ステップだけは
+               アプリ画面で人に確認/代行してもらい（bridge と同じ仕組み）、残りは自動。
+               章は同じチャットで続けて調べる。失敗時はブラウザを開いたままにする。
 - ``graph``  : 任意の HTTP エンドポイント（Microsoft Graph / 社内 Copilot プロキシ等）へ
                Bearer トークンで POST する汎用コネクタ。要求/応答の JSON パスは設定可能。
 
@@ -199,34 +199,46 @@ class BridgeConnector(BaseConnector):
 
 
 # ---------------------------------------------------------------------------
-# selenium — ユーザースクリプト原文（m365_user_script.py）をそのまま実行
+# selenium — ユーザースクリプト（m365_user_script.py）でリサーチツールを操作
 # ---------------------------------------------------------------------------
 
 class SeleniumConnector(BaseConnector):
-    r"""ユーザー実証済みスクリプトを **原文のまま** 実行するコネクタ（薄いラッパー）。
+    r"""ユーザー実証済みスクリプト（``m365_user_script.py``）で Researcher を操作するコネクタ。
 
-    Selenium 操作は同梱の ``m365_user_script.py`` に原文どおり収めてあり、本クラスは
-    それを章ごとに 1 回呼ぶだけ（ログイン→Researcher→送信→「長い」→go ahead→
-    完了待ち→コピー→quit）。**セレクタや XPath を変えたいときは m365_user_script.py を
-    直接編集**する（それがスクリプト原文そのもの）。
+    「リサーチツールを選ぶ」ステップだけは壊れやすい（原文の絶対 XPath は「エージェント
+    一覧の 1 番目」を押すため、並びが変わると別のエージェントを開く）。そこで既定では
+    その 1 ステップを **アプリ画面（bridge と同じ仕組み）で人に確認/代行してもらい**、
+    残り（送信→長さ選択→go ahead→完了待ち→コピー）は自動で行う。章は **同じチャット**
+    で続けて調べるので、人の操作は 1 回の実行につき最初の 1 回だけ。
 
     options:
+      agent_select      : "assist"（既定。自動クリック後に人が確認）/ "manual"（人が選ぶ）/
+                          "auto"（原文どおり自動のみ）
+      researcher_url    : リサーチツールを開いた状態の URL（任意。指定するとメニューを辿らず開く）
+      session_mode      : "same_chat"（既定。同じチャットで章を続ける）/
+                          "per_chapter"（章ごとに Edge を開き直す）
       driver_path       : msedgedriver の場所（既定 C:\Driver\edgedriver_win32\msedgedriver.exe。
                           環境変数 EDGEDRIVER_PATH / MSEDGEDRIVER_PATH でも指定可）
       total_timeout_sec : 生成待ちの上限秒（既定 None=無制限・スクリプト準拠）
 
-    失敗した章のブラウザは **開いたまま** にする（スクリプトと同じ挙動。どの画面で
-    止まったか目視で確認できる）。不要になったら手で閉じる。
-    アプリ側の追加はプロンプト改行の 1 行化と、エラーを結果として返すことのみ。
+    セレクタや XPath を変えたいときは ``m365_user_script.py`` 上部の定数を直接編集する。
+    失敗した章のブラウザは **開いたまま** にする（どの画面で止まったか目視で確認できる）。
     """
 
     kind = "selenium"
-    label = "Selenium（ユーザースクリプト実行・Edge）"
+    label = "Selenium（リサーチツール・Edge）"
 
     DEFAULTS = {
+        "agent_select": "assist",
+        "researcher_url": "",
+        "session_mode": "same_chat",
         "driver_path": r"C:\Driver\edgedriver_win32\msedgedriver.exe",
         "total_timeout_sec": None,
     }
+
+    def __init__(self, options: dict | None = None):
+        super().__init__(options)
+        self._session = None  # same_chat のとき run の間だけ使い回す
 
     def _opt(self, key):
         return self.options.get(key, self.DEFAULTS.get(key))
@@ -240,6 +252,13 @@ class SeleniumConnector(BaseConnector):
         return (os.environ.get("EDGEDRIVER_PATH") or os.environ.get("MSEDGEDRIVER_PATH")
                 or str(self.DEFAULTS["driver_path"]))
 
+    def _total_timeout(self) -> float | None:
+        raw = self._opt("total_timeout_sec")
+        try:
+            return float(raw) if raw not in (None, "", 0, "0") else None
+        except (TypeError, ValueError):
+            return None
+
     def test(self) -> tuple[bool, str]:
         try:
             import selenium  # noqa: F401
@@ -252,8 +271,10 @@ class SeleniumConnector(BaseConnector):
             return False, f"driver_path が見つかりません: {dp}"
         clip = "pyperclip 検出" if _has_pyperclip() else \
             "pyperclip 無し（`pip install pyperclip` 推奨）"
+        how = {"assist": "自動で開いた後にあなたが確認", "manual": "あなたが選ぶ",
+               "auto": "自動のみ"}.get(str(self._opt("agent_select")), "")
         return True, (f"selenium 利用可（Edge / driver={dp} / {clip}）。"
-                      "操作はユーザースクリプト原文（m365_user_script.py）を実行します。")
+                      f"リサーチツールの選択: {how}")
 
     def research(self, prompt, *, meta=None, emit=None, ask_bridge=None,
                  should_cancel=None) -> ChapterResult:
@@ -263,21 +284,43 @@ class SeleniumConnector(BaseConnector):
 
         from . import m365_user_script
 
+        meta = meta or {}
         # 入力欄では Enter=送信のため、章プロンプトは 1 行へ潰して送る（アプリ側の必要調整）
         research_prompt = " ".join(s.strip() for s in str(prompt).splitlines() if s.strip())
-        raw = self._opt("total_timeout_sec")
-        try:
-            total = float(raw) if raw not in (None, "", 0, "0") else None
-        except (TypeError, ValueError):
-            total = None
+        same_chat = str(self._opt("session_mode")) != "per_chapter"
+
+        def ask_human(message: str) -> bool:
+            # アプリ画面（bridge と同じ仕組み）に案内を出し「準備完了」を待つ
+            if ask_bridge is not None:
+                resp = ask_bridge(message, {"kind": "navigate",
+                                            "chapter": meta.get("chapter", "")})
+                return resp.get("decision") == "submit"
+            try:  # ノートブック等から直接呼んだ場合はコンソールで確認
+                input(message + "\n準備ができたら Enter（中止は Ctrl+C）: ")
+                return True
+            except (EOFError, KeyboardInterrupt):
+                return False
+
+        def log(text: str) -> None:
+            self._emit(emit, type="progress", stage="selenium", text=text)
+
+        session = self._session if same_chat else None
+        if session is None:
+            session = m365_user_script.ResearcherSession(
+                driver_path=self._driver_path(), total_timeout_sec=self._total_timeout(),
+                agent_select=str(self._opt("agent_select")),
+                researcher_url=str(self._opt("researcher_url") or ""),
+                ask_human=ask_human, log=log)
+            if same_chat:
+                self._session = session
+        else:  # 章ごとに emit / ask_bridge を最新のものへ
+            session.ask_human, session.log = ask_human, log
 
         t0 = time.time()
         try:
-            self._emit(emit, type="progress", stage="se_run",
-                       text="ユーザースクリプトを実行（Edge起動→Researcher→送信→完了待ち→コピー）")
-            text = (m365_user_script.run_research(
-                research_prompt, driver_path=self._driver_path(),
-                total_timeout_sec=total) or "").strip()
+            text = (session.research(research_prompt) or "").strip()
+            if not same_chat:
+                session.close()
             return ChapterResult(
                 text=text, citations=extract_citations(text), connector=self.kind,
                 latency_sec=time.time() - t0, ok=bool(text),
@@ -286,7 +329,9 @@ class SeleniumConnector(BaseConnector):
         except Exception as e:  # noqa: BLE001  失敗は UI に返す（アプリは落とさない）
             import traceback
 
-            # スクリプト内のどの行で失敗したかを添える（ブラウザは開いたまま＝目視確認可）
+            # 失敗したブラウザは開いたまま残す（目視確認用）。次の章は新しく開き直す。
+            if same_chat:
+                self._session = None
             loc = next((ln.strip() for ln in reversed(traceback.format_exc().splitlines())
                         if "m365_user_script" in ln), "")
             where = f"／失敗箇所: {loc}" if loc else ""
@@ -294,6 +339,12 @@ class SeleniumConnector(BaseConnector):
                 ok=False, connector=self.kind, latency_sec=time.time() - t0,
                 error=f"{type(e).__name__}: {e}{where}"
                       "（ブラウザは開いたままです。画面でどこまで進んだか確認できます）")
+
+    def close(self) -> None:
+        """run 終了時にオーケストレータから呼ばれる。同じチャットで使った Edge を閉じる。"""
+        if self._session is not None:
+            self._session.close()
+            self._session = None
 
 
 # ---------------------------------------------------------------------------
