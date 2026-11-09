@@ -93,7 +93,7 @@ class MycelApp:
             self.library = Library(self)
             self.graphrag = GraphRAG(self)
             self.index.relations = self.relations
-            self.ai = AIService(self.index, self.config)
+            self.ai = AIService(self.index, self.config, app=self)
             self.plugins.load(cfg["plugins"], PluginContext(self))
             self.plugins.emit("on_vault_opened")
         # 初回の読込（インデックスが空のときだけ）。以降の読み込みは利用者の「更新」で行う
@@ -790,6 +790,9 @@ class MycelApp:
     # ------------------------------------------------------------ 画像（VLM）
     def caption_image(self, path: str) -> dict:
         return IMG.caption(self, path)
+
+    def describe_image(self, path: str, instruction: str = "") -> dict:
+        return IMG.describe(self, path, instruction)
 
     def caption_images(self, prefixes=None, only_missing: bool = True) -> dict:
         prefixes = self._prefixes(prefixes)

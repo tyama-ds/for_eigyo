@@ -152,6 +152,7 @@ GET_ROUTES = {
     "/api/people": lambda app, p: {"entities": app.people.list(_str(p, "type"), _str(p, "q")),
                                    "status": app.people.status(), "ignored": app.people.ignored()},
     "/api/people/entity": lambda app, p: app.people.detail(_str(p, "type"), _str(p, "key")),
+    "/api/people/filters": lambda app, p: app.people.filters(),
     "/api/library": lambda app, p: {**app.library.list(_str(p, "q"), _str(p, "tag"), _str(p, "year"), _str(p, "status"),
                                                         _str(p, "author"), _str(p, "type"), _str(p, "sort", "added")),
                                     "embed": app.library.embed_status(), "llm": chat_configured(app.config()),
@@ -194,7 +195,8 @@ GET_ROUTES = {
     "/api/ingest": lambda app, p: app.ingest.list(),
     "/api/folder": lambda app, p: app.folder_view(_str(p, "path")),
     "/api/relations/suggest": lambda app, p: {"suggestions": app.ai.suggest_related(
-        app._path(_str(p, "path")), use_llm=_str(p, "llm", "1") != "0")},
+        app._path(_str(p, "path")), k=max(1, min(40, int(_str(p, "k", "8") or 8))),
+        use_llm=_str(p, "llm", "0") == "1", kind=_str(p, "kind"))},
 }
 
 POST_ROUTES = {
@@ -233,6 +235,8 @@ POST_ROUTES = {
     "/api/library/ask_doc": lambda app, b: app.library.ask_doc(_str(b, "id"), _str(b, "question"), _list(b, "history"),
                                                                 app.resolve_backend(_str(b, "backend") or None)),
     "/api/image/caption": lambda app, b: app.caption_image(_str(b, "path")),
+    "/api/image/describe": lambda app, b: app.describe_image(_str(b, "path"), _str(b, "instruction")),
+    "/api/people/filter": lambda app, b: app.people.filter_set(_str(b, "action"), _str(b, "kind"), _str(b, "value")),
     "/api/image/caption_all": lambda app, b: app.caption_images(_list(b, "prefixes"), b.get("only_missing", True) is not False),
     "/api/vault/switch": lambda app, b: app.vault_switch(_str(b, "path"), bool(b.get("create")), bool(b.get("seed"))),
     "/api/library/ai_batch": lambda app, b: app.library_ai_batch(_list(b, "ids") or [], _str(b, "what", "meta")),

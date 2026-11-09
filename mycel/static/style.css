@@ -284,6 +284,13 @@ canvas.graph.big{height:100%;border:0;border-radius:0}
 @media (max-width:900px){.split{grid-template-columns:1fr;grid-template-rows:1fr 1fr}.split .editor{border-right:0;border-bottom:1px solid var(--line)}}
 .doctext{white-space:pre-wrap;word-break:break-word;font-family:var(--mono);font-size:12.5px;line-height:1.6;background:transparent;border:0;padding:0}
 .btn.xs{padding:0 7px;font-size:11px;line-height:18px}
+.btn.on{border-color:var(--accent);color:var(--accent)}
+.phead .btn.xs{text-transform:none;letter-spacing:0}
+.lnk{color:var(--link);cursor:pointer;text-decoration:underline dotted}
+.md img.emb.clickable{cursor:pointer}.md img.emb.clickable:hover{outline:2px solid var(--accent);outline-offset:2px}
+.notice.row{display:flex;align-items:center;gap:8px}
+.etable td.rowacts{white-space:nowrap}.etable .rx{border:0;background:transparent;color:var(--muted);cursor:pointer;padding:0 4px;font-size:13px}.etable .rx:hover{color:var(--ink)}
+.md blockquote .capmark{color:var(--muted)}
 
 /* ステータスバーの読み込み状況 */
 .status .stindex{margin-right:auto;display:flex;align-items:center;gap:6px;min-width:0}
@@ -426,6 +433,18 @@ canvas.graph.big{height:100%;border:0;border-radius:0}
 .card.rel .rx:hover{background:var(--surface2);color:var(--danger)}
 .card.gone b{color:var(--muted);text-decoration:line-through}
 .relbtns{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0 8px}
+.sugbar{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:4px 0 8px}
+.seg.xs button{padding:1px 8px;font-size:11px}
+.sugall{font-size:11.5px;color:var(--muted);display:flex;align-items:center;gap:4px;cursor:pointer}
+.card.sug{position:relative;padding-left:30px;cursor:pointer}
+.card.sug .sugck{position:absolute;left:9px;top:10px;margin:0}
+.card.sug.dim{opacity:.6}
+.card.sug b{display:flex;align-items:center;gap:8px}
+.card.sug b .pm.sm{flex:0 0 46px;height:6px;border-radius:3px;background:var(--surface2);position:relative;overflow:hidden;margin-left:auto}
+.card.sug b .pm.sm u{position:absolute;left:0;top:0;bottom:0;background:var(--accent);opacity:.6;text-decoration:none}
+.card.sug .why{font-size:11.5px}
+.card.sug .why.ai{color:var(--ink)}
+.sugfoot{margin-top:2px}
 .proplist{max-height:56vh;overflow:auto}
 .prow{display:grid;grid-template-columns:auto minmax(0,1fr) 90px minmax(0,1fr);align-items:center;gap:8px;padding:5px 4px;border-bottom:1px solid var(--line);font-size:12.5px;cursor:pointer}
 .prow .pa{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

@@ -65,9 +65,88 @@ class People:
         items = [n for n in self.index.notes() if n["status"] == "ok"]
         ai = sum(1 for n in items if done.get(n["path"], ("", ""))[1] == "llm" and done[n["path"]][0] == _fp(n))
         m = self.store.model()
+        f = self._filter()
+        shown = [tk for tk, e in m["ents"].items() if not self._is_hidden(tk, e, f)]
         return {"documents": len(items), "ai_extracted": ai,
-                "people": sum(1 for (t, _) in m["ents"] if t == P), "orgs": sum(1 for (t, _) in m["ents"] if t == O),
+                "people": sum(1 for (t, _) in shown if t == P), "orgs": sum(1 for (t, _) in shown if t == O),
+                "hidden": len(m["ents"]) - len(shown), "filters": len(f["rules"]),
                 "llm": chat_configured(self.app.config())}
+
+    # ------------------------------------------------------------ 一時的な非表示（会社・文書・フォルダ・個別）
+    def _filter(self) -> dict:
+        rules = self.store.filter_list()
+        f = {"rules": rules, "ents": set(), "orgs": set(), "paths": set(), "folders": set()}
+        for r in rules:
+            if r["kind"] == "ent":
+                t, _, k = r["value"].partition(":")
+                f["ents"].add((t, k))
+            elif r["kind"] == "org":
+                f["orgs"].add(r["value"])
+            elif r["kind"] == "path":
+                f["paths"].add(r["value"])
+            elif r["kind"] == "folder":
+                f["folders"].add(r["value"].strip("/"))
+        return f
+
+    @staticmethod
+    def _path_hidden(path: str, f: dict) -> bool:
+        if path in f["paths"]:
+            return True
+        return any(path == d or path.startswith(d + "/") or path.startswith("@" + d + "/") for d in f["folders"])
+
+    def _is_hidden(self, tk: tuple, e: dict, f: dict) -> bool:
+        """個別に隠した／会社ごと隠した／登場する文書が全部隠れている、のどれかなら非表示。"""
+        if not f["rules"]:
+            return False
+        if tk in f["ents"]:
+            return True
+        if f["orgs"] and (tk[0] == O and tk[1] in f["orgs"] or tk[0] == P and any(o in f["orgs"] for o in e["orgs"])):
+            return True
+        if (f["paths"] or f["folders"]) and e["paths"] and all(self._path_hidden(p, f) for p in e["paths"]):
+            return True
+        return False
+
+    def filters(self) -> dict:
+        """非表示の規則を、画面に出す名前つきで返す。"""
+        self.sync()
+        m = self.store.model()
+        out = []
+        for r in self.store.filter_list():
+            k, v = r["kind"], r["value"]
+            if k == "ent":
+                t, _, key = v.partition(":")
+                e = m["ents"].get((t, key))
+                label, sub = (e["display"] if e else key), KIND_LABEL.get(t, t)
+            elif k == "org":
+                label, sub = self._org_name(v), "会社ごと（所属する人も）"
+            elif k == "path":
+                it = self.index.get(v)
+                label, sub = (it["title"] if it else v), "文書"
+            else:
+                label, sub = v or "（Vault 直下）", "フォルダ"
+            out.append({"kind": k, "value": v, "label": label, "sub": sub})
+        st = self.status()
+        return {"filters": out, "hidden": st["hidden"]}
+
+    def filter_set(self, action: str, kind: str = "", value: str = "") -> dict:
+        if action == "clear":
+            self.store.filter_clear()
+        elif action == "remove":
+            self.store.filter_remove(kind, value)
+        elif action == "add":
+            if kind == "path":
+                value = self.app._path(value)
+            elif kind == "folder":
+                value = (value or "").replace("\\", "/").strip().strip("/")
+            elif kind == "ent" and ":" not in value:
+                raise VaultError("人物・組織の指定が不正です")
+            try:
+                self.store.filter_add(kind, value)
+            except ValueError as e:
+                raise VaultError(str(e))
+        else:
+            raise VaultError("操作が不正です")
+        return self.filters()
 
     # ------------------------------------------------------------ 抽出（AI・手動）
     def extract_ai(self, prefixes: list[str] | None, job=None) -> dict:
@@ -146,14 +225,17 @@ class People:
         self.sync()
         q = (q or "").strip().lower()
         out = []
+        f = self._filter()
         for (t, k), e in self.store.model()["ents"].items():
             if kind and t != kind:
+                continue
+            if self._is_hidden((t, k), e, f):
                 continue
             if q and q not in e["display"].lower() and not any(q in x for x in e["keys"]):
                 continue
             org = e["orgs"].most_common(1)[0][0] if e["orgs"] else ""
             out.append({"type": t, "key": k, "name": e["display"], "docs": len(e["paths"]),
-                        "org": self._org_name(org) if org else "",
+                        "org": self._org_name(org) if org else "", "org_key": org,
                         "title": e["titles"].most_common(1)[0][0] if e["titles"] else "",
                         "role": e["roles"].most_common(1)[0][0] if e["roles"] else ""})
         out.sort(key=lambda x: (-x["docs"], x["name"]))
@@ -164,9 +246,10 @@ class People:
         self.sync()
         m = self.store.model()
         out = []
+        f = self._filter()
         for (t, k) in sorted(m["path_ents"].get(path, set())):
             e = m["ents"].get((t, k))
-            if not e:
+            if not e or self._is_hidden((t, k), e, f):
                 continue
             rows = e["paths"].get(path, [])
             roles = sorted({r["role"] for r in rows if r["role"]})
@@ -181,10 +264,11 @@ class People:
     def detail(self, kind: str, key: str, related: bool = True) -> dict:
         e = self._ent(kind, key)
         m = self.store.model()
+        f = self._filter()
         apps = []
         for path, rows in e["paths"].items():
             it = self.index.get(path)
-            if not it:
+            if not it or self._path_hidden(path, f):
                 continue
             ctx = [r["context"] for r in rows if r["context"]]
             apps.append({"path": path, "title": it["title"], "kind": it["kind"], "grp": it["grp"],
@@ -198,7 +282,7 @@ class People:
         co: Counter = Counter()
         for p in paths:
             for tk in m["path_ents"].get(p, ()):
-                if tk != (kind, key):
+                if tk != (kind, key) and not self._is_hidden(tk, m["ents"][tk], f):
                     co[tk] += 1
         def ent_row(tk, n):
             f = m["ents"].get(tk)
@@ -209,7 +293,8 @@ class People:
                "titles": [{"name": t, "count": n} for t, n in e["titles"].most_common(5)],
                "roles": [{"name": r, "count": n} for r, n in e["roles"].most_common(8)],
                "appearances": apps, "co_people": co_people, "co_orgs": co_orgs,
-               "aliases": self._aliases(kind, key, e), "note": self._note_for(kind, key)}
+               "aliases": self._aliases(kind, key, e), "note": self._note_for(kind, key),
+               "hidden": self._is_hidden((kind, key), e, f), "hidden_docs": len(e["paths"]) - len(apps)}
         if kind == P:
             explicit = [{"key": k, "name": self._org_name(k), "count": n} for k, n in e["orgs"].most_common(5)]
             ex_keys = {x["key"] for x in explicit}
@@ -220,9 +305,9 @@ class People:
             out["ambiguous"] = len(explicit) > 1
         else:
             members = Counter()
-            for (t, k2), f in m["ents"].items():
-                if t == P and key in f["orgs"]:
-                    members[k2] += f["orgs"][key]
+            for (t, k2), f2 in m["ents"].items():
+                if t == P and key in f2["orgs"] and not self._is_hidden((t, k2), f2, f):
+                    members[k2] += f2["orgs"][key]
             out["members"] = [ent_row((P, k2), n) for k2, n in members.most_common(20)]
         out["related"] = self._related(out, paths) if related and apps else []
         return out
@@ -326,8 +411,9 @@ class People:
         m = self.store.model()
         nodes, edges = {}, []
         min_docs = 1 if center else 2
+        f = self._filter()
         for (t, k), e in m["ents"].items():
-            if len(e["paths"]) < min_docs:
+            if len(e["paths"]) < min_docs or self._is_hidden((t, k), e, f):
                 continue
             nid = f"~{t[0]}:{k}"
             nodes[nid] = (e["display"], t, "")

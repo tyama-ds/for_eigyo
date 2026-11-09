@@ -90,7 +90,11 @@ class OrganizeTest(unittest.TestCase):
     def test_suggest_and_propose(self):
         a = "資料/見積/A社 見積.docx"
         sug = self.app.ai.suggest_related(a)
-        self.assertIn("資料/見積/A社 見積 改訂.docx", [s["path"] for s in sug])       # 内容がほぼ同じ
+        self.assertEqual(sug[0]["path"], "資料/見積/A社 見積 改訂.docx")             # 内容がほぼ同じ → 先頭
+        self.assertGreater(sug[0]["score"], 0.8)
+        self.assertTrue(sug[0]["keywords"] and sug[0]["why"].startswith("共通の語"))  # 理由は LLM 無しでも語で出る
+        self.assertNotIn("メモ.md", [s["path"] for s in sug])                           # リンク済み（バックリンク）は候補から外す
+        self.assertEqual([s["path"] for s in self.app.ai.suggest_related(a, kind="note")], [])
         props = self.app.ai.propose_relations("資料")
         pair = next(p for p in props if {p["a"], p["b"]} == {a, "資料/見積/A社 見積 改訂.docx"})
         self.assertGreater(pair["score"], 0.8)
@@ -99,9 +103,13 @@ class OrganizeTest(unittest.TestCase):
         self.assertFalse(any({p["a"], p["b"]} == {pair["a"], pair["b"]} for p in self.app.ai.propose_relations("資料")))
         # LLM があれば候補を選ばせて理由を付ける
         self.app.update_config({"base_url": self.llm_url + "/v1", "model": "mock"})
-        sug = self.app.ai.suggest_related("資料/B社 提案.pptx")
+        self.app.unrelate(pair["a"], pair["b"])
+        sug = self.app.ai.suggest_related(a, use_llm=True)
         self.assertTrue(sug)
         self.assertEqual(sug[0]["reason"], "同じ顧客の案件")
+        self.assertTrue(all(c.get("llm_skipped") for c in sug[1:]))                      # LLM が選ばなかったものは印つきで後ろに
+        # つながりの無い文書（リンクでしかつながっていない）には候補が出ない
+        self.assertEqual(self.app.ai.suggest_related("資料/B社 提案.pptx"), [])
 
     def test_move_doc_updates_links_relations_and_index(self):
         a = "資料/見積/A社 見積.docx"

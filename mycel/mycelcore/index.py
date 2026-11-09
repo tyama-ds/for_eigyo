@@ -703,6 +703,78 @@ class Index:
                 break
         return out
 
+    # ------------------------------------------------------------ 文書単位の類似（つながりの候補）
+    def doc_profile(self, path: str, top: int = 48) -> dict[str, float]:
+        """文書全体の主題語（バイグラム）と重み（tf×idf、文書頻度ベース）。先頭だけでなく全文を見る。"""
+        with self._lock:
+            n_docs = self.conn.execute("SELECT count(DISTINCT path) FROM chunks").fetchone()[0] or 0
+            if not n_docs:
+                return {}
+            rows = self.conn.execute(
+                "SELECT t.term, sum(t.tf) tf FROM terms t JOIN chunks c ON c.id=t.chunk_id WHERE c.path=? GROUP BY t.term",
+                (path,)).fetchall()
+            tfs = {r["term"]: r["tf"] for r in rows}
+            if not tfs:
+                return {}
+            terms = list(tfs)
+            dfs: dict[str, int] = {}
+            for i in range(0, len(terms), 400):
+                part = terms[i:i + 400]
+                for r in self.conn.execute(
+                        f"SELECT t.term, count(DISTINCT c.path) d FROM terms t JOIN chunks c ON c.id=t.chunk_id "
+                        f"WHERE t.term IN ({','.join('?' * len(part))}) GROUP BY t.term", part):
+                    dfs[r["term"]] = r["d"]
+        # どこにでも出る語（文書の 3 割超）と、1 文字だけの語は主題にならない
+        # 小さな Vault では 3 割だと「初期費用」のような結ぶ語まで落ちるので、少なくとも 6 文書までは許す
+        limit_df = max(6, int(n_docs * 0.3)) if n_docs >= 6 else n_docs
+        w = {}
+        for t, tf in tfs.items():
+            d = dfs.get(t, 1)
+            if (d > limit_df and n_docs >= 6) or len(t) < 2:
+                continue
+            idf = math.log(1 + (n_docs - d + 0.5) / (d + 0.5))
+            w[t] = (1 + math.log(tf)) * idf
+        top_terms = sorted(w, key=lambda t: -w[t])[:top]
+        return {t: w[t] for t in top_terms}
+
+    def similar_docs(self, path: str, k: int = 20, prefixes: list[str] | None = None,
+                     exclude_prefixes: list[str] | None = None) -> list[dict]:
+        """主題語の重なりで、文書同士の近さを測る（0〜1。自分自身が 1）。共通する語も返す。"""
+        prof = self.doc_profile(path)
+        if not prof:
+            return []
+        terms = list(prof)
+        with self._lock:
+            rows = self.conn.execute(
+                f"SELECT c.path, t.term, max(t.tf) tf FROM terms t JOIN chunks c ON c.id=t.chunk_id "
+                f"WHERE t.term IN ({','.join('?' * len(terms))}) GROUP BY c.path, t.term", terms).fetchall()
+        self_norm = math.sqrt(sum(v * v for v in prof.values())) or 1.0
+        acc: dict[str, dict[str, float]] = {}
+        for r in rows:
+            p = r["path"]
+            if p == path:
+                continue
+            if prefixes is not None and not any(self._under(p, x) for x in prefixes):
+                continue
+            if exclude_prefixes and any(p == x or p.startswith(x + "/") for x in exclude_prefixes):
+                continue
+            acc.setdefault(p, {})[r["term"]] = prof[r["term"]] * (1 + math.log(r["tf"]))
+        out = []
+        for p, hit in acc.items():
+            # 対象側は「主題語のうち相手にも出る分」の重みで測る（長い文書が有利になりすぎないよう tf は対数）
+            dot = sum(prof[t] * min(hit[t] / prof[t], 2.0) for t in hit)
+            score = dot / (self_norm * math.sqrt(sum(min(hit[t] / prof[t], 2.0) ** 2 * prof[t] ** 2 for t in hit) or 1.0))
+            cover = sum(prof[t] for t in hit) / (sum(prof.values()) or 1.0)   # 主題語のどれだけを共有するか
+            s = round(min(1.0, 0.5 * score + 0.5 * math.sqrt(cover)), 4)
+            shared = sorted(hit, key=lambda t: -prof[t])
+            out.append({"path": p, "score": s, "shared": shared[:24]})
+        out.sort(key=lambda x: -x["score"])
+        return out[:k]
+
+    def tags_of(self, path: str) -> list[str]:
+        with self._lock:
+            return [r["tag"] for r in self.conn.execute("SELECT tag FROM tags WHERE path=? ORDER BY tag", (path,))]
+
     def chunk_refs(self) -> list[dict]:
         with self._lock:
             return [dict(r) for r in self.conn.execute("SELECT id, path, hash FROM chunks")]

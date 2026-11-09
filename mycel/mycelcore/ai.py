@@ -13,6 +13,7 @@ import json
 import math
 import re
 import threading
+from collections import Counter
 
 from . import links as L
 from .config import chat_configured, embed_configured
@@ -26,9 +27,10 @@ def cosine(a: list[float], b: list[float]) -> float:
 
 
 class AIService:
-    def __init__(self, index, get_config):
+    def __init__(self, index, get_config, app=None):
         self.index = index
         self.get_config = get_config
+        self.app = app                      # 人物・組織など、索引の外の手がかりに使う（無くても動く）
         self._lock = threading.Lock()
         self._vec_model = ""
         self._vecs: dict[str, list[float]] | None = None      # 埋め込みのメモリキャッシュ
@@ -282,24 +284,157 @@ class AIService:
         _, body, _ = L.split_frontmatter(item["text"] or "")
         return f"{item['title']}\n{body[:1500]}"
 
-    def suggest_related(self, path: str, k: int = 6, use_llm: bool = True) -> list[dict]:
-        """この資料（ノート）とつながりそうなノート・資料。既につながっているものは除く。"""
+    # ------------------------------------------------------------ つながりの候補（文書単位）
+    @staticmethod
+    def _keywords(text: str, shared: list[str], limit: int = 6) -> list[str]:
+        """共通するバイグラムを、元の文中でつながっている範囲にまとめて読める語にする（「倉庫」「庫自」→「倉庫自動化」）。"""
+        if not shared:
+            return []
+        sset = set(shared)
+        words: Counter = Counter()
+        for seg in re.split(r"[\s\u3000、。，．,.!?！？「」『』（）()\[\]【】:：;；/／|｜\-–—…・'\"]+", text):
+            if not seg:
+                continue
+            sl = seg.lower()                      # 照合は小文字、表示は元の表記
+            if sl.isascii():
+                if sl in sset:
+                    words[seg] += 1
+                continue
+            i = 0
+            while i < len(sl) - 1:
+                if sl[i:i + 2] in sset:
+                    j = i + 2
+                    while j < len(sl) and sl[j - 1:j + 1] in sset:
+                        j += 1
+                    words[seg[i:j]] += 1
+                    i = j
+                else:
+                    i += 1
+        # 前後の助詞・送り仮名を落とし（「ムの」「と保守」→「保守」）、長い語を優先しつつ、他の語に含まれる語は省く
+        picked: list[str] = []
+        cleaned: Counter = Counter()
+        for w, n in words.items():
+            w = re.sub(r"^[のとはがをにでもやへ]+|[のとはがをにでもやへ]+$", "", w) if not w.isascii() else w
+            if len(w) >= 2 and not re.fullmatch(r"[\u3041-\u309f]+", w):
+                cleaned[w] += n
+        for w, _ in sorted(cleaned.items(), key=lambda x: (-len(x[0]), -x[1])):
+            if any(w in p for p in picked):
+                continue
+            picked.append(w)
+            if len(picked) >= limit:
+                break
+        return picked
+
+    def _doc_vectors(self, model: str) -> dict[str, list[float]]:
+        """文書ごとの埋め込み（チャンクの平均。API は呼ばない）。"""
+        vecs = self._vectors(model)
+        if not vecs:
+            return {}
+        acc: dict[str, list[float]] = {}
+        cnt: Counter = Counter()
+        for ref in self.index.chunk_refs():
+            v = vecs.get(ref["hash"])
+            if v is None:
+                continue
+            a = acc.get(ref["path"])
+            if a is None:
+                acc[ref["path"]] = list(v)
+            else:
+                for i, x in enumerate(v):
+                    a[i] += x
+            cnt[ref["path"]] += 1
+        for p, a in acc.items():
+            n = cnt[p]
+            norm = math.sqrt(sum((x / n) ** 2 for x in a)) or 1.0
+            acc[p] = [x / n / norm for x in a]
+        return acc
+
+    def _entities_of(self, path: str) -> dict[tuple, str]:
+        if self.app is None or not hasattr(self.app, "people"):
+            return {}
+        try:
+            return {(e["type"], e["key"]): e["name"] for e in self.app.people.of(path)}
+        except Exception:  # noqa: BLE001 - 手がかりが取れなくても候補は出す
+            return {}
+
+    def suggest_related(self, path: str, k: int = 8, use_llm: bool = False, kind: str = "") -> list[dict]:
+        """この資料（ノート）とつながりそうなノート・資料。既につながっている・リンク済みのものは除く。
+
+        近さは文書全体の主題語の重なり（全文）を基本に、埋め込みがあれば文書ベクトルの近さを合わせ、
+        同じ人物・組織／同じタグ／同じリンク先／同じフォルダを加点する。理由は語で説明する（LLM は任意）。"""
         item = self.index.get(path)
         if not item or item["status"] != "ok":
             return []
         rel = self.index.relations
         skip = {path} | ({r["path"] for r in rel.for_path(path)} if rel else set())
         skip |= {o["path"] for o in self.index.outgoing(path) if o["path"]}
-        hits = self.retrieve(self._subject(item), k=k * 4, exclude=skip)
+        skip |= {b["path"] for b in self.index.backlinks(path) if b.get("path")}
+        tpl = self._template_prefix()
+        pool = max(k * 5, 40)
+        kw = {h["path"]: h for h in self.index.similar_docs(path, k=pool, exclude_prefixes=tpl)}
+        cfg = self.get_config()
+        vec_sims: dict[str, float] = {}
+        if embed_configured(cfg):
+            dv = self._doc_vectors(cfg["embed_model"])
+            me = dv.get(path)
+            if me:
+                sims = sorted(((sum(a * b for a, b in zip(me, v)), p) for p, v in dv.items() if p != path), reverse=True)
+                vec_sims = {p: s for s, p in sims[:pool]}
+        my_ents = self._entities_of(path)
+        my_tags = set(self.index.tags_of(path))
+        my_out = {o["path"] for o in self.index.outgoing(path) if o["path"]}
+        my_folder = item.get("folder", "")
+        text = item.get("text") or ""
         cands: dict[str, dict] = {}
-        for h in hits:
-            if h["path"] not in cands:
-                it = self.index.get(h["path"]) or {}
-                cands[h["path"]] = {"path": h["path"], "title": h["title"], "kind": h.get("kind", "note"),
-                                    "grp": it.get("grp", ""), "snippet": h["text"][:160].replace("\n", " "),
-                                    "score": h["score"], "reason": ""}
-        cands_l = list(cands.values())[:max(k + 2, 8)]
-        return (self.pick_related(self._subject(item), cands_l) if use_llm else cands_l)[:k]
+        for p in set(kw) | set(vec_sims):
+            if p in skip:
+                continue
+            it = self.index.get(p)
+            if not it or it["status"] != "ok" or (kind and it["kind"] != kind):
+                continue
+            if any(p == t or p.startswith(t + "/") for t in tpl):
+                continue
+            h = kw.get(p)
+            kws = self._keywords(text, h["shared"]) if h else []
+            s_kw = h["score"] if h else 0.0
+            s_vec = max(0.0, vec_sims.get(p, 0.0))
+            base = max(s_kw, 0.6 * s_kw + 0.4 * s_vec) if vec_sims else s_kw
+            if vec_sims and not h:
+                base = 0.7 * s_vec
+            why = []
+            if kws:
+                why.append("共通の語: " + "・".join(kws[:5]))
+            bonus = 0.0
+            ents = self._entities_of(p) if my_ents else {}
+            shared_e = [my_ents[e] for e in my_ents if e in ents]
+            if shared_e:
+                bonus += min(0.3, 0.12 * len(shared_e)); why.append("同じ人物・組織: " + "・".join(shared_e[:3]))
+            shared_t = sorted(my_tags & set(self.index.tags_of(p))) if my_tags else []
+            if shared_t:
+                bonus += min(0.2, 0.1 * len(shared_t)); why.append("同じタグ: " + "・".join("#" + t for t in shared_t[:3]))
+            if my_out:
+                co = my_out & {o["path"] for o in self.index.outgoing(p) if o["path"]}
+                if co:
+                    bonus += min(0.15, 0.08 * len(co)); why.append(f"同じリンク先 {len(co)} 件")
+            if my_folder and it.get("folder") == my_folder:
+                bonus += 0.04
+            if s_vec >= 0.75 and (not h or s_kw < 0.3):
+                why.append("意味が近い（埋め込み）")
+            score = round(min(1.0, base + bonus), 3)
+            if score < 0.08:
+                continue
+            _, body, _ = L.split_frontmatter(it.get("text") or "")
+            cands[p] = {"path": p, "title": it["title"], "kind": it["kind"], "grp": it.get("grp", ""),
+                        "snippet": body[:160].replace("\n", " "), "score": score, "reason": "",
+                        "why": " ／ ".join(why), "keywords": kws[:6], "entities": shared_e[:3], "tags": shared_t[:3],
+                        "vector": round(s_vec, 3) if vec_sims else None}
+        out = sorted(cands.values(), key=lambda c: -c["score"])[:k]
+        if use_llm and out:
+            judged = self.pick_related(self._subject(item), out)
+            byp = {c["path"]: c for c in judged}
+            # LLM が選んだものを先に、理由を付けて。選ばれなかったものも（薄い候補として）後ろに残す
+            out = [byp[c["path"]] for c in out if c["path"] in byp] + [{**c, "llm_skipped": True} for c in out if c["path"] not in byp]
+        return out
 
     def propose_relations(self, prefix: str, per_item: int = 2, limit: int = 300,
                           min_ratio: float = 0.3) -> list[dict]:
@@ -310,22 +445,11 @@ class AIService:
                 and self.index._under(n["path"], prefix)][:limit]
         seen: set[frozenset] = set()
         out = []
+        tpl = self._template_prefix()
         for d in docs:
-            item = self.index.get(d["path"])
-            q = self._subject(item)[:800]
-            hits = self.index.search_chunks(q, 40)
-            chunks = self.index.get_chunks([cid for cid, _ in hits])
-            best: dict[str, float] = {}
-            for cid, sc in hits:
-                c = chunks.get(cid)
-                if c and sc > best.get(c["path"], 0):
-                    best[c["path"]] = sc
-            base = best.get(d["path"]) or max(best.values(), default=0)
-            if not base:
-                continue
-            ranked = sorted(((p, sc / base) for p, sc in best.items() if p != d["path"]), key=lambda x: -x[1])
             n = 0
-            for p, ratio in ranked:
+            for h in self.index.similar_docs(d["path"], k=12, exclude_prefixes=tpl):
+                p, ratio = h["path"], h["score"]
                 other = self.index.get(p)
                 if not other or other["kind"] != "doc" or ratio < min_ratio:
                     continue
@@ -335,7 +459,8 @@ class AIService:
                 seen.add(pair)
                 out.append({"a": d["path"], "a_title": d["title"], "a_grp": d["grp"],
                             "b": p, "b_title": other["title"], "b_grp": other["grp"],
-                            "score": round(min(ratio, 1.0), 3)})
+                            "score": round(min(ratio, 1.0), 3),
+                            "keywords": self._keywords(self.index.get(d["path"]).get("text") or "", h["shared"], 4)})
                 n += 1
                 if n >= per_item:
                     break
