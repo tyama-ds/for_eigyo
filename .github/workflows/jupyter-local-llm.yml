@@ -24,6 +24,12 @@ jobs:
       - name: Install
         run: |
           pip install -e ".[dev]" playwright pytest
+      - name: Make llama_index NLTK cache private
+        # ランナーの site-packages は他アカウントから書き込める権限で入るため、
+        # NLTK 3.10 以降が llama_index 同梱の stopwords を「改ざんの恐れあり」として読まない。
+        # 同梱キャッシュを所有者だけ書き込める権限にする。
+        run: |
+          chmod -R go-w "$(python -c 'import llama_index.core, os; print(os.path.join(os.path.dirname(llama_index.core.__file__), "_static"))')"
       - name: Ruff
         run: ruff check src/llmlab tests tests_e2e
       - name: Compileall
