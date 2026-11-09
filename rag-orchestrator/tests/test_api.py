@@ -204,6 +204,50 @@ class TestAPIFlow(unittest.TestCase):
         self.assertTrue(graphrag["index"]["built"])
         self.assertTrue(graphrag["index"]["stale"])
 
+    def test_09_graphrag_modes(self):
+        # 構築方式を「超高速（LLM なし）」にすると、構築時に LLM を呼ばず、方式が一覧・結果・統合レポートに出る
+        import mock_llm
+        cfg = self.api("/api/config", {"graphrag_extract": "terms", "graphrag_summaries": "lazy"})
+        self.assertEqual(cfg["graphrag_extract"], "terms")
+        data = self.api("/api/engines")
+        self.assertGreater(data["corpus_chunks"], 0)
+        graphrag = next(e for e in data["engines"] if e["id"] == "graphrag")
+        self.assertEqual(graphrag["graph"]["extract"], "terms")
+        self.assertEqual(graphrag["graph"]["variant"]["kind"], "terms")
+        self.assertEqual(graphrag["index"]["variant"]["kind"], "standard")   # 既存は標準で構築済み
+
+        before = len(mock_llm.REQUESTS)
+        job = self.wait_job(self.api("/api/ingest", {"engines": ["graphrag"]})["job_id"])
+        entry = job["engines"]["graphrag"]
+        self.assertEqual(entry["status"], "done", entry.get("error"))
+        self.assertEqual(entry["variant"]["kind"], "terms")
+        self.assertEqual(entry["result"]["stats"]["llm_calls"], 0)
+        self.assertFalse(any("/chat/completions" in r["path"] for r in mock_llm.REQUESTS[before:]))
+        graphrag = next(e for e in self.api("/api/engines")["engines"] if e["id"] == "graphrag")
+        self.assertEqual(graphrag["index"]["variant"]["kind"], "terms")
+
+        # global の質問: 関連の高いコミュニティだけ質問時に要約し、保存して2回目は再利用する
+        q = {"question": "資料全体の要点をまとめてください", "engines": ["graphrag", "bm25"], "mode": "global"}
+        first = self.wait_job(self.api("/api/query", q)["job_id"])["engines"]["graphrag"]
+        self.assertEqual(first["status"], "done", first.get("error"))
+        self.assertEqual(first["variant"]["kind"], "terms")
+        self.assertEqual(first["result"]["variant"]["kind"], "terms")
+        made = first["result"]["stats"]["lazy_summarized"]
+        self.assertGreater(made, 0)
+        stored = store.load_index("graphrag")
+        self.assertEqual(sum(c["summary_source"] == "llm" for c in stored["communities"]), made)
+        second = self.wait_job(self.api("/api/query", q)["job_id"])
+        self.assertEqual(second["engines"]["graphrag"]["result"]["stats"]["lazy_reused"], made)
+        prompts = [m.get("content", "") for r in mock_llm.REQUESTS if r["path"].endswith("/chat/completions")
+                   for m in r["body"].get("messages", [])]
+        synth = [p for p in prompts if "[TASK:synthesis]" in p]
+        self.assertTrue(synth)
+        self.assertIn("GraphRAG（組み込み）・語の共起（LLM なし）", synth[-1])
+        graph = self.api("/api/graph?engine=graphrag")
+        self.assertEqual(graph["variant"]["kind"], "terms")
+        self.assertIn("llm", {c["summary_source"] for c in graph["communities"]})
+        self.api("/api/config", {"graphrag_extract": "standard", "graphrag_summaries": "ingest"})
+
     def test_08_validation_errors(self):
         for path, body in (("/api/ingest", {"engines": []}),
                            ("/api/ingest", {"engines": ["unknown-engine"]}),

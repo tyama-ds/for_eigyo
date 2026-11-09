@@ -11,6 +11,7 @@ cloud プロファイルへ internal データを送ろうとすると PolicyErr
 """
 from __future__ import annotations
 
+import http.client
 import json
 import re
 import socket
@@ -29,11 +30,35 @@ _THINK_BLOCK_RE = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL | 
 
 
 class LLMError(RuntimeError):
-    """接続・API エラー。UI にそのまま表示できる日本語メッセージを持つ。"""
+    """接続・API エラー。UI にそのまま表示できる日本語メッセージを持つ。
+
+    kind（取り込みでやり直すかの判断に使う）:
+      transient … タイムアウト・接続断・HTTP 5xx / 429 など、待てば通る見込みがある
+      config    … 認証・モデル名・URL の誤り・ポリシー違反など、設定を直さない限り通らない
+      request   … その依頼だけの問題（文脈長の超過など HTTP 400 系）。次のチャンクは通る見込みがある
+      other     … それ以外
+    """
+
+    def __init__(self, message: str = "", *, kind: str = "other", status: int | None = None):
+        super().__init__(message)
+        self.kind = kind
+        self.status = status
 
 
 class PolicyError(LLMError):
     """データ区分ポリシー違反（社外秘データをクラウドへ送ろうとした）。"""
+
+    def __init__(self, message: str = ""):
+        super().__init__(message, kind="config")
+
+
+TRANSIENT_STATUS = {408, 409, 425, 429, 500, 502, 503, 504, 520, 522, 524, 529}
+
+
+def connection_error(e: Exception, during: str = "") -> LLMError:
+    """接続・受信の失敗（タイムアウト・切断）を「やり直せる」エラーにする。"""
+    what = "タイムアウト" if isinstance(e, (socket.timeout, TimeoutError)) or "timed out" in str(e) else str(e)
+    return LLMError(f"LLM に接続できません{during}: {what}", kind="transient")
 
 
 def no_think_model(model: str) -> bool:
@@ -169,7 +194,8 @@ class LLM:
         """回答テキスト（think 除去済み）を返す。prompt は文字列か messages 配列。"""
         self.guard(profile, sensitivity)
         if not self.ready(profile):
-            raise LLMError(f"{_label(profile)} LLM が未設定です（設定タブで接続先とモデルを登録してください）")
+            raise LLMError(f"{_label(profile)} LLM が未設定です（設定タブで接続先とモデルを登録してください）",
+                           kind="config")
         messages = _as_messages(prompt)
         started = time.time()
         p = self._prof(profile)
@@ -187,7 +213,8 @@ class LLM:
         """回答をトークン（断片）単位で返すジェネレータ。think は除去される。"""
         self.guard(profile, sensitivity)
         if not self.ready(profile):
-            raise LLMError(f"{_label(profile)} LLM が未設定です（設定タブで接続先とモデルを登録してください）")
+            raise LLMError(f"{_label(profile)} LLM が未設定です（設定タブで接続先とモデルを登録してください）",
+                           kind="config")
         messages = _as_messages(prompt)
         p = self._prof(profile)
         started = time.time()
@@ -211,7 +238,7 @@ class LLM:
 
     def chat_json(self, profile: str, prompt: str, *, sensitivity: str, system: str = "",
                   max_tokens: int | None = None, purpose: str = "ingest",
-                  temperature: float | None = None, on_progress=None):
+                  temperature: float | None = None, on_progress=None, timeout: float | None = None):
         """JSON を書かせる呼び出し。(解析結果 or None, 情報) を返す（rag-orchestrator の chat_json と同じ考え方）。
 
         ローカル LLM は JSON を書き終えても説明を続けたり、同じ行を繰り返したり、考え続けたりして、
@@ -220,12 +247,15 @@ class LLM:
           - Qwen3 系には /no_think を付けて思考を止める
           - 上限で切れた JSON からは、書けた要素までを取り出す
         Claude（公式 SDK）は JSON を閉じて止まるので、通常の呼び出しのまま。
+        受信の途中で切れた・止まったとき（タイムアウト）は、書けた分から JSON を取り出せればそれを使い、
+        取り出せなければ「やり直せる」LLMError（kind=transient）にする。timeout は1回の待ち時間の上書き。
         """
-        from .textutil import extract_json, find_repetition, json_end, salvage_json
+        from .textutil import extract_json, salvage_json
 
         self.guard(profile, sensitivity)
         if not self.ready(profile):
-            raise LLMError(f"{_label(profile)} LLM が未設定です（設定タブで接続先とモデルを登録してください）")
+            raise LLMError(f"{_label(profile)} LLM が未設定です（設定タブで接続先とモデルを登録してください）",
+                           kind="config")
         p = self._prof(profile)
         model = p.get("model") or ""
         if purpose == "ingest" and p.get("ingest_model") and p["provider"] != "azure":
@@ -246,8 +276,9 @@ class LLM:
                 payload["temperature"] = temperature
             payload["stream"] = True
             content = ""
+            interrupted = ""
             try:
-                res = self._request(p, url, payload, headers)
+                res = self._request(p, url, payload, headers, timeout=timeout)
             except urllib.error.HTTPError as e:
                 err = _http_error(e)
                 if "stream" not in str(err).lower():
@@ -261,50 +292,16 @@ class LLM:
                 reasoning = str(msg.get("reasoning_content") or msg.get("reasoning") or "")
                 finish = ch.get("finish_reason") or "stop"
             except (urllib.error.URLError, socket.timeout, OSError) as e:
-                raise LLMError(f"LLM に接続できません: {e}") from e
+                raise connection_error(e) from e
             if res is not None:
-                with res:
-                    ctype = res.headers.get("Content-Type", "")
-                    if "event-stream" not in ctype and "ndjson" not in ctype:
-                        data = json.loads(res.read().decode("utf-8", errors="replace") or "{}")
-                        ch = (data.get("choices") or [{}])[0]
-                        msg = ch.get("message") or {}
-                        content = msg.get("content") or ""
-                        reasoning = str(msg.get("reasoning_content") or msg.get("reasoning") or "")
-                        finish = ch.get("finish_reason") or "stop"
-                    else:
-                        checked, last_note = 0, 0.0
-                        for raw in res:
-                            line = raw.decode("utf-8", errors="replace").strip()
-                            if not line.startswith("data:"):
-                                continue
-                            body = line[5:].strip()
-                            if body == "[DONE]":
-                                break
-                            try:
-                                ch = (json.loads(body).get("choices") or [{}])[0]
-                            except ValueError:
-                                continue
-                            delta = ch.get("delta") or {}
-                            content += delta.get("content") or ""
-                            reasoning += str(delta.get("reasoning_content") or delta.get("reasoning") or "")
-                            if ch.get("finish_reason"):
-                                finish = ch["finish_reason"]
-                            size = len(content) + len(reasoning)
-                            if size - checked >= 64:              # 64 字ごとに打ち切りを判定
-                                checked = size
-                                visible = strip_think(content)
-                                if json_end(visible) is not None:
-                                    finish = "json_complete"
-                                    break
-                                if find_repetition(visible) or find_repetition(reasoning) \
-                                        or find_repetition(content[:len(content) - len(visible)] if visible
-                                                           else content):
-                                    finish = "repetition"
-                                    break
-                            if on_progress and time.time() - last_note >= 1.0:
-                                last_note = time.time()
-                                on_progress(size, time.time() - started)
+                got = {"content": "", "reasoning": "", "finish": "stop"}
+                try:
+                    with res:
+                        _collect_json_stream(res, got, started, on_progress)
+                except (socket.timeout, OSError, http.client.HTTPException, ValueError) as e:
+                    interrupted = str(connection_error(e, "（受信の途中）"))
+                    got["finish"] = "interrupted"
+                content, reasoning, finish = got["content"], got["reasoning"], got["finish"]
             text = strip_think(content)
             think_chars = len(reasoning) + max(0, len(content) - len(text))   # 思考欄＋本文中の <think>
             self._count(profile, len(prompt) + len(system), text, started)
@@ -317,7 +314,11 @@ class LLM:
                 "seconds": round(time.time() - started, 1), "salvaged": salvaged, "max_tokens": limit,
                 "reason": "", "text": text[:4000]}
         if data is None:
+            if interrupted:                      # 途中で切れて何も取り出せない → 待ってやり直せる
+                raise LLMError(f"{interrupted}（{len(content):,} 字受信した所で切れました）", kind="transient")
             info["reason"] = json_failure_reason(info, text)
+        elif interrupted:
+            info["salvaged"] = True
         return data, info
 
     def chat_logprobs(self, profile: str, prompt: str | list[dict], *, sensitivity: str,
@@ -330,7 +331,8 @@ class LLM:
         """
         self.guard(profile, sensitivity)
         if not self.ready(profile):
-            raise LLMError(f"{_label(profile)} LLM が未設定です（設定タブで接続先とモデルを登録してください）")
+            raise LLMError(f"{_label(profile)} LLM が未設定です（設定タブで接続先とモデルを登録してください）",
+                           kind="config")
         p = self._prof(profile)
         key = (p.get("base_url"), p.get("model"))
         if p["provider"] == "anthropic" or key in _NO_LOGPROBS:
@@ -400,11 +402,11 @@ class LLM:
             handler = urllib.request.ProxyHandler()
         return urllib.request.build_opener(handler)
 
-    def _request(self, p: dict, url: str, payload: dict, headers: dict):
+    def _request(self, p: dict, url: str, payload: dict, headers: dict, timeout: float | None = None):
         hdrs = {"Content-Type": "application/json", **headers}
         req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"),
                                      method="POST", headers=hdrs)
-        return self._opener(p).open(req, timeout=float(p.get("timeout") or 180))
+        return self._opener(p).open(req, timeout=float(timeout or p.get("timeout") or 180))
 
     def _post(self, p: dict, url: str, payload: dict, headers: dict) -> dict:
         last: Exception | None = None
@@ -418,7 +420,7 @@ class LLM:
                 last = e
                 if attempt == 0:
                     time.sleep(1.0)
-        raise LLMError(f"LLM に接続できません: {last}") from last
+        raise connection_error(last) from last
 
     def _chat_target(self, p: dict) -> tuple[str, dict, dict]:
         base = (p.get("base_url") or "").rstrip("/")
@@ -481,7 +483,14 @@ class LLM:
                 return
             raise err from e
         except (urllib.error.URLError, socket.timeout, OSError) as e:
-            raise LLMError(f"LLM に接続できません: {e}") from e
+            raise connection_error(e) from e
+        try:
+            yield from self._stream_body(res)
+        except (socket.timeout, OSError, http.client.HTTPException) as e:
+            raise connection_error(e, "（受信の途中）") from e
+
+    @staticmethod
+    def _stream_body(res) -> Iterator[str]:
         with res:
             ctype = res.headers.get("Content-Type", "")
             if "event-stream" not in ctype and "ndjson" not in ctype:
@@ -548,15 +557,71 @@ class LLM:
                 yield "".join(getattr(b, "text", "") for b in final.content
                               if getattr(b, "type", "") == "text")
         except anthropic.AuthenticationError as e:
-            raise LLMError("Claude API の認証に失敗しました（API キーを確認してください）") from e
+            raise LLMError("Claude API の認証に失敗しました（API キーを確認してください）", kind="config") from e
         except anthropic.RateLimitError as e:
-            raise LLMError("Claude API のレート制限に達しました。しばらく待って再実行してください") from e
+            raise LLMError("Claude API のレート制限に達しました。しばらく待って再実行してください",
+                           kind="transient", status=429) from e
         except anthropic.APIStatusError as e:
-            raise LLMError(f"Claude API エラー HTTP {e.status_code}: {getattr(e, 'message', e)}") from e
+            code = int(getattr(e, "status_code", 0) or 0)
+            kind = "transient" if code in TRANSIENT_STATUS else "config" if code in (401, 403, 404) \
+                else "request" if 400 <= code < 500 else "other"
+            raise LLMError(f"Claude API エラー HTTP {e.status_code}: {getattr(e, 'message', e)}",
+                           kind=kind, status=code) from e
         except anthropic.APIConnectionError as e:
-            raise LLMError(f"Claude API に接続できません（プロキシ設定を確認）: {e}") from e
+            raise LLMError(f"Claude API に接続できません（プロキシ設定を確認）: {e}", kind="transient") from e
         if getattr(final, "stop_reason", "") == "refusal":
             raise LLMError("Claude がこの依頼への回答を辞退しました（安全上の理由）")
+
+
+def _collect_json_stream(res, got: dict, started: float, on_progress) -> None:
+    """JSON を書かせる呼び出しの応答（SSE か一括 JSON）を got に溜める。
+
+    JSON が閉じたら・同じ内容の繰り返しに入ったら打ち切る。受信中の例外は呼び出し側で受け、
+    それまでに溜まった分（got）から JSON を取り出す。
+    """
+    from .textutil import find_repetition, json_end
+
+    ctype = res.headers.get("Content-Type", "")
+    if "event-stream" not in ctype and "ndjson" not in ctype:
+        data = json.loads(res.read().decode("utf-8", errors="replace") or "{}")
+        ch = (data.get("choices") or [{}])[0]
+        msg = ch.get("message") or {}
+        got["content"] = msg.get("content") or ""
+        got["reasoning"] = str(msg.get("reasoning_content") or msg.get("reasoning") or "")
+        got["finish"] = ch.get("finish_reason") or "stop"
+        return
+    checked, last_note = 0, 0.0
+    for raw in res:
+        line = raw.decode("utf-8", errors="replace").strip()
+        if not line.startswith("data:"):
+            continue
+        body = line[5:].strip()
+        if body == "[DONE]":
+            break
+        try:
+            ch = (json.loads(body).get("choices") or [{}])[0]
+        except ValueError:
+            continue
+        delta = ch.get("delta") or {}
+        got["content"] += delta.get("content") or ""
+        got["reasoning"] += str(delta.get("reasoning_content") or delta.get("reasoning") or "")
+        if ch.get("finish_reason"):
+            got["finish"] = ch["finish_reason"]
+        content, reasoning = got["content"], got["reasoning"]
+        size = len(content) + len(reasoning)
+        if size - checked >= 64:              # 64 字ごとに打ち切りを判定
+            checked = size
+            visible = strip_think(content)
+            if json_end(visible) is not None:
+                got["finish"] = "json_complete"
+                break
+            if find_repetition(visible) or find_repetition(reasoning) \
+                    or find_repetition(content[:len(content) - len(visible)] if visible else content):
+                got["finish"] = "repetition"
+                break
+        if on_progress and time.time() - last_note >= 1.0:
+            last_note = time.time()
+            on_progress(size, time.time() - started)
 
 
 _PROXY_KEYS = ("http://", "https://", "all://")
@@ -637,7 +702,15 @@ def _http_error(e: urllib.error.HTTPError) -> LLMError:
         detail = e.read().decode("utf-8", errors="replace")[:400]
     except OSError:
         pass
-    return LLMError(f"LLM API エラー HTTP {e.code}: {detail or e.reason}")
+    if e.code in TRANSIENT_STATUS:
+        kind = "transient"
+    elif e.code in (401, 403, 404, 405):
+        kind = "config"
+    elif 400 <= e.code < 500:
+        kind = "request"
+    else:
+        kind = "other"
+    return LLMError(f"LLM API エラー HTTP {e.code}: {detail or e.reason}", kind=kind, status=e.code)
 
 
 def _label(profile: str) -> str:

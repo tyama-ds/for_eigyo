@@ -10,6 +10,7 @@ const ENGINE_COLORS = {
 };
 const state = {
   engines: [],
+  corpusChunks: 0,    // チャンク数（GraphRAG の構築方式ごとの LLM 呼び出し回数の目安）
   corpus: { rev: 0, docs: [] },
   queryJob: null,     // ポーリング中の query ジョブ ID
   ingestJob: null,
@@ -64,6 +65,49 @@ function engineName(id) {
   return eng ? eng.name : id;
 }
 function fmtSec(s) { return s == null ? "" : `${Number(s).toFixed(1)}秒`; }
+
+/* 方式の違い（GraphRAG の 標準 / 高速 / 語の共起（LLM なし））のバッジ。v は {kind, label, title} */
+function variantBadge(v) {
+  if (!v || !v.label) return "";
+  return `<span class="badge variant v-${esc(v.kind)}" title="${esc(v.title || "")}">${esc(v.label)}</span>`;
+}
+function variantText(v) { return v && v.label ? `・${v.label}` : ""; }
+
+/* インデックス・結果の統計の表示名（無いキーはそのまま出す） */
+const STAT_LABELS = {
+  extract_mode: "抽出方式", summary_mode: "コミュニティ要約", llm_calls: "LLM 呼び出し", seconds: "所要",
+  chunks: "チャンク", docs: "文書", entities: "エンティティ", relations: "関係",
+  inferred_entities: "補ったエンティティ", communities: "コミュニティ",
+  summarized_communities: "LLM 要約済みコミュニティ", extract_parse_failures: "抽出の解析失敗",
+  extract_retries: "抽出の再試行", extract_salvaged: "途中で切れた出力", has_embeddings: "埋め込み",
+  dim: "埋め込み次元", retrieved: "取得", mapped_communities: "map したコミュニティ", points: "ポイント",
+  map_parse_failures: "map の解析失敗", lazy_summarized: "質問時に要約", lazy_reused: "保存済みの要約を再利用",
+  sections: "節", groups: "文書群", summarized_docs: "要約した文書",
+};
+function graphModeLabel(kind, id) {
+  const g = (state.engines.find((e) => e.id === "graphrag") || {}).graph;
+  const list = g ? (kind === "extract" ? g.extract_modes : g.summary_modes) : [];
+  const m = list.find((x) => x.id === id);
+  return m ? m.label : id;
+}
+function statsText(stats) {
+  return Object.entries(stats || {}).map(([k, v]) => {
+    let val = v;
+    if (k === "extract_mode") val = graphModeLabel("extract", v);
+    else if (k === "summary_mode") val = graphModeLabel("summaries", v);
+    else if (k === "seconds") val = fmtSec(v);
+    else if (k === "llm_calls") val = `${v} 回`;
+    else if (typeof v === "boolean") val = v ? "あり" : "なし";
+    return `${STAT_LABELS[k] || k}: ${val}`;
+  }).join(" ・ ");
+}
+
+/* 実行ログ（構築方式・質問時の要約など）を折りたたみで表示 */
+function logsHtml(logs) {
+  if (!logs || !logs.length) return "";
+  return `<details class="think"><summary>ログ（${logs.length} 件）</summary>` +
+    `<div class="think-body">${esc(logs.join("\n"))}</div></details>`;
+}
 
 // ---------------------------------------------------------------- tabs
 
@@ -193,8 +237,20 @@ function apiUsage(stats) {
 async function refreshEngines() {
   const data = await api("/api/engines");
   state.engines = data.engines;
+  state.corpusChunks = data.corpus_chunks || 0;
   renderEngineList();
   renderEngineChecks();
+}
+
+/* 再描画してもチェック状態を保つ（初回と、前は選べなかったエンジンは既定の選択） */
+function checkState(selector) {
+  const els = [...document.querySelectorAll(selector)];
+  if (!els.length) return null;
+  return { checked: new Set(els.filter((el) => el.checked).map((el) => el.value)),
+    enabled: new Set(els.filter((el) => !el.disabled).map((el) => el.value)) };
+}
+function keepChecked(prev, id, fallback) {
+  return prev && prev.enabled.has(id) ? prev.checked.has(id) : fallback;
 }
 
 function indexBadge(eng) {
@@ -204,7 +260,72 @@ function indexBadge(eng) {
   return '<span class="badge ok">インデックス構築済み</span>';
 }
 
+/* GraphRAG の構築方式（標準 / 高速 / 超高速）とコミュニティ要約の選択。変更は次回の構築から反映 */
+function graphragSettingsHtml(eng) {
+  const g = eng.graph;
+  if (!g) return "";
+  const n = state.corpusChunks;
+  const extractCalls = { standard: n, fast: n, terms: 0 };
+  const extractCards = g.extract_modes.map((m) => {
+    const sel = m.id === g.extract;
+    const est = n ? `（このコーパスでは ${extractCalls[m.id]} 回）` : "";
+    return `<label class="mode-card ${sel ? "selected" : ""} v-${esc(m.id)}">
+      <input type="radio" name="gr-extract" value="${esc(m.id)}" ${sel ? "checked" : ""}>
+      <span class="mode-title">${esc(m.label)}</span>
+      <span class="mode-desc">${esc(m.desc)}</span>
+      <span class="mode-calls">構築時の LLM: ${esc(m.calls)}${esc(est)}</span>
+    </label>`;
+  }).join("");
+  const summaryCards = g.summary_modes.map((m) => {
+    const sel = m.id === g.summaries;
+    const off = m.id === "ingest" && g.extract !== "standard";   // 高速・超高速では構築時に要約しない
+    return `<label class="mode-card ${sel ? "selected" : ""} ${off ? "disabled" : ""}"
+        title="${off ? "高速・超高速では構築時にコミュニティごとの LLM 呼び出しをしません（標準のみ）" : ""}">
+      <input type="radio" name="gr-summaries" value="${esc(m.id)}" ${sel ? "checked" : ""} ${off ? "disabled" : ""}>
+      <span class="mode-title">${esc(m.label)}</span>
+      <span class="mode-desc">${esc(m.desc)}</span>
+      <span class="mode-calls">構築時の LLM: ${esc(m.calls)}</span>
+    </label>`;
+  }).join("");
+  // 次回の構築の LLM 呼び出しの目安
+  let plan = `${extractCalls[g.extract]} 回`;
+  if (g.summaries === "ingest") plan += ` ＋ コミュニティ要約 最大 ${g.max_summarized} 回`;
+  if (g.extract !== "terms") plan += "（再試行を除く）";
+  // 構築済みインデックスの方式と、設定との違い
+  const idx = eng.index || {};
+  let current = "";
+  if (idx.built) {
+    const st = idx.stats || {};
+    const facts = [st.seconds != null ? `構築 ${fmtSec(st.seconds)}` : "",
+      st.llm_calls != null ? `LLM ${st.llm_calls} 回` : ""].filter(Boolean).join("・");
+    const same = idx.variant && idx.variant.label === g.variant.label;
+    current = `<div class="gr-current">現在のインデックス: ${variantBadge(idx.variant)}
+      ${facts ? `<span class="muted">${esc(facts)}</span>` : ""}
+      ${same ? "" : `<span class="gr-diff">設定と違う方式です。インデックスを構築し直すと「${esc(g.variant.label)}」になります</span>`}</div>`;
+  }
+  return `<div class="gr-settings">
+    <div class="gr-head">構築方式 <span class="muted">（次回のインデックス構築から反映）</span></div>
+    <div class="mode-cards" role="radiogroup" aria-label="GraphRAG の構築方式">${extractCards}</div>
+    <div class="gr-head">コミュニティ要約</div>
+    <div class="mode-cards" role="radiogroup" aria-label="コミュニティ要約の作り方">${summaryCards}</div>
+    <div class="gr-plan">次回の構築: ${variantBadge(g.variant)}
+      <span>構築時の LLM 呼び出しの目安 ${esc(plan)}</span></div>
+    ${current}
+  </div>`;
+}
+
+async function saveGraphragMode(key, value) {
+  await api("/api/config", { [key]: value });
+  await refreshEngines();
+}
+$("#e-list").addEventListener("change", (ev) => {
+  const el = ev.target;
+  if (el.name === "gr-extract") saveGraphragMode("graphrag_extract", el.value);
+  else if (el.name === "gr-summaries") saveGraphragMode("graphrag_summaries", el.value);
+});
+
 function renderEngineList() {
+  const prev = checkState(".e-check");
   const rows = state.engines.map((eng) => {
     const avail = eng.available
       ? '<span class="badge ok">利用可能</span>'
@@ -213,21 +334,23 @@ function renderEngineList() {
     const req = [eng.requires.chat ? "チャットLLM" : null,
       eng.requires.embed ? "埋め込みAPI" : null].filter(Boolean).join("・") || "なし";
     const stats = eng.index && eng.index.built && eng.index.stats
-      ? `構築済み: ${esc(Object.entries(eng.index.stats)
-          .map(([k, v]) => `${k}=${v}`).join(", "))}` : "";
+      ? `構築済み: ${esc(statsText(eng.index.stats))}` : "";
     const warns = (eng.index && eng.index.warnings || [])
       .map((w) => `<div class="engine-warn">⚠ ${esc(w)}</div>`).join("");
-    const checked = eng.available && eng.kind === "builtin" ? "checked" : "";
+    const want = keepChecked(prev, eng.id, eng.kind === "builtin");
+    const checked = eng.available && want ? "checked" : "";
     const disabled = eng.available ? "" : "disabled";
+    const built = eng.index && eng.index.built ? variantBadge(eng.index.variant) : "";
     return `<div class="engine-row">
       <div class="stripe" style="background:${engineColor(eng.id)}"></div>
       <input type="checkbox" class="e-check" value="${eng.id}" ${checked} ${disabled}>
       <div class="engine-main">
         <span class="engine-name">${esc(eng.name)}</span>
-        ${avail}${exp}${indexBadge(eng)}
+        ${avail}${exp}${indexBadge(eng)}${built}
         <div class="engine-desc">${esc(eng.description)}　<span class="muted">必要: ${req}</span></div>
         ${stats ? `<div class="engine-stats">${stats}</div>` : ""}
         ${warns}
+        ${graphragSettingsHtml(eng)}
       </div>
     </div>`;
   });
@@ -235,14 +358,17 @@ function renderEngineList() {
 }
 
 function renderEngineChecks() {
+  const prev = checkState("#q-engines input");
   $("#q-engines").innerHTML = state.engines.map((eng) => {
     const usable = eng.available && eng.index && eng.index.built;
-    const checked = usable && eng.kind === "builtin" ? "checked" : "";
+    const want = keepChecked(prev, eng.id, eng.kind === "builtin");
+    const checked = usable && want ? "checked" : "";
+    const v = usable ? eng.index.variant : null;
     const title = eng.available
-      ? (usable ? "" : "インデックス未構築") : eng.reason;
+      ? (usable ? (v ? v.title : "") : "インデックス未構築") : eng.reason;
     return `<label class="engine-check ${usable ? "" : "disabled"}" title="${esc(title)}">
       <input type="checkbox" value="${eng.id}" ${checked} ${usable ? "" : "disabled"}>
-      <span style="color:${engineColor(eng.id)}">●</span>${esc(eng.name)}
+      <span style="color:${engineColor(eng.id)}">●</span>${esc(eng.name)}${variantBadge(v)}
     </label>`;
   }).join("");
 }
@@ -343,17 +469,17 @@ function renderEngineProgress(eid, e) {
     : "";
   return `<div class="result-card">
     <div class="result-head">
-      <span class="result-title" style="color:${color}">${esc(engineName(eid))}</span>
+      <span class="result-title" style="color:${color}">${esc(engineName(eid))}${variantBadge(e.variant)}</span>
       <span class="result-meta">${status} ${e.elapsed ? "・" + fmtSec(e.elapsed) : ""}</span>
     </div>
     ${bar}
     <div class="result-meta">${esc(e.message || "")}</div>
     ${e.error ? `<div class="error-text">${esc(e.error)}</div>` : ""}
     ${e.status === "done" && e.result && e.result.stats
-      ? `<div class="engine-stats">${esc(Object.entries(e.result.stats)
-          .map(([k, v]) => `${k}=${v}`).join(", "))} ${llmStatsText(e.llm_stats) ? "・" + llmStatsText(e.llm_stats) : ""}</div>` : ""}
+      ? `<div class="engine-stats">${esc(statsText(e.result.stats))} ${llmStatsText(e.llm_stats) ? "・" + llmStatsText(e.llm_stats) : ""}</div>` : ""}
     ${e.status === "done" && e.result && e.result.warnings
       ? e.result.warnings.map((w) => `<div class="engine-warn">⚠ ${esc(w)}</div>`).join("") : ""}
+    ${e.status === "done" && e.result ? logsHtml(e.result.logs) : ""}
   </div>`;
 }
 
@@ -377,6 +503,19 @@ function citeHtml(c) {
   const label = c.type === "entity" ? `👤 ${c.title}`
     : c.type === "community" ? `🧩 ${c.ref} ${c.title}` : `📄 ${c.title} (${c.ref})`;
   return `<span class="cite ${cls}" title="${esc(c.snippet || "")}">${esc(label)}</span>`;
+}
+
+/* GraphRAG の結果: どの方式のインデックスで答えたか・質問時の要約の作成と再利用 */
+function graphragQueryStats(result) {
+  const st = result.stats || {};
+  const parts = [`抽出: ${graphModeLabel("extract", st.extract_mode)}`,
+    `コミュニティ要約: ${graphModeLabel("summaries", st.summary_mode)}`];
+  if (st.mapped_communities != null) parts.push(`map ${st.mapped_communities} コミュニティ`);
+  if (st.lazy_summarized != null) {
+    parts.push(`質問時に要約 ${st.lazy_summarized} 件・保存済みを再利用 ${st.lazy_reused || 0} 件`);
+  }
+  if (st.fallback) parts.push("チャンク直接回答に切り替え");
+  return `<div class="engine-stats">${esc(parts.join(" ・ "))}</div>`;
 }
 
 function renderQueryJob(job) {
@@ -405,7 +544,7 @@ function renderQueryJob(job) {
       const cites = (e.result.citations || []).map(citeHtml).join("");
       cards.push(`<div class="result-card" style="border-top:3px solid ${color}">
         <div class="result-head">
-          <span class="result-title" style="color:${color}">${esc(engineName(eid))}</span>
+          <span class="result-title" style="color:${color}">${esc(engineName(eid))}${variantBadge(e.result.variant || e.variant)}</span>
           <span class="result-meta">mode=${esc(e.result.mode || "")} ・ ${fmtSec(e.elapsed)}
             ${llmStatsText(e.llm_stats) ? "・" + llmStatsText(e.llm_stats) : ""}</span>
         </div>
@@ -413,7 +552,9 @@ function renderQueryJob(job) {
         <div class="answer">${renderText(e.result.answer || "")}</div>
         ${eid === "decision" && e.result.stats && e.result.stats.route
           ? `<div class="engine-stats">階層の経路（経路スコア）: ${esc(e.result.stats.route)} ・ ビーム幅 ${esc(e.result.stats.beam)} ・ 判定 ${esc(e.result.stats.calls)} 回${e.result.stats.trimmed ? `（上限で ${esc(e.result.stats.trimmed)} 件未判定）` : ""}（${esc(judgeLabel(e.result.stats))}${e.result.stats.soft ? "・確率" : ""}${e.result.stats.choice ? "・選択式で並べ替え" : ""}）${apiUsage(e.result.stats)}${e.result.stats.note ? " ・ " + esc(e.result.stats.note) : ""}</div>` : ""}
+        ${eid === "graphrag" && e.result.stats ? graphragQueryStats(e.result) : ""}
         ${cites ? `<div class="citations">${cites}</div>` : ""}
+        ${logsHtml(e.result.logs)}
       </div>`);
     } else {
       cards.push(renderEngineProgress(eid, e));
@@ -453,7 +594,8 @@ function fillGraphEngineSelect() {
   const opts = GRAPH_ENGINES.map((id) => {
     const eng = state.engines.find((e) => e.id === id);
     const built = !!(eng && eng.index && eng.index.built);
-    return { id, built, label: `${eng ? eng.name : id}${built ? "" : "（未構築）"}` };
+    const v = built ? variantText(eng.index.variant) : "";
+    return { id, built, label: `${eng ? eng.name : id}${v}${built ? "" : "（未構築）"}` };
   });
   sel.innerHTML = opts.map((o) =>
     `<option value="${o.id}">${esc(o.label)}</option>`).join("");
@@ -490,10 +632,17 @@ async function loadGraph() {
   gv.setData(data);
   updateGraphHint();
   renderLegend();
+  if (data.variant) {
+    $("#g-com-title").innerHTML = `コミュニティ要約 ${variantBadge(data.variant)}`;
+  }
+  // summary_source: llm（LLM の要約）/ auto（LLM なしで機械的に作った要約）
+  const srcTag = (c) => c.summary_source === "auto"
+    ? '<span class="badge">自動（LLM なし）</span>'
+    : (c.summary_source === "llm" ? '<span class="badge ok">LLM 要約</span>' : "");
   $("#g-communities").innerHTML = data.communities
     .filter((c) => c.summary)
     .map((c) => `<div class="community-row" data-com="${esc(c.id)}"><b>[${esc(c.id)}] ${esc(c.title)}</b>
-      <span class="muted">（${c.size} エンティティ）</span><br>${esc(c.summary)}</div>`)
+      <span class="muted">（${c.size} エンティティ）</span>${srcTag(c)}<br>${esc(c.summary)}</div>`)
     .join("") || '<p class="hint">要約付きコミュニティはありません。</p>';
   document.querySelectorAll("#g-communities [data-com]").forEach((el) => {
     el.addEventListener("click", () => {

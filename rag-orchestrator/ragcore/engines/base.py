@@ -20,6 +20,9 @@ class EngineContext:
     cfg: dict
     progress: Callable[[float, str], None] = lambda frac, msg: None
     logs: list[str] = field(default_factory=list)
+    # 質問時に作ったキャッシュ（GraphRAG の Lazy 要約など）を保存済みインデックスへ書き足す関数。
+    # query が積み、オーケストレーターが store.patch_index で保存済みのインデックスに適用する
+    index_patches: list[Callable[[dict], None]] = field(default_factory=list)
 
     def log(self, msg: str) -> None:
         self.logs.append(msg)
@@ -58,6 +61,14 @@ class Engine:
 
     def query(self, index: dict, question: str, mode: str, ctx: EngineContext) -> dict:
         raise NotImplementedError
+
+    def variant(self, *, stats: dict | None = None, cfg: dict | None = None) -> dict | None:
+        """同じエンジンの中の方式の違い（例: GraphRAG の「高速」）。UI のバッジと統合レポートの名前に使う。
+
+        stats を渡すと構築済みインデックスの方式、cfg を渡すと次に構築するときの方式。
+        戻り値は {"kind", "label", "title"}（方式の違いが無いエンジンは None）。
+        """
+        return None
 
     def info(self, cfg: dict) -> dict:
         ok, reason = self.availability(cfg)

@@ -52,6 +52,13 @@ def mock_chat_response(prompt: str) -> str:
         return json.dumps({"entities": entities, "relations": relations},
                           ensure_ascii=False)
 
+    if task == "graph_extract_fast":     # 高速モード: 名前・種別と関係の組だけ（説明・強さなし）
+        body = prompt.split("# テキスト", 1)[-1]
+        found = [(name, typ) for name, typ in KNOWN_ENTITIES if name in body]
+        return json.dumps({"entities": [[name, typ] for name, typ in found],
+                           "relations": [[found[i][0], found[i + 1][0]] for i in range(len(found) - 1)]},
+                          ensure_ascii=False)
+
     if task == "community_summary":
         names = re.findall(r"- ([^（]+)（", prompt.split("# エンティティ", 1)[-1])
         title = "・".join(n.strip() for n in names[:2]) or "コミュニティ"

@@ -86,7 +86,8 @@
       </div>
       <p class="hint">
         インデックス構築は「コーパス → 各エンジンの検索用データ」の変換。GraphRAG はここで
-        エンティティ抽出とコミュニティ要約を行うため LLM を多く呼ぶ（コーパスが大きいほど時間がかかる）。
+        エンティティ抽出とコミュニティ要約を行うため、標準では LLM を多く呼ぶ（コーパスが大きいほど時間がかかる）。
+        遅いときは GraphRAG の「構築方式」で 高速 / 超高速（LLM なし）を選べる。
       </p>
       <div id="e-list"></div>
     </div>
@@ -272,7 +273,7 @@
           <input type="text" id="da-openrouter-proxy_url" placeholder="http://proxy.example:8080">
         </div>
         <div class="row gap">
-          <button class="btn" id="da-test" type="button">判定 API の接続テスト（保存してから架空の候補 2 件で判定）</button>
+          <button class="btn wrap" id="da-test" type="button">判定 API の接続テスト（保存してから架空の候補 2 件で判定）</button>
           <span class="hint" id="da-test-result"></span>
         </div>
       </details>

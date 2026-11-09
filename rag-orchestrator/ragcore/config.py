@@ -37,6 +37,12 @@ DEFAULT_CONFIG: dict = {
     "decision_judge": "llm",
     "decision_beam": 4,        # 各段で残す枝の数
     "decision_budget": 8,      # 1質問あたりの判定回数の上限
+    # 組み込み GraphRAG の構築方式（エンジンタブで選ぶ。次回のインデックス構築から反映）
+    #   graphrag_extract  : standard（LLM が説明つきで抽出）/ fast（名前と関係の組だけ）/ terms（語の共起・LLM なし）
+    #   graphrag_summaries: ingest（構築時に LLM で要約）/ lazy（質問時に関連の高いものだけ要約）/ none（要約しない）
+    #   fast / terms で ingest を選んでいても lazy として扱う（構築時にコミュニティごとの LLM 呼び出しをしない）
+    "graphrag_extract": "standard",
+    "graphrag_summaries": "ingest",
     # 判定 API（テキストを生成せず確率で答える判定モデル）。接続先ごとに設定を持ち、provider で選ぶ。
     # endpoint・model が空なら既定値（decision_api.PROVIDERS）。外部サービスなので、ローカル LLM（直結）
     # とは別にプロキシを設定する（use_proxy で URL が空なら環境変数、Windows はシステムの設定）
@@ -50,6 +56,10 @@ DEFAULT_CONFIG: dict = {
     },
 }
 JUDGE_PROVIDERS = ("openrouter", "openai", "azure")
+GRAPHRAG_EXTRACT_MODES = ("standard", "fast", "terms")
+GRAPHRAG_SUMMARY_MODES = ("ingest", "lazy", "none")
+# 選択肢から選ぶ設定（ファイルを手で書き換えて範囲外になった値は既定値に戻す）
+CHOICES = {"graphrag_extract": GRAPHRAG_EXTRACT_MODES, "graphrag_summaries": GRAPHRAG_SUMMARY_MODES}
 
 _lock = threading.Lock()
 
@@ -94,6 +104,9 @@ def load_config() -> dict:
                     for key in DEFAULT_CONFIG:
                         if key == "decision_api":
                             cfg[key] = _merge_api(data.get(key))
+                        elif key in CHOICES:
+                            if data.get(key) in CHOICES[key]:
+                                cfg[key] = data[key]
                         elif key in data and isinstance(data[key], type(DEFAULT_CONFIG[key])):
                             cfg[key] = data[key]
             except (OSError, ValueError):
@@ -111,6 +124,9 @@ def save_config(new_cfg: dict) -> dict:
     judge = {"jev": "api"}.get(new_cfg.get("decision_judge"), new_cfg.get("decision_judge"))
     if judge in ("llm", "api"):
         cfg["decision_judge"] = judge
+    for key, allowed in CHOICES.items():
+        if new_cfg.get(key) in allowed:
+            cfg[key] = new_cfg[key]
     api = new_cfg.get("decision_api")
     if isinstance(api, dict):
         dst_api = cfg["decision_api"]
