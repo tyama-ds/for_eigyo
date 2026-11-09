@@ -43,6 +43,12 @@ DEFAULT_CONFIG: dict = {
     #   fast / terms で ingest を選んでいても lazy として扱う（構築時にコミュニティごとの LLM 呼び出しをしない）
     "graphrag_extract": "standard",
     "graphrag_summaries": "ingest",
+    # 組み合わせ RAG（エンジン combo。エンジンタブで選ぶ。構築し直し不要で次の質問から反映）
+    #   combo_components: RRF で統合する方式。bm25（全文）/ vector（埋め込み）/ graphrag（エンティティからたどる）/
+    #                     decision（階層を判定でたどる）。各エンジンの構築済みインデックスを使う
+    #   combo_rerank    : 統合した上位を LLM で並べ替える（質問ごとに LLM 1 回）
+    "combo_components": ["bm25", "vector", "graphrag"],
+    "combo_rerank": False,
     # 判定 API（テキストを生成せず確率で答える判定モデル）。接続先ごとに設定を持ち、provider で選ぶ。
     # endpoint・model が空なら既定値（decision_api.PROVIDERS）。外部サービスなので、ローカル LLM（直結）
     # とは別にプロキシを設定する（use_proxy で URL が空なら環境変数、Windows はシステムの設定）
@@ -60,6 +66,21 @@ GRAPHRAG_EXTRACT_MODES = ("standard", "fast", "terms")
 GRAPHRAG_SUMMARY_MODES = ("ingest", "lazy", "none")
 # 選択肢から選ぶ設定（ファイルを手で書き換えて範囲外になった値は既定値に戻す）
 CHOICES = {"graphrag_extract": GRAPHRAG_EXTRACT_MODES, "graphrag_summaries": GRAPHRAG_SUMMARY_MODES}
+COMBO_COMPONENTS = ("bm25", "vector", "graphrag", "decision")   # 組み合わせ RAG で選べる方式（この順で表示・実行）
+
+
+def valid_components(value) -> list[str] | None:
+    """combo_components の検証。既知の方式だけを重複なく決まった順に並べる。
+
+    リストでない・中身があるのに1つも既知でないときは None（その値は使わない）。空のリストはそのまま
+    （全部外した状態。組み合わせ RAG は「方式を1つ以上選んでください」で使えなくなる）。
+    """
+    if not isinstance(value, list):
+        return None
+    picked = [c for c in COMBO_COMPONENTS if c in value]
+    if value and not picked:
+        return None
+    return picked
 
 _lock = threading.Lock()
 
@@ -104,6 +125,10 @@ def load_config() -> dict:
                     for key in DEFAULT_CONFIG:
                         if key == "decision_api":
                             cfg[key] = _merge_api(data.get(key))
+                        elif key == "combo_components":
+                            picked = valid_components(data.get(key))
+                            if picked is not None:
+                                cfg[key] = picked
                         elif key in CHOICES:
                             if data.get(key) in CHOICES[key]:
                                 cfg[key] = data[key]
@@ -127,6 +152,12 @@ def save_config(new_cfg: dict) -> dict:
     for key, allowed in CHOICES.items():
         if new_cfg.get(key) in allowed:
             cfg[key] = new_cfg[key]
+    if "combo_components" in new_cfg:
+        picked = valid_components(new_cfg["combo_components"])
+        if picked is not None:
+            cfg["combo_components"] = picked
+    if isinstance(new_cfg.get("combo_rerank"), bool):
+        cfg["combo_rerank"] = new_cfg["combo_rerank"]
     api = new_cfg.get("decision_api")
     if isinstance(api, dict):
         dst_api = cfg["decision_api"]

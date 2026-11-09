@@ -4,7 +4,7 @@
 const $ = (sel) => document.querySelector(sel);
 const ENGINE_COLORS = {
   graphrag: "#a78bfa", vector: "#5aa2ff", bm25: "#34d399", hybrid: "#f59e0b",
-  decision: "#f9a8d4",
+  decision: "#f9a8d4", combo: "#a3e635",
   "nano-graphrag": "#f472b6", lightrag: "#f472b6", minirag: "#fb7185",
   hipporag: "#22d3ee", "rag-anything": "#c084fc",
 };
@@ -83,6 +83,8 @@ const STAT_LABELS = {
   dim: "埋め込み次元", retrieved: "取得", mapped_communities: "map したコミュニティ", points: "ポイント",
   map_parse_failures: "map の解析失敗", lazy_summarized: "質問時に要約", lazy_reused: "保存済みの要約を再利用",
   sections: "節", groups: "文書群", summarized_docs: "要約した文書",
+  components: "組み合わせ", skipped: "使えなかった方式", candidates: "統合した候補",
+  judge_api_calls: "判定 API", retrieval_seconds: "検索", answer_seconds: "回答生成",
 };
 function graphModeLabel(kind, id) {
   const g = (state.engines.find((e) => e.id === "graphrag") || {}).graph;
@@ -95,8 +97,8 @@ function statsText(stats) {
     let val = v;
     if (k === "extract_mode") val = graphModeLabel("extract", v);
     else if (k === "summary_mode") val = graphModeLabel("summaries", v);
-    else if (k === "seconds") val = fmtSec(v);
-    else if (k === "llm_calls") val = `${v} 回`;
+    else if (k === "seconds" || k === "retrieval_seconds" || k === "answer_seconds") val = fmtSec(v);
+    else if (k === "llm_calls" || k === "judge_api_calls") val = `${v} 回`;
     else if (typeof v === "boolean") val = v ? "あり" : "なし";
     return `${STAT_LABELS[k] || k}: ${val}`;
   }).join(" ・ ");
@@ -255,6 +257,8 @@ function keepChecked(prev, id, fallback) {
 
 function indexBadge(eng) {
   const idx = eng.index || {};
+  // 作るのが一瞬のエンジン（組み合わせ RAG）は、無い・古いインデックスを質問時に作る
+  if (eng.auto_index && (!idx.built || idx.stale)) return '<span class="badge">インデックスは質問時に自動で作成</span>';
   if (!idx.built) return '<span class="badge">インデックス未構築</span>';
   if (idx.stale) return '<span class="badge warn">インデックスが古い（要再構築）</span>';
   return '<span class="badge ok">インデックス構築済み</span>';
@@ -318,10 +322,76 @@ async function saveGraphragMode(key, value) {
   await api("/api/config", { [key]: value });
   await refreshEngines();
 }
+
+/* 組み合わせ RAG: 方式が使うインデックス（各エンジンの構築済みのもの）の状態。表示は state.engines から作る */
+function comboSourceStatus(m) {
+  if (!m.sources.length) return { cls: "ok", text: `✓ ${m.index_note || "構築不要"}` };
+  let stale = null;
+  for (const s of m.sources) {
+    const eng = state.engines.find((e) => e.id === s.id);
+    const idx = (eng && eng.index) || {};
+    if (idx.built && !idx.stale) {
+      const v = idx.variant && idx.variant.label ? `（${idx.variant.label}）` : "";
+      return { cls: "ok", text: `✓ ${s.name}${v} の構築済みインデックスを使う` };
+    }
+    if (idx.built && !stale) stale = s;
+  }
+  const alt = m.sources.slice(1).map((s) => `。${s.name} のインデックスでも可`).join("");
+  if (stale) {
+    return { cls: "warn", miss: true,
+      text: `⚠ ${stale.name} のインデックスが古い（コーパスを変えた後に未構築）。このままでは質問時に飛ばす（エンジンタブで構築し直す${alt}）` };
+  }
+  return { cls: "warn", miss: true,
+    text: `⚠ ${m.sources[0].name} のインデックスが未構築。このままでは質問時に飛ばす（このタブで先に構築${alt}）` };
+}
+
+/* 組み合わせ RAG の設定（統合する方式・LLM での並べ替え）。構築し直し不要で次の質問から反映 */
+function comboSettingsHtml(eng) {
+  const c = eng.combo;
+  if (!c) return "";
+  const missing = [];
+  const cards = c.components.map((m) => {
+    const sel = c.selected.includes(m.id);
+    const st = comboSourceStatus(m);
+    if (sel && st.miss) missing.push(m.short);
+    return `<label class="mode-card combo-card ${sel ? "selected" : ""}">
+      <input type="checkbox" name="combo-comp" value="${esc(m.id)}" ${sel ? "checked" : ""}>
+      <span class="mode-title">${esc(m.label)}${m.weight !== 1 ? ` <span class="muted">重み ×${esc(m.weight)}</span>` : ""}</span>
+      <span class="mode-desc">${esc(m.desc)}</span>
+      <span class="mode-calls">質問時: ${esc(m.cost)}</span>
+      <span class="combo-src ${st.cls}">${esc(st.text)}</span>
+    </label>`;
+  }).join("");
+  const r = c.rerank_info;
+  const rerank = `<label class="mode-card combo-card ${c.rerank ? "selected" : ""}">
+      <input type="checkbox" name="combo-rerank" ${c.rerank ? "checked" : ""}>
+      <span class="mode-title">${esc(r.label)}</span>
+      <span class="mode-desc">${esc(r.desc)}</span>
+      <span class="mode-calls">質問時: ${esc(r.cost)}</span>
+    </label>`;
+  return `<div class="gr-settings combo-settings">
+    <div class="gr-head">統合する方式 <span class="muted">（構築し直し不要。次の質問から反映。各方式の検索結果を RRF で統合し、上位 ${esc(c.top_k)} 件から回答を1回生成）</span></div>
+    <div class="mode-cards" role="group" aria-label="組み合わせ RAG で統合する方式">${cards}</div>
+    <div class="gr-head">LLM の補助（任意）</div>
+    <div class="mode-cards" role="group" aria-label="LLM の補助">${rerank}</div>
+    <div class="gr-plan">今の組み合わせ: ${variantBadge(c.variant)}
+      <span>${esc(c.estimate.text)}</span>
+      ${missing.length ? `<span class="gr-diff">インデックスが未構築・古い方式（${esc(missing.join("・"))}）は、質問時に飛ばして残りで答えます</span>` : ""}</div>
+  </div>`;
+}
+
+async function saveComboSettings() {
+  const comps = [...document.querySelectorAll('#e-list input[name="combo-comp"]:checked')].map((el) => el.value);
+  const rr = document.querySelector('#e-list input[name="combo-rerank"]');
+  await api("/api/config", { combo_components: comps, combo_rerank: !!(rr && rr.checked) });
+  await refreshEngines();
+}
+
 $("#e-list").addEventListener("change", (ev) => {
   const el = ev.target;
   if (el.name === "gr-extract") saveGraphragMode("graphrag_extract", el.value);
   else if (el.name === "gr-summaries") saveGraphragMode("graphrag_summaries", el.value);
+  else if (el.name === "combo-comp" || el.name === "combo-rerank") saveComboSettings();
 });
 
 function renderEngineList() {
@@ -351,6 +421,7 @@ function renderEngineList() {
         ${stats ? `<div class="engine-stats">${stats}</div>` : ""}
         ${warns}
         ${graphragSettingsHtml(eng)}
+        ${comboSettingsHtml(eng)}
       </div>
     </div>`;
   });
@@ -360,10 +431,11 @@ function renderEngineList() {
 function renderEngineChecks() {
   const prev = checkState("#q-engines input");
   $("#q-engines").innerHTML = state.engines.map((eng) => {
-    const usable = eng.available && eng.index && eng.index.built;
+    // 組み合わせ RAG（auto_index）はインデックスを質問時に作るので、未構築でも選べる
+    const usable = eng.available && ((eng.index && eng.index.built) || eng.auto_index);
     const want = keepChecked(prev, eng.id, eng.kind === "builtin");
     const checked = usable && want ? "checked" : "";
-    const v = usable ? eng.index.variant : null;
+    const v = usable ? ((eng.index && eng.index.built && eng.index.variant) || (eng.combo && eng.combo.variant) || null) : null;
     const title = eng.available
       ? (usable ? (v ? v.title : "") : "インデックス未構築") : eng.reason;
     return `<label class="engine-check ${usable ? "" : "disabled"}" title="${esc(title)}">
@@ -505,6 +577,91 @@ function citeHtml(c) {
   return `<span class="cite ${cls}" title="${esc(c.snippet || "")}">${esc(label)}</span>`;
 }
 
+/* 秒数（1 秒未満は ms。組み合わせ RAG の方式ごとの時間は数 ms のことが多い） */
+function fmtDur(s) {
+  if (s == null) return "";
+  return s < 1 ? `${Math.round(s * 1000)}ms` : fmtSec(s);
+}
+function fmtScore(x) {
+  const n = Number(x);
+  return Math.abs(n) >= 100 ? n.toFixed(0) : (Math.abs(n) >= 1 ? n.toFixed(2) : n.toFixed(4));
+}
+
+/* 組み合わせ RAG の結果: 使った方式と時間・飛ばした方式と理由・質問時の LLM 呼び出し */
+function comboResultHtml(result) {
+  const c = result.combo;
+  const used = c.components.filter((r) => !r.skipped);
+  const parts = c.components.map((r) => {
+    if (r.skipped) return `<span class="combo-part skip" title="${esc(r.skipped)}">${esc(r.short)}: 使えず</span>`;
+    const extra = [`${r.hits.length}件`];
+    if (r.llm_calls) extra.push(`LLM ${r.llm_calls}回`);
+    if (r.judge_api_calls) extra.push(`判定API ${r.judge_api_calls}回`);
+    if (r.embed_calls) extra.push(`埋め込み ${r.embed_calls}回`);
+    const src = r.source && r.source !== "combo" ? `${engineName(r.source)} のインデックス${r.source_variant ? `（${r.source_variant}）` : ""}` : "";
+    const tip = [src, r.load_seconds ? `読み込み ${fmtDur(r.load_seconds)}` : "", r.note].filter(Boolean).join("\n");
+    return `<span class="combo-part" title="${esc(tip)}">${esc(r.short)} ${esc(fmtDur(r.seconds))}・${esc(extra.join("・"))}</span>`;
+  });
+  if (c.rerank && c.rerank.selected) {
+    parts.push(`<span class="combo-part${c.rerank.used ? "" : " skip"}" title="${esc(c.rerank.note || "")}">並べ替え ${esc(fmtDur(c.rerank.seconds))}${c.rerank.used ? "" : "（RRF の順のまま）"}</span>`);
+  }
+  parts.push(`<span class="combo-part">回答 ${esc(fmtDur(c.timings.answer))}</span>`);
+  const calls = c.llm_calls;
+  const breakdown = [calls.judge ? `判定 ${calls.judge}` : "", calls.rerank ? `並べ替え ${calls.rerank}` : "",
+    calls.answer ? `回答 ${calls.answer}` : ""].filter(Boolean).join("・");
+  const callLine = `質問時の LLM ${calls.total} 回${breakdown ? `（${breakdown}）` : ""}`
+    + (c.judge_api_calls ? `・判定 API ${c.judge_api_calls} 回` : "") + `・埋め込み ${c.embed_calls} 回`
+    + ` ・ 統合した候補 ${c.fused.length} 件 → 上位 ${c.top_k} 件`;
+  const notes = used.filter((r) => r.note)
+    .map((r) => `<div class="engine-stats">${esc(r.short)}: ${esc(r.note)}</div>`).join("");
+  const warns = (result.warnings || []).map((w) => `<div class="engine-warn">⚠ ${esc(w)}</div>`).join("");
+  const weights = used.filter((r) => r.weight !== 1).map((r) => `${r.short} ×${r.weight}`).join("・");
+  return `<div class="combo-box">
+    <div class="combo-head">組み合わせ: <b>${esc(used.map((r) => r.short).join(" ＋ ") || "なし")}</b>
+      <span class="muted">→ RRF で統合${weights ? `（重み ${esc(weights)}）` : ""}${c.rerank && c.rerank.used ? " → LLM で並べ替え" : ""}</span></div>
+    <div class="combo-parts">${parts.join("")}</div>
+    <div class="engine-stats">${esc(callLine)}</div>
+    ${notes}${warns}
+  </div>`;
+}
+
+/* 組み合わせ RAG の出典: マウスを載せると、統合後の順位と方式ごとの順位・スコアが出る */
+function comboCiteHtml(c, used) {
+  const why = Object.fromEntries((c.why || []).map((w) => [w.component, w]));
+  const lines = [c.snippet || "", "―――――",
+    `総合 ${c.rank} 位（RRF ${c.score}）${c.fused_rank !== c.rank ? `・並べ替え前は ${c.fused_rank} 位` : ""}`];
+  for (const r of used) {
+    const w = why[r.id];
+    lines.push(w ? `${r.label}: ${w.rank} 位・スコア ${fmtScore(w.score)}${w.weight !== 1 ? `（重み ×${w.weight}）` : ""}`
+      : `${r.label}: 候補外`);
+  }
+  const marks = used.map((r) => (why[r.id] ? `${r.short} ${why[r.id].rank}位` : "")).filter(Boolean).join("・");
+  return `<span class="cite combo-cite" title="${esc(lines.join("\n"))}">${esc(`${c.rank}. 📄 ${c.title} (${c.ref})`)}`
+    + `<span class="cite-why">${esc(marks)}</span></span>`;
+}
+
+/* 出典ごとの各方式の順位・スコア（狭い画面では表だけ横にスクロール） */
+function comboTableHtml(result) {
+  const c = result.combo;
+  const used = c.components.filter((r) => !r.skipped);
+  if (!used.length || !(result.citations || []).length) return "";
+  const head = used.map((r) => `<th>${esc(r.short)}${r.weight !== 1 ? `<span class="muted"> ×${esc(r.weight)}</span>` : ""}</th>`).join("");
+  const rows = result.citations.map((cite) => {
+    const why = Object.fromEntries((cite.why || []).map((w) => [w.component, w]));
+    const cells = used.map((r) => {
+      const w = why[r.id];
+      return w ? `<td>${w.rank}位<br><span class="muted">${esc(fmtScore(w.score))}</span></td>` : '<td class="muted">—</td>';
+    }).join("");
+    const moved = cite.fused_rank !== cite.rank ? `<br><span class="muted">RRF ${cite.fused_rank}位</span>` : "";
+    return `<tr><td>${cite.rank}${moved}</td><td class="combo-doc">${esc(cite.title)}<br><span class="muted">${esc(cite.ref)}</span></td>${cells}<td>${esc(cite.score)}</td></tr>`;
+  }).join("");
+  return `<details class="think combo-why"><summary>出典ごとの各方式の順位・スコア（RRF の内訳）</summary>
+    <div class="table-scroll"><table class="combo-table">
+      <thead><tr><th>順位</th><th>出典</th>${head}<th>RRF</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="combo-foot">RRF: 方式ごとに、順位 r に 重み ÷ (${esc(c.fusion.k)} ＋ r) を足した値（大きいほど上位）。
+      スコアの尺度は方式ごとに違う（全文: BM25・埋め込み: コサイン類似度・GraphRAG: たどったエンティティの重みの和・DecisionRAG: 経路スコア）</div>
+  </details>`;
+}
+
 /* GraphRAG の結果: どの方式のインデックスで答えたか・質問時の要約の作成と再利用 */
 function graphragQueryStats(result) {
   const st = result.stats || {};
@@ -541,7 +698,10 @@ function renderQueryJob(job) {
   for (const [eid, e] of Object.entries(job.engines)) {
     if (e.status === "done" && e.result) {
       const color = engineColor(eid);
-      const cites = (e.result.citations || []).map(citeHtml).join("");
+      const combo = eid === "combo" && e.result.combo;
+      const comboUsed = combo ? e.result.combo.components.filter((r) => !r.skipped) : [];
+      const cites = (e.result.citations || [])
+        .map((c) => (combo && c.why ? comboCiteHtml(c, comboUsed) : citeHtml(c))).join("");
       cards.push(`<div class="result-card" style="border-top:3px solid ${color}">
         <div class="result-head">
           <span class="result-title" style="color:${color}">${esc(engineName(eid))}${variantBadge(e.result.variant || e.variant)}</span>
@@ -553,7 +713,9 @@ function renderQueryJob(job) {
         ${eid === "decision" && e.result.stats && e.result.stats.route
           ? `<div class="engine-stats">階層の経路（経路スコア）: ${esc(e.result.stats.route)} ・ ビーム幅 ${esc(e.result.stats.beam)} ・ 判定 ${esc(e.result.stats.calls)} 回${e.result.stats.trimmed ? `（上限で ${esc(e.result.stats.trimmed)} 件未判定）` : ""}（${esc(judgeLabel(e.result.stats))}${e.result.stats.soft ? "・確率" : ""}${e.result.stats.choice ? "・選択式で並べ替え" : ""}）${apiUsage(e.result.stats)}${e.result.stats.note ? " ・ " + esc(e.result.stats.note) : ""}</div>` : ""}
         ${eid === "graphrag" && e.result.stats ? graphragQueryStats(e.result) : ""}
+        ${combo ? comboResultHtml(e.result) : ""}
         ${cites ? `<div class="citations">${cites}</div>` : ""}
+        ${combo ? comboTableHtml(e.result) : ""}
         ${logsHtml(e.result.logs)}
       </div>`);
     } else {

@@ -155,7 +155,7 @@ class Orchestrator:
             with job.lock:
                 entry["status"] = "done"
                 entry["progress"] = 1.0
-                entry["variant"] = engine.variant(stats=index.get("stats") or {})
+                entry["variant"] = engine.variant(stats=index.get("stats") or {}, cfg=cfg)
                 entry["result"] = {"stats": index.get("stats") or {},
                                    "warnings": index.get("warnings") or [],
                                    "logs": ctx.logs, "variant": entry["variant"]}
@@ -212,11 +212,18 @@ class Orchestrator:
             if engine is None:
                 raise ValueError(f"未知のエンジンです: {engine_id}")
             index = store.load_index(engine_id)
+            corpus = store.load_corpus()
+            if engine.auto_index and corpus["docs"] and (
+                    index is None or index.get("corpus_rev") != corpus["rev"]):
+                # 作るのが一瞬のエンジン（組み合わせ RAG: チャンクの一覧だけ）は、無い・古いインデックスをその場で作る
+                progress(0.02, "インデックスを作成（チャンクの一覧だけ）")
+                built = engine.ingest(corpus["docs"], EngineContext(llm=LLMClient(cfg), cfg=cfg))
+                store.save_index(engine_id, built, corpus["rev"])
+                index = dict(built, corpus_rev=corpus["rev"])
             if index is None:
                 raise ValueError("インデックス未構築です。先に「インデックス構築」を実行してください")
             with job.lock:
-                entry["variant"] = engine.variant(stats=index.get("stats") or {})
-            corpus = store.load_corpus()
+                entry["variant"] = engine.variant(stats=index.get("stats") or {}, cfg=cfg)
             if index.get("corpus_rev") != corpus["rev"]:
                 with job.lock:
                     entry["message"] = "注意: インデックスが古いコーパスで構築されています"

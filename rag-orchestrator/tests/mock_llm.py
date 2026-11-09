@@ -90,6 +90,13 @@ def mock_chat_response(prompt: str) -> str:
     if task == "decide_choice":
         return decide_choice(prompt)
 
+    if task == "combo_rerank":     # 組み合わせ RAG の再順位付け: 質問と候補の文字の重なりが多い順
+        q = prompt.split("# 質問", 1)[-1].split("# 候補", 1)[0]
+        qg = _grams(q)
+        cands = re.findall(r"^\[(\d+)\] (.*)$", prompt.split("# 候補", 1)[-1], re.MULTILINE)
+        order = sorted(cands, key=lambda t: (-len(qg & _grams(t[1])), int(t[0])))
+        return json.dumps({"order": [int(num) for num, _ in order]})
+
     if task == "synthesis":
         return ("## 統合回答\n各エンジンの回答は概ね一致しています。\n"
                 "## 一致点\n- 資料に基づく説明である点\n## 相違点・片方にしかない情報\nなし")

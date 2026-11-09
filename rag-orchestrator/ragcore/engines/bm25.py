@@ -13,8 +13,20 @@ from .base import (Engine, EngineContext, build_chunks, chunk_citation,
 
 TOP_K = 6
 
-# インデックス（JSON）から BM25 を作り直すのは安いが、クエリごとには避ける
-_bm25_cache: dict[int, BM25] = {}
+# インデックス（JSON）から BM25 を作り直すのは安いが、クエリごとには避ける。
+# index 自体も持っておく（id() は解放後に別のオブジェクトへ使い回されるため、is で同じものか確かめる）
+_bm25_cache: dict[int, tuple[dict, BM25]] = {}
+
+
+def bm25_for(index: dict) -> BM25:
+    """index["chunks"] の BM25（直前に使った index ならキャッシュを使う）。"""
+    cached = _bm25_cache.get(id(index))
+    if cached is not None and cached[0] is index:
+        return cached[1]
+    bm25 = BM25([tokenize(c["text"]) for c in index["chunks"]])
+    _bm25_cache.clear()
+    _bm25_cache[id(index)] = (index, bm25)
+    return bm25
 
 
 class BM25Engine(Engine):
@@ -34,16 +46,17 @@ class BM25Engine(Engine):
         return {"engine": self.id, "built_at": time.time(), "chunks": chunks,
                 "stats": {"chunks": len(chunks)}}
 
+    def retrieve(self, index: dict, question: str, ctx: EngineContext, k: int = TOP_K,
+                 *, detail: dict | None = None) -> list[tuple[str, float]]:
+        """字句一致（BM25）の上位 k チャンク。LLM も埋め込みも使わない。"""
+        chunks = index["chunks"]
+        return [(chunks[i]["id"], s) for i, s in bm25_for(index).top_k(question, k=k)]
+
     def query(self, index: dict, question: str, mode: str, ctx: EngineContext) -> dict:
         ctx.progress(0.2, "BM25 検索")
-        cache_key = id(index)
-        bm25 = _bm25_cache.get(cache_key)
-        if bm25 is None:
-            bm25 = BM25([tokenize(c["text"]) for c in index["chunks"]])
-            _bm25_cache.clear()
-            _bm25_cache[cache_key] = bm25
-        hits = bm25.top_k(question, k=TOP_K)
-        passages = [index["chunks"][i] for i, _ in hits]
+        hits = self.retrieve(index, question, ctx, TOP_K)
+        by_id = {c["id"]: c for c in index["chunks"]}
+        passages = [by_id[cid] for cid, _ in hits]
         ctx.progress(0.6, "回答生成")
         think = ""
         if ctx.chat_ok:
@@ -52,6 +65,6 @@ class BM25Engine(Engine):
         else:
             answer = extractive_answer(question, passages)
             mode_used = "bm25(抽出)"
-        citations = [chunk_citation(index["chunks"][i], s) for i, s in hits]
+        citations = [chunk_citation(by_id[cid], s) for cid, s in hits]
         return {"answer": answer, "think": think, "mode": mode_used,
                 "citations": citations, "stats": {"retrieved": len(passages)}}

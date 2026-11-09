@@ -248,6 +248,60 @@ class TestAPIFlow(unittest.TestCase):
         self.assertIn("llm", {c["summary_source"] for c in graph["communities"]})
         self.api("/api/config", {"graphrag_extract": "standard", "graphrag_summaries": "ingest"})
 
+    def test_10_combo(self):
+        # 組み合わせ RAG: 構築しなくても質問できる（チャンクの一覧を質問時に作る）。各エンジンの構築済み
+        # インデックスを使い、古い・未構築の方式は飛ばして理由を出す。統合レポートに組み合わせが出る
+        import mock_llm
+        data = self.api("/api/engines")
+        combo = next(e for e in data["engines"] if e["id"] == "combo")
+        self.assertTrue(combo["available"], combo["reason"])
+        self.assertTrue(combo["auto_index"])
+        self.assertEqual(combo["combo"]["selected"], ["bm25", "vector", "graphrag"])
+        self.assertEqual([m["id"] for m in combo["combo"]["components"]], ["bm25", "vector", "graphrag", "decision"])
+        self.assertIn("1 問あたり LLM", combo["combo"]["estimate"]["text"])
+        self.assertEqual(combo["index"]["variant"] if combo["index"]["built"] else combo["combo"]["variant"],
+                         combo["combo"]["variant"])
+        # この時点: bm25 / vector は test_07 の文書追加の前に構築（古い）、graphrag は test_09 で構築し直した
+        before = len(mock_llm.REQUESTS)
+        q = {"question": "青嶺製作所の主力製品は？", "engines": ["combo", "bm25"], "mode": "auto"}
+        job = self.wait_job(self.api("/api/query", q)["job_id"])
+        entry = job["engines"]["combo"]
+        self.assertEqual(entry["status"], "done", entry.get("error"))
+        res = entry["result"]
+        self.assertEqual(res["combo"]["used"], ["bm25", "graphrag"])
+        self.assertEqual([s["id"] for s in res["combo"]["skipped"]], ["vector"])
+        self.assertTrue(any("埋め込み: Vector RAG のインデックスが古い" in w for w in res["warnings"]))
+        self.assertEqual(res["variant"]["label"], "全文＋GraphRAG")
+        self.assertEqual(entry["variant"]["label"], "全文＋埋め込み＋GraphRAG")      # 設定の組み合わせ
+        self.assertTrue(res["citations"] and all(c["why"] for c in res["citations"]))
+        self.assertEqual(entry["llm_stats"]["chat_calls"], res["combo"]["llm_calls"]["total"])
+        self.assertNotIn("考え中", res["answer"])
+        prompts = [m.get("content", "") for r in mock_llm.REQUESTS[before:] if r["path"].endswith("/chat/completions")
+                   for m in r["body"].get("messages", [])]
+        self.assertFalse(any("[TASK:graph_extract" in p or "[TASK:community_summary]" in p for p in prompts))
+        synth = [p for p in prompts if "[TASK:synthesis]" in p]
+        self.assertTrue(synth)
+        self.assertIn("組み合わせ RAG（選んだ方式を RRF で統合）・全文＋GraphRAG", synth[-1])
+        engines = self.api("/api/engines")["engines"]
+        combo = next(e for e in engines if e["id"] == "combo")
+        self.assertTrue(combo["index"]["built"])
+        self.assertFalse(combo["index"]["stale"])
+
+        # 設定を変えると構築し直さずに次の質問から反映。vector を構築し直せば使われる
+        cfg = self.api("/api/config", {"combo_components": ["vector", "bm25"], "combo_rerank": True})
+        self.assertEqual((cfg["combo_components"], cfg["combo_rerank"]), (["bm25", "vector"], True))
+        self.assertEqual(self.wait_job(self.api("/api/ingest", {"engines": ["vector"]})["job_id"])["status"], "done")
+        job = self.wait_job(self.api("/api/query", dict(q, engines=["combo"]))["job_id"])
+        res = job["engines"]["combo"]["result"]
+        self.assertEqual(res["combo"]["used"], ["bm25", "vector"])
+        self.assertEqual(res["combo"]["skipped"], [])
+        self.assertTrue(res["combo"]["rerank"]["used"])
+        self.assertEqual(res["combo"]["llm_calls"], {"total": 2, "judge": 0, "rerank": 1, "answer": 1})
+        self.assertEqual(res["variant"]["label"], "全文＋埋め込み・LLM並べ替え")
+        self.assertEqual(job["synthesis"]["status"], "skipped")                    # エンジン 1 つ
+        cfg = self.api("/api/config", {"combo_components": ["bm25", "vector", "graphrag"], "combo_rerank": False})
+        self.assertFalse(cfg["combo_rerank"])
+
     def test_08_validation_errors(self):
         for path, body in (("/api/ingest", {"engines": []}),
                            ("/api/ingest", {"engines": ["unknown-engine"]}),

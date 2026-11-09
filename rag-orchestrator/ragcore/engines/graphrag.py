@@ -49,6 +49,9 @@ LAZY_SUMMARIES_PER_QUERY = 5      # lazy: 1回の質問で LLM 要約するコ�
 FAST_MAX_ENTITIES = 12            # fast: 1チャンクから書かせるエンティティ数の上限
 FAST_MAX_RELATIONS = 15           # fast: 同じく関係の数の上限
 FAST_STRENGTH = 5                 # fast: 関係の強さ（書かせないので既定値）
+SEED_ENTITIES = 8                 # local 検索・retrieve で質問から選ぶエンティティ数
+RETRIEVE_RELATION_WEIGHT = 0.5    # retrieve: 関係の根拠のチャンクに足す重み（× エンティティの重み × 強さ/10）
+RETRIEVE_HOP_WEIGHT = 0.25        # retrieve: 関係の先（1 歩先）のエンティティのチャンクに足す重み
 DESC_MERGE_LIMIT = 600            # マージ後のエンティティ説明文の最大長
 JSON_MIN_TOKENS = 3072            # 抽出・要約など JSON 出力系呼び出しの max_tokens 下限。
                                   # 推論モデル（Qwen3 等）は思考にトークンを使うため、
@@ -848,36 +851,96 @@ class GraphRAGEngine(Engine):
                 "stats": {"fallback": True, "retrieved": len(passages),
                           "map_parse_failures": map_parse_failures}}
 
+    # ------------------------------------------------------------ 検索（local と組み合わせ RAG で共通）
+    @staticmethod
+    def _select_entities(index: dict, question: str,
+                         ctx: EngineContext) -> tuple[list[tuple[dict, float]], str]:
+        """質問に関連するエンティティ（上位 8）。埋め込みがあれば意味検索、無ければ BM25。
+
+        戻り値は ([(エンティティ, スコア)], 選び方)。選び方は embed / bm25 / degree（どちらも当たらず、
+        関係の多い順の上位 5 で代用した）。
+        """
+        entities = index["entities"]
+        if index.get("entity_vecs"):
+            try:
+                qvec = ctx.query_vec(question)
+                hits = [(entities[i], s) for i, s in top_k_cosine(qvec, index["entity_vecs"], k=SEED_ENTITIES)
+                        if s > 0]
+                if hits:
+                    return hits, "embed"
+            except LLMError as e:
+                ctx.log(f"質問の埋め込みに失敗、字句検索へフォールバック: {e}")
+        if entities:
+            bm25 = BM25([_entity_tokens(e) for e in entities])
+            hits = [(entities[i], s) for i, s in bm25.top_k(question, k=SEED_ENTITIES)]
+            if hits:
+                return hits, "bm25"
+        return [(e, 0.0) for e in sorted(entities, key=lambda e: -e["degree"])[:5]], "degree"
+
+    @staticmethod
+    def _neighbor_relations(index: dict, keys: set[str]) -> list[dict]:
+        """keys のエンティティにつながる関係（強い順に 20 件）。"""
+        rel_hits = [r for r in index["relations"] if r["source"] in keys or r["target"] in keys]
+        rel_hits.sort(key=lambda r: -r["strength"])
+        return rel_hits[:20]
+
+    def retrieve(self, index: dict, question: str, ctx: EngineContext, k: int = 5,
+                 *, detail: dict | None = None) -> list[tuple[str, float]]:
+        """エンティティからたどったチャンク（local 検索の前半だけ。回答の生成も global の map-reduce もしない）。
+
+        質問に関連するエンティティ（local と同じ選び方の上位 8。順位 r の重み 1/r）から:
+          - そのエンティティが出てくるチャンク: + 重み
+          - そのエンティティの関係（強い順に 20 件）の根拠のチャンク: + 0.5 × 重み × 強さ/10
+          - 関係の先のエンティティ（1 歩先）が出てくるチャンク: + 0.25 × 重み × 強さ/10
+        を足したスコアの順（同点は質問との字句一致の順）。LLM は呼ばない（埋め込みがあれば質問の埋め込み 1 回）。
+        local の回答は埋め込みがあると全チャンクから類似度で選ぶが、ここではエンティティにつながるチャンク
+        だけを候補にする（組み合わせ RAG でベクトル検索と同じ信号にならないように）。
+        質問に関連するエンティティが見つからないときは空（関係の無いチャンクを混ぜない）。
+        """
+        seeds, how = self._select_entities(index, question, ctx)
+        if detail is not None:
+            detail.update(how=how, entities=[e["name"] for e, _ in seeds[:5]] if how != "degree" else [])
+        if how == "degree" or not seeds:
+            if detail is not None:
+                detail["note"] = "質問に関連するエンティティが見つかりませんでした"
+            return []
+        weight = {e["key"]: 1.0 / r for r, (e, _) in enumerate(seeds, 1)}
+        by_key = {e["key"]: e for e in index["entities"]}
+        score: dict[str, float] = defaultdict(float)
+        for e, _ in seeds:
+            for cid in e.get("chunks") or []:
+                score[cid] += weight[e["key"]]
+        rel_hits = self._neighbor_relations(index, set(weight))
+        for r in rel_hits:
+            w = max(weight.get(r["source"], 0.0), weight.get(r["target"], 0.0))
+            strength = min(10.0, max(0.0, float(r.get("strength") or 0))) / 10.0
+            for cid in r.get("chunks") or []:
+                score[cid] += RETRIEVE_RELATION_WEIGHT * w * strength
+            other = r["target"] if r["source"] in weight else r["source"]
+            if other not in weight and other in by_key:
+                for cid in by_key[other].get("chunks") or []:
+                    score[cid] += RETRIEVE_HOP_WEIGHT * w * strength
+        position = {c["id"]: i for i, c in enumerate(index["chunks"])}
+        cands = [cid for cid in score if cid in position]
+        lexical = dict(zip(cands, BM25([_chunk_tokens(index["chunks"][position[c]]) for c in cands])
+                           .scores(question))) if cands else {}
+        cands.sort(key=lambda c: (-round(score[c], 9), -lexical.get(c, 0.0), position[c]))
+        if detail is not None:
+            detail.update(relations=len(rel_hits), candidates=len(cands))
+        return [(cid, round(score[cid], 4)) for cid in cands[:k]]
+
     def _query_local(self, index: dict, question: str, ctx: EngineContext) -> dict:
         entities = index["entities"]
-        relations = index["relations"]
         by_key = {e["key"]: e for e in entities}
 
         # 関連エンティティの選定（埋め込みがあれば意味検索、無ければ BM25）
         ctx.progress(0.1, "エンティティ検索")
-        top_entities: list[dict] = []
-        if index.get("entity_vecs"):
-            try:
-                qvec = ctx.llm.embed([question])[0]
-                for i, score in top_k_cosine(qvec, index["entity_vecs"], k=8):
-                    if score > 0:
-                        top_entities.append(entities[i])
-            except LLMError as e:
-                ctx.log(f"質問の埋め込みに失敗、字句検索へフォールバック: {e}")
-        if not top_entities and entities:
-            bm25 = BM25([_entity_tokens(e) for e in entities])
-            top_entities = [entities[i] for i, _ in bm25.top_k(question, k=8)]
-        if not top_entities:
-            top_entities = sorted(entities, key=lambda e: -e["degree"])[:5]
-
+        top_entities = [e for e, _ in self._select_entities(index, question, ctx)[0]]
         top_keys = {e["key"] for e in top_entities}
 
         # 近傍情報の収集
         ctx.progress(0.35, "近傍情報の収集")
-        rel_hits = [r for r in relations
-                    if r["source"] in top_keys or r["target"] in top_keys]
-        rel_hits.sort(key=lambda r: -r["strength"])
-        rel_hits = rel_hits[:20]
+        rel_hits = self._neighbor_relations(index, top_keys)
 
         com_hits = [c for c in index["communities"]
                     if c["summary"] and top_keys & set(c["entity_keys"])][:3]
@@ -892,7 +955,7 @@ class GraphRAGEngine(Engine):
                       if cid in chunk_by_id and not (cid in seen or seen.add(cid))]
         if index.get("chunk_vecs"):
             try:
-                qvec = ctx.llm.embed([question])[0]
+                qvec = ctx.query_vec(question)          # エンティティ検索で埋め込んだものを使い回す
                 ranked = top_k_cosine(qvec, index["chunk_vecs"], k=5)
                 candidates = [chunks[i] for i, s in ranked if s > 0] or candidates
             except LLMError:

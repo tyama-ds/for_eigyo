@@ -6,7 +6,8 @@
 
 - 標準ライブラリのみ（pip install 不要）。127.0.0.1 にのみ bind し外部公開しない
 - LLM はローカルの OpenAI 互換エンドポイント（Ollama / LM Studio / vLLM / llama.cpp）
-- 組み込みエンジン: GraphRAG（Microsoft 方式の再実装）/ Vector / BM25 / Hybrid
+- 組み込みエンジン: GraphRAG（Microsoft 方式の再実装）/ Vector / BM25 / Hybrid / DecisionRAG /
+  組み合わせ（選んだ方式を RRF で統合）
 - 外部エンジン: nano-graphrag / LightRAG（pip 導入で有効化・実験的）
 - BM25 は LLM 未設定でも抜粋モードで動作する
 """
@@ -54,7 +55,7 @@ def api_engines() -> dict:
         info["index"] = store.index_status(eng.id, corpus["rev"])
         if info["index"]["built"]:
             # 構築済みインデックスの方式（GraphRAG の 標準 / 高速 など。記録の無い古いものは 標準）
-            info["index"]["variant"] = eng.variant(stats=info["index"].get("stats") or {})
+            info["index"]["variant"] = eng.variant(stats=info["index"].get("stats") or {}, cfg=cfg)
         engines.append(info)
     # チャンク数（GraphRAG の構築方式ごとの LLM 呼び出し回数の目安に使う）
     chunks = len(build_chunks(corpus["docs"]))
