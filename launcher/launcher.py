@@ -22,13 +22,17 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
+import urllib.error
+import urllib.request
 import webbrowser
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-__version__ = "1.1.0"
+__version__ = "1.1.5"
 
 BASE = Path(__file__).resolve().parent
 APPS_FILE = BASE / "apps.json"
@@ -47,16 +51,122 @@ _procs: dict[str, dict] = {}  # app_id -> {proc, log(deque), started(float)}
 
 # ---------------------------------------------------------------- apps.json
 
-def load_apps() -> list[dict]:
+class AppsFileError(ValueError):
+    """apps.json を読めない（書式の誤りを補っても読めない・形が違う）。"""
+
+
+# json のエラー文 → 手で直す人向けの説明
+_JSON_HINTS = [
+    ("Expecting ',' delimiter", "「,」（カンマ）が抜けています。多くは前の行の末尾です"),
+    ("Expecting property name enclosed in double quotes",
+     "「}」の直前に余分な「,」があるか、項目名が \"\" で囲まれていません"),
+    ("Expecting ':' delimiter", "項目名の後ろの「:」が抜けています"),
+    ("Expecting value", "値が抜けているか、「]」「}」の直前に余分な「,」があります"),
+    ("Invalid \\", "Windows のパスの「\\」は「\\\\」か「/」で書きます"),
+    ("Invalid control character", "文字列の途中で改行しています"),
+    ("Unterminated string", "「\"」が閉じていません"),
+    ("Extra data", "最後の「}」の後ろに余分な文字があります"),
+]
+
+_apps_file_fixes: list[str] = []
+
+
+def _prev_nonspace(text: str, pos: int) -> int:
+    i = pos - 1
+    while i >= 0 and text[i] in " \t\r\n":
+        i -= 1
+    return i
+
+
+def parse_json_leniently(text: str) -> tuple[object, list[str]]:
+    """手で編集した JSON によくある誤り（行末の「,」の抜け・余分な「,」・Windows パスの「\\」）を補って読む。
+    (データ, 補った内容) を返す。補えない誤りは最初のエラーをそのまま投げる。"""
+    fixes: list[str] = []
+    first: json.JSONDecodeError | None = None
+    for _ in range(200):
+        try:
+            return json.loads(text), list(dict.fromkeys(fixes))  # 同じ行の同じ補いは1つにまとめる
+        except json.JSONDecodeError as e:
+            first = first or e
+            pos, prev = e.pos, _prev_nonspace(text, e.pos)
+            line = text.count("\n", 0, max(prev, 0)) + 1
+            if (e.msg == "Expecting ',' delimiter" and prev >= 0
+                    and "\n" in text[prev:pos] and text[pos:pos + 1] in ('{', '[', '"')):
+                text = text[:prev + 1] + "," + text[prev + 1:]
+                fixes.append(f"{line} 行目の末尾に抜けていた「,」を補いました")
+            elif (e.msg in ("Expecting property name enclosed in double quotes", "Expecting value")
+                    and prev >= 0 and text[prev] == "," and text[pos:pos + 1] in ("}", "]")):
+                text = text[:prev] + text[prev + 1:]
+                fixes.append(f"{line} 行目の末尾の余分な「,」を除きました")
+            elif e.msg.startswith("Invalid \\") and "\\" in text[max(0, pos - 1):pos + 1]:
+                bs = pos if text[pos:pos + 1] == "\\" else pos - 1
+                text = text[:bs] + "\\\\" + text[bs + 1:]
+                fixes.append(f"{text.count(chr(10), 0, bs) + 1} 行目の「\\」を「\\\\」（パスの区切り）として読みました")
+            else:
+                raise first
+    raise first
+
+
+def describe_json_error(name: str, text: str, e: json.JSONDecodeError) -> str:
+    hint = next((h for key, h in _JSON_HINTS if e.msg.startswith(key)), e.msg)
+    lines = text.splitlines()
+    shown = range(max(1, e.lineno - 2), min(len(lines), e.lineno) + 1)
+    snippet = "\n".join(f"{n:>5} | {lines[n - 1]}" for n in shown)
+    return f"{name} の {e.lineno} 行目 {e.colno} 文字目に書式の誤りがあります（{hint}）\n{snippet}"
+
+
+def read_apps_file() -> tuple[dict, list[str]]:
+    """apps.json を読む。手で編集したときの軽い誤りは補い、補った内容も返す。"""
+    raw = APPS_FILE.read_bytes()
+    fixes: list[str] = []
     try:
-        data = json.loads(APPS_FILE.read_text(encoding="utf-8"))
+        text = raw.decode("utf-8-sig")  # メモ帳が付ける BOM も受け付ける
+    except UnicodeDecodeError:
+        text = raw.decode("cp932", errors="replace")
+        fixes.append("文字コードが UTF-8 ではないため Shift_JIS として読みました")
+    try:
+        data, more = parse_json_leniently(text)
+    except json.JSONDecodeError as e:
+        raise AppsFileError(describe_json_error(APPS_FILE.name, text, e)) from None
+    if not isinstance(data, dict) or not isinstance(data.get("apps"), list):
+        raise AppsFileError(f'{APPS_FILE.name} の形が違います（{{"apps": [ ... ]}} の形にしてください）')
+    return data, fixes + more
+
+
+def apps_file_fixes() -> list[str]:
+    return list(_apps_file_fixes)
+
+
+def load_apps() -> list[dict]:
+    global _apps_file_fixes
+    try:
+        data, fixes = read_apps_file()
     except FileNotFoundError:
+        _apps_file_fixes = []
         return []
-    apps = data.get("apps", [])
+    if fixes and fixes != _apps_file_fixes:
+        print(f"[App Portal] {APPS_FILE.name} に書式の誤りがあったため補って読みました: " + " / ".join(fixes),
+              file=sys.stderr, flush=True)
+    _apps_file_fixes = fixes
+    apps = [a for a in data["apps"] if isinstance(a, dict)]
     for app in apps:
         app.setdefault("icon", "terminal")
         app.setdefault("description", "")
     return apps
+
+
+def repair_apps_file() -> list[str]:
+    """補った内容で apps.json を書き直す（元のファイルは apps.json.bak に残す）。補った内容を返す。"""
+    raw = APPS_FILE.read_bytes()
+    data, fixes = read_apps_file()
+    if not fixes:
+        return []
+    APPS_FILE.with_name(APPS_FILE.name + ".bak").write_bytes(raw)
+    tmp = APPS_FILE.with_name(APPS_FILE.name + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp, APPS_FILE)
+    load_apps()
+    return fixes
 
 
 def save_apps(apps: list[dict]) -> None:
@@ -276,15 +386,17 @@ def _progress_version(cwd: Path) -> tuple[str | None, Path | None]:
 def git_last_updated(directory: Path) -> str | None:
     """そのフォルダを最後に変更したコミットの日付（YYYY-MM-DD）。git が無ければ None。"""
     try:
+        # text=True にしない: 日本語版 Windows では cp932 で読まれ、git が UTF-8 で出す日本語の
+        # パス入りメッセージ（dubious ownership など）で UnicodeDecodeError になるため、バイト列で受ける
         out = subprocess.run(
             ["git", "-C", str(directory), "log", "-1", "--format=%cd",
              "--date=short", "--", "."],
-            capture_output=True, text=True, timeout=4,
+            capture_output=True, timeout=4,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError, ValueError):
         return None
-    date = out.stdout.strip()
+    date = out.stdout.decode("utf-8", "replace").strip()
     return date if out.returncode == 0 and re.match(r"^\d{4}-\d{2}-\d{2}$", date) else None
 
 
@@ -328,7 +440,12 @@ def app_version(app: dict, fresh: bool = False) -> dict:
         hit = _version_cache.get(key)
         if hit and not fresh and now - hit[0] < VERSION_TTL:
             return hit[1]
-    info = detect_version(app)
+    try:
+        info = detect_version(app)
+    except Exception as e:  # 1つのアプリの読み取り失敗で一覧全体（/api/apps）を止めない
+        print(f"[App Portal] {app.get('id')}: バージョン情報を読めませんでした: "
+              f"{type(e).__name__}: {e}", file=sys.stderr)
+        info = {"version": None, "source": None, "updated": None}
     with _version_lock:
         _version_cache[key] = (now, info)
     return info
@@ -504,6 +621,19 @@ def app_previews(app: dict) -> list[str]:
     return found
 
 
+def apps_payload(fresh: bool = False) -> list[dict]:
+    """全アプリの状態を並行して調べる。
+
+    Windows では止まっているアプリのポートへの接続がすぐ失敗せず待ち時間の上限まで待つため、
+    順番に調べるとアプリ数 × 0.4 秒（15 アプリで約 6 秒）かかっていた。
+    """
+    apps = load_apps()
+    if not apps:
+        return []
+    with ThreadPoolExecutor(max_workers=min(16, len(apps))) as pool:
+        return list(pool.map(lambda a: app_payload(a, fresh=fresh), apps))
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):  # 静かに
         pass
@@ -513,8 +643,34 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
+
+    def _guard(self, handle) -> None:
+        """想定外の例外で接続を黙って切らず、500 と理由を返す（画面にそのまま表示される）。"""
+        try:
+            handle()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass  # ブラウザ側が先に切った
+        except Exception as e:
+            traceback.print_exc()
+            message = f"{type(e).__name__}: {e}"
+            print(f"[App Portal] {self.command} {self.path} の処理でエラー: {message}",
+                  file=sys.stderr)
+            try:
+                self._json({"ok": False, "error": message}, 500)
+            except OSError:
+                pass
+
+    def do_GET(self):
+        self._guard(self._handle_get)
+
+    def do_POST(self):
+        self._guard(self._handle_post)
+
+    def do_DELETE(self):
+        self._guard(self._handle_delete)
 
     def _read_body(self) -> dict:
         n = int(self.headers.get("Content-Length") or 0)
@@ -525,22 +681,35 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, UnicodeDecodeError):
             return {}
 
-    def do_GET(self):
+    def _handle_get(self):
         u = urlparse(self.path)
         if u.path in ("/", "/index.html"):
             body = UI_FILE.read_bytes()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")  # 更新後に古い画面が残らないように
             self.end_headers()
             self.wfile.write(body)
             return
+        if u.path == "/api/ping":  # 画面が「サーバーが止まっている」と「一覧の作成で失敗」を見分けるため
+            # shutdown: 新しいポータルが起動したとき、この（前の）ポータルを終了させて番号を引き継げる
+            self._json({"ok": True, "app": "App Portal", "version": __version__,
+                        "pid": os.getpid(), "shutdown": True})
+            return
         if u.path == "/api/apps":
             fresh = (parse_qs(u.query).get("fresh") or [""])[0] == "1"
+            try:
+                apps = apps_payload(fresh=fresh)
+            except AppsFileError as e:
+                print(f"[App Portal] {e}", file=sys.stderr, flush=True)
+                self._json({"ok": False, "kind": "apps_file", "error": str(e)}, 500)
+                return
             self._json({
-                "apps": [app_payload(a, fresh=fresh) for a in load_apps()],
+                "apps": apps,
                 "layout": load_layout(),
                 "portal": {"version": __version__},
+                "apps_file": {"fixes": apps_file_fixes()},
             })
             return
         if u.path == "/api/layout":
@@ -581,7 +750,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._json({"error": "not found"}, 404)
 
-    def do_POST(self):
+    def _handle_post(self):
         u = urlparse(self.path)
         app_id = (parse_qs(u.query).get("id") or [""])[0]
 
@@ -593,6 +762,34 @@ class Handler(BaseHTTPRequestHandler):
             result = launch_app(app) if u.path == "/api/launch" else stop_app(app)
             code = 200 if result.get("ok") else 400
             self._json(result, code)
+            return
+
+        if u.path == "/api/apps/repair":  # 補って読んだ apps.json を、その内容で書き直す
+            ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            if ctype != "application/json":
+                self._json({"ok": False, "error": "Content-Type は application/json"}, 415)
+                return
+            try:
+                fixes = repair_apps_file()
+            except (AppsFileError, OSError) as e:
+                self._json({"ok": False, "error": str(e)}, 400)
+                return
+            self._json({"ok": True, "fixes": fixes, "backup": APPS_FILE.name + ".bak" if fixes else None})
+            return
+
+        if u.path == "/api/shutdown":  # 新しく起動したポータルへの引き継ぎ
+            ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            if ctype != "application/json":
+                self._json({"ok": False, "error": "Content-Type は application/json"}, 415)
+                return
+            host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]").lower()
+            if host not in ("127.0.0.1", "localhost"):
+                self._json({"ok": False, "error": "forbidden"}, 403)
+                return
+            self._json({"ok": True})
+            print("[App Portal] 新しく起動したポータルに引き継ぐため、こちらは終了します", flush=True)
+            # serve_forever を止める（この処理中のスレッドから直接呼ぶと終わりを待って固まるので別スレッドで）
+            threading.Thread(target=self.server.shutdown, daemon=True).start()
             return
 
         if u.path == "/api/layout":  # カードの並び・グループ・非表示を保存
@@ -649,7 +846,7 @@ class Handler(BaseHTTPRequestHandler):
 
         self._json({"error": "not found"}, 404)
 
-    def do_DELETE(self):
+    def _handle_delete(self):
         u = urlparse(self.path)
         if u.path == "/api/apps":
             app_id = (parse_qs(u.query).get("id") or [""])[0]
@@ -664,15 +861,95 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"error": "not found"}, 404)
 
 
+class PortalServer(ThreadingHTTPServer):
+    # Windows の SO_REUSEADDR は「他のプロセスが待ち受け中のポートにも重ねて待ち受ける」ことを許す。
+    # 古いポータルが残っていると新しいポータルも起動したように見え、ブラウザの要求は古い方に届いていた。
+    # Windows では付けない（付けなくても、閉じた直後の同じ番号で起動し直せる）
+    allow_reuse_address = os.name != "nt"
+    daemon_threads = True
+
+
+def _bind(port: int) -> PortalServer | None:
+    try:
+        return PortalServer((HOST, port), Handler)
+    except OSError:
+        return None
+
+
+_NO_PROXY = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def probe_portal(port: int, timeout: float = 2.0) -> dict | None:
+    """port で待ち受けている相手に /api/ping を聞く。
+    ポータルなら ping の内容、HTTP エラーなら {"ok": False, "status": コード}、応答が無ければ None。"""
+    try:
+        with _NO_PROXY.open(f"http://{HOST}:{port}/api/ping", timeout=timeout) as r:
+            data = json.loads(r.read().decode("utf-8"))
+            return data if isinstance(data, dict) else {"ok": False}
+    except urllib.error.HTTPError as e:
+        return {"ok": False, "status": e.code}
+    except (OSError, ValueError):
+        return None
+
+
+def request_shutdown(port: int, timeout: float = 3.0) -> bool:
+    req = urllib.request.Request(
+        f"http://{HOST}:{port}/api/shutdown", data=b"{}", method="POST",
+        headers={"Content-Type": "application/json"})
+    try:
+        with _NO_PROXY.open(req, timeout=timeout) as r:
+            return r.status == 200
+    except (OSError, ValueError):
+        return False
+
+
+def _occupant(info: dict | None) -> str:
+    if info is None:
+        return "応答しないプログラム（固まった古いポータルなど）"
+    if info.get("version"):
+        return f"古いポータル（v{info['version']}）"
+    if info.get("status") == 404:
+        return "古いポータル（v1.1.2 以前）または別のプログラム"
+    return "別のプログラム"
+
+
+def open_server(port: int, log=print, fallback_range: int = 30) -> PortalServer:
+    """port で待ち受ける。使われていたら、前のポータルなら終了させて引き継ぎ、
+    引き継げない相手なら次の空き番号で待ち受ける。"""
+    server = _bind(port)
+    if server:
+        return server
+    info = probe_portal(port)
+    if info and info.get("shutdown"):
+        log(f"[App Portal] {port} 番で動いていた前のポータル（v{info.get('version')}）を終了して引き継ぎます")
+        if request_shutdown(port):
+            deadline = time.monotonic() + 8
+            while time.monotonic() < deadline:
+                server = _bind(port)
+                if server:
+                    return server
+                time.sleep(0.2)
+    for alt in range(port + 1, port + 1 + fallback_range):
+        server = _bind(alt)
+        if server:
+            log(f"[App Portal] {port} 番は {_occupant(info)} が使っているため、{alt} 番で起動します。\n"
+                f"             {port} 番の古いポータルを止めるには、黒いウィンドウをすべて閉じるか、\n"
+                f"             タスクマネージャーの「詳細」タブで python.exe と py.exe を終了してください。")
+            return server
+    raise SystemExit(f"[App Portal] {port}〜{port + fallback_range} 番がすべて使われていて起動できません。"
+                     "タスクマネージャーで python.exe を終了してから起動し直してください。")
+
+
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="App Portal — アプリ呼び出しの窓口")
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
     ap.add_argument("--open", action="store_true", help="起動時にブラウザを開く")
     args = ap.parse_args(argv)
 
-    server = ThreadingHTTPServer((HOST, args.port), Handler)
-    url = f"http://{HOST}:{args.port}"
-    print(f"App Portal v{__version__}: {url}  (Ctrl+C で終了)")
+    server = open_server(args.port, log=lambda m: print(m, flush=True))
+    port = server.server_address[1]
+    url = f"http://{HOST}:{port}"
+    print(f"App Portal v{__version__}: {url}  (Ctrl+C で終了)", flush=True)
     if args.open:
         webbrowser.open(url)
     try:
@@ -681,6 +958,8 @@ def main(argv: list[str] | None = None) -> None:
         print("\n停止します")
         for app in load_apps():
             stop_app(app)
+    finally:
+        server.server_close()
 
 
 if __name__ == "__main__":

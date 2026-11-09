@@ -134,6 +134,16 @@ class TestAPIFlow(unittest.TestCase):
         self.assertGreater(len(data["edges"]), 0)
         names = {n["name"] for n in data["nodes"]}
         self.assertIn("青嶺製作所", names)
+        # 出典文書・総数が付く（GUI の詳細パネル・ヒント表示用）
+        self.assertTrue(any(n["docs"] for n in data["nodes"]))
+        self.assertGreaterEqual(data["total_nodes"], len(data["nodes"]))
+        # limit で次数上位に絞れる（下限 20）
+        small = self.api("/api/graph?engine=graphrag&limit=1")
+        self.assertLessEqual(len(small["nodes"]), 20)
+        self.assertEqual(self.api("/api/graph?engine=graphrag&limit=abc")["nodes"], data["nodes"])
+        # 静的ファイル（グラフビューア）が配信される
+        with _opener.open(self.base + "/graphview.js", timeout=10) as res:
+            self.assertIn(b"GraphView", res.read())
         # 未構築エンジンはエラー
         self.assertIn("error", self.api("/api/graph?engine=hybrid"))
 
@@ -193,6 +203,104 @@ class TestAPIFlow(unittest.TestCase):
         graphrag = next(e for e in engines if e["id"] == "graphrag")
         self.assertTrue(graphrag["index"]["built"])
         self.assertTrue(graphrag["index"]["stale"])
+
+    def test_09_graphrag_modes(self):
+        # 構築方式を「超高速（LLM なし）」にすると、構築時に LLM を呼ばず、方式が一覧・結果・統合レポートに出る
+        import mock_llm
+        cfg = self.api("/api/config", {"graphrag_extract": "terms", "graphrag_summaries": "lazy"})
+        self.assertEqual(cfg["graphrag_extract"], "terms")
+        data = self.api("/api/engines")
+        self.assertGreater(data["corpus_chunks"], 0)
+        graphrag = next(e for e in data["engines"] if e["id"] == "graphrag")
+        self.assertEqual(graphrag["graph"]["extract"], "terms")
+        self.assertEqual(graphrag["graph"]["variant"]["kind"], "terms")
+        self.assertEqual(graphrag["index"]["variant"]["kind"], "standard")   # 既存は標準で構築済み
+
+        before = len(mock_llm.REQUESTS)
+        job = self.wait_job(self.api("/api/ingest", {"engines": ["graphrag"]})["job_id"])
+        entry = job["engines"]["graphrag"]
+        self.assertEqual(entry["status"], "done", entry.get("error"))
+        self.assertEqual(entry["variant"]["kind"], "terms")
+        self.assertEqual(entry["result"]["stats"]["llm_calls"], 0)
+        self.assertFalse(any("/chat/completions" in r["path"] for r in mock_llm.REQUESTS[before:]))
+        graphrag = next(e for e in self.api("/api/engines")["engines"] if e["id"] == "graphrag")
+        self.assertEqual(graphrag["index"]["variant"]["kind"], "terms")
+
+        # global の質問: 関連の高いコミュニティだけ質問時に要約し、保存して2回目は再利用する
+        q = {"question": "資料全体の要点をまとめてください", "engines": ["graphrag", "bm25"], "mode": "global"}
+        first = self.wait_job(self.api("/api/query", q)["job_id"])["engines"]["graphrag"]
+        self.assertEqual(first["status"], "done", first.get("error"))
+        self.assertEqual(first["variant"]["kind"], "terms")
+        self.assertEqual(first["result"]["variant"]["kind"], "terms")
+        made = first["result"]["stats"]["lazy_summarized"]
+        self.assertGreater(made, 0)
+        stored = store.load_index("graphrag")
+        self.assertEqual(sum(c["summary_source"] == "llm" for c in stored["communities"]), made)
+        second = self.wait_job(self.api("/api/query", q)["job_id"])
+        self.assertEqual(second["engines"]["graphrag"]["result"]["stats"]["lazy_reused"], made)
+        prompts = [m.get("content", "") for r in mock_llm.REQUESTS if r["path"].endswith("/chat/completions")
+                   for m in r["body"].get("messages", [])]
+        synth = [p for p in prompts if "[TASK:synthesis]" in p]
+        self.assertTrue(synth)
+        self.assertIn("GraphRAG（組み込み）・語の共起（LLM なし）", synth[-1])
+        graph = self.api("/api/graph?engine=graphrag")
+        self.assertEqual(graph["variant"]["kind"], "terms")
+        self.assertIn("llm", {c["summary_source"] for c in graph["communities"]})
+        self.api("/api/config", {"graphrag_extract": "standard", "graphrag_summaries": "ingest"})
+
+    def test_10_combo(self):
+        # 組み合わせ RAG: 構築しなくても質問できる（チャンクの一覧を質問時に作る）。各エンジンの構築済み
+        # インデックスを使い、古い・未構築の方式は飛ばして理由を出す。統合レポートに組み合わせが出る
+        import mock_llm
+        data = self.api("/api/engines")
+        combo = next(e for e in data["engines"] if e["id"] == "combo")
+        self.assertTrue(combo["available"], combo["reason"])
+        self.assertTrue(combo["auto_index"])
+        self.assertEqual(combo["combo"]["selected"], ["bm25", "vector", "graphrag"])
+        self.assertEqual([m["id"] for m in combo["combo"]["components"]], ["bm25", "vector", "graphrag", "decision"])
+        self.assertIn("1 問あたり LLM", combo["combo"]["estimate"]["text"])
+        self.assertEqual(combo["index"]["variant"] if combo["index"]["built"] else combo["combo"]["variant"],
+                         combo["combo"]["variant"])
+        # この時点: bm25 / vector は test_07 の文書追加の前に構築（古い）、graphrag は test_09 で構築し直した
+        before = len(mock_llm.REQUESTS)
+        q = {"question": "青嶺製作所の主力製品は？", "engines": ["combo", "bm25"], "mode": "auto"}
+        job = self.wait_job(self.api("/api/query", q)["job_id"])
+        entry = job["engines"]["combo"]
+        self.assertEqual(entry["status"], "done", entry.get("error"))
+        res = entry["result"]
+        self.assertEqual(res["combo"]["used"], ["bm25", "graphrag"])
+        self.assertEqual([s["id"] for s in res["combo"]["skipped"]], ["vector"])
+        self.assertTrue(any("埋め込み: Vector RAG のインデックスが古い" in w for w in res["warnings"]))
+        self.assertEqual(res["variant"]["label"], "全文＋GraphRAG")
+        self.assertEqual(entry["variant"]["label"], "全文＋埋め込み＋GraphRAG")      # 設定の組み合わせ
+        self.assertTrue(res["citations"] and all(c["why"] for c in res["citations"]))
+        self.assertEqual(entry["llm_stats"]["chat_calls"], res["combo"]["llm_calls"]["total"])
+        self.assertNotIn("考え中", res["answer"])
+        prompts = [m.get("content", "") for r in mock_llm.REQUESTS[before:] if r["path"].endswith("/chat/completions")
+                   for m in r["body"].get("messages", [])]
+        self.assertFalse(any("[TASK:graph_extract" in p or "[TASK:community_summary]" in p for p in prompts))
+        synth = [p for p in prompts if "[TASK:synthesis]" in p]
+        self.assertTrue(synth)
+        self.assertIn("組み合わせ RAG（選んだ方式を RRF で統合）・全文＋GraphRAG", synth[-1])
+        engines = self.api("/api/engines")["engines"]
+        combo = next(e for e in engines if e["id"] == "combo")
+        self.assertTrue(combo["index"]["built"])
+        self.assertFalse(combo["index"]["stale"])
+
+        # 設定を変えると構築し直さずに次の質問から反映。vector を構築し直せば使われる
+        cfg = self.api("/api/config", {"combo_components": ["vector", "bm25"], "combo_rerank": True})
+        self.assertEqual((cfg["combo_components"], cfg["combo_rerank"]), (["bm25", "vector"], True))
+        self.assertEqual(self.wait_job(self.api("/api/ingest", {"engines": ["vector"]})["job_id"])["status"], "done")
+        job = self.wait_job(self.api("/api/query", dict(q, engines=["combo"]))["job_id"])
+        res = job["engines"]["combo"]["result"]
+        self.assertEqual(res["combo"]["used"], ["bm25", "vector"])
+        self.assertEqual(res["combo"]["skipped"], [])
+        self.assertTrue(res["combo"]["rerank"]["used"])
+        self.assertEqual(res["combo"]["llm_calls"], {"total": 2, "judge": 0, "rerank": 1, "answer": 1})
+        self.assertEqual(res["variant"]["label"], "全文＋埋め込み・LLM並べ替え")
+        self.assertEqual(job["synthesis"]["status"], "skipped")                    # エンジン 1 つ
+        cfg = self.api("/api/config", {"combo_components": ["bm25", "vector", "graphrag"], "combo_rerank": False})
+        self.assertFalse(cfg["combo_rerank"])
 
     def test_08_validation_errors(self):
         for path, body in (("/api/ingest", {"engines": []}),

@@ -6,6 +6,7 @@ OpenAI 互換エンドポイント（Ollama / LM Studio / vLLM / llama.cpp serve
 """
 from __future__ import annotations
 
+import copy
 import json
 import threading
 from pathlib import Path
@@ -32,20 +33,106 @@ DEFAULT_CONFIG: dict = {
     # use_proxy=True で proxy_url 空なら環境変数（HTTP(S)_PROXY）を使う。
     "use_proxy": False,
     "proxy_url": "",
+    # DecisionRAG（arXiv:2610.35868）の判定モデル: llm（上の LLM）/ api（判定 API: Jev・OpenAI・Azure）
+    "decision_judge": "llm",
+    "decision_beam": 4,        # 各段で残す枝の数
+    "decision_budget": 8,      # 1質問あたりの判定回数の上限
+    # 組み込み GraphRAG の構築方式（エンジンタブで選ぶ。次回のインデックス構築から反映）
+    #   graphrag_extract  : standard（LLM が説明つきで抽出）/ fast（名前と関係の組だけ）/ terms（語の共起・LLM なし）
+    #   graphrag_summaries: ingest（構築時に LLM で要約）/ lazy（質問時に関連の高いものだけ要約）/ none（要約しない）
+    #   fast / terms で ingest を選んでいても lazy として扱う（構築時にコミュニティごとの LLM 呼び出しをしない）
+    "graphrag_extract": "standard",
+    "graphrag_summaries": "ingest",
+    # 組み合わせ RAG（エンジン combo。エンジンタブで選ぶ。構築し直し不要で次の質問から反映）
+    #   combo_components: RRF で統合する方式。bm25（全文）/ vector（埋め込み）/ graphrag（エンティティからたどる）/
+    #                     decision（階層を判定でたどる）。各エンジンの構築済みインデックスを使う
+    #   combo_rerank    : 統合した上位を LLM で並べ替える（質問ごとに LLM 1 回）
+    "combo_components": ["bm25", "vector", "graphrag"],
+    "combo_rerank": False,
+    # 判定 API（テキストを生成せず確率で答える判定モデル）。接続先ごとに設定を持ち、provider で選ぶ。
+    # endpoint・model が空なら既定値（decision_api.PROVIDERS）。外部サービスなので、ローカル LLM（直結）
+    # とは別にプロキシを設定する（use_proxy で URL が空なら環境変数、Windows はシステムの設定）
+    "decision_api": {
+        "provider": "openai",          # openrouter（Jev）/ openai / azure
+        "timeout": 60.0,
+        "openrouter": {"endpoint": "", "api_key": "", "model": "", "use_proxy": True, "proxy_url": ""},
+        "openai": {"endpoint": "", "api_key": "", "model": "", "use_proxy": True, "proxy_url": ""},
+        "azure": {"endpoint": "", "api_key": "", "model": "", "api_version": "",
+                  "use_proxy": True, "proxy_url": ""},
+    },
 }
+JUDGE_PROVIDERS = ("openrouter", "openai", "azure")
+GRAPHRAG_EXTRACT_MODES = ("standard", "fast", "terms")
+GRAPHRAG_SUMMARY_MODES = ("ingest", "lazy", "none")
+# 選択肢から選ぶ設定（ファイルを手で書き換えて範囲外になった値は既定値に戻す）
+CHOICES = {"graphrag_extract": GRAPHRAG_EXTRACT_MODES, "graphrag_summaries": GRAPHRAG_SUMMARY_MODES}
+COMBO_COMPONENTS = ("bm25", "vector", "graphrag", "decision")   # 組み合わせ RAG で選べる方式（この順で表示・実行）
+
+
+def valid_components(value) -> list[str] | None:
+    """combo_components の検証。既知の方式だけを重複なく決まった順に並べる。
+
+    リストでない・中身があるのに1つも既知でないときは None（その値は使わない）。空のリストはそのまま
+    （全部外した状態。組み合わせ RAG は「方式を1つ以上選んでください」で使えなくなる）。
+    """
+    if not isinstance(value, list):
+        return None
+    picked = [c for c in COMBO_COMPONENTS if c in value]
+    if value and not picked:
+        return None
+    return picked
 
 _lock = threading.Lock()
 
 
+def _merge_api(data) -> dict:
+    """decision_api を既定値の上に重ねる（未知のキー・型違いは捨てる）。"""
+    out = copy.deepcopy(DEFAULT_CONFIG["decision_api"])
+    if not isinstance(data, dict):
+        return out
+    if data.get("provider") in JUDGE_PROVIDERS:
+        out["provider"] = data["provider"]
+    if isinstance(data.get("timeout"), (int, float)) and not isinstance(data["timeout"], bool):
+        out["timeout"] = float(data["timeout"])
+    for name in JUDGE_PROVIDERS:
+        src = data.get(name)
+        if isinstance(src, dict):
+            for key, default in out[name].items():
+                if key in src and isinstance(src[key], type(default)):
+                    out[name][key] = src[key]
+    return out
+
+
+def _migrate(data: dict) -> dict:
+    """古い設定ファイルの読み替え: Jev 専用の jev_* → decision_api の openrouter。"""
+    if "decision_api" not in data and any(k.startswith("jev_") for k in data):
+        sub = {k[4:]: data[k] for k in ("jev_endpoint", "jev_api_key", "jev_model", "jev_use_proxy",
+                                         "jev_proxy_url") if k in data}
+        data = {**data, "decision_api": {"provider": "openrouter", "openrouter": sub}}
+    if data.get("decision_judge") == "jev":
+        data = {**data, "decision_judge": "api"}
+    return data
+
+
 def load_config() -> dict:
     with _lock:
-        cfg = dict(DEFAULT_CONFIG)
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
         if CONFIG_FILE.exists():
             try:
                 data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
+                    data = _migrate(data)
                     for key in DEFAULT_CONFIG:
-                        if key in data and isinstance(data[key], type(DEFAULT_CONFIG[key])):
+                        if key == "decision_api":
+                            cfg[key] = _merge_api(data.get(key))
+                        elif key == "combo_components":
+                            picked = valid_components(data.get(key))
+                            if picked is not None:
+                                cfg[key] = picked
+                        elif key in CHOICES:
+                            if data.get(key) in CHOICES[key]:
+                                cfg[key] = data[key]
+                        elif key in data and isinstance(data[key], type(DEFAULT_CONFIG[key])):
                             cfg[key] = data[key]
             except (OSError, ValueError):
                 pass
@@ -59,6 +146,42 @@ def save_config(new_cfg: dict) -> dict:
         if key in new_cfg and isinstance(new_cfg[key], str):
             cfg[key] = new_cfg[key].strip()
     # api_key は空文字なら「変更なし」扱い（UI に平文を返さないため）
+    judge = {"jev": "api"}.get(new_cfg.get("decision_judge"), new_cfg.get("decision_judge"))
+    if judge in ("llm", "api"):
+        cfg["decision_judge"] = judge
+    for key, allowed in CHOICES.items():
+        if new_cfg.get(key) in allowed:
+            cfg[key] = new_cfg[key]
+    if "combo_components" in new_cfg:
+        picked = valid_components(new_cfg["combo_components"])
+        if picked is not None:
+            cfg["combo_components"] = picked
+    if isinstance(new_cfg.get("combo_rerank"), bool):
+        cfg["combo_rerank"] = new_cfg["combo_rerank"]
+    api = new_cfg.get("decision_api")
+    if isinstance(api, dict):
+        dst_api = cfg["decision_api"]
+        if api.get("provider") in JUDGE_PROVIDERS:
+            dst_api["provider"] = api["provider"]
+        if "timeout" in api:
+            try:
+                dst_api["timeout"] = max(5.0, min(600.0, float(api["timeout"])))
+            except (TypeError, ValueError):
+                pass
+        for name in JUDGE_PROVIDERS:
+            src = api.get(name)
+            if not isinstance(src, dict):
+                continue
+            dst = dst_api[name]
+            for key in ("endpoint", "model", "api_version", "proxy_url"):
+                if key in dst and isinstance(src.get(key), str):
+                    dst[key] = src[key].strip()
+            if isinstance(src.get("api_key"), str) and src["api_key"].strip():
+                dst["api_key"] = src["api_key"].strip()
+            if src.get("clear_api_key"):
+                dst["api_key"] = ""
+            if "use_proxy" in src:
+                dst["use_proxy"] = bool(src["use_proxy"])
     for key, clear_flag in (("api_key", "clear_api_key"), ("embed_api_key", "clear_embed_api_key")):
         if isinstance(new_cfg.get(key), str) and new_cfg[key].strip():
             cfg[key] = new_cfg[key].strip()
@@ -68,7 +191,8 @@ def save_config(new_cfg: dict) -> dict:
         cfg["use_proxy"] = bool(new_cfg["use_proxy"])
     for key, lo, hi in (("context_window", 512, 1_000_000),
                         ("request_timeout", 5.0, 3600.0),
-                        ("max_tokens", 64, 32768)):
+                        ("max_tokens", 64, 32768), ("decision_beam", 1, 10),
+                        ("decision_budget", 2, 30)):
         if key in new_cfg:
             try:
                 val = float(new_cfg[key])
@@ -85,9 +209,13 @@ def save_config(new_cfg: dict) -> dict:
 
 def public_config(cfg: dict) -> dict:
     """api_key を伏せた、UI へ返してよい形。"""
-    out = {k: v for k, v in cfg.items() if k not in ("api_key", "embed_api_key")}
+    out = {k: copy.deepcopy(v) for k, v in cfg.items() if k not in ("api_key", "embed_api_key")}
     out["has_key"] = bool(cfg["api_key"])
     out["has_embed_key"] = bool(cfg["embed_api_key"])
+    for name in JUDGE_PROVIDERS:
+        sub = out["decision_api"][name]
+        sub["has_api_key"] = bool(sub.get("api_key"))
+        sub.pop("api_key", None)
     return out
 
 

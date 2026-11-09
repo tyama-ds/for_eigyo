@@ -7,6 +7,7 @@ import json
 import os
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -152,6 +153,51 @@ class VersionDetectionTests(SandboxMixin, unittest.TestCase):
         self.assertEqual(portal.app_version(app, fresh=True)["version"], "1.1.0")
 
 
+class GitDateRobustnessTests(unittest.TestCase):
+    """日本語版 Windows で git の出力を cp932 で読み、一覧ごと読み込めなくなった不具合の再発防止。"""
+
+    # git は UTF-8 で出す。日本語のパスは cp932 では読めないバイト列になる
+    JP_ERROR = ("fatal: detected dubious ownership in repository at "
+                "'C:/Users/山下/OneDrive - 日本製鉄株式会社/for_eigyo'\n").encode("utf-8")
+
+    def completed(self, code, stdout=b"", stderr=b""):
+        return portal.subprocess.CompletedProcess(["git"], code, stdout=stdout, stderr=stderr)
+
+    def test_message_really_is_undecodable_as_cp932(self):
+        with self.assertRaises(UnicodeDecodeError):
+            self.JP_ERROR.decode("cp932")
+
+    def test_output_is_read_as_bytes_not_with_the_locale_encoding(self):
+        with patch.object(portal.subprocess, "run",
+                          return_value=self.completed(0, b"2026-10-01\n", self.JP_ERROR)) as run:
+            self.assertEqual(portal.git_last_updated(Path(".")), "2026-10-01")
+        self.assertFalse(run.call_args.kwargs.get("text"))
+        self.assertIsNone(run.call_args.kwargs.get("encoding"))
+
+    def test_git_error_with_japanese_path_gives_no_date_instead_of_failing(self):
+        with patch.object(portal.subprocess, "run",
+                          return_value=self.completed(128, b"", self.JP_ERROR + b"\x8b\xff")):
+            self.assertIsNone(portal.git_last_updated(Path(".")))
+
+    def test_unexpected_errors_from_git_are_contained(self):
+        for error in (FileNotFoundError("git"), portal.subprocess.TimeoutExpired("git", 4),
+                      UnicodeDecodeError("cp932", b"\x8b", 0, 1, "illegal multibyte sequence")):
+            with self.subTest(error=type(error).__name__), \
+                    patch.object(portal.subprocess, "run", side_effect=error):
+                self.assertIsNone(portal.git_last_updated(Path(".")))
+
+    @unittest.skipUnless(os.name == "posix", "シェルスクリプトの偽 git を使うため POSIX のみ")
+    def test_real_process_printing_japanese_and_broken_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            message = Path(directory) / "message.bin"     # 引用符を含むのでシェルに埋め込まずファイルから出す
+            message.write_bytes(self.JP_ERROR + b"\x8b\xff\n")
+            fake = Path(directory) / "git"
+            fake.write_text(f'#!/bin/sh\ncat "{message}" >&2\nexit 128\n', encoding="utf-8")
+            fake.chmod(0o755)
+            with patch.dict(os.environ, {"PATH": directory + os.pathsep + os.environ.get("PATH", "")}):
+                self.assertIsNone(portal.git_last_updated(Path(directory)))
+
+
 class LayoutTests(SandboxMixin, unittest.TestCase):
     def setUp(self):
         self.make_sandbox()
@@ -238,6 +284,54 @@ class HttpApiTests(SandboxMixin, unittest.TestCase):
         status, fresh = self.request("/api/apps?fresh=1")
         self.assertEqual(status, 200)
         self.assertEqual(len(fresh["apps"]), 2)
+
+    def test_ping_reports_portal_version(self):
+        status, body = self.request("/api/ping")
+        self.assertEqual(status, 200)
+        self.assertEqual((body["ok"], body["version"], body["shutdown"]), (True, portal.__version__, True))
+
+    def test_unexpected_error_returns_500_with_reason_instead_of_dropping_connection(self):
+        with patch.object(portal, "load_apps", side_effect=RuntimeError("boom")):
+            status, body = self.request("/api/apps")
+        self.assertEqual(status, 500)
+        self.assertEqual(body, {"ok": False, "error": "RuntimeError: boom"})
+
+    def test_api_responses_are_not_cached(self):
+        with self.opener.open(self.base + "/api/apps", timeout=10) as res:
+            self.assertEqual(res.headers.get("Cache-Control"), "no-store")
+        with self.opener.open(self.base + "/", timeout=10) as res:
+            self.assertEqual(res.headers.get("Cache-Control"), "no-store")
+
+    def test_app_states_are_checked_in_parallel(self):
+        # Windows では止まっているポートの確認が 1 件 0.4 秒かかる。15 件を順番に調べると約 6 秒だった
+        write(portal.APPS_FILE, json.dumps({"apps": [
+            {"id": f"a{i}", "name": f"A{i}", "url": f"http://127.0.0.1:{9100 + i}"} for i in range(12)]}))
+
+        def slow_state(app):
+            time.sleep(0.4)
+            return "stopped"
+
+        with patch.object(portal, "app_state", side_effect=slow_state):
+            started = time.monotonic()
+            status, data = self.request("/api/apps")
+            elapsed = time.monotonic() - started
+        self.assertEqual((status, len(data["apps"])), (200, 12))
+        self.assertLess(elapsed, 2.0, f"12 件で {elapsed:.1f} 秒（順番なら約 4.8 秒）")
+        self.assertEqual([a["id"] for a in data["apps"]], [f"a{i}" for i in range(12)])  # 並びは apps.json のまま
+
+    def test_one_app_failing_version_detection_does_not_break_the_list(self):
+        real_detect = portal.detect_version
+
+        def detect(app):
+            if app["id"] == "app1":
+                raise UnicodeDecodeError("cp932", b"\x8b", 0, 1, "illegal multibyte sequence")
+            return real_detect(app)
+
+        with patch.object(portal, "detect_version", side_effect=detect):
+            status, data = self.request("/api/apps")
+        self.assertEqual(status, 200)
+        self.assertEqual([a["id"] for a in data["apps"]], ["app1", "web"])
+        self.assertEqual(data["apps"][0]["version"], {"version": None, "source": None, "updated": None})
 
     def test_add_app_keeps_optional_version_file(self):
         status, body = self.request("/api/apps", {

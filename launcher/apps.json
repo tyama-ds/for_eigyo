@@ -139,7 +139,7 @@
     {
       "id": "rag-orchestrator",
       "name": "RAG Orchestrator",
-      "description": "同一コーパス・同一質問を複数のRAG実装（GraphRAG/Vector/BM25/Hybrid + nano-graphrag/LightRAG）へ並列実行し、回答・出典・実行時間を比較して統合レポートを生成。ナレッジグラフ可視化つき。ローカルLLM（OpenAI互換）対応、BM25はLLMなしでも動作",
+      "description": "同一コーパス・同一質問を複数のRAG実装（GraphRAG/Vector/BM25/Hybrid/DecisionRAG + nano-graphrag/LightRAG）へ並列実行し、回答・出典・実行時間を比較して統合レポートを生成。ナレッジグラフ可視化つき。ローカルLLM（OpenAI互換）対応、BM25はLLMなしでも動作",
       "icon": "research",
       "cwd": "../rag-orchestrator",
       "command": [
@@ -150,6 +150,21 @@
       ],
       "url": "http://127.0.0.1:8750",
       "wait_port": 8750
+    },
+    {
+      "id": "doc-vault",
+      "name": "Doc Vault",
+      "description": "文書管理 × RAG 相談。PDF/Word/PowerPoint/Excel を取り込むとグラフ・要約・埋め込みで索引化し、質問の種類に応じて検索方式（DecisionRAG の階層ナビゲーション・Hybrid・グラフ等）を自動選択して出典付きで回答。社外秘はローカルLLM、公開資料はクラウドLLMで処理",
+      "icon": "docs",
+      "cwd": "../doc-vault",
+      "command": [
+        "{python}",
+        "server.py",
+        "--port",
+        "8760"
+      ],
+      "url": "http://127.0.0.1:8760",
+      "wait_port": 8760
     },
     {
       "id": "fermiscope",

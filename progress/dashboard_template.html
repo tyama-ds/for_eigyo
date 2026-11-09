@@ -118,6 +118,30 @@ details[open] .chev { transform: rotate(90deg); }
 footer { font-size: 12px; color: var(--muted); }
 footer code { font-family: var(--mono); }
 
+/* 画面イメージ */
+.shots-wrap { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px 24px; align-items: start; }
+.shots-group h4 { margin: 0 0 8px; font-size: 12px; font-weight: 500; color: var(--ink-2); }
+.shots { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.shot { margin: 0; display: grid; gap: 6px; align-content: start; }
+.shot button { all: unset; cursor: zoom-in; display: block; border: 1px solid var(--rule); border-radius: 8px; overflow: hidden;
+  background: var(--track); aspect-ratio: 16 / 10; }
+.shot button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.shot img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: top left; }
+.shot figcaption { font-size: 12px; color: var(--ink-2); display: grid; gap: 2px; }
+.shot figcaption .d { font: 11px var(--mono); color: var(--muted); }
+.kind { display: inline-block; font-size: 11px; font-weight: 500; border-radius: 4px; padding: 0 6px; margin-right: 6px;
+  background: var(--accent-soft); color: var(--ink); }
+.kind[data-k="change"] { background: color-mix(in srgb, #DC2626 14%, var(--surface)); color: color-mix(in srgb, #DC2626 75%, var(--ink)); }
+.imgcount { font: 11px var(--mono); color: var(--muted); margin-left: 8px; white-space: nowrap; }
+.noshots { color: var(--muted); font-size: 13px; margin: 0; }
+dialog.viewer { border: 0; padding: 0; background: transparent; max-width: min(96vw, 1400px); max-height: 94vh; }
+dialog.viewer::backdrop { background: rgba(8, 12, 18, .78); }
+dialog.viewer figure { margin: 0; display: grid; gap: 8px; }
+dialog.viewer img { display: block; max-width: 100%; max-height: calc(94vh - 56px); border-radius: 8px; background: var(--surface); }
+dialog.viewer figcaption { color: #E5EAF1; font-size: 13px; display: flex; gap: 12px; align-items: center; justify-content: space-between; }
+dialog.viewer button { font: 500 13px var(--sans); color: #E5EAF1; background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.25);
+  border-radius: 6px; padding: 4px 12px; cursor: pointer; }
+
 @media (max-width: 820px) {
   .head { display: none; }
   .row { grid-template-columns: 1fr auto; gap: 6px 12px; }
@@ -157,6 +181,10 @@ footer code { font-family: var(--mono); }
 
   <footer>進捗は各リポジトリの <code>progress/projects/*.json</code> を正本とし、for_eigyo の <code>progress/build_dashboard.py</code> で生成しています。進捗率は完了したマイルストーンと残作業からの目安です。</footer>
 </div>
+
+<dialog class="viewer" id="viewer" aria-label="画像を拡大">
+  <figure><img id="viewer-img" alt=""><figcaption><span id="viewer-cap"></span><button type="button" id="viewer-close">閉じる</button></figcaption></figure>
+</dialog>
 
 <script id="data" type="application/json">__DATA__</script>
 <script>
@@ -247,9 +275,11 @@ footer code { font-family: var(--mono); }
     meta.push("<span>CI <b>" + (p.ci ? "あり" : "なし") + "</b></span>");
     meta.push("<span>App Portal <b>" + (p.portal ? "登録済み" : "対象外") + "</b></span>");
     meta.push('<span>開始 <b class="num">' + esc(p.started) + "</b></span>");
+    var nimg = (p.images || []).length;
     var stale = isStale(p) ? '<span class="stale" title="' + D.staleDays + '日以上更新がありません">! ' + days(p.updated, today) + "日更新なし</span>" : "";
     return '<details id="p-' + esc(p.repo + "-" + p.slug) + '"><summary class="row" data-s="' + p.status + '">' +
-      '<span class="name"><b>' + esc(p.name) + "</b><code>" + esc(p.repo + " / " + p.path) + "</code></span>" +
+      '<span class="name"><b>' + esc(p.name) + "</b><code>" + esc(p.repo + " / " + p.path) + "</code>" +
+      (nimg ? '<span class="imgcount" title="画面イメージ・修正箇所の画像">画像 ' + nimg + "</span>" : "") + "</span>" +
       '<span class="st"><span class="pill"><span class="dot"></span>' + esc(S[p.status]) + "</span></span>" +
       '<span class="phase">' + esc(p.phase) + "</span>" +
       '<span class="meter" title="進捗の目安 ' + p.progress + '%"><span class="bar" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + p.progress + '" aria-label="進捗"><i style="width:' + p.progress + '%"></i></span><span class="num">' + p.progress + "%</span></span>" +
@@ -258,6 +288,7 @@ footer code { font-family: var(--mono); }
       '<div class="detail"><div class="full" style="display:grid;gap:8px"><p>' + esc(p.summary) + '</p><div class="meta">' + meta.join("") + "</div></div>" +
       '<div class="block"><h3>マイルストーン</h3><ul class="ms">' + (ms || "<li>なし</li>") + "</ul></div>" +
       '<div class="block" style="display:grid;gap:16px"><div><h3>次にやること</h3>' + bul(p.next) + "</div><div><h3>課題・リスク</h3>" + bul(p.risks) + "</div></div>" +
+      '<div class="block full"><h3>画面イメージ・修正箇所</h3><div class="shots-wrap" data-key="' + esc(p.repo + "/" + p.slug) + '"></div></div>' +
       '<div class="block full log"><h3>作業ログ</h3><table><tbody>' + log + "</tbody></table></div></div></details>";
   }
   function renderRows() {
@@ -271,6 +302,41 @@ footer code { font-family: var(--mono); }
     var h = location.hash.slice(1);
     if (h) { var el = document.getElementById(h); if (el && el.tagName === "DETAILS") el.open = true; }
   }
+  // 画面イメージは開いたときに描く（埋め込み画像が多いため）
+  var BY_KEY = {};
+  P.forEach(function (p) { BY_KEY[p.repo + "/" + p.slug] = p; });
+  function shots(p) {
+    var imgs = p.images || [];
+    if (!imgs.length) return '<p class="noshots">まだ画像がありません。次の開発から、画面イメージと修正箇所の画像を追加します。</p>';
+    return ["gui", "change"].map(function (k) {
+      var xs = imgs.filter(function (i) { return i.kind === k; });
+      if (!xs.length) return "";
+      return '<div class="shots-group"><h4>' + esc(D.imageKinds[k]) + '</h4><div class="shots">' + xs.map(function (i, n) {
+        var cap = esc(i.caption);
+        return '<figure class="shot"><button type="button" data-img="' + esc(p.repo + "/" + p.slug) + '" data-i="' + imgs.indexOf(i) + '" aria-label="拡大: ' + cap + '">' +
+          '<img src="' + i.src + '" alt="' + cap + '" loading="lazy"></button><figcaption><span><span class="kind" data-k="' + k + '">' + esc(D.imageKinds[k]) + "</span>" + cap +
+          '</span><span class="d">' + esc(i.date) + (i.ref ? " · " + esc(i.ref) : "") + "</span></figcaption></figure>";
+      }).join("") + "</div></div>";
+    }).join("");
+  }
+  var rowsEl = document.getElementById("rows");
+  rowsEl.addEventListener("toggle", function (e) {
+    var d = e.target; if (!d.open) return;
+    var w = d.querySelector(".shots-wrap");
+    if (w && !w.dataset.done) { w.innerHTML = shots(BY_KEY[w.dataset.key]); w.dataset.done = "1"; }
+  }, true);
+  var viewer = document.getElementById("viewer");
+  rowsEl.addEventListener("click", function (e) {
+    var b = e.target.closest("button[data-img]"); if (!b) return;
+    var i = BY_KEY[b.dataset.img].images[+b.dataset.i];
+    document.getElementById("viewer-img").src = i.src;
+    document.getElementById("viewer-img").alt = i.caption;
+    document.getElementById("viewer-cap").textContent = D.imageKinds[i.kind] + "｜" + i.caption + "（" + i.date + (i.ref ? " · " + i.ref : "") + "）";
+    if (viewer.showModal) viewer.showModal(); else window.open(i.src);
+  });
+  document.getElementById("viewer-close").addEventListener("click", function () { viewer.close(); });
+  viewer.addEventListener("click", function (e) { if (e.target === viewer) viewer.close(); });
+
   function renderAll() { renderRepoChips(); renderSummary(); renderChips(); renderRows(); }
   renderAll();
 })();

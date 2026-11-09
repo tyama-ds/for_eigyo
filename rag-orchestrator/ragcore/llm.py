@@ -16,6 +16,7 @@ import time
 import urllib.error
 import urllib.request
 
+_NO_LOGPROBS: set = set()        # logprobs を拒否した接続先（base_url, model）
 _THINK_BLOCK_RE = re.compile(r"<think(?:ing)?>(.*?)</think(?:ing)?>",
                              re.DOTALL | re.IGNORECASE)
 _THINK_OPEN_RE = re.compile(r"<think(?:ing)?>", re.IGNORECASE)
@@ -57,6 +58,27 @@ def split_think(text: str) -> tuple[str, str]:
 def strip_think(text: str) -> str:
     """<think>…</think>（未閉じ含む）を除去した回答テキストを返す。"""
     return split_think(text)[0]
+
+
+def no_think_model(model: str) -> bool:
+    """思考を /no_think で止められるモデル（Qwen3 の思考切り替え型）か。"""
+    return "qwen3" in (model or "").lower().replace("-", "").replace("_", "")
+
+
+def json_failure_reason(info: dict, text: str) -> str:
+    """JSON を取り出せなかった理由（画面・ログに出す）。"""
+    limit = info.get("max_tokens")
+    if info["finish"] == "repetition":
+        where = "思考" if info["think_chars"] > info["content_chars"] else "出力"
+        return f"{where}が同じ内容の繰り返しに入ったため打ち切りました"
+    if info["finish"] == "length":
+        if info["think_chars"] and info["content_chars"] < 20:
+            return (f"思考だけで出力の上限（{limit} トークン）に達し、JSON が出る前に切れました"
+                    "（推論モデル。Max Tokens を増やすか、思考の短いモデルにしてください）")
+        return f"出力の上限（{limit} トークン）で切れ、JSON を復元できませんでした"
+    if not text.strip():
+        return "応答が空でした"
+    return f"JSON ではない文章が返りました（冒頭: {text.strip()[:40]}）"
 
 
 class LLMError(RuntimeError):
@@ -149,6 +171,145 @@ class LLMClient:
             self.stats["chat_prompt_chars"] += len(prompt) + len(system)
             self.stats["chat_completion_chars"] += len(text)
         return (text, think) if want_think else text
+
+    # ------------------------------------------------------------ JSON を書かせる呼び出し
+    def chat_json(self, prompt: str, *, system: str = "", max_tokens: int | None = None,
+                  temperature: float = 0.0, on_progress=None):
+        """JSON を書かせる呼び出し。(解析結果 or None, 情報) を返す。
+
+        ローカル LLM は JSON を書き終えても説明を続けたり、同じ行を繰り返したり、考え続けたりして、
+        出力の上限まで止まらないことがある（500 字の文書のエンティティ抽出に 10 分かかって失敗した）。そこで:
+          - ストリーミングで受け取り、JSON が閉じたら・同じ内容の繰り返しに入ったら打ち切る
+          - Qwen3 系には /no_think を付けて思考を止める（抽出に長い思考は要らない）
+          - 上限で切れた JSON からは、書けた要素までを取り出す
+        情報: finish（json_complete / repetition / length / stop）・思考と本文の文字数・秒数・
+              salvaged（切れた JSON から取り出したか）・reason（失敗したときの理由）
+        """
+        from .textutil import extract_json, find_repetition, json_end, salvage_json
+
+        cfg = self.cfg
+        if not (cfg.get("base_url") and cfg.get("model")):
+            raise LLMError("LLM が未設定です（設定タブから Base URL / Model を登録してください）")
+        if no_think_model(cfg.get("model", "")) and "/no_think" not in prompt:
+            prompt = prompt + "\n\n/no_think"
+        messages = ([{"role": "system", "content": system}] if system else [])
+        messages.append({"role": "user", "content": prompt})
+        limit = int(max_tokens or cfg.get("max_tokens") or 1600)
+        payload = {"model": cfg["model"], "messages": messages, "max_tokens": limit,
+                   "temperature": temperature, "stream": True}
+        headers = {"Content-Type": "application/json"}
+        if cfg.get("api_key"):
+            headers["Authorization"] = f"Bearer {cfg['api_key']}"
+        req = urllib.request.Request(cfg["base_url"].rstrip("/") + "/chat/completions",
+                                     data=json.dumps(payload).encode("utf-8"), method="POST", headers=headers)
+        timeout = float(cfg.get("request_timeout") or 180.0)
+        content, reasoning, finish = "", "", ""
+        start = time.time()
+        try:
+            with self._opener.open(req, timeout=timeout) as res:
+                if "text/event-stream" not in (res.headers.get("Content-Type") or ""):
+                    data = json.loads(res.read().decode("utf-8", errors="replace"))   # ストリーミング非対応
+                    ch = (data.get("choices") or [{}])[0]
+                    msg = ch.get("message") or {}
+                    content = msg.get("content") or ""
+                    reasoning = str(msg.get("reasoning_content") or msg.get("reasoning") or "")
+                    finish = ch.get("finish_reason") or "stop"
+                else:
+                    checked = 0
+                    last_note = 0.0
+                    for raw in res:
+                        line = raw.decode("utf-8", errors="replace").strip()
+                        if not line.startswith("data:"):
+                            continue
+                        body = line[5:].strip()
+                        if body == "[DONE]":
+                            break
+                        try:
+                            ch = (json.loads(body).get("choices") or [{}])[0]
+                        except ValueError:
+                            continue
+                        delta = ch.get("delta") or {}
+                        content += delta.get("content") or ""
+                        reasoning += str(delta.get("reasoning_content") or delta.get("reasoning") or "")
+                        if ch.get("finish_reason"):
+                            finish = ch["finish_reason"]
+                        size = len(content) + len(reasoning)
+                        if size - checked >= 64:          # 64 字ごとに打ち切りを判定
+                            checked = size
+                            visible, think = split_think(content)
+                            if json_end(visible) is not None:
+                                finish = "json_complete"
+                                break
+                            if find_repetition(visible) or find_repetition(reasoning) \
+                                    or find_repetition(think):
+                                finish = "repetition"
+                                break
+                        if on_progress and time.time() - last_note >= 1.0:
+                            last_note = time.time()
+                            on_progress(size, time.time() - start)
+        except urllib.error.HTTPError as e:
+            detail = ""
+            try:
+                detail = e.read().decode("utf-8", errors="replace")[:300]
+            except OSError:
+                pass
+            raise LLMError(f"LLM API エラー HTTP {e.code}: {detail or e.reason}") from e
+        except (urllib.error.URLError, socket.timeout, OSError) as e:
+            raise LLMError(f"LLM に接続できません: {e}") from e
+        text, think = split_think(content)
+        think_chars = len(think) + len(reasoning)
+        seconds = time.time() - start
+        with self._lock:
+            self.stats["chat_calls"] += 1
+            self.stats["llm_seconds"] += seconds
+            self.stats["chat_prompt_chars"] += len(prompt) + len(system)
+            self.stats["chat_completion_chars"] += len(text)
+        data = extract_json(text)
+        salvaged = False
+        if data is None:
+            data = salvage_json(text)
+            salvaged = data is not None
+        info = {"finish": finish or "stop", "content_chars": len(text), "think_chars": think_chars,
+                "seconds": round(seconds, 1), "salvaged": salvaged, "max_tokens": limit, "reason": ""}
+        if data is None:
+            info["reason"] = json_failure_reason(info, text)
+        return data, info
+
+    def chat_logprobs(self, prompt: str, *, system: str = "", max_tokens: int | None = None
+                      ) -> tuple[str, list | None]:
+        """(回答テキスト（think 未除去）, トークンごとの logprobs) を返す（DecisionRAG の確率化用）。
+
+        logprobs（上位候補つき）を要求し、サーバが受け付けなければ以後は要求せず通常の chat に戻る。
+        """
+        cfg = self.cfg
+        key = (cfg.get("base_url"), cfg.get("model"))
+        if key in _NO_LOGPROBS:
+            return self.chat(prompt, system=system, max_tokens=max_tokens), None
+        if not (cfg.get("base_url") and cfg.get("model")):
+            raise LLMError("LLM が未設定です（設定タブから Base URL / Model を登録してください）")
+        base = cfg["base_url"].rstrip("/")
+        messages = ([{"role": "system", "content": system}] if system else [])
+        messages.append({"role": "user", "content": prompt})
+        payload = {"model": cfg["model"], "messages": messages,
+                   "max_tokens": int(max_tokens or cfg.get("max_tokens") or 1600),
+                   "temperature": 0.0, "logprobs": True, "top_logprobs": 10}
+        try:
+            data = self._post_json(f"{base}/chat/completions", payload, cfg.get("api_key", ""))
+        except LLMError as e:
+            if "logprob" not in str(e).lower():
+                raise
+            _NO_LOGPROBS.add(key)
+            return self.chat(prompt, system=system, max_tokens=max_tokens), None
+        choices = data.get("choices") or []
+        choice = choices[0] if choices else {}
+        text = (choice.get("message") or {}).get("content") or ""
+        lp = choice.get("logprobs")
+        lp = lp.get("content") if isinstance(lp, dict) else None
+        with self._lock:
+            self.stats["chat_calls"] += 1
+            self.stats["chat_prompt_chars"] += len(prompt) + len(system)
+            self.stats["chat_completion_chars"] += len(text)
+        return text, (lp if isinstance(lp, list) and lp else None)
 
     # ------------------------------------------------------------ embeddings
     def embed(self, texts: list[str]) -> list[list[float]]:

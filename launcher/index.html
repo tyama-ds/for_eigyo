@@ -32,7 +32,6 @@
     background:linear-gradient(92deg,#dbe4ff 10%, #8fb2ff 45%, #55e0ff 90%);
     -webkit-background-clip:text; background-clip:text; color:transparent;
   }
-  .brand p{color:var(--dim); margin-top:7px; font-size:13.5px}
   .btn{
     border:1px solid var(--line); background:linear-gradient(180deg,var(--card2),var(--card));
     color:var(--text); border-radius:12px; padding:10px 16px; font-size:14px; cursor:pointer;
@@ -81,6 +80,18 @@
   .drop-hint{grid-column:1/-1; display:grid; place-items:center; min-height:110px; color:#5f6a8c; font-size:13px}
   .card ~ .drop-hint{display:none}
   #hidden-note{margin-top:22px; text-align:center; font-size:12.5px; color:#7f8bb0}
+  .loaderr{margin:0 0 22px; padding:14px 18px; border-radius:14px; font-size:13px; line-height:1.75;
+    color:#ffd1d9; background:rgba(251,113,133,.10); border:1px solid rgba(251,113,133,.45)}
+  .loaderr b{color:#ffe3e8}
+  .loaderr code{background:rgba(10,14,26,.5); padding:1px 6px; border-radius:5px}
+  .loaderr pre{margin:8px 0; padding:8px 10px; background:rgba(10,14,26,.5); border-radius:8px;
+    white-space:pre-wrap; word-break:break-all; font-size:12px; line-height:1.6}
+  .loaderr.warn{color:#ffe2b0; background:rgba(251,191,36,.08); border-color:rgba(251,191,36,.45)}
+  .loaderr.warn b{color:#fff1d6}
+  .loaderr ul{margin:4px 0 8px; padding-left:20px}
+  .loaderr button{margin-top:4px; font:inherit; font-size:12.5px; color:#1a1405; background:#fbbf24;
+    border:0; border-radius:8px; padding:6px 12px; cursor:pointer}
+  .loaderr button:disabled{opacity:.6; cursor:default}
 
   /* ---------- cards ---------- */
   .grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(min(320px,100%),1fr)); gap:22px}
@@ -266,7 +277,6 @@
   <header>
     <div class="brand">
       <div class="brand-row"><h1>App Portal</h1><span class="pver" id="portal-ver" title="App Portal のバージョン"></span></div>
-      <p>for_eigyo / claudecode で作ったアプリを、ここからワンクリックで起動する窓口</p>
     </div>
     <div class="hdr-actions">
       <button class="btn" id="btn-versions" title="各アプリのバージョンと最終更新日">ⓘ バージョン一覧</button>
@@ -287,6 +297,8 @@
     </span>
   </div>
 
+  <div class="loaderr" id="load-error" role="alert" hidden></div>
+  <div class="loaderr warn" id="apps-note" role="status" hidden></div>
   <div id="board"></div>
   <div id="hidden-note"></div>
 
@@ -1239,9 +1251,123 @@ function setupPreview(card, frames) {
   });
 }
 
+/* 一覧を読めないときは黙って真っ白にせず、理由と対処を出す（4秒ごとの再試行で直れば自動で消える） */
+const loadError = document.getElementById("load-error");
+const LIST_TIMEOUT_MS = 20000;
+let refreshing = false;
+function showLoadError(title, detailHtml) {
+  loadError.innerHTML = `<b>${esc(title)}</b><br>${detailHtml}`;
+  loadError.hidden = false;
+}
+async function fetchWithTimeout(url, ms) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), ms);
+  try { return await fetch(url, {signal: ctl.signal, cache: "no-store"}); }
+  finally { clearTimeout(timer); }
+}
+
+/* 一覧を取れなかった理由を見分けて、何をすればよいかを画面に出す */
+async function diagnoseLoadFailure(err) {
+  const retry = "4秒ごとに再試行しています。";
+  if (location.protocol === "file:") {
+    showLoadError("このページはファイルとして直接開かれています",
+      `アドレス欄が <code>file:///</code> で始まっています。この開き方ではアプリ一覧を読めません。<br>
+       <code>launcher\\start_portal.bat</code> をダブルクリックし、自動で開くタブ（<code>http://127.0.0.1:8770</code>）を使ってください。`);
+    return;
+  }
+  if (err && err.kind === "apps_file") {
+    showLoadError("アプリの登録ファイル（apps.json）に書式の誤りがあります",
+      `<pre>${esc(err.serverError)}</pre>
+       <code>launcher\\apps.json</code> をメモ帳で開いて上の行を直して保存するか、「Download ZIP」で取り直した apps.json に置き換えてください。
+       保存すれば自動で表示されます。`);
+    return;
+  }
+  if (err && err.serverError) {
+    showLoadError("アプリ一覧の作成中にエラーが起きました",
+      `内容: <code>${esc(err.serverError)}</code><br>
+       ポータルの黒いウィンドウにも詳しい内容が出ています。この文言をそのまま伝えてもらえれば原因を特定できます。${retry}`);
+    return;
+  }
+  let ping = null;
+  try { ping = await fetchWithTimeout("/api/ping", 3000); } catch {}
+  if (ping && ping.status === 404) {
+    // v1.1.2 以前のポータルには /api/ping が無い。古いポータルが同じ番号で動き続けていて、要求がそちらに届いている
+    showLoadError("古いポータルがまだ動いています",
+      `${esc(location.port || "8770")} 番を、前に起動した古いポータル（v1.1.2 以前）が使い続けていて、要求がそちらに届いています。<br>
+       黒いウィンドウをすべて閉じ、それでも直らなければタスクマネージャーの「詳細」タブで <code>python.exe</code> と <code>py.exe</code> を終了してから、
+       <code>launcher\\start_portal.bat</code> で起動し直してください（v1.1.4 以降は、古いポータルが残っていても自動で引き継ぐか別の番号で起動します）。`);
+    return;
+  }
+  const alive = !!(ping && ping.ok);
+  if (!alive) {
+    showLoadError("ポータルのサーバーが止まっています",
+      `黒いウィンドウ（ポータル本体）が閉じたか、起動していません。<code>launcher\\start_portal.bat</code> で起動し直してください。
+       起動すれば、この画面は自動で表示に戻ります。`);
+  } else if (err && err.name === "AbortError") {
+    showLoadError("アプリ一覧の応答が20秒以上返ってきません",
+      `サーバーは動いていますが、一覧の作成が終わりません。黒いウィンドウにエラーが出ていないか確認してください。${retry}`);
+  } else {
+    showLoadError("サーバーは動いていますが、アプリ一覧の通信が途中で切れました",
+      `内容: <code>${esc(err ? (err.message || String(err)) : "不明")}</code><br>
+       黒いウィンドウにエラーが出ていないか確認してください。${retry}`);
+  }
+}
+
+/* apps.json の軽い書式の誤りは補って表示し、その内容で直すボタンを出す */
+const appsNote = document.getElementById("apps-note");
+let appsNoteKey = "";
+function showAppsNote(fixes) {
+  const key = fixes.join("\n");
+  if (key === appsNoteKey) return;            // 4秒ごとの更新でボタンを作り直さない
+  appsNoteKey = key;
+  appsNote.hidden = !fixes.length;
+  if (!fixes.length) { appsNote.innerHTML = ""; return; }
+  appsNote.innerHTML = `<b>apps.json（アプリの登録ファイル）に書式の誤りがあったため、補って表示しています</b>
+    <ul>${fixes.map(f => `<li>${esc(f)}</li>`).join("")}</ul>
+    <button type="button" id="apps-repair">この内容で apps.json を直す</button>
+    <span style="margin-left:8px">元のファイルは apps.json.bak として残します。</span>`;
+  document.getElementById("apps-repair").onclick = async (ev) => {
+    ev.target.disabled = true;
+    try {
+      const r = await fetch("/api/apps/repair", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"});
+      const b = await r.json().catch(() => ({}));
+      if (!r.ok || !b.ok) throw new Error(b.error || `HTTP ${r.status}`);
+      toast("apps.json を直しました（元は apps.json.bak）");
+      refresh(true);
+    } catch (e) {
+      ev.target.disabled = false;
+      toast("apps.json を直せませんでした: " + e.message, true);
+    }
+  };
+}
+
 async function refresh(force = false, fresh = false) {
+  if (refreshing) return;          // 前の問い合わせがまだ終わっていなければ重ねない
+  refreshing = true;
+  try { await refreshOnce(force, fresh); } finally { refreshing = false; }
+}
+
+async function refreshOnce(force, fresh) {
+  let data;
   try {
-    const data = await (await fetch("/api/apps" + (fresh ? "?fresh=1" : ""))).json();
+    if (location.protocol === "file:") throw new Error("file");
+    const r = await fetchWithTimeout("/api/apps" + (fresh ? "?fresh=1" : ""), LIST_TIMEOUT_MS);
+    let body = null;
+    try { body = await r.json(); } catch {}
+    if (!r.ok || !body || !Array.isArray(body.apps)) {
+      const e = new Error(`HTTP ${r.status}`);
+      e.serverError = (body && body.error) || (r.ok ? "応答の形式が不正です" : `サーバーの応答 HTTP ${r.status}`);
+      e.kind = body && body.kind;
+      throw e;
+    }
+    data = body;
+  } catch (e) {
+    await diagnoseLoadFailure(e);
+    return;
+  }
+  loadError.hidden = true;
+  showAppsNote((data.apps_file && data.apps_file.fixes) || []);
+  try {
     if (data.portal && data.portal.version) portalVer.textContent = "v" + data.portal.version;
     if (editMode || drag) return;               // 編集中は手元の配置を優先して描き直さない
     const snap = JSON.stringify([data.apps, data.layout]);
@@ -1251,7 +1377,11 @@ async function refresh(force = false, fresh = false) {
     layout = data.layout || {groups: [], hidden: []};
     render();
     if (vmodal.classList.contains("show")) renderVersions();
-  } catch {}
+  } catch (e) {
+    console.error(e);
+    lastSnap = null;   // 次の更新で描き直しを再試行する
+    showLoadError("画面の表示中にエラーが起きました", `内容: <code>${esc(e.message)}</code>`);
+  }
 }
 setInterval(() => { if (!ovShown && !editMode) refresh(); }, 4000);
 refresh();

@@ -197,5 +197,34 @@
       "ref": "#50"
     }
   ],
-  "updated": "2026-11-09"
+  "updated": "2026-11-09",
+  "images": [
+    {
+      "file": "images/mycel/2026-11-09-entity-filters.jpg",
+      "kind": "change",
+      "caption": "人物・組織の一時的な非表示（会社ごと・文書・フォルダ・個別）。戻すで復帰",
+      "date": "2026-11-09",
+      "ref": "#106"
+    },
+    {
+      "file": "images/mycel/2026-11-09-image-read.jpg",
+      "kind": "change",
+      "caption": "ノート内の画像をクリック → AI（VLM）で読んで説明を直下に挿入／指示して読む",
+      "date": "2026-11-09",
+      "ref": "#106"
+    },
+    {
+      "file": "images/mycel/2026-11-09-split-mode.jpg",
+      "kind": "change",
+      "caption": "右上に「分割」モード（左で編集・右に即時表示）を追加",
+      "date": "2026-11-09",
+      "ref": "#80"
+    },
+    {
+      "file": "images/mycel/2026-11-09-main.jpg",
+      "kind": "gui",
+      "caption": "ノートの閲覧（リンク・プロパティ・右パネル）",
+      "date": "2026-11-09"
+    }
+  ]
 }

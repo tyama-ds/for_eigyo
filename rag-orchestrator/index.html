@@ -40,6 +40,9 @@
             <option value="global">global（コーパス全体への質問）</option>
             <option value="local">local（特定の事柄への質問）</option>
           </select>
+          <label class="field-label">DecisionRAG のビーム幅</label>
+          <input type="number" id="q-beam" min="1" max="10" placeholder="設定の値"
+            title="各段で残す枝の数。空なら設定タブの値（既定 4）">
         </div>
         <div class="grow">
           <label class="field-label">実行するエンジン</label>
@@ -83,7 +86,10 @@
       </div>
       <p class="hint">
         インデックス構築は「コーパス → 各エンジンの検索用データ」の変換。GraphRAG はここで
-        エンティティ抽出とコミュニティ要約を行うため LLM を多く呼ぶ（コーパスが大きいほど時間がかかる）。
+        エンティティ抽出とコミュニティ要約を行うため、標準では LLM を多く呼ぶ（コーパスが大きいほど時間がかかる）。
+        遅いときは GraphRAG の「構築方式」で 高速 / 超高速（LLM なし）を選べる。
+        組み合わせ RAG は各エンジンの構築済みインデックスを使う（自分のインデックスは質問時に一瞬で作る）ので、
+        組み合わせたい方式のエンジン（Vector / GraphRAG / DecisionRAG）を先に構築しておく。
       </p>
       <div id="e-list"></div>
     </div>
@@ -93,25 +99,43 @@
   <!-- ============================ グラフ ============================ -->
   <section class="panel hidden" id="tab-graph">
     <div class="card">
-      <div class="row space-between">
+      <div class="row space-between wrap gap">
         <h2>ナレッジグラフ</h2>
-        <div class="row">
-          <select id="g-engine" class="inline-select">
-            <option value="graphrag">GraphRAG（組み込み）</option>
-            <option value="lightrag">LightRAG（外部）</option>
-            <option value="minirag">MiniRAG（外部）</option>
-            <option value="rag-anything">RAG-Anything（外部）</option>
-            <option value="nano-graphrag">nano-graphrag（外部）</option>
+        <div class="row wrap gap">
+          <select id="g-engine" class="inline-select" title="グラフを表示するエンジン"></select>
+          <select id="g-limit" class="inline-select" title="表示する最大ノード数（関係の多い順）">
+            <option value="150">上位150</option>
+            <option value="300" selected>上位300</option>
+            <option value="800">上位800</option>
           </select>
           <button class="btn" id="g-reload">再読み込み</button>
         </div>
       </div>
-      <p class="hint" id="g-hint">ノード=エンティティ、色=コミュニティ、太さ=関係の強さ。ドラッグで移動、ホバーで詳細。</p>
-      <canvas id="g-canvas" width="1200" height="640"></canvas>
+      <div class="graph-toolbar row wrap gap">
+        <input type="text" id="g-search" class="inline-input" placeholder="エンティティを検索（Enter で移動）">
+        <label class="check"><input type="checkbox" id="g-isolated"> 孤立ノードも表示</label>
+        <select id="g-color" class="inline-select">
+          <option value="community">色: コミュニティ</option>
+          <option value="type">色: 種別</option>
+        </select>
+        <span class="spacer"></span>
+        <button class="btn small" id="g-zoom-in" title="拡大">＋</button>
+        <button class="btn small" id="g-zoom-out" title="縮小">－</button>
+        <button class="btn small" id="g-fit" title="全体を表示">全体表示</button>
+      </div>
+      <p class="hint" id="g-hint">ホイールで拡大縮小、背景ドラッグで移動、ノードをクリックで詳細と関係を表示。</p>
+      <div class="graph-wrap">
+        <div class="graph-canvas-box"><canvas id="g-canvas"></canvas></div>
+        <aside class="graph-side" id="g-side">
+          <div id="g-legend"></div>
+          <div id="g-detail"><p class="hint">ノードをクリックすると、説明・関係・出典がここに表示されます。</p></div>
+        </aside>
+      </div>
       <div id="g-tooltip" class="tooltip hidden"></div>
     </div>
     <div class="card">
       <h2 id="g-com-title">コミュニティ要約</h2>
+      <p class="hint">クリックするとそのコミュニティを強調表示します（もう一度クリックで解除）。</p>
       <div id="g-communities"></div>
     </div>
   </section>
@@ -160,6 +184,102 @@
       <label class="field-label">Proxy URL（空なら環境変数 HTTP(S)_PROXY を使用）</label>
       <input type="text" id="s-proxy_url" placeholder="http://proxy.example:8080">
 
+      <h3>DecisionRAG（arXiv:2610.35868）</h3>
+      <p class="hint">検索器を使わず、文書→節→段落の階層を判定モデルでたどるエンジンの設定。</p>
+      <div class="row gap">
+        <div>
+          <label class="field-label">判定モデル</label>
+          <select id="s-decision_judge">
+            <option value="llm">LLM（上の接続先。logprobs があれば確率で読む）</option>
+            <option value="api">判定 API（Jev・OpenAI・Azure OpenAI の Decisions API）</option>
+          </select>
+        </div>
+        <div>
+          <label class="field-label">ビーム幅（各段で残す枝の数）</label>
+          <input type="number" id="s-decision_beam" min="1" max="10">
+        </div>
+        <div>
+          <label class="field-label">判定回数の上限</label>
+          <input type="number" id="s-decision_budget" min="2" max="30">
+        </div>
+      </div>
+      <details class="adv" id="judge-box">
+        <summary>判定 API の接続 — Decisions API（Jev / OpenAI / Azure OpenAI）</summary>
+        <p class="hint">判定 API はテキストを生成せず、「この候補は質問に関連するか」を確率で答える判定専用のモデルです。
+          選ぶと、コーパスの本文（各段の候補の説明文）が外部サービスへ送られます。日本語の文書での精度は未確認です。</p>
+        <div class="row gap">
+          <div>
+            <label class="field-label">接続先</label>
+            <select id="da-provider">
+              <option value="openai">OpenAI（gpt-6-luna）</option>
+              <option value="azure">Azure OpenAI（デプロイ名を指定）</option>
+              <option value="openrouter">Jev（OpenRouter・論文で使われた判定モデル）</option>
+            </select>
+          </div>
+          <div>
+            <label class="field-label">タイムアウト（秒）</label>
+            <input type="number" id="da-timeout" min="5" max="600">
+          </div>
+        </div>
+        <div class="judge-prov" data-prov="openai" hidden>
+          <label class="field-label">エンドポイント</label>
+          <input type="text" id="da-openai-endpoint" placeholder="https://api.openai.com/v1/decisions">
+          <div class="row gap">
+            <div class="grow">
+              <label class="field-label">OpenAI の API キー</label>
+              <input type="password" id="da-openai-api_key" autocomplete="off">
+            </div>
+            <div class="grow">
+              <label class="field-label">モデル</label>
+              <input type="text" id="da-openai-model" placeholder="gpt-6-luna">
+            </div>
+          </div>
+          <label class="check"><input type="checkbox" id="da-openai-use_proxy"> プロキシ経由で接続する（上の LLM のプロキシ設定とは別）</label>
+          <label class="field-label">Proxy URL（空なら環境変数 HTTPS_PROXY、Windows はシステムのプロキシ設定）</label>
+          <input type="text" id="da-openai-proxy_url" placeholder="http://proxy.example:8080">
+        </div>
+        <div class="judge-prov" data-prov="azure" hidden>
+          <label class="field-label">エンドポイント</label>
+          <input type="text" id="da-azure-endpoint" placeholder="https://<リソース名>.openai.azure.com">
+          <div class="row gap">
+            <div class="grow">
+              <label class="field-label">Azure OpenAI の API キー</label>
+              <input type="password" id="da-azure-api_key" autocomplete="off">
+            </div>
+            <div class="grow">
+              <label class="field-label">デプロイ名</label>
+              <input type="text" id="da-azure-model" placeholder="Decisions 用のデプロイ名">
+            </div>
+          </div>
+          <label class="field-label">API バージョン（空なら v1 API: …/openai/v1/decisions）</label>
+          <input type="text" id="da-azure-api_version" placeholder="空欄で可">
+          <label class="check"><input type="checkbox" id="da-azure-use_proxy"> プロキシ経由で接続する（上の LLM のプロキシ設定とは別）</label>
+          <label class="field-label">Proxy URL（空なら環境変数 HTTPS_PROXY、Windows はシステムのプロキシ設定）</label>
+          <input type="text" id="da-azure-proxy_url" placeholder="http://proxy.example:8080">
+        </div>
+        <div class="judge-prov" data-prov="openrouter" hidden>
+          <label class="field-label">エンドポイント</label>
+          <input type="text" id="da-openrouter-endpoint" placeholder="https://openrouter.ai/api/alpha/decisions">
+          <div class="row gap">
+            <div class="grow">
+              <label class="field-label">OpenRouter の API キー</label>
+              <input type="password" id="da-openrouter-api_key" autocomplete="off">
+            </div>
+            <div class="grow">
+              <label class="field-label">モデル</label>
+              <input type="text" id="da-openrouter-model" placeholder="typesafe/jev-1.14">
+            </div>
+          </div>
+          <label class="check"><input type="checkbox" id="da-openrouter-use_proxy"> プロキシ経由で接続する（上の LLM のプロキシ設定とは別）</label>
+          <label class="field-label">Proxy URL（空なら環境変数 HTTPS_PROXY、Windows はシステムのプロキシ設定）</label>
+          <input type="text" id="da-openrouter-proxy_url" placeholder="http://proxy.example:8080">
+        </div>
+        <div class="row gap">
+          <button class="btn wrap" id="da-test" type="button">判定 API の接続テスト（保存してから架空の候補 2 件で判定）</button>
+          <span class="hint" id="da-test-result"></span>
+        </div>
+      </details>
+
       <div class="row gap top-space">
         <button class="btn primary" id="s-save">保存</button>
         <button class="btn" id="s-test">接続テスト</button>
@@ -169,6 +289,7 @@
   </section>
 </main>
 
+<script src="/graphview.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

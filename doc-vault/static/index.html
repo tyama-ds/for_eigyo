@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Doc Vault</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='5' y='4' width='18' height='24' rx='3' fill='%235aa2ff'/%3E%3Crect x='9' y='9' width='10' height='2' fill='%230f1420'/%3E%3Crect x='9' y='14' width='10' height='2' fill='%230f1420'/%3E%3Ccircle cx='24' cy='22' r='6' fill='%23a78bfa'/%3E%3Cpath d='M21 22h6M24 19v6' stroke='%230f1420' stroke-width='2'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark">▣</span>
+    <span class="brand-name">Doc Vault</span>
+    <span class="brand-sub">文書管理 × RAG 相談</span>
+  </div>
+  <nav class="tabs" id="tabs">
+    <button class="tab active" data-tab="chat">相談</button>
+    <button class="tab" data-tab="docs">文書</button>
+    <button class="tab" data-tab="graph">グラフ</button>
+    <button class="tab" data-tab="settings">設定</button>
+  </nav>
+  <div class="conn" id="conn-status">状態を確認中…</div>
+</header>
+
+<main>
+  <!-- ============================ 相談 ============================ -->
+  <section class="panel" id="tab-chat">
+    <div class="chat-layout">
+      <aside class="chat-list">
+        <button class="btn primary wide" id="chat-new">＋ 新しい相談</button>
+        <div id="chat-items"></div>
+      </aside>
+      <div class="chat-main">
+        <div class="chat-head">
+          <div class="scope-bar" id="scope-bar" title="この相談で検索する文書（相談先）">
+            <span class="scope-k">相談先</span>
+            <span class="scope-label" id="scope-label">📚 すべての文書</span>
+            <span class="scope-count" id="scope-count"></span>
+            <button class="btn small" id="scope-change">相談先を変える</button>
+          </div>
+          <input type="text" id="chat-title" class="title-input" placeholder="相談のタイトル">
+          <div class="row wrap gap-s">
+            <label class="mini">モード
+              <select id="chat-mode" class="inline-select" title="LLM の使い分け">
+                <option value="auto">自動（社外秘を含むならローカル）</option>
+                <option value="local">ローカルのみ</option>
+                <option value="cloud">クラウド（公開文書のみ参照）</option>
+              </select>
+            </label>
+            <label class="mini">検索方式
+              <select id="chat-strategy" class="inline-select" title="検索の方式（使う RAG）">
+                <option value="auto">自動（質問の種類で選ぶ・おすすめ）</option>
+                <option value="fast">速さ優先（全文＋埋め込み＋GraphRAG・LLM は回答だけ）</option>
+                <option value="custom">選んで使う（下の「使う RAG」でチェック）</option>
+                <option value="decision">DecisionRAG のみ（階層をたどる）</option>
+                <option value="classic">従来型（自動から DecisionRAG を除く）</option>
+              </select>
+            </label>
+            <label class="mini" id="chat-beam-box" title="DecisionRAG で各段に残す枝の数（ビーム幅）。空なら設定の値">幅
+              <input type="number" id="chat-beam" class="inline-input beam-input" min="1" max="10" placeholder="既定">
+            </label>
+          </div>
+          <details class="rag-panel" id="rag-panel">
+            <summary><span class="rag-k">使う RAG</span> <span id="rag-summary"></span></summary>
+            <div class="rag-list" id="rag-list"></div>
+            <div class="rag-foot"><span id="rag-est" class="rag-est"></span>
+              <span class="spacer"></span>
+              <span class="rag-presets" id="rag-presets"></span>
+              <button class="btn small" id="rag-default" title="新しい相談の既定の検索方式・組み合わせにします">この方式を既定にする</button></div>
+          </details>
+          <div class="strategy-note" id="strategy-note"></div>
+        </div>
+        <div id="messages" class="messages">
+          <div class="empty-chat" id="empty-chat">
+            <h2>文書について質問できます</h2>
+            <p>取り込んだ文書を検索して、出典付きで回答します。質問の種類に応じて検索方法を自動で選びます。</p>
+            <div class="examples" id="examples"></div>
+          </div>
+        </div>
+        <div class="composer">
+          <textarea id="q" rows="2" placeholder="質問を入力（Enter で送信、Shift+Enter で改行）"></textarea>
+          <button class="btn mic" id="mic" title="音声で入力（もう一度押すと終了・Esc で取り消し）">🎤</button>
+          <button class="btn primary big" id="send">送信</button>
+        </div>
+        <div class="rec-bar hidden" id="rec-bar"><span class="rec-dot"></span><span id="rec-text">録音中 0:00</span>
+          <span class="rec-level"><span id="rec-level"></span></span><span class="muted" id="rec-engine"></span></div>
+        <div class="hint" id="chat-hint"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ 文書 ============================ -->
+  <section class="panel hidden" id="tab-docs">
+    <div class="docs-layout">
+      <aside class="folder-pane">
+        <div class="row space-between"><span class="pane-title">フォルダ</span>
+          <button class="btn small" id="folder-new" title="選んでいるフォルダの中に作ります">＋ フォルダ</button></div>
+        <p class="hint">文書の行をフォルダへドラッグすると移動します。フォルダもドラッグで移動できます。</p>
+        <div id="folder-tree" class="folder-tree"></div>
+        <div class="pane-title top-space">タグ</div>
+        <div id="tag-list"></div>
+      </aside>
+      <div class="docs-main">
+        <div class="card" id="dropzone">
+          <div class="row wrap gap">
+            <div class="drop-hint">
+              <b>ファイルをここへドラッグ＆ドロップ</b>
+              <span class="muted">PDF / Word / PowerPoint / Excel / テキスト / Markdown / CSV / HTML</span>
+            </div>
+            <label class="btn">ファイルを選ぶ<input type="file" id="file-input" multiple hidden></label>
+            <label class="btn" title="フォルダの中のファイルを、サブフォルダの構成のまま取り込みます">フォルダごと取り込む<input type="file" id="dir-input" webkitdirectory multiple hidden></label>
+            <button class="btn" id="load-samples" title="公開資料2件・社外秘資料2件のサンプル">サンプルを読み込む</button>
+          </div>
+          <div class="row wrap gap top-space">
+            <label class="mini">保存先フォルダ <input type="text" id="up-folder" class="inline-input" placeholder="例: 社内/品質（左のツリーで選択）"></label>
+            <label class="mini">区分
+              <select id="up-sens" class="inline-select">
+                <option value="internal">社外秘（ローカル LLM のみで処理）</option>
+                <option value="public">公開（クラウド LLM でも処理可）</option>
+              </select>
+            </label>
+            <label class="mini">タグ <input type="text" id="up-tags" class="inline-input" placeholder="カンマ区切り"></label>
+          </div>
+          <div id="upload-log" class="upload-log"></div>
+        </div>
+        <div class="card">
+          <div class="row wrap gap space-between">
+            <h2 id="docs-heading">文書</h2>
+            <div class="row gap-s grow-r">
+              <input type="text" id="doc-search" class="inline-input wide-input" placeholder="全文検索（本文・表・スライドの中身）">
+              <button class="btn" id="doc-search-btn">検索</button>
+            </div>
+          </div>
+          <div id="search-results"></div>
+          <div class="bulk-bar hidden" id="bulk-bar"></div>
+          <div id="doc-table"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ グラフ ============================ -->
+  <section class="panel hidden" id="tab-graph">
+    <div class="card">
+      <div class="row space-between wrap gap">
+        <h2>ナレッジグラフ <span class="muted" id="g-subtitle">取り込み時に文書から抽出したエンティティと関係</span></h2>
+        <div class="row wrap gap-s">
+          <div class="seg-btns" id="g-view" role="radiogroup" aria-label="表示の単位">
+            <button class="seg on" data-view="entities" title="エンティティ（組織・製品・設備…）と関係">エンティティ</button>
+            <button class="seg" data-view="folders" title="フォルダを丸、共通のエンティティを線にした全体図">フォルダ</button>
+            <button class="seg" data-view="docs" title="文書を丸、共通のエンティティを線にした全体図">文書</button>
+          </div>
+          <select id="g-folder" class="inline-select" title="対象フォルダ（配下を含む）"></select>
+          <select id="g-depth" class="inline-select" title="フォルダをどの階層でまとめるか（選んだフォルダから数えて）">
+            <option value="0">フォルダ: そのまま</option>
+            <option value="1">フォルダ: 1 階層目でまとめる</option>
+            <option value="2">フォルダ: 2 階層目でまとめる</option>
+          </select>
+          <select id="g-doc" class="inline-select" title="対象文書"></select>
+          <select id="g-limit" class="inline-select" title="表示する最大ノード数（関係の多い順）">
+            <option value="150">上位150</option>
+            <option value="300" selected>上位300</option>
+            <option value="800">上位800</option>
+          </select>
+          <button class="btn" id="g-reload">再読み込み</button>
+        </div>
+      </div>
+      <div class="graph-toolbar row wrap gap">
+        <input type="text" id="g-search" class="inline-input" placeholder="エンティティを検索（Enter で移動）">
+        <label class="check"><input type="checkbox" id="g-isolated"> 孤立ノードも表示</label>
+        <select id="g-color" class="inline-select">
+          <option value="community">色: コミュニティ</option>
+          <option value="type">色: 種別</option>
+          <option value="folder">色: フォルダ</option>
+        </select>
+        <span class="spacer"></span>
+        <button class="btn small" id="g-zoom-in" title="拡大">＋</button>
+        <button class="btn small" id="g-zoom-out" title="縮小">－</button>
+        <button class="btn small" id="g-fit">全体表示</button>
+      </div>
+      <p class="hint" id="g-hint">ホイールで拡大縮小、背景ドラッグで移動、ノードをクリックで詳細。</p>
+      <div class="graph-wrap">
+        <div class="graph-canvas-box"><canvas id="g-canvas"></canvas></div>
+        <aside class="graph-side">
+          <div id="g-legend"></div>
+          <div id="g-detail"><p class="hint">ノードをクリックすると、説明・関係・出典文書が表示されます。</p></div>
+        </aside>
+      </div>
+      <div id="g-tooltip" class="tooltip hidden"></div>
+    </div>
+  </section>
+
+  <!-- ============================ 設定 ============================ -->
+  <section class="panel hidden" id="tab-settings">
+    <div class="settings-grid">
+      <div class="card" data-profile="local">
+        <h2>ローカル LLM <span class="badge internal">社外秘 OK</span></h2>
+        <p class="hint">社外秘文書の処理と、社外秘を含む回答に使います。社内サーバ・PC 上の LLM を指定してください。</p>
+      </div>
+      <div class="card" data-profile="cloud">
+        <h2>クラウド LLM <span class="badge public">公開文書のみ</span></h2>
+        <p class="hint">公開文書の処理と、公開文書だけを根拠にする回答に使います。社外秘の本文は送られません。</p>
+      </div>
+    </div>
+    <div class="settings-grid">
+      <div class="card">
+        <h2>データの取り扱い</h2>
+        <label class="field-label">新しく取り込む文書の既定の区分</label>
+        <select id="p-default_sensitivity">
+          <option value="internal">社外秘</option>
+          <option value="public">公開</option>
+        </select>
+        <label class="field-label">公開文書の取り込み処理（グラフ抽出・要約・埋め込み）に使う LLM</label>
+        <select id="p-public_ingest_profile">
+          <option value="cloud">クラウド（未設定ならローカル）</option>
+          <option value="local">ローカル</option>
+        </select>
+        <label class="field-label">相談の既定モード</label>
+        <select id="p-chat_mode">
+          <option value="auto">自動: 社外秘資料を根拠に含むならローカル、公開資料だけならクラウド</option>
+          <option value="local">ローカルのみ: 質問文も含めて外部へ送らない</option>
+          <option value="cloud">クラウド: 公開文書だけを検索対象にしてクラウドで回答</option>
+        </select>
+        <p class="hint">社外秘文書の本文はどの設定でもクラウドへ送られません（プログラム側で強制）。
+          自動モードでは、社外秘資料を参照しない質問の文面はクラウドへ送られることがあります。</p>
+      </div>
+      <div class="card">
+        <h2>RAG の設定</h2>
+        <label class="check"><input type="checkbox" id="r-graph"> 取り込み時にナレッジグラフを作る（GraphRAG / LightRAG 方式）</label>
+        <div class="field-label">グラフの作り方（文書ごとに「文書の情報」から別の方式でも作れます）</div>
+        <div class="mode-cards" id="graph-mode-cards">
+          <label class="mode-card"><input type="radio" name="graph_mode" value="standard">
+            <b>標準</b><span class="mode-speed">LLM: チャンクごとに 1 回（長い出力）</span>
+            <span class="mode-desc">エンティティ・関係とその説明を LLM が書く。関係の意味まで分かるが、ローカル LLM では遅い</span></label>
+          <label class="mode-card"><input type="radio" name="graph_mode" value="fast">
+            <b>高速</b><span class="mode-speed">LLM: チャンクごとに 1 回（短い出力・数分の1の時間）</span>
+            <span class="mode-desc">名前・種別と関係の組だけを書かせる（説明なし）。グラフの形は標準に近い</span></label>
+          <label class="mode-card"><input type="radio" name="graph_mode" value="terms">
+            <b>語の共起（LLM なし）</b><span class="mode-speed">LLM: 0 回（一瞬）</span>
+            <span class="mode-desc">本文の語（漢字・カタカナ・型番）と、同じ文に出る語のつながりでグラフを作る（LazyGraphRAG 方式）。関係の種類は分からない</span></label>
+        </div>
+        <label class="check"><input type="checkbox" id="r-doc_summary"> 取り込み時に文書要約を作る（RAPTOR 方式。要約・横断質問に使う）</label>
+        <label class="check"><input type="checkbox" id="r-router"> 質問ルーター（検索要否・検索方法の判定と、会話を踏まえた質問の補完）</label>
+        <label class="check"><input type="checkbox" id="r-corrective"> 根拠が足りなければ再検索（CRAG）</label>
+        <label class="check"><input type="checkbox" id="r-rerank"> LLM で検索結果を並べ替える（精度↑・LLM 呼び出し+1）</label>
+        <div class="two">
+          <div><label class="field-label">相談の既定の検索方式（相談ごとに変えられます）</label>
+            <select id="r-default_strategy">
+              <option value="auto">自動（質問の種類で選ぶ）</option>
+              <option value="fast">速さ優先（LLM は回答だけ）</option>
+              <option value="custom">選んで使う（相談画面の「使う RAG」の既定の組み合わせ）</option>
+              <option value="decision">DecisionRAG のみ</option>
+              <option value="classic">従来型（DecisionRAG なし）</option>
+            </select></div>
+          <div class="hint" id="r-default-methods"></div>
+        </div>
+        <p class="hint">下のチェックは「自動」で使うかどうかです。「速さ優先」「選んで使う」は相談画面で選んだ方式を毎回使います。</p>
+        <h3 class="muted">DecisionRAG（arXiv:2610.35868）</h3>
+        <label class="check"><input type="checkbox" id="r-decision"> 事実・比較の質問で、文書の階層（フォルダ→文書→節→段落）を判定モデルでたどる</label>
+        <label class="check"><input type="checkbox" id="r-decision_choice"> 最後に上位の段落を選択式で比べて並べ替える</label>
+        <div class="row gap">
+          <div><label class="field-label">判定モデル</label>
+            <select id="r-decision_judge">
+              <option value="llm">LLM（ローカル / クラウドの設定を使う）</option>
+              <option value="api">判定 API（Jev・OpenAI・Azure OpenAI の Decisions API）</option>
+            </select></div>
+          <div><label class="field-label">ビーム幅（各段で残す枝の数）</label><input type="number" id="r-decision_beam" min="1" max="10"></div>
+          <div><label class="field-label">判定回数の上限</label><input type="number" id="r-decision_budget" min="2" max="30"></div>
+        </div>
+        <details class="adv" id="judge-box"><summary>判定 API の接続 — Decisions API（Jev / OpenAI / Azure OpenAI）</summary>
+          <p class="hint">判定 API はテキストを生成せず、「この候補は質問に関連するか」を確率で答える判定専用のモデルです。
+            外部サービスのため<b>公開文書の候補だけ</b>を判定させ、社外秘を含む段はローカル LLM で判定します
+            （Azure OpenAI で「社外秘の候補も送ってよい」を ON にしたときを除く）。日本語の文書での精度は未確認です。</p>
+          <div class="row gap">
+            <div><label class="field-label">接続先</label>
+              <select id="da-provider">
+                <option value="openai">OpenAI（gpt-6-luna）</option>
+                <option value="azure">Azure OpenAI（デプロイ名を指定）</option>
+                <option value="openrouter">Jev（OpenRouter・論文で使われた判定モデル）</option>
+              </select></div>
+            <div><label class="field-label">タイムアウト（秒）</label><input type="number" id="da-timeout" min="5" max="600"></div>
+          </div>
+          <div class="judge-prov" data-prov="openai" hidden>
+            <label class="field-label">エンドポイント</label><input type="text" id="da-openai-endpoint" placeholder="https://api.openai.com/v1/decisions">
+            <div class="two">
+              <div><label class="field-label">OpenAI の API キー</label><input type="password" id="da-openai-api_key" autocomplete="off"></div>
+              <div><label class="field-label">モデル</label><input type="text" id="da-openai-model" placeholder="gpt-6-luna"></div>
+            </div>
+            <label class="check"><input type="checkbox" id="da-openai-use_proxy"> プロキシを使う（URL が空なら環境変数、無ければ Windows のプロキシ設定）</label>
+            <label class="field-label">Proxy URL</label><input type="text" id="da-openai-proxy_url">
+          </div>
+          <div class="judge-prov" data-prov="azure" hidden>
+            <label class="field-label">エンドポイント</label><input type="text" id="da-azure-endpoint" placeholder="https://<リソース名>.openai.azure.com">
+            <div class="two">
+              <div><label class="field-label">Azure OpenAI の API キー</label><input type="password" id="da-azure-api_key" autocomplete="off"></div>
+              <div><label class="field-label">デプロイ名</label><input type="text" id="da-azure-model" placeholder="Decisions 用のデプロイ名"></div>
+            </div>
+            <label class="field-label">API バージョン（空なら v1 API: …/openai/v1/decisions）</label><input type="text" id="da-azure-api_version" placeholder="空欄で可">
+            <label class="check"><input type="checkbox" id="da-azure-allow_internal"> 社外秘の候補も送ってよい（社内で社外秘の扱いが認められた自社の Azure のときだけ。ローカル LLM と同じ扱いになります）</label>
+            <label class="check"><input type="checkbox" id="da-azure-use_proxy"> プロキシを使う（URL が空なら環境変数、無ければ Windows のプロキシ設定）</label>
+            <label class="field-label">Proxy URL</label><input type="text" id="da-azure-proxy_url">
+          </div>
+          <div class="judge-prov" data-prov="openrouter" hidden>
+            <label class="field-label">エンドポイント</label><input type="text" id="da-openrouter-endpoint" placeholder="https://openrouter.ai/api/alpha/decisions">
+            <div class="two">
+              <div><label class="field-label">OpenRouter の API キー</label><input type="password" id="da-openrouter-api_key" autocomplete="off"></div>
+              <div><label class="field-label">モデル</label><input type="text" id="da-openrouter-model" placeholder="typesafe/jev-1.14"></div>
+            </div>
+            <label class="check"><input type="checkbox" id="da-openrouter-use_proxy"> プロキシを使う（URL が空なら環境変数、無ければ Windows のプロキシ設定）</label>
+            <label class="field-label">Proxy URL</label><input type="text" id="da-openrouter-proxy_url">
+          </div>
+          <div class="row gap"><button class="btn" id="da-test" type="button">接続テスト（保存してから架空の候補 2 件で判定）</button>
+            <span class="hint" id="da-test-result"></span></div>
+        </details>
+        <div class="row gap">
+          <div><label class="field-label">回答に使う資料数</label><input type="number" id="r-top_k" min="3" max="30"></div>
+          <div><label class="field-label">チャンクの文字数</label><input type="number" id="r-chunk_size" min="300" max="4000"></div>
+          <div><label class="field-label">グラフ抽出の上限（チャンク/文書）</label><input type="number" id="r-max_graph_chunks" min="10" max="5000"></div>
+        </div>
+        <p class="hint">チャンクの文字数を変えたら「全文書を再処理」を実行してください。</p>
+      </div>
+    </div>
+    <div class="settings-grid">
+      <div class="card">
+        <h2>音声入力（相談の文字起こし）</h2>
+        <p class="hint">相談の 🎤 ボタンで、話した内容を質問欄に書き起こします。音声には質問の内容が入るため、
+          <b>社内・ローカルの文字起こし（Whisper）を既定</b>にし、クラウドへ送るのは下の許可を ON にしたときだけです。</p>
+        <div class="two">
+          <div><label class="field-label">方式</label>
+            <select id="sp-engine">
+              <option value="auto">自動（Whisper が設定済みならそれ、無ければブラウザの端末内の音声認識）</option>
+              <option value="whisper">Whisper 互換 API（ローカル / 社内サーバ）</option>
+              <option value="browser">ブラウザの音声認識（Chrome / Edge）</option>
+              <option value="off">使わない</option>
+            </select></div>
+          <div><label class="field-label">言語</label><input type="text" id="sp-language" placeholder="ja"></div>
+        </div>
+        <label class="check"><input type="checkbox" id="sp-allow_cloud"> 音声をクラウドへ送ってよい（クラウドの Whisper・Chrome / Edge の音声認識サービス。社外秘の話をしない前提）</label>
+        <details class="adv" id="sp-whisper-box"><summary>Whisper 互換 API の接続（faster-whisper-server / whisper.cpp / LocalAI / Azure OpenAI 等）</summary>
+          <div class="two">
+            <div><label class="field-label">種類</label>
+              <select id="sp-w-provider"><option value="openai">OpenAI 互換（…/v1）・whisper.cpp（…/inference）</option><option value="azure">Azure OpenAI</option></select></div>
+            <div><label class="field-label">置き場所</label>
+              <select id="sp-w-location"><option value="local">ローカル・社内（社外秘の話も可）</option><option value="cloud">クラウド（許可が必要）</option></select></div>
+          </div>
+          <label class="field-label">URL</label><input type="text" id="sp-w-url" placeholder="例: http://127.0.0.1:8000/v1 ・ http://127.0.0.1:8080/inference ・ https://<リソース名>.openai.azure.com">
+          <div class="two">
+            <div><label class="field-label">モデル（Azure はデプロイ名）</label><input type="text" id="sp-w-model" placeholder="whisper-1 / Systran/faster-whisper-small"></div>
+            <div><label class="field-label">API キー</label><input type="password" id="sp-w-api_key" autocomplete="off"></div>
+          </div>
+          <div class="two">
+            <div><label class="field-label">API バージョン（Azure）</label><input type="text" id="sp-w-api_version"></div>
+            <div><label class="field-label">タイムアウト（秒）</label><input type="number" id="sp-w-timeout" min="5" max="600"></div>
+          </div>
+          <label class="check"><input type="checkbox" id="sp-w-use_proxy"> プロキシを使う（URL が空なら環境変数、無ければ Windows のプロキシ設定）</label>
+          <label class="field-label">Proxy URL</label><input type="text" id="sp-w-proxy_url">
+          <div class="row gap wrap"><button class="btn" id="sp-test" type="button">接続テスト（保存してから 1 秒のテスト音を送る）</button>
+            <span class="hint wrap-any" id="sp-test-result"></span></div>
+        </details>
+        <p class="hint" id="sp-browser-note"></p>
+      </div>
+    </div>
+    <div class="row gap">
+      <button class="btn primary big" id="s-save">設定を保存</button>
+      <button class="btn" id="s-reindex">全文書を再処理（抽出からやり直す）</button>
+      <span id="s-msg" class="hint"></span>
+    </div>
+  </section>
+</main>
+
+<!-- 出典ビューア -->
+<aside class="viewer hidden" id="viewer">
+  <div class="viewer-head">
+    <div>
+      <div class="viewer-title" id="viewer-title"></div>
+      <div class="muted" id="viewer-meta"></div>
+    </div>
+    <div class="row gap-s">
+      <a class="btn small" id="viewer-download" target="_blank" rel="noopener">原本</a>
+      <button class="btn small" id="viewer-ask">この文書に質問</button>
+      <button class="btn small" id="viewer-close">閉じる</button>
+    </div>
+  </div>
+  <div class="viewer-body" id="viewer-body"></div>
+</aside>
+
+<!-- 相談先の選択 -->
+<div class="modal hidden" id="scope-modal">
+  <div class="modal-box wide-box">
+    <h2>相談先を選ぶ <span class="muted">フォルダ（配下を含む）と文書を組み合わせて選べます。何も選ばなければすべての文書</span></h2>
+    <div class="scope-pick">
+      <div class="scope-col">
+        <div class="pane-title">フォルダ</div>
+        <div id="sp-folders" class="scope-list"></div>
+      </div>
+      <div class="scope-col">
+        <div class="row gap-s"><span class="pane-title">文書</span>
+          <input type="text" id="sp-doc-q" class="inline-input grow" placeholder="タイトルで絞り込み"></div>
+        <div id="sp-docs" class="scope-list"></div>
+      </div>
+    </div>
+    <div class="scope-preview" id="sp-preview"></div>
+    <div class="row gap wrap top-space">
+      <button class="btn primary" id="sp-apply">この相談先にする</button>
+      <button class="btn" id="sp-new" title="今の相談は残したまま、選んだ相談先で新しい相談を始めます">新しい相談として始める</button>
+      <button class="btn" id="sp-all">すべての文書に戻す</button>
+      <span class="spacer"></span>
+      <button class="btn" id="sp-close">キャンセル</button>
+    </div>
+  </div>
+</div>
+
+<!-- 採用根拠（出典にマウスを載せると表示） -->
+<div id="why-tip" class="why-tip hidden"></div>
+
+<!-- 文書の編集ダイアログ -->
+<div class="modal hidden" id="doc-modal">
+  <div class="modal-box wide-box">
+    <h2>文書の情報</h2>
+    <div id="doc-modal-body"></div>
+    <div class="row gap top-space">
+      <button class="btn primary" id="dm-save">保存</button>
+      <button class="btn" id="dm-reindex">再処理</button>
+      <button class="btn danger" id="dm-delete">削除</button>
+      <span class="spacer"></span>
+      <button class="btn" id="dm-close">閉じる</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/graphview.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

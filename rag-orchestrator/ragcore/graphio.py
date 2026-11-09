@@ -53,6 +53,9 @@ def load_graphml(path: Path) -> tuple[list[dict], list[dict]]:
                 "name": _clean(attrs.get("entity_id")) or _clean(node_id),
                 "type": _clean(attrs.get("entity_type")) or "その他",
                 "description": _clean(attrs.get("description"))[:300],
+                # LightRAG は出典ファイル名を file_path に <SEP> 区切りで持つ
+                "docs": [d for d in (_clean(x) for x in (attrs.get("file_path") or "")
+                                     .split("<SEP>")) if d and d != "unknown_source"][:8],
             })
         else:
             src, tgt = el.get("source") or "", el.get("target") or ""
@@ -125,8 +128,10 @@ def graphml_graph_payload(path: Path, *, max_nodes: int = 300) -> dict:
     kept_ids = {n["id"] for n in kept}
     out_nodes = [{"id": n["id"], "name": n["name"], "type": n["type"],
                   "degree": degree[n["id"]], "community": com_of.get(n["id"], ""),
-                  "description": n["description"]} for n in kept]
+                  "description": n["description"], "docs": n.get("docs") or []}
+                 for n in kept]
     out_edges = [e for e in edges
                  if e["source"] in kept_ids and e["target"] in kept_ids]
     return {"nodes": out_nodes, "edges": out_edges, "communities": communities,
+            "total_nodes": len(nodes), "total_edges": len(edges),
             "truncated": len(nodes) > max_nodes}

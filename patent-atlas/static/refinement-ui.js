@@ -1,67 +1,388 @@
+import {
+  classificationTitle,
+  replaceHtml,
+  listen,
+  classificationKey as keyOf,
+  getState,
+  esc,
+  html,
+  $,
+  $$,
+  on,
+  api,
+  setState,
+  toast,
+  busy,
+  debounce,
+} from './core.js';
+import { setStep } from './app.js';
+import { appState } from './ui-session.js';
+import { counts, trainingHtml } from './map-ui.js';
+import { queryCard, historyHtml, bindQuery, bindHistory } from './query-output.js';
+import { renderStep } from './workflow-ui.js';
+
+export const refinementUiState = {
+  refinementRequest: 0,
+  refinementLoaded: false,
+  refinementClassPicked: new Set(),
+  refinementNeedsRefresh: false,
+};
 /* Explicit, reviewable IPC changes derived from the imported patent population. */
-let refinementRequest=0,refinementLoaded=false,refinementClassPicked=new Set(),refinementNeedsRefresh=false;
-function refinementClassRows(feedback, candidates){
- const rows=new Map((feedback.candidates||[]).map(c=>[keyOf(c),{...c}]));
- for(const key of feedback.active_keys||[]){
-  if(!rows.has(key)){const c=candidates.find(c=>keyOf(c)===key);if(c)rows.set(key,{...c});}
- }
- return [...rows.values()];
-}
-function refinementInitialKeys(feedback){return [...new Set([...(feedback.active_keys||[]),...(feedback.recommended_keys||[])])];}
-function refinementReplacementKeys(feedback){return [...new Set([...(feedback.active_keys||[]).filter(key=>!key.startsWith('IPC:')),...(feedback.recommended_keys||[])])];}
-function refinementIpcHtml(feedback){
- const rows=refinementClassRows(feedback,state.candidates),active=new Set(feedback.active_keys||[]);
- return `<p class="caption">${esc(feedback.note||'')}</p><div class="button-row"><button id="refinement-recommend-ipc" class="button small" ${(feedback.recommended_keys||[]).length?'':'disabled'}>推奨IPCで置き換える</button><button id="refinement-restore-ipc" class="button small subtle">現在の選択に戻す</button></div><p class="caption">現在の分類と推奨IPCを選択済みです。置き換えは既存IPCを推奨IPCに入れ替え、CPC・F-termを残します。上位分類を残して子をORで加えても狭まりません。</p><div class="refinement-ipc-options">${rows.map(c=>{
- const key=keyOf(c),title=c.title_ja||c.title_en||c.title||c.code;
- const hasEvidence=Array.isArray(c.evidence);
- return `<article class="refinement-ipc-card ${c.recommended?'recommended':''}"><label class="check"><input type="checkbox" name="refinement-class" value="${esc(key)}" ${refinementClassPicked.has(key)?'checked':''}><span><b>${esc(c.kind)} ${esc(c.code)}</b> ${c.recommended?'<span class="pill">推奨</span>':''}${active.has(key)?'<span class="pill">現在の選択</span>':''}<small>${esc(title)}</small></span></label>${hasEvidence?`<div class="refinement-ipc-counts"><span>必要 ${Number(c.keep_count||0)} / 不要 ${Number(c.exclude_count||0)} 公報</span><span>予測：必要寄り ${Number(c.predicted_keep_count||0)} / 不要寄り ${Number(c.predicted_exclude_count||0)}</span><span>ファミリー等 ${Number(c.family_count||0)}</span></div><details><summary>根拠の特許と選び方</summary><p>${esc(c.reason)}</p>${[['必要',c.keep_ids],['不要',c.exclude_ids],['必要寄りの予測',c.predicted_keep_ids],['不要寄りの予測',c.predicted_exclude_ids]].filter(([,ids])=>ids?.length).map(([label,ids])=>`<p><b>${label}</b>：${ids.slice(0,30).map(esc).join('、')}${ids.length>30?` ほか${ids.length-30}件`:''}</p>`).join('')}</details>`:'<p class="caption">現在の条件から引き継ぎ。今回の判定群による支持は未確認です。</p>'}</article>`;
- }).join('')||'<p class="caption">判定・関連度とIPCがそろった特許を読み込むと、分類候補を表示します。</p>'}</div><div id="refinement-ipc-change" class="refinement-ipc-change" role="status"></div>${feedback.warnings?.length?`<details><summary>分類の取り込み・集計について ${feedback.warnings.length} 件</summary><ul>${feedback.warnings.map(message=>`<li>${esc(message)}</li>`).join('')}</ul></details>`:''}`;
-}
-function updateRefinementIpcChange(){
- const el=$('#refinement-ipc-change');if(!el)return;
- const active=refinement.classifications?.active_keys||[],chosen=[...refinementClassPicked];
- const added=chosen.filter(k=>!active.includes(k)),removed=active.filter(k=>!refinementClassPicked.has(k));
- el.textContent=`次の式：分類 ${chosen.length} 件（追加 ${added.length} / 解除 ${removed.length}）。`+
-  (added.length?' 分類はORなので、追加により範囲が広がる場合があります。':'')+
-  (removed.length?' 解除した分類は次の式に含めません。':'');
-}
-function paintRefinementIpc(){
- const host=$('#refinement-ipc-options');if(!host)return;
- host.innerHTML=refinementIpcHtml(refinement.classifications||{});
- $$('[name="refinement-class"]').forEach(el=>el.addEventListener('change',()=>{if(el.checked)refinementClassPicked.add(el.value);else refinementClassPicked.delete(el.value);updateRefinementIpcChange();}));
- on('#refinement-recommend-ipc','click',()=>{refinementClassPicked=new Set(refinementReplacementKeys(refinement.classifications));paintRefinementIpc();});
- on('#refinement-restore-ipc','click',()=>{refinementClassPicked=new Set(refinement.classifications.active_keys||[]);paintRefinementIpc();});
- updateRefinementIpcChange();
-}
-function renderRefinementWorkspace(){
- if(refinementNeedsRefresh){
-  refinementNeedsRefresh=false;const serial=++refinementRequest;
-  $('#step-content').innerHTML='<div class="panel"><p>保存済みの検索条件を確認しています…</p></div>';
-  api('/state').then(fresh=>{if(serial!==refinementRequest||step!==3||activeTab!=='explore'){refinementNeedsRefresh=true;return;}state=fresh;renderRefinementWorkspace();}).catch(error=>{refinementNeedsRefresh=true;if(serial===refinementRequest&&step===3&&activeTab==='explore')toast(error.message,true);});return;
- }
- const q=state.queries.at(-1),c=counts(),serial=++refinementRequest;
- refinementLoaded=false;
- $('#step-content').innerHTML=`<div class="query-layout"><div class="panel" id="refinement-controls"><span class="eyebrow">REFINE YOUR SEARCH</span><h2>残したい技術に、近づける。</h2><p class="muted">必要 ${c.keep} 件・不要 ${c.exclude} 件と学習後の関連度から、特徴語・IPCを次の式に反映します。</p><div class="notice">追加語は検索範囲を狭めます。除外語は既知の必要特許に出現しない語を候補にします。IPCは必要・不要の両方の支持を比較し、分類のNOT条件は作りません。</div><h3 style="margin-top:24px">必要な技術の特徴語</h3><div id="include-terms" class="term-options"><p class="caption">候補を読み込んでいます…</p></div><h3>不要な技術の除外候補</h3><div id="exclude-terms" class="term-options exclude"></div><section class="refinement-ipc"><h3>判定した特許から、IPCを見直す</h3><div id="refinement-ipc-options"><p class="caption">公報の分類と判定を照合しています…</p></div></section><button class="button primary wide" id="refine-query" disabled>この特徴語・分類で次の式を提案 →</button><p class="caption">前回の特徴語は選択済みで引き継ぎます。IPCの追加・解除と、その根拠の特許は検索履歴に保存します。</p>${state.training?trainingHtml():''}</div><div class="panel">${queryCard(q)}<div class="button-row" style="margin-top:20px"><button class="button primary" id="next-csv">次のCSVを読み込む →</button></div></div></div>${historyHtml()}`;
- bindQuery(q);bindHistory();on('#next-csv','click',()=>setStep(1));
- api('/refinement').then(result=>{
-  if(serial!==refinementRequest||step!==3||activeTab!=='explore')return;
-  refinement=result;refinementClassPicked=new Set(refinementInitialKeys(result.classifications||{}));
-  for(const [kind,empty] of [['include','必要・不要の両方を判定すると候補が現れます。'],['exclude','現在、除外候補はありません。']]){
-   $('#'+kind+'-terms').innerHTML=result[kind].map(t=>`<label class="check"><input type="checkbox" name="${kind}-term" value="${esc(t)}" ${result['active_'+kind]?.includes(t)?'checked':''}>${esc(t)}</label>`).join('')||`<p class="caption">${empty}</p>`;
+
+function refinementClassRows(feedback, candidates) {
+  const rows = new Map((feedback.candidates || []).map((c) => [keyOf(c), { ...c }]));
+  for (const key of feedback.active_keys || []) {
+    if (!rows.has(key)) {
+      const c = candidates.find((c) => keyOf(c) === key);
+      if (c) rows.set(key, { ...c });
+    }
   }
-  paintRefinementIpc();refinementLoaded=true;$('#refine-query').disabled=state.job.status==='running';
- }).catch(error=>{if(serial===refinementRequest&&step===3&&activeTab==='explore'&&$('#refinement-ipc-options')){$('#refinement-ipc-options').innerHTML=`<p class="learning-error">${esc(error.message)} ページを切り替えて再読込してください。</p>`;toast(error.message,true);}});
- on('#refine-query','click',async e=>{
-  if(!refinementLoaded||state.job.status==='running')return;
-  const body={refine:true,include:$$('[name="include-term"]:checked').map(el=>el.value),exclude:$$('[name="exclude-term"]:checked').map(el=>el.value),classification_keys:[...refinementClassPicked]};
-  await busy(e.currentTarget,'改善案を作成中…',async()=>{
-   $('#refinement-controls').inert=true;
-   try{const fresh=await api('/query',body);if(serial!==refinementRequest||step!==3||activeTab!=='explore'){refinementNeedsRefresh=true;return;}state=fresh;viewedQueryId=null;renderStep();toast('判定・学習から見直した分類と特徴語を検索履歴に保存しました。');}
-   finally{if(serial===refinementRequest&&$('#refinement-controls'))$('#refinement-controls').inert=false;}
+  return [...rows.values()];
+}
+function refinementInitialKeys(feedback) {
+  return [...new Set([...(feedback.active_keys || []), ...(feedback.recommended_keys || [])])];
+}
+function refinementReplacementKeys(feedback) {
+  return [
+    ...new Set([
+      ...(feedback.active_keys || []).filter((key) => !key.startsWith('IPC:')),
+      ...(feedback.recommended_keys || []),
+    ]),
+  ];
+}
+function refinementEvidenceListHtml(c) {
+  const groups = [
+    ['必要', c.keep_ids],
+    ['不要', c.exclude_ids],
+    ['必要寄りの予測', c.predicted_keep_ids],
+    ['不要寄りの予測', c.predicted_exclude_ids],
+  ];
+  return groups
+    .filter(([, ids]) => ids?.length)
+    .map(([label, ids]) => {
+      const more = ids.length > 30 ? ` ほか${ids.length - 30}件` : '';
+      return html`<p><b>${label}</b>：${ids.slice(0, 30).map(esc).join('、')}${more}</p>`;
+    })
+    .join('');
+}
+function refinementIpcEvidenceHtml(c) {
+  if (!Array.isArray(c.evidence))
+    return '<p class="caption">現在の条件から引き継ぎ。今回の判定群による支持は未確認です。</p>';
+  const predictedExclude = Number(c.predicted_exclude_count || 0);
+  return html`<div class="refinement-ipc-counts">
+    <span>必要 ${Number(c.keep_count || 0)} / 不要 ${Number(c.exclude_count || 0)} 公報</span>
+    <span>予測：必要寄り ${Number(c.predicted_keep_count || 0)} / 不要寄り ${predictedExclude}</span>
+    <span>ファミリー等 ${Number(c.family_count || 0)}</span></div>
+    <details><summary>根拠の特許と選び方</summary><p>${esc(c.reason)}</p>${refinementEvidenceListHtml(c)}</details>`;
+}
+function refinementIpcCardHtml(c, active) {
+  const key = keyOf(c),
+    title = classificationTitle(c);
+  return html`<article class="refinement-ipc-card ${c.recommended ? 'recommended' : ''}"><label class="check">
+    <input type="checkbox" name="refinement-class" value="${esc(key)}"
+    ${refinementUiState.refinementClassPicked.has(key) ? 'checked' : ''}>
+    <span><b>${esc(c.kind)} ${esc(c.code)}</b> ${c.recommended ? '<span class="pill">推奨</span>' : ''}
+    ${active.has(key) ? '<span class="pill">現在の選択</span>' : ''}<small>${esc(title)}</small></span></label>
+    ${refinementIpcEvidenceHtml(c)}</article>`;
+}
+function refinementWarningsHtml(warnings) {
+  if (!warnings?.length) return '';
+  return html`<details><summary>分類の取り込み・集計について ${warnings.length} 件</summary>
+    <ul>${warnings.map((message) => html`<li>${esc(message)}</li>`)}</ul></details>`;
+}
+function refinementIpcHtml(feedback) {
+  const rows = refinementClassRows(feedback, getState().candidates),
+    active = new Set(feedback.active_keys || []);
+  const cards = rows.map((c) => refinementIpcCardHtml(c, active)).join('');
+  const empty = '<p class="caption">判定・関連度とIPCがそろった特許を読み込むと、分類候補を表示します。</p>';
+  return html`<p class="caption">${esc(feedback.note || '')}</p>
+    <div class="button-row"><button id="refinement-recommend-ipc" class="button small"
+    ${(feedback.recommended_keys || []).length ? '' : 'disabled'}>推奨IPCで置き換える</button>
+    <button id="refinement-restore-ipc" class="button small subtle">現在の選択に戻す</button></div>
+    <p class="caption">現在の分類と推奨IPCを選択済みです。置き換えは既存IPCを推奨IPCに入れ替え、CPC・F-termを残します。
+    上位分類を残して子をORで加えても狭まりません。</p>
+    <div class="refinement-ipc-options">${cards || empty}</div>
+    <div id="refinement-ipc-change" class="refinement-ipc-change" role="status"></div>
+    ${refinementWarningsHtml(feedback.warnings)}`;
+}
+function updateRefinementIpcChange() {
+  const el = $('#refinement-ipc-change');
+  if (!el) return;
+  const active = appState.refinement.classifications?.active_keys || [],
+    chosen = [...refinementUiState.refinementClassPicked];
+  const added = chosen.filter((k) => !active.includes(k)),
+    removed = active.filter((k) => !refinementUiState.refinementClassPicked.has(k));
+  el.textContent =
+    `次の式：分類 ${chosen.length} 件（追加 ${added.length} / 解除 ${removed.length}）。` +
+    (added.length ? ' 分類はORなので、追加により範囲が広がる場合があります。' : '') +
+    (removed.length ? ' 解除した分類は次の式に含めません。' : '');
+}
+function paintRefinementIpc() {
+  const host = $('#refinement-ipc-options');
+  if (!host) return;
+  replaceHtml(host, refinementIpcHtml(appState.refinement.classifications || {}));
+  $$('[name="refinement-class"]').forEach((el) =>
+    listen(
+      el,
+      'change',
+      () => {
+        if (el.checked) refinementUiState.refinementClassPicked.add(el.value);
+        else refinementUiState.refinementClassPicked.delete(el.value);
+        updateRefinementIpcChange();
+      },
+      undefined,
+      'refinement-ui.js:1'
+    )
+  );
+  on('#refinement-recommend-ipc', 'click', () => {
+    refinementUiState.refinementClassPicked = new Set(
+      refinementReplacementKeys(appState.refinement.classifications)
+    );
+    paintRefinementIpc();
   });
- });
+  on('#refinement-restore-ipc', 'click', () => {
+    refinementUiState.refinementClassPicked = new Set(appState.refinement.classifications.active_keys || []);
+    paintRefinementIpc();
+  });
+  updateRefinementIpcChange();
 }
-function classificationChangesHtml(changes){
- if(!changes)return '';
- return `<details class="classification-feedback-history"><summary>判定・学習から反映したIPCと根拠</summary><p class="caption">追加：${(changes.added_keys||[]).map(esc).join('、')||'なし'}<br>解除：${(changes.removed_keys||[]).map(esc).join('、')||'なし'}</p>${(changes.evidence||[]).map(c=>`<p class="caption"><b>${esc(c.kind)} ${esc(c.code)}</b> · 必要 ${Number(c.keep_count||0)} / 不要 ${Number(c.exclude_count||0)} 公報<br>${esc(c.reason)}<br>必要の根拠：${(c.keep_ids||[]).slice(0,30).map(esc).join('、')||'なし'}<br>不要の根拠：${(c.exclude_ids||[]).slice(0,30).map(esc).join('、')||'なし'}</p>`).join('')}</details>`;
+function refinementControlsHtml(snapshot, c) {
+  return html`<div class="panel" id="refinement-controls"><h2>検索式の改善</h2>
+    <p class="muted">必要 ${c.keep} 件・不要 ${c.exclude} 件と学習後の関連度から、特徴語・IPCを次の式に反映します。</p>
+    <div class="notice">追加語は検索範囲を狭めます。除外語は既知の必要特許に出現しない語を候補にします。
+    IPCは必要・不要の両方の支持を比較し、分類のNOT条件は作りません。</div>
+    <div id="refinement-score" class="refinement-score"></div>
+    <h3 style="margin-top:24px">必要な技術の特徴語</h3>
+    <div id="include-terms" class="term-options"><p class="caption">候補を読み込んでいます…</p></div>
+    <div id="refinement-or-groups"></div>
+    <h3>不要な技術の除外候補</h3><div id="exclude-terms" class="term-options exclude"></div>
+    <section class="refinement-ipc"><h3>判定済み特許のIPC候補</h3>
+    <div id="refinement-ipc-options"><p class="caption">公報の分類と判定を照合しています…</p></div></section>
+    <button class="button primary wide" id="refine-query" disabled>この特徴語・分類で次の式を提案 →</button>
+    <p class="caption">前回の特徴語は選択済みで引き継ぎます。IPCの追加・解除と、その根拠の特許は検索履歴に保存します。</p>
+    ${snapshot.training ? trainingHtml() : ''}</div>`;
 }
+function refinementLayoutHtml(snapshot, q, c) {
+  return html`<div class="query-layout">${refinementControlsHtml(snapshot, c)}
+    <div class="panel">${queryCard(q)}
+    <div class="button-row" style="margin-top:20px">
+    <button class="button primary" id="next-csv">次のCSVを読み込む →</button></div></div></div>${historyHtml()}`;
+}
+/* Retrospective score of the latest query over the labelled rows (a proxy, never real recall). */
+function refinementCounts(score) {
+  return (
+    `必要 ${Number(score.keep_hit)} / ${Number(score.keep_total)} を捕捉 · ` +
+    `不要 ${Number(score.exclude_hit)} / ${Number(score.exclude_total)} が混入 · ` +
+    `未判定 ${Number(score.unlabeled_hit)} 件`
+  );
+}
+function refinementScoreHtml(score) {
+  if (!score || score.error)
+    return '<p class="caption">採点できる検索式がありません。初案を作成すると、判定済み特許で再計算します。</p>';
+  return html`<h3>現在の式の採点</h3>
+    <div class="refinement-score-row">
+    <div class="stat keep"><strong>${Number(score.keep_hit)} / ${Number(score.keep_total)}</strong>
+    <small>必要特許を捕捉</small></div>
+    <div class="stat exclude"><strong>${Number(score.exclude_hit)} / ${Number(score.exclude_total)}</strong>
+    <small>不要特許が混入</small></div>
+    <div class="stat"><strong>${Number(score.unlabeled_hit)}</strong><small>未判定の一致</small></div></div>
+    <p id="refinement-projected" class="caption" role="status">語を選ぶと、この条件での見込み件数を表示します。</p>
+    <p class="caption">${esc(score.note || '')}</p>`;
+}
+function refinementTermEvidenceHtml(info) {
+  const ipc = (info.path || []).find((p) => p.type === 'ipc'),
+    patents = (info.path || []).find((p) => p.type === 'patents'),
+    p = info.projected;
+  const more =
+    patents && patents.total > patents.ids.length ? ` ほか${patents.total - patents.ids.length}件` : '';
+  return html`<details class="refinement-term-evidence"><summary>根拠</summary><p class="caption">
+    ${
+      ipc
+        ? html`必要特許の主なIPC主グループ：${esc(ipc.value)}
+      （${Number(ipc.keep_count)} / ${Number(ipc.keep_with_term)} 件）<br>`
+        : ''
+    }
+    ${patents ? html`例：${patents.ids.map(esc).join('、')}${more}` : ''}
+    ${p ? html`<br>この語を使うと ${refinementCounts(p)}` : ''}</p></details>`;
+}
+function refinementTermHtml(kind, t, checked, info) {
+  const stats = info
+    ? html`<small class="refinement-term-stats">必要 ${Number(info.keep_hit)}/${Number(info.keep_total)} ·
+      不要 ${Number(info.exclude_hit)}/${Number(info.exclude_total)}</small>`
+    : '';
+  return html`<div class="refinement-term"><label class="check"><input type="checkbox" name="${kind}-term"
+    value="${esc(t)}" ${checked ? 'checked' : ''}>${esc(t)}${stats}</label>
+    ${info ? refinementTermEvidenceHtml(info) : ''}</div>`;
+}
+function refinementOrGroupHtml(group, index) {
+  return html`<div class="refinement-or-group"><span>${group.terms.map(esc).join(' <b>OR</b> ')}</span>
+    <small>必要特許 ${Number(group.shared_keep)} 件に共起</small>
+    <button type="button" class="button small" id="refinement-or-group-${index}">この組を追加語に選ぶ</button></div>`;
+}
+function refinementOrGroupsHtml(groups) {
+  if (!groups?.length) return '';
+  return html`<details class="refinement-or-groups" open><summary>代替表現の候補 · ${groups.length} 組</summary>
+    <p class="caption">同じ必要特許に共起する語の組です。同じ探索軸の言い換えなら両方を追加語に選ぶとORでまとまります。
+    同義語の確定ではありません。</p>${groups.map(refinementOrGroupHtml)}</details>`;
+}
+function graphInfo(result, kind) {
+  return new Map((result.graph?.[kind] || []).map((item) => [item.term, item]));
+}
+function paintRefinementTerms(result) {
+  for (const [kind, empty] of [
+    ['include', '必要・不要の両方を判定すると候補が現れます。'],
+    ['exclude', '現在、除外候補はありません。'],
+  ]) {
+    const info = graphInfo(result, kind);
+    replaceHtml(
+      $('#' + kind + '-terms'),
+      result[kind]
+        .map((t) => refinementTermHtml(kind, t, result['active_' + kind]?.includes(t), info.get(t)))
+        .join('') || html`<p class="caption">${empty}</p>`
+    );
+  }
+  replaceHtml($('#refinement-score'), refinementScoreHtml(result.score));
+  replaceHtml($('#refinement-or-groups'), refinementOrGroupsHtml(result.graph?.or_groups));
+}
+function chosenTerms() {
+  return {
+    include: $$('[name="include-term"]:checked').map((el) => el.value),
+    exclude: $$('[name="exclude-term"]:checked').map((el) => el.value),
+  };
+}
+function paintProjection(serial, result) {
+  const el = $('#refinement-projected');
+  if (!el || !refinementActive(serial) || !result?.projected || result.projected.error) return;
+  const d = result.delta || {},
+    sign = (n) => (n > 0 ? `+${n}` : String(n));
+  el.textContent =
+    `この条件なら ${refinementCounts(result.projected)}` +
+    `（必要 ${sign(Number(d.keep_hit || 0))} · 不要 ${sign(Number(d.exclude_hit || 0))}）`;
+}
+function bindTermChanges(serial) {
+  const update = debounce(() => {
+    if (!refinementActive(serial) || !appState.refinement?.score || appState.refinement.score.error) return;
+    api('/refinement/score', chosenTerms())
+      .then((result) => paintProjection(serial, result))
+      .catch(() => {});
+  }, 250);
+  for (const name of ['include-term', 'exclude-term'])
+    $$(`[name="${name}"]`).forEach((el) =>
+      listen(el, 'change', () => update(), undefined, 'refinement-ui.js:2')
+    );
+  (appState.refinement?.graph?.or_groups || []).forEach((group, index) =>
+    on(`#refinement-or-group-${index}`, 'click', () => {
+      for (const el of $$('[name="include-term"]')) if (group.terms.includes(el.value)) el.checked = true;
+      update();
+    })
+  );
+}
+function refinementActive(serial) {
+  return (
+    serial === refinementUiState.refinementRequest && appState.step === 3 && appState.activeTab === 'explore'
+  );
+}
+function renderRefinementWorkspace(host = $('#step-content'), snapshot = getState()) {
+  if (refinementUiState.refinementNeedsRefresh) {
+    refinementUiState.refinementNeedsRefresh = false;
+    const serial = ++refinementUiState.refinementRequest;
+    replaceHtml(host, '<div class="panel"><p>保存済みの検索条件を確認しています…</p></div>');
+    api('/state')
+      .then((fresh) => {
+        if (!refinementActive(serial)) {
+          refinementUiState.refinementNeedsRefresh = true;
+          return;
+        }
+        setState(fresh);
+        renderRefinementWorkspace();
+      })
+      .catch((error) => {
+        refinementUiState.refinementNeedsRefresh = true;
+        if (refinementActive(serial)) toast(error.message, true);
+      });
+    return;
+  }
+  const q = snapshot.queries.at(-1),
+    c = counts(),
+    serial = ++refinementUiState.refinementRequest;
+  refinementUiState.refinementLoaded = false;
+  replaceHtml(host, refinementLayoutHtml(snapshot, q, c));
+  bindQuery(q);
+  bindHistory();
+  on('#next-csv', 'click', () => setStep(1));
+  loadRefinement(serial);
+  on('#refine-query', 'click', (e) => submitRefinement(e, serial));
+}
+function loadRefinement(serial) {
+  api('/refinement')
+    .then((result) => {
+      if (!refinementActive(serial)) return;
+      appState.refinement = result;
+      refinementUiState.refinementClassPicked = new Set(refinementInitialKeys(result.classifications || {}));
+      paintRefinementTerms(result);
+      bindTermChanges(serial);
+      paintRefinementIpc();
+      refinementUiState.refinementLoaded = true;
+      $('#refine-query').disabled = getState().job.status === 'running';
+    })
+    .catch((error) => {
+      if (refinementActive(serial) && $('#refinement-ipc-options')) {
+        replaceHtml(
+          $('#refinement-ipc-options'),
+          html`<p class="learning-error">${esc(error.message)} ページを切り替えて再読込してください。</p>`
+        );
+        toast(error.message, true);
+      }
+    });
+}
+async function submitRefinement(e, serial) {
+  if (!refinementUiState.refinementLoaded || getState().job.status === 'running') return;
+  const body = {
+    refine: true,
+    include: $$('[name="include-term"]:checked').map((el) => el.value),
+    exclude: $$('[name="exclude-term"]:checked').map((el) => el.value),
+    classification_keys: [...refinementUiState.refinementClassPicked],
+  };
+  await busy(e.currentTarget, '改善案を作成中…', async () => {
+    $('#refinement-controls').inert = true;
+    try {
+      const fresh = await api('/query', body);
+      if (!refinementActive(serial)) {
+        refinementUiState.refinementNeedsRefresh = true;
+        return;
+      }
+      setState(fresh);
+      appState.viewedQueryId = null;
+      renderStep();
+      toast('判定・学習から見直した分類と特徴語を検索履歴に保存しました。');
+    } finally {
+      if (serial === refinementUiState.refinementRequest && $('#refinement-controls'))
+        $('#refinement-controls').inert = false;
+    }
+  });
+}
+function classificationChangeEvidenceHtml(c) {
+  const keep = (c.keep_ids || []).slice(0, 30).map(esc).join('、') || 'なし';
+  const exclude = (c.exclude_ids || []).slice(0, 30).map(esc).join('、') || 'なし';
+  const counts = `必要 ${Number(c.keep_count || 0)} / 不要 ${Number(c.exclude_count || 0)} 公報`;
+  return html`<p class="caption"><b>${esc(c.kind)} ${esc(c.code)}</b> · ${counts}<br>${esc(c.reason)}<br>
+    必要の根拠：${keep}<br>不要の根拠：${exclude}</p>`;
+}
+function classificationChangesHtml(changes) {
+  if (!changes) return '';
+  return html`<details class="classification-feedback-history"><summary>判定・学習から反映したIPCと根拠</summary>
+    <p class="caption">追加：${(changes.added_keys || []).map(esc).join('、') || 'なし'}<br>
+    解除：${(changes.removed_keys || []).map(esc).join('、') || 'なし'}</p>
+    ${(changes.evidence || []).map(classificationChangeEvidenceHtml)}</details>`;
+}
+
+export {
+  refinementClassRows,
+  refinementInitialKeys,
+  refinementReplacementKeys,
+  refinementIpcHtml,
+  renderRefinementWorkspace,
+  classificationChangesHtml,
+};
+
+export { renderRefinementWorkspace as render };

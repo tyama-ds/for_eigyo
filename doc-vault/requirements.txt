@@ -1,0 +1,5 @@
+# Doc Vault は標準ライブラリだけで起動する。以下は用途に応じて入れる任意の依存。
+pypdf>=4.0          # PDF の取り込み（純 Python）。PDF を扱うなら必須
+anthropic>=1.0      # クラウド LLM に Claude を使う場合
+# pymupdf           # PDF 抽出をより高精度・高速に（入っていれば pypdf より優先。AGPL ライセンスに注意）
+# numpy             # 埋め込み検索の高速化（数万チャンク以上）

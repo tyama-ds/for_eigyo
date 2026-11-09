@@ -1,0 +1,439 @@
+"""API 統合テスト: モック LLM + 実 HTTP サーバーで、取り込み → 検索 → 相談 → グラフまで通す。
+
+ローカル / クラウドの2プロファイルを別モデル名でモック LLM に向け、
+**社外秘文書の本文がクラウド側モデルへ一度も送られていないこと**を送信記録から検証する。
+"""
+from __future__ import annotations
+
+import json
+import sys
+import tempfile
+import threading
+import time
+import unittest
+import urllib.request
+from http.server import ThreadingHTTPServer
+from pathlib import Path
+
+APP_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(APP_DIR))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import mock_llm  # noqa: E402
+from docvault import config, db  # noqa: E402
+from docvault.indexer import INDEXER  # noqa: E402
+from docvault.retrieval import INDEX  # noqa: E402
+
+_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+INTERNAL_MARKERS = ("温度センサーを 9 月 10 日に交換", "ファーム更新で解決", "是正処置記録")
+
+
+class TestAPIFlow(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)  # Windows: 取り込みスレッドの DB 接続
+        tmp = Path(cls.tmp.name)
+        config.CONFIG_FILE = tmp / "config.json"
+        db.set_data_dir(tmp / "data")
+        INDEX.loaded_for = None
+        cls.mock_server, cls.mock_base = start = mock_llm.start_mock_llm()
+        import server as appserver
+        cls.appserver = appserver
+        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), appserver.Handler)
+        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+        cls.base = f"http://127.0.0.1:{cls.server.server_address[1]}"
+
+    @classmethod
+    def tearDownClass(cls):
+        INDEXER.wait_idle(30)
+        cls.server.shutdown()
+        cls.mock_server.shutdown()
+        db.close()
+        cls.tmp.cleanup()
+
+    # ------------------------------------------------------------ helpers
+    @classmethod
+    def api(cls, path, body=None, *, raw: bytes | None = None, status_ok=True):
+        url = cls.base + path
+        if raw is not None:
+            req = urllib.request.Request(url, data=raw, method="POST",
+                                         headers={"Content-Type": "application/octet-stream"})
+        elif body is None:
+            req = urllib.request.Request(url)
+        else:
+            req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",
+                                         headers={"Content-Type": "application/json"})
+        try:
+            with _opener.open(req, timeout=60) as res:
+                return json.loads(res.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            if status_ok:
+                return json.loads(e.read().decode("utf-8"))
+            raise
+
+    @classmethod
+    def ask(cls, chat_id, question):
+        req = urllib.request.Request(cls.base + f"/api/chats/{chat_id}/ask",
+                                     data=json.dumps({"question": question}).encode(),
+                                     method="POST", headers={"Content-Type": "application/json"})
+        events = []
+        with _opener.open(req, timeout=60) as res:
+            for line in res:
+                line = line.decode("utf-8").strip()
+                if line.startswith("data: "):
+                    events.append(json.loads(line[6:]))
+        return events
+
+    @classmethod
+    def wait_ready(cls, timeout=60):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            st = cls.api("/api/status")
+            if not st["indexer"]["current"] and not st["indexer"]["pending"]:
+                return
+            time.sleep(0.2)
+        raise AssertionError("取り込みが終わりません")
+
+    # ------------------------------------------------------------ tests
+    def test_00_health_and_defaults(self):
+        self.assertTrue(self.api("/api/health")["ok"])
+        cfg = self.api("/api/config")
+        self.assertEqual(cfg["policy"]["default_sensitivity"], "internal")
+        self.assertNotIn("api_key", cfg["profiles"]["cloud"])     # 秘密は返さない
+
+    def test_01_configure(self):
+        cfg = self.api("/api/config", {
+            "profiles": {
+                "local": {"provider": "openai", "base_url": self.mock_base, "model": "local-chat",
+                          "embed_model": "local-embed", "api_key": "secret-local"},
+                "cloud": {"provider": "openai", "base_url": self.mock_base, "model": "cloud-chat",
+                          "embed_model": "cloud-embed"},
+            },
+            "policy": {"public_ingest_profile": "cloud", "chat_mode": "auto"},
+        })
+        self.assertTrue(cfg["profiles"]["local"]["chat_ready"])
+        self.assertTrue(cfg["profiles"]["local"]["has_api_key"])
+        self.assertNotIn("api_key", cfg["profiles"]["local"])
+        test = self.api("/api/config/test", {"profile": "local"})
+        self.assertTrue(test["chat"]["ok"], test)
+        self.assertTrue(test["embed"]["ok"], test)
+
+    def test_02_ingest_samples(self):
+        r = self.api("/api/samples", {})
+        self.assertEqual(len(r["docs"]), 4)
+        self.wait_ready()
+        docs = {d["filename"]: d for d in self.api("/api/docs")["docs"]}
+        for name, d in docs.items():
+            self.assertEqual(d["status"], "ready", (name, d["error"], d["warnings"]))
+            self.assertTrue(d["flags"].get("bm25"))
+            self.assertTrue(d["flags"].get("vector"), (name, d["warnings"]))
+            self.assertTrue(d["flags"].get("graph"), (name, d["warnings"]))
+            self.assertTrue(d["summary"], name)
+        # 区分に応じたプロファイルで処理されている
+        minutes = docs["03_品質会議_議事録_2026-09.md"]
+        self.assertEqual(minutes["sensitivity"], "internal")
+        self.assertEqual(minutes["flags"]["graph"], "local")
+        self.assertTrue(minutes["flags"]["vector"].startswith("local:"))
+        company = docs["01_会社概要.md"]
+        self.assertEqual(company["flags"]["graph"], "cloud")
+        self.assertTrue(company["flags"]["vector"].startswith("cloud:"))
+        # 同じ内容の再アップロードは重複登録しない
+        again = self.api("/api/samples", {})
+        self.assertFalse(any(x["created"] for x in again["docs"]))
+        # フォルダ集計
+        folders = {f["path"]: f["count"] for f in self.api("/api/docs")["folders"]}
+        self.assertEqual(folders["社内"], 2)
+        self.assertEqual(folders[""], 4)
+
+    def test_03_doc_view_and_file(self):
+        docs = self.api("/api/docs")["docs"]
+        xlsx = next(d for d in docs if d["ext"] == ".xlsx")
+        view = self.api(f"/api/docs/{xlsx['id']}/chunks")
+        self.assertIn("ネジ緩み", view["chunks"][0]["text"])
+        self.assertTrue(view["chunks"][0]["locator"].startswith("不具合集計!行"))
+        with _opener.open(self.base + f"/api/docs/{xlsx['id']}/file?download=1", timeout=10) as res:
+            self.assertIn("attachment", res.headers["Content-Disposition"])
+            self.assertTrue(res.read().startswith(b"PK"))
+
+    def test_04_search(self):
+        r = self.api("/api/search", {"q": "熱処理炉 温度"})
+        titles = [g["title"] for g in r["results"]]
+        self.assertTrue(titles)
+        self.assertTrue(any("議事録" in t or "品質会議" in t for t in titles), titles)
+        self.assertTrue(r["results"][0]["hits"][0]["snippet"])
+
+    def test_05_chat_auto_internal_goes_local(self):
+        chat = self.api("/api/chats", {})["chat"]
+        events = self.ask(chat["id"], "熱処理炉の件で北浜電機への対応はどう決まった？")
+        types = [e["type"] for e in events]
+        self.assertEqual(types[-1], "done", events[-3:])
+        done = events[-1]["message"]
+        self.assertIn("[S1]", done["content"])
+        self.assertNotIn("<think>", done["content"])
+        self.assertTrue(done["meta"]["route"]["retrieval"])
+        self.assertEqual(done["meta"]["sensitivity"], "internal")
+        self.assertEqual(done["meta"]["profile"], "local")         # 社外秘を含む → ローカル
+        self.assertTrue(any(s["used"] for s in done["meta"]["sources"]))
+        self.assertTrue(self.api(f"/api/chats/{chat['id']}")["chat"]["touched_internal"])
+        deltas = "".join(e["text"] for e in events if e["type"] == "delta")
+        self.assertIn("SkyEdge", deltas)
+
+    def test_05b_decision_rag_strategies(self):
+        # DecisionRAG のみ（検索器なし）: 階層をたどって議事録の段落に着く
+        chat = self.api("/api/chats", {"mode": "local", "strategy": "decision"})["chat"]
+        self.assertEqual(chat["strategy"], "decision")
+        before = len(mock_llm.REQUESTS)
+        done = self.ask(chat["id"], "熱処理炉の温度センサーはいつ交換した？")[-1]["message"]
+        meta = done["meta"]
+        self.assertTrue(meta["via"][0].startswith("DecisionRAG"), (meta["via"], meta["decision"]))
+        self.assertNotIn("BM25", " ".join(meta["via"]))            # 第1段の検索器を使っていない
+        self.assertGreater(meta["decision"]["calls"], 0)
+        self.assertTrue(meta["decision"]["soft"])                   # logprobs から確率で採点
+        self.assertTrue(meta["decision"]["choice"])                 # 最後の選択式の並べ替え
+        self.assertTrue(any("議事録" in s["doc_title"] for s in meta["sources"]), (meta["decision"], [s["doc_title"] for s in meta["sources"]]))
+        decide_reqs = [r["body"] for r in mock_llm.REQUESTS[before:]
+                       if "[TASK:decide]" in json.dumps(r["body"], ensure_ascii=False)]
+        self.assertTrue(decide_reqs)
+        self.assertTrue(all(b.get("logprobs") for b in decide_reqs))
+        self.assertTrue(all(b.get("model") == "local-chat" for b in decide_reqs))
+        # 自動: 事実の質問では DecisionRAG と Hybrid を融合
+        chat = self.api("/api/chats", {"mode": "local"})["chat"]
+        meta = self.ask(chat["id"], "SkyEdge S-2 の保護等級は？")[-1]["message"]["meta"]
+        via = " ".join(meta["via"])
+        self.assertIn("DecisionRAG", via)
+        self.assertIn("ハイブリッド", via)
+        # 従来型: DecisionRAG を使わない（切り替えは相談ごと）
+        self.api(f"/api/chats/{chat['id']}/update", {"strategy": "classic"})
+        meta = self.ask(chat["id"], "保護等級は？")[-1]["message"]["meta"]
+        self.assertNotIn("DecisionRAG", " ".join(meta["via"]))
+        self.assertIsNone(meta["decision"])
+
+    def test_05c_beam_width_per_chat(self):
+        # 相談ごとにビーム幅を指定できる（0 / 空なら設定の値＝既定 4）
+        chat = self.api("/api/chats", {"mode": "local", "strategy": "decision",
+                                       "decision_beam": 1})["chat"]
+        self.assertEqual(chat["decision_beam"], 1)
+        meta = self.ask(chat["id"], "熱処理炉の温度センサーはいつ交換した？")[-1]["message"]["meta"]
+        self.assertEqual(meta["decision"]["beam"], 1)
+        self.assertTrue(all(len(lv["kept"]) <= 1 for lv in meta["decision"]["path"]))
+        self.assertTrue(any("ビーム幅 1" in s["detail"] for s in meta["steps"]))
+        chat = self.api(f"/api/chats/{chat['id']}/update", {"decision_beam": 0})["chat"]
+        self.assertEqual(chat["decision_beam"], 0)
+        meta = self.ask(chat["id"], "熱処理炉の温度センサーはいつ交換した？")[-1]["message"]["meta"]
+        self.assertEqual(meta["decision"]["beam"], 4)
+        chat = self.api(f"/api/chats/{chat['id']}/update", {"decision_beam": 99})["chat"]
+        self.assertEqual(chat["decision_beam"], 10)                  # 上限で丸める
+        chat = self.api(f"/api/chats/{chat['id']}/update", {"decision_beam": "x"})["chat"]
+        self.assertEqual(chat["decision_beam"], 10)                  # 不正な値は無視
+
+    def test_06_chat_cloud_mode_excludes_internal(self):
+        chat = self.api("/api/chats", {"mode": "cloud"})["chat"]
+        events = self.ask(chat["id"], "SkyEdge S-2 の給電方式は？")
+        done = events[-1]["message"]
+        self.assertEqual(done["meta"]["profile"], "cloud")
+        self.assertTrue(done["meta"]["sources"])
+        for s in done["meta"]["sources"]:
+            self.assertEqual(s["sensitivity"], "public")
+
+    def test_06b_cloud_mode_after_internal_drops_history(self):
+        chat = self.api("/api/chats", {"mode": "local"})["chat"]
+        self.ask(chat["id"], "熱処理炉の温度センサーはいつ交換した？")
+        self.assertTrue(self.api(f"/api/chats/{chat['id']}")["chat"]["touched_internal"])
+        self.api(f"/api/chats/{chat['id']}/update", {"mode": "cloud"})
+        done = self.ask(chat["id"], "SkyEdge S-2 の保護等級は？")[-1]["message"]
+        self.assertEqual(done["meta"]["profile"], "cloud")
+        self.assertTrue(any("会話履歴を送りません" in w for w in done["meta"]["warnings"]))
+
+    def test_07_chat_summary_and_chitchat(self):
+        chat = self.api("/api/chats", {"mode": "local"})["chat"]
+        events = self.ask(chat["id"], "資料全体を要約して")
+        done = events[-1]["message"]
+        self.assertEqual(done["meta"]["route"]["type"], "summary")
+        kinds = {s["kind"] for s in done["meta"]["sources"]}
+        self.assertIn("doc", kinds)
+        events = self.ask(chat["id"], "ありがとう")
+        done = events[-1]["message"]
+        self.assertFalse(done["meta"]["route"]["retrieval"])
+        self.assertEqual(done["meta"]["sources"], [])
+        msgs = self.api(f"/api/chats/{chat['id']}")["messages"]
+        self.assertEqual([m["role"] for m in msgs], ["user", "assistant", "user", "assistant"])
+
+    def test_08_relation_uses_graph(self):
+        chat = self.api("/api/chats", {"mode": "local"})["chat"]
+        events = self.ask(chat["id"], "北浜電機と仙台工場の関係は？")
+        done = events[-1]["message"]
+        self.assertEqual(done["meta"]["route"]["type"], "relation")
+        self.assertIn("グラフ PPR", done["meta"]["via"])
+
+    def test_09_scope_limits_documents(self):
+        docs = self.api("/api/docs")["docs"]
+        spec = next(d for d in docs if d["ext"] == ".docx")
+        chat = self.api("/api/chats", {"mode": "local", "scope": {"doc_ids": [spec["id"]]}})["chat"]
+        events = self.ask(chat["id"], "保証期間は？")
+        done = events[-1]["message"]
+        self.assertTrue(done["meta"]["sources"])
+        self.assertTrue(all(s["doc_id"] == spec["id"] for s in done["meta"]["sources"]))
+
+    def test_10_graph_api(self):
+        g = self.api("/api/graph")
+        self.assertNotIn("error", g)
+        names = {n["name"] for n in g["nodes"]}
+        self.assertIn("北浜電機", names)
+        self.assertTrue(g["edges"])
+        self.assertTrue(any(n["docs"] for n in g["nodes"]))
+        one = next(d for d in self.api("/api/docs")["docs"] if d["ext"] == ".xlsx")
+        g1 = self.api(f"/api/graph?doc={one['id']}")
+        self.assertLessEqual(len(g1["nodes"]), len(g["nodes"]))
+
+    def use_judge_api(self, provider, **sub):
+        self.api("/api/config", {"rag": {"decision_judge": "api"},
+                                 "decision_api": {"provider": provider,
+                                                  provider: {"api_key": f"{provider}-key", "use_proxy": False,
+                                                             **sub}}})
+
+    def decisions_requests(self, before):
+        return [r for r in mock_llm.REQUESTS[before:] if r["path"].split("?")[0].endswith("/decisions")]
+
+    def test_10b_judge_api(self):
+        """判定 API（Jev / OpenAI / Azure OpenAI）で判定する。公開文書の候補だけが送られる。"""
+        cases = [
+            ("openrouter", {"endpoint": self.mock_base + "/decisions"}, "/decisions",
+             "typesafe/jev-1.14"),
+            ("openai", {"endpoint": self.mock_base + "/v1/decisions"}, "/v1/decisions", "gpt-6-luna"),
+            ("azure", {"endpoint": self.mock_base.rsplit("/v1", 1)[0], "model": "luna-deploy"},
+             "/openai/v1/decisions", "luna-deploy"),
+            ("azure", {"endpoint": self.mock_base.rsplit("/v1", 1)[0], "model": "luna-deploy",
+                       "api_version": "2026-10-01-preview"},
+             "/openai/decisions?api-version=2026-10-01-preview", "luna-deploy"),
+        ]
+        try:
+            for provider, sub, path, model in cases:
+                with self.subTest(provider=provider, path=path):
+                    self.use_judge_api(provider, **sub)
+                    pub = self.api("/api/config")["decision_api"]
+                    self.assertTrue(pub[provider]["has_api_key"])
+                    self.assertNotIn("api_key", pub[provider])                    # 秘密は返さない
+                    test = self.api("/api/config/test", {"judge_api": True})      # 接続テスト
+                    self.assertTrue(test["ok"], test)
+                    self.assertTrue(test["url"].endswith(path), test)
+                    before = len(mock_llm.REQUESTS)
+                    chat = self.api("/api/chats", {"mode": "cloud", "strategy": "decision"})["chat"]
+                    meta = self.ask(chat["id"], "SkyEdge S-2 の給電方式は？")[-1]["message"]["meta"]
+                    self.assertIn(provider, meta["decision"]["judges"], meta["decision"])
+                    self.assertTrue(meta["decision"]["choice"])              # 最後の選択式の並べ替え
+                    self.assertGreater(meta["decision"]["api"]["calls"], 0)
+                    if provider == "openrouter":
+                        self.assertGreater(meta["decision"]["api"]["cost"], 0)
+                    else:
+                        self.assertGreater(meta["decision"]["api"]["input_tokens"], 0)
+                    self.assertTrue(any("仕様書" in s["doc_title"] for s in meta["sources"]))
+                    reqs = self.decisions_requests(before)
+                    self.assertTrue(reqs)
+                    for r in reqs:
+                        body = r["body"]
+                        self.assertTrue(r["path"].endswith(path), r["path"])
+                        self.assertEqual(body["model"], model)
+                        if provider == "azure":
+                            self.assertEqual((r["api_key"], r["auth"]), ("azure-key", None))
+                        else:
+                            self.assertEqual(r["auth"], f"Bearer {provider}-key")
+                        if provider == "openrouter":
+                            self.assertIn("candidates", body["state"])
+                            self.assertTrue({q["type"] for q in body["questions"].values()} <= {"noul", "choice"})
+                        else:
+                            self.assertIn("Candidates:", body["input"])
+                            self.assertTrue({q["type"] for q in body["questions"]} <= {"predicate", "choice"})
+                    # ローカルモード（社外秘を含む）では判定 API を使わずローカル LLM で判定する
+                    before = len(mock_llm.REQUESTS)
+                    chat = self.api("/api/chats", {"mode": "local", "strategy": "decision"})["chat"]
+                    meta = self.ask(chat["id"], "熱処理炉の温度センサーはいつ交換した？")[-1]["message"]["meta"]
+                    self.assertEqual(meta["decision"]["judges"], ["llm"])
+                    self.assertFalse(self.decisions_requests(before))
+        finally:
+            self.api("/api/config", {"rag": {"decision_judge": "llm"},
+                                     "decision_api": {"azure": {"allow_internal": False}}})
+
+    def test_10c_azure_allowed_for_internal(self):
+        """Azure で「社外秘も送ってよい」を ON にすると、社外秘を含む段も Azure で判定する。"""
+        self.use_judge_api("azure", endpoint=self.mock_base.rsplit("/v1", 1)[0], model="company-luna",
+                           allow_internal=True)
+        try:
+            before = len(mock_llm.REQUESTS)
+            chat = self.api("/api/chats", {"mode": "local", "strategy": "decision"})["chat"]
+            meta = self.ask(chat["id"], "熱処理炉の温度センサーはいつ交換した？")[-1]["message"]["meta"]
+            self.assertIn("azure", meta["decision"]["judges"], meta["decision"])
+            reqs = self.decisions_requests(before)
+            self.assertTrue(reqs)
+            self.assertTrue(all(r["body"]["model"] == "company-luna" for r in reqs))
+        finally:
+            self.api("/api/config", {"rag": {"decision_judge": "llm"},
+                                     "decision_api": {"azure": {"allow_internal": False}}})
+
+    def test_10d_judge_api_not_configured(self):
+        """判定 API を選んでも未設定なら、警告を出して LLM で判定する。"""
+        self.api("/api/config", {"rag": {"decision_judge": "api"},
+                                 "decision_api": {"provider": "azure",
+                                                  "azure": {"endpoint": "", "model": "", "clear_api_key": True}}})
+        try:
+            self.assertFalse(self.api("/api/config/test", {"judge_api": True})["ok"])
+            chat = self.api("/api/chats", {"mode": "cloud", "strategy": "decision"})["chat"]
+            meta = self.ask(chat["id"], "SkyEdge S-2 の給電方式は？")[-1]["message"]["meta"]
+            self.assertEqual(meta["decision"]["judges"], ["llm"])
+            self.assertTrue(any("Azure OpenAI" in w and "未設定" in w for w in meta["warnings"]), meta["warnings"])
+        finally:
+            self.api("/api/config", {"rag": {"decision_judge": "llm"}})
+
+    def test_11_no_internal_text_reached_cloud(self):
+        """送信記録全体で、クラウド側モデルへ社外秘の本文が送られていないこと。"""
+        leaked = []
+        cloud_calls = 0
+        for req in mock_llm.REQUESTS:
+            body = req["body"]
+            # 外部の判定 API（Jev・OpenAI・社外秘を許可していない Azure）も対象。10c の Azure は社外秘を許可した接続先
+            if body.get("model") not in ("cloud-chat", "cloud-embed", "typesafe/jev-1.14", "gpt-6-luna",
+                                         "luna-deploy"):
+                continue
+            cloud_calls += 1
+            text = json.dumps(body, ensure_ascii=False)
+            for marker in INTERNAL_MARKERS:
+                if marker in text:
+                    leaked.append((body.get("model"), marker))
+        self.assertEqual(leaked, [])
+        self.assertGreater(cloud_calls, 0)        # 公開文書・クラウドモードではクラウドを使っている
+
+    def test_12_update_delete_reindex(self):
+        docs = self.api("/api/docs")["docs"]
+        md = next(d for d in docs if d["filename"].startswith("01_"))
+        r = self.api(f"/api/docs/{md['id']}/update",
+                     {"title": "会社概要（改）", "folder": "/公開資料/会社/", "tags": ["会社", "概要"],
+                      "sensitivity": "internal"})
+        self.assertEqual(r["doc"]["title"], "会社概要（改）")
+        self.assertEqual(r["doc"]["folder"], "公開資料/会社")
+        self.wait_ready()
+        d = self.api(f"/api/docs/{md['id']}")["doc"]
+        self.assertTrue(d["flags"]["vector"].startswith("local:"))   # 区分変更で埋め込みを作り直す
+        self.assertTrue(self.api(f"/api/docs/{md['id']}/reindex", {"stages": ["summary"]})["ok"])
+        self.wait_ready()
+        self.assertTrue(self.api(f"/api/docs/{md['id']}/delete", {})["ok"])
+        self.assertIn("error", self.api(f"/api/docs/{md['id']}"))
+        r = self.api("/api/search", {"q": "代表取締役社長"})
+        self.assertFalse(any(g["doc_id"] == md["id"] for g in r["results"]))
+
+    def test_13_upload_validation(self):
+        r = self.api("/api/docs/upload?name=x.exe", raw=b"MZ")
+        self.assertIn("error", r)
+        r = self.api("/api/docs/upload?name=note.txt&folder=a/b&sensitivity=public&tags=t1,t2",
+                     raw="テスト用のメモ。新しい試作品 X-9 の評価は良好。".encode("utf-8"))
+        self.assertTrue(r["created"])
+        self.assertEqual(r["doc"]["sensitivity"], "public")
+        self.assertEqual(r["doc"]["tags"], ["t1", "t2"])
+        self.wait_ready()
+        broken = self.api("/api/docs/upload?name=broken.docx", raw=b"not a zip")
+        self.wait_ready()
+        d = self.api(f"/api/docs/{broken['doc']['id']}")["doc"]
+        self.assertEqual(d["status"], "error")
+        self.assertIn("壊れて", d["error"])
+
+
+if __name__ == "__main__":
+    unittest.main()

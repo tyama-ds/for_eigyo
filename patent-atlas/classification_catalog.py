@@ -4,6 +4,7 @@ The bundled catalogue contains every symbol from WIPO's valid-symbol list.
 Relationships are imported from the nested scheme XML, never guessed from digits.
 The caller must keep CPC, FI and F-term separate; unsupported kinds return no hits.
 """
+
 from __future__ import annotations
 
 from collections import defaultdict
@@ -55,20 +56,36 @@ def _public(row: list) -> dict:
         code = rows[code][2]
     ancestor_codes.reverse()
     result = {
-        "code": row[0], "kind": "IPC", "title": row[1], "parent": row[2],
-        "level": row[3], "dots": row[4], "entry_type": row[5],
-        "source": "https://ipcpub.wipo.int/?" + urlencode({"notion": "scheme", "version": meta["edition"], "symbol": row[6], "lang": "en"}),
-        "verified": True, "version": meta["version"], "language": "en",
+        "code": row[0],
+        "kind": "IPC",
+        "title": row[1],
+        "parent": row[2],
+        "level": row[3],
+        "dots": row[4],
+        "entry_type": row[5],
+        "source": "https://ipcpub.wipo.int/?"
+        + urlencode({"notion": "scheme", "version": meta["edition"], "symbol": row[6], "lang": "en"}),
+        "verified": True,
+        "version": meta["version"],
+        "language": "en",
         "children_count": len(child_map.get(row[0], [])),
         "ancestors": ancestor_codes,
         "path_title": " > ".join([rows[c][1] for c in ancestor_codes] + [row[1]]),
     }
-    result.update(title_en=row[1], title_en_status='official', title_en_source=result['source'],
-                  title_en_version=meta['version'], **label_fields('IPC', row[0]))
+    result.update(
+        title_en=row[1],
+        title_en_status="official",
+        title_en_source=result["source"],
+        title_en_version=meta["version"],
+        **label_fields("IPC", row[0]),
+    )
     parent_row = rows.get(row[2])
-    result.update(title_en_parent=parent_row[1] if parent_row else '',
-                  title_ja_parent=label_fields('IPC', row[2]).get('title_ja', '') if parent_row else '',
-                  title_en_parent_code=row[2] or '', title_ja_parent_code=row[2] or '')
+    result.update(
+        title_en_parent=parent_row[1] if parent_row else "",
+        title_ja_parent=label_fields("IPC", row[2]).get("title_ja", "") if parent_row else "",
+        title_en_parent_code=row[2] or "",
+        title_ja_parent_code=row[2] or "",
+    )
     return result
 
 
@@ -112,10 +129,16 @@ def metadata() -> dict:
 
 @lru_cache(maxsize=1)
 def _titles() -> list[tuple[str, str]]:
-    japanese = _bundle().get('records', {})
-    return [(row[0], unicodedata.normalize("NFKC", row[1] + ' ' +
-             japanese.get(row[0], {}).get('title_ja', '')).casefold().strip())
-            for row in _catalog()[1].values()]
+    japanese = _bundle().get("records", {})
+    return [
+        (
+            row[0],
+            unicodedata.normalize("NFKC", row[1] + " " + japanese.get(row[0], {}).get("title_ja", ""))
+            .casefold()
+            .strip(),
+        )
+        for row in _catalog()[1].values()
+    ]
 
 
 def search(kind: str, text: str, limit: int = 30) -> list[dict]:
@@ -156,8 +179,10 @@ def search(kind: str, text: str, limit: int = 30) -> list[dict]:
             missing = [word for word, found in zip(words, present) if not found]
             parent_code = rows[code][2]
             while parent_code is not None and missing:
-                title_parent = unicodedata.normalize("NFKC", rows[parent_code][1] + ' ' +
-                    _bundle().get('records', {}).get(parent_code, {}).get('title_ja', '')).casefold()
+                title_parent = unicodedata.normalize(
+                    "NFKC",
+                    rows[parent_code][1] + " " + _bundle().get("records", {}).get(parent_code, {}).get("title_ja", ""),
+                ).casefold()
                 missing = [word for word in missing if word not in title_parent]
                 parent_code = rows[parent_code][2]
             if missing:
