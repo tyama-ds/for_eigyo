@@ -142,9 +142,45 @@
   ],
   "images": [
     {
+      "file": "images/doc-vault/2026-11-09-scope-rag.jpg",
+      "kind": "change",
+      "caption": "相談先を常に表示し、使う RAG（検索方式・方式ごとの LLM 呼び出し回数）を選べるように",
+      "date": "2026-11-09"
+    },
+    {
+      "file": "images/doc-vault/2026-11-09-why-score.jpg",
+      "kind": "change",
+      "caption": "出典にマウスを載せると採用の根拠（検索ごとの順位・スコア・RRF の統合スコア）を表示",
+      "date": "2026-11-09"
+    },
+    {
+      "file": "images/doc-vault/2026-11-09-folders.jpg",
+      "kind": "change",
+      "caption": "フォルダツリー（文書の行・フォルダをドラッグして移動）と複数選択の一括操作",
+      "date": "2026-11-09"
+    },
+    {
+      "file": "images/doc-vault/2026-11-09-readings.jpg",
+      "kind": "change",
+      "caption": "読み込み結果（LLM ごとに要約・グラフを残して切り替え）とチャンクごとの抽出記録",
+      "date": "2026-11-09"
+    },
+    {
+      "file": "images/doc-vault/2026-11-09-graph-mode.jpg",
+      "kind": "change",
+      "caption": "グラフの作り方（標準 / 高速 / 語の共起（LLM なし））と相談の既定の検索方式",
+      "date": "2026-11-09"
+    },
+    {
+      "file": "images/doc-vault/2026-11-09-speech.jpg",
+      "kind": "change",
+      "caption": "相談の音声入力（社内の Whisper・ブラウザの端末内認識。クラウドへ送るのは許可したときだけ）",
+      "date": "2026-11-09"
+    },
+    {
       "file": "images/doc-vault/2026-11-09-main.jpg",
       "kind": "gui",
-      "caption": "相談タブ（取り込んだ文書に質問）",
+      "caption": "相談タブ（相談先・検索方式・使った RAG・出典つきの回答）",
       "date": "2026-11-09"
     }
   ]
