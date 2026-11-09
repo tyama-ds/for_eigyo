@@ -93,7 +93,7 @@ class MycelApp:
             self.library = Library(self)
             self.graphrag = GraphRAG(self)
             self.index.relations = self.relations
-            self.ai = AIService(self.index, self.config)
+            self.ai = AIService(self.index, self.config, app=self)
             self.plugins.load(cfg["plugins"], PluginContext(self))
             self.plugins.emit("on_vault_opened")
         # 初回の読込（インデックスが空のときだけ）。以降の読み込みは利用者の「更新」で行う

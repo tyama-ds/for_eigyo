@@ -195,7 +195,8 @@ GET_ROUTES = {
     "/api/ingest": lambda app, p: app.ingest.list(),
     "/api/folder": lambda app, p: app.folder_view(_str(p, "path")),
     "/api/relations/suggest": lambda app, p: {"suggestions": app.ai.suggest_related(
-        app._path(_str(p, "path")), use_llm=_str(p, "llm", "1") != "0")},
+        app._path(_str(p, "path")), k=max(1, min(40, int(_str(p, "k", "8") or 8))),
+        use_llm=_str(p, "llm", "0") == "1", kind=_str(p, "kind"))},
 }
 
 POST_ROUTES = {

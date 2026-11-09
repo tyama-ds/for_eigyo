@@ -2620,7 +2620,7 @@
     let h = `<div class="rh"><span>つながり</span><span>${rels.length}</span></div>`;
     h += rels.length ? rels.map((r) => `<div class="card rel${r.exists ? "" : " gone"}" data-open="${r.exists ? esc(r.path) : ""}"><b>${r.kind === "note" ? "" : ftBadge(r.grp)}${esc(r.title)}${r.origin === "ai" ? ' <small class="sb">AI</small>' : ""}</b>${r.label ? `<span>${esc(r.label)}</span>` : ""}${r.exists ? "" : '<span class="ng">見つかりません（移動・削除された可能性）</span>'}<button class="rx" data-unrel="${esc(r.path)}" title="つながりを外す">×</button></div>`).join("")
       : `<div class="hint">${c.readonly ? "資料には [[リンク]] を書けないので、ここで他の資料・ノートとつなげます。" : "資料やノートとのつながりを追加できます。"}</div>`;
-    h += `<div class="relbtns"><button class="btn sm" id="relAdd">＋ つなぐ…</button><button class="btn sm" id="relSug" title="内容の近いノート・資料を探し、ローカル LLM が関係を判断します">似ているものを探す（AI）</button></div><div id="relOut"></div>`;
+    h += `<div class="relbtns"><button class="btn sm" id="relAdd">＋ つなぐ…</button><button class="btn sm pri" id="relSug" title="文書全体の主題語・埋め込み・同じ人物やタグから、つながりそうなノート・資料を探します（すぐ出ます）">似ているものを探す</button></div><div id="relOut"></div>`;
     return h;
   }
   function bindRelations(p) {
@@ -2630,17 +2630,53 @@
       try { await api.post("/api/relations/remove", { a: c.path, b: b.dataset.unrel }); afterRelationChange(); } catch (err) { fail(err); }
     }));
     $("#relAdd", p).onclick = () => relateDialog(c.path);
-    $("#relSug", p).onclick = async () => {
-      const out = $("#relOut", p); out.innerHTML = '<span class="spin"></span> 探しています…';
+    $("#relSug", p).onclick = () => suggestRelated(c.path, $("#relOut", p));
+  }
+
+  /** つながりの候補（右パネル）。語・人物・タグで理由を示し、絞り込み・もっと見る・まとめてつなぐ・AI の判断（任意）。 */
+  const SUG = { kind: store.get("sugKind", ""), k: 8 };
+  async function suggestRelated(path, out, { llm = false } = {}) {
+    out.innerHTML = '<span class="spin"></span> 探しています…';
+    let r;
+    try { r = await api.get("/api/relations/suggest", { path, k: SUG.k, kind: SUG.kind, llm: llm ? "1" : "0" }); }
+    catch (e) { out.innerHTML = `<div class="notice">${esc(e.message)}</div>`; return; }
+    const sug = r.suggestions;
+    const pct = (s) => Math.round(Math.min(1, s.score) * 100);
+    const seg = `<div class="sugbar"><div class="seg xs">${[["", "すべて"], ["note", "ノート"], ["doc", "資料"]].map(([v, l]) => `<button data-sk="${v}" class="${SUG.kind === v ? "on" : ""}">${l}</button>`).join("")}</div>
+      ${sug.length > 1 ? `<label class="sugall"><input type="checkbox" id="sugAll"> まとめて選ぶ</label>` : ""}</div>`;
+    const card = (s) => `<label class="card sug${s.llm_skipped ? " dim" : ""}" data-open="${esc(s.path)}">
+        <input type="checkbox" class="sugck" data-p="${esc(s.path)}" data-label="${esc(s.reason || "")}"${s.score >= 0.5 && !s.llm_skipped ? " checked" : ""}>
+        <b>${s.kind === "note" ? "" : ftBadge(s.grp)}${esc(s.title)}<i class="pm sm" title="近さ ${pct(s)}%"><u style="width:${pct(s)}%"></u></i></b>
+        ${s.reason ? `<span class="why ai"><small class="sb">AI</small> ${esc(s.reason)}</span>` : ""}
+        <span class="why">${esc(s.why || (s.llm_skipped ? "AI は関係が薄いと判断" : s.snippet))}</span>
+        <div class="acts"><button class="btn xs" data-relto="${esc(s.path)}" data-label="${esc(s.reason || "")}">つなぐ</button><button class="btn xs" data-relto="${esc(s.path)}" data-ask="1">説明を付けてつなぐ…</button></div></label>`;
+    const tips = !sug.length ? `<div class="hint">候補は見つかりませんでした。${SUG.kind ? "絞り込みを「すべて」にするか、" : ""}索引を「更新」してから試してください。内容の重なりが無い文書は候補になりません（既にリンク・つながりがあるものは出しません）。</div>` : "";
+    out.innerHTML = seg + sug.map(card).join("") + tips + `<div class="relbtns sugfoot">
+        ${sug.length ? `<button class="btn sm pri" id="sugLink" disabled>選んだものをつなぐ</button>` : ""}
+        ${sug.length >= SUG.k ? `<button class="btn sm" id="sugMore">もっと見る</button>` : ""}
+        ${sug.length && !llm && (S.state.llm || {}).chat ? `<button class="btn sm" id="sugLlm" title="ローカル LLM に候補を見せて、本当に関係があるものと理由を判断させます（数十秒かかることがあります）">AI に関係を判断させる</button>` : ""}
+      </div>`;
+    $$("[data-sk]", out).forEach((b) => (b.onclick = (e) => { e.preventDefault(); SUG.kind = b.dataset.sk; store.set("sugKind", SUG.kind); SUG.k = 8; suggestRelated(path, out); }));
+    const upd = () => { const n = $$(".sugck:checked", out).length; const lb = $("#sugLink", out); if (lb) { lb.disabled = !n; lb.textContent = n ? `選んだ ${n} 件をつなぐ` : "選んだものをつなぐ"; } };
+    $$(".sugck", out).forEach((ck) => { ck.onclick = (e) => e.stopPropagation(); ck.onchange = upd; });
+    if ($("#sugAll", out)) $("#sugAll", out).onchange = (e) => { $$(".sugck", out).forEach((ck) => (ck.checked = e.target.checked)); upd(); };
+    $$("label.sug", out).forEach((l) => (l.onclick = (e) => { if (e.target.closest("input, button, .acts")) return; e.preventDefault(); openNote(l.dataset.open); }));
+    upd();
+    const link = async (pairs) => {
       try {
-        const r = await api.get("/api/relations/suggest", { path: c.path });
-        out.innerHTML = r.suggestions.length ? r.suggestions.map((s) => `<div class="card" data-open="${esc(s.path)}"><b>${s.kind === "note" ? "" : ftBadge(s.grp)}${esc(s.title)}</b><span>${esc(s.reason || s.snippet)}</span><div class="acts"><button class="btn sm" data-relto="${esc(s.path)}" data-label="${esc(s.reason || "")}">つなぐ</button></div></div>`).join("") : '<div class="hint">候補は見つかりませんでした。</div>';
-        $$("[data-relto]", out).forEach((b) => (b.onclick = async (e) => {
-          e.stopPropagation();
-          try { await api.post("/api/relations/add", { a: c.path, b: b.dataset.relto, label: b.dataset.label, origin: "ai" }); b.closest(".card").remove(); afterRelationChange(); } catch (err) { fail(err); }
-        }));
-      } catch (e) { out.innerHTML = `<div class="notice">${esc(e.message)}</div>`; }
+        const res = await api.post("/api/relations/many", { pairs: pairs.map((x) => ({ a: path, b: x.p, label: x.label || "" })), origin: "ai" });
+        toast(`${res.added} 件をつなぎました`); afterRelationChange();
+      } catch (err) { fail(err); }
     };
+    $$("[data-relto]", out).forEach((b) => (b.onclick = async (e) => {
+      e.preventDefault(); e.stopPropagation();
+      let label = b.dataset.label || "";
+      if (b.dataset.ask) { const v = await promptBox("つながりの説明（任意）", "例: 改訂版 / 添付資料 / 前提となる仕様 / 同じ顧客の案件", label); if (v === null) return; label = v; }
+      await link([{ p: b.dataset.relto, label }]);
+    }));
+    if ($("#sugLink", out)) $("#sugLink", out).onclick = () => link($$(".sugck:checked", out).map((ck) => ({ p: ck.dataset.p, label: ck.dataset.label })));
+    if ($("#sugMore", out)) $("#sugMore", out).onclick = () => { SUG.k += 8; suggestRelated(path, out, { llm }); };
+    if ($("#sugLlm", out)) $("#sugLlm", out).onclick = () => suggestRelated(path, out, { llm: true });
   }
   async function proposeRelations(prefix) {
     const m = modal({ title: `資料のつながりを提案（${prefix ? docLabel(prefix) : "Vault"}）`, body: '<span class="spin"></span> 内容の近い資料を探しています…', wide: false, buttons: [] });
@@ -2649,7 +2685,7 @@
     m.close();
     const body = document.createElement("div");
     body.innerHTML = pairs.length ? `<p class="hint" style="margin-top:0">キーワード索引で内容の近さを測った候補です（100% ＝ ほぼ同じ内容）。つなぐ組を選んでください。1 件ずつ AI に理由を判断させたいときは、資料を開いて「似ているものを探す（AI）」を使います。</p>
-      <div class="proplist">${pairs.map((p, i) => `<label class="prow"><input type="checkbox" data-pi="${i}"${p.score >= 0.5 ? " checked" : ""}><span class="pa">${ftBadge(p.a_grp)}${esc(p.a_title)}</span><span class="pm"><i style="width:${Math.round(p.score * 100)}%"></i><small>${Math.round(p.score * 100)}%</small></span><span class="pa">${ftBadge(p.b_grp)}${esc(p.b_title)}</span></label>`).join("")}</div>`
+      <div class="proplist">${pairs.map((p, i) => `<label class="prow"><input type="checkbox" data-pi="${i}"${p.score >= 0.5 ? " checked" : ""}><span class="pa">${ftBadge(p.a_grp)}${esc(p.a_title)}</span><span class="pm" title="${esc((p.keywords || []).length ? "共通の語: " + p.keywords.join("・") : "")}"><i style="width:${Math.round(p.score * 100)}%"></i><small>${Math.round(p.score * 100)}%</small></span><span class="pa">${ftBadge(p.b_grp)}${esc(p.b_title)}</span></label>`).join("")}</div>`
       : '<p class="hint">つなぐ候補は見つかりませんでした（資料が少ないか、内容が離れています）。</p>';
     modal({ title: `資料のつながりを提案（${pairs.length} 組）`, body, wide: false, buttons: [{ label: "閉じる" }, ...(pairs.length ? [{ label: "選んだ組をつなぐ", primary: true, onClick: async () => {
       const sel = $$("[data-pi]:checked", body).map((c) => pairs[+c.dataset.pi]);
