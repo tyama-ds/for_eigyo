@@ -27,6 +27,9 @@ def chat_response(messages: list[dict]) -> str:
         prompt = " ".join(p.get("text", "") for p in prompt if p.get("type") == "text")
         if "[TASK:caption]" in prompt:
             return "A社向け提案の売上推移グラフ。2024 年 120、2025 年 150（推定）。見出し「売上推移」" if has_img else "画像がありません"
+        if "[TASK:describe]" in prompt:
+            inst = prompt.split("指示:", 1)[-1].strip()
+            return f"指示「{inst}」への回答: 2024 年 120、2025 年 150" if has_img else "画像がありません"
     task = (re.search(r"\[TASK:(\w+)\]", prompt) or [None, ""])[1]
     if task == "rerank":
         ns = [int(n) for n in re.findall(r"^\[(\d+)\] 「", prompt, re.M)]

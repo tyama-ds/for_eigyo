@@ -250,6 +250,7 @@ class EntityStore:
             CREATE TABLE IF NOT EXISTS hidden(path TEXT, type TEXT, key TEXT, PRIMARY KEY(path, type, key));
             CREATE TABLE IF NOT EXISTS manual(path TEXT, type TEXT, key TEXT, name TEXT, title TEXT, org TEXT,
                 role TEXT, context TEXT, PRIMARY KEY(path, type, key));
+            CREATE TABLE IF NOT EXISTS filters(kind TEXT, value TEXT, at REAL, PRIMARY KEY(kind, value));
         """)
         c.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         c.commit()
@@ -327,6 +328,30 @@ class EntityStore:
                                item.get("org", ""), item.get("role", ""), item.get("context", "")))
             self.conn.commit()
             self._changed()
+
+    # ------------------------------------------------------------ 一時的な非表示（表示だけを絞る。抽出結果は変えない）
+    FILTER_KINDS = ("ent", "org", "path", "folder")   # ent: "type:key" / org: 組織キー / path: 文書 / folder: フォルダ
+
+    def filter_add(self, kind: str, value: str) -> None:
+        if kind not in self.FILTER_KINDS or not value:
+            raise ValueError("非表示の種類が不正です")
+        with _lock:
+            self.conn.execute("INSERT OR REPLACE INTO filters VALUES(?,?,?)", (kind, value, time.time()))
+            self.conn.commit()
+
+    def filter_remove(self, kind: str, value: str) -> None:
+        with _lock:
+            self.conn.execute("DELETE FROM filters WHERE kind=? AND value=?", (kind, value))
+            self.conn.commit()
+
+    def filter_clear(self) -> None:
+        with _lock:
+            self.conn.execute("DELETE FROM filters")
+            self.conn.commit()
+
+    def filter_list(self) -> list[dict]:
+        with _lock:
+            return [dict(r) for r in self.conn.execute("SELECT kind, value, at FROM filters ORDER BY at")]
 
     def hidden_list(self) -> list[dict]:
         with _lock:

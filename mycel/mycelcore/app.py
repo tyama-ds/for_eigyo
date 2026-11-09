@@ -791,6 +791,9 @@ class MycelApp:
     def caption_image(self, path: str) -> dict:
         return IMG.caption(self, path)
 
+    def describe_image(self, path: str, instruction: str = "") -> dict:
+        return IMG.describe(self, path, instruction)
+
     def caption_images(self, prefixes=None, only_missing: bool = True) -> dict:
         prefixes = self._prefixes(prefixes)
         return self.jobs.start("caption", f"画像を読む（{self._label(prefixes)}）", prefixes,

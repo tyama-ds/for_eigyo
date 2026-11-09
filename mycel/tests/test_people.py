@@ -118,6 +118,44 @@ class PeopleAppTest(unittest.TestCase):
         plain = self.app.graph("資料/議事録.txt", 2)
         self.assertNotIn("日報/0918.md", {n["id"] for n in plain["nodes"]})
 
+    def test_temporary_filters(self):
+        """一時的な非表示: 個別・会社ごと・文書・フォルダ。抽出結果は変えず、解除すれば戻る。"""
+        pp = self.app.people
+        self.assertIn("山本", keys(pp.list("person"), "person"))
+        bko = next(e["key"] for e in pp.list("org") if "B" in e["name"])
+        pp.add("資料/議事録.txt", "person", "山本さん（B社）", "窓口")      # 所属を明示（会社ごと非表示の対象になる）
+        # 会社ごと → 組織も所属する人も消える。所属の無い人は残る
+        pp.filter_set("add", "org", bko)
+        self.assertNotIn(bko, keys(pp.list("org"), "org"))
+        self.assertNotIn("山本", keys(pp.list("person"), "person"))
+        self.assertTrue(pp.status()["hidden"] >= 2)
+        self.assertEqual(pp.filters()["filters"][0]["sub"], "会社ごと（所属する人も）")
+        pp.filter_set("remove", "org", bko)
+        self.assertIn("山本", keys(pp.list("person"), "person"))
+        # 文書単位 → その文書にしか出ない人は消え、他の文書にも出る人は残る（登場一覧からその文書は消える）
+        pp.filter_set("add", "path", "資料/議事録.txt")
+        self.assertNotIn("山本", keys(pp.list("person"), "person"))
+        d = pp.detail("person", "田中")
+        self.assertNotIn("資料/議事録.txt", [a["path"] for a in d["appearances"]])
+        self.assertGreaterEqual(d["hidden_docs"], 1)
+        self.assertNotIn("山本", keys(pp.of("資料/議事録.txt"), "person"))
+        # フォルダ単位
+        pp.filter_set("add", "folder", "資料/")
+        self.assertFalse(any(e["type"] == "person" and e["key"] == "山本" for e in pp.list()))
+        self.assertEqual([r["kind"] for r in pp.filters()["filters"]], ["path", "folder"])
+        # 個別
+        pp.filter_set("clear")
+        pp.filter_set("add", "ent", "person:山本")
+        self.assertNotIn("山本", keys(pp.list("person"), "person"))
+        self.assertTrue(pp.detail("person", "山本")["hidden"])            # 直接開けば見える（印つき）
+        g = self.app.graph(None, 1, False, True)
+        self.assertFalse(any(n.get("id", "").endswith("山本") and n.get("entity") for n in g["nodes"]))
+        with self.assertRaises(VaultError):
+            pp.filter_set("add", "ent", "山本")
+        pp.filter_set("clear")
+        self.assertIn("山本", keys(pp.list("person"), "person"))
+        self.assertEqual(pp.status()["hidden"], 0)
+
     def test_corrections_hide_merge_ignore_add(self):
         p = "資料/議事録.txt"
         # この文書から外す → 抽出し直しても外したまま → 戻す

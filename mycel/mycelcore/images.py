@@ -51,6 +51,27 @@ def caption(app, path: str) -> dict:
     return {"path": path, "caption": text, "model": cfg["vlm_model"]}
 
 
+def describe(app, path: str, instruction: str = "") -> dict:
+    """ノートに貼った画像を読む。指示が無ければ通常の説明（索引にも保存）。指示があればそれに従って読み、保存はしない。"""
+    instruction = (instruction or "").strip()
+    if not instruction:
+        return {**caption(app, path), "saved": True}
+    path = app._path(path)
+    cfg = app.config()
+    if not vlm_configured(cfg):
+        raise LLMError("画像を読むモデル（VLM）が未設定です。設定の「LLM」で「画像を読むモデル」を入力してください（例: llava, qwen2.5vl, gemma3）")
+    abs_p = app.scope.abs_path(path)
+    if not abs_p.is_file() or abs_p.suffix.lower() not in IMAGE_MIME:
+        raise LLMError("画像ファイルが見つかりません")
+    client = LLMClient({**cfg, "model": cfg["vlm_model"]})
+    prompt = f"[TASK:describe]\n画像について次の指示に日本語で答えてください。読み取れないことは「不明」と書き、推測は「推定」と添えてください。\n指示: {instruction}"
+    content = [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": _data_url(abs_p)}}]
+    text = client.chat([{"role": "user", "content": content}], temperature=0.1).strip()
+    if not text:
+        raise LLMError("VLM の応答が空でした")
+    return {"path": path, "caption": text, "model": cfg["vlm_model"], "saved": False}
+
+
 def caption_all(app, prefixes=None, job=None, only_missing: bool = True) -> dict:
     """読み込み済みの画像をまとめて読む（ジョブ）。"""
     todo = [im for im in app.index.images(prefixes) if not (only_missing and im["captioned"])]

@@ -158,6 +158,14 @@ class FeatureTest(unittest.TestCase):
         self.assertTrue(any(h["path"] == "添付/グラフ.png" for h in self.app.ai.retrieve("売上推移 グラフ", k=5)))
         d = self.app.note("添付/グラフ.png")
         self.assertEqual(d["caption"]["model"], "mock-vl")
+        # ノートに貼った画像を指示つきで読む（保存しない）／指示なしは通常の説明（保存する）
+        r = self.app.describe_image("添付/グラフ.png", "数値を表にして")
+        self.assertIn("数値を表にして", r["caption"])
+        self.assertFalse(r["saved"])
+        self.assertIn("売上推移", self.app.index.caption_of("添付/グラフ.png"))
+        r = self.app.describe_image("添付/グラフ.png", "")
+        self.assertTrue(r["saved"])
+        self.assertIn("売上推移", r["caption"])
         self.assertEqual(self.app.images_status()["captioned"], 1)
         # 名前を変えても説明は付いてくる
         self.app.move_item("添付/グラフ.png", "添付/売上.png")
