@@ -65,6 +65,9 @@
   .btn.warn{background:linear-gradient(92deg,#fab219,#e66767)}
   .btn.sm{padding:6px 12px;font-size:.8rem}
   .row{display:flex;gap:8px;align-items:center}
+  /* 横の説明文が長くてもボタンの文字を縦に折り返さない（説明文の側を折り返す） */
+  .row > .btn{flex:none;white-space:nowrap}
+  .row > .hint{min-width:0;overflow-wrap:anywhere}
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
   .hint{font-size:.74rem;color:var(--ink-mute)}
   code.k{background:#0d1119;border:1px solid var(--line);border-radius:6px;padding:1px 6px;font-size:.78rem}

@@ -79,7 +79,7 @@
   "log": [
     {
       "date": "2026-11-09",
-      "summary": "Copilot Research: リサーチツール選択を人が1回確認する半自動 Selenium（bridge 併用・同一チャットで全章継続）、章別結果表示の不具合修正（v0.9.3）"
+      "summary": "Copilot Research: リサーチツール選択を人が1回確認する半自動 Selenium（bridge 併用・同一チャットで全章継続）、章別結果表示・接続テストのボタン折り返しの不具合修正（v0.9.3）"
     },
     {
       "date": "2026-08-04",
