@@ -54,6 +54,8 @@ for_eigyo と claudecode（tyama-ds/claudecode）の各プロジェクトの状�
 開発のたびに、画面のあるプロジェクトは使用イメージを付ける。ダッシュボードでは各プロジェクトを開くと
 「画面イメージ」（現在の画面）と「修正箇所」（変更した部分を赤枠で囲んだ画面）が並び、クリックで拡大できる。
 
+![ダッシュボードの画面イメージ欄](images/_dashboard/detail.jpg)
+
 | 項目 | 内容 |
 |------|------|
 | `file` | `progress/` からの相対パス（例: `images/mycel/2026-11-09-split-mode.jpg`）。JPEG / PNG / WebP、1枚 400 KB まで |
