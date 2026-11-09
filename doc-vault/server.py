@@ -29,7 +29,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 BASE = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE))
 
-from docvault import __version__, config, db, decision_api, folders, graph, rag, readings, speech  # noqa: E402
+from docvault import __version__, config, db, decision_api, folders, graph, rag, ragopts, readings, speech  # noqa: E402
 from docvault.extract import SUPPORTED  # noqa: E402
 from docvault.indexer import ALL_STAGES, INDEXER, register_upload, resume_pending  # noqa: E402
 from docvault.llm import LLM, LLMError  # noqa: E402
@@ -40,13 +40,20 @@ DEFAULT_PORT = 8760
 STATIC = BASE / "static"
 MAX_UPLOAD = 200 * 1024 * 1024
 TOKEN = ""                     # 空ならトークン不要（127.0.0.1 のみで待ち受け）
-STRATEGIES = ("auto", "decision", "classic")   # 検索方式（自動 / DecisionRAG のみ / 従来型のみ）
+STRATEGIES = config.STRATEGIES   # 検索方式（自動 / 速さ優先 / 選んで使う / DecisionRAG のみ / 従来型）
 
 STATIC_TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
                 ".js": "text/javascript; charset=utf-8", ".svg": "image/svg+xml"}
 
 
 # ---------------------------------------------------------------- API 実装
+
+def public_config_with_catalog(cfg: dict) -> dict:
+    """画面へ返す設定（API キーは伏せる）＋ 相談で選べる RAG の一覧と呼び出し回数の目安。"""
+    out = config.public_config(cfg)
+    out["rag_methods"] = ragopts.catalog(cfg)
+    return out
+
 
 def api_status() -> dict:
     cfg = config.load_config()
@@ -440,7 +447,7 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/api/status":
             self._json(api_status())
         elif route == "/api/config":
-            self._json(config.public_config(config.load_config()))
+            self._json(public_config_with_catalog(config.load_config()))
         elif route == "/api/docs":
             self._json(api_docs(qs))
         elif len(parts) == 3 and parts[:2] == ["api", "docs"]:
@@ -503,7 +510,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         body = self._body_json()
         if route == "/api/config":
-            self._json(config.public_config(config.save_config(body)))
+            self._json(public_config_with_catalog(config.save_config(body)))
         elif route == "/api/config/test":
             self._json(api_config_test(body))
         elif route == "/api/search":
@@ -571,8 +578,13 @@ class Handler(BaseHTTPRequestHandler):
             mode = body.get("mode") if body.get("mode") in ("auto", "local", "cloud") \
                 else config.load_config()["policy"]["chat_mode"]
             scope = body.get("scope") if isinstance(body.get("scope"), dict) else {}
-            strategy = body.get("strategy") if body.get("strategy") in STRATEGIES else "auto"
-            chat = db.create_chat(str(body.get("title") or ""), mode, folders.clean_scope(scope), strategy)
+            cfg = config.load_config()
+            strategy = body.get("strategy") if body.get("strategy") in STRATEGIES \
+                else cfg["rag"].get("default_strategy", "auto")
+            methods = config.clean_methods(body["methods"]) if isinstance(body.get("methods"), list) \
+                else list(cfg["rag"].get("custom_methods") or [])
+            chat = db.create_chat(str(body.get("title") or ""), mode, folders.clean_scope(scope), strategy,
+                                  methods)
             beam = _beam(body.get("decision_beam"))
             if beam:
                 db.update_chat(chat["id"], decision_beam=beam)
@@ -596,6 +608,8 @@ class Handler(BaseHTTPRequestHandler):
                     fields["mode"] = body["mode"]
                 if body.get("strategy") in STRATEGIES:
                     fields["strategy"] = body["strategy"]
+                if isinstance(body.get("methods"), list):
+                    fields["methods"] = config.clean_methods(body["methods"])
                 beam = _beam(body.get("decision_beam"))
                 if beam is not None:
                     fields["decision_beam"] = beam

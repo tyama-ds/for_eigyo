@@ -93,6 +93,9 @@ DEFAULT_CONFIG: dict = {
         # グラフの作り方: standard=LLM でエンティティ・関係・説明を抽出 / fast=LLM に名前と関係の組だけ
         # 書かせる（説明なし。速い）/ terms=LLM を使わない語の共起グラフ（一瞬。関係の種類は分からない）
         "graph_mode": "standard",
+        # 相談の既定の検索方式（相談ごとに変えられる）と、「選んで使う」の既定の組み合わせ
+        "default_strategy": "auto",
+        "custom_methods": ["bm25", "vector", "graph", "crag"],
     },
     # 相談の音声入力（文字起こし）。engine: auto=Whisper があればそれ、無ければブラウザの音声認識 /
     # whisper=Whisper 互換 API / browser=ブラウザの音声認識 / off=使わない
@@ -108,6 +111,18 @@ DEFAULT_CONFIG: dict = {
 }
 
 GRAPH_MODES = ("standard", "fast", "terms")
+# 相談の検索方式: auto=質問の種類で自動 / fast=速さ優先（全文＋埋め込み＋グラフ・LLM は回答だけ）/
+# custom=選んで使う / decision=DecisionRAG のみ / classic=従来型（DecisionRAG なし）
+STRATEGIES = ("auto", "fast", "custom", "decision", "classic")
+RAG_RETRIEVERS = ("bm25", "vector", "graph", "decision", "summary", "community", "multi")
+RAG_HELPERS = ("router", "crag", "rerank")
+RAG_METHODS = RAG_RETRIEVERS + RAG_HELPERS
+
+
+def clean_methods(value) -> list[str]:
+    """「選んで使う」の方式の一覧を検証する（知らない名前は捨て、並びは定義の順）。"""
+    got = {str(x) for x in value} if isinstance(value, (list, tuple)) else set()
+    return [m for m in RAG_METHODS if m in got]
 SPEECH_ENGINES = ("auto", "whisper", "browser", "off")
 
 _lock = threading.Lock()
@@ -226,6 +241,10 @@ def save_config(update: dict) -> dict:
                     cfg["rag"][key] = val
         if rag.get("graph_mode") in GRAPH_MODES:
             cfg["rag"]["graph_mode"] = rag["graph_mode"]
+        if rag.get("default_strategy") in STRATEGIES:
+            cfg["rag"]["default_strategy"] = rag["default_strategy"]
+        if isinstance(rag.get("custom_methods"), list):
+            cfg["rag"]["custom_methods"] = clean_methods(rag["custom_methods"])
         judge = {"jev": "api"}.get(rag.get("decision_judge"), rag.get("decision_judge"))
         if judge in ("llm", "api"):
             cfg["rag"]["decision_judge"] = judge

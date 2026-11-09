@@ -18,7 +18,7 @@ import re
 import time
 from typing import Iterator
 
-from . import db, decision, decision_api, folders, graph
+from . import db, decision, decision_api, folders, graph, ragopts
 from .config import embed_space, load_config
 from .llm import LLM, LLMError, strip_think
 from .retrieval import INDEX, load_chunks
@@ -103,6 +103,7 @@ class Ctx:
         if self.mode not in ("auto", "local", "cloud"):
             self.mode = "auto"
         self.touched = bool(chat.get("touched_internal"))
+        self.opts = ragopts.resolve(chat, cfg)          # 使う RAG（検索方式）
         self.steps: list[dict] = []
         self.warnings: list[str] = []
         self.t0 = time.time()
@@ -169,7 +170,7 @@ def heuristic_route(question: str) -> dict:
 
 def route(ctx: Ctx, question: str, history: list[dict]) -> dict:
     plan = heuristic_route(question)
-    if not ctx.cfg["rag"]["router"]:
+    if not ctx.opts["router"]:
         return plan
     prof = ctx.profile("helper", ctx.history_sensitivity)
     if not prof:
@@ -229,9 +230,15 @@ def _signal_name(name: str) -> str:
 
 
 def _hybrid_detail(ctx, text, allowed, k, qvecs=None) -> tuple[list[tuple[str, float]], dict[str, list]]:
-    """ハイブリッド検索（BM25 + 埋め込みの RRF）と、チャンクごとの内訳（信号ごとの順位・スコア）。"""
-    sig = INDEX.signals(text, allowed_docs=allowed, k=k,
-                        qvecs=qvecs if qvecs is not None else _qvecs(ctx, text, allowed))
+    """ハイブリッド検索（BM25 + 埋め込みの RRF）と、チャンクごとの内訳（信号ごとの順位・スコア）。
+
+    使う RAG に全文（BM25）・埋め込みのどちらかが無ければ、その信号は使わない（埋め込みが無ければ
+    質問の埋め込みも作らない）。
+    """
+    methods = ctx.opts["methods"]
+    if qvecs is None:
+        qvecs = _qvecs(ctx, text, allowed) if "vector" in methods else {}
+    sig = INDEX.signals(text, allowed_docs=allowed, k=k, qvecs=qvecs, bm25="bm25" in methods)
     if not sig:
         return [], {}
     fused = rrf_fuse([[cid for cid, _ in ranked] for _, ranked in sig])[:k]
@@ -291,12 +298,15 @@ def retrieve(ctx: Ctx, plan: dict, allowed: set[str], doc_sens: dict[str, str]) 
     ev = {"passages": [], "graph": None, "communities": [], "doc_summaries": [], "via": [],
           "decision": None, "why": {}, "methods": []}
     fusion = Fusion()
-    strategy = ctx.chat.get("strategy") or "auto"
+    opts = ctx.opts
+
+    def use(method: str, when_auto: bool = True) -> bool:
+        """この質問で方式を使うか。自動・従来型は質問の種類（when_auto）で、それ以外は選んだものを毎回。"""
+        return method in opts["methods"] and (when_auto if opts["dynamic"] else True)
 
     # DecisionRAG: 検索器を使わず階層をたどる（自動では事実・比較の質問に使う）
     dec_rank: list[str] = []
-    if ctx.cfg["rag"]["decision"] and strategy != "classic" and (
-            strategy == "decision" or plan["type"] in ("fact", "compare")):
+    if use("decision", plan["type"] in ("fact", "compare")):
         api_client = None
         if ctx.cfg["rag"].get("decision_judge") == "api":
             if decision_api.ready(ctx.cfg):
@@ -335,7 +345,8 @@ def retrieve(ctx: Ctx, plan: dict, allowed: set[str], doc_sens: dict[str, str]) 
                                   "hits": len(dec_rank)})
     dec_note = "経路スコア（たどった各段の判定確率の幾何平均）" + ("・選択式で並べ替え済み" if dec_rank and
                                                                  ev["decision"] and ev["decision"]["choice"] else "")
-    if strategy == "decision":
+    only_decision = not (opts["methods"] & {"bm25", "vector", "graph", "summary", "community", "multi"})
+    if only_decision:
         if dec_rank:
             # 論文どおり第1段の検索器を使わない
             fusion.add("DecisionRAG", res["hits"], 1.0, note=dec_note)
@@ -343,25 +354,41 @@ def retrieve(ctx: Ctx, plan: dict, allowed: set[str], doc_sens: dict[str, str]) 
             ev["why"] = fusion.why
             ev["passages"] = _diversify(dec_rank, k=k * 2, per_doc=None)
             return ev
-        ctx.warnings.append("DecisionRAG で段落が見つからなかったため、従来の検索で補いました")
+        ctx.warnings.append("DecisionRAG で段落が見つからなかったため、全文検索で補いました")
     if dec_rank:
         fusion.add("DecisionRAG", res["hits"], 1.5, note=dec_note)
 
-    qv = _qvecs(ctx, query_text, allowed)
-    base, sub = _hybrid_detail(ctx, query_text, allowed, k * 3, qv)
-    fusion.add("ハイブリッド（BM25＋埋め込み）" if qv else "BM25（全文の語の一致）",
-               base if qv else [(cid, next((x["score"] for x in sub.get(cid, []) if x["rank"]), sc))
-                                for cid, sc in base],
-               1.0, note="BM25 と埋め込みの RRF スコア" if qv else "BM25 スコア", sub=sub if qv else None)
-    ev["via"].append("ハイブリッド（BM25+埋め込み）" if qv else "BM25")
-    ev["methods"].append({"id": "hybrid" if qv else "bm25",
-                          "label": "ハイブリッド（BM25＋埋め込み）" if qv else "BM25（全文検索）",
-                          "detail": ("語の一致（BM25）と意味の近さ（埋め込みモデル: "
-                                     + "・".join(sp.partition(":")[2] or sp for sp in qv) + "）を RRF で統合")
-                          if qv else "語の一致で探す（埋め込みモデル未設定のため意味検索なし）",
-                          "hits": len(base)})
+    use_bm25, use_vec = "bm25" in opts["methods"], "vector" in opts["methods"]
+    if only_decision and not dec_rank:
+        use_bm25 = True                                  # 補いの全文検索
+        ctx.opts = dict(opts, methods=opts["methods"] | {"bm25"})
+    if use_bm25 or use_vec:
+        qv = _qvecs(ctx, query_text, allowed) if use_vec else {}
+        if use_vec and not qv:
+            ctx.warnings.append("埋め込み（ベクトル）を選んでいますが、埋め込みのある文書・設定が無いため使えませんでした")
+        base, sub = _hybrid_detail(ctx, query_text, allowed, k * 3, qv)
+        both = use_bm25 and bool(qv)
+        if both:
+            name, mid, label, via = "ハイブリッド（BM25＋埋め込み）", "hybrid", "ハイブリッド（BM25＋埋め込み）", \
+                "ハイブリッド（BM25+埋め込み）"
+            detail = ("語の一致（BM25）と意味の近さ（埋め込みモデル: "
+                      + "・".join(sp.partition(":")[2] or sp for sp in qv) + "）を RRF で統合")
+            ranked, note, subs = base, "BM25 と埋め込みの RRF スコア", sub
+        else:
+            vec_only = bool(qv) and not use_bm25
+            name = "埋め込み（ベクトル）" if vec_only else "BM25（全文の語の一致）"
+            mid, label, via = ("vector", "埋め込み（ベクトル）", "埋め込み") if vec_only else ("bm25", "BM25（全文検索）", "BM25")
+            detail = ("意味の近さで探す（埋め込みモデル: " + "・".join(sp.partition(":")[2] or sp for sp in qv) + "）"
+                      if vec_only else "語の一致で探す" + ("" if use_vec else "（埋め込みは使わない設定）"))
+            # 信号が1つだけなので、RRF ではなくその信号の素のスコアを出す
+            ranked = [(cid, next((x["score"] for x in sub.get(cid, [])), sc)) for cid, sc in base]
+            note, subs = ("コサイン類似度（1 に近いほど意味が近い）" if vec_only else "BM25 スコア（語の一致の強さ）"), None
+        if ranked:
+            fusion.add(name, ranked, 1.0, note=note, sub=subs)
+        ev["via"].append(via)
+        ev["methods"].append({"id": mid, "label": label, "detail": detail, "hits": len(base)})
 
-    if plan["type"] in ("relation", "compare", "summary") or plan["entities"]:
+    if use("graph", plan["type"] in ("relation", "compare", "summary") or bool(plan["entities"])):
         g = graph.get_graph(allowed, doc_sens)
         if g.entities:
             seeds = g.seed_entities(q, plan["keywords"] + plan["entities"])
@@ -393,7 +420,7 @@ def retrieve(ctx: Ctx, plan: dict, allowed: set[str], doc_sens: dict[str, str]) 
                             e["sensitivity"] != "public" for e in ctxg["entities"]) else "public",
                     }
 
-    if plan["type"] == "compare":
+    if plan["type"] == "compare" and "multi" in opts["methods"] and (use_bm25 or use_vec):
         targets = (plan["entities"] or plan["keywords"])[:4]
         for t in targets:
             fusion.add(f"マルチクエリ「{t[:16]}」", _hybrid(ctx, f"{t} {q}", allowed, k), 1.0,
@@ -403,29 +430,31 @@ def retrieve(ctx: Ctx, plan: dict, allowed: set[str], doc_sens: dict[str, str]) 
             ev["methods"].append({"id": "multi", "label": "マルチクエリ",
                                   "detail": "比較の対象ごとに検索: " + "・".join(targets), "hits": 0})
 
-    if plan["type"] == "summary":
-        ev["doc_summaries"] = _doc_summaries(q + " " + " ".join(plan["keywords"]), allowed, limit=5)
+    if use("summary", plan["type"] == "summary"):
+        ev["doc_summaries"] = _doc_summaries(q + " " + " ".join(plan["keywords"]), allowed,
+                                             limit=5 if plan["type"] == "summary" else 3)
         if ev["doc_summaries"]:
             ev["via"].append("文書要約")
             ev["methods"].append({"id": "summary", "label": "文書要約（RAPTOR）",
                                   "detail": "取り込み時に作った文書ごとの要約", "hits": len(ev["doc_summaries"])})
-        scope_docs = (ctx.chat.get("scope") or {}).get("doc_ids") or []
-        if len(allowed) > 3 and not (0 < len(scope_docs) <= 3):
-            ev["communities"] = _communities(ctx, q, plan, allowed, doc_sens)
-            if ev["communities"]:
-                ev["via"].append("コミュニティ要約")
-                ev["methods"].append({"id": "community", "label": "コミュニティ要約（LazyGraphRAG）",
-                                      "detail": "グラフで関連の強いまとまりを、質問時に必要な分だけ要約",
-                                      "hits": len(ev["communities"])})
-        else:
-            # 特定文書の要約: 文書全体からまんべんなく代表チャンクを取る
-            spread = []
-            for d in allowed:
-                chs = db.doc_chunks(d)
-                step = max(1, len(chs) // 6)
-                spread.extend(c["id"] for c in chs[::step][:6])
-            fusion.add("文書全体から均等に", [(cid, 0.0) for cid in spread], 1.0,
-                       note="要約の質問のため、文書の最初から最後まで均等に取った箇所")
+    scope_docs = (ctx.chat.get("scope") or {}).get("doc_ids") or []
+    few_docs = len(allowed) <= 3 or 0 < len(scope_docs) <= 3
+    if use("community", plan["type"] == "summary" and not few_docs):
+        ev["communities"] = _communities(ctx, q, plan, allowed, doc_sens)
+        if ev["communities"]:
+            ev["via"].append("コミュニティ要約")
+            ev["methods"].append({"id": "community", "label": "コミュニティ要約（LazyGraphRAG）",
+                                  "detail": "グラフで関連の強いまとまりを、質問時に必要な分だけ要約",
+                                  "hits": len(ev["communities"])})
+    if plan["type"] == "summary" and few_docs and opts["methods"] & {"bm25", "vector", "summary"}:
+        # 特定文書の要約: 文書全体からまんべんなく代表チャンクを取る
+        spread = []
+        for d in allowed:
+            chs = db.doc_chunks(d)
+            step = max(1, len(chs) // 6)
+            spread.extend(c["id"] for c in chs[::step][:6])
+        fusion.add("文書全体から均等に", [(cid, 0.0) for cid in spread], 1.0,
+                   note="要約の質問のため、文書の最初から最後まで均等に取った箇所")
 
     fused = fusion.fuse()
     ev["why"] = fusion.why
@@ -530,7 +559,7 @@ def _sens_of(passages: list[dict]) -> str:
 
 def corrective(ctx: Ctx, plan: dict, ev: dict, allowed, doc_sens) -> dict:
     """CRAG: 資料が不十分なら書き換えた検索文で再検索して統合する（1回まで）。"""
-    if not ctx.cfg["rag"]["corrective"] or plan["type"] not in ("fact", "relation", "compare"):
+    if not ctx.opts["crag"] or plan["type"] not in ("fact", "relation", "compare"):
         return ev
     top = ev["passages"][:6]
     if not top:
@@ -558,12 +587,15 @@ def corrective(ctx: Ctx, plan: dict, ev: dict, allowed, doc_sens) -> dict:
     ctx.step("根拠チェック", f"不足 → 再検索: {new_q[:60]}")
     alt = dict(plan, standalone=new_q,
                type="relation" if plan["type"] == "fact" else plan["type"])
-    saved = ctx.chat.get("strategy")
-    ctx.chat = dict(ctx.chat, strategy="classic")       # 再検索では判定を繰り返さない
+    saved = ctx.opts
+    again = saved["methods"] - {"decision"}             # 再検索では判定を繰り返さない
+    if not again & {"bm25", "vector", "graph"}:
+        again |= {"bm25"}
+    ctx.opts = dict(saved, methods=again)
     try:
         ev2 = retrieve(ctx, alt, allowed, doc_sens)
     finally:
-        ctx.chat = dict(ctx.chat, strategy=saved)
+        ctx.opts = saved
     seen = {p["id"] for p in ev["passages"]}
     merged = ev["passages"][:4] + [p for p in ev2["passages"] if p["id"] not in seen] \
         + ev["passages"][4:]
@@ -583,7 +615,7 @@ def corrective(ctx: Ctx, plan: dict, ev: dict, allowed, doc_sens) -> dict:
 
 
 def rerank(ctx: Ctx, question: str, passages: list[dict], k: int, why: dict | None = None) -> list[dict]:
-    if not ctx.cfg["rag"]["rerank"] or len(passages) <= k:
+    if not ctx.opts["rerank"] or len(passages) <= k:
         return passages[:k]
     cand = passages[:20]
     sens = "internal" if _sens_of(cand) == "internal" or ctx.touched else "public"
@@ -713,7 +745,9 @@ def ask(chat_id: str, question: str) -> Iterator[dict]:
     # 2. 検索
     ev = {"passages": [], "graph": None, "communities": [], "doc_summaries": [], "via": [],
           "decision": None, "why": {}, "methods": []}
-    route_info["strategy"] = chat.get("strategy") or "auto"
+    route_info["strategy"] = ctx.opts["strategy"]
+    route_info["strategy_label"] = ctx.opts["label"]
+    route_info["selected"] = [m for m in ragopts.METHODS if m in ctx.opts["methods"]]
     if route_info["retrieval"]:
         yield {"type": "status", "text": "資料を検索しています…"}
         ev = retrieve(ctx, plan, allowed, doc_sens)

@@ -200,9 +200,127 @@ function graphSummary(hits) {
 
 const STRATEGY_NOTE = {
   auto: "自動: 事実・比較 → 🌲DecisionRAG＋🔎ハイブリッド ／ 関係 → 🕸GraphRAG＋🔎ハイブリッド ／ 要約 → 📑文書要約＋🧩コミュニティ要約",
+  fast: "速さ優先: 🔤全文＋🔎埋め込み＋🕸GraphRAG を毎回使い、LLM は回答の 1 回だけ（ルーター・根拠チェックを省く）",
+  custom: "選んで使う: 「使う RAG」でチェックした方式を、質問の種類にかかわらず毎回使う",
   decision: "DecisionRAG のみ: 検索器を使わず、フォルダ→文書→節→段落を判定モデルでたどる",
-  classic: "従来型: 🔎全文（BM25）＋埋め込み＋🕸GraphRAG（関係の質問）を RRF で統合",
+  classic: "従来型: 🔎全文（BM25）＋埋め込み＋🕸GraphRAG（関係の質問）を RRF で統合（DecisionRAG なし）",
 };
+// 自動・従来型で、方式を使う質問の種類
+const AUTO_WHEN = { decision: "事実・比較の質問", graph: "関係・比較・要約の質問か、固有の対象を含む質問",
+  summary: "要約の質問", community: "要約の質問（文書 4 件以上）", multi: "比較の質問",
+  bm25: "毎回", vector: "毎回（埋め込みモデルがあれば）", router: "毎回", crag: "事実・関係・比較の質問", rerank: "毎回" };
+const METHOD_ICON2 = { bm25: "🔤", vector: "🔎", graph: "🕸", decision: "🌲", summary: "📑", community: "🧩",
+  multi: "🔀", router: "🧭", crag: "↻", rerank: "⇅" };
+
+function ragCatalog() { return (state.config && state.config.rag_methods) || null; }
+
+function effectiveMethods(strategy, chat) {
+  const cat = ragCatalog();
+  if (!cat) return [];
+  if (strategy === "custom") {
+    const m = (chat && chat.methods && chat.methods.length) ? chat.methods
+      : ((state.config.rag && state.config.rag.custom_methods) || []);
+    return cat.order.filter((x) => m.includes(x));
+  }
+  return (cat.strategies[strategy] || cat.strategies.auto).methods;
+}
+
+function estimate(methods, dynamic) {
+  // 1 問あたりの LLM 呼び出しの目安。自動・従来型は質問の種類で使う方式が変わるので、
+  // DecisionRAG（事実・比較）とコミュニティ要約（要約）は同じ質問では重ならないものとして最大を数える
+  const cat = ragCatalog();
+  const rag = (state.config && state.config.rag) || {};
+  const budget = (cat ? cat.decision_budget : 8) + (rag.decision_choice === false ? 0 : 1);
+  const parts = ["回答 1"];
+  let total = 1, embed = 0;
+  const cost = {};
+  for (const m of cat ? cat.order : []) {
+    if (!methods.includes(m)) continue;
+    const info = cat.methods[m];
+    const n = info.llm === "budget" ? budget : Number(info.llm) || 0;
+    cost[m] = n;
+    if (n) parts.push(`${info.label} ${m === "decision" || m === "community" ? "最大 " : ""}${n}`);
+    if (info.embed === 1) embed += 1;
+  }
+  if (dynamic) {
+    const c = (m) => cost[m] || 0;
+    total += c("router") + c("rerank") + Math.max(c("decision") + c("crag"), c("community"), c("crag"));
+  } else {
+    total += Object.values(cost).reduce((a, b) => a + b, 0);
+  }
+  return { total, embed, parts };
+}
+
+function costText(m, info, cat) {
+  if (info.llm === "budget") return `LLM 最大 ${cat.decision_budget + 1} 回`;
+  if (info.llm) return m === "community" ? "LLM 最大 5 回（初回）" : `LLM ${info.llm} 回`;
+  if (info.embed === 1) return "埋め込み 1 回";
+  if (info.embed === "targets") return "埋め込み（対象ごと）";
+  return "LLM 0 回";
+}
+
+function renderRagPanel() {
+  const cat = ragCatalog();
+  const box = $("#rag-list");
+  if (!cat || !box) return;
+  const strategy = $("#chat-strategy").value;
+  const dynamic = cat.strategies[strategy] ? cat.strategies[strategy].dynamic : false;
+  const methods = effectiveMethods(strategy, state.chat);
+  const row = (m) => {
+    const info = cat.methods[m];
+    const on = methods.includes(m);
+    return `<label class="rag-item ${on ? "on" : ""} ${dynamic ? "locked" : ""}" title="${esc(info.desc)}">
+      <input type="checkbox" data-method="${m}" ${on ? "checked" : ""} ${dynamic ? "disabled" : ""}>
+      <span class="rag-name">${METHOD_ICON2[m] || ""} ${esc(info.label)}</span>
+      <span class="rag-cost ${info.llm ? "llm" : ""}">${esc(costText(m, info, cat))}</span>
+      <span class="rag-desc">${esc(info.desc)}${dynamic && on ? `<span class="rag-when">自動で使うとき: ${esc(AUTO_WHEN[m] || "")}</span>` : ""}</span></label>`;
+  };
+  const lockNote = dynamic ? `<div class="rag-lock">「${esc((cat.strategies[strategy] || {}).label || "")}」は質問の種類で方式を使い分けます（下の表示は使うことがある方式）。
+      自分で選ぶには <button class="btn small" id="rag-to-custom">選んで使うに切り替える</button></div>` : "";
+  box.innerHTML = `${lockNote}<div class="rag-group-title">${dynamic ? "検索の方式（質問の種類で使い分け、RRF で統合）" : "検索の方式（選んだものを毎回使い、RRF で統合）"}</div>${cat.retrievers.map(row).join("")}
+    <div class="rag-group-title">補助の LLM 処理</div>${cat.helpers.map(row).join("")}`;
+  const est = estimate(methods, dynamic);
+  $("#rag-est").textContent = `1 問の LLM 呼び出し: ${dynamic ? "質問の種類により最大 " : ""}${est.total} 回（${est.parts.join("・")}）`
+    + (est.embed ? `・埋め込み ${est.embed} 回` : "");
+  const labels = methods.filter((m) => cat.retrievers.includes(m)).map((m) => cat.methods[m].label);
+  $("#rag-summary").textContent = `${(cat.strategies[strategy] || {}).label || strategy}: ${labels.join("＋") || "（なし）"}`
+    + `　LLM ${dynamic ? "最大 " : ""}${est.total} 回`;
+  $("#rag-presets").innerHTML = [["fast", "速さ優先"], ["hybrid", "全文＋埋め込みだけ"], ["graph", "GraphRAG 重視"], ["all", "全部"]]
+    .map(([k, l]) => `<button class="btn small" data-preset="${k}">${l}</button>`).join("");
+  const toCustom = $("#rag-to-custom");
+  if (toCustom) toCustom.addEventListener("click", () => { $("#chat-strategy").value = "custom"; updateChat({ strategy: "custom" }); });
+  $$("#rag-list [data-method]").forEach((el) => el.addEventListener("change", () => {
+    const cur = new Set(effectiveMethods($("#chat-strategy").value, state.chat));
+    if (el.checked) cur.add(el.dataset.method); else cur.delete(el.dataset.method);
+    setMethods([...cur]);
+  }));
+  $$("#rag-presets [data-preset]").forEach((el) => el.addEventListener("click", () => {
+    const k = el.dataset.preset;
+    if (k === "fast") { updateChat({ strategy: "fast" }); return; }
+    setMethods({ hybrid: ["bm25", "vector"], graph: ["bm25", "vector", "graph", "crag"],
+      all: cat.order.slice() }[k]);
+  }));
+}
+
+function setMethods(methods) {
+  const cat = ragCatalog();
+  if (cat && !methods.some((m) => cat.retrievers.includes(m))) {
+    $("#chat-hint").textContent = "検索の方式を 1 つ以上選んでください（全文・埋め込み・GraphRAG など）";
+    renderRagPanel();
+    return;
+  }
+  $("#chat-hint").textContent = "";
+  updateChat({ strategy: "custom", methods });
+}
+
+$("#rag-default").addEventListener("click", async () => {
+  const strategy = $("#chat-strategy").value;
+  const rag = { default_strategy: strategy };
+  if (strategy === "custom") rag.custom_methods = effectiveMethods("custom", state.chat);
+  state.config = await api("/api/config", { rag });
+  toast(`新しい相談の既定を「${(ragCatalog().strategies[strategy] || {}).label || strategy}」にしました`);
+  renderRagPanel();
+});
 
 function refreshChatHead(flash) {
   const c = state.chat;
@@ -210,7 +328,8 @@ function refreshChatHead(flash) {
   const info = describeScope(scope);
   $("#chat-title").value = c ? c.title : "";
   $("#chat-mode").value = c ? c.mode : ((state.config && state.config.policy && state.config.policy.chat_mode) || "auto");
-  $("#chat-strategy").value = c ? (c.strategy || "auto") : "auto";
+  $("#chat-strategy").value = c ? (c.strategy || "auto")
+    : ((state.config && state.config.rag && state.config.rag.default_strategy) || "auto");
   $("#chat-beam").value = c && c.decision_beam ? c.decision_beam : "";
   const defBeam = state.config && state.config.rag ? state.config.rag.decision_beam : 4;
   $("#chat-beam").placeholder = `既定 ${defBeam}`;
@@ -224,6 +343,7 @@ function refreshChatHead(flash) {
   const gs = graphSummary(info.hits);
   $("#strategy-note").textContent = (STRATEGY_NOTE[$("#chat-strategy").value] || "")
     + (gs ? ` ／ この相談先のグラフ: ${gs}` : "");
+  renderRagPanel();
   if (flash) {
     const bar = $("#scope-bar");
     bar.classList.remove("flash"); void bar.offsetWidth; bar.classList.add("flash");
@@ -360,7 +480,11 @@ async function updateChat(fields) {
 $("#chat-mode").addEventListener("change", () => {
   if (state.chat) updateChat({ mode: $("#chat-mode").value }); else refreshChatHead();
 });
-$("#chat-strategy").addEventListener("change", () => updateChat({ strategy: $("#chat-strategy").value }));
+$("#chat-strategy").addEventListener("change", () => {
+  const strategy = $("#chat-strategy").value;
+  if (strategy === "custom") $("#rag-panel").open = true;
+  updateChat({ strategy });
+});
 $("#chat-beam").addEventListener("change", () => {
   const v = $("#chat-beam").value.trim();
   updateChat({ decision_beam: v ? Math.max(1, Math.min(10, Number(v) || 0)) : 0 });
@@ -455,6 +579,11 @@ function messageHtml(m, idx) {
   const badges = [];
   if (route.scope_label) badges.push(`<span class="badge scope" title="この回答で検索した文書（相談先）">相談先: ${esc(route.scope_label)}（${route.docs_in_scope ?? "-"} 文書）</span>`);
   if (route.type) badges.push(`<span class="badge">${ROUTE_LABEL[route.type] || route.type}</span>`);
+  if (route.strategy_label) {
+    const cat = ragCatalog();
+    const sel = (route.selected || []).map((m) => (cat && cat.methods[m] ? cat.methods[m].label : m)).join("・");
+    badges.push(`<span class="badge" title="この回答の検索方式${sel ? `（選んでいた方式: ${esc(sel)}）` : ""}">検索方式: ${esc(route.strategy_label)}</span>`);
+  }
   if (meta.profile) badges.push(`<span class="badge ${meta.profile}">${meta.profile === "local" ? "ローカル LLM" : "クラウド LLM"}</span>`);
   else if (route.type) badges.push('<span class="badge ng">LLM なし（抜粋）</span>');
   if (route.retrieval) badges.push(meta.sensitivity === "internal"
@@ -1682,6 +1811,13 @@ async function loadSettings() {
   for (const k of ["default_sensitivity", "public_ingest_profile", "chat_mode"]) $(`#p-${k}`).value = cfg.policy[k];
   for (const k of RAG_BOOLS) $(`#r-${k}`).checked = !!cfg.rag[k];
   for (const k of RAG_NUMS) $(`#r-${k}`).value = cfg.rag[k];
+  $("#r-default_strategy").value = cfg.rag.default_strategy || "auto";
+  const cat = cfg.rag_methods;
+  if (cat) {
+    $("#r-default-methods").textContent = "「選んで使う」の既定の組み合わせ: "
+      + (cfg.rag.custom_methods || []).map((m) => (cat.methods[m] || {}).label || m).join("・")
+      + "（相談画面の「この方式を既定にする」で変えられます）";
+  }
   const gm = cfg.rag.graph_mode || "standard";
   $$('#graph-mode-cards input[name="graph_mode"]').forEach((el) => { el.checked = el.value === gm; });
   syncModeCards();
@@ -1733,7 +1869,7 @@ async function saveSettings(quiet) {
   }
   const policy = {};
   for (const k of ["default_sensitivity", "public_ingest_profile", "chat_mode"]) policy[k] = $(`#p-${k}`).value;
-  const rag = { decision_judge: $("#r-decision_judge").value };
+  const rag = { decision_judge: $("#r-decision_judge").value, default_strategy: $("#r-default_strategy").value };
   for (const k of RAG_BOOLS) rag[k] = $(`#r-${k}`).checked;
   for (const k of RAG_NUMS) rag[k] = Number($(`#r-${k}`).value);
   const gm = $('#graph-mode-cards input[name="graph_mode"]:checked');

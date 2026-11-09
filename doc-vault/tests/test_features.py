@@ -270,6 +270,76 @@ class TestFeatures(unittest.TestCase):
         chats = self.api("/api/chats")["chats"]
         self.assertIn("scope_info", chats[0])
 
+    # ------------------------------------------------------------ 使う RAG（検索方式）
+    def ask_counting(self, body, question):
+        chat = self.api("/api/chats", body)["chat"]
+        start = len(mock_llm.REQUESTS)
+        msg = self.ask(chat["id"], question)
+        sent = mock_llm.REQUESTS[start:]
+        chats = [r for r in sent if r["path"].endswith("/chat/completions")]
+        embeds = [r for r in sent if r["path"].endswith("/embeddings")]
+        return chat, msg["meta"], chats, embeds
+
+    def signal_names(self, meta):
+        return {x["name"].split("（")[0] for s in meta["sources"] for x in (s.get("why") or {}).get("signals", [])}
+
+    def test_40_fast_strategy_calls_llm_only_for_the_answer(self):
+        q = "SkyEdge S-2 の筐体固定ネジの不具合の件数は？"
+        _, meta, chats, embeds = self.ask_counting({"strategy": "auto"}, q)
+        self.assertGreater(len(chats), 1)                      # 自動: ルーター・判定・根拠チェック＋回答
+        _, meta, chats, embeds = self.ask_counting({"strategy": "fast"}, q)
+        self.assertEqual(len(chats), 1)                         # 速さ優先: 回答だけ
+        self.assertEqual(meta["route"]["strategy_label"], "速さ優先")
+        self.assertEqual(meta["route"]["by"], "rule")           # ルーターは規則で判定
+        self.assertTrue(embeds)                                 # 質問の埋め込みは作る
+        self.assertNotIn("decision", [m["id"] for m in meta["methods"]])
+        self.assertTrue(meta["sources"])
+
+    def test_41_custom_methods_are_used_as_selected(self):
+        q = "SkyEdge S-2 の筐体固定ネジの不具合の件数は？"
+        # 全文（BM25）だけ: 埋め込みも LLM の補助も使わない
+        chat, meta, chats, embeds = self.ask_counting({"strategy": "custom", "methods": ["bm25"]}, q)
+        self.assertEqual(chat["methods"], ["bm25"])
+        self.assertEqual(len(chats), 1)
+        self.assertEqual(embeds, [])
+        self.assertEqual([m["id"] for m in meta["methods"]], ["bm25"])
+        self.assertEqual(self.signal_names(meta), {"BM25"})
+        # 埋め込みだけ
+        _, meta, _, embeds = self.ask_counting({"strategy": "custom", "methods": ["vector"]}, q)
+        self.assertTrue(embeds)
+        self.assertEqual([m["id"] for m in meta["methods"]], ["vector"])
+        self.assertEqual(self.signal_names(meta), {"埋め込み"})
+        # 文書要約を選ぶと、要約の質問でなくても文書要約を資料に加える
+        _, meta, _, _ = self.ask_counting({"strategy": "custom", "methods": ["bm25", "summary"]}, q)
+        self.assertTrue(any(s["kind"] == "doc" for s in meta["sources"]), meta["sources"])
+        # 知らない方式は捨てる・方式の更新
+        chat = self.api("/api/chats", {"strategy": "custom", "methods": ["bm25", "magic"]})["chat"]
+        self.assertEqual(chat["methods"], ["bm25"])
+        chat = self.api(f"/api/chats/{chat['id']}/update", {"methods": ["vector", "graph", "crag"]})["chat"]
+        self.assertEqual(chat["methods"], ["vector", "graph", "crag"])
+
+    def test_42_custom_decision_only_uses_no_retriever(self):
+        _, meta, chats, _ = self.ask_counting({"strategy": "custom", "methods": ["decision"]},
+                                              "北浜電機から受けた指摘は何件？")
+        ids = [m["id"] for m in meta["methods"]]
+        self.assertEqual(ids, ["decision"])
+        self.assertGreater(len(chats), 2)                       # 判定 + 回答
+
+    def test_43_default_strategy_and_catalog(self):
+        cfg = self.api("/api/config")
+        cat = cfg["rag_methods"]
+        self.assertEqual(cat["strategies"]["fast"]["estimate"]["llm_max"], 1)
+        self.assertGreater(cat["strategies"]["auto"]["estimate"]["llm_max"], 3)
+        self.assertIn("decision", cat["strategies"]["auto"]["methods"])
+        self.assertNotIn("decision", cat["strategies"]["classic"]["methods"])
+        self.api("/api/config", {"rag": {"default_strategy": "custom", "custom_methods": ["graph", "bm25", "x"]}})
+        cfg = self.api("/api/config")
+        self.assertEqual(cfg["rag"]["custom_methods"], ["bm25", "graph"])
+        chat = self.api("/api/chats", {})["chat"]
+        self.assertEqual(chat["strategy"], "custom")
+        self.assertEqual(chat["methods"], ["bm25", "graph"])
+        self.api("/api/config", {"rag": {"default_strategy": "auto"}})
+
     # ------------------------------------------------------------ 文字起こし
     def test_30_transcribe_via_local_whisper(self):
         wav = speech.test_tone()

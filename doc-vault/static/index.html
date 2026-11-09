@@ -49,16 +49,26 @@
               </select>
             </label>
             <label class="mini">検索方式
-              <select id="chat-strategy" class="inline-select" title="検索の方式">
-                <option value="auto">自動（質問の種類で選ぶ）</option>
+              <select id="chat-strategy" class="inline-select" title="検索の方式（使う RAG）">
+                <option value="auto">自動（質問の種類で選ぶ・おすすめ）</option>
+                <option value="fast">速さ優先（全文＋埋め込み＋GraphRAG・LLM は回答だけ）</option>
+                <option value="custom">選んで使う（下の「使う RAG」でチェック）</option>
                 <option value="decision">DecisionRAG のみ（階層をたどる）</option>
-                <option value="classic">従来型（全文＋埋め込み＋GraphRAG）</option>
+                <option value="classic">従来型（自動から DecisionRAG を除く）</option>
               </select>
             </label>
             <label class="mini" id="chat-beam-box" title="DecisionRAG で各段に残す枝の数（ビーム幅）。空なら設定の値">幅
               <input type="number" id="chat-beam" class="inline-input beam-input" min="1" max="10" placeholder="既定">
             </label>
           </div>
+          <details class="rag-panel" id="rag-panel">
+            <summary><span class="rag-k">使う RAG</span> <span id="rag-summary"></span></summary>
+            <div class="rag-list" id="rag-list"></div>
+            <div class="rag-foot"><span id="rag-est" class="rag-est"></span>
+              <span class="spacer"></span>
+              <span class="rag-presets" id="rag-presets"></span>
+              <button class="btn small" id="rag-default" title="新しい相談の既定の検索方式・組み合わせにします">この方式を既定にする</button></div>
+          </details>
           <div class="strategy-note" id="strategy-note"></div>
         </div>
         <div id="messages" class="messages">
@@ -223,6 +233,18 @@
         <label class="check"><input type="checkbox" id="r-router"> 質問ルーター（検索要否・検索方法の判定と、会話を踏まえた質問の補完）</label>
         <label class="check"><input type="checkbox" id="r-corrective"> 根拠が足りなければ再検索（CRAG）</label>
         <label class="check"><input type="checkbox" id="r-rerank"> LLM で検索結果を並べ替える（精度↑・LLM 呼び出し+1）</label>
+        <div class="two">
+          <div><label class="field-label">相談の既定の検索方式（相談ごとに変えられます）</label>
+            <select id="r-default_strategy">
+              <option value="auto">自動（質問の種類で選ぶ）</option>
+              <option value="fast">速さ優先（LLM は回答だけ）</option>
+              <option value="custom">選んで使う（相談画面の「使う RAG」の既定の組み合わせ）</option>
+              <option value="decision">DecisionRAG のみ</option>
+              <option value="classic">従来型（DecisionRAG なし）</option>
+            </select></div>
+          <div class="hint" id="r-default-methods"></div>
+        </div>
+        <p class="hint">下のチェックは「自動」で使うかどうかです。「速さ優先」「選んで使う」は相談画面で選んだ方式を毎回使います。</p>
         <h3 class="muted">DecisionRAG（arXiv:2610.35868）</h3>
         <label class="check"><input type="checkbox" id="r-decision"> 事実・比較の質問で、文書の階層（フォルダ→文書→節→段落）を判定モデルでたどる</label>
         <label class="check"><input type="checkbox" id="r-decision_choice"> 最後に上位の段落を選択式で比べて並べ替える</label>

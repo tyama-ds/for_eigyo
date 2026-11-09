@@ -130,14 +130,15 @@ class SearchIndex:
         return out
 
     def signals(self, query: str, *, allowed_docs: set[str] | None, k: int = 20,
-                qvecs: dict[str, list[float]] | None = None) -> list[tuple[str, list[tuple[str, float]]]]:
+                qvecs: dict[str, list[float]] | None = None,
+                bm25: bool = True) -> list[tuple[str, list[tuple[str, float]]]]:
         """検索の信号ごとの結果: [("bm25", [(chunk_id, BM25 スコア)]), ("vec:<空間>", [(chunk_id, コサイン類似度)])]。"""
         self.ensure_loaded()
 
         def allow(cid):
             return allowed_docs is None or self.meta.get(cid, {}).get("doc_id") in allowed_docs
 
-        out = [("bm25", self.bm25.search(query, k=k * 2, allow=allow))]
+        out = [("bm25", self.bm25.search(query, k=k * 2, allow=allow))] if bm25 else []
         for space, qv in (qvecs or {}).items():
             vi = self.vectors.get(space)
             if vi is not None and qv:

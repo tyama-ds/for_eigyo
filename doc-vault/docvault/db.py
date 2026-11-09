@@ -114,6 +114,7 @@ CREATE TABLE IF NOT EXISTS chats (
   mode TEXT NOT NULL DEFAULT 'auto',
   strategy TEXT NOT NULL DEFAULT 'auto',
   decision_beam INTEGER NOT NULL DEFAULT 0,
+  methods TEXT NOT NULL DEFAULT '[]',
   scope TEXT NOT NULL DEFAULT '{}',
   touched_internal INTEGER NOT NULL DEFAULT 0,
   created_at REAL NOT NULL,
@@ -219,6 +220,8 @@ def _migrate(c: sqlite3.Connection) -> None:
         c.execute("ALTER TABLE chats ADD COLUMN strategy TEXT NOT NULL DEFAULT 'auto'")
     if "decision_beam" not in cols:      # 0 = 設定の値に従う
         c.execute("ALTER TABLE chats ADD COLUMN decision_beam INTEGER NOT NULL DEFAULT 0")
+    if "methods" not in cols:            # 検索方式「選んで使う」の組み合わせ
+        c.execute("ALTER TABLE chats ADD COLUMN methods TEXT NOT NULL DEFAULT '[]'")
     for table in ("entity_mentions", "relation_mentions"):
         if "reading_id" not in {r[1] for r in c.execute(f"PRAGMA table_info({table})")}:
             c.execute(f"ALTER TABLE {table} ADD COLUMN reading_id TEXT NOT NULL DEFAULT ''")
@@ -397,13 +400,13 @@ def doc_chunks(doc_id: str) -> list[dict]:
 # ---------------------------------------------------------------- 会話
 
 def create_chat(title: str = "", mode: str = "auto", scope: dict | None = None,
-                strategy: str = "auto") -> dict:
+                strategy: str = "auto", methods: list[str] | None = None) -> dict:
     cid = new_id("c")
     t = now()
-    write("INSERT INTO chats(id,title,mode,strategy,scope,created_at,updated_at) "
-          "VALUES(?,?,?,?,?,?,?)",
-          (cid, title or "新しい相談", mode, strategy, json.dumps(scope or {}, ensure_ascii=False),
-           t, t))
+    write("INSERT INTO chats(id,title,mode,strategy,methods,scope,created_at,updated_at) "
+          "VALUES(?,?,?,?,?,?,?,?)",
+          (cid, title or "新しい相談", mode, strategy, json.dumps(methods or []),
+           json.dumps(scope or {}, ensure_ascii=False), t, t))
     return get_chat(cid)
 
 
@@ -413,6 +416,10 @@ def chat_dict(row) -> dict:
         d["scope"] = json.loads(d.get("scope") or "{}")
     except ValueError:
         d["scope"] = {}
+    try:
+        d["methods"] = json.loads(d.get("methods") or "[]")
+    except ValueError:
+        d["methods"] = []
     d["touched_internal"] = bool(d.get("touched_internal"))
     return d
 
@@ -429,6 +436,8 @@ def list_chats() -> list[dict]:
 def update_chat(chat_id: str, **fields) -> None:
     if "scope" in fields and not isinstance(fields["scope"], str):
         fields["scope"] = json.dumps(fields["scope"], ensure_ascii=False)
+    if "methods" in fields and not isinstance(fields["methods"], str):
+        fields["methods"] = json.dumps(fields["methods"])
     if "touched_internal" in fields:
         fields["touched_internal"] = int(bool(fields["touched_internal"]))
     fields["updated_at"] = now()
