@@ -64,5 +64,20 @@
       "ref": "#47"
     }
   ],
-  "updated": "2026-09-24"
+  "updated": "2026-09-24",
+  "images": [
+    {
+      "file": "images/tensorium/2026-11-09-augment.jpg",
+      "kind": "change",
+      "caption": "「データ拡張・蒸留」タブを追加（LLM 知識蒸留で偏りを均衡化）",
+      "date": "2026-11-09",
+      "ref": "#48"
+    },
+    {
+      "file": "images/tensorium/2026-11-09-main.jpg",
+      "kind": "gui",
+      "caption": "ステップ 1: データの読み込み",
+      "date": "2026-11-09"
+    }
+  ]
 }

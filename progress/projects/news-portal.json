@@ -245,5 +245,13 @@
       "ref": "#16"
     }
   ],
-  "updated": "2026-11-02"
+  "updated": "2026-11-02",
+  "images": [
+    {
+      "file": "images/news-portal/2026-11-09-main.jpg",
+      "kind": "gui",
+      "caption": "トップ（カテゴリ別のフィード）",
+      "date": "2026-11-09"
+    }
+  ]
 }
