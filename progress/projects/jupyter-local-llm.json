@@ -98,5 +98,25 @@
       "ref": "#9〜#12"
     }
   ],
-  "updated": "2026-08-04"
+  "updated": "2026-08-04",
+  "images": [
+    {
+      "file": "images/jupyter-local-llm/2026-11-09-copilot-research.jpg",
+      "kind": "gui",
+      "caption": "Copilot Research（App Portal のプレビュー画像）",
+      "date": "2026-11-09"
+    },
+    {
+      "file": "images/jupyter-local-llm/2026-11-09-loop.jpg",
+      "kind": "gui",
+      "caption": "llmlab Loop（App Portal のプレビュー画像）",
+      "date": "2026-11-09"
+    },
+    {
+      "file": "images/jupyter-local-llm/2026-11-09-studio.jpg",
+      "kind": "gui",
+      "caption": "llmlab Studio（App Portal のプレビュー画像）",
+      "date": "2026-11-09"
+    }
+  ]
 }

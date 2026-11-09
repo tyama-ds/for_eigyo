@@ -187,5 +187,13 @@
       "summary": "初版とポータル統合"
     }
   ],
-  "updated": "2026-10-14"
+  "updated": "2026-10-14",
+  "images": [
+    {
+      "file": "images/research-atlas/2026-11-09-main.jpg",
+      "kind": "gui",
+      "caption": "概要（研究の現在地）",
+      "date": "2026-11-09"
+    }
+  ]
 }

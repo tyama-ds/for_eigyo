@@ -193,5 +193,20 @@
       "summary": "初版とポータル統合"
     }
   ],
-  "updated": "2026-11-08"
+  "updated": "2026-11-08",
+  "images": [
+    {
+      "file": "images/patent-atlas/2026-11-09-report-table.jpg",
+      "kind": "change",
+      "caption": "検索式カードに「技術動向調査の報告書形式」（調査条件表・検索式表）を追加",
+      "date": "2026-11-09",
+      "ref": "#103"
+    },
+    {
+      "file": "images/patent-atlas/2026-11-09-main.jpg",
+      "kind": "gui",
+      "caption": "調査条件の入力（5ステップの調査フロー）",
+      "date": "2026-11-09"
+    }
+  ]
 }
