@@ -107,5 +107,20 @@
       "ref": "#14, #17, #27"
     }
   ],
-  "updated": "2026-11-06"
+  "updated": "2026-11-06",
+  "images": [
+    {
+      "file": "images/launcher/2026-11-09-apps-json-repair.jpg",
+      "kind": "change",
+      "caption": "apps.json の書式の誤りを補って表示し、黄色い帯から書き直せるようにした",
+      "date": "2026-11-09",
+      "ref": "#101"
+    },
+    {
+      "file": "images/launcher/2026-11-09-main.jpg",
+      "kind": "gui",
+      "caption": "アプリ一覧（カードから起動）",
+      "date": "2026-11-09"
+    }
+  ]
 }

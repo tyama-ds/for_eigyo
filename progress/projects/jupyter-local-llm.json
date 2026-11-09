@@ -79,7 +79,8 @@
   "log": [
     {
       "date": "2026-11-09",
-      "summary": "Copilot Research: リサーチツール選択を人が1回確認する半自動 Selenium（bridge 併用・同一チャットで全章継続）、章別結果表示・接続テストのボタン折り返しの不具合修正（v0.9.3）"
+      "summary": "Copilot Research: リサーチツール選択を人が1回確認する半自動 Selenium（bridge 併用・同一チャットで全章継続）、章別結果表示・接続テストのボタン折り返しの不具合修正（v0.9.3）",
+      "ref": "#105"
     },
     {
       "date": "2026-08-04",
@@ -112,5 +113,46 @@
       "ref": "#9〜#12"
     }
   ],
-  "updated": "2026-11-09"
+  "updated": "2026-11-09",
+  "images": [
+    {
+      "file": "images/jupyter-local-llm/2026-11-09-copilot-selenium-settings.jpg",
+      "kind": "gui",
+      "caption": "Copilot Research（Selenium・リサーチツールの選択待ち）",
+      "date": "2026-11-09",
+      "ref": "#105"
+    },
+    {
+      "file": "images/jupyter-local-llm/2026-11-09-copilot-navigate.jpg",
+      "kind": "change",
+      "caption": "Copilot Research: リサーチツールの選択を画面の案内で確認（ここだけ人が操作し、以降は同じチャットで自動）",
+      "date": "2026-11-09",
+      "ref": "#105"
+    },
+    {
+      "file": "images/jupyter-local-llm/2026-11-09-copilot-test-button.jpg",
+      "kind": "change",
+      "caption": "Copilot Research: 接続テストの結果が長くてもボタンの文字を縦に折り返さない",
+      "date": "2026-11-09",
+      "ref": "#105"
+    },
+    {
+      "file": "images/jupyter-local-llm/2026-11-09-copilot-research.jpg",
+      "kind": "gui",
+      "caption": "Copilot Research（App Portal のプレビュー画像）",
+      "date": "2026-11-09"
+    },
+    {
+      "file": "images/jupyter-local-llm/2026-11-09-loop.jpg",
+      "kind": "gui",
+      "caption": "llmlab Loop（App Portal のプレビュー画像）",
+      "date": "2026-11-09"
+    },
+    {
+      "file": "images/jupyter-local-llm/2026-11-09-studio.jpg",
+      "kind": "gui",
+      "caption": "llmlab Studio（App Portal のプレビュー画像）",
+      "date": "2026-11-09"
+    }
+  ]
 }

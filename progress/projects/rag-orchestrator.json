@@ -96,5 +96,13 @@
       "ref": "#43"
     }
   ],
-  "updated": "2026-11-06"
+  "updated": "2026-11-06",
+  "images": [
+    {
+      "file": "images/rag-orchestrator/2026-11-09-main.jpg",
+      "kind": "gui",
+      "caption": "質問・比較タブ（複数の RAG を同時実行）",
+      "date": "2026-11-09"
+    }
+  ]
 }
