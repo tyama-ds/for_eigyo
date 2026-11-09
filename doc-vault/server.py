@@ -29,9 +29,9 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 BASE = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE))
 
-from docvault import __version__, config, db, decision_api, graph, rag  # noqa: E402
+from docvault import __version__, config, db, decision_api, folders, graph, rag, ragopts, readings, speech  # noqa: E402
 from docvault.extract import SUPPORTED  # noqa: E402
-from docvault.indexer import ALL_STAGES, INDEXER, register_upload  # noqa: E402
+from docvault.indexer import ALL_STAGES, INDEXER, register_upload, resume_pending  # noqa: E402
 from docvault.llm import LLM, LLMError  # noqa: E402
 from docvault.retrieval import INDEX, load_chunks  # noqa: E402
 
@@ -40,13 +40,20 @@ DEFAULT_PORT = 8760
 STATIC = BASE / "static"
 MAX_UPLOAD = 200 * 1024 * 1024
 TOKEN = ""                     # 空ならトークン不要（127.0.0.1 のみで待ち受け）
-STRATEGIES = ("auto", "decision", "classic")   # 検索方式（自動 / DecisionRAG のみ / 従来型のみ）
+STRATEGIES = config.STRATEGIES   # 検索方式（自動 / 速さ優先 / 選んで使う / DecisionRAG のみ / 従来型）
 
 STATIC_TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
                 ".js": "text/javascript; charset=utf-8", ".svg": "image/svg+xml"}
 
 
 # ---------------------------------------------------------------- API 実装
+
+def public_config_with_catalog(cfg: dict) -> dict:
+    """画面へ返す設定（API キーは伏せる）＋ 相談で選べる RAG の一覧と呼び出し回数の目安。"""
+    out = config.public_config(cfg)
+    out["rag_methods"] = ragopts.catalog(cfg)
+    return out
+
 
 def api_status() -> dict:
     cfg = config.load_config()
@@ -66,6 +73,13 @@ def api_status() -> dict:
 def api_config_test(body: dict) -> dict:
     if body.get("judge_api"):                      # 判定 API（Jev / OpenAI / Azure）の接続テスト
         return decision_api.connection_test(config.load_config())
+    if body.get("speech"):                         # 文字起こし（Whisper 互換）の接続テスト
+        try:
+            r = speech.transcribe(config.load_config(), speech.test_tone())
+        except speech.SpeechError as e:
+            return {"ok": False, "message": str(e)}
+        return {"ok": True, "message": f"応答あり（{r['seconds']} 秒・テスト音の認識結果: "
+                                       f"「{r['text'][:30] or '（なし）'}」）", "url": r["url"]}
     name = body.get("profile")
     if name not in config.PROFILE_NAMES:
         return {"error": "profile は local / cloud"}
@@ -100,23 +114,109 @@ def api_docs(qs: dict) -> dict:
     folder = (qs.get("folder") or [""])[0].strip("/")
     q = (qs.get("q") or [""])[0].strip().lower()
     docs = []
-    for d in db.list_docs():
+    all_docs = db.list_docs()
+    acts = readings.actives_by_doc()
+    for d in all_docs:
         if folder and not (d["folder"] == folder or d["folder"].startswith(folder + "/")):
             continue
         if q and q not in (d["title"] + " " + d["filename"] + " " + " ".join(d["tags"])).lower():
             continue
-        docs.append(doc_public(d))
-    folders: dict[str, int] = {}
-    for d in db.list_docs():
-        f = d["folder"]
-        while True:
-            folders[f] = folders.get(f, 0) + 1
-            if not f:
-                break
-            f = f.rsplit("/", 1)[0] if "/" in f else ""
-    tags = sorted({t for d in db.list_docs() for t in d["tags"]})
-    return {"docs": docs, "folders": [{"path": k, "count": v} for k, v in sorted(folders.items())],
-            "tags": tags, "supported": sorted(SUPPORTED)}
+        out = doc_public(d)
+        out["readings"] = acts.get(d["id"], {})
+        docs.append(out)
+    tags = sorted({t for d in all_docs for t in d["tags"]})
+    return {"docs": docs, "folders": folders.tree(), "tags": tags, "supported": sorted(SUPPORTED)}
+
+
+def api_doc_read(doc_id: str, body: dict) -> dict:
+    """「この LLM で読み込む」: 指定の LLM（プロファイル・モデル）・方式で要約・グラフを作る（前の結果は残す）。"""
+    doc = db.get_doc(doc_id)
+    if not doc:
+        return {"error": "文書が見つかりません"}
+    stages = tuple(s for s in (body.get("stages") or ["summary", "graph"]) if s in ("embed", "summary", "graph"))
+    if not stages:
+        return {"error": "読み込む段階（要約・グラフ）を選んでください"}
+    mode = body.get("graph_mode") if body.get("graph_mode") in readings.GRAPH_MODES else ""
+    prof = body.get("profile") if body.get("profile") in config.PROFILE_NAMES else ""
+    model = str(body.get("model") or "").strip()[:120]
+    cfg = config.load_config()
+    needs_llm = "summary" in stages or ("graph" in stages and mode != "terms")
+    if needs_llm:
+        if not prof:
+            return {"error": "使う LLM（ローカル / クラウド）を選んでください"}
+        if prof == "cloud" and doc["sensitivity"] != "public":
+            return {"error": "社外秘の文書はクラウド LLM で読み込めません（ローカル LLM を選んでください）"}
+        from docvault.indexer import _cfg_for
+        if not config.chat_ready(_cfg_for(cfg, prof, model), prof):
+            return {"error": f"{'ローカル' if prof == 'local' else 'クラウド'} LLM が未設定です（設定タブ）"}
+    opts = {"profile": prof if needs_llm else "", "model": model if needs_llm else "",
+            "graph_mode": mode, "policy": "restart"}
+    INDEXER.enqueue(doc_id, stages, opts)
+    return {"ok": True}
+
+
+def api_doc_reindex(doc_id: str, body: dict) -> dict:
+    if not db.get_doc(doc_id):
+        return {"error": "文書が見つかりません"}
+    stages = tuple(s for s in (body.get("stages") or ALL_STAGES) if s in ALL_STAGES) or ALL_STAGES
+    opts: dict = {}
+    if body.get("policy") in ("resume", "retry_failed", "restart"):
+        opts["policy"] = body["policy"]
+    rid = str(body.get("reading_id") or "")
+    if rid:                                          # その読み込み結果（LLM・方式）の続き・やり直し
+        r = readings.get(rid)
+        if not r or r["doc_id"] != doc_id:
+            return {"error": "読み込み結果が見つかりません"}
+        opts.update(r["data"].get("opts") or {})
+        if r["stage"] == "graph":
+            opts["graph_mode"] = r["mode"] or "standard"
+        stages = (r["stage"],)
+    INDEXER.enqueue(doc_id, stages, opts)
+    return {"ok": True}
+
+
+def api_doc_readings(doc_id: str, qs: dict) -> dict:
+    doc = db.get_doc(doc_id)
+    if not doc:
+        return {"error": "文書が見つかりません"}
+    cfg = config.load_config()
+    current = {}
+    for name in config.PROFILE_NAMES:
+        if config.chat_ready(cfg, name):
+            current[name] = readings.label_of(readings.identity(cfg, name), "summary")
+    out = {"readings": readings.list_for(doc_id), "current": current,
+           "embed_spaces": {name: config.embed_space(cfg, name) for name in config.PROFILE_NAMES
+                            if config.embed_ready(cfg, name)},
+           "graph_mode": cfg["rag"].get("graph_mode", "standard")}
+    rid = (qs.get("log") or [""])[0]
+    if rid:
+        out["log"] = readings.chunk_log(rid)
+    return out
+
+
+def api_bulk(body: dict) -> dict:
+    """文書の一括操作（移動・区分の変更・再処理・削除）。"""
+    ids = [str(x) for x in (body.get("doc_ids") or []) if db.get_doc(str(x))]
+    if not ids:
+        return {"error": "文書が選ばれていません"}
+    action = body.get("action")
+    if action == "move":
+        return {"ok": True, "moved": folders.move_docs(ids, str(body.get("folder") or ""))}
+    if action == "sensitivity":
+        if body.get("sensitivity") not in ("internal", "public"):
+            return {"error": "区分は internal / public"}
+        for i in ids:
+            api_doc_update(i, {"sensitivity": body["sensitivity"]})
+        return {"ok": True}
+    if action == "reindex":
+        for i in ids:
+            INDEXER.enqueue(i, ALL_STAGES)
+        return {"ok": True}
+    if action == "delete":
+        for i in ids:
+            api_doc_delete(i)
+        return {"ok": True}
+    return {"error": "不明な操作です"}
 
 
 def api_doc_update(doc_id: str, body: dict) -> dict:
@@ -127,7 +227,10 @@ def api_doc_update(doc_id: str, body: dict) -> dict:
     if isinstance(body.get("title"), str) and body["title"].strip():
         fields["title"] = body["title"].strip()[:200]
     if isinstance(body.get("folder"), str):
-        fields["folder"] = "/".join(p.strip() for p in body["folder"].split("/") if p.strip())[:200]
+        from docvault.indexer import clean_folder, ensure_folder
+        fields["folder"] = clean_folder(body["folder"])
+        if fields["folder"]:
+            ensure_folder(fields["folder"])
     if isinstance(body.get("tags"), list):
         fields["tags"] = [str(t).strip()[:30] for t in body["tags"] if str(t).strip()][:20]
     reprocess = False
@@ -139,6 +242,11 @@ def api_doc_update(doc_id: str, body: dict) -> dict:
         INDEX.add_doc(doc_id)             # 検索用テキストにタイトルを含むため
     db.bump_revision()
     if reprocess:
+        if fields["sensitivity"] == "internal":
+            # 社外秘にしたら、クラウドで作った埋め込みは使わない（質問をクラウドで埋め込むことになるため）
+            for r in readings.list_for(doc_id):
+                if r["stage"] == "embed" and r["profile"] == "cloud":
+                    readings.delete(r["id"])
         # 区分が変わったら埋め込み空間を区分に合わせて作り直す
         INDEXER.enqueue(doc_id, ("embed",))
     return {"doc": doc_public(db.get_doc(doc_id))}
@@ -204,18 +312,50 @@ def api_graph(qs: dict) -> dict:
     except ValueError:
         limit = 300
     doc_id = (qs.get("doc") or [""])[0]
+    folder = (qs.get("folder") or [""])[0].strip("/")
     docs = db.list_docs()
     sens = {d["id"]: d["sensitivity"] for d in docs}
-    allowed = {doc_id} if doc_id else {d["id"] for d in docs}
+    if doc_id:
+        allowed = {doc_id}
+    elif folder:                                   # フォルダ（配下を含む）の文書だけのグラフ
+        allowed = {d["id"] for d in docs if d["folder"] == folder or d["folder"].startswith(folder + "/")}
+    else:
+        allowed = {d["id"] for d in docs}
     g = graph.get_graph(allowed, sens)
     if not g.entities:
         cfg = config.load_config()
-        hint = ("取り込み時のナレッジグラフ抽出には LLM が必要です（設定タブ）。設定後に"
-                "文書の「再処理」を実行してください") if not cfg["rag"]["graph"] or not (
-            config.chat_ready(cfg, "local") or config.chat_ready(cfg, "cloud")) \
-            else "まだグラフがありません。文書を取り込むと、エンティティと関係が抽出されます"
+        no_llm = not (config.chat_ready(cfg, "local") or config.chat_ready(cfg, "cloud"))
+        if not cfg["rag"]["graph"]:
+            hint = "取り込み時のグラフ作成が OFF です（設定タブ → RAG の設定）"
+        elif no_llm and cfg["rag"].get("graph_mode") != "terms":
+            hint = ("グラフの抽出には LLM が必要です（設定タブ）。LLM が無くても、設定の「グラフの作り方」を"
+                    "「語の共起（LLM なし）」にして文書を再処理すると、語のつながりのグラフを作れます")
+        else:
+            hint = "まだグラフがありません。文書を取り込むと、エンティティと関係が抽出されます"
         return {"error": hint, "nodes": [], "edges": [], "communities": []}
-    return g.to_payload(limit=limit)
+    view = (qs.get("view") or ["entities"])[0]
+    try:
+        depth = max(0, min(int((qs.get("depth") or ["0"])[0]), 5))
+    except ValueError:
+        depth = 0
+    by_id = {d["id"]: d for d in docs}
+    # 文書 → フォルダのまとまり（絞り込み中のフォルダから depth 階層下まで。0 はそのまま）
+    group_of = {d: graph.folder_group(by_id[d]["folder"], folder, depth) for d in allowed if d in by_id}
+    if view == "folders":
+        parent_of = {grp: graph.folder_group(grp, folder, 1) if grp != folder else folder
+                     for grp in set(group_of.values())}
+        color_of = {grp: graph.folder_label(parent) for grp, parent in parent_of.items()}
+        out = graph.group_payload(g, group_of, kind="folder", parent_of=parent_of, color_of=color_of, limit=limit)
+    elif view == "docs":
+        out = graph.group_payload(g, {d: d for d in group_of}, kind="doc",
+                                  names={d: by_id[d]["title"] for d in group_of},
+                                  color_of={d: graph.folder_label(grp) for d, grp in group_of.items()},
+                                  parent_of=group_of, limit=limit)
+    else:
+        out = g.to_payload(limit=limit, group_of=group_of)
+        out["view"] = "entities"
+    out.update(base_folder=folder, depth=depth)
+    return out
 
 
 # ---------------------------------------------------------------- HTTP
@@ -329,13 +469,18 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/api/status":
             self._json(api_status())
         elif route == "/api/config":
-            self._json(config.public_config(config.load_config()))
+            self._json(public_config_with_catalog(config.load_config()))
         elif route == "/api/docs":
             self._json(api_docs(qs))
         elif len(parts) == 3 and parts[:2] == ["api", "docs"]:
             d = db.get_doc(parts[2])
             self._json({"doc": doc_public(d)} if d else {"error": "文書が見つかりません"},
                        200 if d else 404)
+        elif len(parts) == 4 and parts[:2] == ["api", "docs"] and parts[3] == "readings":
+            r = api_doc_readings(parts[2], qs)
+            self._json(r, 404 if "error" in r else 200)
+        elif route == "/api/folders":
+            self._json({"folders": folders.tree()})
         elif len(parts) == 4 and parts[:2] == ["api", "docs"] and parts[3] == "chunks":
             d = db.get_doc(parts[2])
             if not d:
@@ -356,12 +501,17 @@ class Handler(BaseHTTPRequestHandler):
         elif route == "/api/graph":
             self._json(api_graph(qs))
         elif route == "/api/chats":
-            self._json({"chats": db.list_chats()})
+            docs = db.list_docs()
+            chats = db.list_chats()
+            for c in chats:
+                c["scope_info"] = folders.describe_scope(c["scope"], docs)
+            self._json({"chats": chats})
         elif len(parts) == 3 and parts[:2] == ["api", "chats"]:
             chat = db.get_chat(parts[2])
             if not chat:
                 self._json({"error": "相談が見つかりません"}, 404)
             else:
+                chat["scope_info"] = folders.describe_scope(chat["scope"])
                 self._json({"chat": chat, "messages": db.chat_messages(parts[2])})
         else:
             self.send_error(404)
@@ -377,9 +527,12 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/api/docs/upload":
             self._upload(parse_qs(parsed.query))
             return
+        if route == "/api/transcribe":
+            self._transcribe(parse_qs(parsed.query))
+            return
         body = self._body_json()
         if route == "/api/config":
-            self._json(config.public_config(config.save_config(body)))
+            self._json(public_config_with_catalog(config.save_config(body)))
         elif route == "/api/config/test":
             self._json(api_config_test(body))
         elif route == "/api/search":
@@ -392,6 +545,39 @@ class Handler(BaseHTTPRequestHandler):
                                                tags=item["tags"], sensitivity=item["sensitivity"])
                 out.append({"id": doc["id"], "title": doc["title"], "created": created})
             self._json({"docs": out})
+        elif route == "/api/folders":
+            try:
+                self._json({"ok": True, "path": folders.create(str(body.get("path") or ""))})
+            except ValueError as e:
+                self._json({"error": str(e)}, 400)
+        elif route in ("/api/folders/rename", "/api/folders/delete"):
+            try:
+                r = folders.rename(str(body.get("path") or ""), str(body.get("to") or "")) \
+                    if route.endswith("rename") else folders.delete(str(body.get("path") or ""))
+                self._json({"ok": True, **r})
+            except ValueError as e:
+                self._json({"error": str(e)}, 400)
+        elif route == "/api/docs/move":
+            self._json({"ok": True, "moved": folders.move_docs(body.get("doc_ids") or [],
+                                                               str(body.get("folder") or ""))})
+        elif route == "/api/docs/bulk":
+            r = api_bulk(body)
+            self._json(r, 400 if "error" in r else 200)
+        elif len(parts) == 6 and parts[:2] == ["api", "docs"] and parts[3] == "readings":
+            r = readings.get(parts[4])
+            if not r or r["doc_id"] != parts[2]:
+                self._json({"error": "読み込み結果が見つかりません"}, 404)
+            elif parts[5] == "activate":
+                if r["status"] not in ("done", "partial", "paused", "running"):
+                    self._json({"error": "完了していない読み込み結果は使えません"}, 400)
+                else:
+                    readings.set_active(r["id"])
+                    self._json({"ok": True})
+            elif parts[5] == "delete":
+                readings.delete(r["id"])
+                self._json({"ok": True})
+            else:
+                self._json({"error": "不明な操作です"}, 400)
         elif route == "/api/docs/reindex-all":
             stages = tuple(s for s in (body.get("stages") or ALL_STAGES) if s in ALL_STAGES)
             for d in db.list_docs():
@@ -404,12 +590,9 @@ class Handler(BaseHTTPRequestHandler):
             elif action == "delete":
                 r = api_doc_delete(doc_id)
             elif action == "reindex":
-                if not db.get_doc(doc_id):
-                    r = {"error": "文書が見つかりません"}
-                else:
-                    stages = tuple(s for s in (body.get("stages") or ALL_STAGES) if s in ALL_STAGES)
-                    INDEXER.enqueue(doc_id, stages or ALL_STAGES)
-                    r = {"ok": True}
+                r = api_doc_reindex(doc_id, body)
+            elif action == "read":
+                r = api_doc_read(doc_id, body)
             else:
                 r = {"error": "不明な操作です"}
             self._json(r, 400 if "error" in r else 200)
@@ -417,12 +600,18 @@ class Handler(BaseHTTPRequestHandler):
             mode = body.get("mode") if body.get("mode") in ("auto", "local", "cloud") \
                 else config.load_config()["policy"]["chat_mode"]
             scope = body.get("scope") if isinstance(body.get("scope"), dict) else {}
-            strategy = body.get("strategy") if body.get("strategy") in STRATEGIES else "auto"
-            chat = db.create_chat(str(body.get("title") or ""), mode, _clean_scope(scope), strategy)
+            cfg = config.load_config()
+            strategy = body.get("strategy") if body.get("strategy") in STRATEGIES \
+                else cfg["rag"].get("default_strategy", "auto")
+            methods = config.clean_methods(body["methods"]) if isinstance(body.get("methods"), list) \
+                else list(cfg["rag"].get("custom_methods") or [])
+            chat = db.create_chat(str(body.get("title") or ""), mode, folders.clean_scope(scope), strategy,
+                                  methods)
             beam = _beam(body.get("decision_beam"))
             if beam:
                 db.update_chat(chat["id"], decision_beam=beam)
                 chat = db.get_chat(chat["id"])
+            chat["scope_info"] = folders.describe_scope(chat["scope"])
             self._json({"chat": chat})
         elif len(parts) == 4 and parts[:2] == ["api", "chats"]:
             chat_id, action = parts[2], parts[3]
@@ -441,16 +630,20 @@ class Handler(BaseHTTPRequestHandler):
                     fields["mode"] = body["mode"]
                 if body.get("strategy") in STRATEGIES:
                     fields["strategy"] = body["strategy"]
+                if isinstance(body.get("methods"), list):
+                    fields["methods"] = config.clean_methods(body["methods"])
                 beam = _beam(body.get("decision_beam"))
                 if beam is not None:
                     fields["decision_beam"] = beam
                 if isinstance(body.get("scope"), dict):
-                    fields["scope"] = _clean_scope(body["scope"])
+                    fields["scope"] = folders.clean_scope(body["scope"])
                 if isinstance(body.get("title"), str) and body["title"].strip():
                     fields["title"] = body["title"].strip()[:80]
                 if fields:
                     db.update_chat(chat_id, **fields)
-                self._json({"chat": db.get_chat(chat_id)})
+                chat = db.get_chat(chat_id)
+                chat["scope_info"] = folders.describe_scope(chat["scope"])
+                self._json({"chat": chat})
             elif action == "delete":
                 db.delete_chat(chat_id)
                 self._json({"ok": True})
@@ -484,6 +677,26 @@ class Handler(BaseHTTPRequestHandler):
             replace=(qs.get("replace") or ["0"])[0] == "1")
         self._json({"doc": doc_public(doc), "created": created})
 
+    def _transcribe(self, qs: dict) -> None:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = 0
+        if length <= 0 or length > speech.MAX_AUDIO:
+            if length > 0:
+                self.rfile.read(length)
+            self._json({"error": "音声が空か、長すぎます"}, 400)
+            return
+        audio = self.rfile.read(length)
+        try:
+            r = speech.transcribe(config.load_config(), audio,
+                                  content_type=self.headers.get("Content-Type") or "audio/wav",
+                                  language=(qs.get("lang") or [""])[0])
+        except speech.SpeechError as e:
+            self._json({"error": str(e)}, 400)
+            return
+        self._json(r)
+
     def _login_page(self) -> None:
         body = ("<!doctype html><meta charset=utf-8><title>Doc Vault</title>"
                 "<body style='font-family:sans-serif;background:#0f1420;color:#e6ecf7;padding:40px'>"
@@ -512,18 +725,12 @@ def _beam(value) -> int | None:
         return None
 
 
-def _clean_scope(scope: dict) -> dict:
-    return {"folder": str(scope.get("folder") or "").strip("/")[:200],
-            "doc_ids": [str(x) for x in (scope.get("doc_ids") or []) if str(x)][:50],
-            "tags": [str(x) for x in (scope.get("tags") or []) if str(x)][:10]}
-
-
 def startup() -> None:
-    """起動時: 検索インデックスの読み込みと、中断された取り込みの再開。"""
+    """起動時: 検索インデックスの読み込みと、中断された取り込みの再開（済んだ分はやり直さない）。"""
     INDEX.ensure_loaded()
-    for d in db.list_docs():
-        if d["status"] in ("queued", "processing") or (d["status"] == "ready" and d["stage"]):
-            INDEXER.enqueue(d["id"], ALL_STAGES if not d["chars"] else ("embed", "graph", "summary"))
+    n = resume_pending()
+    if n:
+        print(f"  中断していた取り込みを続きから再開します（{n} 文書）")
 
 
 class Server(ThreadingHTTPServer):

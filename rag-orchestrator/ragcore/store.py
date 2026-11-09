@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
 import time
@@ -96,6 +97,28 @@ def load_index(engine_id: str) -> dict | None:
             return data if isinstance(data, dict) else None
         except (OSError, ValueError):
             return None
+
+
+def patch_index(engine_id: str, built_at, patches) -> bool:
+    """質問時に作ったキャッシュ（GraphRAG の Lazy 要約など）を保存済みのインデックスへ書き足す。
+
+    保存済みのものを読み直してから patches（index を書き換える関数の列）を当てるので、同時に走った
+    別の質問の書き足しを消さない。built_at が違う（その間に再構築された）ときは何もしない。
+    """
+    path = _index_file(engine_id)
+    with _lock:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False
+        if not isinstance(data, dict) or data.get("built_at") != built_at:
+            return False
+        for patch in patches:
+            patch(data)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, path)
+    return True
 
 
 def index_status(engine_id: str, corpus_rev: int) -> dict:

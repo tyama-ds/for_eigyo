@@ -494,46 +494,63 @@ class DecisionRAGEngine(Engine):
                           "sections": kinds.get("section", 0), "groups": kinds.get("group", 0),
                           "summarized_docs": len(summaries)}}
 
-    def query(self, index: dict, question: str, mode: str, ctx: EngineContext) -> dict:
-        judge = None
-        note = ""
+    @staticmethod
+    def make_judge(ctx: EngineContext):
+        """設定の判定モデル。判定 API を選んでいても未設定なら LLM で判定する（理由を返す）。"""
         if ctx.cfg.get("decision_judge") == "api":
             if decision_api.ready(ctx.cfg):
-                judge = APIJudge(decision_api.DecisionAPIClient(decision_api.effective(ctx.cfg)))
-            else:
-                note = (f"判定 API（{decision_api.effective(ctx.cfg)['label']}）の"
-                        f"{decision_api.missing(ctx.cfg)}が未設定のため LLM で判定しました")
-                ctx.log(note)
-        if judge is None:
-            judge = LLMJudge(ctx.llm)
+                return APIJudge(decision_api.DecisionAPIClient(decision_api.effective(ctx.cfg))), ""
+            note = (f"判定 API（{decision_api.effective(ctx.cfg)['label']}）の"
+                    f"{decision_api.missing(ctx.cfg)}が未設定のため LLM で判定しました")
+            ctx.log(note)
+            return LLMJudge(ctx.llm), note
+        return LLMJudge(ctx.llm), ""
+
+    def retrieve(self, index: dict, question: str, ctx: EngineContext, k: int = TOP_K,
+                 *, detail: dict | None = None) -> list[tuple[str, float]]:
+        """階層を判定モデルでたどった段落（チャンク）を経路スコア順に最大 k 件。判定は最大 decision_budget 回。
+
+        detail には結果カード用の stats（判定モデル・判定回数・経路…）と mode を書く。
+        """
+        judge, note = self.make_judge(ctx)
         res = navigate(index["tree"], question, judge,
                        beam=int(ctx.cfg.get("decision_beam") or 4),
                        budget=int(ctx.cfg.get("decision_budget") or 8),
                        progress=ctx.progress)
-        passages = [index["chunks"][i] for i, _ in res["hits"][:TOP_K]]
+        if detail is not None:
+            route = " → ".join("・".join(f"{x['title']}({x['path']})" for x in lv["kept"][:2])
+                               + ("［戻り］" if lv["backtracked"] else "")
+                               for lv in res["path"] if lv["kept"])
+            stats = {"judge": judge.name, "beam": res["beam"], "calls": res["calls"],
+                     "steps": len(res["path"]), "soft": res["soft"], "choice": res["choice"],
+                     "trimmed": sum(lv["trimmed"] for lv in res["path"]),
+                     "route": route[:300] or "（段落のみ）"}
+            if isinstance(judge, APIJudge):
+                c = judge.client
+                stats["judge_api"] = c.label
+                if c.cost:
+                    stats["api_cost_usd"] = round(c.cost, 6)
+                if c.input_tokens:
+                    stats["api_input_tokens"] = c.input_tokens
+                if c.refusals:
+                    stats["api_refusals"] = c.refusals
+            if note:
+                stats["note"] = note
+            detail.update(stats=stats, mode=f"decision({judge.name})", judge=judge.name,
+                          api=isinstance(judge, APIJudge), calls=res["calls"])
+        chunks = index["chunks"]
+        return [(chunks[i]["id"], s) for i, s in res["hits"][:k]]
+
+    def query(self, index: dict, question: str, mode: str, ctx: EngineContext) -> dict:
+        detail: dict = {}
+        hits = self.retrieve(index, question, ctx, TOP_K, detail=detail)
+        by_id = {c["id"]: c for c in index["chunks"]}
+        passages = [by_id[cid] for cid, _ in hits]
         ctx.progress(0.75, "回答生成")
         if passages:
             answer, think = generate_answer(ctx, question, passages, task_tag="decision_answer")
         else:
             answer, think = "階層をたどっても関連する段落が見つかりませんでした。", ""
-        citations = [chunk_citation(index["chunks"][i], s) for i, s in res["hits"][:TOP_K]]
-        route = " → ".join("・".join(f"{x['title']}({x['path']})" for x in lv["kept"][:2])
-                           + ("［戻り］" if lv["backtracked"] else "")
-                           for lv in res["path"] if lv["kept"])
-        stats = {"judge": judge.name, "beam": res["beam"], "calls": res["calls"],
-                 "steps": len(res["path"]), "soft": res["soft"], "choice": res["choice"],
-                 "trimmed": sum(lv["trimmed"] for lv in res["path"]),
-                 "route": route[:300] or "（段落のみ）"}
-        if isinstance(judge, APIJudge):
-            c = judge.client
-            stats["judge_api"] = c.label
-            if c.cost:
-                stats["api_cost_usd"] = round(c.cost, 6)
-            if c.input_tokens:
-                stats["api_input_tokens"] = c.input_tokens
-            if c.refusals:
-                stats["api_refusals"] = c.refusals
-        if note:
-            stats["note"] = note
-        return {"answer": answer, "think": think, "mode": f"decision({judge.name})",
-                "citations": citations, "stats": stats}
+        citations = [chunk_citation(by_id[cid], s) for cid, s in hits]
+        return {"answer": answer, "think": think, "mode": detail["mode"],
+                "citations": citations, "stats": detail["stats"]}

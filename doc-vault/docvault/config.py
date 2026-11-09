@@ -90,8 +90,40 @@ DEFAULT_CONFIG: dict = {
         "decision_budget": 8,      # 1質問あたりの判定（呼び出し）の上限
         "decision_choice": True,   # 最後に候補を選択式で並べ替える（論文の multiple-choice 段）
         "max_graph_chunks": 400,   # 1文書あたりグラフ抽出するチャンク数の上限（費用の上限）
+        # グラフの作り方: standard=LLM でエンティティ・関係・説明を抽出 / fast=LLM に名前と関係の組だけ
+        # 書かせる（説明なし。速い）/ terms=LLM を使わない語の共起グラフ（一瞬。関係の種類は分からない）
+        "graph_mode": "standard",
+        # 相談の既定の検索方式（相談ごとに変えられる）と、「選んで使う」の既定の組み合わせ
+        "default_strategy": "auto",
+        "custom_methods": ["bm25", "vector", "graph", "crag"],
+    },
+    # 相談の音声入力（文字起こし）。engine: auto=Whisper があればそれ、無ければブラウザの音声認識 /
+    # whisper=Whisper 互換 API / browser=ブラウザの音声認識 / off=使わない
+    # 音声には質問の内容が含まれるため、クラウドへ送るのは allow_cloud を ON にしたときだけ
+    "speech": {
+        "engine": "auto",
+        "language": "ja",
+        "allow_cloud": False,
+        "whisper": {"provider": "openai", "url": "", "api_key": "", "model": "whisper-1",
+                    "api_version": "2024-06-01", "location": "local", "use_proxy": False,
+                    "proxy_url": "", "timeout": 120.0},
     },
 }
+
+GRAPH_MODES = ("standard", "fast", "terms")
+# 相談の検索方式: auto=質問の種類で自動 / fast=速さ優先（全文＋埋め込み＋グラフ・LLM は回答だけ）/
+# custom=選んで使う / decision=DecisionRAG のみ / classic=従来型（DecisionRAG なし）
+STRATEGIES = ("auto", "fast", "custom", "decision", "classic")
+RAG_RETRIEVERS = ("bm25", "vector", "graph", "decision", "summary", "community", "multi")
+RAG_HELPERS = ("router", "crag", "rerank")
+RAG_METHODS = RAG_RETRIEVERS + RAG_HELPERS
+
+
+def clean_methods(value) -> list[str]:
+    """「選んで使う」の方式の一覧を検証する（知らない名前は捨て、並びは定義の順）。"""
+    got = {str(x) for x in value} if isinstance(value, (list, tuple)) else set()
+    return [m for m in RAG_METHODS if m in got]
+SPEECH_ENGINES = ("auto", "whisper", "browser", "off")
 
 _lock = threading.Lock()
 
@@ -207,6 +239,12 @@ def save_config(update: dict) -> dict:
                 val = _clamp(rag[key], lo, hi, int)
                 if val is not None:
                     cfg["rag"][key] = val
+        if rag.get("graph_mode") in GRAPH_MODES:
+            cfg["rag"]["graph_mode"] = rag["graph_mode"]
+        if rag.get("default_strategy") in STRATEGIES:
+            cfg["rag"]["default_strategy"] = rag["default_strategy"]
+        if isinstance(rag.get("custom_methods"), list):
+            cfg["rag"]["custom_methods"] = clean_methods(rag["custom_methods"])
         judge = {"jev": "api"}.get(rag.get("decision_judge"), rag.get("decision_judge"))
         if judge in ("llm", "api"):
             cfg["rag"]["decision_judge"] = judge
@@ -234,6 +272,35 @@ def save_config(update: dict) -> dict:
             for key in ("use_proxy", "allow_internal"):
                 if key in dst and key in src:
                     dst[key] = bool(src[key])
+    speech = update.get("speech") if isinstance(update, dict) else None
+    if isinstance(speech, dict):
+        dst = cfg["speech"]
+        if speech.get("engine") in SPEECH_ENGINES:
+            dst["engine"] = speech["engine"]
+        if isinstance(speech.get("language"), str) and speech["language"].strip():
+            dst["language"] = speech["language"].strip()[:10]
+        if "allow_cloud" in speech:
+            dst["allow_cloud"] = bool(speech["allow_cloud"])
+        src = speech.get("whisper")
+        if isinstance(src, dict):
+            w = dst["whisper"]
+            for key in ("url", "model", "api_version", "proxy_url"):
+                if isinstance(src.get(key), str):
+                    w[key] = src[key].strip()
+            if src.get("provider") in ("openai", "azure"):
+                w["provider"] = src["provider"]
+            if src.get("location") in ("local", "cloud"):
+                w["location"] = src["location"]
+            if isinstance(src.get("api_key"), str) and src["api_key"].strip():
+                w["api_key"] = src["api_key"].strip()
+            if src.get("clear_api_key"):
+                w["api_key"] = ""
+            if "use_proxy" in src:
+                w["use_proxy"] = bool(src["use_proxy"])
+            if "timeout" in src:
+                val = _clamp(src["timeout"], 5, 600, float)
+                if val is not None:
+                    w["timeout"] = val
     with _lock:
         CONFIG_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
     return cfg
@@ -250,6 +317,9 @@ def public_config(cfg: dict) -> dict:
         sub = out["decision_api"][name]
         sub["has_api_key"] = bool(sub.get("api_key"))
         sub.pop("api_key", None)
+    w = out["speech"]["whisper"]
+    w["has_api_key"] = bool(w.get("api_key"))
+    w.pop("api_key", None)
     for name in PROFILE_NAMES:
         out["profiles"][name]["chat_ready"] = chat_ready(cfg, name)
         out["profiles"][name]["embed_ready"] = embed_ready(cfg, name)

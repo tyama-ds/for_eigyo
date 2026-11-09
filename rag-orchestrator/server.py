@@ -6,7 +6,8 @@
 
 - 標準ライブラリのみ（pip install 不要）。127.0.0.1 にのみ bind し外部公開しない
 - LLM はローカルの OpenAI 互換エンドポイント（Ollama / LM Studio / vLLM / llama.cpp）
-- 組み込みエンジン: GraphRAG（Microsoft 方式の再実装）/ Vector / BM25 / Hybrid
+- 組み込みエンジン: GraphRAG（Microsoft 方式の再実装）/ Vector / BM25 / Hybrid / DecisionRAG /
+  組み合わせ（選んだ方式を RRF で統合）
 - 外部エンジン: nano-graphrag / LightRAG（pip 導入で有効化・実験的）
 - BM25 は LLM 未設定でも抜粋モードで動作する
 """
@@ -30,6 +31,7 @@ from ragcore import __version__  # noqa: E402
 from ragcore import decision_api, store  # noqa: E402
 from ragcore.config import load_config, public_config, save_config  # noqa: E402
 from ragcore.engines import all_engines, external, get_engine  # noqa: E402
+from ragcore.engines.base import build_chunks  # noqa: E402
 from ragcore.graphio import GRAPHML_FILENAME, graphml_graph_payload  # noqa: E402
 from ragcore.llm import LLMClient, LLMError  # noqa: E402
 from ragcore.orchestrator import Orchestrator  # noqa: E402
@@ -51,8 +53,13 @@ def api_engines() -> dict:
     for eng in all_engines():
         info = eng.info(cfg)
         info["index"] = store.index_status(eng.id, corpus["rev"])
+        if info["index"]["built"]:
+            # 構築済みインデックスの方式（GraphRAG の 標準 / 高速 など。記録の無い古いものは 標準）
+            info["index"]["variant"] = eng.variant(stats=info["index"].get("stats") or {}, cfg=cfg)
         engines.append(info)
-    return {"engines": engines, "corpus_rev": corpus["rev"]}
+    # チャンク数（GraphRAG の構築方式ごとの LLM 呼び出し回数の目安に使う）
+    chunks = len(build_chunks(corpus["docs"]))
+    return {"engines": engines, "corpus_rev": corpus["rev"], "corpus_chunks": chunks}
 
 
 def api_config_test(body: dict | None = None) -> dict:
@@ -135,7 +142,10 @@ def api_graph(engine_id: str, limit: int = MAX_GRAPH_NODES) -> dict:
         return {"error": "インデックス未構築です。「エンジン」タブでこのエンジンのインデックスを構築してください"}
     if "entities" not in index:
         return {"error": "このエンジンのインデックスはグラフ表示に対応していません"}
-    return builtin_graph_payload(index, max_nodes=limit)
+    payload = builtin_graph_payload(index, max_nodes=limit)
+    engine = get_engine(engine_id)
+    payload["variant"] = engine.variant(stats=index.get("stats") or {}) if engine else None
+    return payload
 
 
 def builtin_graph_payload(index: dict, *, max_nodes: int = MAX_GRAPH_NODES) -> dict:
@@ -168,8 +178,9 @@ def builtin_graph_payload(index: dict, *, max_nodes: int = MAX_GRAPH_NODES) -> d
               "strength": r["strength"], "description": r["description"][:200]}
              for r in relations
              if r["source"] in keys and r["target"] in keys]
+    # summary_source: llm（LLM の要約）/ auto（LLM なしで機械的に作った要約）。記録の無い古いものは空
     communities = [{"id": c["id"], "title": c["title"], "size": c["size"],
-                    "summary": c["summary"][:500]}
+                    "summary": c["summary"][:500], "summary_source": c.get("summary_source", "")}
                    for c in index.get("communities") or []]
     return {"nodes": nodes, "edges": edges, "communities": communities,
             "total_nodes": len(index["entities"]), "total_edges": len(relations),

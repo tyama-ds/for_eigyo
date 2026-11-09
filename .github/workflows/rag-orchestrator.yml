@@ -3,9 +3,9 @@ name: rag-orchestrator tests
 
 on:
   push:
-    paths: ["rag-orchestrator/**", "doc-vault/docvault/decision_api.py", "doc-vault/docvault/textutil.py", ".github/workflows/rag-orchestrator.yml"]
+    paths: ["rag-orchestrator/**", "doc-vault/docvault/decision_api.py", "doc-vault/docvault/textutil.py", "doc-vault/docvault/terms.py", ".github/workflows/rag-orchestrator.yml"]
   pull_request:
-    paths: ["rag-orchestrator/**", "doc-vault/docvault/decision_api.py", "doc-vault/docvault/textutil.py", ".github/workflows/rag-orchestrator.yml"]
+    paths: ["rag-orchestrator/**", "doc-vault/docvault/decision_api.py", "doc-vault/docvault/textutil.py", "doc-vault/docvault/terms.py", ".github/workflows/rag-orchestrator.yml"]
 
 jobs:
   test:

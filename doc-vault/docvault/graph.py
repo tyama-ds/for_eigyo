@@ -11,6 +11,11 @@
   - global 検索: LazyGraphRAG の考え方で、コミュニティ要約は**取り込み時に作らず**、質問時に
     関連の高いコミュニティだけ要約してキャッシュする（取り込みコストを大幅に削減）。
   - コミュニティ検出は依存なしのラベル伝播法（本家の Leiden 法の軽量代替）。
+  - 抽出の方式（設定の graph_mode・文書ごとに選べる）:
+      standard … LLM がエンティティ・関係・説明を書く（上記）
+      fast     … LLM に名前・種別と関係の組だけを書かせる（説明を書かせない。出力が数分の1になり速い）
+      terms    … LLM を使わない語の共起グラフ（terms.py。LazyGraphRAG の名詞句グラフの軽量版）
+  - 抽出結果は「読み込み結果」（readings.py）ごとに保存し、文書ごとに使用中の結果だけでグラフを作る。
 """
 from __future__ import annotations
 
@@ -64,6 +69,22 @@ COMMUNITY_PROMPT = """[TASK:community_summary]
 {relations}
 """
 
+FAST_PROMPT = """[TASK:graph_extract_fast]
+以下は文書「{title}」（{locator}）の一部です。重要なエンティティと、エンティティ間の関係を抽出してください。
+説明文は書かず、名前だけを短く書きます。
+
+出力は次の JSON のみ:
+{{"entities": [["名称", "種別"]], "relations": [["名称", "名称"]], "keywords": ["上位概念キーワード（3〜5個）"]}}
+
+- 種別は次から選ぶ: {types}
+- name は本文中の表記をそのまま使う。relations の名称は entities の名称と一致させる
+- エンティティは重要なものから最大 12 件、関係は最大 15 件
+- 同じものを繰り返し書かない。JSON を閉じたら、それ以上何も書かない
+
+# テキスト
+{text}
+"""
+
 # 法人格などの接頭・接尾辞（表記ゆれでエンティティが分断されるのを防ぐ）
 _CORP_RE = re.compile(
     r"^(?:株式会社|有限会社|合同会社|合資会社|一般社団法人|公益財団法人|\(株\)|㈱|\(有\))"
@@ -84,7 +105,8 @@ def norm_key(name: str) -> str:
 # ---------------------------------------------------------------- 抽出（取り込み時）
 
 def extract_chunk(llm, profile: str, sensitivity: str, title: str, chunk: dict,
-                  on_progress=None) -> tuple[dict | None, dict]:
+                  on_progress=None, *, mode: str = "standard",
+                  timeout: float | None = None) -> tuple[dict | None, dict]:
     """1チャンクからエンティティ・関係・キーワードを抽出する。(結果 or None, 情報) を返す。
 
     打ち切り・思考の抑制・切れた JSON の復元は llm.chat_json 側。取り出せなかったら、理由に応じて
@@ -92,11 +114,16 @@ def extract_chunk(llm, profile: str, sensitivity: str, title: str, chunk: dict,
       - 文章が返った → 「JSON のみ」を念押しして再出力
       - 同じ内容の繰り返しに入った → 温度を上げてもう一度
       - 思考・出力が上限で切れた → やり直さない
+    mode="fast" は説明を書かせない短いプロンプト（出力トークンが少なく速い）。
+    timeout は1回の待ち時間（取り込み側が、やり直すたびに長くする）。
     """
-    prompt = EXTRACT_PROMPT.format(title=title[:80], locator=chunk.get("locator") or "",
-                                   text=chunk["text"][:3500], types=ENTITY_TYPES)
+    template = FAST_PROMPT if mode == "fast" else EXTRACT_PROMPT
+    max_tokens = 2048 if mode == "fast" else 4096
+    prompt = template.format(title=title[:80], locator=chunk.get("locator") or "",
+                             text=chunk["text"][:3500], types=ENTITY_TYPES)
     data, info = llm.chat_json(profile, prompt, sensitivity=sensitivity, system=EXTRACT_SYSTEM,
-                               max_tokens=4096, purpose="ingest", on_progress=on_progress)
+                               max_tokens=max_tokens, purpose="ingest", on_progress=on_progress,
+                               timeout=timeout)
     if not isinstance(data, dict) and info["finish"] != "length":
         first = info
         if info["finish"] == "repetition":
@@ -106,8 +133,8 @@ def extract_chunk(llm, profile: str, sensitivity: str, title: str, chunk: dict,
                             "指示した JSON のみを出力してください。")
             temperature = None
         data, info = llm.chat_json(profile, again_prompt, sensitivity=sensitivity, system=EXTRACT_SYSTEM,
-                                   max_tokens=4096, purpose="ingest", temperature=temperature,
-                                   on_progress=on_progress)
+                                   max_tokens=max_tokens, purpose="ingest", temperature=temperature,
+                                   on_progress=on_progress, timeout=timeout)
         info["seconds"] = round(info["seconds"] + first["seconds"], 1)
         if not isinstance(data, dict):
             info["reason"] = f"{first['reason']} → やり直しも失敗: {info['reason']}"
@@ -119,6 +146,8 @@ def _clean_extraction(data: dict) -> dict:
     for e in data.get("entities") or []:
         if isinstance(e, str):
             e = {"name": e}
+        elif isinstance(e, list) and e:                  # 高速モードの ["名称", "種別"]
+            e = {"name": e[0], "type": e[1] if len(e) > 1 else ""}
         if not isinstance(e, dict):
             continue
         name = str(e.get("name", "")).strip()
@@ -128,6 +157,8 @@ def _clean_extraction(data: dict) -> dict:
                      "description": str(e.get("description", "")).strip()[:400]})
     known = {norm_key(e["name"]) for e in ents}
     for r in data.get("relations") or []:
+        if isinstance(r, list) and len(r) >= 2:          # 高速モードの ["名称", "名称"]
+            r = {"source": r[0], "target": r[1], "description": r[2] if len(r) > 2 else ""}
         if not isinstance(r, dict):
             continue
         src, tgt = str(r.get("source", "")).strip(), str(r.get("target", "")).strip()
@@ -144,23 +175,32 @@ def _clean_extraction(data: dict) -> dict:
             "keywords": as_str_list(data.get("keywords"), limit=8, maxlen=40)}
 
 
-def save_extraction(doc_id: str, chunk_id: str, data: dict) -> None:
-    em = [(norm_key(e["name"]), e["name"], e["type"], e["description"], doc_id, chunk_id)
+def mention_rows(doc_id: str, chunk_id: str, data: dict, reading_id: str) -> tuple[list, list]:
+    """抽出結果 → entity_mentions / relation_mentions の行。"""
+    em = [(norm_key(e["name"]), e["name"], e["type"], e["description"], doc_id, chunk_id, reading_id)
           for e in data["entities"]]
     rm = []
     for r in data["relations"]:
         a, b = norm_key(r["source"]), norm_key(r["target"])
         if a > b:
             a, b = b, a
-        rm.append((a, b, r["description"], r["strength"], doc_id, chunk_id))
-    stmts = [("INSERT INTO entity_mentions(entity_key,name,type,description,doc_id,chunk_id) "
-              "VALUES(?,?,?,?,?,?)", row) for row in em]
-    stmts += [("INSERT INTO relation_mentions(source,target,description,strength,doc_id,chunk_id) "
-               "VALUES(?,?,?,?,?,?)", row) for row in rm]
-    import json
-    stmts.append(("UPDATE chunks SET keywords=? WHERE id=?",
-                  (json.dumps(data.get("keywords") or [], ensure_ascii=False), chunk_id)))
-    db.write_many(stmts)
+        rm.append((a, b, r["description"], r["strength"], doc_id, chunk_id, reading_id))
+    return em, rm
+
+
+def save_extraction(doc_id: str, chunk_id: str, data: dict, reading_id: str | None = None) -> None:
+    """1チャンクの抽出結果を保存する。reading_id を省くと、その文書の「手動」の読み込み結果に入れる。"""
+    from . import readings
+    if reading_id is None:
+        r = readings.find(doc_id, "graph", "manual")
+        if r is None:
+            r = readings.start(doc_id, "graph", {"profile": "", "provider": "manual", "model": "手動",
+                                                 "endpoint": ""}, restart=False)
+            db.write("UPDATE readings SET llm_key='manual', label='手動で登録', status='done' WHERE id=?",
+                     (r["id"],))
+            readings.set_active(r["id"])
+        reading_id = r["id"]
+    readings.save_chunk(reading_id, doc_id, chunk_id, "done", data=data)
 
 
 # ---------------------------------------------------------------- グラフ（検索時）
@@ -175,7 +215,8 @@ class KnowledgeGraph:
         self.chunk_entities: dict[str, set[str]] = defaultdict(set)
         names: dict[str, Counter] = defaultdict(Counter)
         types: dict[str, Counter] = defaultdict(Counter)
-        for r in db.query("SELECT entity_key,name,type,description,doc_id,chunk_id FROM entity_mentions"):
+        for r in db.query("SELECT entity_key,name,type,description,doc_id,chunk_id FROM entity_mentions "
+                          "WHERE reading_id IN (SELECT id FROM readings WHERE active=1 AND stage='graph')"):
             if allowed_docs is not None and r["doc_id"] not in allowed_docs:
                 continue
             key = r["entity_key"]
@@ -195,8 +236,8 @@ class KnowledgeGraph:
             ent["name"] = names[key].most_common(1)[0][0]
             ent["type"] = types[key].most_common(1)[0][0] or "概念"
             ent["description"] = " / ".join(ent.pop("descs"))[:600]
-        for r in db.query("SELECT source,target,description,strength,doc_id,chunk_id "
-                          "FROM relation_mentions"):
+        for r in db.query("SELECT source,target,description,strength,doc_id,chunk_id FROM relation_mentions "
+                          "WHERE reading_id IN (SELECT id FROM readings WHERE active=1 AND stage='graph')"):
             if allowed_docs is not None and r["doc_id"] not in allowed_docs:
                 continue
             a, b = r["source"], r["target"]
@@ -322,8 +363,12 @@ class KnowledgeGraph:
             for (a, b), r in self.relations.items() if a in mset and b in mset)[:3500]
         return ent_lines[:4000], rel_lines or "（なし）"
 
-    def to_payload(self, *, limit: int = 300) -> dict:
-        """GUI のグラフ表示用（graphview.js の形式）。"""
+    def to_payload(self, *, limit: int = 300, group_of: dict[str, str] | None = None) -> dict:
+        """GUI のグラフ表示用（graphview.js の形式）。
+
+        group_of（文書 → フォルダ）を渡すと、各エンティティに folder（出てくる文書が最も多いフォルダ）と
+        folders（出てくるフォルダの一覧。2件以上なら画面で輪を描く）を付ける（フォルダで色分けする用）。
+        """
         coms = self.communities()
         com_of = {m: c["id"] for c in coms for m in c["members"]}
         deg = {k: len(self.adj.get(k, {})) for k in self.entities}
@@ -336,6 +381,12 @@ class KnowledgeGraph:
                   "docs": [titles.get(d, d) for d in sorted(self.entities[k]["docs"])][:8],
                   "doc_ids": sorted(self.entities[k]["docs"])[:8]}
                  for k in keep]
+        if group_of is not None:
+            for node in nodes:
+                counts = Counter(group_of.get(d, "") for d in self.entities[node["id"]]["docs"])
+                ranked = sorted(counts, key=lambda g: (-counts[g], g))
+                node["folder"] = folder_label(ranked[0]) if ranked else folder_label("")
+                node["folders"] = [folder_label(g) for g in ranked]
         edges = [{"source": a, "target": b, "strength": r["strength"],
                   "description": r["description"][:200]}
                  for (a, b), r in self.relations.items() if a in kset and b in kset]
@@ -353,6 +404,119 @@ class KnowledgeGraph:
         return {"nodes": nodes, "edges": edges, "communities": communities,
                 "total_nodes": len(self.entities), "total_edges": len(self.relations),
                 "truncated": len(self.entities) > limit}
+
+
+def folder_label(path: str) -> str:
+    return path or "（フォルダなし）"
+
+
+def folder_group(folder: str, base: str = "", depth: int = 0) -> str:
+    """文書のフォルダを、表示するまとまりにする。base（絞り込み中のフォルダ）から depth 階層下までで切る。
+
+    depth=0 はフォルダそのまま。例: folder="社内/品質/2026", base="社内", depth=1 → "社内/品質"
+    """
+    folder = (folder or "").strip("/")
+    if depth <= 0:
+        return folder
+    base = (base or "").strip("/")
+    if base and not (folder == base or folder.startswith(base + "/")):
+        return folder
+    rest = folder[len(base):].strip("/") if base else folder
+    parts = [x for x in rest.split("/") if x][:depth]
+    return "/".join([base] + parts if base else parts) if parts else base
+
+
+def group_payload(g: KnowledgeGraph, group_of: dict[str, str], *, kind: str, names: dict[str, str] | None = None,
+                  color_of: dict[str, str] | None = None, parent_of: dict[str, str] | None = None,
+                  limit: int = 300, max_edges_per_node: int = 8) -> dict:
+    """フォルダ（または文書）を丸、共通のエンティティを線にした全体図（graphview.js の形式）。
+
+    group_of: 文書 → まとまり（フォルダのパス、または文書 ID）。color_of: まとまり → 色分けの名前
+    （フォルダの全体図は1つ上の階層、文書の全体図は文書のフォルダ）。線の強さは共通のエンティティの
+    IDF の和（多くのまとまりに出てくるありふれたエンティティほど軽く数える）。線は各丸の強い順に
+    max_edges_per_node 本まで（毛玉にならないように）。
+    """
+    names = names or {}
+    color_of = color_of or {}
+    parent_of = parent_of or {}
+    members: dict[str, set[str]] = defaultdict(set)      # まとまり → エンティティ
+    docs_of: dict[str, set[str]] = defaultdict(set)
+    for doc_id, grp in group_of.items():
+        docs_of[grp].add(doc_id)
+    for key, ent in g.entities.items():
+        for d in ent["docs"]:
+            if d in group_of:
+                members[group_of[d]].add(key)
+    groups = sorted(docs_of, key=lambda x: (-len(members.get(x, ())), x))
+    truncated = len(groups) > limit
+    groups = groups[:limit]
+    gset = set(groups)
+    df: Counter = Counter()
+    for grp in groups:
+        for key in members.get(grp, ()):
+            df[key] += 1
+    n_groups = max(1, len(groups))
+    idf = {key: math.log(1 + n_groups / c) for key, c in df.items()}
+    inverted: dict[str, list[str]] = defaultdict(list)
+    for grp in groups:
+        for key in members.get(grp, ()):
+            inverted[key].append(grp)
+    cap = max(20, n_groups // 2)                          # ほぼ全部に出る語は線の計算から外す（速さのため）
+    pair_score: dict[tuple[str, str], float] = defaultdict(float)
+    pair_shared: dict[tuple[str, str], list[str]] = defaultdict(list)
+    for key, grps in inverted.items():
+        if len(grps) < 2 or len(grps) > cap:
+            continue
+        grps = sorted(grps)
+        for i, a in enumerate(grps):
+            for b in grps[i + 1:]:
+                pair_score[(a, b)] += idf[key]
+                pair_shared[(a, b)].append(key)
+    best: dict[str, list[tuple[float, tuple[str, str]]]] = defaultdict(list)
+    for pair, score in pair_score.items():
+        best[pair[0]].append((score, pair))
+        best[pair[1]].append((score, pair))
+    keep_pairs: set[tuple[str, str]] = set()
+    for grp, lst in best.items():
+        for _, pair in sorted(lst, key=lambda t: (-t[0], t[1]))[:max_edges_per_node]:
+            keep_pairs.add(pair)
+    top = max((pair_score[p] for p in keep_pairs), default=1.0) or 1.0
+    titles = {d["id"]: d["title"] for d in db.list_docs()}
+    deg = Counter()
+    edges = []
+    for a, b in sorted(keep_pairs, key=lambda p: -pair_score[p]):
+        shared = sorted(pair_shared[(a, b)], key=lambda k: (-idf[k], k))
+        deg[a] += 1
+        deg[b] += 1
+        edges.append({"source": f"g:{a}", "target": f"g:{b}",
+                      "strength": max(1, min(10, round(1 + 9 * pair_score[(a, b)] / top))),
+                      "shared": len(shared),
+                      "description": f"共通のエンティティ {len(shared)} 件: "
+                                     + "・".join(g.entities[k]["name"] for k in shared[:8])
+                                     + ("…" if len(shared) > 8 else "")})
+    unit = "フォルダ" if kind == "folder" else "文書"
+    nodes = []
+    for grp in groups:
+        ents = members.get(grp, set())
+        # そのまとまりで目立つエンティティ: そこでの出現が多く、ほかのまとまりに少ないもの
+        local = Counter()
+        for key in ents:
+            local[key] = sum(1 for d in g.entities[key]["docs"] if group_of.get(d) == grp)
+        main = sorted(ents, key=lambda k: (-(local[k] * idf.get(k, 0)), k))[:8]
+        doc_ids = sorted(docs_of[grp], key=lambda d: titles.get(d, d))
+        label = names.get(grp) or (folder_label(grp) if kind == "folder" else titles.get(grp, grp))
+        nodes.append({
+            "id": f"g:{grp}", "key": grp, "kind": kind, "name": label, "type": unit,
+            "size": len(ents), "degree": deg[grp], "degLabel": f"つながる{unit}",
+            "community": parent_of.get(grp, ""), "folder": color_of.get(grp) or folder_label(grp),
+            "description": (f"文書 {len(doc_ids)} 件・エンティティ {len(ents)} 件。"
+                            + ("主なエンティティ: " + "・".join(g.entities[k]["name"] for k in main) if main
+                               else "グラフのある文書がありません")),
+            "entities": [g.entities[k]["name"] for k in main],
+            "docs": [titles.get(d, d) for d in doc_ids][:8], "doc_ids": doc_ids[:8], "doc_count": len(doc_ids),
+        })
+    return {"view": "folders" if kind == "folder" else "docs", "nodes": nodes, "edges": edges, "communities": [],
+            "total_nodes": len(docs_of), "total_edges": len(pair_score), "truncated": truncated}
 
 
 def label_propagation(nodes: list[str], adj: dict[str, dict[str, float]],

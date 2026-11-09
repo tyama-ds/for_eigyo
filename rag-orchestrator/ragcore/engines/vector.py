@@ -36,11 +36,18 @@ class VectorEngine(Engine):
             "stats": {"chunks": len(chunks), "dim": len(vecs[0]) if vecs else 0},
         }
 
+    def retrieve(self, index: dict, question: str, ctx: EngineContext, k: int = TOP_K,
+                 *, detail: dict | None = None) -> list[tuple[str, float]]:
+        """質問の埋め込みとコサイン類似度の上位 k チャンク（類似度 0 以下は除く）。埋め込み 1 回。"""
+        qvec = ctx.query_vec(question)
+        chunks = index["chunks"]
+        return [(chunks[i]["id"], s) for i, s in top_k_cosine(qvec, index["chunk_vecs"], k=k) if s > 0]
+
     def query(self, index: dict, question: str, mode: str, ctx: EngineContext) -> dict:
         ctx.progress(0.2, "類似チャンク検索")
-        qvec = ctx.llm.embed([question])[0]
-        hits = [(i, s) for i, s in top_k_cosine(qvec, index["chunk_vecs"], k=TOP_K) if s > 0]
-        passages = [index["chunks"][i] for i, _ in hits]
+        hits = self.retrieve(index, question, ctx, TOP_K)
+        by_id = {c["id"]: c for c in index["chunks"]}
+        passages = [by_id[cid] for cid, _ in hits]
         ctx.progress(0.6, "回答生成")
         think = ""
         if ctx.chat_ok:
@@ -49,6 +56,6 @@ class VectorEngine(Engine):
         else:
             answer = extractive_answer(question, passages)
             mode_used = "vector(抽出)"
-        citations = [chunk_citation(index["chunks"][i], s) for i, s in hits]
+        citations = [chunk_citation(by_id[cid], s) for cid, s in hits]
         return {"answer": answer, "think": think, "mode": mode_used,
                 "citations": citations, "stats": {"retrieved": len(passages)}}

@@ -40,6 +40,12 @@ def respond(prompt: str) -> str:
                 for i in range(len(found) - 1)]
         return "```json\n" + json.dumps({"entities": ents, "relations": rels,
                                          "keywords": ["品質", "製造"]}, ensure_ascii=False) + "\n```"
+    if task == "graph_extract_fast":               # 高速モード: 説明なし・配列の形
+        body = prompt.split("# テキスト", 1)[-1]
+        found = [(n, t) for n, t in KNOWN_ENTITIES if n in body]
+        return json.dumps({"entities": [[n, t] for n, t in found],
+                           "relations": [[found[i][0], found[i + 1][0]] for i in range(len(found) - 1)],
+                           "keywords": ["品質"]}, ensure_ascii=False)
     if task == "community_summary":
         return json.dumps({"title": "製造と品質のまとまり", "summary": "製品・工場・品質保証の関係をまとめたテーマ。"},
                           ensure_ascii=False)

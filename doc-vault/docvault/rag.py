@@ -18,7 +18,7 @@ import re
 import time
 from typing import Iterator
 
-from . import db, decision, decision_api, graph
+from . import db, decision, decision_api, folders, graph, ragopts
 from .config import embed_space, load_config
 from .llm import LLM, LLMError, strip_think
 from .retrieval import INDEX, load_chunks
@@ -103,6 +103,7 @@ class Ctx:
         if self.mode not in ("auto", "local", "cloud"):
             self.mode = "auto"
         self.touched = bool(chat.get("touched_internal"))
+        self.opts = ragopts.resolve(chat, cfg)          # 使う RAG（検索方式）
         self.steps: list[dict] = []
         self.warnings: list[str] = []
         self.t0 = time.time()
@@ -131,22 +132,15 @@ class Ctx:
 
 
 def allowed_docs(chat: dict, mode: str) -> tuple[set[str], dict[str, str]]:
-    """相談の範囲（フォルダ・文書・タグ）とモードから検索対象の文書集合を作る。"""
+    """相談先（フォルダ・個別の文書・タグ）とモードから検索対象の文書集合を作る。"""
     scope = chat.get("scope") or {}
-    doc_ids = set(scope.get("doc_ids") or [])
-    folder = (scope.get("folder") or "").strip("/")
-    tags = set(scope.get("tags") or [])
     allowed: set[str] = set()
     sens: dict[str, str] = {}
     for d in db.list_docs():
         sens[d["id"]] = d["sensitivity"]
         if d["status"] not in ("ready", "processing", "queued") or not d["chars"]:
             continue
-        if doc_ids and d["id"] not in doc_ids:
-            continue
-        if folder and not (d["folder"] == folder or d["folder"].startswith(folder + "/")):
-            continue
-        if tags and not tags & set(d["tags"]):
+        if not folders.in_scope(d, scope):
             continue
         if mode == "cloud" and d["sensitivity"] != "public":
             continue                     # クラウドモードでは社外秘を検索対象から外す
@@ -176,7 +170,7 @@ def heuristic_route(question: str) -> dict:
 
 def route(ctx: Ctx, question: str, history: list[dict]) -> dict:
     plan = heuristic_route(question)
-    if not ctx.cfg["rag"]["router"]:
+    if not ctx.opts["router"]:
         return plan
     prof = ctx.profile("helper", ctx.history_sensitivity)
     if not prof:
@@ -227,9 +221,73 @@ def _qvecs(ctx: Ctx, text: str, allowed: set[str]) -> dict[str, list[float]]:
     return out
 
 
+def _signal_name(name: str) -> str:
+    if name == "bm25":
+        return "BM25（全文の語の一致）"
+    space = name.split(":", 1)[1] if ":" in name else name
+    prof, _, model = space.partition(":")
+    return f"埋め込み（{model or space}・{'ローカル' if prof == 'local' else 'クラウド'}）"
+
+
+def _hybrid_detail(ctx, text, allowed, k, qvecs=None) -> tuple[list[tuple[str, float]], dict[str, list]]:
+    """ハイブリッド検索（BM25 + 埋め込みの RRF）と、チャンクごとの内訳（信号ごとの順位・スコア）。
+
+    使う RAG に全文（BM25）・埋め込みのどちらかが無ければ、その信号は使わない（埋め込みが無ければ
+    質問の埋め込みも作らない）。
+    """
+    methods = ctx.opts["methods"]
+    if qvecs is None:
+        qvecs = _qvecs(ctx, text, allowed) if "vector" in methods else {}
+    sig = INDEX.signals(text, allowed_docs=allowed, k=k, qvecs=qvecs, bm25="bm25" in methods)
+    if not sig:
+        return [], {}
+    fused = rrf_fuse([[cid for cid, _ in ranked] for _, ranked in sig])[:k]
+    sub: dict[str, list] = {}
+    for name, ranked in sig:
+        label = _signal_name(name)
+        note = "BM25 スコア（語の一致の強さ）" if name == "bm25" else "コサイン類似度（1 に近いほど意味が近い）"
+        for r, (cid, sc) in enumerate(ranked, 1):
+            sub.setdefault(cid, []).append({"name": label, "rank": r, "score": round(float(sc), 4),
+                                            "note": note, "sub": True})
+    return fused, sub
+
+
 def _hybrid(ctx, text, allowed, k, qvecs=None):
-    return INDEX.hybrid(text, allowed_docs=allowed, k=k,
-                        qvecs=qvecs if qvecs is not None else _qvecs(ctx, text, allowed))
+    return _hybrid_detail(ctx, text, allowed, k, qvecs)[0]
+
+
+class Fusion:
+    """検索の信号（DecisionRAG・ハイブリッド・グラフ PPR…）を RRF で融合し、採用根拠を記録する。
+
+    why[chunk_id] = {"signals": [{name, rank, score, weight, note}], "fused": RRF スコア, "fused_rank": 順位}
+    画面では出典にマウスを載せると、この内訳（どの検索で何位・スコアいくつ）が出る。
+    """
+
+    def __init__(self):
+        self.rankings: list[list[str]] = []
+        self.weights: list[float] = []
+        self.why: dict[str, dict] = {}
+
+    def add(self, name: str, ranked: list[tuple[str, float]], weight: float, *, note: str = "",
+            sub: dict[str, list] | None = None) -> None:
+        if not ranked:
+            return
+        self.rankings.append([cid for cid, _ in ranked])
+        self.weights.append(weight)
+        for r, (cid, sc) in enumerate(ranked, 1):
+            w = self.why.setdefault(cid, {"signals": []})
+            w["signals"].append({"name": name, "rank": r, "score": round(float(sc), 4), "weight": weight,
+                                 "note": note})
+            if sub and cid in sub:
+                w["signals"].extend(sub[cid])
+
+    def fuse(self) -> list[str]:
+        if not self.rankings:
+            return []
+        fused = rrf_fuse(self.rankings, weights=self.weights)
+        for rank, (cid, sc) in enumerate(fused, 1):
+            self.why.setdefault(cid, {"signals": []}).update(fused=round(sc, 5), fused_rank=rank)
+        return [cid for cid, _ in fused]
 
 
 def retrieve(ctx: Ctx, plan: dict, allowed: set[str], doc_sens: dict[str, str]) -> dict:
@@ -238,15 +296,17 @@ def retrieve(ctx: Ctx, plan: dict, allowed: set[str], doc_sens: dict[str, str]) 
     q = plan["standalone"]
     query_text = " ".join([q, *plan["keywords"]])
     ev = {"passages": [], "graph": None, "communities": [], "doc_summaries": [], "via": [],
-          "decision": None}
-    rankings: list[list[str]] = []
-    weights: list[float] = []
-    strategy = ctx.chat.get("strategy") or "auto"
+          "decision": None, "why": {}, "methods": []}
+    fusion = Fusion()
+    opts = ctx.opts
+
+    def use(method: str, when_auto: bool = True) -> bool:
+        """この質問で方式を使うか。自動・従来型は質問の種類（when_auto）で、それ以外は選んだものを毎回。"""
+        return method in opts["methods"] and (when_auto if opts["dynamic"] else True)
 
     # DecisionRAG: 検索器を使わず階層をたどる（自動では事実・比較の質問に使う）
     dec_rank: list[str] = []
-    if ctx.cfg["rag"]["decision"] and strategy != "classic" and (
-            strategy == "decision" or plan["type"] in ("fact", "compare")):
+    if use("decision", plan["type"] in ("fact", "compare")):
         api_client = None
         if ctx.cfg["rag"].get("decision_judge") == "api":
             if decision_api.ready(ctx.cfg):
@@ -280,34 +340,72 @@ def retrieve(ctx: Ctx, plan: dict, allowed: set[str], doc_sens: dict[str, str]) 
         if dec_rank:
             ev["via"].append(f"DecisionRAG（ビーム幅 {res['beam']}・展開 {len(res['path'])} 回・"
                              f"判定 {res['calls']} 回）")
-    if strategy == "decision":
+            ev["methods"].append({"id": "decision", "label": "DecisionRAG",
+                                  "detail": f"文書の階層を判定モデル（{judge_txt}）でたどる・判定 {res['calls']} 回",
+                                  "hits": len(dec_rank)})
+    dec_note = "経路スコア（たどった各段の判定確率の幾何平均）" + ("・選択式で並べ替え済み" if dec_rank and
+                                                                 ev["decision"] and ev["decision"]["choice"] else "")
+    only_decision = not (opts["methods"] & {"bm25", "vector", "graph", "summary", "community", "multi"})
+    if only_decision:
         if dec_rank:
             # 論文どおり第1段の検索器を使わない
+            fusion.add("DecisionRAG", res["hits"], 1.0, note=dec_note)
+            fusion.fuse()
+            ev["why"] = fusion.why
             ev["passages"] = _diversify(dec_rank, k=k * 2, per_doc=None)
             return ev
-        ctx.warnings.append("DecisionRAG で段落が見つからなかったため、従来の検索で補いました")
+        ctx.warnings.append("DecisionRAG で段落が見つからなかったため、全文検索で補いました")
     if dec_rank:
-        rankings.append(dec_rank)
-        weights.append(1.5)
+        fusion.add("DecisionRAG", res["hits"], 1.5, note=dec_note)
 
-    qv = _qvecs(ctx, query_text, allowed)
-    base = [cid for cid, _ in _hybrid(ctx, query_text, allowed, k * 3, qv)]
-    rankings.append(base)
-    weights.append(1.0)
-    ev["via"].append("ハイブリッド（BM25+埋め込み）" if qv else "BM25")
+    use_bm25, use_vec = "bm25" in opts["methods"], "vector" in opts["methods"]
+    if only_decision and not dec_rank:
+        use_bm25 = True                                  # 補いの全文検索
+        ctx.opts = dict(opts, methods=opts["methods"] | {"bm25"})
+    if use_bm25 or use_vec:
+        qv = _qvecs(ctx, query_text, allowed) if use_vec else {}
+        if use_vec and not qv:
+            ctx.warnings.append("埋め込み（ベクトル）を選んでいますが、埋め込みのある文書・設定が無いため使えませんでした")
+        base, sub = _hybrid_detail(ctx, query_text, allowed, k * 3, qv)
+        both = use_bm25 and bool(qv)
+        if both:
+            name, mid, label, via = "ハイブリッド（BM25＋埋め込み）", "hybrid", "ハイブリッド（BM25＋埋め込み）", \
+                "ハイブリッド（BM25+埋め込み）"
+            detail = ("語の一致（BM25）と意味の近さ（埋め込みモデル: "
+                      + "・".join(sp.partition(":")[2] or sp for sp in qv) + "）を RRF で統合")
+            ranked, note, subs = base, "BM25 と埋め込みの RRF スコア", sub
+        else:
+            vec_only = bool(qv) and not use_bm25
+            name = "埋め込み（ベクトル）" if vec_only else "BM25（全文の語の一致）"
+            mid, label, via = ("vector", "埋め込み（ベクトル）", "埋め込み") if vec_only else ("bm25", "BM25（全文検索）", "BM25")
+            detail = ("意味の近さで探す（埋め込みモデル: " + "・".join(sp.partition(":")[2] or sp for sp in qv) + "）"
+                      if vec_only else "語の一致で探す" + ("" if use_vec else "（埋め込みは使わない設定）"))
+            # 信号が1つだけなので、RRF ではなくその信号の素のスコアを出す
+            ranked = [(cid, next((x["score"] for x in sub.get(cid, [])), sc)) for cid, sc in base]
+            note, subs = ("コサイン類似度（1 に近いほど意味が近い）" if vec_only else "BM25 スコア（語の一致の強さ）"), None
+        if ranked:
+            fusion.add(name, ranked, 1.0, note=note, sub=subs)
+        ev["via"].append(via)
+        ev["methods"].append({"id": mid, "label": label, "detail": detail, "hits": len(base)})
 
-    if plan["type"] in ("relation", "compare", "summary") or plan["entities"]:
+    if use("graph", plan["type"] in ("relation", "compare", "summary") or bool(plan["entities"])):
         g = graph.get_graph(allowed, doc_sens)
         if g.entities:
             seeds = g.seed_entities(q, plan["keywords"] + plan["entities"])
             if seeds:
                 rank = g.ppr(seeds)
-                graph_chunks = [cid for cid, _ in g.rank_chunks(rank, k=k * 3)]
-                if graph_chunks:
+                graph_ranked = g.rank_chunks(rank, k=k * 3)
+                if graph_ranked:
                     # relation は グラフを主、他は補助として融合
-                    rankings.append(graph_chunks)
-                    weights.append(1.5 if plan["type"] == "relation" else 0.8)
+                    fusion.add("GraphRAG（グラフ PPR）", graph_ranked, 1.5 if plan["type"] == "relation" else 0.8,
+                               note="質問のエンティティから Personalized PageRank でたどったスコア")
                     ev["via"].append("グラフ PPR")
+                    ev["methods"].append({"id": "graph", "label": "GraphRAG",
+                                          "detail": "質問のエンティティ（"
+                                          + "・".join(g.entities[s]["name"] for s in list(seeds)[:3])
+                                          + "）から関係をたどる（Personalized PageRank）・"
+                                          + graph_modes_text(allowed),
+                                          "hits": len(graph_ranked)})
                 ctxg = g.context(rank)
                 if ctxg["entities"]:
                     ev["graph"] = {
@@ -322,39 +420,61 @@ def retrieve(ctx: Ctx, plan: dict, allowed: set[str], doc_sens: dict[str, str]) 
                             e["sensitivity"] != "public" for e in ctxg["entities"]) else "public",
                     }
 
-    if plan["type"] == "compare":
+    if plan["type"] == "compare" and "multi" in opts["methods"] and (use_bm25 or use_vec):
         targets = (plan["entities"] or plan["keywords"])[:4]
         for t in targets:
-            sub = [cid for cid, _ in _hybrid(ctx, f"{t} {q}", allowed, k)]
-            if sub:
-                rankings.append(sub)
-                weights.append(1.0)
+            fusion.add(f"マルチクエリ「{t[:16]}」", _hybrid(ctx, f"{t} {q}", allowed, k), 1.0,
+                       note="比較の対象ごとに検索した RRF スコア")
         if targets:
             ev["via"].append(f"マルチクエリ（{len(targets)}対象）")
+            ev["methods"].append({"id": "multi", "label": "マルチクエリ",
+                                  "detail": "比較の対象ごとに検索: " + "・".join(targets), "hits": 0})
 
-    if plan["type"] == "summary":
-        ev["doc_summaries"] = _doc_summaries(q + " " + " ".join(plan["keywords"]), allowed, limit=5)
+    if use("summary", plan["type"] == "summary"):
+        ev["doc_summaries"] = _doc_summaries(q + " " + " ".join(plan["keywords"]), allowed,
+                                             limit=5 if plan["type"] == "summary" else 3)
         if ev["doc_summaries"]:
             ev["via"].append("文書要約")
-        scope_docs = (ctx.chat.get("scope") or {}).get("doc_ids") or []
-        if len(allowed) > 3 and not (0 < len(scope_docs) <= 3):
-            ev["communities"] = _communities(ctx, q, plan, allowed, doc_sens)
-            if ev["communities"]:
-                ev["via"].append("コミュニティ要約")
-        else:
-            # 特定文書の要約: 文書全体からまんべんなく代表チャンクを取る
-            spread = []
-            for d in allowed:
-                chs = db.doc_chunks(d)
-                step = max(1, len(chs) // 6)
-                spread.extend(c["id"] for c in chs[::step][:6])
-            rankings.append(spread)
-            weights.append(1.0)
+            ev["methods"].append({"id": "summary", "label": "文書要約（RAPTOR）",
+                                  "detail": "取り込み時に作った文書ごとの要約", "hits": len(ev["doc_summaries"])})
+    scope_docs = (ctx.chat.get("scope") or {}).get("doc_ids") or []
+    few_docs = len(allowed) <= 3 or 0 < len(scope_docs) <= 3
+    if use("community", plan["type"] == "summary" and not few_docs):
+        ev["communities"] = _communities(ctx, q, plan, allowed, doc_sens)
+        if ev["communities"]:
+            ev["via"].append("コミュニティ要約")
+            ev["methods"].append({"id": "community", "label": "コミュニティ要約（LazyGraphRAG）",
+                                  "detail": "グラフで関連の強いまとまりを、質問時に必要な分だけ要約",
+                                  "hits": len(ev["communities"])})
+    if plan["type"] == "summary" and few_docs and opts["methods"] & {"bm25", "vector", "summary"}:
+        # 特定文書の要約: 文書全体からまんべんなく代表チャンクを取る
+        spread = []
+        for d in allowed:
+            chs = db.doc_chunks(d)
+            step = max(1, len(chs) // 6)
+            spread.extend(c["id"] for c in chs[::step][:6])
+        fusion.add("文書全体から均等に", [(cid, 0.0) for cid in spread], 1.0,
+                   note="要約の質問のため、文書の最初から最後まで均等に取った箇所")
 
-    fused = [cid for cid, _ in rrf_fuse(rankings, weights=weights)] if len(rankings) > 1 \
-        else rankings[0]
+    fused = fusion.fuse()
+    ev["why"] = fusion.why
     ev["passages"] = _diversify(fused, k=k * 2, per_doc=None if len(allowed) <= 2 else 4)
     return ev
+
+
+def graph_modes_text(allowed: set[str]) -> str:
+    """検索対象の文書のグラフが、どの方式・どの LLM で作られたか（回答の「RAG の流れ」に出す）。"""
+    from .readings import MODE_LABEL
+    counts: dict[str, int] = {}
+    for r in db.query("SELECT doc_id, mode, label FROM readings WHERE stage='graph' AND active=1"):
+        if r["doc_id"] in allowed:
+            key = MODE_LABEL.get(r["mode"] or "standard", r["mode"])
+            if r["mode"] != "terms":
+                key += f": {r['label']}"
+            counts[key] = counts.get(key, 0) + 1
+    if not counts:
+        return "グラフのある文書なし"
+    return "グラフ " + "／".join(f"{k}（{n} 文書）" for k, n in sorted(counts.items(), key=lambda kv: -kv[1]))
 
 
 def _diversify(cids: list[str], *, k: int, per_doc: int | None) -> list[dict]:
@@ -382,7 +502,11 @@ def _doc_summaries(query: str, allowed: set[str], *, limit: int) -> list[dict]:
     idx = BM25Index()
     for d in docs:
         idx.add(d["id"], f"{d['title']} {' '.join(d['keywords'])} {d['summary']}")
-    order = [key for key, _ in idx.search(query, k=limit)]
+    hits = idx.search(query, k=limit)
+    order = [key for key, _ in hits]
+    for key, sc in hits:
+        by_id = next(d for d in docs if d["id"] == key)
+        by_id["_score"] = round(float(sc), 3)
     for d in docs:                      # 字句が当たらない一般的な要約依頼でも新しい順に補完
         if len(order) >= limit:
             break
@@ -406,7 +530,7 @@ def _communities(ctx: Ctx, q: str, plan: dict, allowed: set[str], doc_sens) -> l
     score = {cid: s for cid, s in hits}
     ranked = sorted(coms, key=lambda c: -(score.get(c["id"], 0) + 0.3 * math.log(1 + c["size"])))[:5]
     out = []
-    for c in ranked:
+    for rank, c in enumerate(ranked, 1):
         prof = ctx.profile("helper", c["sensitivity"])
         try:
             s = graph.summarize_community(ctx.llm, prof, g, c)
@@ -414,7 +538,11 @@ def _communities(ctx: Ctx, q: str, plan: dict, allowed: set[str], doc_sens) -> l
             ctx.warnings.append(f"コミュニティ要約に失敗: {e}")
             s = graph.summarize_community(None, None, g, c)
         out.append({"id": c["id"], "title": s["title"], "summary": s["summary"],
-                    "size": c["size"], "sensitivity": c["sensitivity"]})
+                    "size": c["size"], "sensitivity": c["sensitivity"],
+                    "why": {"signals": [{"name": "コミュニティの BM25", "rank": rank,
+                                         "score": round(float(score.get(c["id"], 0)), 3),
+                                         "note": "質問とメンバーのエンティティ名・説明の語の一致"
+                                                 f"（エンティティ {c['size']} 件。大きいまとまりを少し優先）"}]}})
     return out
 
 
@@ -431,7 +559,7 @@ def _sens_of(passages: list[dict]) -> str:
 
 def corrective(ctx: Ctx, plan: dict, ev: dict, allowed, doc_sens) -> dict:
     """CRAG: 資料が不十分なら書き換えた検索文で再検索して統合する（1回まで）。"""
-    if not ctx.cfg["rag"]["corrective"] or plan["type"] not in ("fact", "relation", "compare"):
+    if not ctx.opts["crag"] or plan["type"] not in ("fact", "relation", "compare"):
         return ev
     top = ev["passages"][:6]
     if not top:
@@ -459,24 +587,35 @@ def corrective(ctx: Ctx, plan: dict, ev: dict, allowed, doc_sens) -> dict:
     ctx.step("根拠チェック", f"不足 → 再検索: {new_q[:60]}")
     alt = dict(plan, standalone=new_q,
                type="relation" if plan["type"] == "fact" else plan["type"])
-    saved = ctx.chat.get("strategy")
-    ctx.chat = dict(ctx.chat, strategy="classic")       # 再検索では判定を繰り返さない
+    saved = ctx.opts
+    again = saved["methods"] - {"decision"}             # 再検索では判定を繰り返さない
+    if not again & {"bm25", "vector", "graph"}:
+        again |= {"bm25"}
+    ctx.opts = dict(saved, methods=again)
     try:
         ev2 = retrieve(ctx, alt, allowed, doc_sens)
     finally:
-        ctx.chat = dict(ctx.chat, strategy=saved)
+        ctx.opts = saved
     seen = {p["id"] for p in ev["passages"]}
     merged = ev["passages"][:4] + [p for p in ev2["passages"] if p["id"] not in seen] \
         + ev["passages"][4:]
     ev["passages"] = merged[: len(ev["passages"]) + 4]
+    for p in ev2["passages"]:
+        if p["id"] not in seen:
+            w = dict(ev2.get("why", {}).get(p["id"]) or {"signals": []})
+            w["crag"] = new_q[:80]
+            ev.setdefault("why", {})[p["id"]] = w
     ev["via"].append("再検索（CRAG）")
+    ev.setdefault("methods", []).append({"id": "crag", "label": "再検索（CRAG）",
+                                         "detail": f"根拠が足りないと判定 → 「{new_q[:40]}」で再検索",
+                                         "hits": len([p for p in ev2["passages"] if p["id"] not in seen])})
     if ev2.get("graph") and not ev.get("graph"):
         ev["graph"] = ev2["graph"]
     return ev
 
 
-def rerank(ctx: Ctx, question: str, passages: list[dict], k: int) -> list[dict]:
-    if not ctx.cfg["rag"]["rerank"] or len(passages) <= k:
+def rerank(ctx: Ctx, question: str, passages: list[dict], k: int, why: dict | None = None) -> list[dict]:
+    if not ctx.opts["rerank"] or len(passages) <= k:
         return passages[:k]
     cand = passages[:20]
     sens = "internal" if _sens_of(cand) == "internal" or ctx.touched else "public"
@@ -505,6 +644,9 @@ def rerank(ctx: Ctx, question: str, passages: list[dict], k: int) -> list[dict]:
     if not picked:
         return passages[:k]
     ctx.step("再順位付け", f"{len(cand)}件 → {min(k, len(picked))}件")
+    if why is not None:
+        for i, p in enumerate(picked[:k], 1):
+            why.setdefault(p["id"], {"signals": []})["rerank"] = {"rank": i, "before": cand.index(p) + 1}
     return picked[:k]
 
 
@@ -517,21 +659,29 @@ def build_context(ev: dict) -> tuple[str, list[dict]]:
         head = f"[S{i}] 文書「{p['doc_title']}」{p['locator']}" + \
                (f"（{p['heading'][:40]}）" if p.get("heading") else "")
         blocks.append(f"{head}\n{p['text'][:1800]}")
+        why = dict((ev.get("why") or {}).get(p["id"]) or {})
+        why["position"] = i
         sources.append({"ref": f"S{i}", "kind": "chunk", "doc_id": p["doc_id"],
                         "doc_title": p["doc_title"], "locator": p["locator"], "page": p["page"],
                         "chunk_id": p["id"], "ext": p.get("ext", ""),
-                        "snippet": p["text"][:300], "sensitivity": p["sensitivity"]})
+                        "snippet": p["text"][:300], "sensitivity": p["sensitivity"], "why": why})
     for i, d in enumerate(ev["doc_summaries"], 1):
         blocks.append(f"[D{i}] 文書「{d['title']}」の要約\n{d['summary'][:1500]}")
+        summary_reading = (d.get("flags") or {}).get("summary_label") or ""
         sources.append({"ref": f"D{i}", "kind": "doc", "doc_id": d["id"], "doc_title": d["title"],
                         "locator": "文書要約", "page": None, "snippet": d["summary"][:300],
-                        "sensitivity": d["sensitivity"], "ext": d["ext"]})
+                        "sensitivity": d["sensitivity"], "ext": d["ext"],
+                        "why": {"position": i, "signals": [{
+                            "name": "要約の BM25", "rank": i, "score": d.get("_score", 0),
+                            "note": "質問と文書要約・キーワードの語の一致"
+                                    + (f"（要約: {summary_reading}）" if summary_reading else "")}]}})
     for i, c in enumerate(ev["communities"], 1):
         blocks.append(f"[C{i}] テーマ「{c['title']}」（関連エンティティ {c['size']} 件の要約）\n"
                       f"{c['summary'][:1200]}")
         sources.append({"ref": f"C{i}", "kind": "community", "title": c["title"],
                         "doc_title": f"テーマ: {c['title']}", "locator": "コミュニティ要約",
-                        "snippet": c["summary"][:300], "sensitivity": c["sensitivity"]})
+                        "snippet": c["summary"][:300], "sensitivity": c["sensitivity"],
+                        "why": {**(c.get("why") or {}), "position": i}})
     g = ev.get("graph")
     if g:
         ent = "\n".join(f"- {e['name']}（{e['type']}）: {e['description']}" for e in g["entities"])
@@ -584,17 +734,20 @@ def ask(chat_id: str, question: str) -> Iterator[dict]:
     allowed, doc_sens = allowed_docs(chat, ctx.mode)
     if not allowed and plan["retrieval"]:
         ctx.warnings.append("検索対象の文書がありません（文書を取り込むか、相談の範囲を見直してください）")
+    scope_info = folders.describe_scope(chat.get("scope") or {})
     route_info = {"type": plan["type"], "retrieval": plan["retrieval"] and bool(allowed),
                   "standalone": plan["standalone"], "keywords": plan["keywords"],
                   "entities": plan["entities"], "by": plan["by"], "mode": ctx.mode,
-                  "docs_in_scope": len(allowed)}
+                  "docs_in_scope": len(allowed), "scope_label": scope_info["label"]}
     ctx.step("ルーター", f"{plan['type']}（{'検索する' if route_info['retrieval'] else '検索しない'}）")
     yield {"type": "route", "route": route_info}
 
     # 2. 検索
     ev = {"passages": [], "graph": None, "communities": [], "doc_summaries": [], "via": [],
-          "decision": None}
-    route_info["strategy"] = chat.get("strategy") or "auto"
+          "decision": None, "why": {}, "methods": []}
+    route_info["strategy"] = ctx.opts["strategy"]
+    route_info["strategy_label"] = ctx.opts["label"]
+    route_info["selected"] = [m for m in ragopts.METHODS if m in ctx.opts["methods"]]
     if route_info["retrieval"]:
         yield {"type": "status", "text": "資料を検索しています…"}
         ev = retrieve(ctx, plan, allowed, doc_sens)
@@ -602,7 +755,11 @@ def ask(chat_id: str, question: str) -> Iterator[dict]:
         if ev["passages"]:
             yield {"type": "status", "text": "根拠を確認しています…"}
             ev = corrective(ctx, plan, ev, allowed, doc_sens)
-        ev["passages"] = rerank(ctx, plan["standalone"], ev["passages"], int(cfg["rag"]["top_k"]))
+        ev["passages"] = rerank(ctx, plan["standalone"], ev["passages"], int(cfg["rag"]["top_k"]),
+                                why=ev.setdefault("why", {}))
+        if any("rerank" in w for w in ev["why"].values()):
+            ev["methods"].append({"id": "rerank", "label": "再順位付け", "detail": "LLM で根拠として役立つ順に並べ替え",
+                                  "hits": len(ev["passages"])})
 
     context, sources = build_context(ev)
     sens = evidence_sensitivity(ev)
@@ -637,11 +794,13 @@ def ask(chat_id: str, question: str) -> Iterator[dict]:
     else:
         yield {"type": "status", "text": f"回答を生成しています（{'ローカル' if prof == 'local' else 'クラウド'} LLM）…"}
         ctx.step("回答生成", "ローカル LLM" if prof == "local" else "クラウド LLM")
+        from .indexer import INDEXER
         try:
-            for piece in ctx.llm.stream(prof, messages, sensitivity=hist_sens, system=system,
-                                        purpose="answer"):
-                answer += piece
-                yield {"type": "delta", "text": piece}
+            with INDEXER.chat_session():     # 取り込みのグラフ抽出には、回答が終わるまで LLM を待ってもらう
+                for piece in ctx.llm.stream(prof, messages, sensitivity=hist_sens, system=system,
+                                            purpose="answer"):
+                    answer += piece
+                    yield {"type": "delta", "text": piece}
         except LLMError as e:
             msg = f"\n\n⚠ 回答の生成に失敗しました: {e}"
             if not answer:
@@ -655,7 +814,12 @@ def ask(chat_id: str, question: str) -> Iterator[dict]:
         s["used"] = s["ref"] in used
     if route_info["retrieval"] and sens == "internal" and not chat["touched_internal"]:
         db.update_chat(chat_id, touched_internal=True)
+    answer_model = ""
+    if prof:
+        pp = cfg["profiles"][prof]
+        answer_model = pp.get("model") or ""
     meta = {"route": route_info, "sources": sources, "via": ev["via"], "profile": prof,
+            "methods": ev.get("methods") or [], "answer_model": answer_model,
             "decision": ev.get("decision"),
             "sensitivity": sens, "steps": ctx.steps, "warnings": ctx.warnings,
             "elapsed": round(time.time() - ctx.t0, 2),

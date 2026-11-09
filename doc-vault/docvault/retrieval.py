@@ -91,15 +91,31 @@ class SearchIndex:
                         nv.add(k, v)
                 self.vectors[space] = nv
 
-    def drop_vectors(self, doc_id: str) -> None:
+    def drop_vectors(self, doc_id: str, space: str | None = None) -> None:
+        """文書のベクトルを検索インデックスから外す（space を指定するとその空間だけ）。"""
+        self.ensure_loaded()
         with self._lock:
             ids = {cid for cid, m in self.meta.items() if m["doc_id"] == doc_id}
-            for space, vi in list(self.vectors.items()):
+            for sp, vi in list(self.vectors.items()):
+                if space is not None and sp != space:
+                    continue
                 nv = VectorIndex()
                 for k, v in zip(vi.keys, vi.vecs):
                     if k not in ids:
                         nv.add(k, v)
-                self.vectors[space] = nv
+                self.vectors[sp] = nv
+
+    def load_vectors(self, doc_id: str) -> None:
+        """DB に残っている文書のベクトル（全空間）を検索インデックスへ入れ直す。"""
+        self.ensure_loaded()
+        rows = db.query("SELECT chunk_id,space,vec FROM vectors WHERE doc_id=?", (doc_id,))
+        with self._lock:
+            by_space: dict[str, list] = {}
+            for r in rows:
+                if r["chunk_id"] in self.meta:
+                    by_space.setdefault(r["space"], []).append((r["chunk_id"], unpack_vec(r["vec"])))
+        for space, items in by_space.items():
+            self.add_vectors(space, items)
 
     # ------------------------------------------------------------ 検索
     def spaces_for(self, allowed_docs: set[str] | None) -> list[str]:
@@ -113,20 +129,27 @@ class SearchIndex:
                 out.append(space)
         return out
 
-    def hybrid(self, query: str, *, allowed_docs: set[str] | None, k: int = 20,
-               qvecs: dict[str, list[float]] | None = None) -> list[tuple[str, float]]:
-        """BM25 + 各空間のベクトル検索を RRF で融合。qvecs は {space: 質問ベクトル}。"""
+    def signals(self, query: str, *, allowed_docs: set[str] | None, k: int = 20,
+                qvecs: dict[str, list[float]] | None = None,
+                bm25: bool = True) -> list[tuple[str, list[tuple[str, float]]]]:
+        """検索の信号ごとの結果: [("bm25", [(chunk_id, BM25 スコア)]), ("vec:<空間>", [(chunk_id, コサイン類似度)])]。"""
         self.ensure_loaded()
 
         def allow(cid):
             return allowed_docs is None or self.meta.get(cid, {}).get("doc_id") in allowed_docs
 
-        rankings = [[cid for cid, _ in self.bm25.search(query, k=k * 2, allow=allow)]]
+        out = [("bm25", self.bm25.search(query, k=k * 2, allow=allow))] if bm25 else []
         for space, qv in (qvecs or {}).items():
             vi = self.vectors.get(space)
             if vi is not None and qv:
-                rankings.append([cid for cid, _ in vi.search(qv, k=k * 2, allow=allow)])
-        rankings = [r for r in rankings if r]
+                out.append((f"vec:{space}", vi.search(qv, k=k * 2, allow=allow)))
+        return [(name, ranked) for name, ranked in out if ranked]
+
+    def hybrid(self, query: str, *, allowed_docs: set[str] | None, k: int = 20,
+               qvecs: dict[str, list[float]] | None = None) -> list[tuple[str, float]]:
+        """BM25 + 各空間のベクトル検索を RRF で融合。qvecs は {space: 質問ベクトル}。"""
+        rankings = [[cid for cid, _ in ranked]
+                    for _, ranked in self.signals(query, allowed_docs=allowed_docs, k=k, qvecs=qvecs)]
         if not rankings:
             return []
         return rrf_fuse(rankings)[:k]

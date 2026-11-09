@@ -61,7 +61,8 @@ class Job:
         self.lock = threading.Lock()
         self.engines: dict[str, dict] = {
             eid: {"engine": eid, "status": "pending", "progress": 0.0, "message": "",
-                  "result": None, "error": "", "elapsed": 0.0, "llm_stats": None}
+                  "result": None, "error": "", "elapsed": 0.0, "llm_stats": None,
+                  "variant": None}       # 方式の違い（GraphRAG の 標準 / 高速 など。UI のバッジ）
             for eid in engine_ids
         }
         self.synthesis: dict = {"status": "pending", "text": "", "error": ""}
@@ -141,6 +142,8 @@ class Orchestrator:
             engine = get_engine(engine_id)
             if engine is None:
                 raise ValueError(f"未知のエンジンです: {engine_id}")
+            with job.lock:
+                entry["variant"] = engine.variant(cfg=cfg)
             ok, reason = engine.availability(cfg)
             if not ok:
                 raise LLMError(reason)
@@ -152,9 +155,10 @@ class Orchestrator:
             with job.lock:
                 entry["status"] = "done"
                 entry["progress"] = 1.0
+                entry["variant"] = engine.variant(stats=index.get("stats") or {}, cfg=cfg)
                 entry["result"] = {"stats": index.get("stats") or {},
                                    "warnings": index.get("warnings") or [],
-                                   "logs": ctx.logs}
+                                   "logs": ctx.logs, "variant": entry["variant"]}
                 entry["llm_stats"] = ctx.llm.stats
         except Exception as e:  # noqa: BLE001  部分失敗を許容し UI へ表示する
             with job.lock:
@@ -208,14 +212,26 @@ class Orchestrator:
             if engine is None:
                 raise ValueError(f"未知のエンジンです: {engine_id}")
             index = store.load_index(engine_id)
+            corpus = store.load_corpus()
+            if engine.auto_index and corpus["docs"] and (
+                    index is None or index.get("corpus_rev") != corpus["rev"]):
+                # 作るのが一瞬のエンジン（組み合わせ RAG: チャンクの一覧だけ）は、無い・古いインデックスをその場で作る
+                progress(0.02, "インデックスを作成（チャンクの一覧だけ）")
+                built = engine.ingest(corpus["docs"], EngineContext(llm=LLMClient(cfg), cfg=cfg))
+                store.save_index(engine_id, built, corpus["rev"])
+                index = dict(built, corpus_rev=corpus["rev"])
             if index is None:
                 raise ValueError("インデックス未構築です。先に「インデックス構築」を実行してください")
-            corpus = store.load_corpus()
+            with job.lock:
+                entry["variant"] = engine.variant(stats=index.get("stats") or {}, cfg=cfg)
             if index.get("corpus_rev") != corpus["rev"]:
                 with job.lock:
                     entry["message"] = "注意: インデックスが古いコーパスで構築されています"
             ctx = EngineContext(llm=LLMClient(cfg), cfg=cfg, progress=progress)
             result = engine.query(index, job.question, job.mode, ctx)
+            if ctx.index_patches:                     # 質問時に作ったキャッシュ（Lazy 要約）を保存
+                if not store.patch_index(engine_id, index.get("built_at"), ctx.index_patches):
+                    ctx.log("インデックスが作り直されていたため、質問時の要約は保存しませんでした")
             with job.lock:
                 entry["status"] = "done"
                 entry["progress"] = 1.0
@@ -235,7 +251,8 @@ class Orchestrator:
     # ------------------------------------------------------------ synthesis
     def _synthesize(self, job: Job, cfg: dict) -> None:
         with job.lock:
-            answers = [(eid, e["result"]["answer"]) for eid, e in job.engines.items()
+            answers = [(eid, e["result"]["answer"], e["result"].get("variant"))
+                       for eid, e in job.engines.items()
                        if e["status"] == "done" and e.get("result")]
         if len(answers) < 2:
             with job.lock:
@@ -251,9 +268,11 @@ class Orchestrator:
             job.synthesis = {"status": "running", "text": "", "error": ""}
         try:
             blocks = []
-            for eid, answer in answers:
+            for eid, answer, variant in answers:
                 engine = get_engine(eid)
                 name = engine.name if engine else eid
+                if variant and variant.get("label"):      # 例: GraphRAG（組み込み）・高速
+                    name = f"{name}・{variant['label']}"
                 blocks.append(f"## {name}\n{answer[:4000]}")
             llm = LLMClient(cfg)
             text, think = llm.chat(

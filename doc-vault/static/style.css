@@ -213,6 +213,11 @@ details.adv summary { cursor: pointer; color: var(--muted); font-size: 12px; mar
 
 /* ---------------- graph（graphview.js） ---------------- */
 .graph-toolbar { margin: 8px 0 4px; align-items: center; }
+.seg-btns { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.seg-btns .seg { background: var(--bg2); color: var(--muted); border: 0; padding: 5px 12px; font-size: 13px; cursor: pointer; }
+.seg-btns .seg + .seg { border-left: 1px solid var(--border); }
+.seg-btns .seg.on { background: var(--accent); color: #0b1220; font-weight: 600; }
+.ent-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
 .graph-toolbar .check { display: inline-flex; gap: 4px; align-items: center; margin: 0; }
 .graph-wrap { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 12px; }
 .graph-canvas-box { min-width: 0; background: var(--bg2); border: 1px solid var(--border);
@@ -229,7 +234,157 @@ details.adv summary { cursor: pointer; color: var(--muted); font-size: 12px; mar
   padding: 8px 12px; font-size: 12px; max-width: 340px; pointer-events: none; z-index: 50;
   box-shadow: 0 6px 24px rgba(0,0,0,.5); }
 
+/* ---------------- 相談先・RAG の流れ・採用根拠 ---------------- */
+.scope-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 12px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--bg2); min-width: 0; }
+.scope-bar.narrow { border-color: var(--accent2); background: #1f1d36; }
+.scope-k { font-size: 11px; color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 1px 6px; }
+.scope-label { font-weight: 700; font-size: 15px; overflow-wrap: anywhere; min-width: 0; }
+.scope-count { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.scope-bar .btn { margin-left: auto; }
+.scope-bar.flash { animation: scopeflash 1.2s ease-out; }
+@keyframes scopeflash { 0% { box-shadow: 0 0 0 3px var(--accent2); } 100% { box-shadow: 0 0 0 0 transparent; } }
+.strategy-note { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.chat-item .t-wrap { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.chat-scope { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-item.active .chat-scope { color: #c4b5fd; }
+.scope-picks { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 10px; }
+.pick { background: var(--bg2); color: var(--text); border: 1px solid var(--border); border-radius: 16px;
+  padding: 6px 12px; cursor: pointer; font-size: 13px; }
+.pick:hover { border-color: var(--accent2); }
+.pick.on { border-color: var(--accent2); background: #2a2550; }
+.badge.scope { color: #c4b5fd; border-color: #6d5bd0; white-space: normal; text-align: left; }
+.rag-flow { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin: 0 0 8px; font-size: 12px; }
+.flow-k { color: var(--muted); font-size: 11px; margin-right: 2px; }
+.method { border: 1px solid var(--border); border-radius: 12px; padding: 1px 8px; background: var(--card); cursor: help; }
+.method .cnt { color: var(--muted); margin-left: 4px; font-size: 11px; }
+.method.m-decision { border-color: #f9a8d4; color: #f9a8d4; }
+.method.m-graph, .method.m-community { border-color: #6ee7b7; color: #6ee7b7; }
+.method.m-hybrid, .method.m-bm25, .method.m-multi { border-color: var(--accent); color: var(--accent); }
+.method.m-summary { border-color: #fcd34d; color: #fcd34d; }
+.method.m-answer { border-color: var(--accent2); color: var(--accent2); }
+.arrow { color: var(--muted); }
+.sources-head { margin-top: 10px; }
+.why-line { color: var(--accent); font-size: 11px; margin-top: 3px; }
+.why-tip { position: fixed; z-index: 60; background: #0b101c; border: 1px solid var(--accent); border-radius: 10px;
+  padding: 10px 12px; font-size: 12px; width: min(420px, calc(100vw - 16px)); box-shadow: 0 8px 28px rgba(0,0,0,.55);
+  pointer-events: none; line-height: 1.5; }
+.why-title { margin-bottom: 6px; overflow-wrap: anywhere; }
+.why-table { width: 100%; border-collapse: collapse; }
+.why-table th { text-align: left; color: var(--muted); font-weight: normal; border-bottom: 1px solid var(--border); }
+.why-table td { padding: 2px 4px; vertical-align: top; }
+.why-table td.num, .log-table td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.why-table tr.sub td { color: var(--muted); }
+.why-table tr.note td { color: var(--muted); font-size: 11px; padding-top: 0; }
+.why-lines { margin-top: 6px; border-top: 1px dashed var(--border); padding-top: 4px; }
+.why-foot { margin-top: 6px; color: var(--muted); font-size: 10.5px; }
+
+/* ---------------- 使う RAG の選択 ---------------- */
+.rag-panel { border: 1px solid var(--border); border-radius: 10px; padding: 4px 10px; background: var(--bg2); }
+.rag-panel summary { cursor: pointer; font-size: 12px; color: var(--text); overflow-wrap: anywhere; padding: 2px 0; }
+.rag-panel[open] summary { margin-bottom: 6px; }
+.rag-k { font-size: 11px; color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 0 6px; }
+.rag-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 4px 10px;
+  max-height: 46vh; overflow: auto; }
+.rag-group-title { grid-column: 1 / -1; font-size: 11px; color: var(--muted); margin-top: 4px; }
+.rag-item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 2px 6px; align-items: center;
+  border: 1px solid var(--border); border-radius: 8px; padding: 4px 8px; font-size: 12px; cursor: pointer; min-width: 0; }
+.rag-item.on { border-color: var(--accent); background: #18233a; }
+.rag-item.locked { cursor: default; opacity: .85; }
+.rag-lock { grid-column: 1 / -1; font-size: 12px; color: var(--muted); padding: 4px 0; overflow-wrap: anywhere; }
+.rag-name { font-weight: 600; overflow-wrap: anywhere; }
+.rag-cost { font-size: 11px; color: var(--ok); white-space: nowrap; }
+.rag-cost.llm { color: var(--warn); }
+.rag-desc { grid-column: 2 / -1; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.rag-when { display: block; color: #c4b5fd; }
+.rag-foot { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; margin: 6px 0 4px; font-size: 12px; }
+.rag-est { color: var(--text); overflow-wrap: anywhere; min-width: 0; }
+.rag-presets { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+
+/* ---------------- 音声入力 ---------------- */
+.btn.mic { font-size: 16px; padding: 8px 12px; }
+.btn.mic.recording { background: var(--ng); border-color: var(--ng); color: #0b1220; }
+.rec-bar { display: flex; align-items: center; gap: 10px; padding: 0 14px 8px; font-size: 12px; }
+.rec-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--ng); animation: blink 1s infinite; }
+@keyframes blink { 50% { opacity: .3; } }
+.rec-level { width: 120px; height: 6px; background: var(--bg2); border-radius: 3px; overflow: hidden; }
+.rec-level span { display: block; height: 100%; width: 0; background: var(--ok); }
+
+/* ---------------- フォルダツリー・ドラッグ＆ドロップ ---------------- */
+.folder-tree { margin-top: 4px; }
+.folder { align-items: center; gap: 4px; user-select: none; }
+.folder .tw { display: flex; align-items: center; gap: 2px; min-width: 0; flex: 1; }
+.folder .toggle { width: 14px; display: inline-block; color: var(--muted); text-align: center; flex: none; }
+.folder .fname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder .f-acts { display: none; gap: 2px; margin-left: 4px; }
+.folder .f-acts span { padding: 0 3px; border-radius: 4px; color: var(--muted); }
+.folder .f-acts span:hover { background: var(--bg2); color: var(--text); }
+.folder:hover .f-acts { display: inline-flex; }
+.folder:hover .cnt { display: none; }
+.folder.drop-target { outline: 2px dashed var(--accent2); background: #2a2550; }
+body.dragging-docs .folder { background: rgba(167,139,250,.06); }
+.doc-table th.sel, .doc-table td.sel { width: 28px; }
+.doc-table tr.selected td { background: #1d2440; }
+.doc-table tr[draggable="true"] { cursor: grab; }
+.drag-handle { color: var(--muted); margin-right: 6px; cursor: grab; letter-spacing: -2px; }
+.drag-ghost { position: fixed; top: -100px; left: -100px; background: var(--accent2); color: #0b1220;
+  padding: 4px 10px; border-radius: 8px; font-size: 12px; font-weight: 600; }
+.doc-llm { font-size: 11px; color: #c4b5fd; margin-top: 3px; overflow-wrap: anywhere; }
+.flag.warn { color: var(--warn); border-color: var(--warn); }
+.warn-link { cursor: pointer; color: var(--warn); }
+.bulk-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 10px; margin: 8px 0;
+  background: #1f1d36; border: 1px solid var(--accent2); border-radius: 10px; font-size: 13px; }
+.bulk-bar select { max-width: 220px; }
+.toast { position: fixed; right: 18px; bottom: 18px; background: #0b101c; border: 1px solid var(--accent);
+  border-radius: 10px; padding: 10px 14px; font-size: 13px; z-index: 70; opacity: 0; transform: translateY(10px);
+  transition: all .25s; pointer-events: none; max-width: min(420px, calc(100vw - 36px)); }
+.toast.show { opacity: 1; transform: none; }
+
+/* ---------------- 相談先の選択・文書の情報 ---------------- */
+.modal-box.wide-box { width: min(860px, 100%); }
+.scope-pick { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 8px; }
+.scope-col { min-width: 0; }
+.scope-list { max-height: 46vh; overflow: auto; border: 1px solid var(--border); border-radius: 8px; padding: 4px; }
+.scope-item { display: flex; gap: 6px; align-items: center; padding: 3px 4px; font-size: 13px; cursor: pointer;
+  border-radius: 6px; overflow-wrap: anywhere; }
+.scope-item:hover { background: var(--bg2); }
+.scope-item.via-folder { opacity: .75; }
+.scope-item.via-folder::after { content: "（フォルダで対象）"; color: var(--accent2); font-size: 11px; }
+.scope-item .cnt { color: var(--muted); font-size: 11px; margin-left: auto; }
+.scope-preview { margin-top: 10px; padding: 8px 10px; background: var(--bg2); border-radius: 8px; font-size: 13px;
+  overflow-wrap: anywhere; }
+.grow { flex: 1; min-width: 0; }
+.sec-title { font-size: 14px; margin: 16px 0 6px; border-top: 1px solid var(--border); padding-top: 10px; }
+.rd-group { margin-bottom: 8px; }
+.rd-stage { font-size: 12px; color: var(--muted); margin: 6px 0 2px; }
+.rd-item { border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; margin-bottom: 4px; font-size: 13px; }
+.rd-item.active { border-color: var(--accent2); background: #1f1d36; }
+.rd-main { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; overflow-wrap: anywhere; }
+.rd-mark { color: var(--accent2); font-size: 12px; }
+.rd-sub { color: var(--muted); font-size: 12px; margin-top: 2px; overflow-wrap: anywhere; }
+.rd-acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+.rd-log { margin-top: 6px; max-height: 260px; overflow: auto; }
+.log-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.log-table th.num { text-align: right; }
+.log-table th { text-align: left; color: var(--muted); font-weight: normal; border-bottom: 1px solid var(--border); }
+.log-table td { padding: 2px 4px; border-bottom: 1px solid #222b40; vertical-align: top; }
+.log-table td.reason { overflow-wrap: anywhere; color: var(--muted); }
+.log-table tr.st-failed td, .log-table tr.st-error td { color: var(--warn); }
+.warn-text { color: var(--warn); }
+.read-form { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+.read-form input.inline-input { width: 180px; }
+.mode-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; margin: 4px 0 8px; }
+.mode-card { display: flex; flex-direction: column; gap: 3px; border: 1px solid var(--border); border-radius: 10px;
+  padding: 8px 10px; cursor: pointer; font-size: 13px; min-width: 0; }
+.mode-card input { position: absolute; opacity: 0; pointer-events: none; }
+.mode-card.on { border-color: var(--accent2); background: #1f1d36; }
+.mode-speed { color: var(--ok); font-size: 11px; }
+.mode-desc { color: var(--muted); font-size: 11px; }
+.wrap-any { overflow-wrap: anywhere; min-width: 0; }
+select.inline-select { max-width: 100%; }
+
 @media (max-width: 900px) {
+  .scope-pick { grid-template-columns: 1fr; }
   main { padding: 10px; }
   .chat-layout, .docs-layout, .graph-wrap { grid-template-columns: 1fr; height: auto; }
   .chat-list { max-height: 160px; }
