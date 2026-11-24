@@ -93,6 +93,12 @@ CLOSING_HINT = ("【念押し】返答は次のどちらかだけです。(1) �
 CLOSING_HINT_EN = ("[Reminder] Reply in exactly one of two ways: (1) only <tool_call> block(s) for the next action, or "
                    "(2) start with [FINAL] and answer. Any other ordinary reply will be sent back.")
 
+# 暖機（決まりだけを先に送る）のとき、決まりの後ろに置く文。返事は読み捨てる
+WARMUP_HINT = ("ここまでが作業の決まりです。まだ作業は始めないでください。"
+               "内容を理解したら「了解」とだけ答えてください。会話は次の発言で渡します。")
+WARMUP_HINT_EN = ("These are the rules of the work. Do not start the work yet. "
+                  "When you have understood them, reply with only \"OK\". The conversation follows in the next message.")
+
 # <tool_call> を出さずに「自分で探して無かった」「ツールが使えない」等と答えたときの言い直し
 NUDGE = ("書式が守られていません。返答は次のどちらかだけです。(1) 次にしてほしい操作を <tool_call> ブロックだけで書く"
          "（<tool_call> はあなたのツールではなく、オペレーターへの指示の書式です。実行するのはオペレーターなので"
@@ -339,6 +345,32 @@ def _args_obj(args: str):
 def render_opening(messages: list[dict], tools: list | None, *,
                    max_tool_result_chars: int = 0, max_chars: int = 0, lang: str = "ja") -> str:
     """新しい Copilot 会話の最初の送信文（規則＋操作一覧＋元の指示＋これまでの会話全部）。"""
+    head, body = _opening_parts(messages, tools, max_tool_result_chars=max_tool_result_chars,
+                                max_chars=max_chars, lang=lang)
+    return head + body
+
+
+def render_warmup(messages: list[dict], tools: list | None, *,
+                  max_tool_result_chars: int = 0, max_chars: int = 0, lang: str = "ja") -> tuple[str, str]:
+    """新しい Copilot 会話を 2 回に分けて始めるときの送信文（決まりだけ, 会話）。
+
+    実機での様子: 決まりと最初の指示を 1 通にまとめて送ると、その返事では操作の書式が出ず、
+    決まりの後に 1 往復はさんでから指示を送ると出る。1 通目は決まり（規則＋操作一覧＋元の指示）だけで、
+    「了解」とだけ答えてもらう。2 通目が会話。2 通を続けて読むと render_opening の 1 通と同じ内容になる。
+    """
+    head, body = _opening_parts(messages, tools, max_tool_result_chars=max_tool_result_chars,
+                                max_chars=max_chars, lang=lang)
+    return head + "\n" + (WARMUP_HINT_EN if lang == "en" else WARMUP_HINT), body.lstrip("\n")
+
+
+def has_rules_to_explain(messages: list[dict], tools: list | None) -> bool:
+    """先に伝えておく決まり（操作一覧か、呼び出し元の指示）があるか。無ければ暖機は要らない。"""
+    return bool(tools) or any(m["role"] in ("system", "developer") and m.get("text") for m in messages)
+
+
+def _opening_parts(messages: list[dict], tools: list | None, *,
+                   max_tool_result_chars: int = 0, max_chars: int = 0, lang: str = "ja") -> tuple[str, str]:
+    """(決まりの部分, 会話の部分)。つなげると最初の送信文になる。"""
     system_parts = [m["text"] for m in messages if m["role"] in ("system", "developer") and m.get("text")]
     rest = [m for m in messages if m["role"] not in ("system", "developer")]
     rules = RULES_EN if lang == "en" else RULES
@@ -351,7 +383,7 @@ def render_opening(messages: list[dict], tools: list | None, *,
     if max_chars and len(head) + len(body) > max_chars:
         body = _clip_middle(body, max(1000, max_chars - len(head)))
     closing = ("\n\n" + (CLOSING_HINT_EN if lang == "en" else CLOSING_HINT)) if tools else ""
-    return head + ("\n[Conversation]\n" if lang == "en" else "\n【会話】\n") + body + closing
+    return head, ("\n[Conversation]\n" if lang == "en" else "\n【会話】\n") + body + closing
 
 
 def render_delta(messages: list[dict], *, max_tool_result_chars: int = 0, first: bool = False,

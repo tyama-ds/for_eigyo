@@ -8,6 +8,7 @@
   "login_timeout_sec": 300,
   "reply_timeout_sec": 600,
   "log_dir": "logs",
+  "warmup": "client",
   "models": {
     "opus": "Opus5.5",
     "sonnet": "Sonnet5.5",
