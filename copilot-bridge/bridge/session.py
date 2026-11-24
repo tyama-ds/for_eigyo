@@ -51,11 +51,17 @@ class SessionStore:
         self._lock = threading.Lock()
         self.max_sessions = max_sessions
 
-    def resolve(self, raw_messages: list[dict], key: str | None = None) -> tuple[Session, list[dict], list[dict]]:
+    def resolve(self, raw_messages: list[dict], key: str | None = None,
+                own_records: bool = False) -> tuple[Session, list[dict], list[dict]]:
         """(会話, 正規化した全 message, 続きとして送る差分) を返す。差分が空＝作り直しが必要。
 
         key（X-Conversation-Id ヘッダ等）があれば、指紋ではなくその ID で会話を結びつける。
         ID が同じでも送った列と先頭が一致しなければ（要約で履歴が書き換わった等）作り直す。
+
+        own_records: 呼び出し元が自分の書式を使っていて、直前の回答を原文ではなく自分の記録の形で送り返す
+        （agent-workbench の Copilot Agent は、回答を呼び出し ID つきの履歴レコードに直して送る）。
+        このときは、ID が同じで、直前の回答より前がすべて一致していれば続きとみなす。差分は、呼び出し元が
+        記録した直前の回答（ID の対応が分かるように）と、その後に増えた message。
         """
         norm = [normalize_message(m) for m in raw_messages]
         fp = fingerprint(norm)
@@ -72,6 +78,11 @@ class SessionStore:
                 s.last_used = time.time()
                 if s.sent and len(s.sent) < len(norm) and all(same_message(a, b) for a, b in zip(s.sent, norm)):
                     return s, norm, norm[len(s.sent):]
+                last = len(s.sent) - 1
+                if (own_records and s.sent and len(s.sent) < len(norm)
+                        and s.sent[last]["role"] == "assistant" and norm[last]["role"] == "assistant"
+                        and all(same_message(a, b) for a, b in zip(s.sent[:last], norm))):
+                    return s, norm, norm[last:]
                 s.sent = []
                 return s, norm, []
             best: Session | None = None

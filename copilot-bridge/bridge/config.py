@@ -103,6 +103,15 @@ class Config:
     nudge_retries: int = 2
     # Copilot へ送る規則文の言語（ja / en）。日本語で断られるときは en を試す
     prompt_lang: str = "ja"
+    # 暖機: 新しい会話を始めるとき、決まり（規則・操作一覧・元の指示）だけを先に送って「了解」をもらい、
+    # 会話はその次の発言で送る。1 通にまとめると最初の返事で操作の書式が出ないことがあるため。
+    # client = 呼び出し元がヘッダ X-Bridge-Warmup: 1 で頼んだ要求だけ / always = いつも / off = しない。
+    # 新しい会話ごとに Copilot との往復が 1 回増える
+    warmup: str = "client"
+    # 呼び出し元が自分の書式を持つとき（操作一覧を tools ではなく指示（system）の中に書いている）、
+    # この中継の規則・書式・念押し・言い直しを付けず、呼び出し元の指示と会話だけをそのまま送り、回答もそのまま返す。
+    # client = 呼び出し元がヘッダ X-Bridge-Format: own で頼んだ、tools の無い要求だけ / off = いつもこの中継の書式
+    own_format: str = "client"
     # 送受信ログの保存先（相対なら copilot-bridge フォルダ基準。空なら保存しない）。
     # <log_dir>/YYYYMMDD.jsonl に全往復、<log_dir>/sessions/<日時>_<会話>.md に会話ごとの全文を残す
     log_dir: str = "logs"

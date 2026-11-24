@@ -108,6 +108,46 @@ class ParseTests(unittest.TestCase):
         self.assertIn("[Actions the operator can perform]", en)
         self.assertIn("read_file", en)
 
+    def test_warmup_splits_the_opening_into_rules_and_conversation(self):
+        from bridge.protocol import WARMUP_HINT, WARMUP_HINT_EN, has_rules_to_explain, render_opening, render_warmup
+        msgs = [normalize_message(m) for m in (
+            {"role": "system", "content": "作業方針 S"}, {"role": "user", "content": "一覧を見て"})]
+        for lang, hint in (("ja", WARMUP_HINT), ("en", WARMUP_HINT_EN)):
+            rules, conversation = render_warmup(msgs, TOOLS, lang=lang)
+            # 1 通目は決まりだけ（会話は入らない）で、「了解」とだけ答えるよう頼む
+            self.assertTrue(rules.endswith("\n" + hint))
+            self.assertIn("read_file", rules)
+            self.assertIn("作業方針 S", rules)
+            self.assertNotIn("一覧を見て", rules)
+            # 2 通目は会話（決まりは入らない）。2 通を続けると、まとめて送る 1 通と同じ内容
+            self.assertIn("一覧を見て", conversation)
+            self.assertNotIn("作業方針 S", conversation)
+            self.assertEqual(rules[:-len(hint)] + conversation, render_opening(msgs, TOOLS, lang=lang))
+        # 先に伝える決まりが無い（操作も指示も無い）なら、暖機は要らない
+        self.assertTrue(has_rules_to_explain(msgs, None))
+        self.assertTrue(has_rules_to_explain(msgs[1:], TOOLS))
+        self.assertFalse(has_rules_to_explain(msgs[1:], None))
+        self.assertFalse(has_rules_to_explain([normalize_message({"role": "system", "content": ""})] + msgs[1:], []))
+
+    def test_own_format_sends_only_the_callers_instructions_and_the_conversation(self):
+        from bridge.protocol import WARMUP_HINT, render_delta, render_opening, render_warmup
+        msgs = [normalize_message(m) for m in (
+            {"role": "system", "content": "呼び出し元の決まり J"}, {"role": "user", "content": "u1"},
+            {"role": "assistant", "content": "a1"}, {"role": "user", "content": "u2"})]
+        text = render_opening(msgs, None, own_format=True)
+        self.assertEqual(text, "呼び出し元の決まり J\n\nu1\n\n<assistant>\na1\n</assistant>\n\nu2")
+        for mark in ("【書式】", "<tool_call>", "【最終回答】", "【会話】", "オペレーター", "操作なし"):
+            self.assertNotIn(mark, text)
+        rules, conversation = render_warmup(msgs, None, own_format=True)
+        self.assertEqual(rules, "呼び出し元の決まり J\n\n" + WARMUP_HINT)
+        self.assertEqual(conversation, "u1\n\n<assistant>\na1\n</assistant>\n\nu2")
+        # 続きにも、この中継の念押しは付けない
+        self.assertEqual(render_delta(msgs[3:], hints=False), "u2")
+        self.assertIn("【最終回答】", render_delta(msgs[3:]))
+        # 長すぎる会話は、これまでどおり中央を省く
+        long = [msgs[0], normalize_message({"role": "user", "content": "x" * 5000})]
+        self.assertLess(len(render_opening(long, None, own_format=True, max_chars=2000)), 2200)
+
     def test_bare_json_without_tags(self):
         # 画面から読むと <tool_call> タグが消え、JSON だけが残ることがある
         text = 'ファイルを読みます。\n{"name": "read_file", "arguments": {"path": "a.py"}}\n{"name": "read_file", "arguments": {"path": "b.py"}}'

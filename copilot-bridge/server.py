@@ -35,8 +35,8 @@ from bridge import __version__  # noqa: E402
 from bridge.config import load_config  # noqa: E402
 from bridge.pool import BridgeError, ModelStalled, WorkerPool, WorkerRestarted  # noqa: E402
 from bridge.protocol import (  # noqa: E402
-    needs_nudge, normalize_message, nudge_invalid_text, nudge_text, parse_reply, render_delta,
-    render_opening, validate_calls,
+    has_instructions, has_rules_to_explain, needs_nudge, normalize_message, nudge_invalid_text, nudge_text, parse_reply,
+    render_delta, render_opening, render_warmup, validate_calls,
 )
 from bridge.session import SessionStore  # noqa: E402
 
@@ -73,14 +73,19 @@ class Bridge:
         self.pool.close_all()
 
     # ------------------------------------------------------------ 1 要求の処理
-    def complete(self, body: dict, conversation_key: str | None = None) -> dict:
+    def complete(self, body: dict, conversation_key: str | None = None, warmup: bool = False,
+                 own_format: bool = False) -> dict:
         messages = body.get("messages") or []
         if not isinstance(messages, list) or not messages:
             raise BadRequest("messages が空です")
         tools = body.get("tools") or []
         candidates = self._model_candidates(body.get("model"))
         model_label = candidates[0] if candidates else None
-        session, norm, delta = self.store.resolve(messages, key=conversation_key)
+        # 呼び出し元が自分の書式を持つ（ヘッダで頼まれ、tools が無く、指示がある）: この中継の書式は付けない
+        own = (own_format and not tools and str(self.cfg.own_format or "client").lower() == "client"
+               and any(isinstance(m, dict) and m.get("role") in ("system", "developer") for m in messages))
+        session, norm, delta = self.store.resolve(messages, key=conversation_key, own_records=own)
+        own = own and has_instructions(norm)
         # 届いた文字が化けていないか（PowerShell の ???? 等）をコンソールで確認できるようにする
         last_user = next((m["text"] for m in reversed(norm) if m["role"] == "user"), "")
         print(f"[{session.id}] 受信: {last_user[:80]!r}（messages={len(norm)} tools={len(tools)}）", flush=True)
@@ -91,29 +96,42 @@ class Bridge:
                 # 差分が無い／担当が別の会話に使われた後／まだ何も送っていない → 会話を作り直す
                 fresh = not delta or not worker.resumed or not session.sent
                 lang = self.cfg.prompt_lang
-                if fresh:
+                # 暖機: 決まりだけを先に送り、会話は次の発言で送る（設定と、呼び出し元の頼みで決まる）
+                mode = str(self.cfg.warmup or "client").lower()
+                warm = (mode == "always" or (mode == "client" and warmup)) and has_rules_to_explain(norm, tools)
+                warmed = False
+
+                def opening() -> str:
+                    """新しい会話を作り、最初に送る文を返す。暖機するときは、決まりをここで先に送る。"""
+                    nonlocal warmed
                     worker.new_chat(model=model_label)
-                    text = render_opening(norm, tools,
-                                          max_tool_result_chars=self.cfg.max_tool_result_chars,
-                                          max_chars=self.cfg.max_resend_chars, lang=lang)
-                else:
-                    text = render_delta(delta, max_tool_result_chars=self.cfg.max_tool_result_chars, lang=lang)
+                    limits = {"max_tool_result_chars": self.cfg.max_tool_result_chars,
+                              "max_chars": self.cfg.max_resend_chars, "lang": lang, "own_format": own}
+                    if not warm:
+                        return render_opening(norm, tools, **limits)
+                    rules, conversation = render_warmup(norm, tools, **limits)
+                    answer = worker.send(rules)   # 返事は読み捨てる（操作として読まない・呼び出し元にも返さない）
+                    warmed = True
+                    print(f"[{session.id}] 暖機: 決まりを先に送りました（返事 {len(answer or '')} 文字）", flush=True)
+                    return conversation
+
                 t0 = time.time()
                 try:
-                    reply = None
+                    reply, text, restarted = None, None, False
                     remaining = list(candidates[1:]) if candidates else []
                     while reply is None:
                         try:
+                            if text is None:
+                                text = opening() if fresh else render_delta(
+                                    delta, max_tool_result_chars=self.cfg.max_tool_result_chars, lang=lang,
+                                    hints=not own)
                             reply = worker.send(text)
                         except WorkerRestarted as e:
                             # ブラウザが再起動された → 会話を作り直して 1 回だけやり直す
+                            if restarted:
+                                raise
                             print(f"{e} → 会話を作り直してやり直します", flush=True)
-                            fresh = True
-                            worker.new_chat(model=model_label)
-                            text = render_opening(norm, tools,
-                                                  max_tool_result_chars=self.cfg.max_tool_result_chars,
-                                                  max_chars=self.cfg.max_resend_chars, lang=lang)
-                            reply = worker.send(text)
+                            restarted, fresh, text = True, True, None
                         except ModelStalled as e:
                             # モデルが詰まった → 冷却して、次の候補で会話を作り直してやり直す
                             self._mark_cooldown(model_label)
@@ -122,19 +140,19 @@ class Bridge:
                             nxt = remaining.pop(0)
                             print(f"{e} → モデルを「{model_label or '既定'}」から「{nxt}」に切り替えてやり直します", flush=True)
                             model_label = nxt
-                            fresh = True
-                            worker.new_chat(model=model_label)
-                            text = render_opening(norm, tools,
-                                                  max_tool_result_chars=self.cfg.max_tool_result_chars,
-                                                  max_chars=self.cfg.max_resend_chars, lang=lang)
+                            fresh, text = True, None
                 except BridgeError as e:
                     print(f"{e}", flush=True)
                     detach = True
                     raise
-                content, calls = parse_reply(reply, id_prefix=f"call_{session.id}_{session.turns + 1}")
+                if own:
+                    # 回答はそのまま返す（操作として読まない・印を取らない・言い直させない）。読むのは呼び出し元
+                    content, calls = (reply or "").strip(), []
+                else:
+                    content, calls = parse_reply(reply, id_prefix=f"call_{session.id}_{session.turns + 1}")
                 # Copilot が自前の実行環境で探して「無い」と答えたら、<tool_call> で依頼するよう言い直させる
                 nudges = 0
-                while nudges < self.cfg.nudge_retries and needs_nudge(reply, calls, tools):
+                while not own and nudges < self.cfg.nudge_retries and needs_nudge(reply, calls, tools):
                     nudges += 1
                     print(f"[{session.id}] 操作の書式が無く、断り／自前で探した様子 → 言い直し {nudges} 回目", flush=True)
                     try:
@@ -176,7 +194,7 @@ class Bridge:
                 session.sent = norm + [normalize_message(assistant)]
                 session.worker_id = worker.id
                 session.turns += 1
-                self._log({"session": session.id, "worker": worker.id, "fresh": fresh, "nudges": nudges,
+                self._log({"session": session.id, "worker": worker.id, "fresh": fresh, "warmup": warmed, "own_format": own, "nudges": nudges,
                            "model": model_label,
                            "sent": text, "reply": reply, "latency_sec": round(time.time() - t0, 1)},
                           session=session)
@@ -339,8 +357,12 @@ def make_handler(bridge: Bridge):
                 return self._error(400, f"JSON を読めません: {e}", "invalid_request_error")
             # 呼び出し元が会話 ID を付けてくれれば、指紋の推測ではなく確実に続きを結びつける
             key = (self.headers.get("X-Conversation-Id") or self.headers.get("X-Session-Id") or "").strip() or None
+            # 呼び出し元が暖機を頼んでいるか（設定 warmup が client のときだけ効く）
+            asked = (self.headers.get("X-Bridge-Warmup") or "").strip().lower() in ("1", "true", "yes", "on")
+            # 呼び出し元が自分の書式を持つか（設定 own_format が client のときだけ効く）
+            own = (self.headers.get("X-Bridge-Format") or "").strip().lower() == "own"
             try:
-                result = bridge.complete(body, conversation_key=key)
+                result = bridge.complete(body, conversation_key=key, warmup=asked, own_format=own)
             except BadRequest as e:
                 return self._error(400, str(e), "invalid_request_error")
             except BridgeError as e:
@@ -418,6 +440,10 @@ def main(argv=None):
     p.add_argument("--headless", dest="headless", action="store_const", const=True, default=None,
                    help="Edge を画面なしで動かす（read_mode は dom 推奨）")
     p.add_argument("--prompt-lang", dest="prompt_lang", choices=["ja", "en"], help="規則文の言語")
+    p.add_argument("--own-format", dest="own_format", choices=["client", "off"],
+                   help="呼び出し元が自分の書式を持つとき、この中継の書式を付けない（client=頼まれたときだけ）")
+    p.add_argument("--warmup", choices=["client", "always", "off"],
+                   help="新しい会話で決まりだけを先に送る（client=呼び出し元が頼んだときだけ）")
     p.add_argument("--log-dir", dest="log_dir")
     a = p.parse_args(argv)
     cfg = load_config(a.config, {k: v for k, v in vars(a).items() if k != "config"})
