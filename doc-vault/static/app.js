@@ -1023,6 +1023,7 @@ document.addEventListener("keydown", (ev) => {
     if (speech.active) { speech.active.cancel(); return; }
     $("#viewer").classList.add("hidden"); $("#doc-modal").classList.add("hidden");
     $("#scope-modal").classList.add("hidden"); hideWhy();
+    if (!$("#dict-modal").classList.contains("hidden")) closeDict();
   }
 });
 
@@ -1741,15 +1742,24 @@ function renderGraphDetail(node) {
     return;
   }
   const folders = (node.folders || []).length ? `<div class="muted">📁 ${esc(node.folders.slice(0, 4).join("・"))}${node.folders.length > 4 ? ` ほか ${node.folders.length - 4}` : ""}</div>` : "";
-  box.innerHTML = `<div class="detail-title">${esc(node.name)}</div>
+  box.innerHTML = `<div class="detail-title">${esc(node.name)}${node.dict ? ' <span class="badge dict" title="エンティティ辞書に登録（名前・種別・別名を決めた）">辞書</span>' : ""}</div>
     <div class="muted">${esc(node.type || "")}${node.community ? " ・ " + esc(node.community) : ""} ・ 関係 ${rels.length}</div>
+    ${(node.aliases || []).length ? `<div class="muted">別名: ${esc(node.aliases.join("、"))}</div>` : ""}
     ${folders}
+    ${node.found ? `<div class="muted" title="辞書の「本文から探す」で、LLM が拾わなかったチャンクにも足した数">本文から検出: ${node.found} か所</div>` : ""}
     <p>${esc(node.description || "（説明なし）")}</p>
     ${docs ? `<div class="muted">出典文書</div><ul>${docs}</ul>` : ""}
     <button class="btn small" id="g-ask">このエンティティについて質問</button>
+    <div class="row wrap gap-s top-space">
+      <button class="btn small" data-edit="rename" title="名前を変える。ほかのエンティティと同じ名前にすると統合する（元の名前は別名として残る）">名前の変更・統合</button>
+      <button class="btn small" data-edit="type">種別を変える</button>
+      <button class="btn small" data-edit="relation">関係を追加</button>
+      <button class="btn small danger" data-edit="exclude">グラフから外す</button>
+    </div>
+    <div id="g-edit"></div>
     <div class="muted top-space">関係（強い順）</div>
-    ${rels.slice(0, 40).map((r) => `<div class="detail-rel" data-id="${esc(r.node.id)}">→ <b>${esc(r.node.name)}</b>
-      <span class="muted">強さ${r.edge.strength ?? ""}</span><br><span class="muted">${esc((r.edge.description || "").slice(0, 120))}</span></div>`).join("")
+    ${rels.slice(0, 40).map((r) => `<div class="detail-rel" data-id="${esc(r.node.id)}"><button class="btn small x" data-hide="${esc(r.node.id)}" title="この関係をグラフから外す（エンティティ辞書で取り消せる）">外す</button>→ <b>${esc(r.node.name)}</b>
+      ${r.edge.manual ? '<span class="badge dict">手で追加</span>' : ""}<span class="muted">強さ${r.edge.strength ?? ""}</span><br><span class="muted">${esc((r.edge.description || "").slice(0, 120))}</span></div>`).join("")
       || '<p class="hint">関係はありません。</p>'}`;
   $$("[data-id]", box).forEach((el) => el.addEventListener("click", () => graphView().focus(el.dataset.id)));
   $$("[data-doc]", box).forEach((el) => el.addEventListener("click", (ev) => { ev.preventDefault(); openDoc(el.dataset.doc); }));
@@ -1759,7 +1769,242 @@ function renderGraphDetail(node) {
     $("#q").value = `${node.name}について、関係する人・組織・経緯も含めて教えて`;
     $("#q").focus();
   });
+  $$("[data-edit]", box).forEach((b) => b.addEventListener("click", () => openGraphEdit(node, b.dataset.edit)));
+  $$("[data-hide]", box).forEach((b) => b.addEventListener("click", async (ev) => {
+    ev.stopPropagation();
+    const other = rels.find((r) => r.node.id === b.dataset.hide);
+    const r = await api("/api/entity-dict/relation-hide", { source: node.id, target: b.dataset.hide,
+      source_name: node.name, target_name: other ? other.node.name : "" });
+    if (r.error) { toast(r.error); return; }
+    afterGraphEdit(node.id, `「${node.name}」—「${other ? other.node.name : ""}」の関係を外しました`);
+  }));
 }
+
+/* ---- グラフの手直し（エンティティ辞書へ書く。グラフを作るときに当てるので読み直しても消えない） ---- */
+
+const CORP_RE = /^(株式会社|有限会社|合同会社|合資会社|一般社団法人|公益財団法人|\(株\)|㈱|\(有\))|(株式会社|有限会社|合同会社|合資会社|\(株\)|㈱|\(有\)|inc\.?|corp\.?|co\.,?ltd\.?|ltd\.?|k\.k\.)$/;
+function normName(s) {
+  let k = String(s || "").normalize("NFKC").replace(/\s+/g, "").toLowerCase();
+  for (let prev = null; prev !== k;) { prev = k; k = k.replace(CORP_RE, ""); }
+  return k;
+}
+
+function graphNodeByName(name) {
+  const k = normName(name);
+  if (!k || !gdata) return null;
+  return gdata.nodes.find((n) => n.id === k || normName(n.name) === k
+    || (n.aliases || []).some((a) => normName(a) === k)) || null;
+}
+
+function fillDictLists(types) {
+  const nodes = (gdata && gdata.nodes) || [];
+  const names = new Set([...nodes.map((n) => n.name), ...((dictState && dictState.entries) || []).map((e) => e.name)]);
+  $("#dict-names").innerHTML = [...names].sort().map((n) => `<option value="${esc(n)}">`).join("");
+  const ts = new Set([...(types || (dictState && dictState.types) || []), ...nodes.map((n) => n.type).filter(Boolean)]);
+  $("#dict-types").innerHTML = [...ts].map((t) => `<option value="${esc(t)}">`).join("");
+}
+
+async function afterGraphEdit(focusKey, msg) {
+  await loadGraph();
+  let shown = !focusKey || graphView().focus(focusKey);
+  if (!shown && !$("#g-isolated").checked && gdata && gdata.nodes.some((n) => n.id === focusKey)) {
+    $("#g-isolated").checked = true;          // 関係の無いエンティティになったら孤立ノードも表示して見せる
+    graphView().setShowIsolated(true);
+    shown = graphView().focus(focusKey);
+  }
+  toast(msg);
+  $("#g-hint").textContent = `${msg}。取り消しは「エンティティ辞書」から。`;
+}
+
+async function openGraphEdit(node, kind) {
+  const box = $("#g-edit");
+  if (!dictState) dictState = await api("/api/entity-dict");
+  fillDictLists();
+  if (kind === "exclude") {
+    if (!confirm(`「${node.name}」をグラフから外しますか？\n（相談のグラフ検索にも使わなくなります。エンティティ辞書の「外す語」から消せば元に戻ります）`)) return;
+    const r = await api("/api/entity-dict/exclude", { key: node.id, name: node.name });
+    if (r.error) { toast(r.error); return; }
+    afterGraphEdit(null, `「${node.name}」をグラフから外しました`);
+    return;
+  }
+  const form = {
+    rename: { label: "新しい名前（ほかのエンティティの名前にすると統合）", list: "dict-names", value: node.name,
+      hint: `元の名前「${node.name}」は別名として残り、文書の言及は新しい名前にまとまります。`, ok: "変更" },
+    type: { label: "種別（一覧から選ぶか、自由に入力）", list: "dict-types", value: node.type || "",
+      hint: "この種別で色分け・表示します（LLM での読み直しは不要）。", ok: "変更" },
+    relation: { label: "つなぐ相手のエンティティ", list: "dict-names", value: "",
+      hint: "グラフにまだ無い名前でも登録できます（その名前のエンティティが出てきたらつながります）。", ok: "追加" },
+  }[kind];
+  box.innerHTML = `<div class="g-edit">
+    <label class="field-label">${form.label}</label>
+    <input type="text" id="ge-value" list="${form.list}" value="${esc(form.value)}" autocomplete="off">
+    ${kind === "relation" ? '<input type="text" id="ge-desc" placeholder="関係の説明（例: 筐体を製造）">' : ""}
+    <div class="hint" id="ge-hint">${esc(form.hint)}</div>
+    <div class="row gap-s"><button class="btn small primary" id="ge-ok">${form.ok}</button><button class="btn small" id="ge-cancel">やめる</button></div>
+  </div>`;
+  const input = $("#ge-value");
+  input.focus(); input.select();
+  if (kind === "rename") {
+    input.addEventListener("input", () => {
+      const other = graphNodeByName(input.value);
+      const merging = other && other.id !== node.id;
+      $("#ge-hint").textContent = merging
+        ? `「${other.name}」に統合します（関係・出典・別名をまとめ、「${node.name}」は別名になります）。`
+        : form.hint;
+      $("#ge-ok").textContent = merging ? "統合" : "変更";
+    });
+  }
+  $("#ge-cancel").addEventListener("click", () => { box.innerHTML = ""; });
+  const submit = async () => {
+    const value = input.value.trim();
+    if (!value) { input.focus(); return; }
+    let r;
+    if (kind === "rename") {
+      if (value === node.name) { box.innerHTML = ""; return; }
+      r = await api("/api/entity-dict/rename", { key: node.id, name: node.name, to: value });
+    } else if (kind === "type") {
+      r = await api("/api/entity-dict/type", { key: node.id, name: node.name, type: value });
+    } else {
+      r = await api("/api/entity-dict/relation", { source: node.name, target: value, description: $("#ge-desc").value });
+    }
+    if (r.error) { $("#ge-hint").textContent = r.error; return; }
+    dictState = r;
+    if (kind === "rename") {
+      const rn = r.renamed;
+      afterGraphEdit(rn.key, rn.merged ? `「${node.name}」を「${rn.name}」に統合しました` : `名前を「${rn.name}」に変えました`);
+    } else if (kind === "type") {
+      afterGraphEdit(node.id, `「${node.name}」の種別を「${value}」にしました`);
+    } else {
+      afterGraphEdit(node.id, `「${node.name}」—「${value}」の関係を追加しました`);
+    }
+  };
+  $("#ge-ok").addEventListener("click", submit);
+  input.addEventListener("keydown", (ev) => { if (ev.key === "Enter" && !ev.isComposing) submit(); });
+}
+
+/* ---- エンティティ辞書のダイアログ ---- */
+
+let dictState = null;
+let dictEditing = null;      // 編集中の行の key
+let dictChanged = false;
+
+async function openDict(tab) {
+  dictChanged = false;
+  $("#dict-modal").classList.remove("hidden");
+  $("#dict-msg").textContent = "";
+  renderDict(await api("/api/entity-dict"));
+  showDictTab(tab || "entries");
+}
+
+function closeDict() {
+  $("#dict-modal").classList.add("hidden");
+  resetDictForm();
+  if (dictChanged && !$("#tab-graph").classList.contains("hidden")) loadGraph();
+}
+
+function showDictTab(tab) {
+  $$("#dict-tabs [data-dtab]").forEach((b) => b.classList.toggle("on", b.dataset.dtab === tab));
+  $$("#dict-modal [data-dpane]").forEach((p) => p.classList.toggle("hidden", p.dataset.dpane !== tab));
+}
+
+function dictMsg(text, isError) {
+  const el = $("#dict-msg");
+  el.textContent = text;
+  el.style.color = isError ? "var(--ng)" : "";
+}
+
+function resetDictForm() {
+  dictEditing = null;
+  ["#de-name", "#de-type", "#de-aliases", "#de-desc"].forEach((id) => { $(id).value = ""; });
+  $("#de-match").checked = true;
+  $("#de-save").textContent = "登録";
+  $("#de-cancel").classList.add("hidden");
+}
+
+function renderDict(data) {
+  if (data && !data.error) dictState = data;
+  const st = dictState || { entries: [], excludes: [], relations: [], types: [] };
+  $("#dict-n-entries").textContent = `(${st.entries.length})`;
+  $("#dict-n-excludes").textContent = `(${st.excludes.length})`;
+  $("#dict-n-relations").textContent = `(${st.relations.length})`;
+  $("#dict-entries").innerHTML = st.entries.map((e) => `<div class="dict-row">
+      <div><b>${esc(e.name)}</b> ${e.type ? `<span class="badge">${esc(e.type)}</span>` : ""}
+        ${e.match ? "" : '<span class="muted" title="本文の文字列照合はしない（LLM が拾った言及だけをまとめる）">本文からは探さない</span>'}
+        ${e.aliases.length ? `<div class="sub">別名: ${esc(e.aliases.join("、"))}</div>` : ""}
+        ${e.description ? `<div class="sub">${esc(e.description)}</div>` : ""}</div>
+      <div class="ops"><button class="btn small" data-dedit="${esc(e.key)}">編集</button>
+        <button class="btn small danger" data-ddel="${esc(e.key)}">削除</button></div></div>`).join("")
+    || '<p class="hint">まだ登録がありません。グラフの詳細の「名前の変更・統合」「種別を変える」で直したものもここに入ります。</p>';
+  $("#dx-text").value = st.excludes.map((x) => x.name).join("\n");
+  $("#dict-relations").innerHTML = st.relations.map((r) => `<div class="dict-row">
+      <div>${r.hidden ? '<span class="badge ng">外した</span>' : '<span class="badge dict">手で追加</span>'}
+        <b>${esc(r.source_name)}</b> — <b>${esc(r.target_name)}</b>
+        ${r.description ? `<div class="sub">${esc(r.description)}</div>` : ""}</div>
+      <div class="ops"><button class="btn small" data-rundo="${esc(r.source)}\t${esc(r.target)}">取り消す</button></div></div>`).join("")
+    || '<p class="hint">まだありません。グラフの詳細の「関係を追加」や、関係の「外す」もここに入ります。</p>';
+  fillDictLists(st.types);
+  $$("[data-dedit]", $("#dict-entries")).forEach((b) => b.addEventListener("click", () => {
+    const e = st.entries.find((x) => x.key === b.dataset.dedit);
+    if (!e) return;
+    dictEditing = e.key;
+    $("#de-name").value = e.name; $("#de-type").value = e.type; $("#de-aliases").value = e.aliases.join("、");
+    $("#de-desc").value = e.description; $("#de-match").checked = e.match;
+    $("#de-save").textContent = "保存"; $("#de-cancel").classList.remove("hidden");
+    $("#de-name").focus();
+  }));
+  $$("[data-ddel]", $("#dict-entries")).forEach((b) => b.addEventListener("click", async () => {
+    const e = st.entries.find((x) => x.key === b.dataset.ddel);
+    if (e && !confirm(`「${e.name}」を辞書から消しますか？（別名でまとめていたエンティティは元に戻ります）`)) return;
+    if (await dictCall("delete", { key: b.dataset.ddel })) dictMsg(`「${e ? e.name : ""}」を消しました`);
+  }));
+  $$("[data-rundo]", $("#dict-relations")).forEach((b) => b.addEventListener("click", async () => {
+    const [source, target] = b.dataset.rundo.split("\t");
+    if (await dictCall("relation-delete", { source, target })) dictMsg("取り消しました");
+  }));
+}
+
+async function dictCall(action, body) {
+  const r = await api(`/api/entity-dict/${action}`, body);
+  if (r.error) { dictMsg(r.error, true); return null; }
+  dictChanged = true;
+  renderDict(r);
+  return r;
+}
+
+$("#g-dict").addEventListener("click", () => openDict());
+$("#dict-close").addEventListener("click", closeDict);
+$$("#dict-tabs [data-dtab]").forEach((b) => b.addEventListener("click", () => showDictTab(b.dataset.dtab)));
+$("#de-cancel").addEventListener("click", resetDictForm);
+$("#de-save").addEventListener("click", async () => {
+  const name = $("#de-name").value.trim();
+  if (!name) { $("#de-name").focus(); return; }
+  const r = await dictCall("entry", { name, type: $("#de-type").value.trim(), aliases: $("#de-aliases").value,
+    description: $("#de-desc").value.trim(), match: $("#de-match").checked, old_key: dictEditing || "" });
+  if (r) { dictMsg(`「${r.entry.name}」を${dictEditing ? "保存" : "登録"}しました`); resetDictForm(); }
+});
+$("#de-bulk-add").addEventListener("click", async () => {
+  const r = await dictCall("bulk", { text: $("#de-bulk").value });
+  if (!r) return;
+  const b = r.bulk;
+  dictMsg(`${b.added} 件を登録、${b.updated} 件を更新${b.errors.length ? `。登録できなかった行: ${b.errors.join(" / ")}` : ""}`, b.errors.length > 0);
+  if (!b.errors.length) $("#de-bulk").value = "";
+});
+$("#de-export").addEventListener("click", () => {
+  const cell = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const rows = [["名前", "種別", "別名", "説明", "本文から探す"],
+    ...((dictState && dictState.entries) || []).map((e) => [e.name, e.type, e.aliases.join("|"), e.description, e.match ? "1" : "0"])];
+  const blob = new Blob(["﻿" + rows.map((r) => r.map(cell).join(",")).join("\r\n")], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = "entity-dictionary.csv"; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+});
+$("#dx-save").addEventListener("click", async () => {
+  if (await dictCall("excludes", { names: $("#dx-text").value.split("\n") })) dictMsg("外す語を保存しました");
+});
+$("#dr-add").addEventListener("click", async () => {
+  const r = await dictCall("relation", { source: $("#dr-a").value, target: $("#dr-b").value, description: $("#dr-desc").value });
+  if (r) { dictMsg("関係を追加しました"); ["#dr-a", "#dr-b", "#dr-desc"].forEach((id) => { $(id).value = ""; }); }
+});
 
 $$("#g-view [data-view]").forEach((b) => b.addEventListener("click", () => {
   if (graphViewMode() === b.dataset.view) return;

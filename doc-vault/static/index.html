@@ -174,6 +174,7 @@
           <option value="type">色: 種別</option>
           <option value="folder">色: フォルダ</option>
         </select>
+        <button class="btn small" id="g-dict" title="名前・種別・別名・外す語・関係を自分で決める（グラフを作るときに当てる。読み直しても消えない）">エンティティ辞書</button>
         <span class="spacer"></span>
         <button class="btn small" id="g-zoom-in" title="拡大">＋</button>
         <button class="btn small" id="g-zoom-out" title="縮小">－</button>
@@ -413,6 +414,62 @@
 
 <!-- 採用根拠（出典にマウスを載せると表示） -->
 <div id="why-tip" class="why-tip hidden"></div>
+
+<!-- エンティティ辞書 -->
+<div class="modal hidden" id="dict-modal">
+  <div class="modal-box wide-box">
+    <h2>エンティティ辞書 <span class="muted">決めた名前・種別・別名・外す語・関係は、グラフを作るときに当てます。読み込み済みの文書にもすぐ反映され、文書を読み直しても消えません</span></h2>
+    <div class="seg-btns" id="dict-tabs" role="tablist">
+      <button class="seg on" data-dtab="entries">登録したエンティティ <span id="dict-n-entries"></span></button>
+      <button class="seg" data-dtab="excludes">外す語 <span id="dict-n-excludes"></span></button>
+      <button class="seg" data-dtab="relations">関係の手直し <span id="dict-n-relations"></span></button>
+    </div>
+    <div class="dict-pane" data-dpane="entries">
+      <div class="dict-form">
+        <div><label class="field-label">名前（正式名）</label><input type="text" id="de-name" placeholder="例: 北浜電機"></div>
+        <div><label class="field-label">種別</label><input type="text" id="de-type" list="dict-types" placeholder="例: 組織・顧客（自由に決められる）"></div>
+        <div class="wide"><label class="field-label">別名（「、」で区切る）</label><input type="text" id="de-aliases" placeholder="例: 北電、北浜電機株式会社、Kitahama"></div>
+        <div class="wide"><label class="field-label">説明（任意）</label><input type="text" id="de-desc" placeholder="グラフの詳細と相談の参考情報に出ます"></div>
+      </div>
+      <div class="row wrap gap top-space">
+        <label class="check" title="LLM が拾わなかった箇所も、文書の本文から名前・別名を探して足します"><input type="checkbox" id="de-match" checked> 本文から探す（LLM が拾わなかった箇所も足す）</label>
+        <span class="spacer"></span>
+        <button class="btn primary" id="de-save">登録</button>
+        <button class="btn hidden" id="de-cancel">編集をやめる</button>
+      </div>
+      <p class="hint">別名で書かれた箇所も正式名のエンティティにまとめます（全角半角・大文字小文字・「株式会社」の有無は自動でそろえます）。相談で別名を使って質問しても正式名のエンティティから探します。</p>
+      <div id="dict-entries" class="dict-list"></div>
+      <details class="adv">
+        <summary>まとめて登録・CSV で書き出す</summary>
+        <p class="hint">1 行に 1 件: <code>名前,種別,別名1|別名2</code>（Excel からタブ区切りで貼り付けても可。既にある名前は種別と別名を足します）</p>
+        <textarea id="de-bulk" rows="5" placeholder="北浜電機,顧客,北電|北浜電機株式会社&#10;SkyEdge S-2,製品,S-2|スカイエッジ"></textarea>
+        <div class="row gap top-space"><button class="btn" id="de-bulk-add">まとめて登録</button><button class="btn" id="de-export">CSV で書き出す</button></div>
+      </details>
+    </div>
+    <div class="dict-pane hidden" data-dpane="excludes">
+      <p class="hint">グラフ（と相談のグラフ検索）から外す語。1 行に 1 語。グラフ画面で「グラフから外す」を押した語もここに入ります。行を消して保存すると元に戻ります。</p>
+      <textarea id="dx-text" rows="10" placeholder="確認&#10;資料"></textarea>
+      <div class="row gap top-space"><button class="btn primary" id="dx-save">保存</button></div>
+    </div>
+    <div class="dict-pane hidden" data-dpane="relations">
+      <p class="hint">手で足した関係と、グラフ画面で外した関係。「取り消す」で元に戻ります。</p>
+      <div class="dict-form">
+        <div><label class="field-label">エンティティ</label><input type="text" id="dr-a" list="dict-names"></div>
+        <div><label class="field-label">もう一方</label><input type="text" id="dr-b" list="dict-names"></div>
+        <div class="wide"><label class="field-label">関係の説明</label><input type="text" id="dr-desc" placeholder="例: SkyEdge S-2 の筐体を製造"></div>
+      </div>
+      <div class="row gap top-space"><button class="btn primary" id="dr-add">関係を追加</button></div>
+      <div id="dict-relations" class="dict-list"></div>
+    </div>
+    <div class="row gap top-space">
+      <span class="muted" id="dict-msg"></span>
+      <span class="spacer"></span>
+      <button class="btn" id="dict-close">閉じる</button>
+    </div>
+  </div>
+</div>
+<datalist id="dict-types"></datalist>
+<datalist id="dict-names"></datalist>
 
 <!-- 文書の編集ダイアログ -->
 <div class="modal hidden" id="doc-modal">

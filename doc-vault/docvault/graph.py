@@ -19,6 +19,7 @@
 """
 from __future__ import annotations
 
+import bisect
 import hashlib
 import math
 import re
@@ -26,7 +27,7 @@ import threading
 import unicodedata
 from collections import Counter, defaultdict
 
-from . import db
+from . import db, entitydict
 from .textutil import BM25Index, as_str_list, parse_score
 
 ENTITY_TYPES = "組織 / 人物 / 製品 / 技術 / 設備 / 工程 / 材料 / 規格・法令 / 場所 / 日付・イベント / 指標 / 文書 / 概念"
@@ -213,56 +214,139 @@ class KnowledgeGraph:
         self.relations: dict[tuple[str, str], dict] = {}
         self.adj: dict[str, dict[str, float]] = defaultdict(dict)
         self.chunk_entities: dict[str, set[str]] = defaultdict(set)
+        # エンティティ辞書と手直し（別名をまとめる・外す・種別・関係の追加と削除）をここで当てる
+        rules = self.rules = entitydict.load_rules()
         names: dict[str, Counter] = defaultdict(Counter)
         types: dict[str, Counter] = defaultdict(Counter)
+        match = bool(rules.match_entries)        # 本文から探す辞書の語があるときだけ、文の照合用に表記を集める
+        surfaces: dict[str, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
         for r in db.query("SELECT entity_key,name,type,description,doc_id,chunk_id FROM entity_mentions "
                           "WHERE reading_id IN (SELECT id FROM readings WHERE active=1 AND stage='graph')"):
             if allowed_docs is not None and r["doc_id"] not in allowed_docs:
                 continue
-            key = r["entity_key"]
-            ent = self.entities.setdefault(key, {"key": key, "name": r["name"], "type": "",
-                                                 "descs": [], "docs": set(), "chunks": set(),
-                                                 "sensitivity": "public"})
+            key = rules.canon(r["entity_key"])
+            if rules.excluded(r["entity_key"], key):
+                continue
+            ent = self._entity(key, r["name"], r["doc_id"], r["chunk_id"], doc_sens)
             names[key][r["name"]] += 1
             types[key][r["type"]] += 1
             if r["description"] and r["description"] not in ent["descs"] and len(ent["descs"]) < 6:
                 ent["descs"].append(r["description"])
-            ent["docs"].add(r["doc_id"])
-            ent["chunks"].add(r["chunk_id"])
-            if doc_sens.get(r["doc_id"], "internal") != "public":
-                ent["sensitivity"] = "internal"
-            self.chunk_entities[r["chunk_id"]].add(key)
+            if match:
+                surfaces[r["chunk_id"]][key].add(r["name"])
+        # 「本文から探す」辞書の語: LLM が拾わなかったチャンクにも足す
+        found: dict[str, dict[str, list]] = {}
+        hits = entitydict.text_hits(rules) if match else {}
+        for cid, (doc_id, text, spans_of) in hits.items():
+            if allowed_docs is not None and doc_id not in allowed_docs:
+                continue
+            for key, spans in spans_of.items():
+                if key in rules.excludes:
+                    continue
+                ent = self.entities.get(key)
+                if ent is not None and cid in ent["chunks"]:
+                    continue                       # LLM もこのチャンクで拾っている
+                ent = self._entity(key, rules.entries[key]["name"], doc_id, cid, doc_sens)
+                ent["found"] += 1
+                if not ent["first"]:
+                    s0 = spans[0][0]
+                    ent["first"] = next((text[a:b].strip() for a, b in entitydict.sentence_spans(text)
+                                         if a <= s0 < b), "")[:200]
+                found.setdefault(cid, {})[key] = spans
         for key, ent in self.entities.items():
-            ent["name"] = names[key].most_common(1)[0][0]
-            ent["type"] = types[key].most_common(1)[0][0] or "概念"
-            ent["description"] = " / ".join(ent.pop("descs"))[:600]
+            entry = rules.entries.get(key)
+            ent["name"] = entry["name"] if entry else (names[key].most_common(1)[0][0] if names[key] else ent["name"])
+            ent["type"] = (entry and entry["type"]) or \
+                (types[key].most_common(1)[0][0] if types[key] else "") or "概念"
+            descs = ent.pop("descs") or ([ent["first"]] if ent["first"] else [])
+            if entry and entry["description"]:
+                descs.insert(0, entry["description"])
+            ent["description"] = " / ".join(descs)[:600]
+            ent["dict"] = entry is not None
+            ent["aliases"] = list(entry["aliases"]) if entry else []
+            del ent["first"]
         for r in db.query("SELECT source,target,description,strength,doc_id,chunk_id FROM relation_mentions "
                           "WHERE reading_id IN (SELECT id FROM readings WHERE active=1 AND stage='graph')"):
             if allowed_docs is not None and r["doc_id"] not in allowed_docs:
                 continue
-            a, b = r["source"], r["target"]
-            if a not in self.entities or b not in self.entities or a == b:
-                continue
-            rel = self.relations.setdefault((a, b), {"source": a, "target": b, "descs": [],
-                                                     "strength": 0, "chunks": set(), "count": 0})
-            if r["description"] and r["description"] not in rel["descs"] and len(rel["descs"]) < 3:
-                rel["descs"].append(r["description"])
-            rel["strength"] = max(rel["strength"], int(r["strength"] or 5))
-            rel["chunks"].add(r["chunk_id"])
-            rel["count"] += 1
+            self._add_relation(r["source"], r["target"], r["description"], int(r["strength"] or 5), r["chunk_id"])
+        # 辞書の語を本文から足したチャンク: 同じ文に出てくるエンティティと弱く結ぶ（LLM の関係が無いので）。
+        # 文ごとに出てくるエンティティをまとめてから、足した語の文だけを見る（組み合わせを総当たりしない）
+        extracted = set(self.relations)
+        for cid, spans_of in found.items():
+            _, text, all_spans = hits[cid]
+            starts = [a for a, _ in entitydict.sentence_spans(text)]
+            sid = lambda pos: bisect.bisect_right(starts, pos) - 1  # noqa: E731
+            in_sent: dict[int, set[str]] = defaultdict(set)
+            for key, spans in all_spans.items():
+                if key in self.entities:
+                    for a, _ in spans:
+                        in_sent[sid(a)].add(key)
+            low = text.casefold()
+            for key, names_ in surfaces[cid].items():
+                for surf in names_:
+                    needle = entitydict.norm_text(surf).casefold()
+                    i = low.find(needle) if needle else -1
+                    while i != -1:
+                        in_sent[sid(i)].add(key)
+                        i = low.find(needle, i + 1)
+            done: set[tuple[str, str]] = set()           # 1 チャンクで同じ組は 1 回だけ数える
+            for key, spans in spans_of.items():
+                others = set().union(*(in_sent[sid(a)] for a, _ in spans)) - {key}
+                for other in sorted(others):
+                    pair = (key, other) if key <= other else (other, key)
+                    if pair not in extracted and pair not in done:
+                        done.add(pair)
+                        self._add_relation(key, other, "同じ文に出てくる（辞書の語を本文から検出）", 3, cid,
+                                           canon=False)
+        for rel in rules.relations:                # 手で足した関係
+            self._add_relation(rel["source"], rel["target"], rel["description"], int(rel["strength"]), "",
+                               canon=False, manual=True)
         for (a, b), rel in self.relations.items():
             rel["description"] = " / ".join(rel.pop("descs"))[:400]
-            w = rel["strength"] * (1 + math.log(rel["count"]))
+            w = rel["strength"] * (1 + math.log(max(1, rel["count"])))
             self.adj[a][b] = w
             self.adj[b][a] = w
         self._ent_index: BM25Index | None = None
+
+    def _entity(self, key: str, name: str, doc_id: str, chunk_id: str, doc_sens: dict[str, str]) -> dict:
+        ent = self.entities.setdefault(key, {"key": key, "name": name, "type": "", "descs": [], "docs": set(),
+                                             "chunks": set(), "sensitivity": "public", "found": 0, "first": ""})
+        ent["docs"].add(doc_id)
+        ent["chunks"].add(chunk_id)
+        if doc_sens.get(doc_id, "internal") != "public":
+            ent["sensitivity"] = "internal"
+        self.chunk_entities[chunk_id].add(key)
+        return ent
+
+    def _add_relation(self, a: str, b: str, description: str, strength: int, chunk_id: str, *,
+                      canon: bool = True, manual: bool = False) -> None:
+        if canon:
+            a, b = self.rules.canon(a), self.rules.canon(b)
+        if a == b or a not in self.entities or b not in self.entities:
+            return
+        pair = (a, b) if a <= b else (b, a)
+        if pair in self.rules.hidden:
+            return
+        rel = self.relations.setdefault(pair, {"source": pair[0], "target": pair[1], "descs": [], "strength": 0,
+                                               "chunks": set(), "count": 0, "manual": False})
+        if description and description not in rel["descs"] and len(rel["descs"]) < 3:
+            if manual:
+                rel["descs"].insert(0, description)
+            else:
+                rel["descs"].append(description)
+        rel["strength"] = max(rel["strength"], strength)
+        if chunk_id:
+            rel["chunks"].add(chunk_id)
+        rel["count"] += 1
+        rel["manual"] = rel["manual"] or manual
 
     # -------------------------------------------------- 種エンティティ
     def entity_index(self) -> BM25Index:
         if self._ent_index is None:
             idx = BM25Index()
             for key, e in self.entities.items():
-                idx.add(key, f"{e['name']} {e['name']} {e['type']} {e['description'][:200]}")
+                idx.add(key, f"{e['name']} {e['name']} {' '.join(e['aliases'])} {e['type']} {e['description'][:200]}")
             self._ent_index = idx
         return self._ent_index
 
@@ -273,8 +357,11 @@ class KnowledgeGraph:
         for key, e in self.entities.items():
             if len(key) >= 2 and key in q:
                 seeds[key] += 2.0 + min(1.0, len(key) / 10)
+        for akey, key in self.rules.alias.items():          # 辞書の別名で聞かれても正式名のエンティティへ
+            if key in self.entities and len(akey) >= 2 and akey in q:
+                seeds[key] += 2.0 + min(1.0, len(akey) / 10)
         for kw in keywords:
-            k = norm_key(kw)
+            k = self.rules.canon(norm_key(kw))
             if len(k) < 2:
                 continue
             if k in self.entities:
@@ -379,7 +466,9 @@ class KnowledgeGraph:
                   "degree": deg[k], "community": com_of.get(k, ""),
                   "description": self.entities[k]["description"][:300],
                   "docs": [titles.get(d, d) for d in sorted(self.entities[k]["docs"])][:8],
-                  "doc_ids": sorted(self.entities[k]["docs"])[:8]}
+                  "doc_ids": sorted(self.entities[k]["docs"])[:8],
+                  "dict": self.entities[k]["dict"], "aliases": self.entities[k]["aliases"][:20],
+                  "found": self.entities[k]["found"]}
                  for k in keep]
         if group_of is not None:
             for node in nodes:
@@ -388,7 +477,7 @@ class KnowledgeGraph:
                 node["folder"] = folder_label(ranked[0]) if ranked else folder_label("")
                 node["folders"] = [folder_label(g) for g in ranked]
         edges = [{"source": a, "target": b, "strength": r["strength"],
-                  "description": r["description"][:200]}
+                  "description": r["description"][:200], "manual": r["manual"]}
                  for (a, b), r in self.relations.items() if a in kset and b in kset]
         cached = {row["signature"]: row for row in db.query(
             "SELECT signature,title,summary FROM community_cache")}
@@ -574,8 +663,8 @@ _cache: dict[tuple, KnowledgeGraph] = {}
 
 
 def get_graph(allowed_docs: set[str] | None, doc_sens: dict[str, str]) -> KnowledgeGraph:
-    """リビジョン × 許可文書集合 ごとにグラフをキャッシュする。"""
-    key = (db.revision(), str(db.DATA_DIR),
+    """リビジョン（文書・辞書）× 許可文書集合 ごとにグラフをキャッシュする。"""
+    key = (db.revision(), entitydict.revision(), str(db.DATA_DIR),
            hashlib.sha1("\n".join(sorted(allowed_docs)).encode()).hexdigest()
            if allowed_docs is not None else "*",
            hashlib.sha1(repr(sorted(doc_sens.items())).encode()).hexdigest())
