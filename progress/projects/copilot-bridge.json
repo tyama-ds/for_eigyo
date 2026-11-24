@@ -56,7 +56,7 @@
     }
   ],
   "next": [
-    "暖機（warmup）を実機で確認: agent-workbench の Copilot Agent で、最初の指示への返事が書式どおりになるか。効果があれば既定を always にするか決める",
+    "暖機（warmup）と、この中継の書式を付けない動き（own_format）を実機で確認: agent-workbench の Copilot Agent で、最初の指示への返事が書式どおりになるか、長い会話でも書式が保たれるか、1 ターンごとに会話を作り直さなくなったか",
     "agent-workbench の Local プロファイルに bridge を設定し、文章だけの依頼 → ファイル編集の依頼の順に試す（タイムアウト 900 秒以上、同時数 = windows）",
     "Codex CLI の接続（~/.codex/config.toml の model_provider、wire_api、WSL2 からの到達）を確認し、短い作業を 1 つ完遂",
     "probe cleanup で会話の削除が通るか確認し、通れば delete_chat_on_close を有効化",
@@ -73,6 +73,10 @@
     "Copilot は自前の実行環境で作業しようとしたり、「無いツールを架空に呼べない」と断ったりして <tool_call> を出さないことがある（オペレーターへの手順書という枠組みと言い直しで対処中）"
   ],
   "log": [
+    {
+      "date": "2026-11-25",
+      "summary": "呼び出し元が自分の書式を持つとき（agent-workbench の Copilot Agent。要求ヘッダ X-Bridge-Format: own）、この中継の規則・書式・念押し・言い直しを付けず、指示と会話だけを送り、回答をそのまま返すようにした（設定 own_format: client / off）。2 つの書式が 1 通に並んで矛盾していたため。あわせて、直前の回答を呼び出し元の記録の形で受け取っても同じ Copilot 会話の続きとして扱う（これまでは毎ターン新しい会話を作って全履歴を送り直していた）。実機での効果は未確認"
+    },
     {
       "date": "2026-11-25",
       "summary": "暖機を追加: 新しい Copilot 会話で、決まり（規則・操作一覧・元の指示）だけを先に送って「了解」をもらい、会話は次の発言で送る（設定 warmup: client / always / off。client は要求ヘッダ X-Bridge-Warmup: 1 が付いた要求だけ）。決まりと最初の指示を 1 通にまとめると最初の返事で操作の書式が出ない、という実機の様子への対処。実機での効果は未確認"

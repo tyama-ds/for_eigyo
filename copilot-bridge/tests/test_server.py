@@ -389,6 +389,93 @@ class WarmupFallbackTests(ServerTestCase):
         self.assertEqual(seen, [("Claude Opus", False), ("GPT-5", False), ("GPT-5", True)])
 
 
+class OwnFormatTests(ServerTestCase):
+    """呼び出し元が自分の書式を持つとき、この中継の規則・書式・念押し・言い直しを付けない。"""
+    windows = 1
+    SYSTEM = {"role": "system", "content": "呼び出し元の決まり J: JSON を 1 つだけ返す"}
+
+    def setUp(self):
+        super().setUp()
+        self.cfg.own_format, self.cfg.warmup = "client", "client"
+        self.seen = []
+
+    def ask(self, msgs, key, *, own=True, warm=False, tools=None):
+        headers = {"Content-Type": "application/json", "X-Conversation-Id": key}
+        if own:
+            headers["X-Bridge-Format"] = "own"
+        if warm:
+            headers["X-Bridge-Warmup"] = "1"
+        body = {"messages": msgs, **({"tools": tools} if tools else {})}
+        req = urllib.request.Request(self.base + "/v1/chat/completions", data=json.dumps(body).encode(), headers=headers)
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return json.loads(r.read().decode())
+
+    def record(self, *answers):
+        answers = list(answers)
+
+        def responder(text, worker):
+            self.seen.append(text)
+            return answers.pop(0) if answers else "【最終回答】ok"
+        FakeWorker.responder = staticmethod(responder)
+
+    def test_only_the_callers_instructions_are_sent_and_the_answer_comes_back_as_written(self):
+        answers = ('{"awb_protocol":"copilot-json-v1","kind":"final","text":"done"}',
+                   '<tool_call>\n{"name": "read_file", "arguments": {"path": "x"}}\n</tool_call>',
+                   '【最終回答】{"name": "read_file", "arguments": {"path": "x"}}',
+                   "この環境ではツールは利用できません。ファイルは存在しません。")
+        for index, answer in enumerate(answers):
+            self.seen.clear()
+            self.record(answer)
+            r = self.ask([self.SYSTEM, {"role": "user", "content": f"o{index}"}], f"own/1-{index}")
+            # 送るのは呼び出し元の指示と会話だけ
+            self.assertEqual(self.seen, [self.SYSTEM["content"] + f"\n\no{index}"])
+            # 回答はそのまま: 操作として読まない・印を取らない・言い直させない
+            message = r["choices"][0]["message"]
+            self.assertEqual(message["content"], answer)
+            self.assertNotIn("tool_calls", message)
+            self.assertEqual(r["choices"][0]["finish_reason"], "stop")
+
+    def test_the_callers_own_record_of_the_answer_continues_the_same_chat(self):
+        self.record("回答 1（Copilot が書いたまま）", "回答 2")
+        msgs = [self.SYSTEM, {"role": "user", "content": "o-first"}]
+        chats = self.get("/status")["windows"][0]["chats"]
+        self.ask(msgs, "own/2")
+        # 呼び出し元は、回答を自分の記録（呼び出し ID つき）に直して送り返す
+        record = {"role": "assistant", "content": '{"history":"assistant","requests":[{"call_id":"c1","tool":"read_file"}]}'}
+        result = {"role": "user", "content": '{"history":"tool","call_id":"c1","result_text":"中身"}'}
+        r2 = self.ask(msgs + [record, result], "own/2")
+        self.assertEqual(r2["choices"][0]["message"]["content"], "回答 2")
+        self.assertEqual(self.get("/status")["windows"][0]["chats"], chats + 1)      # 同じ会話の続き
+        self.assertEqual(self.seen[1], "<assistant>\n" + record["content"] + "\n</assistant>\n\n" + result["content"])
+        # この中継の書式のままなら、回答の原文と一致しないので作り直す（これまでどおり）
+        self.seen.clear()
+        self.record()
+        self.ask(msgs, "own/3", own=False)
+        self.ask(msgs + [record, result], "own/3", own=False)
+        self.assertIn("【書式】", self.seen[1])
+
+    def test_with_warmup_the_instructions_go_first(self):
+        from bridge.protocol import WARMUP_HINT
+        self.record("了解", '{"kind":"final","text":"x"}')
+        r = self.ask([self.SYSTEM, {"role": "user", "content": "o-warm"}], "own/4", warm=True)
+        self.assertEqual(self.seen, [self.SYSTEM["content"] + "\n\n" + WARMUP_HINT, "o-warm"])
+        self.assertEqual(r["choices"][0]["message"]["content"], '{"kind":"final","text":"x"}')
+
+    def test_only_when_asked_without_tools_with_instructions_and_not_turned_off(self):
+        user = {"role": "user", "content": "o-cases"}
+        cases = (("client", True, [self.SYSTEM, user], None, True),
+                 ("client", False, [self.SYSTEM, user], None, False),     # 頼まれていない
+                 ("off", True, [self.SYSTEM, user], None, False),         # 設定で止めてある
+                 ("client", True, [self.SYSTEM, user], TOOLS, False),     # tools がある: 読むのはこの中継
+                 ("client", True, [user], None, False))                   # 指示が無い: 伝える書式が無い
+        for index, (mode, asked, msgs, tools, own) in enumerate(cases):
+            self.cfg.own_format = mode
+            self.seen.clear()
+            self.record()
+            self.ask(msgs, f"own/5-{index}", own=asked, tools=tools)
+            self.assertEqual("【書式】" not in self.seen[0], own, (mode, asked, bool(tools)))
+
+
 class FinalMarkTests(ServerTestCase):
     windows = 1
 

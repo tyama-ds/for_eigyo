@@ -129,6 +129,25 @@ class ParseTests(unittest.TestCase):
         self.assertFalse(has_rules_to_explain(msgs[1:], None))
         self.assertFalse(has_rules_to_explain([normalize_message({"role": "system", "content": ""})] + msgs[1:], []))
 
+    def test_own_format_sends_only_the_callers_instructions_and_the_conversation(self):
+        from bridge.protocol import WARMUP_HINT, render_delta, render_opening, render_warmup
+        msgs = [normalize_message(m) for m in (
+            {"role": "system", "content": "呼び出し元の決まり J"}, {"role": "user", "content": "u1"},
+            {"role": "assistant", "content": "a1"}, {"role": "user", "content": "u2"})]
+        text = render_opening(msgs, None, own_format=True)
+        self.assertEqual(text, "呼び出し元の決まり J\n\nu1\n\n<assistant>\na1\n</assistant>\n\nu2")
+        for mark in ("【書式】", "<tool_call>", "【最終回答】", "【会話】", "オペレーター", "操作なし"):
+            self.assertNotIn(mark, text)
+        rules, conversation = render_warmup(msgs, None, own_format=True)
+        self.assertEqual(rules, "呼び出し元の決まり J\n\n" + WARMUP_HINT)
+        self.assertEqual(conversation, "u1\n\n<assistant>\na1\n</assistant>\n\nu2")
+        # 続きにも、この中継の念押しは付けない
+        self.assertEqual(render_delta(msgs[3:], hints=False), "u2")
+        self.assertIn("【最終回答】", render_delta(msgs[3:]))
+        # 長すぎる会話は、これまでどおり中央を省く
+        long = [msgs[0], normalize_message({"role": "user", "content": "x" * 5000})]
+        self.assertLess(len(render_opening(long, None, own_format=True, max_chars=2000)), 2200)
+
     def test_bare_json_without_tags(self):
         # 画面から読むと <tool_call> タグが消え、JSON だけが残ることがある
         text = 'ファイルを読みます。\n{"name": "read_file", "arguments": {"path": "a.py"}}\n{"name": "read_file", "arguments": {"path": "b.py"}}'

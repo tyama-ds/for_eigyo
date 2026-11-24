@@ -343,15 +343,21 @@ def _args_obj(args: str):
 
 
 def render_opening(messages: list[dict], tools: list | None, *,
-                   max_tool_result_chars: int = 0, max_chars: int = 0, lang: str = "ja") -> str:
-    """新しい Copilot 会話の最初の送信文（規則＋操作一覧＋元の指示＋これまでの会話全部）。"""
+                   max_tool_result_chars: int = 0, max_chars: int = 0, lang: str = "ja",
+                   own_format: bool = False) -> str:
+    """新しい Copilot 会話の最初の送信文（規則＋操作一覧＋元の指示＋これまでの会話全部）。
+
+    own_format: 呼び出し元が自分の書式を指示（system）に書いている。この中継の規則・書式・念押しは付けず、
+    呼び出し元の指示と会話だけを送る（2 つの書式が 1 通に並ぶと、どちらも守られない）。
+    """
     head, body = _opening_parts(messages, tools, max_tool_result_chars=max_tool_result_chars,
-                                max_chars=max_chars, lang=lang)
+                                max_chars=max_chars, lang=lang, own_format=own_format)
     return head + body
 
 
 def render_warmup(messages: list[dict], tools: list | None, *,
-                  max_tool_result_chars: int = 0, max_chars: int = 0, lang: str = "ja") -> tuple[str, str]:
+                  max_tool_result_chars: int = 0, max_chars: int = 0, lang: str = "ja",
+                  own_format: bool = False) -> tuple[str, str]:
     """新しい Copilot 会話を 2 回に分けて始めるときの送信文（決まりだけ, 会話）。
 
     実機での様子: 決まりと最初の指示を 1 通にまとめて送ると、その返事では操作の書式が出ず、
@@ -359,20 +365,33 @@ def render_warmup(messages: list[dict], tools: list | None, *,
     「了解」とだけ答えてもらう。2 通目が会話。2 通を続けて読むと render_opening の 1 通と同じ内容になる。
     """
     head, body = _opening_parts(messages, tools, max_tool_result_chars=max_tool_result_chars,
-                                max_chars=max_chars, lang=lang)
-    return head + "\n" + (WARMUP_HINT_EN if lang == "en" else WARMUP_HINT), body.lstrip("\n")
+                                max_chars=max_chars, lang=lang, own_format=own_format)
+    return head.rstrip("\n") + "\n\n" + (WARMUP_HINT_EN if lang == "en" else WARMUP_HINT), body.lstrip("\n")
 
 
 def has_rules_to_explain(messages: list[dict], tools: list | None) -> bool:
     """先に伝えておく決まり（操作一覧か、呼び出し元の指示）があるか。無ければ暖機は要らない。"""
-    return bool(tools) or any(m["role"] in ("system", "developer") and m.get("text") for m in messages)
+    return bool(tools) or has_instructions(messages)
+
+
+def has_instructions(messages: list[dict]) -> bool:
+    """呼び出し元の指示（system / developer）があるか。"""
+    return any(m["role"] in ("system", "developer") and m.get("text") for m in messages)
 
 
 def _opening_parts(messages: list[dict], tools: list | None, *,
-                   max_tool_result_chars: int = 0, max_chars: int = 0, lang: str = "ja") -> tuple[str, str]:
+                   max_tool_result_chars: int = 0, max_chars: int = 0, lang: str = "ja",
+                   own_format: bool = False) -> tuple[str, str]:
     """(決まりの部分, 会話の部分)。つなげると最初の送信文になる。"""
     system_parts = [m["text"] for m in messages if m["role"] in ("system", "developer") and m.get("text")]
     rest = [m for m in messages if m["role"] not in ("system", "developer")]
+    if own_format:
+        # 呼び出し元の指示だけが決まり。この中継の規則・書式の例・念押しは付けない
+        head = "\n\n".join(system_parts)
+        body = render_delta(rest, max_tool_result_chars=max_tool_result_chars, first=True, lang=lang, hints=False)
+        if max_chars and len(head) + len(body) > max_chars:
+            body = _clip_middle(body, max(1000, max_chars - len(head)))
+        return (head + "\n\n" if head else ""), body
     rules = RULES_EN if lang == "en" else RULES
     no_tools = "(no actions; just answer normally)" if lang == "en" else NO_TOOLS
     no_system = "(none)" if lang == "en" else NO_SYSTEM
@@ -387,12 +406,12 @@ def _opening_parts(messages: list[dict], tools: list | None, *,
 
 
 def render_delta(messages: list[dict], *, max_tool_result_chars: int = 0, first: bool = False,
-                 lang: str = "ja") -> str:
-    """続きの送信文（前回以降に増えた message だけ）。"""
+                 lang: str = "ja", hints: bool = True) -> str:
+    """続きの送信文（前回以降に増えた message だけ）。hints=False なら、この中継の書式の念押しを付けない。"""
     parts = [render_turn(m, max_tool_result_chars=max_tool_result_chars) for m in messages]
     text = "\n\n".join(p for p in parts if p)
     has_tool = any(m["role"] == "tool" for m in messages)
-    if has_tool or not first:
+    if hints and (has_tool or not first):
         text += "\n\n" + (CONTINUE_HINT_EN if lang == "en" else CONTINUE_HINT)
     return text
 
