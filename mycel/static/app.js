@@ -44,7 +44,7 @@
   const fail = (e) => toast(e.message || String(e), true);
   const titleOf = (p) => p.split("/").pop().replace(/\.md$/i, "");
   const isDoc = (p) => p.startsWith("@") || !/\.(md|markdown)$/i.test(p);
-  const CLIENT_VERSION = "0.6.8";          // サーバの __version__ と合わせる（tests/test_api が確認）
+  const CLIENT_VERSION = "0.6.9";          // サーバの __version__ と合わせる（tests/test_api が確認）
   const FT = { word: "W", excel: "X", powerpoint: "P", pdf: "PDF", email: "✉", csv: "CSV", html: "HTML", text: "TXT", code: "{ }", note: "MD", image: "IMG" };
   const GRP_NAME = { word: "Word", excel: "Excel", powerpoint: "PowerPoint", pdf: "PDF", email: "メール", csv: "CSV", html: "HTML", text: "テキスト", code: "データ", image: "画像" };
   const fmtDate = (t) => { if (!t) return "—"; const d = new Date(t * 1000), now = new Date(); return d.getFullYear() === now.getFullYear() ? d.toLocaleDateString("ja-JP", { month: "numeric", day: "numeric" }) : d.toLocaleDateString("ja-JP", { year: "numeric", month: "numeric", day: "numeric" }); };
@@ -1192,13 +1192,34 @@
     if (m) return openEntity(m[1] === "p" ? "person" : "org", m[2]);
     if (path) openNote(path); else openTarget(title);
   }
+  /** 拡大表示。右パネルと同じ範囲（n ホップ）で開き、上の切り替えで「全体」と行き来できる。 */
   async function bigGraph(center) {
-    const m = modal({ title: "グラフ（Vault 全体）", body: '<canvas class="graph big" id="gBigC" aria-label="Vault 全体のグラフ"></canvas>', buttons: [], wide: true, onClose: () => g.destroy() });
+    let depth = center ? S.depth : 0;
+    const body = document.createElement("div"); body.className = "gbig";
+    const m = modal({ title: "グラフ", body, buttons: [], wide: true, onClose: () => { g.destroy(); if (S.rtab === "graph") renderRight(); } });
     m.body.style.padding = "0"; m.body.style.overflow = "hidden";
-    const q = {}; if (S.gDocs) q.docs = "1"; if (S.gPeople) q.people = "1"; if (S.gKG) q.kg = "1";
-    const load = async () => { try { g.setData(await api.get("/api/graph", q), center); } catch (e) { fail(e); } };
+    body.innerHTML = `<div class="gctl"><span>範囲</span><div class="seg">${[1, 2, 0].map((d) => `<button data-bd="${d}" class="${depth === d ? "on" : ""}"${!center && d ? " disabled" : ""} title="${d ? `開いているノートから ${d} ホップ以内` : "Vault 全体"}">${d ? d + " ホップ" : "全体"}</button>`).join("")}</div>
+      ${center ? `<span class="hint gcenter" title="${esc(center)}">中心: ${esc(titleOf(center))}</span>` : ""}
+      <label title="リンクされていない資料も表示"><input type="checkbox" id="gbDocs"${S.gDocs ? " checked" : ""}> 資料</label>
+      <label title="人物・組織を介したつながりも表示"><input type="checkbox" id="gbPeople"${S.gPeople ? " checked" : ""}> 人物</label>
+      <label title="GraphRAG の知識グラフを重ねて表示"><input type="checkbox" id="gbKG"${S.gKG ? " checked" : ""}> 知識グラフ</label>
+      <span style="flex:1"></span><span class="hint" id="gbInfo"></span></div>
+      <canvas class="graph big" id="gBigC" aria-label="グラフの拡大表示"></canvas>`;
+    const load = async () => {
+      const q = depth && center ? { path: center, depth } : {};
+      if (S.gDocs) q.docs = "1"; if (S.gPeople) q.people = "1"; if (S.gKG) q.kg = "1";
+      try {
+        const data = await api.get("/api/graph", q);
+        g.setData(data, center);
+        $("#gbInfo", body).textContent = `${(data.nodes || []).length} 件 ・ ${(data.edges || []).length} 本`;
+      } catch (e) { fail(e); }
+    };
     const refresh = () => { load(); if (S.rtab === "graph" && S.graph) renderRight(); };
-    const g = new ForceGraph($("#gBigC"), { onOpen: (p, t) => { m.close(); graphOpen(p, t); }, onEdgeClick: (e, ev) => graphEdgeMenu(e, ev, refresh), onLink: (a, b) => graphLink(a, b, refresh) });
+    $$("[data-bd]", body).forEach((b) => (b.onclick = () => { depth = +b.dataset.bd; S.depth = depth; store.set("depth", depth); $$("[data-bd]", body).forEach((x) => x.classList.toggle("on", +x.dataset.bd === depth)); load(); }));
+    $("#gbDocs", body).onchange = (e) => { S.gDocs = e.target.checked; store.set("gDocs", S.gDocs); load(); };
+    $("#gbPeople", body).onchange = (e) => { S.gPeople = e.target.checked; store.set("gPeople", S.gPeople); load(); };
+    $("#gbKG", body).onchange = (e) => { S.gKG = e.target.checked; store.set("gKG", S.gKG); load(); };
+    const g = new ForceGraph($("#gBigC", body), { onOpen: (p, t) => { m.close(); graphOpen(p, t); }, onEdgeClick: (e, ev) => graphEdgeMenu(e, ev, refresh), onLink: (a, b) => graphLink(a, b, refresh) });
     await load();
   }
 
