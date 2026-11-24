@@ -202,6 +202,17 @@ CREATE TABLE IF NOT EXISTS entity_relations (
   updated_at REAL NOT NULL,
   PRIMARY KEY (source, target)
 );
+-- 種別の一覧（空なら標準の種別）と、名前を変えた・まとめた種別の付け替え（抽出済みの種別に当てる）
+CREATE TABLE IF NOT EXISTS entity_types (
+  name TEXT PRIMARY KEY,
+  description TEXT NOT NULL DEFAULT '',
+  ord INTEGER NOT NULL DEFAULT 0,
+  updated_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS entity_type_map (
+  src TEXT PRIMARY KEY,
+  dst TEXT NOT NULL
+);
 """
 
 _local = threading.local()

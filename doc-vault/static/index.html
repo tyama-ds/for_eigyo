@@ -421,6 +421,7 @@
     <h2>エンティティ辞書 <span class="muted">決めた名前・種別・別名・外す語・関係は、グラフを作るときに当てます。読み込み済みの文書にもすぐ反映され、文書を読み直しても消えません</span></h2>
     <div class="seg-btns" id="dict-tabs" role="tablist">
       <button class="seg on" data-dtab="entries">登録したエンティティ <span id="dict-n-entries"></span></button>
+      <button class="seg" data-dtab="types">種別 <span id="dict-n-types"></span></button>
       <button class="seg" data-dtab="excludes">外す語 <span id="dict-n-excludes"></span></button>
       <button class="seg" data-dtab="relations">関係の手直し <span id="dict-n-relations"></span></button>
     </div>
@@ -445,6 +446,26 @@
         <textarea id="de-bulk" rows="5" placeholder="北浜電機,顧客,北電|北浜電機株式会社&#10;SkyEdge S-2,製品,S-2|スカイエッジ"></textarea>
         <div class="row gap top-space"><button class="btn" id="de-bulk-add">まとめて登録</button><button class="btn" id="de-export">CSV で書き出す</button></div>
       </details>
+    </div>
+    <div class="dict-pane hidden" data-dpane="types">
+      <p class="hint">LLM で読み込むときに選ばせる種別の一覧です。<b>名前の変更</b>と<b>まとめる（削除）</b>は、読み込み済みのグラフにもすぐ反映します。
+        <b>追加</b>した種別や<b>説明</b>を LLM に使わせるには、文書のグラフを読み直します（下に対象の文書の数が出ます）。</p>
+      <div id="dt-stale" class="dict-stale hidden"></div>
+      <div class="dict-form">
+        <div><label class="field-label">種別の名前</label><input type="text" id="dt-name" placeholder="例: 顧客"></div>
+        <div><label class="field-label">説明（LLM への説明・任意）</label><input type="text" id="dt-desc" placeholder="例: 当社の製品を買う会社・団体"></div>
+      </div>
+      <div class="row wrap gap top-space">
+        <span class="hint grow">どれにも当てはまらないものの受け皿（例: 概念・その他）を 1 つ残しておくと、LLM が迷いません。</span>
+        <button class="btn primary" id="dt-save">追加</button>
+        <button class="btn hidden" id="dt-cancel">編集をやめる</button>
+      </div>
+      <div id="dict-types-list" class="dict-list"></div>
+      <div class="row wrap gap top-space">
+        <span class="muted" id="dt-note"></span>
+        <span class="spacer"></span>
+        <button class="btn small" id="dt-reset" title="標準の 13 種に戻す（名前の変更・まとめも取り消す）">標準の種別に戻す</button>
+      </div>
     </div>
     <div class="dict-pane hidden" data-dpane="excludes">
       <p class="hint">グラフ（と相談のグラフ検索）から外す語。1 行に 1 語。グラフ画面で「グラフから外す」を押した語もここに入ります。行を消して保存すると元に戻ります。</p>

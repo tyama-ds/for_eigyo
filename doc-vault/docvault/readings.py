@@ -178,6 +178,14 @@ def start(doc_id: str, stage: str, ident: dict, mode: str = "", *, opts: dict | 
     return get(rid)
 
 
+def update_data(rid: str, **values) -> None:
+    """読み込み結果の data に値を足す（読み込み中でも書ける）。"""
+    r = get(rid)
+    if r:
+        db.write("UPDATE readings SET data=? WHERE id=?",
+                 (json.dumps({**r["data"], **values}, ensure_ascii=False), rid))
+
+
 def finish(rid: str, status: str, *, data: dict | None = None, warnings: list[str] | None = None,
            seconds: float | None = None, activate: bool = True) -> dict | None:
     r = get(rid)
