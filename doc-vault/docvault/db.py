@@ -175,6 +175,33 @@ CREATE TABLE IF NOT EXISTS graph_chunks (
   PRIMARY KEY (reading_id, chunk_id)
 );
 CREATE INDEX IF NOT EXISTS idx_gc_doc ON graph_chunks(doc_id);
+
+-- エンティティ辞書とグラフ画面での手直し（entitydict.py。グラフを組み立てるときに当てる）
+CREATE TABLE IF NOT EXISTS entity_dict (
+  key TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL DEFAULT '',
+  aliases TEXT NOT NULL DEFAULT '[]',
+  description TEXT NOT NULL DEFAULT '',
+  match INTEGER NOT NULL DEFAULT 1,
+  updated_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS entity_excludes (
+  key TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  updated_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS entity_relations (
+  source TEXT NOT NULL,
+  target TEXT NOT NULL,
+  source_name TEXT NOT NULL,
+  target_name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  strength INTEGER NOT NULL DEFAULT 7,
+  hidden INTEGER NOT NULL DEFAULT 0,
+  updated_at REAL NOT NULL,
+  PRIMARY KEY (source, target)
+);
 """
 
 _local = threading.local()

@@ -29,7 +29,8 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 BASE = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE))
 
-from docvault import __version__, config, db, decision_api, folders, graph, rag, ragopts, readings, speech  # noqa: E402
+from docvault import (__version__, config, db, decision_api, entitydict, folders, graph, rag,  # noqa: E402
+                      ragopts, readings, speech)
 from docvault.extract import SUPPORTED  # noqa: E402
 from docvault.indexer import ALL_STAGES, INDEXER, register_upload, resume_pending  # noqa: E402
 from docvault.llm import LLM, LLMError  # noqa: E402
@@ -306,6 +307,39 @@ def _snippet(text: str, q: str, width: int = 160) -> str:
     return ("…" if start else "") + s + ("…" if start + width < len(text) else "")
 
 
+def api_entity_dict(action: str, body: dict) -> dict:
+    """エンティティ辞書とグラフ画面の手直し（entitydict.py）。成功したら辞書の一覧も返す。"""
+    s = lambda k: str(body.get(k) or "")  # noqa: E731
+    result: dict = {}
+    try:
+        if action == "entry":
+            result["entry"] = entitydict.save_entry(body, old_key=s("old_key") or None)
+        elif action == "delete":
+            entitydict.delete_entry(s("key"))
+        elif action == "bulk":
+            result["bulk"] = entitydict.bulk_add(s("text"))
+        elif action == "excludes":
+            entitydict.set_excludes(body.get("names") if isinstance(body.get("names"), list) else s("names"))
+        elif action == "relation":
+            result["relation"] = entitydict.add_relation(s("source"), s("target"), s("description"),
+                                                         body.get("strength") or 7)
+        elif action == "relation-hide":
+            entitydict.hide_relation(s("source"), s("target"), s("source_name"), s("target_name"))
+        elif action == "relation-delete":
+            entitydict.delete_relation(s("source"), s("target"))
+        elif action == "rename":
+            result["renamed"] = entitydict.rename(s("key"), s("name"), s("to"))
+        elif action == "type":
+            result["entry"] = entitydict.set_type(s("key"), s("name"), s("type"))
+        elif action == "exclude":
+            entitydict.exclude_entity(s("key"), s("name"))
+        else:
+            return {"error": "不明な操作です"}
+    except ValueError as e:
+        return {"error": str(e)}
+    return {"ok": True, **result, **entitydict.state()}
+
+
 def api_graph(qs: dict) -> dict:
     try:
         limit = max(20, min(int((qs.get("limit") or ["300"])[0]), 2000))
@@ -500,6 +534,8 @@ class Handler(BaseHTTPRequestHandler):
                        inline=(qs.get("download") or ["0"])[0] != "1")
         elif route == "/api/graph":
             self._json(api_graph(qs))
+        elif route == "/api/entity-dict":
+            self._json(entitydict.state())
         elif route == "/api/chats":
             docs = db.list_docs()
             chats = db.list_chats()
@@ -578,6 +614,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": True})
             else:
                 self._json({"error": "不明な操作です"}, 400)
+        elif len(parts) == 3 and parts[:2] == ["api", "entity-dict"]:
+            r = api_entity_dict(parts[2], body)
+            self._json(r, 400 if "error" in r else 200)
         elif route == "/api/docs/reindex-all":
             stages = tuple(s for s in (body.get("stages") or ALL_STAGES) if s in ALL_STAGES)
             for d in db.list_docs():

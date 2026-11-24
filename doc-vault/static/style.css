@@ -218,6 +218,22 @@ details.adv summary { cursor: pointer; color: var(--muted); font-size: 12px; mar
 .seg-btns .seg + .seg { border-left: 1px solid var(--border); }
 .seg-btns .seg.on { background: var(--accent); color: #0b1220; font-weight: 600; }
 .ent-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+/* エンティティ辞書・グラフの手直し */
+#dict-tabs { margin: 8px 0 4px; }
+.dict-form { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
+.dict-form .wide { grid-column: 1 / -1; }
+.dict-list { margin-top: 10px; border-top: 1px solid var(--border); }
+.dict-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: center;
+  padding: 6px 2px; border-bottom: 1px solid var(--border); font-size: 13px; }
+.dict-row .sub { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.dict-row .ops { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+#dict-modal textarea { width: 100%; }
+.g-edit { margin-top: 6px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg2); }
+.g-edit input { width: 100%; margin: 4px 0; }
+.g-edit .hint { margin: 2px 0 6px; }
+.detail-rel .x { float: right; margin-left: 6px; }
+.badge.dict { color: #fbbf24; border-color: #b45309; }
+@media (max-width: 640px) { .dict-form { grid-template-columns: 1fr; } }
 .graph-toolbar .check { display: inline-flex; gap: 4px; align-items: center; margin: 0; }
 .graph-wrap { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 12px; }
 .graph-canvas-box { min-width: 0; background: var(--bg2); border: 1px solid var(--border);

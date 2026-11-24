@@ -7,6 +7,7 @@
   - グラフの作り方: 高速（説明なし）・語の共起（LLM なし）
   - 文字起こし: Whisper 互換 API への中継（ローカル既定・クラウドは許可制）
   - 旧データの移行: 読み込み結果の導入前の要約・グラフ・埋め込みを「以前の取り込み」として残す
+  - エンティティ辞書: 別名をまとめる・種別・外す語・本文から探す・関係の追加と削除・グラフ画面の手直し
 """
 from __future__ import annotations
 
@@ -27,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 os.environ.setdefault("DOCVAULT_QUIET", "1")
 
 import mock_llm  # noqa: E402
-from docvault import config, db, folders, graph, readings, speech, terms  # noqa: E402
+from docvault import config, db, entitydict, folders, graph, readings, speech, terms  # noqa: E402
 from docvault.indexer import INDEXER  # noqa: E402
 from docvault.retrieval import INDEX  # noqa: E402
 
@@ -404,6 +405,38 @@ class TestFeatures(unittest.TestCase):
         self.assertTrue({n["name"] for n in docs["nodes"]} <= titles)
 
 
+    def test_51_entity_dict_api_edits_graph_and_restores(self):
+        before = self.api("/api/graph?limit=2000")
+        node = max(before["nodes"], key=lambda n: (n["degree"], n["id"]))
+        r = self.api("/api/entity-dict/rename", {"key": node["id"], "name": node["name"], "to": "テスト用の正式名"})
+        self.assertTrue(r["ok"], r)
+        key = r["renamed"]["key"]
+        self.assertEqual(r["entries"][0]["name"], "テスト用の正式名")           # 辞書の一覧も返す
+        after = {n["id"]: n for n in self.api("/api/graph?limit=2000")["nodes"]}
+        self.assertNotIn(node["id"], after)
+        self.assertEqual((after[key]["name"], after[key]["dict"], after[key]["degree"]),
+                         ("テスト用の正式名", True, node["degree"]))
+        self.assertIn(node["name"], after[key]["aliases"])
+        self.api("/api/entity-dict/type", {"key": key, "name": "テスト用の正式名", "type": "注目"})
+        typed = {n["id"]: n for n in self.api("/api/graph?limit=2000")["nodes"]}
+        self.assertEqual(typed[key]["type"], "注目")
+        self.assertIn("注目", self.api("/api/entity-dict")["types"])
+        bad = self.api("/api/entity-dict/entry", {"name": "別の名前", "aliases": [node["name"]]})
+        self.assertIn("登録済み", bad["error"])
+        self.assertIn("error", self.api("/api/entity-dict/unknown", {}))
+        # グラフから外す → 外す語を空にすると元に戻る
+        self.api("/api/entity-dict/exclude", {"key": key, "name": "テスト用の正式名"})
+        gone = {n["id"] for n in self.api("/api/graph?limit=2000")["nodes"]}
+        self.assertNotIn(key, gone)
+        self.assertNotIn(node["id"], gone)
+        st = self.api("/api/entity-dict")
+        self.assertEqual(st["entries"], [])
+        self.assertEqual({x["name"] for x in st["excludes"]}, {"テスト用の正式名", node["name"]})
+        self.api("/api/entity-dict/excludes", {"names": []})
+        back = {n["id"]: n for n in self.api("/api/graph?limit=2000")["nodes"]}
+        self.assertEqual((back[node["id"]]["name"], back[node["id"]]["degree"]), (node["name"], node["degree"]))
+
+
 class TestGraphGroups(unittest.TestCase):
     """フォルダのまとめ方と、共通のエンティティでつなぐ全体図（ありふれたエンティティは軽く数える）。"""
 
@@ -458,6 +491,181 @@ class TestGraphGroups(unittest.TestCase):
         docs = graph.group_payload(self.g, {d: d for d in self.folder_of}, kind="doc",
                                    color_of={d: f for d, f in self.folder_of.items()})
         self.assertEqual({n["folder"] for n in docs["nodes"]}, {"A", "A/x", "B"})
+
+
+class TestEntityDict(unittest.TestCase):
+    """エンティティ辞書とグラフ画面の手直し（グラフを組み立てるときに当て、抽出結果は書き換えない）。"""
+
+    TEXTS = {
+        "d1": "北浜電機の購買部と SkyEdge S-2 の追加発注を協議した。北電の担当は早瀬。AirFeeder は別の製品。",
+        "d2": "熱処理炉の点検で AirFeed の給電を試験した。品質保証部が確認した。",
+        "d3": "AirFeed は SkyEdge S-2 に搭載する。",
+    }
+    ENTS = {
+        "d1": ([("北浜電機", "組織"), ("北電", "組織"), ("SkyEdge S-2", "製品")],
+               [("北浜電機", "SkyEdge S-2"), ("北電", "SkyEdge S-2")]),
+        "d2": ([("熱処理炉", "設備"), ("品質保証部", "組織"), ("確認", "概念")],
+               [("熱処理炉", "品質保証部"), ("品質保証部", "確認")]),
+        "d3": ([("AirFeed", "製品"), ("SkyEdge S-2", "製品")], [("AirFeed", "SkyEdge S-2")]),
+    }
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        db.set_data_dir(Path(self.tmp.name))
+        for doc_id, text in self.TEXTS.items():
+            db.write("INSERT INTO documents(id,title,filename,ext,sha256,folder,sensitivity,created_at,updated_at)"
+                     " VALUES(?,?,?,?,?,?,?,0,0)", (doc_id, f"文書{doc_id}", f"{doc_id}.md", ".md", doc_id, "",
+                                                   "internal"))
+            db.write("INSERT INTO chunks(id,doc_id,ord,text) VALUES(?,?,0,?)", (f"{doc_id}#0", doc_id, text))
+            ents, rels = self.ENTS[doc_id]
+            graph.save_extraction(doc_id, f"{doc_id}#0", graph._clean_extraction({
+                "entities": [{"name": n, "type": t} for n, t in ents],
+                "relations": [{"source": a, "target": b, "description": f"{a}と{b}"} for a, b in rels]}))
+        self.sens = {d: "internal" for d in self.TEXTS}
+
+    def tearDown(self):
+        db.close()
+        self.tmp.cleanup()
+
+    def g(self):
+        return graph.get_graph(None, self.sens)
+
+    def rel(self, g, a, b):
+        ka, kb = graph.norm_key(a), graph.norm_key(b)
+        return g.relations.get((ka, kb) if ka <= kb else (kb, ka))
+
+    def test_aliases_merge_type_and_question_by_alias(self):
+        before = self.g()
+        self.assertIn(graph.norm_key("北電"), before.entities)
+        entitydict.save_entry({"name": "北浜電機", "type": "顧客", "aliases": "北電、北浜電機株式会社",
+                               "description": "主要顧客"})
+        g = self.g()
+        self.assertIsNot(g, before)                                   # 辞書を変えたらグラフを作り直す
+        self.assertNotIn(graph.norm_key("北電"), g.entities)
+        ent = g.entities[graph.norm_key("北浜電機")]
+        self.assertEqual((ent["name"], ent["type"], ent["dict"]), ("北浜電機", "顧客", True))
+        self.assertTrue(ent["description"].startswith("主要顧客"))
+        self.assertEqual(ent["aliases"], ["北電"])                     # 「北浜電機株式会社」は同じ照合キーなので省く
+        self.assertEqual(self.rel(g, "北浜電機", "SkyEdge S-2")["count"], 2)   # 北電の関係もまとまる
+        self.assertIn(graph.norm_key("北浜電機"), g.seed_entities("北電への発注は？", []))
+        node = next(n for n in g.to_payload()["nodes"] if n["name"] == "北浜電機")
+        self.assertEqual((node["dict"], node["aliases"]), (True, ["北電"]))
+        # 抽出結果は書き換えない（辞書を消せば元に戻る）
+        entitydict.delete_entry(graph.norm_key("北浜電機"))
+        self.assertIn(graph.norm_key("北電"), self.g().entities)
+
+    def test_excludes_remove_entity_and_its_relations(self):
+        entitydict.set_excludes("確認\n資料")
+        g = self.g()
+        self.assertNotIn(graph.norm_key("確認"), g.entities)
+        self.assertIsNone(self.rel(g, "品質保証部", "確認"))
+        self.assertEqual([x["name"] for x in entitydict.excludes()], ["確認", "資料"])
+        entitydict.set_excludes([])
+        self.assertIn(graph.norm_key("確認"), self.g().entities)
+
+    def test_match_in_text_adds_chunks_and_sentence_cooccurrence(self):
+        key = graph.norm_key("AirFeed")
+        self.assertEqual(self.g().entities[key]["chunks"], {"d3#0"})
+        entitydict.save_entry({"name": "AirFeed", "type": "製品"})          # 本文から探す（既定）
+        g = self.g()
+        ent = g.entities[key]
+        self.assertEqual(ent["chunks"], {"d2#0", "d3#0"})                   # LLM が拾わなかった d2 にも
+        self.assertEqual(ent["found"], 1)                                   # 「AirFeeder」は別の語（d1 は無し）
+        self.assertEqual(ent["docs"], {"d2", "d3"})
+        self.assertIsNotNone(self.rel(g, "AirFeed", "熱処理炉"))             # 同じ文に出てくる
+        self.assertEqual(self.rel(g, "AirFeed", "熱処理炉")["strength"], 3)
+        self.assertIsNone(self.rel(g, "AirFeed", "品質保証部"))             # 別の文
+        # 辞書にだけある語（LLM が1度も拾っていない）も本文から見つかればエンティティになる
+        entitydict.save_entry({"name": "購買部", "type": "組織", "description": "北浜電機の部署"})
+        ent = self.g().entities[graph.norm_key("購買部")]
+        self.assertEqual((ent["docs"], ent["type"]), ({"d1"}, "組織"))
+        self.assertTrue(ent["description"].startswith("北浜電機の部署"))
+        # 本文から探さない設定なら足さない
+        entitydict.save_entry({"name": "AirFeed", "type": "製品", "match": False}, old_key=key)
+        self.assertEqual(self.g().entities[key]["chunks"], {"d3#0"})
+
+    def test_rename_and_merge_from_graph(self):
+        hq = graph.norm_key("熱処理炉")
+        r = entitydict.rename(hq, "熱処理炉", "熱処理炉 A 号機")
+        self.assertFalse(r["merged"])
+        g = self.g()
+        self.assertNotIn(hq, g.entities)
+        self.assertEqual(g.entities[r["key"]]["name"], "熱処理炉 A 号機")
+        self.assertIn("熱処理炉", g.entities[r["key"]]["aliases"])
+        # ほかのエンティティと同じ名前にすると統合する（その間の関係は消え、ほかの関係は付け替わる）
+        qa = graph.norm_key("品質保証部")
+        r2 = entitydict.rename(qa, "品質保証部", "熱処理炉 A 号機")
+        self.assertTrue(r2["merged"])
+        self.assertEqual(r2["key"], r["key"])
+        g = self.g()
+        self.assertNotIn(qa, g.entities)
+        ent = g.entities[r["key"]]
+        self.assertEqual(set(ent["aliases"]), {"熱処理炉", "品質保証部"})
+        self.assertNotIn((r["key"], r["key"]), g.relations)
+        self.assertIsNotNone(self.rel(g, "熱処理炉 A 号機", "確認"))
+        # 自分の別名を正式名にする
+        r3 = entitydict.rename(r["key"], "熱処理炉 A 号機", "熱処理炉")
+        self.assertEqual((r3["key"], r3["merged"]), (hq, False))
+        ent = self.g().entities[hq]
+        self.assertEqual(ent["name"], "熱処理炉")
+        self.assertEqual(set(ent["aliases"]), {"熱処理炉 A 号機", "品質保証部"})
+        # 種別の変更
+        entitydict.set_type(hq, "熱処理炉", "重要設備")
+        self.assertEqual(self.g().entities[hq]["type"], "重要設備")
+        with self.assertRaises(ValueError):
+            entitydict.rename(hq, "熱処理炉", "  ")
+
+    def test_relations_added_and_hidden_and_exclude_dict_entity(self):
+        a, s2 = graph.norm_key("AirFeed"), graph.norm_key("SkyEdge S-2")
+        entitydict.hide_relation(a, s2, "AirFeed", "SkyEdge S-2")
+        self.assertIsNone(self.rel(self.g(), "AirFeed", "SkyEdge S-2"))
+        entitydict.add_relation("熱処理炉", "SkyEdge S-2", "筐体の熱処理", 8)
+        rel = self.rel(self.g(), "熱処理炉", "SkyEdge S-2")
+        self.assertTrue(rel["manual"])
+        self.assertEqual((rel["description"], rel["strength"]), ("筐体の熱処理", 8))
+        edge = next(e for e in self.g().to_payload()["edges"] if e["manual"])
+        self.assertEqual({edge["source"], edge["target"]}, {graph.norm_key("熱処理炉"), s2})
+        self.assertEqual(len(entitydict.relations()), 2)
+        entitydict.delete_relation(s2, a)                                 # 取り消し（向きは問わない）
+        self.assertIsNotNone(self.rel(self.g(), "AirFeed", "SkyEdge S-2"))
+        with self.assertRaises(ValueError):
+            entitydict.add_relation("熱処理炉", "熱処理炉")
+        # 辞書のエンティティをグラフから外すと、名前と別名をまとめて外す語にする
+        entitydict.save_entry({"name": "北浜電機", "aliases": ["北電"]})
+        entitydict.exclude_entity(graph.norm_key("北浜電機"), "北浜電機")
+        g = self.g()
+        self.assertNotIn(graph.norm_key("北浜電機"), g.entities)
+        self.assertNotIn(graph.norm_key("北電"), g.entities)
+        self.assertEqual(entitydict.entries(), [])
+        self.assertEqual({x["name"] for x in entitydict.excludes()}, {"北浜電機", "北電"})
+        # 登録し直すと、外す語から消える
+        entitydict.save_entry({"name": "北浜電機"})
+        self.assertIn(graph.norm_key("北浜電機"), self.g().entities)
+
+    def test_matcher_word_boundaries_spaces_and_longest(self):
+        rx = entitydict._terms_regex(["airfeed", "skyedge s-2", "北浜電機", "北浜"])
+        found = lambda t: [m.group(0) for m in rx.finditer(t)]  # noqa: E731
+        self.assertEqual(found("XAirFeed と AirFeeder"), [])                 # 英数字の語は単語の区切りで
+        self.assertEqual(found("AirFeed は"), ["AirFeed"])
+        self.assertEqual(found("SKYEDGE  S-2 と SkyEdgeS-2"), ["SKYEDGE  S-2", "SkyEdgeS-2"])  # 大小・空白
+        self.assertEqual(found("北浜電機の件と北浜の件"), ["北浜電機", "北浜"])  # 長いほうを優先
+
+    def test_conflicts_and_bulk(self):
+        entitydict.save_entry({"name": "北浜電機", "aliases": "北電"})
+        with self.assertRaisesRegex(ValueError, "北浜電機"):
+            entitydict.save_entry({"name": "北浜グループ", "aliases": "北電"})
+        with self.assertRaisesRegex(ValueError, "登録済み"):
+            entitydict.save_entry({"name": "北浜電機株式会社"})
+        r = entitydict.bulk_add("名前,種別,別名\n北浜電機,顧客,KHD|北浜\nSkyEdge S-2\t製品\tS-2\n"
+                                "# コメント\n北浜グループ,組織,北電\n")
+        self.assertEqual((r["added"], r["updated"]), (1, 1))
+        self.assertEqual(len(r["errors"]), 1)
+        self.assertIn("5 行目", r["errors"][0])
+        e = entitydict.get(graph.norm_key("北浜電機"))
+        self.assertEqual((e["type"], e["aliases"]), ("顧客", ["北電", "KHD", "北浜"]))
+        st = entitydict.state()
+        self.assertIn("顧客", st["types"])
+        self.assertIn("組織", st["types"])
 
 
 class TestTerms(unittest.TestCase):
