@@ -8,6 +8,7 @@
   - 文字起こし: Whisper 互換 API への中継（ローカル既定・クラウドは許可制）
   - 旧データの移行: 読み込み結果の導入前の要約・グラフ・埋め込みを「以前の取り込み」として残す
   - エンティティ辞書: 別名をまとめる・種別・外す語・本文から探す・関係の追加と削除・グラフ画面の手直し
+  - 種別の一覧: LLM への指示・名前の変更とまとめる（抽出済みにも当てる）・標準に戻す・読み直しの対象と読み直し
 """
 from __future__ import annotations
 
@@ -437,6 +438,39 @@ class TestFeatures(unittest.TestCase):
         self.assertEqual((back[node["id"]]["name"], back[node["id"]]["degree"]), (node["name"], node["degree"]))
 
 
+    def test_52_entity_types_api_and_reread(self):
+        st = self.api("/api/entity-dict")
+        self.assertFalse(st["types_customized"])
+        self.assertEqual(st["stale"]["count"], 0)
+        self.assertGreater(st["type_counts"].get("組織", 0), 0)
+        # 名前の変更は、読み込み済みのグラフにもすぐ当たる（読み直しの対象にはならない）
+        r = self.api("/api/entity-dict/type-update", {"old": "組織", "name": "取引先"})
+        self.assertEqual(r["type"]["name"], "取引先")
+        self.assertNotIn("組織", r["type_counts"])
+        self.assertGreater(r["type_counts"].get("取引先", 0), 0)
+        self.assertEqual(r["stale"]["count"], 0)
+        self.assertIn("取引先", {n["type"] for n in self.api("/api/graph?limit=2000")["nodes"]})
+        self.assertIn("既に", self.api("/api/entity-dict/type-update", {"old": "取引先", "name": "人物"})["error"])
+        # 種別を足すと、LLM で読んだグラフが読み直しの対象になり、読み直すと新しい種別が LLM への指示に入る
+        r = self.api("/api/entity-dict/type-add", {"name": "顧客", "description": "製品を買う会社"})
+        stale = r["stale"]["count"]
+        self.assertGreater(stale, 0)
+        mock_llm.REQUESTS.clear()
+        r = self.api("/api/entity-dict/reread", {})
+        self.assertEqual(r["reread"], stale)
+        self.assertTrue(INDEXER.wait_idle(60))
+        self.assertEqual(self.api("/api/entity-dict")["stale"]["count"], 0)
+        prompts = [m.get("content", "") for q in mock_llm.REQUESTS for m in q["body"].get("messages", [])]
+        extract = [p for p in prompts if "[TASK:graph_extract" in p]
+        self.assertEqual(len({p.split("文書「")[1].split("」")[0] for p in extract}), stale)
+        self.assertTrue(all("  - 顧客: 製品を買う会社" in p and "/ 顧客" in p for p in extract))
+        # 標準に戻す
+        r = self.api("/api/entity-dict/type-reset", {})
+        self.assertFalse(r["types_customized"])
+        self.assertEqual(r["type_map"], {})
+        self.assertIn("組織", {n["type"] for n in self.api("/api/graph?limit=2000")["nodes"]})
+
+
 class TestGraphGroups(unittest.TestCase):
     """フォルダのまとめ方と、共通のエンティティでつなぐ全体図（ありふれたエンティティは軽く数える）。"""
 
@@ -649,6 +683,83 @@ class TestEntityDict(unittest.TestCase):
         self.assertEqual(found("AirFeed は"), ["AirFeed"])
         self.assertEqual(found("SKYEDGE  S-2 と SkyEdgeS-2"), ["SKYEDGE  S-2", "SkyEdgeS-2"])  # 大小・空白
         self.assertEqual(found("北浜電機の件と北浜の件"), ["北浜電機", "北浜"])  # 長いほうを優先
+
+    def test_type_list_prompt_rename_merge_reset(self):
+        nk = graph.norm_key
+        std = graph.ENTITY_TYPES
+        self.assertEqual(entitydict.types_prompt(), std)              # 標準のままなら従来の指示と同じ
+        self.assertFalse(entitydict.types_customized())
+        v0 = entitydict.types_version()
+        entitydict.add_type("顧客", "当社の製品を買う会社")
+        self.assertTrue(entitydict.types_customized())
+        self.assertEqual(entitydict.types_version(), v0 + 1)
+        prompt = entitydict.types_prompt()
+        self.assertTrue(prompt.startswith(std + " / 顧客"))
+        self.assertIn("\n  - 顧客: 当社の製品を買う会社", prompt)
+        with self.assertRaisesRegex(ValueError, "既に"):
+            entitydict.add_type("顧客")
+
+        class FakeLLM:                                               # LLM への指示に入ることを確かめる
+            prompts = []
+
+            def chat_json(self, profile, prompt, **kw):
+                self.prompts.append(prompt)
+                return {"entities": [{"name": "北浜電機", "type": "顧客"}], "relations": []}, \
+                    {"finish": "stop", "seconds": 0.1, "reason": ""}
+        fake = FakeLLM()
+        data, _ = graph.extract_chunk(fake, "local", "internal", "文書", {"text": "北浜電機に納入", "locator": ""})
+        self.assertIn("種別は次から選ぶ: " + std + " / 顧客\n  - 顧客: 当社の製品を買う会社", fake.prompts[0])
+        self.assertEqual(data["entities"][0]["type"], "顧客")
+        # 名前の変更: 抽出済みの種別・辞書の行にもすぐ当てる（読み直し不要なので版は上げない）
+        entitydict.save_entry({"name": "北浜電機", "type": "組織", "match": False})
+        entitydict.update_type("組織", "取引先")
+        g = self.g()
+        self.assertEqual(g.entities[nk("北浜電機")]["type"], "取引先")
+        self.assertEqual(g.entities[nk("品質保証部")]["type"], "取引先")    # LLM が「組織」と付けたもの
+        self.assertEqual(entitydict.get(nk("北浜電機"))["type"], "取引先")
+        self.assertEqual(entitydict.types_version(), v0 + 1)
+        self.assertIn("取引先", entitydict.types_prompt())
+        self.assertNotIn("組織", entitydict.types_prompt())
+        # もう一度変えても、元の種別から届く
+        entitydict.update_type("取引先", "相手先")
+        self.assertEqual(self.g().entities[nk("品質保証部")]["type"], "相手先")
+        self.assertEqual(entitydict.type_map(), {"組織": "相手先", "取引先": "相手先"})
+        # 元の名前に戻すと付け替えもやめる
+        entitydict.update_type("相手先", "組織")
+        self.assertEqual(entitydict.type_map(), {"取引先": "組織", "相手先": "組織"})
+        self.assertEqual(self.g().entities[nk("品質保証部")]["type"], "組織")
+        # まとめる（一覧から削除）
+        entitydict.delete_type("設備", "製品")
+        self.assertEqual(self.g().entities[nk("熱処理炉")]["type"], "製品")
+        self.assertNotIn("設備", [t["name"] for t in entitydict.entity_types()])
+        with self.assertRaisesRegex(ValueError, "まとめ先"):
+            entitydict.delete_type("製品", "設備")
+        entitydict.delete_type("部署", "組織")                            # 一覧に無い種別（LLM が付けた種別）も
+        self.assertEqual(entitydict.type_map()["部署"], "組織")
+        # 説明の変更は読み直しで効くので版を上げる
+        entitydict.update_type("顧客", "顧客", "買う会社")
+        self.assertEqual(entitydict.types_version(), v0 + 2)
+        # 標準に戻す
+        entitydict.reset_types()
+        self.assertEqual((entitydict.types_prompt(), entitydict.type_map()), (std, {}))
+        self.assertEqual(self.g().entities[nk("熱処理炉")]["type"], "設備")
+        self.assertEqual(entitydict.types_version(), v0 + 3)
+
+    def test_stale_readings_only_llm_graphs_after_adding_types(self):
+        r = readings.start("d1", "graph", {"profile": "local", "provider": "openai", "model": "m",
+                                           "endpoint": "http://h"}, "standard")
+        readings.update_data(r["id"], types_version=entitydict.types_version())
+        readings.finish(r["id"], "done")
+        t = readings.start("d2", "graph", readings.terms_identity(), "terms")
+        readings.finish(t["id"], "done")
+        self.assertEqual(entitydict.stale_readings(), [])
+        entitydict.update_type("組織", "取引先")                          # 名前の変更だけなら読み直し不要
+        self.assertEqual(entitydict.stale_readings(), [])
+        entitydict.add_type("顧客")
+        stale = entitydict.stale_readings()
+        self.assertEqual([x["doc_id"] for x in stale], ["d1"])         # 語の共起・手動のグラフは対象外
+        readings.update_data(r["id"], types_version=entitydict.types_version())
+        self.assertEqual(entitydict.stale_readings(), [])
 
     def test_conflicts_and_bulk(self):
         entitydict.save_entry({"name": "北浜電機", "aliases": "北電"})

@@ -39,7 +39,7 @@ import time
 import traceback
 from collections import Counter, deque
 
-from . import db, graph, readings, terms
+from . import db, entitydict, graph, readings, terms
 from .config import chat_ready, embed_profile_for, embed_space, ingest_profile_for, load_config
 from .extract import ExtractError, extract
 from .llm import LLM, LLMError
@@ -526,6 +526,8 @@ class Indexer:
         reading = readings.start(doc_id, "graph", ident, mode, opts={**opts, "graph_mode": mode},
                                  restart=policy == "restart")
         rid = reading["id"]
+        if mode != "terms":                 # どの種別の一覧で読んだか（種別を足したら読み直しの対象になる）
+            readings.update_data(rid, types_version=entitydict.types_version())
         records = {r["chunk_id"]: r["status"] for r in db.query(
             "SELECT chunk_id,status FROM graph_chunks WHERE reading_id=?", (rid,))}
         skip = {cid for cid, st in records.items()

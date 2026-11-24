@@ -333,11 +333,38 @@ def api_entity_dict(action: str, body: dict) -> dict:
             result["entry"] = entitydict.set_type(s("key"), s("name"), s("type"))
         elif action == "exclude":
             entitydict.exclude_entity(s("key"), s("name"))
+        elif action == "type-add":
+            result["type"] = entitydict.add_type(s("name"), s("description"))
+        elif action == "type-update":
+            result["type"] = entitydict.update_type(s("old"), s("name"),
+                                                    s("description") if "description" in body else None)
+        elif action == "type-delete":
+            entitydict.delete_type(s("name"), s("into"))
+        elif action == "type-reset":
+            entitydict.reset_types()
+        elif action == "reread":
+            # 種別を足す・説明を変える前に LLM で作ったグラフを、同じ LLM・方式で読み直す
+            stale = entitydict.stale_readings()
+            for r in stale:
+                api_doc_reindex(r["doc_id"], {"reading_id": r["reading_id"], "policy": "restart"})
+            result["reread"] = len(stale)
         else:
             return {"error": "不明な操作です"}
     except ValueError as e:
         return {"error": str(e)}
-    return {"ok": True, **result, **entitydict.state()}
+    return {"ok": True, **result, **entity_dict_state()}
+
+
+def entity_dict_state() -> dict:
+    """辞書の画面用の一覧に、種別ごとのエンティティの数（今のグラフ全体）を添える。"""
+    out = entitydict.state()
+    docs = db.list_docs()
+    g = graph.get_graph({d["id"] for d in docs}, {d["id"]: d["sensitivity"] for d in docs})
+    counts: dict[str, int] = {}
+    for e in g.entities.values():
+        counts[e["type"]] = counts.get(e["type"], 0) + 1
+    out["type_counts"] = counts
+    return out
 
 
 def api_graph(qs: dict) -> dict:
@@ -535,7 +562,7 @@ class Handler(BaseHTTPRequestHandler):
         elif route == "/api/graph":
             self._json(api_graph(qs))
         elif route == "/api/entity-dict":
-            self._json(entitydict.state())
+            self._json(entity_dict_state())
         elif route == "/api/chats":
             docs = db.list_docs()
             chats = db.list_chats()

@@ -30,6 +30,7 @@ from collections import Counter, defaultdict
 from . import db, entitydict
 from .textutil import BM25Index, as_str_list, parse_score
 
+# 標準の種別（利用者が種別の一覧を決めていないとき。決めた一覧は entitydict.entity_types）
 ENTITY_TYPES = "組織 / 人物 / 製品 / 技術 / 設備 / 工程 / 材料 / 規格・法令 / 場所 / 日付・イベント / 指標 / 文書 / 概念"
 
 EXTRACT_SYSTEM = ("あなたはナレッジグラフ構築のための情報抽出器です。"
@@ -121,7 +122,7 @@ def extract_chunk(llm, profile: str, sensitivity: str, title: str, chunk: dict,
     template = FAST_PROMPT if mode == "fast" else EXTRACT_PROMPT
     max_tokens = 2048 if mode == "fast" else 4096
     prompt = template.format(title=title[:80], locator=chunk.get("locator") or "",
-                             text=chunk["text"][:3500], types=ENTITY_TYPES)
+                             text=chunk["text"][:3500], types=entitydict.types_prompt())
     data, info = llm.chat_json(profile, prompt, sensitivity=sensitivity, system=EXTRACT_SYSTEM,
                                max_tokens=max_tokens, purpose="ingest", on_progress=on_progress,
                                timeout=timeout)
@@ -229,7 +230,7 @@ class KnowledgeGraph:
                 continue
             ent = self._entity(key, r["name"], r["doc_id"], r["chunk_id"], doc_sens)
             names[key][r["name"]] += 1
-            types[key][r["type"]] += 1
+            types[key][rules.map_type(r["type"])] += 1
             if r["description"] and r["description"] not in ent["descs"] and len(ent["descs"]) < 6:
                 ent["descs"].append(r["description"])
             if match:
@@ -256,8 +257,8 @@ class KnowledgeGraph:
         for key, ent in self.entities.items():
             entry = rules.entries.get(key)
             ent["name"] = entry["name"] if entry else (names[key].most_common(1)[0][0] if names[key] else ent["name"])
-            ent["type"] = (entry and entry["type"]) or \
-                (types[key].most_common(1)[0][0] if types[key] else "") or "概念"
+            ent["type"] = rules.map_type((entry and entry["type"]) or
+                                         (types[key].most_common(1)[0][0] if types[key] else "") or "概念")
             descs = ent.pop("descs") or ([ent["first"]] if ent["first"] else [])
             if entry and entry["description"]:
                 descs.insert(0, entry["description"])

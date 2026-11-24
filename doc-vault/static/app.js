@@ -1886,6 +1886,7 @@ async function openGraphEdit(node, kind) {
 
 let dictState = null;
 let dictEditing = null;      // 編集中の行の key
+let typeEditing = null;      // 編集中の種別の名前
 let dictChanged = false;
 
 async function openDict(tab) {
@@ -1898,7 +1899,7 @@ async function openDict(tab) {
 
 function closeDict() {
   $("#dict-modal").classList.add("hidden");
-  resetDictForm();
+  resetDictForm(); resetTypeForm();
   if (dictChanged && !$("#tab-graph").classList.contains("hidden")) loadGraph();
 }
 
@@ -1926,6 +1927,8 @@ function renderDict(data) {
   const st = dictState || { entries: [], excludes: [], relations: [], types: [] };
   $("#dict-n-entries").textContent = `(${st.entries.length})`;
   $("#dict-n-excludes").textContent = `(${st.excludes.length})`;
+  $("#dict-n-types").textContent = `(${(st.type_list || []).length})`;
+  renderTypes(st);
   $("#dict-n-relations").textContent = `(${st.relations.length})`;
   $("#dict-entries").innerHTML = st.entries.map((e) => `<div class="dict-row">
       <div><b>${esc(e.name)}</b> ${e.type ? `<span class="badge">${esc(e.type)}</span>` : ""}
@@ -1963,6 +1966,89 @@ function renderDict(data) {
   }));
 }
 
+/* ---- 種別の一覧（LLM に選ばせる種別。名前の変更・まとめるはすぐ反映、追加・説明は読み直しで効く） ---- */
+
+function renderTypes(st) {
+  const list = st.type_list || [];
+  const counts = st.type_counts || {};
+  const listed = new Set(list.map((t) => t.name));
+  const fromOf = {};
+  Object.entries(st.type_map || {}).forEach(([src, dst]) => { (fromOf[dst] = fromOf[dst] || []).push(src); });
+  const opts = (except) => list.filter((t) => t.name !== except)
+    .map((t) => `<option value="${esc(t.name)}">${esc(t.name)}</option>`).join("");
+  const row = (name, desc, extra) => {
+    const n = counts[name] || 0;
+    return `<div class="dict-row" data-type="${esc(name)}">
+      <div><b>${esc(name)}</b> <span class="muted">エンティティ ${n}</span>${extra.badge || ""}
+        ${desc ? `<div class="sub">${esc(desc)}</div>` : ""}
+        ${(fromOf[name] || []).length ? `<div class="sub">元の種別: ${esc(fromOf[name].join("、"))}（抽出済みのものもこの種別で表示）</div>` : ""}</div>
+      <div class="ops">${extra.ops}</div>
+      <div class="dt-merge hidden">この種別のエンティティ（${n} 件）を
+        <select>${opts(name)}</select> にまとめて
+        <button class="btn small danger" data-tdo="${esc(name)}">${extra.listed ? "一覧から削除" : "まとめる"}</button>
+        <button class="btn small" data-tcancel>やめる</button></div>
+    </div>`;
+  };
+  const unknown = Object.keys(counts).filter((t) => !listed.has(t)).sort((a, b) => counts[b] - counts[a]);
+  $("#dict-types-list").innerHTML = list.map((t) => row(t.name, t.description, {
+    listed: true,
+    ops: `<button class="btn small" data-tedit="${esc(t.name)}">編集</button>
+      <button class="btn small danger" data-tdel="${esc(t.name)}">削除…</button>`,
+  })).join("") + (unknown.length ? `<div class="dict-sub-title">一覧に無い種別（LLM が一覧の外から付けたもの・辞書で決めたもの）</div>`
+    + unknown.map((t) => row(t, "", {
+      listed: false, badge: ' <span class="badge">一覧に無い</span>',
+      ops: `<button class="btn small" data-tadd="${esc(t)}">一覧に足す</button>
+        <button class="btn small" data-tdel="${esc(t)}">まとめる…</button>`,
+    })).join("") : "");
+  $("#dt-note").textContent = st.types_customized ? "種別の一覧を変更しています" : "標準の種別（13 種）を使っています";
+  $("#dt-reset").disabled = !st.types_customized;
+  const stale = st.stale || { count: 0, docs: [] };
+  const box = $("#dt-stale");
+  box.classList.toggle("hidden", !stale.count);
+  if (stale.count) {
+    const names = stale.docs.slice(0, 3).map((d) => d.title).join("・");
+    box.innerHTML = `<span>種別を足す・説明を変える前に LLM で読み込んだ文書が <b>${stale.count}</b> 件あります（${esc(names)}${stale.count > 3 ? " ほか" : ""}）。
+      新しい種別で拾わせるには読み直します。</span><button class="btn small primary" id="dt-reread">同じ LLM で読み直す</button>`;
+    $("#dt-reread").addEventListener("click", async () => {
+      if (!confirm(`${stale.count} 件の文書のグラフを、前と同じ LLM・方式で読み直します。\n文書の量によっては時間がかかります（文書タブで進み具合が分かります）。`)) return;
+      const r = await dictCall("reread", {});
+      if (r) dictMsg(`${r.reread} 件の読み直しを始めました（文書タブで進み具合が分かります）`);
+    });
+  }
+  const pane = $("#dict-types-list");
+  $$("[data-tedit]", pane).forEach((b) => b.addEventListener("click", () => {
+    const t = list.find((x) => x.name === b.dataset.tedit);
+    if (!t) return;
+    typeEditing = t.name;
+    $("#dt-name").value = t.name; $("#dt-desc").value = t.description;
+    $("#dt-save").textContent = "保存"; $("#dt-cancel").classList.remove("hidden");
+    $("#dt-name").focus();
+  }));
+  $$("[data-tdel]", pane).forEach((b) => b.addEventListener("click", () => {
+    const merge = b.closest(".dict-row").querySelector(".dt-merge");
+    merge.classList.remove("hidden");
+    const sel = merge.querySelector("select");
+    const fallback = [...sel.options].find((o) => ["概念", "その他"].includes(o.value));
+    if (fallback) sel.value = fallback.value;
+  }));
+  $$("[data-tcancel]", pane).forEach((b) => b.addEventListener("click", () => b.closest(".dt-merge").classList.add("hidden")));
+  $$("[data-tdo]", pane).forEach((b) => b.addEventListener("click", async () => {
+    const into = b.closest(".dt-merge").querySelector("select").value;
+    const r = await dictCall("type-delete", { name: b.dataset.tdo, into });
+    if (r) dictMsg(`種別「${b.dataset.tdo}」を「${into}」にまとめました`);
+  }));
+  $$("[data-tadd]", pane).forEach((b) => b.addEventListener("click", async () => {
+    const r = await dictCall("type-add", { name: b.dataset.tadd });
+    if (r) dictMsg(`種別「${b.dataset.tadd}」を一覧に足しました`);
+  }));
+}
+
+function resetTypeForm() {
+  typeEditing = null;
+  $("#dt-name").value = ""; $("#dt-desc").value = "";
+  $("#dt-save").textContent = "追加"; $("#dt-cancel").classList.add("hidden");
+}
+
 async function dictCall(action, body) {
   const r = await api(`/api/entity-dict/${action}`, body);
   if (r.error) { dictMsg(r.error, true); return null; }
@@ -1997,6 +2083,24 @@ $("#de-export").addEventListener("click", () => {
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob); a.download = "entity-dictionary.csv"; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+});
+$("#dt-cancel").addEventListener("click", resetTypeForm);
+$("#dt-save").addEventListener("click", async () => {
+  const name = $("#dt-name").value.trim();
+  if (!name) { $("#dt-name").focus(); return; }
+  const editing = typeEditing;
+  const r = editing
+    ? await dictCall("type-update", { old: editing, name, description: $("#dt-desc").value.trim() })
+    : await dictCall("type-add", { name, description: $("#dt-desc").value.trim() });
+  if (!r) return;
+  dictMsg(editing ? (editing !== r.type.name ? `種別「${editing}」を「${r.type.name}」にしました（抽出済みのものも）` : `種別「${r.type.name}」を保存しました`)
+    : `種別「${r.type.name}」を足しました`);
+  resetTypeForm();
+});
+$("#dt-name").addEventListener("keydown", (ev) => { if (ev.key === "Enter" && !ev.isComposing) $("#dt-save").click(); });
+$("#dt-reset").addEventListener("click", async () => {
+  if (!confirm("種別の一覧を標準の 13 種に戻しますか？（名前の変更・まとめも取り消します。辞書でエンティティに決めた種別はそのまま）")) return;
+  if (await dictCall("type-reset", {})) dictMsg("標準の種別に戻しました");
 });
 $("#dx-save").addEventListener("click", async () => {
   if (await dictCall("excludes", { names: $("#dx-text").value.split("\n") })) dictMsg("外す語を保存しました");

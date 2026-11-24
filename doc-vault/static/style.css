@@ -233,6 +233,13 @@ details.adv summary { cursor: pointer; color: var(--muted); font-size: 12px; mar
 .g-edit .hint { margin: 2px 0 6px; }
 .detail-rel .x { float: right; margin-left: 6px; }
 .badge.dict { color: #fbbf24; border-color: #b45309; }
+.dict-row .dt-merge { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+  padding: 6px 8px; border: 1px dashed var(--border); border-radius: 8px; }
+.dict-row .dt-merge select { width: auto; margin: 0; }
+.dict-stale { margin: 8px 0; padding: 8px 10px; border: 1px solid var(--warn); border-radius: 8px; font-size: 13px;
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.dict-stale.hidden { display: none; }
+.dict-sub-title { color: var(--muted); font-size: 12px; margin: 10px 0 2px; }
 @media (max-width: 640px) { .dict-form { grid-template-columns: 1fr; } }
 .graph-toolbar .check { display: inline-flex; gap: 4px; align-items: center; margin: 0; }
 .graph-wrap { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 12px; }

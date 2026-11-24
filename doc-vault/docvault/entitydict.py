@@ -15,6 +15,14 @@ LLM や語の共起で抽出したエンティティは、取り込みのたび�
 グラフ画面の「名前の変更・統合」「種別を変える」「グラフから外す」「関係を追加・外す」も、この 3 つの表への
 書き込みになる（辞書の画面で一覧・取り消しができる）。照合キーは graph.norm_key（全角半角・空白・
 大文字小文字・法人格の違いを無視）。
+
+種別の一覧（entity_types。空なら標準の 13 種）も利用者が決める:
+  - LLM で読み込むときの指示（「種別は次から選ぶ」）に使う。説明を書くと LLM への説明として添える
+  - 名前の変更・まとめる（削除）は entity_type_map（元の種別 → 新しい種別）に残し、抽出済みの種別にも
+    グラフを組み立てるときに当てる（読み直し不要）。辞書の行の種別も書き換える
+  - 種別を足す・説明を変える・標準に戻すは、LLM に読み直させないと抽出済みの文書には効かない。
+    そのため版（meta の entity_types_version）を上げ、グラフの読み込み結果に読んだときの版を残して、
+    読み直していない文書を数えられるようにする
 """
 from __future__ import annotations
 
@@ -54,6 +62,144 @@ def _nk(name: str) -> str:
 def standard_types() -> list[str]:
     from .graph import ENTITY_TYPES
     return [t.strip() for t in ENTITY_TYPES.split("/") if t.strip()]
+
+
+# ---------------------------------------------------------------- 種別の一覧
+
+def entity_types() -> list[dict]:
+    """種別の一覧 [{name, description}]（並び順どおり）。まだ決めていなければ標準の種別。"""
+    rows = db.query("SELECT name,description FROM entity_types ORDER BY ord, name")
+    if rows:
+        return [{"name": r["name"], "description": r["description"]} for r in rows]
+    return [{"name": t, "description": ""} for t in standard_types()]
+
+
+def types_customized() -> bool:
+    return db.one("SELECT 1 FROM entity_types LIMIT 1") is not None
+
+
+def types_version() -> int:
+    row = db.one("SELECT value FROM meta WHERE key='entity_types_version'")
+    try:
+        return int(row["value"]) if row else 0
+    except ValueError:
+        return 0
+
+
+def _version_stmt() -> tuple:
+    return ("INSERT OR REPLACE INTO meta(key,value) VALUES('entity_types_version',?)", (str(types_version() + 1),))
+
+
+def types_prompt() -> str:
+    """LLM への「種別は次から選ぶ」。説明があれば行を分けて添える（標準のままなら従来と同じ 1 行）。"""
+    types = entity_types()
+    line = " / ".join(t["name"] for t in types)
+    notes = [f"  - {t['name']}: {t['description']}" for t in types if t["description"]]
+    return line + ("\n" + "\n".join(notes) if notes else "")
+
+
+def type_map() -> dict[str, str]:
+    return {r["src"]: r["dst"] for r in db.query("SELECT src,dst FROM entity_type_map")}
+
+
+def _ensure_types() -> list[tuple]:
+    """標準の種別のまま初めて変えるときに、標準の一覧を表へ書き出す文。"""
+    if types_customized():
+        return []
+    return [("INSERT INTO entity_types(name,description,ord,updated_at) VALUES(?,?,?,?)", (t, "", i, db.now()))
+            for i, t in enumerate(standard_types())]
+
+
+def _clean_type(value) -> str:
+    return clean_name(value, MAX_TYPE).replace("/", "・")
+
+
+def add_type(name: str, description: str = "") -> dict:
+    name = _clean_type(name)
+    if not name:
+        raise ValueError("種別の名前を入れてください")
+    if any(t["name"] == name for t in entity_types()):
+        raise ValueError(f"種別「{name}」は既にあります")
+    desc = str(description or "").strip()[:200]
+    order = len(entity_types())
+    db.write_many(_ensure_types() + [
+        ("INSERT INTO entity_types(name,description,ord,updated_at) VALUES(?,?,?,?)", (name, desc, order, db.now())),
+        ("DELETE FROM entity_type_map WHERE src=?", (name,)),       # まとめた種別を足し直したら付け替えをやめる
+        _version_stmt()])
+    _bump()
+    return {"name": name, "description": desc}
+
+
+def _retarget(old: str, new: str) -> list[tuple]:
+    """種別 old を new へ付け替える文（抽出済みの種別・前の付け替え・辞書の行）。"""
+    return [("UPDATE entity_type_map SET dst=? WHERE dst=?", (new, old)),
+            ("DELETE FROM entity_type_map WHERE src=dst", ()),
+            ("INSERT OR REPLACE INTO entity_type_map(src,dst) VALUES(?,?)", (old, new)),
+            ("DELETE FROM entity_type_map WHERE src=?", (new,)),
+            ("UPDATE entity_dict SET type=? WHERE type=?", (new, old))]
+
+
+def update_type(old: str, name: str, description: str | None = None) -> dict:
+    """種別の名前・説明を変える。名前の変更は抽出済みの種別にもすぐ当てる（説明の変更は読み直しで効く）。"""
+    types = entity_types()
+    cur = next((t for t in types if t["name"] == old), None)
+    if cur is None:
+        raise ValueError(f"種別「{old}」が見つかりません")
+    name = _clean_type(name) or old
+    if name != old and any(t["name"] == name for t in types):
+        raise ValueError(f"種別「{name}」は既にあります（まとめるときは「{old}」の削除でまとめ先に選んでください）")
+    desc = cur["description"] if description is None else str(description).strip()[:200]
+    stmts = _ensure_types()
+    stmts.append(("UPDATE entity_types SET name=?, description=?, updated_at=? WHERE name=?",
+                  (name, desc, db.now(), old)))
+    if name != old:
+        stmts += _retarget(old, name)
+    if desc != cur["description"]:
+        stmts.append(_version_stmt())
+    db.write_many(stmts)
+    _bump()
+    return {"name": name, "description": desc}
+
+
+def delete_type(name: str, into: str) -> None:
+    """種別を一覧から外し、その種別のエンティティを into（一覧にある種別）へまとめる。
+
+    一覧に無い種別（LLM が一覧の外から付けた種別）も、同じようにまとめ先へ付け替えられる。
+    """
+    name = clean_name(name, MAX_TYPE)
+    if not name:
+        raise ValueError("種別を指定してください")
+    types = entity_types()
+    if into == name or not any(t["name"] == into for t in types):
+        raise ValueError("まとめ先の種別を一覧から選んでください")
+    stmts = _ensure_types() + [("DELETE FROM entity_types WHERE name=?", (name,))] \
+        if any(t["name"] == name for t in types) else []
+    db.write_many(stmts + _retarget(name, into))
+    _bump()
+
+
+def reset_types() -> None:
+    """標準の種別に戻す（付け替えもやめる。辞書の行に決めた種別はそのまま）。"""
+    db.write_many([("DELETE FROM entity_types", ()), ("DELETE FROM entity_type_map", ()), _version_stmt()])
+    _bump()
+
+
+def stale_readings() -> list[dict]:
+    """種別を足す・説明を変える前に LLM で作ったグラフ（使用中のもの）。読み直すと新しい種別で抽出する。"""
+    version = types_version()
+    if version == 0:
+        return []
+    out = []
+    for r in db.query("SELECT r.id,r.doc_id,r.label,r.data,d.title FROM readings r JOIN documents d ON d.id=r.doc_id "
+                      "WHERE r.stage='graph' AND r.active=1 AND r.provider NOT IN ('terms','manual') "
+                      "AND r.mode!='terms' ORDER BY d.title"):
+        try:
+            seen = int(json.loads(r["data"] or "{}").get("types_version") or 0)
+        except (ValueError, TypeError):
+            seen = 0
+        if seen < version:
+            out.append({"reading_id": r["id"], "doc_id": r["doc_id"], "title": r["title"], "label": r["label"]})
+    return out
 
 
 def clean_name(value, limit: int = MAX_NAME) -> str:
@@ -109,13 +255,17 @@ def relations() -> list[dict]:
 
 
 def state() -> dict:
-    """辞書の画面用（登録したエンティティ・外す語・手で足した/外した関係・種別の候補）。"""
+    """辞書の画面用（登録したエンティティ・外す語・手で足した/外した関係・種別の一覧と候補）。"""
     ents = entries()
-    types = standard_types()
+    type_list = entity_types()
+    types = [t["name"] for t in type_list]
     for e in ents:
         if e["type"] and e["type"] not in types:
             types.append(e["type"])
-    return {"entries": ents, "excludes": excludes(), "relations": relations(), "types": types}
+    stale = stale_readings()
+    return {"entries": ents, "excludes": excludes(), "relations": relations(), "types": types,
+            "type_list": type_list, "types_customized": types_customized(), "types_version": types_version(),
+            "type_map": type_map(), "stale": {"count": len(stale), "docs": stale[:20]}}
 
 
 def _owners(skip: set[str] = frozenset()) -> dict[str, dict]:
@@ -348,9 +498,18 @@ class Rules:
     excludes: set[str] = field(default_factory=set)
     relations: list[dict] = field(default_factory=list)          # 手で足した関係（照合キーは canon 済み）
     hidden: set[tuple[str, str]] = field(default_factory=set)    # 外した関係（canon 済み・並べ替え済み）
+    type_map: dict[str, str] = field(default_factory=dict)       # 名前を変えた・まとめた種別 → 今の種別
 
     def canon(self, key: str) -> str:
         return self.alias.get(key, key)
+
+    def map_type(self, type_: str) -> str:
+        for _ in range(8):                       # 付け替えは書き込み時に畳んでいるが、念のため連鎖もたどる
+            nxt = self.type_map.get(type_)
+            if not nxt or nxt == type_:
+                break
+            type_ = nxt
+        return type_
 
     def excluded(self, raw_key: str, key: str | None = None) -> bool:
         return raw_key in self.excludes or (key or self.canon(raw_key)) in self.excludes
@@ -370,6 +529,7 @@ def load_rules() -> Rules:
             if k and k not in r.entries:          # ほかの行の正式名は別名にしない（行が優先）
                 r.alias.setdefault(k, e["key"])
     r.excludes = {x["key"] for x in excludes()}
+    r.type_map = type_map()
     for rel in relations():
         a, b = r.canon(rel["source"]), r.canon(rel["target"])
         if a == b:
