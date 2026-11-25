@@ -72,6 +72,11 @@
   ],
   "log": [
     {
+      "date": "2026-11-25",
+      "summary": "共通のグラフビューア（graphview.js）を更新: ノードの丸の中に文字（絵文字）を描く setGlyphs と、属性を指定した強調 highlightKey(key, mode) を追加（Doc Vault の絵文字モードのため。こちらの表示は変わらない）",
+      "ref": "#112"
+    },
+    {
       "date": "2026-11-09",
       "summary": "共通のグラフビューア（graphview.js）を更新: 色分けを任意の属性に広げ、複数のグループに属するノードの輪・大きさの指定に対応（Doc Vault のフォルダ表示のため。こちらの表示は変わらない）",
       "ref": "#107"
@@ -125,7 +130,7 @@
       "ref": "#43"
     }
   ],
-  "updated": "2026-11-09",
+  "updated": "2026-11-25",
   "images": [
     {
       "file": "images/rag-orchestrator/2026-11-09-combo-engine.jpg",

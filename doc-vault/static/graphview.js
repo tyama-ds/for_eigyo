@@ -9,6 +9,7 @@
  *   - 孤立ノード（関係なし）の表示切替、色分け（コミュニティ / 種別 / 任意の属性。例: フォルダ）
  *     属性 X で色分けしたとき、ノードに X + "s"（例: folders）の配列が2件以上あれば外側に輪を描く
  *     （複数のフォルダにまたがるエンティティが分かる）
+ *   - 絵文字モード（setGlyphs）: ノードの丸の中に文字（例: 種別の絵文字）を描く。色分けは丸の縁に残す
  *   - HiDPI（devicePixelRatio）対応、コンテナ幅への追従
  *
  * 使い方:
@@ -16,6 +17,7 @@
  *   gv.setData({ nodes, edges, communities });
  *   gv.fit(); gv.zoomBy(1.2); gv.focus(id); gv.search("文字列"); gv.setColorMode("type");
  *   gv.setShowIsolated(true); gv.highlightCommunity(cid); gv.setColorMode("folder"); gv.highlightKey(key);
+ *   gv.setGlyphs((node) => "🏢"); gv.setGlyphs(null); gv.highlightKey("組織", "type");
  *
  * nodes: [{id, name, type, degree, community, description, docs?, size?（大きさ。省略時は関係の数）,
  *          folder?, folders?（色分けの属性の例）}]
@@ -49,6 +51,7 @@
       this.onSelect = opts.onSelect || (() => {});
       this.height = opts.height || 620;
       this.colorMode = "community";
+      this.glyphOf = null;                          // ノード → 丸の中に描く文字（絵文字モード）
       this.showIsolated = false;
       this.all = { nodes: [], edges: [], communities: [] };
       this.nodes = []; this.edges = [];
@@ -93,6 +96,12 @@
       this.colorMode = mode || "community";       // community / type / 任意の属性名（例: folder）
       this.highlightCom = null;
       this._assignColors();
+      this.draw();
+    }
+
+    setGlyphs(fn) {
+      /* 絵文字モード: fn(node) が返す文字を丸の中に描く（null で通常の丸に戻す） */
+      this.glyphOf = typeof fn === "function" ? fn : null;
       this.draw();
     }
 
@@ -399,9 +408,9 @@
       this._highlight(cid);
     }
 
-    highlightKey(key) {
-      /* 今の色分けのグループ（例: フォルダ）を強調する */
-      this.highlightMode = this.colorMode;
+    highlightKey(key, mode) {
+      /* 今の色分け（mode を渡せばその属性。例: "type"）のグループを強調する */
+      this.highlightMode = mode || this.colorMode;
       this._highlight(key);
     }
 
@@ -450,11 +459,25 @@
         ctx.beginPath(); ctx.moveTo(e.a.x, e.a.y); ctx.lineTo(e.b.x, e.b.y); ctx.stroke();
       }
       // nodes
+      const glyphOf = this.glyphOf;
       for (const n of this.nodes) {
         const dim = dimmed(n);
         ctx.globalAlpha = dim ? 0.15 : 1;
-        ctx.fillStyle = n.color;
-        ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2); ctx.fill();
+        const glyph = glyphOf ? glyphOf(n) : "";
+        if (glyph) {                                  // 絵文字モード: 暗い丸に色の縁、中に絵文字
+          ctx.fillStyle = "rgba(15,22,38,0.92)";
+          ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2); ctx.fill();
+          ctx.strokeStyle = n.color; ctx.lineWidth = Math.max(1.6 / v.k, n.r * 0.16); ctx.stroke();
+          ctx.save();
+          ctx.font = `${n.r * 1.15}px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif`;
+          ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillStyle = "#ffffff";
+          ctx.fillText(glyph, n.x, n.y + n.r * 0.06);
+          ctx.restore();
+          ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
+        } else {
+          ctx.fillStyle = n.color;
+          ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2); ctx.fill();
+        }
         if (n.ring) {                                 // 複数のグループ（フォルダ）にまたがる
           ctx.save();
           ctx.strokeStyle = n.ring; ctx.lineWidth = 2.4 / v.k;
@@ -584,7 +607,8 @@
       const x = Math.min(ev.clientX + 14, global.innerWidth - 360);
       tip.style.left = `${x}px`;
       tip.style.top = `${ev.clientY + 14}px`;
-      tip.innerHTML = `<b>${esc(n.name)}</b>（${esc(n.type || "")}）`
+      const glyph = this.glyphOf ? this.glyphOf(n) : "";
+      tip.innerHTML = `<b>${esc(n.name)}</b>（${glyph ? esc(glyph) + " " : ""}${esc(n.type || "")}）`
         + `<span class="muted"> ${esc(n.degLabel || "関係")} ${n.deg}${n.community ? " / " + esc(n.community) : ""}</span>`
         + (n.description ? `<br>${esc(String(n.description).slice(0, 240))}` : "")
         + `<br><span class="muted">クリックで詳細</span>`;

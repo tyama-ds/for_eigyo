@@ -1611,7 +1611,15 @@ function syncGraphControls() {
   const color = $("#g-color");
   if (view !== "entities") { color.value = "folder"; color.disabled = true; } else { color.disabled = false; }
   $("#g-isolated").closest("label").classList.toggle("hidden", view !== "entities");
+  $("#g-emoji").closest("label").classList.toggle("hidden", view !== "entities");
 }
+
+/* ---- 絵文字モード: エンティティの丸の中に種別の絵文字（絵文字は辞書の「種別」タブで決める・空なら自動） ---- */
+function glyphOf(type) {
+  return (gdata && gdata.type_glyphs && gdata.type_glyphs[type]) || "🏷️";
+}
+function emojiMode() { return graphViewMode() === "entities" && $("#g-emoji").checked && !!gdata; }
+function applyGlyphs() { graphView().setGlyphs(emojiMode() ? (n) => glyphOf(n.type) : null); }
 
 async function loadGraph() {
   if (!state.docs.length) await loadDocs(true);
@@ -1650,6 +1658,7 @@ async function loadGraph() {
   gv.setColorMode(view === "entities" ? $("#g-color").value : "folder");
   gv.setShowIsolated(view !== "entities" || $("#g-isolated").checked);
   gv.setData(data);
+  applyGlyphs();
   updateGraphHint(); renderLegend();
 }
 
@@ -1663,6 +1672,7 @@ function updateGraphHint() {
     if (gdata.truncated) note += "（関係の多い順に上限まで）";
     if (st.isolated && !$("#g-isolated").checked) note += ` ・ 孤立ノード ${st.isolated} 件は非表示`;
     if ($("#g-color").value === "folder") note += " ・ 点線の輪は複数のフォルダに出てくるエンティティ";
+    if (emojiMode()) note += " ・ 丸の中の絵文字は種別（辞書の「種別」タブで変えられる）";
     note += "。ホイールで拡大縮小、背景ドラッグで移動、クリックで詳細。";
   } else {
     const unit = GRAPH_VIEW_TEXT[view].unit;
@@ -1677,13 +1687,23 @@ function updateGraphHint() {
 function renderLegend() {
   const items = graphView().legend();
   const mode = graphViewMode() === "entities" ? $("#g-color").value : "folder";
-  $("#g-legend").innerHTML = `<div class="muted">凡例（${COLOR_NAME[mode] || mode}・クリックで強調）</div>`
+  const emoji = emojiMode();
+  let html = `<div class="muted">凡例（${COLOR_NAME[mode] || mode}・クリックで強調）</div>`
     + items.map((it) => `<div class="legend-row" data-key="${esc(it.key)}">
-      <span class="sw" style="background:${it.color}"></span>${esc(it.label.slice(0, 30))}<span class="cnt">${it.count}</span></div>`).join("");
+      <span class="sw" style="background:${it.color}"></span>${emoji && mode === "type" ? `<span class="glyph">${esc(glyphOf(it.key))}</span>` : ""}${esc(it.label.slice(0, 30))}<span class="cnt">${it.count}</span></div>`).join("");
+  if (emoji && mode !== "type") {
+    const counts = new Map();
+    for (const n of graphView().nodes) counts.set(n.type, (counts.get(n.type) || 0) + 1);
+    html += `<div class="muted top-space">種別（丸の中の絵文字・クリックで強調）</div>`
+      + [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([t, c]) => `<div class="legend-row" data-tkey="${esc(t)}">
+        <span class="glyph">${esc(glyphOf(t))}</span>${esc(String(t).slice(0, 30))}<span class="cnt">${c}</span></div>`).join("");
+  }
+  $("#g-legend").innerHTML = html;
   $$("#g-legend [data-key]").forEach((el) => el.addEventListener("click", () => {
     if (mode === "community") graphView().highlightCommunity(el.dataset.key);
     else graphView().highlightKey(el.dataset.key);
   }));
+  $$("#g-legend [data-tkey]").forEach((el) => el.addEventListener("click", () => graphView().highlightKey(el.dataset.tkey, "type")));
 }
 
 function drillInto(view, folder, docId) {
@@ -1743,7 +1763,7 @@ function renderGraphDetail(node) {
   }
   const folders = (node.folders || []).length ? `<div class="muted">📁 ${esc(node.folders.slice(0, 4).join("・"))}${node.folders.length > 4 ? ` ほか ${node.folders.length - 4}` : ""}</div>` : "";
   box.innerHTML = `<div class="detail-title">${esc(node.name)}${node.dict ? ' <span class="badge dict" title="エンティティ辞書に登録（名前・種別・別名を決めた）">辞書</span>' : ""}</div>
-    <div class="muted">${esc(node.type || "")}${node.community ? " ・ " + esc(node.community) : ""} ・ 関係 ${rels.length}</div>
+    <div class="muted">${node.type ? `<span class="glyph">${esc(glyphOf(node.type))}</span>` : ""}${esc(node.type || "")}${node.community ? " ・ " + esc(node.community) : ""} ・ 関係 ${rels.length}</div>
     ${(node.aliases || []).length ? `<div class="muted">別名: ${esc(node.aliases.join("、"))}</div>` : ""}
     ${folders}
     ${node.found ? `<div class="muted" title="辞書の「本文から探す」で、LLM が拾わなかったチャンクにも足した数">本文から検出: ${node.found} か所</div>` : ""}
@@ -1979,7 +1999,7 @@ function renderTypes(st) {
   const row = (name, desc, extra) => {
     const n = counts[name] || 0;
     return `<div class="dict-row" data-type="${esc(name)}">
-      <div><b>${esc(name)}</b> <span class="muted">エンティティ ${n}</span>${extra.badge || ""}
+      <div><span class="glyph" title="グラフの絵文字モードで使う絵文字${extra.auto ? "（名前から自動）" : ""}">${esc(extra.glyph || "")}</span><b>${esc(name)}</b> <span class="muted">エンティティ ${n}</span>${extra.badge || ""}
         ${desc ? `<div class="sub">${esc(desc)}</div>` : ""}
         ${(fromOf[name] || []).length ? `<div class="sub">元の種別: ${esc(fromOf[name].join("、"))}（抽出済みのものもこの種別で表示）</div>` : ""}</div>
       <div class="ops">${extra.ops}</div>
@@ -1991,12 +2011,12 @@ function renderTypes(st) {
   };
   const unknown = Object.keys(counts).filter((t) => !listed.has(t)).sort((a, b) => counts[b] - counts[a]);
   $("#dict-types-list").innerHTML = list.map((t) => row(t.name, t.description, {
-    listed: true,
+    listed: true, glyph: t.glyph, auto: !t.emoji,
     ops: `<button class="btn small" data-tedit="${esc(t.name)}">編集</button>
       <button class="btn small danger" data-tdel="${esc(t.name)}">削除…</button>`,
   })).join("") + (unknown.length ? `<div class="dict-sub-title">一覧に無い種別（LLM が一覧の外から付けたもの・辞書で決めたもの）</div>`
     + unknown.map((t) => row(t, "", {
-      listed: false, badge: ' <span class="badge">一覧に無い</span>',
+      listed: false, glyph: (st.type_glyphs || {})[t] || "🏷️", auto: true, badge: ' <span class="badge">一覧に無い</span>',
       ops: `<button class="btn small" data-tadd="${esc(t)}">一覧に足す</button>
         <button class="btn small" data-tdel="${esc(t)}">まとめる…</button>`,
     })).join("") : "");
@@ -2020,7 +2040,8 @@ function renderTypes(st) {
     const t = list.find((x) => x.name === b.dataset.tedit);
     if (!t) return;
     typeEditing = t.name;
-    $("#dt-name").value = t.name; $("#dt-desc").value = t.description;
+    $("#dt-name").value = t.name; $("#dt-desc").value = t.description; $("#dt-emoji").value = t.emoji || "";
+    $("#dt-emoji").placeholder = `空なら ${t.glyph}`;
     $("#dt-save").textContent = "保存"; $("#dt-cancel").classList.remove("hidden");
     $("#dt-name").focus();
   }));
@@ -2045,7 +2066,7 @@ function renderTypes(st) {
 
 function resetTypeForm() {
   typeEditing = null;
-  $("#dt-name").value = ""; $("#dt-desc").value = "";
+  $("#dt-name").value = ""; $("#dt-desc").value = ""; $("#dt-emoji").value = ""; $("#dt-emoji").placeholder = "例: 🤝";
   $("#dt-save").textContent = "追加"; $("#dt-cancel").classList.add("hidden");
 }
 
@@ -2089,9 +2110,8 @@ $("#dt-save").addEventListener("click", async () => {
   const name = $("#dt-name").value.trim();
   if (!name) { $("#dt-name").focus(); return; }
   const editing = typeEditing;
-  const r = editing
-    ? await dictCall("type-update", { old: editing, name, description: $("#dt-desc").value.trim() })
-    : await dictCall("type-add", { name, description: $("#dt-desc").value.trim() });
+  const body = { name, description: $("#dt-desc").value.trim(), emoji: $("#dt-emoji").value.trim() };
+  const r = editing ? await dictCall("type-update", { old: editing, ...body }) : await dictCall("type-add", body);
   if (!r) return;
   dictMsg(editing ? (editing !== r.type.name ? `種別「${editing}」を「${r.type.name}」にしました（抽出済みのものも）` : `種別「${r.type.name}」を保存しました`)
     : `種別「${r.type.name}」を足しました`);
@@ -2124,6 +2144,11 @@ $("#g-isolated").addEventListener("change", () => {
   graphView().setShowIsolated($("#g-isolated").checked); updateGraphHint(); renderLegend();
 });
 $("#g-color").addEventListener("change", () => { graphView().setColorMode($("#g-color").value); updateGraphHint(); renderLegend(); });
+$("#g-emoji").checked = !!store("dv-graph-emoji");
+$("#g-emoji").addEventListener("change", () => {
+  store("dv-graph-emoji", $("#g-emoji").checked);
+  applyGlyphs(); updateGraphHint(); renderLegend();
+});
 $("#g-fit").addEventListener("click", () => graphView().fit());
 $("#g-zoom-in").addEventListener("click", () => graphView().zoomBy(1.3));
 $("#g-zoom-out").addEventListener("click", () => graphView().zoomBy(1 / 1.3));

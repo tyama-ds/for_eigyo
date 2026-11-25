@@ -334,10 +334,11 @@ def api_entity_dict(action: str, body: dict) -> dict:
         elif action == "exclude":
             entitydict.exclude_entity(s("key"), s("name"))
         elif action == "type-add":
-            result["type"] = entitydict.add_type(s("name"), s("description"))
+            result["type"] = entitydict.add_type(s("name"), s("description"), s("emoji"))
         elif action == "type-update":
             result["type"] = entitydict.update_type(s("old"), s("name"),
-                                                    s("description") if "description" in body else None)
+                                                    s("description") if "description" in body else None,
+                                                    s("emoji") if "emoji" in body else None)
         elif action == "type-delete":
             entitydict.delete_type(s("name"), s("into"))
         elif action == "type-reset":
@@ -364,6 +365,7 @@ def entity_dict_state() -> dict:
     for e in g.entities.values():
         counts[e["type"]] = counts.get(e["type"], 0) + 1
     out["type_counts"] = counts
+    out["type_glyphs"] = entitydict.type_glyphs(set(counts) | set(out["types"]))
     return out
 
 
@@ -415,7 +417,8 @@ def api_graph(qs: dict) -> dict:
     else:
         out = g.to_payload(limit=limit, group_of=group_of)
         out["view"] = "entities"
-    out.update(base_folder=folder, depth=depth)
+    out.update(base_folder=folder, depth=depth,
+               type_glyphs=entitydict.type_glyphs({n.get("type", "") for n in out["nodes"]}))
     return out
 
 

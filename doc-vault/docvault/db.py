@@ -207,6 +207,7 @@ CREATE TABLE IF NOT EXISTS entity_types (
   name TEXT PRIMARY KEY,
   description TEXT NOT NULL DEFAULT '',
   ord INTEGER NOT NULL DEFAULT 0,
+  emoji TEXT NOT NULL DEFAULT '',
   updated_at REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS entity_type_map (
@@ -263,6 +264,8 @@ def _migrate(c: sqlite3.Connection) -> None:
     for table in ("entity_mentions", "relation_mentions"):
         if "reading_id" not in {r[1] for r in c.execute(f"PRAGMA table_info({table})")}:
             c.execute(f"ALTER TABLE {table} ADD COLUMN reading_id TEXT NOT NULL DEFAULT ''")
+    if "emoji" not in {r[1] for r in c.execute("PRAGMA table_info(entity_types)")}:   # 種別の絵文字（グラフ表示）
+        c.execute("ALTER TABLE entity_types ADD COLUMN emoji TEXT NOT NULL DEFAULT ''")
     c.execute("CREATE INDEX IF NOT EXISTS idx_em_reading ON entity_mentions(reading_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_rm_reading ON relation_mentions(reading_id)")
     if not c.execute("SELECT 1 FROM meta WHERE key='readings_v1'").fetchone():
