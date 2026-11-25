@@ -73,7 +73,8 @@
   "log": [
     {
       "date": "2026-11-25",
-      "summary": "共通のグラフビューア（graphview.js）を更新: ノードの丸の中に文字（絵文字）を描く setGlyphs と、属性を指定した強調 highlightKey(key, mode) を追加（Doc Vault の絵文字モードのため。こちらの表示は変わらない）"
+      "summary": "共通のグラフビューア（graphview.js）を更新: ノードの丸の中に文字（絵文字）を描く setGlyphs と、属性を指定した強調 highlightKey(key, mode) を追加（Doc Vault の絵文字モードのため。こちらの表示は変わらない）",
+      "ref": "#112"
     },
     {
       "date": "2026-11-09",
