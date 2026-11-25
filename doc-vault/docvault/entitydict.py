@@ -66,12 +66,52 @@ def standard_types() -> list[str]:
 
 # ---------------------------------------------------------------- 種別の一覧
 
+# グラフの絵文字モードで種別を表す絵文字。種別の一覧で決めた絵文字が優先、無ければ標準の種別の絵文字、
+# それも無ければ（利用者が足した種別）名前の語から推し量る
+STANDARD_EMOJI = {"組織": "🏢", "人物": "👤", "製品": "📦", "技術": "🔬", "設備": "🏭", "工程": "⚙️",
+                  "材料": "🧱", "規格・法令": "📜", "場所": "📍", "日付・イベント": "📅", "指標": "📊",
+                  "文書": "📄", "概念": "💡", "語": "🔤", "その他": "🏷️"}
+_EMOJI_HINTS = [
+    (r"顧客|取引|得意先|客", "🤝"), (r"競合|ライバル", "⚔️"), (r"案件|商談|プロジェクト|契約", "💼"),
+    (r"部署|部門|チーム|班|[部課室]$", "👥"), (r"会社|企業|組織|団体|法人|機関|社$", "🏢"), (r"人|担当|者|氏|員", "👤"),
+    (r"課題|問題|リスク|不具合|故障|トラブル", "⚠️"), (r"製品|商品|品|型番", "📦"), (r"技術|特許|研究", "🔬"),
+    (r"設備|装置|機械|工場|ライン|炉", "🏭"), (r"工程|プロセス|手順|作業", "⚙️"), (r"材料|素材|部材|原料", "🧱"),
+    (r"規格|法|規則|基準|規程", "📜"), (r"場所|拠点|地域|国|都市|住所", "📍"), (r"日|時期|イベント|会議|年", "📅"),
+    (r"指標|数値|KPI|金額|価格|費用|売上", "📊"), (r"文書|資料|報告|帳票", "📄"), (r"サービス", "🛎️"),
+    (r"システム|ソフト|アプリ|ツール", "💻"), (r"概念|考え|方針", "💡"),
+]
+DEFAULT_EMOJI = "🏷️"
+MAX_EMOJI = 8
+
+
+def default_emoji(type_name: str) -> str:
+    if type_name in STANDARD_EMOJI:
+        return STANDARD_EMOJI[type_name]
+    for pattern, emoji in _EMOJI_HINTS:
+        if re.search(pattern, type_name or "", re.IGNORECASE):
+            return emoji
+    return DEFAULT_EMOJI
+
+
+def _clean_emoji(value) -> str:
+    return "".join(str(value or "").split())[:MAX_EMOJI]
+
+
 def entity_types() -> list[dict]:
-    """種別の一覧 [{name, description}]（並び順どおり）。まだ決めていなければ標準の種別。"""
-    rows = db.query("SELECT name,description FROM entity_types ORDER BY ord, name")
-    if rows:
-        return [{"name": r["name"], "description": r["description"]} for r in rows]
-    return [{"name": t, "description": ""} for t in standard_types()]
+    """種別の一覧 [{name, description, emoji（決めた絵文字。空なら自動）, glyph（表示に使う絵文字）}]。
+
+    並び順どおり。まだ決めていなければ標準の種別。
+    """
+    rows = db.query("SELECT name,description,emoji FROM entity_types ORDER BY ord, name")
+    items = [(r["name"], r["description"], r["emoji"] or "") for r in rows] if rows \
+        else [(t, "", "") for t in standard_types()]
+    return [{"name": n, "description": d, "emoji": e, "glyph": e or default_emoji(n)} for n, d, e in items]
+
+
+def type_glyphs(names) -> dict[str, str]:
+    """種別 → 絵文字（グラフの絵文字モード用。一覧に無い種別も推し量る）。"""
+    explicit = {t["name"]: t["glyph"] for t in entity_types()}
+    return {n: explicit.get(n) or default_emoji(n) for n in names if n}
 
 
 def types_customized() -> bool:
@@ -106,7 +146,8 @@ def _ensure_types() -> list[tuple]:
     """標準の種別のまま初めて変えるときに、標準の一覧を表へ書き出す文。"""
     if types_customized():
         return []
-    return [("INSERT INTO entity_types(name,description,ord,updated_at) VALUES(?,?,?,?)", (t, "", i, db.now()))
+    return [("INSERT INTO entity_types(name,description,ord,emoji,updated_at) VALUES(?,?,?,'',?)",
+             (t, "", i, db.now()))
             for i, t in enumerate(standard_types())]
 
 
@@ -114,20 +155,22 @@ def _clean_type(value) -> str:
     return clean_name(value, MAX_TYPE).replace("/", "・")
 
 
-def add_type(name: str, description: str = "") -> dict:
+def add_type(name: str, description: str = "", emoji: str = "") -> dict:
     name = _clean_type(name)
     if not name:
         raise ValueError("種別の名前を入れてください")
     if any(t["name"] == name for t in entity_types()):
         raise ValueError(f"種別「{name}」は既にあります")
     desc = str(description or "").strip()[:200]
+    emoji = _clean_emoji(emoji)
     order = len(entity_types())
     db.write_many(_ensure_types() + [
-        ("INSERT INTO entity_types(name,description,ord,updated_at) VALUES(?,?,?,?)", (name, desc, order, db.now())),
+        ("INSERT INTO entity_types(name,description,ord,emoji,updated_at) VALUES(?,?,?,?,?)",
+         (name, desc, order, emoji, db.now())),
         ("DELETE FROM entity_type_map WHERE src=?", (name,)),       # まとめた種別を足し直したら付け替えをやめる
         _version_stmt()])
     _bump()
-    return {"name": name, "description": desc}
+    return {"name": name, "description": desc, "emoji": emoji, "glyph": emoji or default_emoji(name)}
 
 
 def _retarget(old: str, new: str) -> list[tuple]:
@@ -139,8 +182,9 @@ def _retarget(old: str, new: str) -> list[tuple]:
             ("UPDATE entity_dict SET type=? WHERE type=?", (new, old))]
 
 
-def update_type(old: str, name: str, description: str | None = None) -> dict:
-    """種別の名前・説明を変える。名前の変更は抽出済みの種別にもすぐ当てる（説明の変更は読み直しで効く）。"""
+def update_type(old: str, name: str, description: str | None = None, emoji: str | None = None) -> dict:
+    """種別の名前・説明・絵文字を変える。名前の変更は抽出済みの種別にもすぐ当てる（説明の変更は読み直しで効く。
+    絵文字はグラフの表示だけなので読み直しは要らない）。"""
     types = entity_types()
     cur = next((t for t in types if t["name"] == old), None)
     if cur is None:
@@ -149,16 +193,17 @@ def update_type(old: str, name: str, description: str | None = None) -> dict:
     if name != old and any(t["name"] == name for t in types):
         raise ValueError(f"種別「{name}」は既にあります（まとめるときは「{old}」の削除でまとめ先に選んでください）")
     desc = cur["description"] if description is None else str(description).strip()[:200]
+    emoji = cur["emoji"] if emoji is None else _clean_emoji(emoji)
     stmts = _ensure_types()
-    stmts.append(("UPDATE entity_types SET name=?, description=?, updated_at=? WHERE name=?",
-                  (name, desc, db.now(), old)))
+    stmts.append(("UPDATE entity_types SET name=?, description=?, emoji=?, updated_at=? WHERE name=?",
+                  (name, desc, emoji, db.now(), old)))
     if name != old:
         stmts += _retarget(old, name)
     if desc != cur["description"]:
         stmts.append(_version_stmt())
     db.write_many(stmts)
     _bump()
-    return {"name": name, "description": desc}
+    return {"name": name, "description": desc, "emoji": emoji, "glyph": emoji or default_emoji(name)}
 
 
 def delete_type(name: str, into: str) -> None:

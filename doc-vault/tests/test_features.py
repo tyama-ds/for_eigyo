@@ -9,6 +9,7 @@
   - 旧データの移行: 読み込み結果の導入前の要約・グラフ・埋め込みを「以前の取り込み」として残す
   - エンティティ辞書: 別名をまとめる・種別・外す語・本文から探す・関係の追加と削除・グラフ画面の手直し
   - 種別の一覧: LLM への指示・名前の変更とまとめる（抽出済みにも当てる）・標準に戻す・読み直しの対象と読み直し
+  - 種別の絵文字（グラフの絵文字モード）: 標準の絵文字・名前からの推測・決めた絵文字・古い DB への列の追加
 """
 from __future__ import annotations
 
@@ -439,6 +440,9 @@ class TestFeatures(unittest.TestCase):
 
 
     def test_52_entity_types_api_and_reread(self):
+        g = self.api("/api/graph?limit=2000")                         # 絵文字モード用に、出てくる種別の絵文字
+        self.assertEqual(set(g["type_glyphs"]), {n["type"] for n in g["nodes"]})
+        self.assertEqual(g["type_glyphs"]["組織"], "🏢")
         st = self.api("/api/entity-dict")
         self.assertFalse(st["types_customized"])
         self.assertEqual(st["stale"]["count"], 0)
@@ -744,6 +748,44 @@ class TestEntityDict(unittest.TestCase):
         self.assertEqual((entitydict.types_prompt(), entitydict.type_map()), (std, {}))
         self.assertEqual(self.g().entities[nk("熱処理炉")]["type"], "設備")
         self.assertEqual(entitydict.types_version(), v0 + 3)
+
+    def test_type_emoji_defaults_guess_and_edit(self):
+        d = entitydict.default_emoji
+        self.assertEqual((d("組織"), d("人物"), d("規格・法令"), d("概念")), ("🏢", "👤", "📜", "💡"))
+        # 利用者が足した種別は名前から推し量る（「部品」は部署、「社員」は会社にしない）
+        self.assertEqual([d(t) for t in ("取引先", "競合", "案件", "品質保証部", "部品", "社員", "不具合")],
+                         ["🤝", "⚔️", "💼", "👥", "📦", "👤", "⚠️"])
+        self.assertEqual(d("なにか"), entitydict.DEFAULT_EMOJI)
+        types = {t["name"]: t for t in entitydict.entity_types()}
+        self.assertEqual((types["組織"]["emoji"], types["組織"]["glyph"]), ("", "🏢"))
+        v0 = entitydict.types_version()
+        # 名前を変えると、決めていなければ新しい名前から選び直す
+        entitydict.update_type("組織", "取引先")
+        self.assertEqual(entitydict.type_glyphs(["取引先"]), {"取引先": "🤝"})
+        # 決めた絵文字が優先。絵文字だけの変更は読み直しの対象にしない
+        t = entitydict.update_type("取引先", "取引先", emoji=" 🏭 ")
+        self.assertEqual((t["emoji"], t["glyph"]), ("🏭", "🏭"))
+        self.assertEqual(entitydict.types_version(), v0)
+        self.assertEqual(entitydict.add_type("顧客", emoji="🛒")["glyph"], "🛒")
+        self.assertEqual(entitydict.type_glyphs(["取引先", "顧客", "部署", ""]),
+                         {"取引先": "🏭", "顧客": "🛒", "部署": "👥"})   # 一覧に無い種別も推し量る
+        # 空にすると自動に戻る
+        self.assertEqual(entitydict.update_type("取引先", "取引先", emoji="")["glyph"], "🤝")
+        self.assertEqual(entitydict.state()["type_list"][0]["glyph"], "🤝")
+
+    def test_type_emoji_column_added_to_old_database(self):
+        db.close()
+        old = Path(self.tmp.name) / "old"
+        old.mkdir()
+        c = sqlite3.connect(old / "docvault.sqlite3")
+        c.execute("CREATE TABLE entity_types (name TEXT PRIMARY KEY, description TEXT NOT NULL DEFAULT '', "
+                  "ord INTEGER NOT NULL DEFAULT 0, updated_at REAL NOT NULL)")       # 絵文字の列が無かった版
+        c.execute("INSERT INTO entity_types VALUES ('取引先', '', 0, 0)")
+        c.commit()
+        c.close()
+        db.set_data_dir(old)
+        self.assertEqual(entitydict.entity_types(), [{"name": "取引先", "description": "", "emoji": "", "glyph": "🤝"}])
+        self.assertEqual(entitydict.update_type("取引先", "取引先", emoji="🏢")["glyph"], "🏢")
 
     def test_stale_readings_only_llm_graphs_after_adding_types(self):
         r = readings.start("d1", "graph", {"profile": "local", "provider": "openai", "model": "m",
